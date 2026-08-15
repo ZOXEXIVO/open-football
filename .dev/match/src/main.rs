@@ -7,6 +7,7 @@ use core::club::team::tactics::{MatchTacticType, Tactics};
 use core::r#match::FootballEngine;
 use core::r#match::MatchSquad;
 use core::r#match::player::MatchPlayer;
+use core::r#match::player::state::PlayerState;
 use core::r#match::player::strategies::players::ops::skill_composites as sc;
 use core::staff_contract_mod::NaiveDate;
 use core::{
@@ -1851,6 +1852,24 @@ fn print_keeper_season_ladder(played: &[LeagueMatch], teams: &[LeagueTeam]) {
 // ───────────────────────────────────────────────────────────────────────────
 /// Seeded timing + coarse calibration benchmark. Bundled into a struct so
 /// the harness exposes no loose helper functions.
+/// Printable names for the `compact_id()`s the engine's censuses are
+/// keyed by.
+struct StateNames;
+
+impl StateNames {
+    /// Map a `PlayerState::compact_id()` back to its printable name by
+    /// walking the state registry — the ids are role-banded and sparse
+    /// (retired states leave holes), so a hand-written table would go
+    /// stale silently.
+    fn of(id: u16) -> String {
+        PlayerState::all()
+            .into_iter()
+            .find(|s| s.compact_id() == id)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| format!("state#{id}"))
+    }
+}
+
 struct Bench;
 
 impl Bench {
@@ -5998,6 +6017,287 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         "  block→corner branch fired={}  save-parry→corner branch fired={}",
         mr[14], mr[15]
     );
+
+    // ── PASS WEIGHT CENSUS ─────────────────────────────────────────────
+    // How far a pass was meant to travel versus how far it actually did,
+    // sampled at the first touch after it was struck. This is the only
+    // measurement that answers "is the ball being struck too hard".
+    {
+        use core::mid_run_diag::PassWeightCensus;
+        let bands = PassWeightCensus::snapshot();
+        if bands.iter().any(|b| b.0 > 0) {
+            println!();
+            println!("--- PASS WEIGHT CENSUS (first touch while the pass was still live) ---");
+            println!("  overshoot > 1.0 would mean the ball is being struck past its man");
+            println!(
+                "  {:<12} {:>9}  {:>9}  {:>9}  {:>10}  {:>12}",
+                "band", "passes", "intended", "actual", "overshoot", "by-target"
+            );
+            for (label, (n, intended, actual, to_target)) in
+                ["short ≤15m", "medium ≤30m", "long >30m"].iter().zip(bands)
+            {
+                if n == 0 {
+                    continue;
+                }
+                println!(
+                    "  {:<12} {:>9} {:>8.1}m  {:>8.1}m  {:>9.2}x  {:>11.0}%",
+                    label,
+                    n,
+                    intended * 0.125,
+                    actual * 0.125,
+                    actual / intended.max(1.0),
+                    to_target * 100.0
+                );
+            }
+        }
+    }
+
+    // ── ENDLINE CENSUS ─────────────────────────────────────────────────
+    {
+        use core::mid_run_diag::EndlineCensus;
+        let (corners, goal_kicks) = EndlineCensus::snapshot();
+        let crossings = corners + goal_kicks;
+        if crossings > 0 {
+            println!();
+            println!(
+                "--- ENDLINE CENSUS --- {:.1} crossings/match: {:.1} corners ({:.0}%), \
+                 {:.1} goal kicks   (real ~21 + ~13)",
+                crossings as f64 / n_matches as f64,
+                corners as f64 / n_matches as f64,
+                corners as f64 * 100.0 / crossings as f64,
+                goal_kicks as f64 / n_matches as f64
+            );
+            {
+                use core::mid_run_diag::CrossDiag;
+                use core::r#match::player::strategies::passing::CrossType;
+                let by_type = CrossDiag::by_type();
+                let struck: u64 = by_type.iter().sum();
+                let lofted: u64 = [
+                    CrossType::FloatedFarPost,
+                    CrossType::WhippedNearPost,
+                    CrossType::EarlyCross,
+                ]
+                .iter()
+                .map(|t| by_type[t.diag_index()])
+                .sum();
+                println!(
+                    "  crosses struck {:.1}/match (real ~30), of which LOFTED {:.1} ({:.0}%):",
+                    struck as f64 / n_matches as f64,
+                    lofted as f64 / n_matches as f64,
+                    lofted as f64 * 100.0 / struck.max(1) as f64
+                );
+                let mut mix = String::new();
+                for t in [
+                    CrossType::FloatedFarPost,
+                    CrossType::DrivenLowCross,
+                    CrossType::Cutback,
+                    CrossType::WhippedNearPost,
+                    CrossType::EarlyCross,
+                ] {
+                    mix.push_str(&format!(
+                        "  {} {:.1}",
+                        t.label(),
+                        by_type[t.diag_index()] as f64 / n_matches as f64
+                    ));
+                }
+                println!("   {}", mix.trim());
+                let r = CrossDiag::rejects();
+                println!(
+                    "  contest gate rejections (ball-ticks): above 2.9m {}, below 1.5m {}, \
+                     still rising {}, >25m from goal {}",
+                    r[0], r[1], r[2], r[3]
+                );
+                let d = CrossDiag::disarm_heights();
+                println!(
+                    "  lofted deliveries DISARMED before the contest, by height: \
+                     on the deck {:.1}, low {:.1}, in band {:.1}, above band {:.1} (/match)",
+                    d[0] as f64 / n_matches as f64,
+                    d[1] as f64 / n_matches as f64,
+                    d[2] as f64 / n_matches as f64,
+                    d[3] as f64 / n_matches as f64
+                );
+                let (touched, died) = CrossDiag::lost_deliveries();
+                println!(
+                    "  lofted deliveries lost before the contest: touched first {:.1}/match, \
+                     died armed {:.1}/match",
+                    touched as f64 / n_matches as f64,
+                    died as f64 / n_matches as f64
+                );
+                let (seen, fired, won, gk, headers) = CrossDiag::contest();
+                println!(
+                    "  contest funnel: seen {:.1} ball-ticks, FIRED {:.1}, GK claimed {:.1}, \
+                     attacker won {:.1}, headers on goal {:.1}, headed clear {:.1}",
+                    seen as f64 / n_matches as f64,
+                    fired as f64 / n_matches as f64,
+                    gk as f64 / n_matches as f64,
+                    won as f64 / n_matches as f64,
+                    headers as f64 / n_matches as f64,
+                    fired.saturating_sub(gk).saturating_sub(won) as f64 / n_matches as f64
+                );
+            }
+            println!("  corners conceded, by what the DEFENDER who put it behind was doing:");
+            for (id, n) in EndlineCensus::corner_sources().iter().take(8) {
+                if *n * 40 < corners {
+                    continue; // below 2.5% — noise
+                }
+                println!(
+                    "    {:<32} {:>5.1}/match",
+                    StateNames::of(*id),
+                    *n as f64 / n_matches as f64
+                );
+            }
+            let from_shot = EndlineCensus::from_shot();
+            println!(
+                "  of those goal kicks, {:.1}/match ({:.0}%) were a MISSED SHOT, not a stray pass",
+                from_shot as f64 / n_matches as f64,
+                from_shot as f64 * 100.0 / goal_kicks.max(1) as f64
+            );
+            let (nonshot, speed, slow) = EndlineCensus::nonshot_speed();
+            println!(
+                "  the other {:.1}/match cross at {:.2} u/tick ({:.1} m/s); {:.0}% of them \
+                 trickle out under 4.4 m/s",
+                nonshot as f64 / n_matches as f64,
+                speed,
+                speed * 12.5,
+                slow * 100.0
+            );
+            println!("  goal kicks by what the LAST TOUCHER was doing, and how far the");
+            println!("  ball ran after that touch:");
+            for (id, n, run) in EndlineCensus::run_snapshot().iter().take(10) {
+                if *n * 50 < goal_kicks {
+                    continue; // below 2% — noise
+                }
+                println!(
+                    "    {:<32} {:>5.1}/match   ran {:>5.1}m after the touch",
+                    StateNames::of(*id),
+                    *n as f64 / n_matches as f64,
+                    run * 0.125
+                );
+            }
+        }
+    }
+
+    // ── FOUL SOURCE CENSUS ─────────────────────────────────────────────
+    // Which state emitted each foul, and how many had the ball inside the
+    // fouler's own box (penalty candidates). The aggregate foul/penalty
+    // counts cannot say which model to tune.
+    {
+        use core::mid_run_diag::FoulCensus;
+        let rows = FoulCensus::snapshot();
+        let total: u64 = rows.iter().map(|r| r.1).sum();
+        let total_box: u64 = rows.iter().map(|r| r.2).sum();
+        if total > 0 {
+            println!();
+            println!("--- FOUL SOURCE CENSUS (contacts emitted, before the referee gate) ---");
+            println!(
+                "  {:<34} {:>8}  {:>7}  {:>9}  {:>7}",
+                "emitting state", "fouls", "share", "ball-in-box", "in-box%"
+            );
+            for (id, n, in_box) in rows.iter() {
+                if *n * 100 < total {
+                    continue; // below 1% — noise
+                }
+                println!(
+                    "  {:<34} {:>8} {:>6.1}%  {:>9} {:>6.1}%",
+                    StateNames::of(*id),
+                    n,
+                    *n as f64 * 100.0 / total as f64,
+                    in_box,
+                    *in_box as f64 * 100.0 / *n as f64
+                );
+            }
+            println!(
+                "  TOTAL {} emitted, {} with the ball in our own box ({:.1}%)",
+                total,
+                total_box,
+                total_box as f64 * 100.0 / total as f64
+            );
+        }
+    }
+
+    // ── TEAM SHAPE CENSUS ──────────────────────────────────────────────
+    // Where the match time actually goes, state by state, and how far out
+    // of the team's shape a player is while he is there. The `paths` mode
+    // reports the block length; this says which states are responsible
+    // for it, so off-ball work lands on the ticks that exist rather than
+    // the ticks it feels like should.
+    {
+        use core::mid_run_diag::ShapeCensus;
+        let rows = ShapeCensus::snapshot();
+        let total: u64 = rows.iter().map(|r| r.1).sum();
+        if total > 0 {
+            println!();
+            println!("--- TEAM SHAPE CENSUS (AI ticks by state, heaviest first) ---");
+            println!("  anchor lag = distance from the place the team plan wants him (metres)");
+            println!(
+                "  {:<34} {:>7}  {:>7}  {:>8}  {:>8}  {:>7}",
+                "state", "ticks", "share", "anchorlag", "axislag", "still"
+            );
+            let mut shown = 0;
+            for (id, ticks, lag, axis, still) in rows.iter() {
+                if *ticks * 400 < total {
+                    continue; // below 0.25% — noise
+                }
+                println!(
+                    "  {:<34} {:>7} {:>6.1}%  {:>7.1}m  {:>+7.1}m  {:>6.0}%",
+                    StateNames::of(*id),
+                    ticks,
+                    *ticks as f64 * 100.0 / total as f64,
+                    lag * 0.125,
+                    axis * 0.125,
+                    still * 100.0
+                );
+                shown += 1;
+                if shown >= 26 {
+                    break;
+                }
+            }
+            // Per-role roll-up: the headline is what share of a role's
+            // match is spent in states that hold shape vs states that
+            // chase the ball.
+            let role_of = |id: u16| -> usize { (id / 100) as usize };
+            let mut role_ticks = [0u64; 5];
+            let mut role_lag = [0f64; 5];
+            let mut role_still = [0f64; 5];
+            for (id, ticks, lag, _axis, still) in rows.iter() {
+                let r = role_of(*id).min(4);
+                role_ticks[r] += ticks;
+                role_lag[r] += (*lag as f64) * (*ticks as f64);
+                role_still[r] += (*still as f64) * (*ticks as f64);
+            }
+            let (anchor_span, actual_span, worst_lag) = ShapeCensus::span_snapshot();
+            let axis = ShapeCensus::axis_lag_snapshot();
+            println!();
+            println!(
+                "  mean lag ALONG the attacking axis (+ = further forward than the plan):  \
+                 DEF {:+.1}m   MID {:+.1}m   FWD {:+.1}m",
+                axis[1] * 0.125,
+                axis[2] * 0.125,
+                axis[3] * 0.125
+            );
+            println!();
+            println!(
+                "  block span along the goal axis:  planned {:.1}m   actual {:.1}m   \
+                 worst single player {:.1}m out",
+                anchor_span * 0.125,
+                actual_span * 0.125,
+                worst_lag * 0.125
+            );
+            println!();
+            for (r, name) in [(1, "GK"), (2, "DEF"), (3, "MID"), (4, "FWD")] {
+                if role_ticks[r] == 0 {
+                    continue;
+                }
+                println!(
+                    "  {:<5} mean anchor lag {:>5.1}m   still {:>4.0}%   ({} ticks)",
+                    name,
+                    role_lag[r] / role_ticks[r] as f64 * 0.125,
+                    role_still[r] / role_ticks[r] as f64 * 100.0,
+                    role_ticks[r]
+                );
+            }
+        }
+    }
 
     // ── MIDFIELDER ON-BALL DECISION CENSUS ─────────────────────────────
     // One row per exit of `MidfielderRunningState::process`, counted per

@@ -357,6 +357,32 @@ impl PlayerSide {
         }
     }
 
+    /// The end the other team is defending.
+    #[inline]
+    pub fn opposite(self) -> PlayerSide {
+        match self {
+            PlayerSide::Left => PlayerSide::Right,
+            PlayerSide::Right => PlayerSide::Left,
+        }
+    }
+
+    /// Own-goal x for a team defending this end.
+    #[inline]
+    pub fn own_goal_x(self, field_width: f32) -> f32 {
+        match self {
+            PlayerSide::Left => 0.0,
+            PlayerSide::Right => field_width,
+        }
+    }
+
+    /// The pitch x that sits `progress` of the way from this side's own
+    /// goal line to the opponent's — the inverse of
+    /// [`attacking_progress_x`](Self::attacking_progress_x).
+    #[inline]
+    pub fn x_at_progress(self, progress: f32, field_width: f32) -> f32 {
+        self.own_goal_x(field_width) + self.forward_dir_x() * progress * field_width
+    }
+
     /// Attacking progress for an x-coordinate, normalised to [0.0, 1.0]:
     ///   0.0 = own goal line, 1.0 = opponent goal line.
     /// Use this everywhere a "what fraction of the pitch have we

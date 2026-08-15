@@ -7,6 +7,8 @@ use crate::r#match::engine::player::events::players::FoulResolver;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::state::PlayerState;
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::CrossDiag;
 use crate::r#match::player::strategies::passing::CrossType;
 use crate::r#match::player::transition::TransitionSource;
 use nalgebra::Vector3;
@@ -710,7 +712,34 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // Resolve at the point the ball is actually attackable — head
         // height on the way DOWN. Above that it is still travelling; below
         // it, the ordinary reception path has it.
-        if ball.position.z > 2.9 || ball.position.z < 1.5 || ball.velocity.z > 0.0 {
+        //
+        // Widening this band to 5.0 m was tried, on the theory that the
+        // ordinary receiver claim (which starts at 2.8 m, and resolves
+        // EARLIER in the tick than this does) was pre-empting the duel.
+        // It moved contests from 3.9 to 4.7 a match — inside run-to-run
+        // noise — and was reverted, because the diagnosis was wrong.
+        //
+        // What actually happens: of ~14 lofted deliveries a match, ~12.6
+        // are CORNER kicks, and `resolve_corner_contest` runs first in
+        // `game_tick_inner` and ends by calling
+        // `clear_pending_pass_metadata`, which disarms this contest —
+        // correctly, since a corner is its business. Only 2-3 open-play
+        // crosses a match exist for this contest to resolve. The gap is
+        // crossing VOLUME, not this window. See `CrossDiag`.
+        const CONTEST_CEILING: f32 = 2.9;
+        const CONTEST_FLOOR: f32 = 1.5;
+        if ball.position.z > CONTEST_CEILING
+            || ball.position.z < CONTEST_FLOOR
+            || ball.velocity.z > 0.0
+        {
+            #[cfg(feature = "match-logs")]
+            CrossDiag::note_reject(if ball.position.z > CONTEST_CEILING {
+                0
+            } else if ball.velocity.z > 0.0 {
+                2
+            } else {
+                1
+            });
             return;
         }
 
@@ -735,6 +764,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         };
         // Not a box delivery — let it play out as an ordinary ball.
         if (ball_pos - attacked_goal).magnitude() > 200.0 {
+            #[cfg(feature = "match-logs")]
+            CrossDiag::note_reject(3);
             return;
         }
 
@@ -899,6 +930,54 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // `0.28`, which is a 40 m apex. Ask for the apex and let the
             // shared ballistics helper produce the launch speed, then size
             // the horizontal component to the range the arc can carry.
+            // …but not always UPFIELD. A defender meeting a ball that is
+            // already across him, six yards out, cannot turn it round —
+            // he puts it behind, and concedes the corner he can defend
+            // instead of the chance he cannot.
+            //
+            // This branch is the majority outcome of every cross in the
+            // engine and it could only ever clear away from goal, so
+            // **defenders never conceded corners**. Measured
+            // (`ENDLINE CENSUS`, corner sources): the only real supplier
+            // was the keeper parrying, at 3.4 a match, and corners ran at
+            // ~10.8 against a real ~21. Putting the ball behind is the
+            // single largest real corner source and it did not exist —
+            // note the endline split, 25% corners here against ~62% real.
+            if Self::heads_it_behind(ball_pos, attacked_goal, field.size.width as f32, context) {
+                let field_height = field.size.height as f32;
+                // Wide of the post, on the side he is already on. Never
+                // across the face of goal — that is an own goal, not a
+                // clearance.
+                const CLEAR_OF_POST: f32 = 55.0;
+                let out_y = if ball_pos.y >= attacked_goal.y {
+                    (attacked_goal.y + CLEAR_OF_POST).min(field_height - 6.0)
+                } else {
+                    (attacked_goal.y - CLEAR_OF_POST).max(6.0)
+                };
+                // Just past the goal line, on the far side of it.
+                let goal_line_dir = (attacked_goal.x - ball_pos.x).signum();
+                let out_x = attacked_goal.x + goal_line_dir * 18.0;
+                let target = Vector3::new(out_x, out_y, 0.0);
+                let to_target = target - ball_pos;
+                let dist = to_target.magnitude().max(0.1);
+                // A hooked header is high and short — it only has to
+                // cross the line.
+                let vz = Ball::launch_speed_for_apex(5.0);
+                let hang = Ball::hang_ticks(vz).max(1.0);
+                let speed = ((dist / hang) * 1.5).clamp(0.30, 2.6);
+                let dir = to_target / dist;
+
+                let b = &mut field.ball;
+                b.position.z = 2.2;
+                b.velocity = Vector3::new(dir.x * speed, dir.y * speed, vz);
+                b.current_owner = None;
+                b.flags.in_flight_state = 1;
+                b.pass_target_player_id = None;
+                b.clear_pending_pass_metadata();
+                b.cross_contest_resolved = true;
+                return;
+            }
+
             const CLEAR_RANGE_UNITS: f32 = 210.0; // ~26 m
             const CLEAR_APEX_METRES: f32 = 6.0;
             let vz = Ball::launch_speed_for_apex(CLEAR_APEX_METRES);
@@ -937,6 +1016,35 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         field.ball.pass_target_player_id = None;
         field.ball.clear_pending_pass_metadata();
         field.ball.cross_contest_resolved = true;
+    }
+
+    /// Does this defensive header go BEHIND for a corner rather than
+    /// upfield? See the call site in [`resolve_cross_contest`].
+    ///
+    /// Depth decides it, because depth is what removes the option: a
+    /// header met on the edge of the area can be sent anywhere, one met
+    /// on the six-yard line with the ball travelling across you can only
+    /// go one way. The share rises steeply as the goal line approaches
+    /// and is zero outside the area, so ordinary defensive headers in and
+    /// around the box still play the ball out as they always did.
+    fn heads_it_behind(
+        ball_pos: Vector3<f32>,
+        attacked_goal: Vector3<f32>,
+        field_width: f32,
+        context: &mut MatchContext,
+    ) -> bool {
+        /// Outside this there is always a way out. 130u ≈ 16 m.
+        const BEHIND_DEPTH: f32 = 130.0;
+        /// Share that goes behind when the header is right on the line.
+        const BEHIND_AT_LINE: f32 = 0.55;
+
+        let depth = (ball_pos.x - attacked_goal.x).abs();
+        if depth > BEHIND_DEPTH || field_width <= 0.0 {
+            return false;
+        }
+        // 1.0 on the goal line, 0 at the edge of the window.
+        let urgency = 1.0 - depth / BEHIND_DEPTH;
+        context.rng.bernoulli(BEHIND_AT_LINE * urgency * urgency)
     }
 
     /// Consume `Ball::pending_save_credit` left behind by the physics

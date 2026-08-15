@@ -1,5 +1,6 @@
-use crate::r#match::StateProcessingContext;
+use crate::r#match::engine::context::PenaltyArea;
 use crate::r#match::player::events::FoulSeverity;
+use crate::r#match::{PlayerSide, StateProcessingContext};
 use nalgebra::Vector3;
 
 /// How far behind a challenging player a team-mate can be and still count
@@ -87,6 +88,62 @@ impl TackleEngagement {
     }
 }
 
+/// Would a foul by this player, right now, be a penalty?
+///
+/// # Why this is one function
+///
+/// Three places need this answer and two of them used to compute it
+/// differently from the one that matters.
+/// [`FoulResolver::award_restart_for_foul`] — the code that actually
+/// awards the penalty — tests **the BALL's position** against the
+/// fouler's own penalty area. Both restraint models tested **the
+/// FOULER's position** instead.
+///
+/// Those differ constantly, and the gap is not symmetric: a defender
+/// standing on the edge of his box challenging for a ball inside it gets
+/// no restraint and concedes a penalty. Measured, that was the whole
+/// story — restraining tackles on the defender's own position cut tackles
+/// 22.4 → 18.3 per team and moved the penalty rate by nothing, and the
+/// foul-source census then showed **41 of 43 box fouls were being emitted
+/// by midfielders**, who are exactly the players standing at the edge of
+/// the area rather than inside it.
+///
+/// So the restraint asks the referee's question, in the referee's terms.
+pub struct PenaltyRisk;
+
+impl PenaltyRisk {
+    /// True when a foul by this player would be given as a penalty —
+    /// the ball is inside the area his own team is defending. This is the
+    /// referee's exact test, mirrored from `award_restart_for_foul`.
+    pub fn applies(ctx: &StateProcessingContext) -> bool {
+        Self::own_box(ctx).contains(&ctx.tick_context.positions.ball.position)
+    }
+
+    /// True when the player should be defending carefully because of
+    /// where he is standing, whether or not the ball is with him yet.
+    ///
+    /// Both halves of this are needed and they are not the same
+    /// population. Swapping the models from the standing test to the ball
+    /// test alone fixed penalties (1.03 → 0.10) and sent fouls from 14.3
+    /// to 23.5 per team, because most defensive engagements inside the
+    /// area happen while the ball is still on its way in — a defender
+    /// picking up a runner at the back post is in the box, the ball is
+    /// not, and the old test was quietly suppressing every one of those.
+    ///
+    /// A defender is careful in his own box because of the consequences
+    /// of being *there*, and doubly so once the ball arrives. Taking the
+    /// union keeps the first and lets [`applies`](Self::applies) carry
+    /// the second.
+    pub fn in_own_box(ctx: &StateProcessingContext) -> bool {
+        Self::own_box(ctx).contains(&ctx.player.position) || Self::applies(ctx)
+    }
+
+    fn own_box(ctx: &StateProcessingContext) -> PenaltyArea {
+        ctx.context
+            .penalty_area(ctx.player.side == Some(PlayerSide::Left))
+    }
+}
+
 /// When a defender in contact range actually commits to a challenge,
 /// rather than staying on his feet and containing.
 ///
@@ -121,6 +178,12 @@ impl TackleDecision {
     /// applied — a defender who stands his man up for a second or two
     /// usually does not dive in.
     const BASE: f32 = 0.16;
+
+    /// Commitment multiplier inside the defender's own penalty area when
+    /// there is cover behind him — see [`Self::box_restraint`].
+    const BOX_RESTRAINT: f32 = 0.22;
+    /// …and when he is the last man, where the challenge has to be made.
+    const BOX_RESTRAINT_LAST_MAN: f32 = 0.60;
 
     /// How often the decision is taken while containing, in ticks.
     ///
@@ -195,7 +258,55 @@ impl TackleDecision {
         let proximity = (1.0 - distance / TackleEngagement::CONTACT.max(1.0)).clamp(0.0, 1.0);
         let reach = 0.65 + proximity * 0.70;
 
-        (Self::BASE * temperament * cover_licence * necessity * timing * reach).clamp(0.0, 0.55)
+        (Self::BASE
+            * temperament
+            * cover_licence
+            * necessity
+            * timing
+            * reach
+            * Self::box_restraint(ctx))
+        .clamp(0.0, 0.55)
+    }
+
+    /// How much a defender holds back from a challenge because he is
+    /// inside his own penalty area.
+    ///
+    /// `necessity` above is right that the cost of NOT engaging rises
+    /// toward your own goal — but it peaks at the EDGE of the box, not
+    /// inside it. Inside, the cost of the challenge itself jumps
+    /// discontinuously: a missed tackle is a penalty and usually a card,
+    /// so the professional response is to stay on your feet, show him
+    /// wide, and block the shot. Real defenders visibly stop diving in
+    /// there, which is why penalties are ~1% of all fouls.
+    ///
+    /// [`ContactFoul::probability`] has always modelled this — its own
+    /// box restraint is 0.004, and its comment says "same restraint the
+    /// tackle model applies". **The tackle model did not apply it.** The
+    /// shirt-pull path was restrained and the sliding-tackle path was
+    /// *encouraged*, by `necessity`, in exactly the same square of grass.
+    ///
+    /// It stayed invisible while the pitch was sparse. Compacting the
+    /// team shape put far more bodies in and around the box, `necessity`
+    /// multiplied every one of those engagements by up to 2.9, and
+    /// penalties went from 0.27 a match to 1.0 — against a real 0.25-0.30.
+    ///
+    /// The last-ditch challenge survives: when the carrier has beaten
+    /// everyone and this defender is the last man, the restraint lifts,
+    /// because at that point conceding a penalty really is better than
+    /// conceding a goal. That is the case the dramatic box challenge is
+    /// FOR, and it is rare — which is why the rate it produces is rare too.
+    fn box_restraint(ctx: &StateProcessingContext) -> f32 {
+        if !PenaltyRisk::in_own_box(ctx) {
+            return 1.0;
+        }
+        if Self::cover_exists(ctx) {
+            // Somebody is behind me — there is no excuse at all.
+            Self::BOX_RESTRAINT
+        } else {
+            // Last man. Still more careful than in open play, but this is
+            // the challenge that has to be made.
+            Self::BOX_RESTRAINT_LAST_MAN
+        }
     }
 
     /// Is there somebody behind me if I miss?
@@ -265,7 +376,37 @@ impl ContactFoul {
     /// Close enough for contact (~2.5 m).
     const CONTACT_RANGE: f32 = 20.0;
     /// Per-decision chance for an ordinary engagement.
-    const BASE: f32 = 0.034;
+    ///
+    /// Re-fitted (0.034 → 0.017) after the box restraint landed on
+    /// [`TackleDecision`]. The two foul models are coupled through DWELL:
+    /// a defender who declines the challenge stays engaged, and this model
+    /// rolls once a second *for as long as he is engaged*. Restraining
+    /// tackles in and around the box therefore lengthened engagements and
+    /// **tripled** defender contact fouls (435 → 1062 emitted per 20
+    /// matches), taking the whistled rate from 14.3 to 23.6 per team
+    /// against a real ~12. The base was fitted when engagements were
+    /// shorter; this is the same rate expressed over the new dwell.
+    const BASE: f32 = 0.021;
+
+    /// Restraint when a foul here would be a PENALTY (the ball is in our
+    /// own area).
+    ///
+    /// Fitted to the real penalty rate rather than asserted. The previous
+    /// 0.004 was written as "nobody grabs a shirt inside his own area",
+    /// which is an exaggeration of a real tendency: the shirt-pull at a
+    /// corner and the clumsy challenge on a crosser are precisely where
+    /// real penalties come from, and at 0.004 the engine emitted **four
+    /// box contacts in twenty matches** and awarded 0.08 penalties a match
+    /// against a real 0.25-0.30.
+    ///
+    /// 0.30 says a defender is about three times less likely to foul with
+    /// the ball in his own box than in open play — which is the real
+    /// tendency, at a strength that produces the real rate.
+    const BOX_PENALTY_RESTRAINT: f32 = 0.30;
+    /// Restraint when the player is in his own area but the ball is not
+    /// yet — marking a runner at the back post, tracking into the box.
+    /// Careful, but not the catastrophic case.
+    const BOX_POSITION_RESTRAINT: f32 = 0.10;
 
     /// Is this tick one on which a contact foul is considered?
     pub fn is_decision_tick(ctx: &StateProcessingContext) -> bool {
@@ -295,14 +436,20 @@ impl ContactFoul {
         let proximity = (1.0 - gap / Self::CONTACT_RANGE).clamp(0.0, 1.0);
         let closeness = 0.55 + proximity * 0.90;
 
-        // Nobody grabs a shirt inside his own area — the downside is a
-        // penalty, and real defenders visibly stop doing it there. Same
-        // restraint the tackle model applies.
-        let in_own_box = ctx
-            .context
-            .penalty_area(ctx.player.side == Some(crate::r#match::PlayerSide::Left))
-            .contains(&ctx.player.position);
-        let box_restraint = if in_own_box { 0.004 } else { 1.0 };
+        // Nobody grabs a shirt when the downside is a penalty, and real
+        // defenders visibly stop doing it. Same test the tackle model
+        // uses — see `PenaltyRisk`.
+        // Nobody grabs a shirt when the downside is a penalty. Graded,
+        // because "would this be a penalty" and "am I standing in the
+        // box" are different questions with different answers — see
+        // `PenaltyRisk`.
+        let box_restraint = if PenaltyRisk::applies(ctx) {
+            Self::BOX_PENALTY_RESTRAINT
+        } else if PenaltyRisk::in_own_box(ctx) {
+            Self::BOX_POSITION_RESTRAINT
+        } else {
+            1.0
+        };
 
         (Self::BASE * temperament * desperation * closeness * box_restraint).clamp(0.0, 0.30)
     }

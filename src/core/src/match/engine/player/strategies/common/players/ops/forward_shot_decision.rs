@@ -568,7 +568,82 @@ pub mod mid_run_diag {
 
     /// Crossing-chain counters. Bundled so the delivery mix, the contest
     /// funnel and the header endpoint are read and reset as one thing.
+    /// A lofted cross that somebody TOUCHED before the aerial contest
+    /// could resolve it — the delivery was reserved for one named
+    /// receiver instead of being contested by the box.
+    pub static CROSS_TOUCHED_FIRST: AtomicU64 = AtomicU64::new(0);
+    /// …and a lofted cross that went dead (out of play, goal, whistle)
+    /// with the contest still armed.
+    pub static CROSS_DIED_ARMED: AtomicU64 = AtomicU64::new(0);
+
+    /// Per-tick rejection lanes inside `resolve_cross_contest`, for a
+    /// delivery that is armed and loose. 0 above the window, 1 below it,
+    /// 2 still rising, 3 too far from the goal being attacked, 4 no
+    /// attacker within contest range. Says WHICH gate is eating the
+    /// deliveries, which the fired count alone cannot.
+    pub static CROSS_REJECT: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+
+    /// Lofted deliveries disarmed before the contest, bucketed by the
+    /// height they died at: 0 on the deck (<0.5 m), 1 low (<1.5 m),
+    /// 2 in the contest band (1.5-2.9 m), 3 above it.
+    pub static CROSS_DISARM_AT: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+
     pub struct CrossDiag;
+
+    impl CrossDiag {
+        pub fn note_disarmed_at(z: f32) {
+            let b = if z < 0.5 {
+                0
+            } else if z < 1.5 {
+                1
+            } else if z <= 2.9 {
+                2
+            } else {
+                3
+            };
+            CROSS_DISARM_AT[b].fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// `[on the deck, low, in band, above band]`.
+        pub fn disarm_heights() -> [u64; 4] {
+            let mut out = [0u64; 4];
+            for (slot, c) in out.iter_mut().zip(CROSS_DISARM_AT.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+
+        pub fn note_reject(lane: usize) {
+            if lane < 5 {
+                CROSS_REJECT[lane].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `[above, below, rising, far, no-attacker]` ball-ticks.
+        pub fn rejects() -> [u64; 5] {
+            let mut out = [0u64; 5];
+            for (slot, c) in out.iter_mut().zip(CROSS_REJECT.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+
+        pub fn note_touched_first() {
+            CROSS_TOUCHED_FIRST.fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub fn note_died_armed() {
+            CROSS_DIED_ARMED.fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// `(touched before the contest, died with it still armed)`.
+        pub fn lost_deliveries() -> (u64, u64) {
+            (
+                CROSS_TOUCHED_FIRST.load(Ordering::Relaxed),
+                CROSS_DIED_ARMED.load(Ordering::Relaxed),
+            )
+        }
+    }
 
     impl CrossDiag {
         /// Record a delivery against its type.
@@ -660,6 +735,387 @@ pub mod mid_run_diag {
             BLOCK_CORNER_FIRED.load(Ordering::Relaxed),
             SAVE_PARRY_FIRED.load(Ordering::Relaxed),
         ]
+    }
+
+    // ── Shape census ──────────────────────────────────────────────────
+    //
+    // Which states actually own the match, and how far out of the team's
+    // shape a player is while he is in them.
+    //
+    // Written because a whole round of off-ball work — rewiring
+    // `Walking`, `Standing` and `Returning` onto the live team anchor —
+    // moved the block length by 1.4 m. The states that were rewired
+    // turned out not to be the states players are in. Same failure shape
+    // the defensive-shape sampler documents ("shape code is in
+    // `HoldingLine` but the back line is only there 6% of ticks"): tuning
+    // a state you are not in reaches none of the ticks.
+    //
+    // Indexed by `PlayerState::compact_id()`, which is banded 0 / 100+ /
+    // 200+ / 300+ / 400+ by role — so a flat array of 500 covers the
+    // whole id space with the role split for free.
+    pub const STATE_SLOTS: usize = 500;
+    pub static STATE_TICKS: [AtomicU64; STATE_SLOTS] =
+        [const { AtomicU64::new(0) }; STATE_SLOTS];
+    /// Sum of each player's distance from his team anchor, in units ×100,
+    /// bucketed the same way. `STATE_ANCHOR_LAG / STATE_TICKS` is the
+    /// average "how far from where my team wants me" for that state.
+    pub static STATE_ANCHOR_LAG: [AtomicU64; STATE_SLOTS] =
+        [const { AtomicU64::new(0) }; STATE_SLOTS];
+    /// Ticks in that state where the handler produced NO velocity at all
+    /// — the player is standing still because his state has nothing for
+    /// him to do.
+    pub static STATE_STILL_TICKS: [AtomicU64; STATE_SLOTS] =
+        [const { AtomicU64::new(0) }; STATE_SLOTS];
+    /// Signed lag ALONG the attacking axis per state, offset by
+    /// `SIGNED_BIAS` per sample so an unsigned counter can hold it.
+    /// Positive = this state parks the player further forward than his
+    /// team plan wants him. This is the column that names which state is
+    /// stretching the block, which neither the unsigned per-state lag nor
+    /// the signed per-ROLE lag can do.
+    pub static STATE_AXIS_LAG: [AtomicU64; STATE_SLOTS] =
+        [const { AtomicU64::new(0) }; STATE_SLOTS];
+
+    /// Block extent, sampled per refresh: the span of the ANCHORS the
+    /// shape handed out versus the span the players actually occupy.
+    /// Separates "the plan is too spread out" from "nobody goes to the
+    /// plan", which the aggregate block length cannot.
+    pub static SPAN_ANCHOR_X10: AtomicU64 = AtomicU64::new(0);
+    pub static SPAN_ACTUAL_X10: AtomicU64 = AtomicU64::new(0);
+    pub static SPAN_SAMPLES: AtomicU64 = AtomicU64::new(0);
+    /// The single worst offender each sample: how far the most
+    /// out-of-position player is from his own anchor. A block stretched
+    /// by ONE stray player looks identical in the mean to one stretched
+    /// by everybody, and needs a completely different fix.
+    pub static SPAN_WORST_LAG_X10: AtomicU64 = AtomicU64::new(0);
+
+    /// Mean SIGNED lag along the attacking axis, per role
+    /// (0 GK, 1 DEF, 2 MID, 3 FWD). Positive = the player is further
+    /// forward than the plan wants him.
+    ///
+    /// The unsigned mean cannot answer the question the block length
+    /// poses. A 20 m over-run splits completely differently depending on
+    /// whether the forwards are too high, the defenders too deep, or
+    /// everybody is scattered symmetrically — and the fix is different in
+    /// each case. Stored offset by a bias so an unsigned counter can hold
+    /// a signed quantity.
+    const SIGNED_BIAS: u64 = 1 << 31;
+    pub static AXIS_LAG_BY_ROLE: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static AXIS_LAG_N: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+
+    /// Fouls emitted per state, and how many of them had the ball inside
+    /// the fouler's own box — i.e. were penalty candidates. Indexed by
+    /// `PlayerState::compact_id()` like the shape census.
+    pub static FOUL_BY_STATE: [AtomicU64; STATE_SLOTS] = [const { AtomicU64::new(0) }; STATE_SLOTS];
+    pub static FOUL_IN_BOX_BY_STATE: [AtomicU64; STATE_SLOTS] =
+        [const { AtomicU64::new(0) }; STATE_SLOTS];
+
+    /// Balls that crossed a goal line without being a goal, split into
+    /// corners and goal kicks.
+    pub static ENDLINE_CORNER: AtomicU64 = AtomicU64::new(0);
+    pub static ENDLINE_GOAL_KICK: AtomicU64 = AtomicU64::new(0);
+
+    /// For each goal-kick crossing: how far the ball ran after the last
+    /// touch, bucketed by what that toucher was doing. A pass struck too
+    /// hard and a clearance hammered out are the same count and
+    /// completely different bugs.
+    pub static ENDLINE_RUN_BY_STATE: [AtomicU64; STATE_SLOTS] =
+        [const { AtomicU64::new(0) }; STATE_SLOTS];
+    /// The same for CORNERS: which defensive action put the ball behind.
+    /// Read by absence as much as by presence — a defensive action that
+    /// never appears here is one that never concedes a corner, and in
+    /// real football most of them do.
+    pub static CORNER_BY_STATE: [AtomicU64; STATE_SLOTS] =
+        [const { AtomicU64::new(0) }; STATE_SLOTS];
+    pub static ENDLINE_RUN_SUM_BY_STATE: [AtomicU64; STATE_SLOTS] =
+        [const { AtomicU64::new(0) }; STATE_SLOTS];
+    /// …and how many of those goal kicks were simply a MISSED SHOT.
+    pub static ENDLINE_FROM_SHOT: AtomicU64 = AtomicU64::new(0);
+    /// Speed (u/tick ×100) at which NON-SHOT balls cross the goal line,
+    /// and how many crossed slowly enough to have been cut out. This is
+    /// the test for whether the ball is being struck too hard: an
+    /// over-weighted pass crosses at pace, a mispositioned one trickles.
+    pub static ENDLINE_NONSHOT_SPEED_X100: AtomicU64 = AtomicU64::new(0);
+    pub static ENDLINE_NONSHOT_N: AtomicU64 = AtomicU64::new(0);
+    pub static ENDLINE_NONSHOT_SLOW: AtomicU64 = AtomicU64::new(0);
+
+    /// Pass overshoot, sampled at the first touch taken **while the pass
+    /// was still live** — i.e. before the reception path clears the
+    /// pending-pass metadata. That makes the population the passes that
+    /// were CUT OUT rather than completed, which is exactly the question
+    /// "is the ball being struck too hard" needs answered: an over-hit
+    /// ball runs PAST everybody, so it would show a ratio above 1.
+    ///
+    /// It measures 0.54-0.76, so the ball is reaching a first touch at
+    /// half to three-quarters of its intended journey. Passes in this
+    /// engine are intercepted early, never over-weighted.
+    ///
+    /// Bucketed by intended distance: 0 short (≤15 m), 1 medium (≤30 m),
+    /// 2 long. `INTENDED`/`ACTUAL` are summed in units.
+    pub const PASS_BANDS: usize = 3;
+    pub static PASS_N: [AtomicU64; PASS_BANDS] = [const { AtomicU64::new(0) }; PASS_BANDS];
+    pub static PASS_INTENDED: [AtomicU64; PASS_BANDS] = [const { AtomicU64::new(0) }; PASS_BANDS];
+    pub static PASS_ACTUAL: [AtomicU64; PASS_BANDS] = [const { AtomicU64::new(0) }; PASS_BANDS];
+    /// …and how many of those first touches were the INTENDED receiver.
+    pub static PASS_TO_TARGET: [AtomicU64; PASS_BANDS] = [const { AtomicU64::new(0) }; PASS_BANDS];
+
+    pub struct PassWeightCensus;
+
+    impl PassWeightCensus {
+        pub fn note(intended: f32, actual: f32, to_target: bool) {
+            let band = if intended <= 120.0 {
+                0
+            } else if intended <= 240.0 {
+                1
+            } else {
+                2
+            };
+            PASS_N[band].fetch_add(1, Ordering::Relaxed);
+            PASS_INTENDED[band].fetch_add(intended.max(0.0) as u64, Ordering::Relaxed);
+            PASS_ACTUAL[band].fetch_add(actual.max(0.0) as u64, Ordering::Relaxed);
+            if to_target {
+                PASS_TO_TARGET[band].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// Per band: `(n, mean intended, mean actual, share reaching the
+        /// intended receiver)`.
+        pub fn snapshot() -> [(u64, f32, f32, f32); PASS_BANDS] {
+            let mut out = [(0u64, 0.0f32, 0.0f32, 0.0f32); PASS_BANDS];
+            for b in 0..PASS_BANDS {
+                let n = PASS_N[b].load(Ordering::Relaxed);
+                let d = n.max(1) as f32;
+                out[b] = (
+                    n,
+                    PASS_INTENDED[b].load(Ordering::Relaxed) as f32 / d,
+                    PASS_ACTUAL[b].load(Ordering::Relaxed) as f32 / d,
+                    PASS_TO_TARGET[b].load(Ordering::Relaxed) as f32 / d,
+                );
+            }
+            out
+        }
+    }
+
+    pub struct EndlineCensus;
+
+    impl EndlineCensus {
+        pub fn note(is_corner: bool, toucher_state: u16) {
+            if is_corner {
+                ENDLINE_CORNER.fetch_add(1, Ordering::Relaxed);
+                let i = toucher_state as usize;
+                if i < STATE_SLOTS {
+                    CORNER_BY_STATE[i].fetch_add(1, Ordering::Relaxed);
+                }
+            } else {
+                ENDLINE_GOAL_KICK.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(compact_id, corners conceded from that state)`, heaviest
+        /// first.
+        pub fn corner_sources() -> Vec<(u16, u64)> {
+            let mut rows: Vec<(u16, u64)> = (0..STATE_SLOTS)
+                .filter_map(|i| {
+                    let n = CORNER_BY_STATE[i].load(Ordering::Relaxed);
+                    (n > 0).then_some((i as u16, n))
+                })
+                .collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows
+        }
+
+        /// One goal-kick crossing: who touched it last, and how far the
+        /// ball ran afterwards.
+        pub fn note_goal_kick_run(state_id: u16, run: f32, was_shot: bool, speed: f32) {
+            if was_shot {
+                ENDLINE_FROM_SHOT.fetch_add(1, Ordering::Relaxed);
+            } else {
+                ENDLINE_NONSHOT_N.fetch_add(1, Ordering::Relaxed);
+                ENDLINE_NONSHOT_SPEED_X100
+                    .fetch_add((speed.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+                // 0.35 u/tick = 4.4 m/s — a ball this slow was there to be
+                // cut out by anybody in the neighbourhood.
+                if speed < 0.35 {
+                    ENDLINE_NONSHOT_SLOW.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            let i = state_id as usize;
+            if i >= STATE_SLOTS {
+                return;
+            }
+            ENDLINE_RUN_BY_STATE[i].fetch_add(1, Ordering::Relaxed);
+            ENDLINE_RUN_SUM_BY_STATE[i].fetch_add(run.max(0.0) as u64, Ordering::Relaxed);
+        }
+
+        /// Goal kicks that were a missed shot rather than a stray pass.
+        pub fn from_shot() -> u64 {
+            ENDLINE_FROM_SHOT.load(Ordering::Relaxed)
+        }
+
+        /// `(non-shot goal kicks, mean crossing speed u/tick, share that
+        /// crossed slowly enough to have been cut out)`.
+        pub fn nonshot_speed() -> (u64, f32, f32) {
+            let n = ENDLINE_NONSHOT_N.load(Ordering::Relaxed);
+            let d = n.max(1) as f32;
+            (
+                n,
+                ENDLINE_NONSHOT_SPEED_X100.load(Ordering::Relaxed) as f32 / 100.0 / d,
+                ENDLINE_NONSHOT_SLOW.load(Ordering::Relaxed) as f32 / d,
+            )
+        }
+
+        /// `(corners, goal kicks)`.
+        pub fn snapshot() -> (u64, u64) {
+            (
+                ENDLINE_CORNER.load(Ordering::Relaxed),
+                ENDLINE_GOAL_KICK.load(Ordering::Relaxed),
+            )
+        }
+
+        /// `(compact_id, goal kicks caused, mean run after the touch)`,
+        /// heaviest first.
+        pub fn run_snapshot() -> Vec<(u16, u64, f32)> {
+            let mut rows: Vec<(u16, u64, f32)> = (0..STATE_SLOTS)
+                .filter_map(|i| {
+                    let n = ENDLINE_RUN_BY_STATE[i].load(Ordering::Relaxed);
+                    if n == 0 {
+                        return None;
+                    }
+                    let run =
+                        ENDLINE_RUN_SUM_BY_STATE[i].load(Ordering::Relaxed) as f32 / n as f32;
+                    Some((i as u16, n, run))
+                })
+                .collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows
+        }
+    }
+
+    pub struct FoulCensus;
+
+    impl FoulCensus {
+        pub fn note(state_id: u16, in_own_box: bool) {
+            let i = state_id as usize;
+            if i >= STATE_SLOTS {
+                return;
+            }
+            FOUL_BY_STATE[i].fetch_add(1, Ordering::Relaxed);
+            if in_own_box {
+                FOUL_IN_BOX_BY_STATE[i].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(compact_id, fouls, fouls with the ball in our own box)`,
+        /// heaviest first.
+        pub fn snapshot() -> Vec<(u16, u64, u64)> {
+            let mut rows: Vec<(u16, u64, u64)> = (0..STATE_SLOTS)
+                .filter_map(|i| {
+                    let n = FOUL_BY_STATE[i].load(Ordering::Relaxed);
+                    if n == 0 {
+                        return None;
+                    }
+                    Some((i as u16, n, FOUL_IN_BOX_BY_STATE[i].load(Ordering::Relaxed)))
+                })
+                .collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows
+        }
+    }
+
+    pub struct ShapeCensus;
+
+    impl ShapeCensus {
+        /// One sample of how far forward of his anchor a player is, along
+        /// his own team's attacking direction.
+        pub fn note_axis_lag(role: usize, signed_lag: f32) {
+            if role >= 4 {
+                return;
+            }
+            let v = (signed_lag * 10.0) as i64 + SIGNED_BIAS as i64;
+            AXIS_LAG_BY_ROLE[role].fetch_add(v.max(0) as u64, Ordering::Relaxed);
+            AXIS_LAG_N[role].fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// Mean signed axis lag per role, in units.
+        pub fn axis_lag_snapshot() -> [f32; 4] {
+            let mut out = [0.0f32; 4];
+            for r in 0..4 {
+                let n = AXIS_LAG_N[r].load(Ordering::Relaxed);
+                if n == 0 {
+                    continue;
+                }
+                let sum = AXIS_LAG_BY_ROLE[r].load(Ordering::Relaxed) as f64;
+                out[r] = ((sum - (SIGNED_BIAS as f64) * n as f64) / 10.0 / n as f64) as f32;
+            }
+            out
+        }
+
+        pub fn note_span(anchor_span: f32, actual_span: f32, worst_lag: f32) {
+            SPAN_ANCHOR_X10.fetch_add((anchor_span * 10.0) as u64, Ordering::Relaxed);
+            SPAN_ACTUAL_X10.fetch_add((actual_span * 10.0) as u64, Ordering::Relaxed);
+            SPAN_WORST_LAG_X10.fetch_add((worst_lag * 10.0) as u64, Ordering::Relaxed);
+            SPAN_SAMPLES.fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// `(mean anchor span, mean actual span, mean worst lag)` in units.
+        pub fn span_snapshot() -> (f32, f32, f32) {
+            let n = SPAN_SAMPLES.load(Ordering::Relaxed).max(1) as f32;
+            (
+                SPAN_ANCHOR_X10.load(Ordering::Relaxed) as f32 / 10.0 / n,
+                SPAN_ACTUAL_X10.load(Ordering::Relaxed) as f32 / 10.0 / n,
+                SPAN_WORST_LAG_X10.load(Ordering::Relaxed) as f32 / 10.0 / n,
+            )
+        }
+    }
+
+    impl ShapeCensus {
+        pub fn note(state_id: u16, anchor_lag: f32, axis_lag: f32, moving: bool) {
+            let i = state_id as usize;
+            if i >= STATE_SLOTS {
+                return;
+            }
+            STATE_TICKS[i].fetch_add(1, Ordering::Relaxed);
+            STATE_ANCHOR_LAG[i].fetch_add((anchor_lag.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+            let v = (axis_lag * 10.0) as i64 + SIGNED_BIAS as i64;
+            STATE_AXIS_LAG[i].fetch_add(v.max(0) as u64, Ordering::Relaxed);
+            if !moving {
+                STATE_STILL_TICKS[i].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn reset() {
+            for i in 0..STATE_SLOTS {
+                STATE_TICKS[i].store(0, Ordering::Relaxed);
+                STATE_ANCHOR_LAG[i].store(0, Ordering::Relaxed);
+                STATE_AXIS_LAG[i].store(0, Ordering::Relaxed);
+                STATE_STILL_TICKS[i].store(0, Ordering::Relaxed);
+            }
+        }
+
+        /// `(compact_id, ticks, mean anchor lag, mean signed axis lag,
+        /// still share)` in units, for every state that saw play,
+        /// heaviest first.
+        pub fn snapshot() -> Vec<(u16, u64, f32, f32, f32)> {
+            let mut rows: Vec<(u16, u64, f32, f32, f32)> = (0..STATE_SLOTS)
+                .filter_map(|i| {
+                    let ticks = STATE_TICKS[i].load(Ordering::Relaxed);
+                    if ticks == 0 {
+                        return None;
+                    }
+                    let lag = STATE_ANCHOR_LAG[i].load(Ordering::Relaxed) as f32
+                        / 100.0
+                        / ticks as f32;
+                    let axis_sum = STATE_AXIS_LAG[i].load(Ordering::Relaxed) as f64;
+                    let axis = ((axis_sum - (SIGNED_BIAS as f64) * ticks as f64)
+                        / 10.0
+                        / ticks as f64) as f32;
+                    let still =
+                        STATE_STILL_TICKS[i].load(Ordering::Relaxed) as f32 / ticks as f32;
+                    Some((i as u16, ticks, lag, axis, still))
+                })
+                .collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows
+        }
     }
 }
 

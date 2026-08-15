@@ -12,7 +12,9 @@ use crate::r#match::player::strategies::common::PlayerOperationsImpl;
 use crate::r#match::player::strategies::common::PlayersOperationsImpl;
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::player_context::LooseBallChase;
-use crate::r#match::team::TeamOperationsImpl;
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::ShapeCensus;
+use crate::r#match::team::{ShapeDiscipline, TeamOperationsImpl};
 use crate::r#match::{BallOperationsImpl, GameTickContext, MatchContext, MatchPlayer, PlayerSide};
 use log::debug;
 use nalgebra::Vector3;
@@ -513,9 +515,35 @@ impl<'p> StateProcessor<'p> {
         let mut result = StateProcessingResult::new();
 
         if let Some(velocity) = handler.velocity(&processing_ctx) {
+            // Positional discipline first: keep the state's own intent
+            // inside the space the team plan gave this player. Applied
+            // here — the one point every state's movement converges on —
+            // rather than inside twenty state machines that cannot see
+            // each other. See `ShapeDiscipline`.
+            let shaped = ShapeDiscipline::apply(&processing_ctx, velocity);
             // Apply coach tempo multiplier to all player movement
             let tempo = processing_ctx.team().coach_instruction().tempo_multiplier();
-            result.velocity = Some(velocity * tempo);
+            result.velocity = Some(shaped * tempo);
+        }
+
+        // Shape census — one sample per AI tick per player, at the single
+        // point every state passes through. See `ShapeCensus`.
+        #[cfg(feature = "match-logs")]
+        {
+            let moving = result
+                .velocity
+                .is_some_and(|v| v.magnitude() > 0.02);
+            let anchor = processing_ctx.team().my_anchor();
+            let axis_lag = processing_ctx
+                .player
+                .side
+                .map_or(0.0, |s| s.forward_delta(anchor.x, processing_ctx.player.position.x));
+            ShapeCensus::note(
+                processing_ctx.player.state.compact_id(),
+                (processing_ctx.player.position - anchor).magnitude(),
+                axis_lag,
+                moving,
+            );
         }
 
         if let Some(change) = handler.process(&processing_ctx) {

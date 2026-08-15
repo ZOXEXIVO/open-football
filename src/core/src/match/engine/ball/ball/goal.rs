@@ -4,6 +4,8 @@
 //! since the ball can't move other players' positions itself.
 
 use super::Ball;
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::EndlineCensus;
 use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::engine::goal::GOAL_WIDTH;
@@ -402,6 +404,41 @@ impl Ball {
             .and_then(|p| p.side);
 
         let is_corner = last_toucher_side == Some(defending_side);
+
+        // Endline census — total crossings and how they split. A drop in
+        // corners can mean either "fewer balls go out behind" or "the same
+        // number go out but off the attacker", and the two have opposite
+        // fixes. The corner count alone cannot distinguish them.
+        #[cfg(feature = "match-logs")]
+        {
+            let last_state = self
+                .last_touch_player_id
+                .and_then(|pid| players.iter().find(|p| p.id == pid))
+                .map(|p| p.state.compact_id())
+                .unwrap_or(0);
+            EndlineCensus::note(is_corner, last_state);
+            // …and when it is a goal kick, how far did the ball run after
+            // the last man touched it, and what was he doing? A pass
+            // struck too hard and a clearance hammered out are the same
+            // count and completely different bugs.
+            if !is_corner {
+                let run = (self.position - self.last_touch_position).magnitude();
+                let toucher_state = self
+                    .last_touch_player_id
+                    .and_then(|pid| players.iter().find(|p| p.id == pid))
+                    .map(|p| p.state.compact_id())
+                    .unwrap_or(0);
+                // Was this a MISSED SHOT rather than a pass? The last
+                // toucher being the last shooter is the test. The states
+                // above cannot answer it: they are read now, and a shooter
+                // is back in an off-ball state long before his shot
+                // reaches the line.
+                let was_shot = self.last_shot_shooter_id.is_some()
+                    && self.last_shot_shooter_id == self.last_touch_player_id;
+                let speed = Vector3::new(self.velocity.x, self.velocity.y, 0.0).magnitude();
+                EndlineCensus::note_goal_kick_run(toucher_state, run, was_shot, speed);
+            }
+        }
 
         if is_corner {
             // Attacking team gets a corner. Place ball at the nearest corner

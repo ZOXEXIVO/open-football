@@ -134,7 +134,8 @@ impl StateProcessingHandler for MidfielderReturningState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let dist_to_start = (ctx.player.position - ctx.player.start_position).magnitude();
+        let anchor = ctx.team().my_anchor();
+        let dist_to_start = (ctx.player.position - anchor).magnitude();
 
         // Close enough — stop to prevent oscillation
         if dist_to_start < 8.0 {
@@ -142,7 +143,7 @@ impl StateProcessingHandler for MidfielderReturningState {
         }
 
         let arrive = SteeringBehavior::Arrive {
-            target: ctx.player.start_position,
+            target: anchor,
             slowing_distance: 50.0,
         }
         .calculate(ctx.player)

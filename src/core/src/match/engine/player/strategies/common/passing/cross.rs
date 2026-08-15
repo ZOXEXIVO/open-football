@@ -213,6 +213,20 @@ impl CrossModel {
 
     /// Whether a player is wide enough to cross. Used by the crossing
     /// states' entry guard.
+    /// Is this player wide enough to be crossing?
+    ///
+    /// NB this is NOT what limits crossing volume, though it looks like
+    /// it should be. The engine strikes **2-3 open-play crosses a match
+    /// against a real ~30** (the ~14 lofted deliveries it does produce
+    /// are almost all corner kicks — see `CrossDiag`), and the block is
+    /// only 40 m wide on a 68 m pitch, so its widest man stands ~14 m
+    /// infield of the touchline. Two fixes were tried on that reasoning
+    /// and BOTH measured nothing: widening the block plan to 64 m (the
+    /// occupied width stayed at 40.1 m — players no more occupy lateral
+    /// anchors than depth ones), and making this test shape-relative
+    /// rather than pitch-relative so the wide man in a narrow side still
+    /// counts. Crossing volume is gated by whatever decides to ENTER the
+    /// crossing states, not by this predicate.
     pub fn is_in_wide_position(ctx: &StateProcessingContext) -> bool {
         let field_height = ctx.context.field_size.height as f32;
         let y = ctx.player.position.y;

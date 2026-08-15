@@ -98,8 +98,13 @@ impl StateProcessingHandler for ForwardReturningState {
         // pixel; the tight number is a large part of why this state was
         // so sticky. 15u = 1.9 m, and the velocity fn holds still inside
         // it so he cannot creep.
+        //
+        // "Position" is the team's live anchor, not the kickoff dot — a
+        // forward who has jogged back to where he stood at 0:00 while his
+        // block has slid 30 m to the left flank is not in position, he is
+        // in the place the match started.
         const IN_POSITION: f32 = 15.0;
-        if ctx.player().distance_from_start_position() < IN_POSITION {
+        if ctx.team().distance_from_anchor() < IN_POSITION {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Standing,
             ));
@@ -140,7 +145,7 @@ impl StateProcessingHandler for ForwardReturningState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.player.start_position,
+                target: ctx.team().my_anchor(),
                 slowing_distance: 10.0,
             }
             .calculate(ctx.player)

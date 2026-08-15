@@ -156,16 +156,20 @@ impl StateProcessingHandler for MidfielderWalkingState {
             }
         }
 
-        // Walk toward start position at reduced speed — no random jitter
-        let to_start = ctx.player.start_position - ctx.player.position;
-        let dist = to_start.magnitude();
+        // Walk into the team's live anchor at reduced speed. This used to
+        // aim at `start_position` — the kickoff dot — which is why the
+        // midfield ran 23.6 km a match: the block never moved, so every
+        // recovery was a full-length trek back to a coordinate the ball
+        // had long left.
+        let anchor = ctx.team().my_anchor();
+        let dist = (anchor - ctx.player.position).magnitude();
         if dist < 5.0 {
             return Some(Vector3::zeros());
         }
 
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.player.start_position,
+                target: anchor,
                 slowing_distance: 30.0,
             }
             .calculate(ctx.player)

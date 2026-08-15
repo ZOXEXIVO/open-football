@@ -21,8 +21,8 @@ use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::{
     AttackPlan, AttackRefreshInputs, CoachInstruction, DefenceRefreshInputs, DefensivePlan,
     GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState,
-    PenaltyShootoutKick, Score, StateManager, SubstitutionInfo, TacticalRefreshInputs,
-    TeamTacticalState,
+    PenaltyShootoutKick, Score, ShapeRefreshInputs, StateManager, SubstitutionInfo,
+    TacticalRefreshInputs, TeamShape, TeamTacticalState,
 };
 use crate::{MatchRuntime, PlayerFieldPositionGroup};
 #[cfg(feature = "match-logs")]

@@ -166,6 +166,15 @@ impl Default for TeamSkillAggregates {
 pub struct TacticalRefreshInputs<'a> {
     pub field: &'a MatchField,
     pub home_team_id: u32,
+    /// Which end the HOME side is defending right now. Sides swap at
+    /// half time (`MatchField::swap_squads`), so this cannot be assumed:
+    /// every zone / line-height number below is expressed relative to a
+    /// team's own goal, and reading it off the wrong end inverts the
+    /// entire tactical layer for one half of every match — a team in its
+    /// own six-yard box would classify as `AttackingThird`, pick the
+    /// `Attack` phase, and push its defensive line to 55% of the pitch
+    /// while under siege.
+    pub home_side: PlayerSide,
     pub tick_interval: u32,
     pub coach_wants_high_press_home: bool,
     pub coach_wants_high_press_away: bool,
@@ -402,9 +411,12 @@ impl TeamTacticalState {
             0
         };
 
-        // Ball zones from each team's perspective.
-        home.ball_zone = BallZone::for_side(field_width, ball_x, PlayerSide::Left);
-        away.ball_zone = BallZone::for_side(field_width, ball_x, PlayerSide::Right);
+        // Ball zones from each team's perspective — read off the end each
+        // side is actually defending, not off a first-half assumption.
+        let home_side = inputs.home_side;
+        let away_side = home_side.opposite();
+        home.ball_zone = BallZone::for_side(field_width, ball_x, home_side);
+        away.ball_zone = BallZone::for_side(field_width, ball_x, away_side);
         let side_zone = BallSideZone::for_y(field_height, ball_y);
         home.ball_side = side_zone;
         away.ball_side = side_zone;
@@ -504,21 +516,27 @@ impl TeamTacticalState {
         // Defensive line x: interpolate between "deep" (own third
         // boundary) and "high" (opponent's half) based on phase. Gives
         // defenders a shared reference frame for how high to push.
-        let third = field_width / 3.0;
-        let home_base_line = match home.phase {
-            GamePhase::HighPress | GamePhase::Attack => field_width * 0.55,
-            GamePhase::AttackingTransition | GamePhase::Progression => field_width * 0.45,
-            GamePhase::BuildUp => field_width * 0.25,
-            GamePhase::MidBlock | GamePhase::DefensiveTransition => third,
-            GamePhase::LowBlock => field_width * 0.18,
+        //
+        // Expressed as attacking PROGRESS (0 = own goal line, 1 = theirs)
+        // and mapped back onto the pitch through the side each team is
+        // actually defending. The two hand-mirrored constant tables this
+        // replaces disagreed with each other — the away side's `BuildUp`
+        // was 0.75 (= 0.25 progress, matching home) but its `MidBlock` was
+        // `field_width - third` (= 0.333 progress) against home's `third`
+        // (also 0.333), so they only happened to agree while home was
+        // Left. After the half-time swap both tables were read off the
+        // wrong end.
+        let base_line_progress = |phase: GamePhase| -> f32 {
+            match phase {
+                GamePhase::HighPress | GamePhase::Attack => 0.55,
+                GamePhase::AttackingTransition | GamePhase::Progression => 0.45,
+                GamePhase::BuildUp => 0.25,
+                GamePhase::MidBlock | GamePhase::DefensiveTransition => 1.0 / 3.0,
+                GamePhase::LowBlock => 0.18,
+            }
         };
-        let away_base_line = match away.phase {
-            GamePhase::HighPress | GamePhase::Attack => field_width * 0.45,
-            GamePhase::AttackingTransition | GamePhase::Progression => field_width * 0.55,
-            GamePhase::BuildUp => field_width * 0.75,
-            GamePhase::MidBlock | GamePhase::DefensiveTransition => field_width - third,
-            GamePhase::LowBlock => field_width * 0.82,
-        };
+        let home_base_line = home_side.x_at_progress(base_line_progress(home.phase), field_width);
+        let away_base_line = away_side.x_at_progress(base_line_progress(away.phase), field_width);
         // Defensive-quality risk drop: weak back lines lower their
         // line by up to 0.06 of the pitch so a shaky 5-rated CB pair
         // doesn't get caught chasing through-balls they can't recover.
@@ -556,11 +574,14 @@ impl TeamTacticalState {
         // window; not a six-yard-box bus.
         let home_gm_drop = field_width * 0.05 * home.game_management_intensity;
         let away_gm_drop = field_width * 0.05 * away.game_management_intensity;
-        home.defensive_line_x = (home_base_line - home_line_drop_units + home_gk_lift
-            - home_gm_drop)
+        // Drops pull the line toward that side's OWN goal and the GK lift
+        // pushes it away from it, so both are signed by the side's
+        // attacking direction rather than written out twice by hand.
+        home.defensive_line_x = (home_base_line
+            + home_side.forward_dir_x() * (home_gk_lift - home_line_drop_units - home_gm_drop))
             .clamp(0.0, field_width);
-        away.defensive_line_x = (away_base_line + away_line_drop_units - away_gk_lift
-            + away_gm_drop)
+        away.defensive_line_x = (away_base_line
+            + away_side.forward_dir_x() * (away_gk_lift - away_line_drop_units - away_gm_drop))
             .clamp(0.0, field_width);
 
         // ── Phase-dependent signals ──────────────────────────────────

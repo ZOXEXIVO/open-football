@@ -100,6 +100,25 @@ impl StateProcessingHandler for ForwardStandingState {
                 return None;
             }
 
+            // Standing is only legitimate while he is roughly WHERE HIS
+            // TEAM WANTS HIM. The block slides with the ball every
+            // refresh, so an anchor that was under his feet a moment ago
+            // has moved, and this state's velocity used to be exactly
+            // zero — which is how a forward came to spend 63% of a match
+            // motionless while his side attacked without him.
+            //
+            // The threshold is a genuine recovery run, not a nudge: the
+            // velocity fn below already shuffles him toward a nearby
+            // anchor, and `ShapeDiscipline` pulls on him from 6 m out
+            // whatever state he is in. A tight trigger here just adds a
+            // transition on top of two mechanisms that already handle it
+            // — at 3 m it fired on nearly every tick, because the settled
+            // anchor lag is 12 m, and measurably raised state churn.
+            const OUT_OF_SHAPE: f32 = 160.0;
+            if ctx.team().distance_from_anchor() > OUT_OF_SHAPE {
+                return Some(StateChangeResult::with_forward_state(ForwardState::Walking));
+            }
+
             // Offside discipline — if we're stranded beyond the opposing
             // defensive line while our team doesn't have the ball, drop
             // back. Otherwise we stay camped near the opponent's goal
@@ -144,9 +163,25 @@ impl StateProcessingHandler for ForwardStandingState {
             }
         }
 
-        // Standing = completely still. Separation is handled by transitioning
-        // to Running state, not by applying forces while stationary.
-        Some(Vector3::zeros())
+        // Standing = holding position, which is not the same as being
+        // frozen. `process` sends him to Walking once he is more than a
+        // couple of strides out of shape; inside that band he adjusts his
+        // feet toward the anchor rather than standing on a spot the block
+        // has already moved off. `Arrive` decelerates into its target, so
+        // this is a shuffle that stops on arrival, not a drift.
+        let to_anchor = ctx.team().my_anchor() - ctx.player.position;
+        if to_anchor.magnitude() < 4.0 {
+            return Some(Vector3::zeros());
+        }
+        Some(
+            SteeringBehavior::Arrive {
+                target: ctx.player.position + to_anchor,
+                slowing_distance: 20.0,
+            }
+            .calculate(ctx.player)
+            .velocity
+                * 0.35,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

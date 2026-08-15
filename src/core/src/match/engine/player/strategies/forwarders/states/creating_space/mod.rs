@@ -146,18 +146,42 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             );
         }
 
-        // Forwards must always push TOWARD the opponent goal, never drop back.
-        // Target X: between the ball and the goal, biased heavily toward goal.
-        let forward_x = goal_pos.x * 0.6 + ball_pos.x * 0.4;
-        // Never behind the ball — always ahead
+        // DEPTH comes from the team block; this state chooses the LANE.
+        //
+        // What used to be here was "forwards must always push TOWARD the
+        // opponent goal, never drop back": a target 60% of the way from
+        // the ball to the goal, floored at 40% of the pitch and never
+        // behind the ball. With the ball on the halfway line that puts a
+        // forward 21 m from the opponent's goal — inside the box —
+        // whenever his side has possession anywhere, and there is no ball
+        // position from which the rule lets him come and get it.
+        //
+        // Measured, it was the single largest contributor to the block
+        // length: forwards sat a mean **+8.9 m further forward than the
+        // team plan** while defenders sat 3.7 m deeper, and those two
+        // numbers ARE the split team. It also put a forward within 12 m
+        // of goal for 18% of the match.
+        //
+        // The forward's depth is the front of his team's block, which
+        // already accounts for the ball, the phase, the press and the
+        // line height. He gets his lane from the gap scan below — that
+        // part was doing real work and is kept.
+        let anchor = ctx.team().my_anchor();
+        // He may lead the block, but by a stride or two, not by a third
+        // of a pitch: this is the striker's licence to play on the
+        // shoulder rather than a licence to leave.
+        const LEAD: f32 = 40.0;
+        let lead_x = anchor.x + attacking_direction * LEAD;
         let (raw_min, raw_max) = if attacking_direction > 0.0 {
-            (ball_pos.x.max(field_width * 0.4), field_width - 30.0)
+            (anchor.x, (lead_x).min(field_width - 30.0))
         } else {
-            (30.0, ball_pos.x.min(field_width * 0.6))
+            ((lead_x).max(30.0), anchor.x)
         };
-        // Safety: ensure min <= max when ball is near the edge
         let min_x = raw_min.min(raw_max);
-        let target_x = forward_x.clamp(min_x, raw_max);
+        let target_x = lead_x.clamp(min_x, raw_max.max(min_x));
+        // `goal_pos` still drives the box-slot branch above; the gap scan
+        // below keys off the ball.
+        let _ = goal_pos;
 
         // Find gaps between defenders in the attacking zone — and
         // assign a DIFFERENT gap to each of our forwards so they run

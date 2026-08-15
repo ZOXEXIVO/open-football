@@ -17,6 +17,8 @@ use crate::r#match::engine::zones::MatchZone;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::gk_claim::GkClaimContest;
 #[cfg(feature = "match-logs")]
+use crate::mid_run_diag::FoulCensus;
+#[cfg(feature = "match-logs")]
 use crate::r#match::player::events::gk_claim::gk_claim_diag;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 #[cfg(feature = "match-logs")]
@@ -4575,6 +4577,26 @@ impl PlayerEventDispatcher {
         // calls more, a lenient one waves play on). The card decision
         // is computed only when the whistle goes — a missed call costs
         // nobody a yellow.
+        // Foul-source census: which STATE emitted this contact, and was
+        // the ball in the fouler's own box at the time (i.e. is this a
+        // penalty candidate). Recorded before the referee gate so the
+        // emitted rate and the whistled rate can be told apart. Restraining
+        // the tackle model cut tackles 22.4 → 18.3 and moved the penalty
+        // rate by nothing at all, which means the box fouls are being
+        // emitted somewhere else — this says where.
+        #[cfg(feature = "match-logs")]
+        if let Some(f) = field.players.iter().find(|p| p.id == fouler_id) {
+            let in_box = f
+                .side
+                .map(|s| {
+                    context
+                        .penalty_area(s == PlayerSide::Left)
+                        .contains(&field.ball.position)
+                })
+                .unwrap_or(false);
+            FoulCensus::note(f.state.compact_id(), in_box);
+        }
+
         let call_ctx = FoulResolver::build_call_context(fouler_id, severity, field, context);
         let call_prob = context
             .referee

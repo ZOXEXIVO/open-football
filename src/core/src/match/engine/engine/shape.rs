@@ -436,9 +436,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             (&field.right_team_tactics, &field.left_team_tactics)
         };
 
+        let home_side = if home_is_left {
+            PlayerSide::Left
+        } else {
+            PlayerSide::Right
+        };
+
         let inputs = TacticalRefreshInputs {
             field,
             home_team_id: context.field_home_team_id,
+            home_side,
             tick_interval,
             coach_wants_high_press_home: home_high_press,
             coach_wants_high_press_away: away_high_press,
@@ -495,6 +502,26 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             &mut context.defence_home,
             &mut context.defence_away,
             &defence_inputs,
+        );
+
+        // …and the positional layer under all three. The plans above name
+        // the players involved with the ball; this gives EVERY player a
+        // live place to be, so the seven or eight who aren't involved stop
+        // steering at a kickoff dot they were drawn on before the match.
+        // Runs last because it reads the tactical state the first refresh
+        // produced (line height, compactness, width, press intensity).
+        let shape_inputs = ShapeRefreshInputs {
+            field,
+            home_team_id: context.field_home_team_id,
+            away_team_id: context.field_away_team_id,
+            home_tactical: &context.tactical_home,
+            away_tactical: &context.tactical_away,
+            tick_interval,
+        };
+        TeamShape::refresh(
+            &mut context.shape_home,
+            &mut context.shape_away,
+            &shape_inputs,
         );
 
         // Cumulative possession + field-tilt counters feed the rolling

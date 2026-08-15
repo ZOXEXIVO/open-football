@@ -1,6 +1,6 @@
 use crate::r#match::{
     AttackPlan, BoxSlot, CoachInstruction, DefensiveDuty, DefensivePlan, GamePhase, MatchCoach,
-    MatchPlayerLite, PlayerSide, StateProcessingContext, TeamTacticalState,
+    MatchPlayerLite, PlayerSide, StateProcessingContext, TeamShape, TeamTacticalState,
 };
 use crate::{PlayerFieldPositionGroup, Tactics};
 use nalgebra::Vector3;
@@ -151,6 +151,54 @@ impl<'b> TeamOperationsImpl<'b> {
         let forward_dir = self.ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
         let ball_y = self.ctx.tick_context.positions.ball.position.y;
         Some(slot.target(goal, ball_y, field_height, forward_dir))
+    }
+
+    /// This side's live positional block.
+    pub fn shape(&self) -> &TeamShape {
+        self.ctx.context.shape_for_team(self.ctx.player.team_id)
+    }
+
+    /// **The one place this player is trying to be right now**, when he
+    /// has no ball to play.
+    ///
+    /// This is the single-target resolver: four team-level systems can
+    /// each have an opinion about where a player belongs, and this is the
+    /// order they win in.
+    ///
+    /// 1. **Box slot** — he has been given a patch of the penalty area in
+    ///    the current attack ([`AttackPlan`]). Most specific, so it wins.
+    /// 2. **Defensive duty** — he has been given a man, a cover angle, or
+    ///    the ball carrier ([`DefensivePlan`]). Only applies while his
+    ///    side is actually defending.
+    /// 3. **Team shape** — his anchor inside the live block
+    ///    ([`TeamShape`]). Always available, covers all eleven, and is
+    ///    what makes the side one body rather than eleven agents.
+    /// 4. **Kickoff dot** — the pre-plan fallback, kept only for the
+    ///    first tick of a match and for a player who has somehow left
+    ///    every roster.
+    ///
+    /// Every off-ball state steers at this instead of deriving its own
+    /// destination, which is what stops two players computing the same
+    /// answer from the same global geometry and running to the same patch
+    /// of grass.
+    pub fn my_anchor(&self) -> Vector3<f32> {
+        if let Some(slot) = self.my_box_slot_target() {
+            return slot;
+        }
+        if !self.tactical().in_possession {
+            if let Some(duty) = self.my_duty_anchor() {
+                return duty;
+            }
+        }
+        if let Some(anchor) = self.shape().anchor_of(self.ctx.player.id) {
+            return anchor;
+        }
+        self.ctx.player.start_position
+    }
+
+    /// How far this player is from the place his team wants him.
+    pub fn distance_from_anchor(&self) -> f32 {
+        (self.ctx.player.position - self.my_anchor()).magnitude()
     }
 
     /// Is the attack ready to progress? True when at least one of our

@@ -14,6 +14,7 @@ use nalgebra::Vector3;
 #[derive(Default, Clone)]
 pub struct DefenderClearingState {}
 
+
 impl StateProcessingHandler for DefenderClearingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Wait a few ticks before clearing to allow the player to reach the ball
@@ -51,6 +52,13 @@ impl StateProcessingHandler for DefenderClearingState {
         let rng = &ctx.context.rng;
         let poor_clearance = rng.random::<f32>() < def_profile.poor_clearance_chance.min(0.95);
 
+        // NB "hook it behind for a corner" — the largest real-world
+        // corner source — was implemented here and REMOVED, because this
+        // state does not run: `Defender: Clearing` is below 0.25% of AI
+        // ticks in the state census, so the logic was correct and dead.
+        // Defensive clearances in this engine happen in the cross
+        // contest's headed-clear branch (`resolve_cross_contest`) and in
+        // the heading states, not here.
         let halfway_x = field_width * 0.5;
         let nominal_target_x = if is_left_side {
             halfway_x.max(ball_position.x + 30.0)

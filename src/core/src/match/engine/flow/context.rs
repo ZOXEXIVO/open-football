@@ -58,8 +58,8 @@ impl MatchEngineConfig {
 use crate::r#match::{
     AttackPlan, DefensivePlan, GameState, GoalCelebration, GoalDetail, GoalPosition,
     MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MatchCoach, MatchField, MatchFieldSize,
-    MatchPlayerCollection, MatchState, MatchTime, PlayerSide, Score, TeamSkillAggregates,
-    TeamTacticalState, TeamsTactics,
+    MatchPlayerCollection, MatchState, MatchTime, PlayerSide, Score, TeamShape,
+    TeamSkillAggregates, TeamTacticalState, TeamsTactics,
 };
 use nalgebra::Vector3;
 
@@ -165,6 +165,14 @@ pub struct MatchContext {
     /// [`DefensivePlan`](crate::r#match::DefensivePlan).
     pub defence_home: DefensivePlan,
     pub defence_away: DefensivePlan,
+
+    /// The live positional block for each side, and every player's anchor
+    /// inside it. The three plans above only ever name the handful of
+    /// players involved with the ball; this one covers all eleven, in
+    /// every phase, and is what off-ball movement steers at instead of the
+    /// static kickoff dot. See [`TeamShape`](crate::r#match::TeamShape).
+    pub shape_home: TeamShape,
+    pub shape_away: TeamShape,
 
     /// Knockout-format match — enables extra time + penalty shootout when
     /// the score is level at the end of regulation.
@@ -386,6 +394,8 @@ impl MatchContext {
             attack_away: AttackPlan::idle(),
             defence_home: DefensivePlan::idle(),
             defence_away: DefensivePlan::idle(),
+            shape_home: TeamShape::idle(),
+            shape_away: TeamShape::idle(),
             is_knockout,
             environment: MatchEnvironment::default(),
             referee: RefereeProfile::default(),
@@ -466,6 +476,15 @@ impl MatchContext {
             &self.defence_home
         } else {
             &self.defence_away
+        }
+    }
+
+    /// This team's live positional block.
+    pub fn shape_for_team(&self, team_id: u32) -> &TeamShape {
+        if team_id == self.field_home_team_id {
+            &self.shape_home
+        } else {
+            &self.shape_away
         }
     }
 
@@ -551,6 +570,25 @@ impl MatchContext {
         use std::sync::OnceLock;
         static BLIND: OnceLock<bool> = OnceLock::new();
         *BLIND.get_or_init(|| std::env::var("OF_SCORE_BLIND").is_ok())
+    }
+
+    /// Diagnostic switch: when the `OF_SHAPE_OFF` env var is set, the
+    /// team-shape layer is inert — [`TeamShape`] stops handing out
+    /// anchors and `ShapeDiscipline` stops pulling on anybody, so every
+    /// off-ball consumer falls back to the kickoff formation dot exactly
+    /// as it did before the layer existed.
+    ///
+    /// This is the A/B control for the whole positional system. Its
+    /// effects reach every player on every tick, so "did the shape work
+    /// cause this?" cannot be answered by reading the diff — and it must
+    /// not be answered by checking out an older revision either, because
+    /// the working tree moves under you. Same pattern and same purpose as
+    /// [`score_blind`](Self::score_blind); read once per process. Debug
+    /// infrastructure — do not remove.
+    pub fn shape_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_SHAPE_OFF").is_ok())
     }
 
     /// Match minute before which BEHAVIORAL score reactions stay off —

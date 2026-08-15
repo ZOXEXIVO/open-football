@@ -623,6 +623,17 @@ impl<'p> PlayerOperationsImpl<'p> {
         //    0. Use the *closest* defender — multiple defenders at the
         //    same distance shouldn't multiply the penalty (you only need
         //    to evade one of them with the back-swing).
+        //
+        // The 12u radius (1.5 m) and the closest-only rule together mean
+        // a team's SHAPE cannot suppress shooting: three defenders read
+        // exactly like one, and the measured pressure factor sits at
+        // 0.93-0.96 from 11 m out. Widening the radius to 32u and adding
+        // a decaying crowd term was tried on that reasoning and is
+        // WRONG — it took shots from 29 to 37 per team and goals from
+        // 6.1 to 7.3. Pressure does not only suppress the shot; it also
+        // feeds the "strike before you are closed down" reliefs, and at a
+        // realistic radius the second effect dominates. Whatever the fix
+        // for shot supply is, it is not here.
         let mut closest_pressure = 0.0_f32;
         for opp in self.ctx.players().opponents().nearby(12.0) {
             if opp.tactical_positions.is_goalkeeper() {

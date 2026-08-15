@@ -59,14 +59,14 @@ impl StateProcessingHandler for DefenderReturningState {
             }
         }
 
-        if ctx.player().distance_from_start_position() < 10.0 {
+        if ctx.team().distance_from_anchor() < 10.0 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Standing,
             ));
         }
 
         if ctx.team().is_control_ball() {
-            if ctx.player().distance_from_start_position() < 5.0 {
+            if ctx.team().distance_from_anchor() < 5.0 {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Standing,
                 ));
@@ -108,7 +108,7 @@ impl StateProcessingHandler for DefenderReturningState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.player.start_position,
+                target: ctx.team().my_anchor(),
                 slowing_distance: 10.0,
             }
             .calculate(ctx.player)

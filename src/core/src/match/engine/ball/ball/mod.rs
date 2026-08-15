@@ -28,6 +28,8 @@ mod restart;
 // the dev harness, same as `ownership::reception_diag`.
 pub mod stall;
 
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::{CrossDiag, PassWeightCensus};
 use crate::r#match::engine::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::net::BallInNet;
 use crate::r#match::engine::set_pieces::CornerRoutine;
@@ -975,6 +977,10 @@ pub struct Ball {
     /// block, save, pass) and from foot-deflections that don't transfer
     /// ownership but still count as a touch for the dead-ball decision.
     pub last_touch_player_id: Option<u32>,
+    /// Where the last touch happened. Diagnostic-only, so it exists only
+    /// under `match-logs` — see `EndlineCensus`.
+    #[cfg(feature = "match-logs")]
+    pub last_touch_position: Vector3<f32>,
     pub last_touch_team_id: Option<u32>,
     pub last_touch_tick: u64,
     pub last_touch_was_controlled: bool,
@@ -1308,6 +1314,8 @@ impl Ball {
             cached_shot_target: None,
             pending_save_credit: None,
             last_touch_player_id: None,
+            #[cfg(feature = "match-logs")]
+            last_touch_position: Vector3::new(x, y, 0.0),
             last_touch_team_id: None,
             last_touch_tick: 0,
             last_touch_was_controlled: false,
@@ -1452,6 +1460,37 @@ impl Ball {
     /// Record a meaningful touch. Drives restart resolution. `controlled`
     /// distinguishes a clean reception from a deflection / failed save.
     pub fn record_touch(&mut self, player_id: u32, team_id: u32, tick: u64, controlled: bool) {
+        // Where the touch happened, so a downstream diagnostic can ask how
+        // far the ball ran afterwards. Diagnostic-only — see
+        // `EndlineCensus`.
+        #[cfg(feature = "match-logs")]
+        {
+            self.last_touch_position = self.position;
+            // A lofted delivery that somebody touches before the aerial
+            // contest resolves it never gets contested at all — the ball
+            // was reserved for one named receiver rather than fought for
+            // by the box. Counting these says whether the crossing gap is
+            // a DELIVERY problem or a RECEPTION problem.
+            if !self.cross_contest_resolved
+                && self.pending_cross_type.is_some_and(CrossType::is_lofted)
+            {
+                CrossDiag::note_touched_first();
+            }
+            // Pass OVERSHOOT, measured at the chokepoint every touch goes
+            // through: a live pass that somebody has just touched tells us
+            // how far it was meant to travel and how far it actually did.
+            // The whole question "is the ball being struck too hard" is
+            // this ratio, and nothing else measures it.
+            if let (Some(origin), Some(target)) =
+                (self.pending_pass_origin, self.pending_pass_target)
+            {
+                PassWeightCensus::note(
+                    (target - origin).magnitude(),
+                    (self.position - origin).magnitude(),
+                    self.pass_target_player_id == Some(player_id),
+                );
+            }
+        }
         // Somebody else has been on the ball — whatever the last releaser
         // did is history, and their re-collect bar lifts.
         if self
@@ -2583,6 +2622,16 @@ impl Ball {
     /// in flight (claim, interception, expiry, set-piece restart).
     #[inline]
     pub fn clear_pending_pass_metadata(&mut self) {
+        // A lofted delivery being disarmed here never reached the aerial
+        // contest. Record the height it died at — that says whether it
+        // was cut out on the way up, at head height, or after landing,
+        // and those are three different bugs.
+        #[cfg(feature = "match-logs")]
+        if !self.cross_contest_resolved
+            && self.pending_cross_type.is_some_and(CrossType::is_lofted)
+        {
+            CrossDiag::note_disarmed_at(self.position.z);
+        }
         self.pending_pass_passer = None;
         self.pending_pass_origin = None;
         self.pending_pass_target = None;

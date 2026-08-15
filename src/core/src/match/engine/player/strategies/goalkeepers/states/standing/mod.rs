@@ -139,6 +139,15 @@ impl StateProcessingHandler for GoalkeeperStandingState {
             // enough to matter.
         }
 
+        // NB a wider "sweep up slow balls in my area" branch was tried
+        // here and REMOVED: it fired on under 0.25% of keeper ticks and
+        // moved nothing. The balls trickling over the goal line are
+        // crossing WIDE of the penalty area, near the corner flags, where
+        // a keeper correctly does not go — and where a defender who
+        // touched it last would be conceding a corner rather than saving
+        // one. The endline losses are not a keeper-positioning problem.
+        // See `EndlineCensus`.
+        //
         // Check for loose ball in dangerous area — same self-recollect bar
         // as the close-ball branch above, or `ComingOut` simply becomes the
         // second door into the same cycle.
@@ -233,6 +242,7 @@ impl StateProcessingHandler for GoalkeeperStandingState {
 }
 
 impl GoalkeeperStandingState {
+
     /// Goal kick: go long, or play short to a defender?
     ///
     /// Continuous score, no threshold flip. Going long is driven by the
