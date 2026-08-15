@@ -364,9 +364,7 @@ impl Ball {
                     let near_side = y < FLAG || y > h - FLAG;
                     if near_end && near_side {
                         0
-                    } else if (x < 132.0 || x > w - 132.0)
-                        && (y - h * 0.5).abs() < h * 0.35
-                    {
+                    } else if (x < 132.0 || x > w - 132.0) && (y - h * 0.5).abs() < h * 0.35 {
                         1
                     } else if y < TOUCH || y > h - TOUCH {
                         2

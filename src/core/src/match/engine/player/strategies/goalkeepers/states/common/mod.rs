@@ -1,8 +1,8 @@
-use crate::r#match::StateProcessingContext;
 use crate::r#match::engine::player::strategies::common::{
     ActivityIntensityConfig, ConditionProcessor, GOALKEEPER_JADEDNESS_INCREMENT,
     GOALKEEPER_JADEDNESS_INTERVAL, GOALKEEPER_LOW_CONDITION_THRESHOLD,
 };
+use crate::r#match::{PlayerSide, StateProcessingContext};
 use nalgebra::Vector3;
 
 /// Goalkeeper-specific activity intensity configuration
@@ -68,6 +68,115 @@ impl ActivityIntensityConfig for GoalkeeperConfig {
 /// (839.3, 223.6, 1.20) without moving for 3.5 seconds.
 ///
 /// UNITS: 1 unit = 0.125 m.
+/// Where the keeper stands during OPEN PLAY — as distinct from
+/// [`KeeperSetPosition`], which is where he sets himself to face a strike.
+///
+/// # Why this exists
+///
+/// Two states owned a keeper's resting position — `Standing` and
+/// `Walking` — and each had its own copy of the model with different
+/// constants, so the same keeper wanted to be in two different places
+/// depending on which state he happened to be in. Both copies were also
+/// wrong in the same way: their whole depth range came to about 1-4 m, so
+/// a keeper never left his line. He stood motionless for **88% of the
+/// match**, which is the "only the GK stays in the goal" report.
+///
+/// # The model
+///
+/// Depth is set by **where the ball is** and **how high his own defence
+/// is**; lateral position by **the angle** — he stands on the line from
+/// the middle of his goal to the ball, which is what narrowing the angle
+/// physically means, and which gives him his side-to-side movement for
+/// free.
+///
+/// Real reference points, which the constants reproduce:
+///   * ball in the opponent's half behind a high line — 20-28 m out,
+///     effectively a sweeper;
+///   * ball in midfield — 12-18 m;
+///   * ball entering our final third — 6-10 m;
+///   * ball in the box — 2-5 m, on the angle.
+pub struct KeeperRestPosition;
+
+impl KeeperRestPosition {
+    /// Off his line with the ball at the far end and the line high.
+    /// 220u = 27.5 m.
+    const SWEEP_DEPTH: f32 = 220.0;
+    /// …and with the ball on top of him. 18u = 2.25 m.
+    const NEAR_DEPTH: f32 = 18.0;
+    /// He never closes to within this of his own back line — the space
+    /// in behind is his to cover, not a free run for a striker.
+    const BEHIND_LINE_GAP: f32 = 150.0;
+    /// Inside this he is where he wants to be and stands set. A keeper
+    /// standing still, set, is a real and common thing; without a
+    /// deadzone he chases a target that moves every tick with the ball
+    /// and covers more ground than a midfielder.
+    ///
+    /// 26u = 3.25 m. A keeper repositions in STEPS — he shuffles, then
+    /// sets, then shuffles again — rather than gliding continuously after
+    /// the ball. At 10u he tracked it every tick and covered 10.2 km
+    /// against a real ~5 km.
+    pub const SET_DEADZONE: f32 = 26.0;
+
+    /// The spot, for a keeper defending `own_goal`, given where the ball
+    /// is and where his side's defensive line is sitting.
+    pub fn point(
+        own_goal: Vector3<f32>,
+        ball: Vector3<f32>,
+        side: PlayerSide,
+        defensive_line_x: f32,
+        field_width: f32,
+        command_of_area: f32,
+        positioning: f32,
+    ) -> Vector3<f32> {
+        let to_ball = ball - own_goal;
+        let ball_distance = to_ball.magnitude();
+
+        // Depth rises with the ball's distance. SQUARED, so he drops onto
+        // his line quickly as the ball comes into the final third and only
+        // drifts back up slowly once it has gone — the asymmetry a keeper
+        // actually plays with: getting back is urgent, pushing up is not.
+        let far = (ball_distance / field_width).clamp(0.0, 1.0);
+        let mut depth = Self::NEAR_DEPTH + (Self::SWEEP_DEPTH - Self::NEAR_DEPTH) * far * far;
+        // Temperament: a commanding keeper sweeps, a line-keeper does not.
+        depth *= 0.65 + command_of_area.clamp(0.0, 1.0) * 0.55;
+
+        // Tethered to his own defensive line. A keeper 30 m off his line
+        // behind a deep block is lost, not brave; behind a high line, one
+        // on his goal line leaves 40 m of grass nobody covers.
+        // `defensive_line_x` is the same reference the back four uses, so
+        // keeper and defence agree where the space in behind is.
+        let line_progress = side.attacking_progress_x(defensive_line_x, field_width);
+        let line_depth =
+            (line_progress * field_width - Self::BEHIND_LINE_GAP).max(Self::NEAR_DEPTH);
+        depth = depth.min(line_depth).min(field_width * 0.5 - 20.0);
+
+        // On the goal-to-ball line. A better-positioned keeper sits truer
+        // on the angle; a poorer one hedges centrally and can be beaten at
+        // his near post.
+        let toward_ball = if ball_distance > 1.0 {
+            to_ball / ball_distance
+        } else {
+            Vector3::new(side.forward_dir_x(), 0.0, 0.0)
+        };
+        let on_angle = own_goal + toward_ball * depth;
+        let fidelity = 0.55 + positioning.clamp(0.0, 1.0) * 0.45;
+        Vector3::new(
+            on_angle.x,
+            own_goal.y + (on_angle.y - own_goal.y) * fidelity,
+            0.0,
+        )
+    }
+
+    /// How fast he travels to it — set by how near the BALL is, not by how
+    /// far he has to go. That is the difference between a keeper strolling
+    /// to the edge of his box while play is at the other end and the same
+    /// keeper sprinting to the same spot with a striker running through.
+    pub fn pace(ball_distance: f32, field_width: f32) -> f32 {
+        let urgency = (1.0 - ball_distance / (field_width * 0.55)).clamp(0.0, 1.0);
+        0.18 + urgency * urgency * 1.12
+    }
+}
+
 pub struct KeeperSetPosition;
 
 impl KeeperSetPosition {

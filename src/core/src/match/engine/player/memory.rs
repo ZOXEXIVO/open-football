@@ -45,27 +45,28 @@ impl PlayerMemory {
         Self::default()
     }
 
-    /// Can this player take a shot right now?
+    /// Can this player take a shot right now? **Always yes.**
     ///
-    /// After shooting, a player is physically unable to strike again
-    /// instantly — momentum carries them forward, the ball has left
-    /// their feet, stance is broken. Real football: rebound shots
-    /// (saved → tap-in by the same striker) take ~1-2 seconds. The
-    /// per-possession shot cap and team-level cooldown handle "shot
-    /// spam" prevention; this cooldown only needs to be long enough
-    /// to make a back-to-back strike physically unrealistic, not to
-    /// cap match-long shot totals (the team cooldown does that).
+    /// 2026-08-16: the per-player shot cooldown is REMOVED. It was 200
+    /// ticks (2 s), justified as "momentum carries them forward, the ball
+    /// has left their feet, stance is broken" — but that is a description
+    /// of a player who has just kicked the ball, and such a player does
+    /// not have the ball to shoot again anyway. **There is no cooldown in
+    /// football.** A striker whose shot is parved back to him hits it
+    /// again immediately; that is one of the game's commonest goals, and a
+    /// timer cannot tell it apart from spam.
     ///
-    /// 200 ticks (2 sim seconds) — balanced for rebound goals to
-    /// remain possible from a parry/loose-ball scramble. The previous
-    /// 800-tick lockout blocked all rebound mechanics, removing one
-    /// of football's key goal patterns.
-    pub fn can_shoot(&self, current_tick: u64) -> bool {
-        const PLAYER_SHOT_COOLDOWN_TICKS: u64 = 200;
-        if self.shots_taken == 0 {
-            return true;
-        }
-        current_tick.saturating_sub(self.last_shot_tick) >= PLAYER_SHOT_COOLDOWN_TICKS
+    /// What actually stops a player shooting twice in a row is that he
+    /// must regain the ball first, which the ownership model already
+    /// enforces. Anything beyond that was a quota standing in for
+    /// defending, and defending is where it belongs — see `SHOT_BAR_BASE`
+    /// for the rest of the teardown.
+    ///
+    /// Kept as a method rather than deleted at the call sites so the
+    /// pressing work has an obvious place to reintroduce a real
+    /// constraint (fatigue, balance, body shape) if one is wanted.
+    pub fn can_shoot(&self, _current_tick: u64) -> bool {
+        true
     }
 
     /// Credit a shot at the moment it is struck. `shots_on_target` is NOT

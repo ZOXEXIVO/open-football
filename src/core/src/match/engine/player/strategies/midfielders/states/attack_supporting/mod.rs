@@ -70,7 +70,10 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
         }
 
         // Team has possession - continue supporting
-        if Interception::is_available(ctx) && ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 100.0 {
+        if Interception::is_available(ctx)
+            && ctx.ball().is_towards_player_with_angle(0.8)
+            && ctx.ball().distance() < 100.0
+        {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Intercepting,
             ));

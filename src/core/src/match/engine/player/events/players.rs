@@ -17,8 +17,6 @@ use crate::r#match::engine::zones::MatchZone;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::gk_claim::GkClaimContest;
 #[cfg(feature = "match-logs")]
-use crate::mid_run_diag::FoulCensus;
-#[cfg(feature = "match-logs")]
 use crate::r#match::player::events::gk_claim::gk_claim_diag;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 #[cfg(feature = "match-logs")]
@@ -40,6 +38,8 @@ use crate::r#match::{
 };
 #[cfg(feature = "match-logs")]
 use crate::match_log_info;
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::FoulCensus;
 use log::debug;
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]

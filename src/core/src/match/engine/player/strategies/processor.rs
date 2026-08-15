@@ -12,10 +12,10 @@ use crate::r#match::player::strategies::common::PlayerOperationsImpl;
 use crate::r#match::player::strategies::common::PlayersOperationsImpl;
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::player_context::LooseBallChase;
-#[cfg(feature = "match-logs")]
-use crate::mid_run_diag::ShapeCensus;
 use crate::r#match::team::{ShapeDiscipline, TeamOperationsImpl};
 use crate::r#match::{BallOperationsImpl, GameTickContext, MatchContext, MatchPlayer, PlayerSide};
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::ShapeCensus;
 use log::debug;
 use nalgebra::Vector3;
 
@@ -530,14 +530,11 @@ impl<'p> StateProcessor<'p> {
         // point every state passes through. See `ShapeCensus`.
         #[cfg(feature = "match-logs")]
         {
-            let moving = result
-                .velocity
-                .is_some_and(|v| v.magnitude() > 0.02);
+            let moving = result.velocity.is_some_and(|v| v.magnitude() > 0.02);
             let anchor = processing_ctx.team().my_anchor();
-            let axis_lag = processing_ctx
-                .player
-                .side
-                .map_or(0.0, |s| s.forward_delta(anchor.x, processing_ctx.player.position.x));
+            let axis_lag = processing_ctx.player.side.map_or(0.0, |s| {
+                s.forward_delta(anchor.x, processing_ctx.player.position.x)
+            });
             ShapeCensus::note(
                 processing_ctx.player.state.compact_id(),
                 (processing_ctx.player.position - anchor).magnitude(),

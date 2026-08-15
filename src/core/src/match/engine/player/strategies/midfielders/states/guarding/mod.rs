@@ -132,7 +132,10 @@ impl StateProcessingHandler for MidfielderGuardingState {
             }
 
             // Ball coming toward guarded opponent — intercept
-            if Interception::is_available(ctx) && ctx.ball().distance() < 80.0 && ctx.ball().is_towards_player_with_angle(0.7) {
+            if Interception::is_available(ctx)
+                && ctx.ball().distance() < 80.0
+                && ctx.ball().is_towards_player_with_angle(0.7)
+            {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Intercepting,
                 ));

@@ -226,7 +226,10 @@ impl StateProcessingHandler for DefenderCoveringState {
             }
         }
 
-        if Interception::is_available(ctx) && ball_ops.is_towards_player() && ball_ops.distance() < INTERCEPTION_DISTANCE {
+        if Interception::is_available(ctx)
+            && ball_ops.is_towards_player()
+            && ball_ops.distance() < INTERCEPTION_DISTANCE
+        {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Intercepting,
             ));

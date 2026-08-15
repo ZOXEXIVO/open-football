@@ -28,14 +28,14 @@ mod restart;
 // the dev harness, same as `ownership::reception_diag`.
 pub mod stall;
 
-#[cfg(feature = "match-logs")]
-use crate::mid_run_diag::{CrossDiag, PassWeightCensus};
-use crate::r#match::engine::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::net::BallInNet;
+use crate::r#match::engine::ball::events::BallEvent;
 use crate::r#match::engine::set_pieces::CornerRoutine;
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::strategies::passing::CrossType;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::{CrossDiag, PassWeightCensus};
 use nalgebra::Vector3;
 use std::collections::VecDeque;
 
@@ -2009,7 +2009,12 @@ impl Ball {
 
         self.try_intercept(context, players, events);
         #[cfg(feature = "match-logs")]
-        probe.note(flight_diag::STAGE_INTERCEPT, self.position, self.velocity, 0.0);
+        probe.note(
+            flight_diag::STAGE_INTERCEPT,
+            self.position,
+            self.velocity,
+            0.0,
+        );
         self.try_block_shot(context, players, events);
         #[cfg(feature = "match-logs")]
         probe.note(flight_diag::STAGE_BLOCK, self.position, self.velocity, 0.0);
@@ -2021,7 +2026,12 @@ impl Ball {
         // NUCLEAR OPTION: Force claiming if ball unowned and stopped for too long
         self.force_claim_if_deadlock(players, events);
         #[cfg(feature = "match-logs")]
-        probe.note(flight_diag::STAGE_DEADLOCK, self.position, self.velocity, 0.0);
+        probe.note(
+            flight_diag::STAGE_DEADLOCK,
+            self.position,
+            self.velocity,
+            0.0,
+        );
 
         // Unconditional unowned safety net - forces nearest players to TakeBall
         self.force_takeball_if_unowned_too_long(players, events);
@@ -2036,7 +2046,12 @@ impl Ball {
 
         self.process_ownership(context, players, events);
         #[cfg(feature = "match-logs")]
-        probe.note(flight_diag::STAGE_OWNERSHIP, self.position, self.velocity, 0.0);
+        probe.note(
+            flight_diag::STAGE_OWNERSHIP,
+            self.position,
+            self.velocity,
+            0.0,
+        );
         self.tick_carry_tracker(events);
 
         // Move ball FIRST, then check goal/boundary on new position
@@ -2049,7 +2064,12 @@ impl Ball {
             .max(1.5);
         self.move_to(tick_context);
         #[cfg(feature = "match-logs")]
-        probe.note(flight_diag::STAGE_MOVE, self.position, self.velocity, move_allowance);
+        probe.note(
+            flight_diag::STAGE_MOVE,
+            self.position,
+            self.velocity,
+            move_allowance,
+        );
         self.check_goal(context, events);
         #[cfg(feature = "match-logs")]
         probe.note(flight_diag::STAGE_GOAL, self.position, self.velocity, 0.0);
@@ -2074,7 +2094,12 @@ impl Ball {
         );
         self.check_boundary_collision(context);
         #[cfg(feature = "match-logs")]
-        probe.note(flight_diag::STAGE_BOUNDARY, self.position, self.velocity, 0.0);
+        probe.note(
+            flight_diag::STAGE_BOUNDARY,
+            self.position,
+            self.velocity,
+            0.0,
+        );
         self.expire_offside_snapshot(context);
         self.update_landing_cache();
 
@@ -2627,8 +2652,7 @@ impl Ball {
         // was cut out on the way up, at head height, or after landing,
         // and those are three different bugs.
         #[cfg(feature = "match-logs")]
-        if !self.cross_contest_resolved
-            && self.pending_cross_type.is_some_and(CrossType::is_lofted)
+        if !self.cross_contest_resolved && self.pending_cross_type.is_some_and(CrossType::is_lofted)
         {
             CrossDiag::note_disarmed_at(self.position.z);
         }

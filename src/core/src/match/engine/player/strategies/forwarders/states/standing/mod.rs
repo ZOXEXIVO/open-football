@@ -20,11 +20,12 @@ impl StateProcessingHandler for ForwardStandingState {
         // Check if the forward still has the ball
         if ctx.player.has_ball(ctx) {
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-            // Settle before striking: 30 ticks = ~300ms. Without this the
-            // forward can receive + shoot in the same half-second, which
-            // turns every possession into a strike.
-            let ownership_ticks = ctx.tick_context.ball.ownership_duration;
-            let has_settled = ownership_ticks >= 30;
+            // 2026-08-16: the "settle for 300 ms before you may strike"
+            // timer is REMOVED. A first-time finish is not a bug — it is
+            // most of what a striker does, and the timer forbade exactly
+            // the shot that arriving onto a cutback is FOR. Removed with
+            // the other shot cooldowns; see `PlayerMemory::can_shoot`.
+            let has_settled = true;
             let can_shoot = ctx.team().can_shoot() && ctx.player().can_shoot();
 
             // Point-blank (≤24u / ~12m) — defer to the centralised helper
@@ -59,14 +60,11 @@ impl StateProcessingHandler for ForwardStandingState {
                 }
             }
 
-            // Cooldown for medium/long range shots to prevent rapid-fire spam.
-            const SHOOTING_COOLDOWN: u64 = 20;
-
-            if has_settled
-                && can_shoot
-                && ctx.player().should_attempt_shot()
-                && ctx.in_state_time > SHOOTING_COOLDOWN
-            {
+            // 2026-08-16: the medium/long-range shot cooldown is REMOVED
+            // for the same reason as the rest — it gated on how long the
+            // player had been standing, which is not a footballing
+            // constraint on striking a ball.
+            if has_settled && can_shoot && ctx.player().should_attempt_shot() {
                 if let Some(result) = dispatch_shot(ctx, "FWD_STAND_RANGE") {
                     return Some(result);
                 }

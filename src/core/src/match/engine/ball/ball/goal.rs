@@ -4,14 +4,14 @@
 //! since the ball can't move other players' positions itself.
 
 use super::Ball;
-#[cfg(feature = "match-logs")]
-use crate::mid_run_diag::EndlineCensus;
 use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::engine::set_pieces::{CornerScores, pick_corner_routine};
 use crate::r#match::events::EventCollection;
 use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::EndlineCensus;
 use nalgebra::Vector3;
 use std::cmp::Ordering;
 

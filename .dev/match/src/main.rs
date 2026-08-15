@@ -6018,6 +6018,25 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         mr[14], mr[15]
     );
 
+    // ── DEFENDER SHOOTING SUPPLY ───────────────────────────────────────
+    // Separates "the defender is blocked from shooting" from "he never
+    // has the ball anywhere near the goal", which the shot count alone
+    // cannot distinguish.
+    {
+        use core::mid_run_diag::DefenderShotDiag;
+        let (onball, in_range, decisions) = DefenderShotDiag::snapshot();
+        if onball > 0 {
+            println!();
+            println!(
+                "--- DEFENDER SHOOTING SUPPLY --- {:.0} on-ball ticks/match, of which \
+                 {:.1}% within 40m of goal; {:.1} shot decisions reached/match",
+                onball as f64 / n_matches as f64,
+                in_range as f64 * 100.0 / onball as f64,
+                decisions as f64 / n_matches as f64
+            );
+        }
+    }
+
     // ── PASS WEIGHT CENSUS ─────────────────────────────────────────────
     // How far a pass was meant to travel versus how far it actually did,
     // sampled at the first touch after it was struck. This is the only

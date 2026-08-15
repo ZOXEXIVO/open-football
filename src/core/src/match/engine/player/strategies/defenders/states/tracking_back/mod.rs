@@ -65,7 +65,10 @@ impl StateProcessingHandler for DefenderTrackingBackState {
         }
 
         // Check if the ball is close and moving towards the player
-        if Interception::is_available(ctx) && ctx.ball().distance() < BALL_INTERCEPTION_DISTANCE && ctx.ball().is_towards_player() {
+        if Interception::is_available(ctx)
+            && ctx.ball().distance() < BALL_INTERCEPTION_DISTANCE
+            && ctx.ball().is_towards_player()
+        {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Intercepting,
             ));

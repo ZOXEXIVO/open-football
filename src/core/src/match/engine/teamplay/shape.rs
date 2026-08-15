@@ -59,9 +59,9 @@
 //! same instant.
 
 use super::tactical::TeamTacticalState;
+use crate::r#match::{MatchContext, MatchField, PlayerSide};
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::ShapeCensus;
-use crate::r#match::{MatchContext, MatchField, PlayerSide};
 use nalgebra::Vector3;
 
 /// Most players one side can have on the pitch.
@@ -324,7 +324,8 @@ impl ShapeBuilder<'_> {
         // and gave the same height whether the ball was on the halfway
         // line or in the six-yard box.
         let standoff = STANDOFF_PASSIVE
-            - (STANDOFF_PASSIVE - STANDOFF_AGGRESSIVE) * self.tactical.press_intensity.clamp(0.0, 1.0);
+            - (STANDOFF_PASSIVE - STANDOFF_AGGRESSIVE)
+                * self.tactical.press_intensity.clamp(0.0, 1.0);
         let phase_cap = side.attacking_progress_x(self.tactical.defensive_line_x, field_width);
 
         // ── How big it is ────────────────────────────────────────────
@@ -434,9 +435,9 @@ impl ShapeBuilder<'_> {
             let anchor = if p.tactical_position.current_position.is_goalkeeper() {
                 self.keeper_anchor(side, field_width, pitch_centre_y, ball, rear)
             } else {
-                let depth_frac =
-                    (side.attacking_progress_x(p.start_position.x, field_width) - min_depth)
-                        / depth_span;
+                let depth_frac = (side.attacking_progress_x(p.start_position.x, field_width)
+                    - min_depth)
+                    / depth_span;
                 let lat_frac = (p.start_position.y - min_lat) / lat_span;
                 let progress = rear + depth_frac * (length / field_width);
                 let x = side
@@ -477,10 +478,7 @@ impl ShapeBuilder<'_> {
                 } else {
                     1
                 };
-                ShapeCensus::note_axis_lag(
-                    role,
-                    side.forward_delta(anchor.x, p.position.x),
-                );
+                ShapeCensus::note_axis_lag(role, side.forward_delta(anchor.x, p.position.x));
             }
             if a_min <= a_max && p_min <= p_max {
                 ShapeCensus::note_span(a_max - a_min, p_max - p_min, worst);
@@ -605,8 +603,12 @@ mod tests {
         let field_width = 840.0f32;
         let standoff = STANDOFF_PASSIVE;
         let cap = 0.55f32; // a high line the phase permits
-        let deep_ball = (0.20 - standoff / field_width).min(cap).max(REAR_FLOOR_PROGRESS);
-        let high_ball = (0.80 - standoff / field_width).min(cap).max(REAR_FLOOR_PROGRESS);
+        let deep_ball = (0.20 - standoff / field_width)
+            .min(cap)
+            .max(REAR_FLOOR_PROGRESS);
+        let high_ball = (0.80 - standoff / field_width)
+            .min(cap)
+            .max(REAR_FLOOR_PROGRESS);
         assert!(
             high_ball > deep_ball,
             "rear line ignored the ball: {deep_ball} vs {high_ball}"
@@ -623,7 +625,10 @@ mod tests {
         let rear = (0.90 - STANDOFF_AGGRESSIVE / field_width)
             .min(cap)
             .max(REAR_FLOOR_PROGRESS);
-        assert!((rear - cap).abs() < 1e-6, "low block failed to cap at {rear}");
+        assert!(
+            (rear - cap).abs() < 1e-6,
+            "low block failed to cap at {rear}"
+        );
     }
 
     /// The deepest possible block plus its longest possible length must

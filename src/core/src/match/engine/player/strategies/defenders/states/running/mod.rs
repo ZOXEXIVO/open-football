@@ -6,6 +6,9 @@ use crate::r#match::defenders::states::common::{
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+    ShotDecision, evaluate_forward_shot_decision,
+};
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
@@ -13,9 +16,22 @@ use crate::r#match::{
     PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::DefenderShotDiag;
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 30.0; // Defenders almost never shoot, only from very close
+/// Reachability cap only — the same 320u (40 m) the forwards and
+/// midfielders use. The shared shot helper owns the decision from there.
+///
+/// 2026-08-16: was **30.0 — three and three-quarter metres**. A defender
+/// could only shoot from inside the six-yard box, essentially on the goal
+/// line, while every other line was live from 40 m. Defenders took 1.4%
+/// of all shots as a result. A centre-back arriving at a corner, or a
+/// full-back cutting in, does shoot in football; whether HE shoots is a
+/// question about his finishing and the look, and the helper prices both
+/// continuously. A blanket range veto answered it before it was asked.
+/// Part of the shooting-blocker teardown — see `PlayerMemory::can_shoot`.
+const MAX_SHOOTING_DISTANCE: f32 = 320.0;
 
 /// How close an assigned man has to be before a defender abandons the
 /// shape logic to go and mark him (~19 m). Wide enough that a marker
@@ -167,18 +183,37 @@ impl StateProcessingHandler for DefenderRunningState {
                 ));
             }
 
-            // Defenders should almost always pass — only shoot if very close with clear shot.
-            // Routes through `shooting_close` so the threshold reads
-            // fatigue-aware finishing/composure/decisions, not raw
-            // finishing alone — a tired CB makes a worse shoot/no-shoot
-            // call here.
-            if self.is_in_shooting_range(ctx) {
-                let minute = sc::minute_from_ms(ctx.context.total_match_time);
-                let shoot_quality = sc::shooting_close(ctx.player, minute);
-                if shoot_quality > 0.40 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Shooting,
-                    ));
+            // Defenders consult the SAME shot helper as everyone else.
+            //
+            // This used to be a bespoke `shooting_close(..) > 0.40`
+            // threshold behind a 3.75 m range cap — the only line in the
+            // engine that never reached `evaluate_forward_shot_decision`.
+            // Two consequences: a defender's shoot/no-shoot call ignored
+            // the angle, the lane, the keeper and the game state that
+            // every other player weighs, and no amount of work on the
+            // shared model could reach him.
+            //
+            // Through the helper, a centre-back with 6 finishing still
+            // rarely shoots — `execution_skill` and `selection_skill`
+            // price exactly that — but he does so because of who he is
+            // rather than because of a blanket veto on his position.
+            #[cfg(feature = "match-logs")]
+            DefenderShotDiag::note_onball(self.is_in_shooting_range(ctx));
+
+            if self.is_in_shooting_range(ctx) && ctx.team().can_shoot() && ctx.player().can_shoot()
+            {
+                #[cfg(feature = "match-logs")]
+                DefenderShotDiag::note_decision();
+                match evaluate_forward_shot_decision(ctx, "DEF_SHOOT") {
+                    ShotDecision::Shoot { reason } => {
+                        return Some(
+                            StateChangeResult::with_defender_state(DefenderState::Shooting)
+                                .with_shot_reason(reason),
+                        );
+                    }
+                    // A defender who is better off laying it off does that
+                    // through his normal passing path, as before.
+                    ShotDecision::Pass | ShotDecision::Hold => {}
                 }
             }
 
@@ -1242,7 +1277,14 @@ impl DefenderRunningState {
             // a back-pass to a pressed keeper is how goals get given
             // away.
             let is_gk = teammate.tactical_positions.is_goalkeeper();
-            if is_gk && ctx.tick_context.grid.opponents(teammate.id, 40.0).next().is_some() {
+            if is_gk
+                && ctx
+                    .tick_context
+                    .grid
+                    .opponents(teammate.id, 40.0)
+                    .next()
+                    .is_some()
+            {
                 continue;
             }
 
@@ -1283,10 +1325,15 @@ impl DefenderRunningState {
         best.map(|(t, _)| t)
     }
 
+    /// Reachability only.
+    ///
+    /// `has_clear_shot()` is dropped here for the reason it was dropped
+    /// on both forward paths and the midfielder path: it is a hard binary
+    /// veto on lane quality, and lane is already priced continuously
+    /// inside the helper, which also still rejects a genuinely blocked
+    /// one. The defender path was the last place it survived.
     fn is_in_shooting_range(&self, ctx: &StateProcessingContext) -> bool {
-        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-
-        distance_to_goal <= MAX_SHOOTING_DISTANCE && ctx.player().has_clear_shot()
+        ctx.ball().distance_to_opponent_goal() <= MAX_SHOOTING_DISTANCE
     }
 
     /// Should this defender deliver a cross?

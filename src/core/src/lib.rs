@@ -444,9 +444,9 @@ pub use crate::r#match::engine::player::strategies::forwarders::states::running:
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::strategies::forwarders::states::running::tackle_stats;
 #[cfg(feature = "match-logs")]
-pub use crate::r#match::midfielders::states::common::onball_diag as mid_onball_diag;
-#[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::strategies::processor::chase_diag;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::midfielders::states::common::onball_diag as mid_onball_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::player::motion_diag;
 #[cfg(feature = "match-logs")]

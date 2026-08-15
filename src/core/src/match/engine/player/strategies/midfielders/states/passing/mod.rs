@@ -151,18 +151,16 @@ impl StateProcessingHandler for MidfielderPassingState {
                 let reach = 1.0
                     - ((goal_dist - COMFORTABLE_RANGE) / (LONG_SHOT_LIMIT - COMFORTABLE_RANGE))
                         .clamp(0.0, 1.0);
-                let strike = mid_profile.mid_shot_selection * 0.55
-                    + shot_profile.execution_skill * 0.45;
+                let strike =
+                    mid_profile.mid_shot_selection * 0.55 + shot_profile.execution_skill * 0.45;
                 // No outlet is itself a reason: a player with nothing on
                 // has less to lose by hitting it.
                 let willingness = strike * (0.45 + reach.powf(0.6) * 0.75);
                 let spread = Opportunity::draw(ctx, BAILOUT_SALT);
                 if willingness >= 0.34 + spread * 0.30 {
                     return Some(if goal_dist > COMFORTABLE_RANGE {
-                        StateChangeResult::with_midfielder_state(
-                            MidfielderState::DistanceShooting,
-                        )
-                        .with_shot_reason("MID_PASS_BAILOUT_DISTANCE")
+                        StateChangeResult::with_midfielder_state(MidfielderState::DistanceShooting)
+                            .with_shot_reason("MID_PASS_BAILOUT_DISTANCE")
                     } else {
                         StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
                             .with_shot_reason("MID_PASS_BAILOUT_SHOOT")

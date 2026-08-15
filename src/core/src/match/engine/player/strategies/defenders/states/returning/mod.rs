@@ -84,7 +84,10 @@ impl StateProcessingHandler for DefenderReturningState {
                 }
             }
 
-            if Interception::is_available(ctx) && ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 200.0 {
+            if Interception::is_available(ctx)
+                && ctx.ball().is_towards_player_with_angle(0.8)
+                && ctx.ball().distance() < 200.0
+            {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Intercepting,
                 ));

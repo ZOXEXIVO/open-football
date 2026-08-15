@@ -335,8 +335,8 @@ impl Ball {
             // pace on every bounce, and a ball with the rotation the
             // solved-spin sites used to produce simply accelerated off
             // the pitch.
-            let after = (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y)
-                .sqrt();
+            let after =
+                (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y).sqrt();
             if after > incoming_horizontal && after > 1.0e-6 {
                 let scale = incoming_horizontal / after;
                 self.velocity.x *= scale;
@@ -748,13 +748,11 @@ mod tests {
                 ball.velocity = Vector3::new(2.0, 0.0, -0.08);
                 // Rotation about both axes at the engine's ceiling.
                 ball.spin = Vector3::new(0.0, rolling, spin_z);
-                let before = (ball.velocity.x * ball.velocity.x
-                    + ball.velocity.y * ball.velocity.y)
-                    .sqrt();
+                let before =
+                    (ball.velocity.x * ball.velocity.x + ball.velocity.y * ball.velocity.y).sqrt();
                 ball.update_velocity();
-                let after = (ball.velocity.x * ball.velocity.x
-                    + ball.velocity.y * ball.velocity.y)
-                    .sqrt();
+                let after =
+                    (ball.velocity.x * ball.velocity.x + ball.velocity.y * ball.velocity.y).sqrt();
                 assert!(
                     after <= before + 1.0e-4,
                     "bounce with spin ({rolling}, {spin_z}) sped the ball up: {before} -> {after}"

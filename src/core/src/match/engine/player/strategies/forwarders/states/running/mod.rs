@@ -81,7 +81,10 @@ pub mod stuck_exit_stats {
             out[i] = c.load(Ordering::Relaxed);
         }
         let n = SAMPLES.load(Ordering::Relaxed).max(1);
-        (out, SPEED_X100.load(Ordering::Relaxed) as f32 / n as f32 / 100.0)
+        (
+            out,
+            SPEED_X100.load(Ordering::Relaxed) as f32 / n as f32 / 100.0,
+        )
     }
 }
 
@@ -576,8 +579,12 @@ impl StateProcessingHandler for ForwardRunningState {
             // Point-blank (Priority 0 above) already returned; those are
             // unavoidable. Everything below is a judgement call, and
             // judgement calls need at least a beat of control.
-            let ownership_ticks = ctx.tick_context.ball.ownership_duration;
-            let has_settled = ownership_ticks >= 30;
+            // 2026-08-16: the "settle for 300 ms before you may strike"
+            // timer is REMOVED, with the rest of the shot cooldowns. A
+            // first-time finish is not spam, and this gate could not tell
+            // the two apart — it only knew how long the ball had been at
+            // his feet. See `PlayerMemory::can_shoot`.
+            let has_settled = true;
 
             // Teammate-in-better-position pass-over-shot heuristic.
             // Real strikers pick PASS over SHOT when a teammate is in a
@@ -602,8 +609,17 @@ impl StateProcessingHandler for ForwardRunningState {
             // chance-quality calculus. Apply it as a willingness
             // post-multiplier so a leading team late still recycles
             // through PRIO 0.5 without firing every possession.
+            //
+            // 2026-08-16: softened from a 70% cut to a 20% one. A leading
+            // side playing the clock is real, but at full strength this
+            // took 70% of a forward's willingness away — so the reported
+            // "he had a shot and passed it backwards" got WORSE the moment
+            // a team went ahead, which is when it was most visible. Game
+            // management belongs in tempo and in where the block sits, not
+            // in vetoing a chance. Part of the shooting-blocker teardown —
+            // see `SHOT_BAR_BASE`.
             let gm_suppression = if gm_intensity > 0.40 {
-                (1.0 - (gm_intensity - 0.40) / 0.60 * 0.70).clamp(0.30, 1.0)
+                (1.0 - (gm_intensity - 0.40) / 0.60 * 0.20).clamp(0.80, 1.0)
             } else {
                 1.0
             };
@@ -858,7 +874,11 @@ impl StateProcessingHandler for ForwardRunningState {
                         // against a real 58/32.
                         const HOLD_PATIENCE: u64 = 300; // 3 s
                         if ctx.in_state_time <= HOLD_PATIENCE {
-                            stuck_exit_stats::note(2, ctx.in_state_time, ctx.player.velocity.norm());
+                            stuck_exit_stats::note(
+                                2,
+                                ctx.in_state_time,
+                                ctx.player.velocity.norm(),
+                            );
                             return None;
                         }
                     }
@@ -2244,7 +2264,10 @@ impl ForwardRunningState {
             // 40% closer (e.g. 24u when we're at 40u) still counts
             // as a better option — previously the strict < at 0.6
             // missed that exact boundary case.
-            let is_much_closer = teammate_distance <= own_distance * 0.65;
+            // 2026-08-16: 0.65 → 0.45. "Much better shot" has to mean MUCH
+            // better, or the carrier hands off a perfectly good look. Part
+            // of the shooting-blocker teardown — see `SHOT_BAR_BASE`.
+            let is_much_closer = teammate_distance <= own_distance * 0.45;
             let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
             // "Not heavily marked" asked for TWO opponents inside 8u — and
             // 8u is one metre, so it took two defenders standing on a man's
@@ -2274,8 +2297,8 @@ impl ForwardRunningState {
             // to shoot from; deferring to him is how a clear chance became a
             // square ball. Compare where each of them actually is.
             let centre_y = ctx.context.field_size.height as f32 / 2.0;
-            let more_central = (teammate.position.y - centre_y).abs()
-                < (ctx.player.position.y - centre_y).abs();
+            let more_central =
+                (teammate.position.y - centre_y).abs() < (ctx.player.position.y - centre_y).abs();
 
             is_much_closer && has_clear_pass && is_free && more_central
         })

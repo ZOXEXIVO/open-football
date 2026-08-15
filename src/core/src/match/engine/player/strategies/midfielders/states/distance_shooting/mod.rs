@@ -175,11 +175,10 @@ impl MidfielderDistanceShootingState {
         // the 40 m the helper itself calls hopeless.
         const COMFORTABLE: f32 = 16.5 * U_PER_M;
         const HOPELESS: f32 = 40.0 * U_PER_M;
-        let reach = 1.0
-            - ((distance_to_goal - COMFORTABLE) / (HOPELESS - COMFORTABLE)).clamp(0.0, 1.0);
+        let reach =
+            1.0 - ((distance_to_goal - COMFORTABLE) / (HOPELESS - COMFORTABLE)).clamp(0.0, 1.0);
 
-        let strike = (mid_profile.mid_shot_selection * 0.60
-            + shot_profile.execution_skill * 0.40)
+        let strike = (mid_profile.mid_shot_selection * 0.60 + shot_profile.execution_skill * 0.40)
             .clamp(0.0, 1.0);
 
         let willingness = strike * reach.powf(0.75) * room * clarity.clamp(0.0, 1.0).powf(0.35);
@@ -215,8 +214,8 @@ impl MidfielderDistanceShootingState {
         // footballer would call a pass and this whole `should_pass`
         // branch could not fire. 30 m is a midfield ball.
         const PASSING_RANGE: f32 = 30.0 * U_PER_M;
-        let is_in_passing_range =
-            (teammate.position - ctx.player.position).norm_squared() <= PASSING_RANGE * PASSING_RANGE;
+        let is_in_passing_range = (teammate.position - ctx.player.position).norm_squared()
+            <= PASSING_RANGE * PASSING_RANGE;
         let has_clear_passing_lane = self.has_clear_passing_lane(ctx, teammate);
 
         is_in_passing_range && has_clear_passing_lane

@@ -42,7 +42,10 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
         }
 
         // If ball is coming toward player and close, prepare to receive
-        if Interception::is_available(ctx) && ctx.ball().distance() < 80.0 && ctx.ball().is_towards_player_with_angle(0.85) {
+        if Interception::is_available(ctx)
+            && ctx.ball().distance() < 80.0
+            && ctx.ball().is_towards_player_with_angle(0.85)
+        {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Intercepting,
             ));

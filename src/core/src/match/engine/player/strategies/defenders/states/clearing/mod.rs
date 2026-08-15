@@ -14,7 +14,6 @@ use nalgebra::Vector3;
 #[derive(Default, Clone)]
 pub struct DefenderClearingState {}
 
-
 impl StateProcessingHandler for DefenderClearingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Wait a few ticks before clearing to allow the player to reach the ball

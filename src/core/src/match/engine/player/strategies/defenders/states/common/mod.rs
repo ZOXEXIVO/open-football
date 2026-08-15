@@ -469,10 +469,7 @@ impl DefensiveLine {
     ///
     /// The presser is deliberately exempt: somebody has to leave the line
     /// to engage the ball, and he is the one doing it.
-    pub fn hold_shape(
-        ctx: &StateProcessingContext,
-        target: Vector3<f32>,
-    ) -> Vector3<f32> {
+    pub fn hold_shape(ctx: &StateProcessingContext, target: Vector3<f32>) -> Vector3<f32> {
         if ctx.player.has_ball(ctx) {
             return target;
         }
@@ -504,7 +501,9 @@ impl DefensiveLine {
             return target;
         }
         let slot = Self::compact_slot_y(ctx);
-        let leashed = target.y.clamp(slot - Self::SHAPE_LEASH, slot + Self::SHAPE_LEASH);
+        let leashed = target
+            .y
+            .clamp(slot - Self::SHAPE_LEASH, slot + Self::SHAPE_LEASH);
 
         // ── DEPTH, and why it is ASYMMETRIC ──────────────────────────
         //

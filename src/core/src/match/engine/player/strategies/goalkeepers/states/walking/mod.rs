@@ -1,5 +1,6 @@
-use crate::IntegerUtils;
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperRestPosition,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::processor::StateChangeResult;
 use crate::r#match::player::strategies::processor::{
@@ -114,34 +115,33 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Calculate optimal position using goalkeeper skills
+        // Same resting position as every other keeper state — see
+        // `KeeperRestPosition`. This state used to own a SECOND copy of
+        // the positioning model with different constants, so the same
+        // keeper wanted to be in two different places depending on which
+        // state he happened to be in.
+        //
+        // And within 10u of it he `Wander`ed, on a 6.25 m radius, forever:
+        // measured **0% still** in this state, a keeper pacing aimlessly
+        // around his box. Same pattern removed from the outfield walking
+        // states. He stands set instead.
         let optimal_position = self.calculate_intelligent_position(ctx);
-
-        if ctx.player.position.distance_to(&optimal_position) < 10.0 {
-            // Small adjustments - use wander for natural movement
-            Some(
-                SteeringBehavior::Wander {
-                    target: optimal_position,
-                    radius: 50.0,
-                    jitter: 1.0,
-                    distance: 50.0,
-                    angle: IntegerUtils::random(0, 360) as f32,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    * 0.7, // Active movement for fine positioning
-            )
-        } else {
-            // Need to reposition - use arrive for smooth movement
-            Some(
-                SteeringBehavior::Arrive {
-                    target: optimal_position,
-                    slowing_distance: 15.0,
-                }
-                .calculate(ctx.player)
-                .velocity,
-            )
+        let gap = ctx.player.position.distance_to(&optimal_position);
+        if gap < KeeperRestPosition::SET_DEADZONE {
+            return Some(Vector3::zeros());
         }
+
+        let pace =
+            KeeperRestPosition::pace(ctx.ball().distance(), ctx.context.field_size.width as f32);
+        Some(
+            SteeringBehavior::Arrive {
+                target: optimal_position,
+                slowing_distance: 8.0,
+            }
+            .calculate(ctx.player)
+            .velocity
+                * pace,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
@@ -246,68 +246,23 @@ impl GoalkeeperWalkingState {
     }
 
     /// Calculate intelligent position using multiple goalkeeper skills
+    /// Delegates to the ONE shared keeper positioning model.
+    ///
+    /// This used to be a second, divergent copy of it — same idea,
+    /// different constants — so the same keeper wanted to be in two
+    /// different places depending on which state he was in. Both copies
+    /// were wrong the same way: the whole depth range came to a couple of
+    /// metres, so he never left his line. See `KeeperRestPosition`.
     fn calculate_intelligent_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let goal_position = ctx.ball().direction_to_own_goal();
-        let ball_position = ctx.tick_context.positions.ball.position;
-        let ball_distance_to_goal = (ball_position - goal_position).magnitude();
-
-        // Use positioning and command of area skills. Communication
-        // reads the dedicated GK attribute, not `mental.leadership`,
-        // so an outfield captaincy-style player doesn't substitute
-        // for an actual shouting goalkeeper.
-        let positioning_skill = ctx.player.skills.mental.positioning / 20.0;
-        let command_of_area = ctx.player.skills.goalkeeping.command_of_area / 20.0;
-        let communication = ctx.player.skills.goalkeeping.communication / 20.0;
-
-        // Calculate angle to ball for positioning
-        let angle_to_ball = if ball_distance_to_goal > 0.1 {
-            (ball_position - goal_position).normalize()
-        } else {
-            ctx.player.start_position
-        };
-
-        // Base distance from goal line
-        let mut optimal_distance = 8.0; // Base distance from goal
-
-        // Adjust based on ball position and goalkeeper skills
-        if ctx.ball().on_own_side() {
-            // Ball on own half - position based on threat
-            let threat_factor = ball_distance_to_goal / (ctx.context.field_size.width as f32 * 0.5);
-
-            // Better command of area = more aggressive positioning
-            optimal_distance += (25.0 - threat_factor * 15.0) * command_of_area;
-
-            // Better positioning = more accurate placement
-            optimal_distance *= 0.7 + positioning_skill * 0.6;
-
-            // If ball is wide, adjust position laterally
-            let ball_y_offset = ball_position.y - goal_position.y;
-            let lateral_adjustment = ball_y_offset * 0.25 * positioning_skill; // Better positioning = better angle coverage
-
-            // Calculate the position
-            let mut new_position = goal_position + angle_to_ball * optimal_distance;
-            new_position.y += lateral_adjustment;
-
-            // Ensure within penalty area
-            self.limit_to_penalty_area(new_position, ctx)
-        } else {
-            // Ball on opponent's half - position for distribution or counter
-            let sweeper_keeper_ability = (command_of_area + communication) / 2.0;
-
-            // Modern sweeper-keeper positioning
-            optimal_distance = 14.0 + (sweeper_keeper_ability * 16.0); // 14-30 units from goal
-
-            // Position more centrally when ball is far
-            let mut new_position = goal_position;
-            new_position.x += optimal_distance
-                * (if ctx.player.side == Some(PlayerSide::Left) {
-                    1.0
-                } else {
-                    -1.0
-                });
-
-            self.limit_to_penalty_area(new_position, ctx)
-        }
+        KeeperRestPosition::point(
+            ctx.ball().direction_to_own_goal(),
+            ctx.tick_context.positions.ball.position,
+            ctx.player.side.unwrap_or(PlayerSide::Left),
+            ctx.team().tactical().defensive_line_x,
+            ctx.context.field_size.width as f32,
+            ctx.player.skills.goalkeeping.command_of_area / 20.0,
+            ctx.player.skills.mental.positioning / 20.0,
+        )
     }
 
     /// Limit position to penalty area with some flexibility based on skills

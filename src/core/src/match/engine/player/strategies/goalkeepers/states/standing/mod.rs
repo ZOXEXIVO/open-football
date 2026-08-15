@@ -1,5 +1,5 @@
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim,
+    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperRestPosition,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
@@ -194,45 +194,41 @@ impl StateProcessingHandler for GoalkeeperStandingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Calculate optimal position based on ball and goal
         let optimal_position = self.calculate_optimal_position(ctx);
         let distance_to_optimal = ctx.player.position.distance_to(&optimal_position);
 
-        // GKs need to reposition quickly to track the ball
-        if distance_to_optimal < 5.0 {
-            // Close to position — small adjustments to stay ready
-            Some(
-                SteeringBehavior::Arrive {
-                    target: optimal_position,
-                    slowing_distance: 3.0,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    * 0.7,
-            )
-        } else if distance_to_optimal < 15.0 {
-            // Repositioning needed — move with purpose
-            Some(
-                SteeringBehavior::Arrive {
-                    target: optimal_position,
-                    slowing_distance: 6.0,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    * 1.0,
-            )
-        } else {
-            // Urgently out of position — sprint
-            Some(
-                SteeringBehavior::Arrive {
-                    target: optimal_position,
-                    slowing_distance: 10.0,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    * 1.3,
-            )
+        // A keeper is not always repositioning. Standing still, set, is a
+        // real and common thing for him to be doing, and the target moves
+        // continuously with the ball — so without a deadzone he chases it
+        // every tick and ends up covering more ground than a midfielder.
+        // 10u = 1.25 m: inside that he is, for football purposes, where he
+        // wants to be.
+
+        if distance_to_optimal < KeeperRestPosition::SET_DEADZONE {
+            return Some(Vector3::zeros());
         }
+
+        // URGENCY. How fast he travels is set by how near the ball is, not
+        // by how far he has to go — which is the difference between a
+        // keeper strolling out to the edge of his box while play is at the
+        // other end, and the same keeper sprinting to the same spot with
+        // a striker running through. Without this he moves at repositioning
+        // pace always, and covers 12.8 km a match against a real ~5 km.
+        let ball_distance = ctx.ball().distance();
+        let field_width = ctx.context.field_size.width as f32;
+        let urgency = (1.0 - ball_distance / (field_width * 0.55)).clamp(0.0, 1.0);
+        // Amble ↔ sprint.
+        let pace = 0.18 + urgency * urgency * 1.12;
+
+        Some(
+            SteeringBehavior::Arrive {
+                target: optimal_position,
+                slowing_distance: 8.0,
+            }
+            .calculate(ctx.player)
+            .velocity
+                * pace,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
@@ -242,7 +238,6 @@ impl StateProcessingHandler for GoalkeeperStandingState {
 }
 
 impl GoalkeeperStandingState {
-
     /// Goal kick: go long, or play short to a defender?
     ///
     /// Continuous score, no threshold flip. Going long is driven by the
@@ -372,65 +367,67 @@ impl GoalkeeperStandingState {
     }
 
     /// Calculate optimal goalkeeper position based on ball and goal
+    /// Where the keeper should be standing.
+    ///
+    /// # Why this was rebuilt
+    ///
+    /// A keeper in this engine stood on his line and never left it. He
+    /// spent **88% of the match motionless** and sat 11.4 m deeper than
+    /// even the modest anchor the team shape gave him, which is the "only
+    /// the GK stays in the goal" report.
+    ///
+    /// The old model had two faults, and the first is the interesting one:
+    /// **its depth was inverted.** With the ball in the opponent's half it
+    /// put him `12 + command * 8` units — **1.5 to 2.5 metres** — off his
+    /// line. That is the moment a real keeper is FURTHEST out, 20-30 m up,
+    /// sweeping behind his defence. With the ball near him it brought him
+    /// *further* out. Across every input the whole range came to about
+    /// 1-4 m, so nothing he did was visible.
+    ///
+    /// Second, every result was clamped inside the penalty area, so
+    /// sweeping up to meet a ball played in behind was impossible by
+    /// construction.
+    ///
+    /// # The model
+    ///
+    /// A keeper's depth is set by **where the ball is** and **how high his
+    /// own defence is**, and his lateral position by **the angle** — he
+    /// stands on the line from the centre of his goal to the ball, which
+    /// is what "narrowing the angle" physically means.
+    ///
+    /// Real reference points, which the constants below reproduce:
+    ///   * ball in the opponent's half behind a high line — 20-28 m out,
+    ///     effectively a sweeper;
+    ///   * ball in midfield — 12-18 m;
+    ///   * ball entering our final third — 6-10 m;
+    ///   * ball in the box — 2-5 m, on the angle, ready to spread.
     fn calculate_optimal_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let goal_center = ctx.ball().direction_to_own_goal();
-        let ball_position = ctx.tick_context.positions.ball.position;
-
-        // Goalkeeper skills affecting positioning
-        let positioning_skill = ctx.player.skills.mental.positioning / 20.0;
-        let command_of_area = ctx.player.skills.goalkeeping.command_of_area / 20.0;
-
-        // Calculate distance from goal to ball
-        let goal_to_ball = ball_position - goal_center;
-        let distance_to_ball = goal_to_ball.magnitude();
-
-        // Base distance from goal line (in meters/units)
-        let mut optimal_distance_from_goal = 10.0; // Start about 10 units from goal line
-
-        // Adjust based on ball position
-        if ctx.ball().on_own_side() {
-            // Ball on defensive half - position based on threat level
-            let threat_distance = distance_to_ball.min(300.0) / 300.0; // Normalize to 0-1
-
-            // Closer ball = come out more (but not too far)
-            optimal_distance_from_goal += (1.0 - threat_distance) * 20.0 * command_of_area;
-
-            // Better positioning = more accurate placement
-            optimal_distance_from_goal *= 0.8 + positioning_skill * 0.4;
-
-            // Narrow the angle - position on line between goal and ball
-            let direction_to_ball = if distance_to_ball > 1.0 {
-                goal_to_ball.normalize()
-            } else {
-                Vector3::new(1.0, 0.0, 0.0) // Fallback if ball too close to goal
-            };
-
-            let mut new_position = goal_center + direction_to_ball * optimal_distance_from_goal;
-
-            // Lateral adjustment for angle coverage
-            let ball_y_offset = ball_position.y - goal_center.y;
-            let lateral_adjustment = ball_y_offset * 0.2 * positioning_skill;
-            new_position.y += lateral_adjustment;
-
-            // Keep within penalty area
-            self.clamp_to_penalty_area(ctx, new_position)
-        } else {
-            // Ball on opponent's half - stay closer to goal but ready
-            optimal_distance_from_goal = 12.0 + command_of_area * 8.0;
-
-            let mut new_position = goal_center;
-            new_position.x += optimal_distance_from_goal
-                * (if ctx.player.side == Some(PlayerSide::Left) {
-                    1.0
-                } else {
-                    -1.0
-                });
-
-            self.clamp_to_penalty_area(ctx, new_position)
-        }
+        let point = KeeperRestPosition::point(
+            ctx.ball().direction_to_own_goal(),
+            ctx.tick_context.positions.ball.position,
+            ctx.player.side.unwrap_or(PlayerSide::Left),
+            ctx.team().tactical().defensive_line_x,
+            ctx.context.field_size.width as f32,
+            ctx.player.skills.goalkeeping.command_of_area / 20.0,
+            ctx.player.skills.mental.positioning / 20.0,
+        );
+        self.clamp_sweep_range(ctx, point)
     }
 
-    fn clamp_to_penalty_area(
+    /// Bound the keeper's standing position.
+    ///
+    /// Replaces a hard clamp into the penalty area. That clamp made
+    /// sweeping impossible by construction — a keeper cannot come and
+    /// meet a ball played in behind if he is not allowed out of his box —
+    /// and it is not what the laws or the football say: a keeper may go
+    /// anywhere, he just cannot handle the ball outside the area, which
+    /// the handling code enforces separately.
+    ///
+    /// What actually bounds him is how far he dares leave his goal, which
+    /// is `depth`, already computed from the ball and his defensive line.
+    /// Laterally he stays within the width of his own area — a keeper
+    /// drifting to the touchline is lost, not sweeping.
+    fn clamp_sweep_range(
         &self,
         ctx: &StateProcessingContext,
         position: Vector3<f32>,
@@ -438,8 +435,23 @@ impl GoalkeeperStandingState {
         let penalty_area = ctx
             .context
             .penalty_area(ctx.player.side == Some(PlayerSide::Left));
+        let goal_center = ctx.ball().direction_to_own_goal();
+        let side = ctx.player.side.unwrap_or(PlayerSide::Left);
+        let field_width = ctx.context.field_size.width as f32;
+
+        // Never behind his own goal line, and never past halfway —
+        // `KeeperRestPosition` already bounds the depth, this is the
+        // backstop. Laterally he stays within the width of his own area:
+        // a keeper drifting toward a touchline is lost, not sweeping.
+        let far_x = goal_center.x + side.forward_dir_x() * (field_width * 0.5 - 20.0);
+        let (lo_x, hi_x) = if side.forward_dir_x() > 0.0 {
+            (goal_center.x, far_x)
+        } else {
+            (far_x, goal_center.x)
+        };
+
         Vector3::new(
-            position.x.clamp(penalty_area.min.x, penalty_area.max.x),
+            position.x.clamp(lo_x, hi_x),
             position.y.clamp(penalty_area.min.y, penalty_area.max.y),
             0.0,
         )

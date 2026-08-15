@@ -588,6 +588,38 @@ pub mod mid_run_diag {
     /// 2 in the contest band (1.5-2.9 m), 3 above it.
     pub static CROSS_DISARM_AT: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
 
+    /// Defender-with-the-ball ticks, and how many of them were within
+    /// shooting range at all. Answers "is the defender BLOCKED from
+    /// shooting, or does he simply never have the ball near the goal",
+    /// which the shot count alone cannot.
+    pub static DEF_ONBALL_TICKS: AtomicU64 = AtomicU64::new(0);
+    pub static DEF_ONBALL_IN_RANGE: AtomicU64 = AtomicU64::new(0);
+    pub static DEF_SHOT_DECISIONS: AtomicU64 = AtomicU64::new(0);
+
+    pub struct DefenderShotDiag;
+
+    impl DefenderShotDiag {
+        pub fn note_onball(in_range: bool) {
+            DEF_ONBALL_TICKS.fetch_add(1, Ordering::Relaxed);
+            if in_range {
+                DEF_ONBALL_IN_RANGE.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn note_decision() {
+            DEF_SHOT_DECISIONS.fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// `(on-ball ticks, of those in range, shot decisions reached)`.
+        pub fn snapshot() -> (u64, u64, u64) {
+            (
+                DEF_ONBALL_TICKS.load(Ordering::Relaxed),
+                DEF_ONBALL_IN_RANGE.load(Ordering::Relaxed),
+                DEF_SHOT_DECISIONS.load(Ordering::Relaxed),
+            )
+        }
+    }
+
     pub struct CrossDiag;
 
     impl CrossDiag {
@@ -754,8 +786,7 @@ pub mod mid_run_diag {
     // 200+ / 300+ / 400+ by role — so a flat array of 500 covers the
     // whole id space with the role split for free.
     pub const STATE_SLOTS: usize = 500;
-    pub static STATE_TICKS: [AtomicU64; STATE_SLOTS] =
-        [const { AtomicU64::new(0) }; STATE_SLOTS];
+    pub static STATE_TICKS: [AtomicU64; STATE_SLOTS] = [const { AtomicU64::new(0) }; STATE_SLOTS];
     /// Sum of each player's distance from his team anchor, in units ×100,
     /// bucketed the same way. `STATE_ANCHOR_LAG / STATE_TICKS` is the
     /// average "how far from where my team wants me" for that state.
@@ -980,8 +1011,7 @@ pub mod mid_run_diag {
                     if n == 0 {
                         return None;
                     }
-                    let run =
-                        ENDLINE_RUN_SUM_BY_STATE[i].load(Ordering::Relaxed) as f32 / n as f32;
+                    let run = ENDLINE_RUN_SUM_BY_STATE[i].load(Ordering::Relaxed) as f32 / n as f32;
                     Some((i as u16, n, run))
                 })
                 .collect();
@@ -1101,15 +1131,13 @@ pub mod mid_run_diag {
                     if ticks == 0 {
                         return None;
                     }
-                    let lag = STATE_ANCHOR_LAG[i].load(Ordering::Relaxed) as f32
-                        / 100.0
-                        / ticks as f32;
+                    let lag =
+                        STATE_ANCHOR_LAG[i].load(Ordering::Relaxed) as f32 / 100.0 / ticks as f32;
                     let axis_sum = STATE_AXIS_LAG[i].load(Ordering::Relaxed) as f64;
                     let axis = ((axis_sum - (SIGNED_BIAS as f64) * ticks as f64)
                         / 10.0
                         / ticks as f64) as f32;
-                    let still =
-                        STATE_STILL_TICKS[i].load(Ordering::Relaxed) as f32 / ticks as f32;
+                    let still = STATE_STILL_TICKS[i].load(Ordering::Relaxed) as f32 / ticks as f32;
                     Some((i as u16, ticks, lag, axis, still))
                 })
                 .collect();
@@ -1573,7 +1601,15 @@ pub enum ShotDecision {
 /// ability-gated `SPECIALIST_RELIEF` half is gone (see `range_ease`), so
 /// this carries both. Everyone gets it; who actually shoots from there
 /// is settled by `reach`, `boldness` and `discernment` in the appetite.
-const LONG_RANGE_RELIEF: f32 = 0.48;
+///
+/// 2026-08-16: 0.48 → 0.14, because the reliefs are ABSOLUTE subtractions
+/// and `SHOT_BAR_BASE` has just dropped 0.900 → 0.520. At the old
+/// magnitude the 30 m+ bar fell onto `LONG_RANGE_FLOOR` for everybody and
+/// **53% of all shots came from beyond 30 m** — the far band holds 73% of
+/// all shot rolls, so any bar it can clear it clears constantly. The
+/// relief still exists and still ramps with distance; it simply no longer
+/// has to carry the 0.38 of headroom the base was holding.
+const LONG_RANGE_RELIEF: f32 = 0.14;
 /// The bar never falls below this, so a hopeful from 40 m is still a
 /// decision and not a reflex.
 ///
@@ -1598,7 +1634,29 @@ const LONG_RANGE_FLOOR: f32 = 0.20;
 /// Move it in small steps and re-read the whole distance mix, never just
 /// the total: the reliefs subtract from this, so a uniform lift falls
 /// entirely on the un-eased middle of the pitch.
-const SHOT_BAR_BASE: f32 = 0.900;
+///
+/// # 2026-08-16 — deliberately dropped 0.900 → 0.520
+///
+/// The bar had been titrated upward to hold the shot COUNT near the real
+/// ~13 a team. Measured against the appetite it was gating, that put it
+/// out of reach of the ordinary decision: mean APPETITE ran 0.30-0.51
+/// across the distance bands against an effective BAR of 0.60-0.88, so
+/// **the average look failed in every band** and only the tail of the
+/// distribution ever cleared. What the player does instead is lay it off,
+/// including backwards — which is the reported behaviour, and it is the
+/// bar producing it rather than the passing model.
+///
+/// Restraining shot volume through the DECISION was always the fallback
+/// position (see the note above: "shot volume must be restrained by
+/// better defending rather than by suppressing the decision"). It is
+/// being handed back: volume is expected to rise well past the real
+/// count for now, and the pressing / chance-quality work will take it
+/// back through defending, where it belongs.
+///
+/// The reliefs, the spread and the per-band shaping above are all left
+/// exactly as they are — this moves the whole curve down without
+/// disturbing the distance mix they encode.
+const SHOT_BAR_BASE: f32 = 0.520;
 /// How much of the urge a man stretching at full tilt for a ball he has
 /// not got under control gives up. See `poise`.
 const STRETCH_COST: f32 = 0.45;
@@ -1730,9 +1788,14 @@ const THROUGH_ON_GOAL_LIFT: f32 = 0.45;
 const POINT_BLANK_SPAN: f32 = 100.0;
 const BOX_RELIEF: f32 = 0.22;
 /// How much further from goal than the carrier a lay-off target may be
-/// and still count as a release rather than a recycle. 20u = 2.5 m — a
-/// square ball, not a pass back into midfield. See the release clause.
-const RELEASE_BACKWARD_TOLERANCE: f32 = 20.0;
+/// and still count as a release rather than a recycle.
+///
+/// 2026-08-16: 20u (2.5 m) → 0. A release is now strictly not backwards
+/// at all — the outlet has to be at least level with the carrier. The
+/// square ball this tolerance allowed is one of the balls the "he passes
+/// backwards instead of shooting" report is about, and with the shot bar
+/// down there is no longer a reason to keep the escape hatch open.
+const RELEASE_BACKWARD_TOLERANCE: f32 = 0.0;
 
 pub struct StrikingRange;
 
@@ -2135,8 +2198,8 @@ pub fn evaluate_forward_shot_decision(
         + composure)
         / 4.0;
     let stretched = (sprinting * (1.0 - body_control)).clamp(0.0, 1.0);
-    let poise = ((1.0 - stretched * STRETCH_COST) * (0.80 + physical_balance * 0.20))
-        .clamp(0.0, 1.0);
+    let poise =
+        ((1.0 - stretched * STRETCH_COST) * (0.80 + physical_balance * 0.20)).clamp(0.0, 1.0);
 
     // ── Being closed down ─────────────────────────────────────────────
     //
@@ -2296,9 +2359,16 @@ pub fn evaluate_forward_shot_decision(
     // has shot all afternoon and his own side stop giving it to him.
     // Left in because it is real; the version that raised an xG bar
     // instead is gone with the rest of them.
+    //
+    // 2026-08-16: threshold 5 → 14 and the slope halved. This is the one
+    // volume term that survives the cooldown teardown, because unlike a
+    // timer it describes something real. But it was fitted when a player
+    // took ~2 shots a match, so at the reopened volume it fired on
+    // everybody and became another flat suppressor. It should describe
+    // the man who has genuinely shot all afternoon, not the third effort.
     let shots_so_far = ctx.memory().shots_taken;
-    if shots_so_far > 5 {
-        appetite *= (1.0 - (shots_so_far - 5) as f32 * 0.08).clamp(0.35, 1.0);
+    if shots_so_far > 14 {
+        appetite *= (1.0 - (shots_so_far - 14) as f32 * 0.04).clamp(0.35, 1.0);
     }
 
     // Kept for the diagnostics only — the decision above never reads it.
@@ -2588,7 +2658,16 @@ pub fn evaluate_forward_shot_decision(
     // shoots. From range the ratio still dominates (at 25 m it demands
     // 5.5 m, well past the margin), so the long-range judgement the
     // ratio was written for is untouched.
-    const BETTER_PLACED_MARGIN: f32 = 32.0; // 4 m
+    //
+    // 2026-08-16: 32u (4 m) → 96u (12 m). This clause does two things at
+    // once — it ZEROES the distance relief AND returns `Pass` outright —
+    // so it is the single most direct "he had a shot and squared it
+    // instead" path in the model. At 4 m a team-mate barely ahead of you
+    // took the ball off you. Twelve metres is a team-mate in a plainly
+    // better position: the ball is worth giving up for that, and for
+    // nothing less. Part of the deliberate shooting-blocker teardown —
+    // see `SHOT_BAR_BASE`.
+    const BETTER_PLACED_MARGIN: f32 = 96.0; // 12 m
     let better_placed = outlet.is_some_and(|(t, _)| {
         let their_distance = (opp_goal - t.position).magnitude();
         their_distance < distance * generosity
@@ -2742,7 +2821,17 @@ pub fn evaluate_forward_shot_decision(
     let releasable = outlet.is_some_and(|(t, _)| {
         (opp_goal - t.position).magnitude() <= distance + RELEASE_BACKWARD_TOLERANCE
     });
-    if distance <= comfortable
+    //
+    // 2026-08-16: …and never from inside the penalty area. A player
+    // closed down in the box shoots — being pressed there is the normal
+    // condition of a shooting position, not a reason to give the ball
+    // away, and this clause was the last route by which a midfielder in
+    // the area laid it off instead of striking it. Outside the box the
+    // anti-hover argument still holds. Part of the shooting-blocker
+    // teardown; see `PlayerMemory::can_shoot`.
+    const NEVER_RELEASE_INSIDE: f32 = 132.0; // penalty-area depth
+    if distance > NEVER_RELEASE_INSIDE
+        && distance <= comfortable
         && releasable
         && ctx.player().pressure().is_under_immediate_pressure()
     {

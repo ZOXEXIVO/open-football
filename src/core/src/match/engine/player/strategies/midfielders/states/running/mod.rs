@@ -74,6 +74,14 @@ const SNAPSHOT_SALT: u64 = 0x1405_7B7E_F767_814F;
 /// goals 4.48 → 5.37, MID goal share 45% → 52%. The window is far
 /// longer than it looks, because an arriving runner holds a clear
 /// central look for as long as he holds the ball.
+///
+/// 2026-08-16: RETIRED (kept for reference — the block no longer rolls
+/// it). A per-tick, then per-possession, probability that an arriving
+/// midfielder declines a clear chance in the six-yard area is a cooldown
+/// by another name: it does not read the chance, only the dice. An
+/// arriving runner with a clear look in the box shoots, every time.
+/// See `PlayerMemory::can_shoot` for the rest of the teardown.
+#[allow(dead_code)]
 const CLEAR_CHANCE_RATE: f32 = 0.015;
 const SNAPSHOT_RATE: f32 = 0.55;
 
@@ -81,7 +89,6 @@ const SNAPSHOT_RATE: f32 = 0.55;
 /// shape logic to go and mark him (~19 m). Same figure the back line
 /// uses, so a duty means the same thing wherever it is held.
 const MARK_BREAK_DISTANCE: f32 = 150.0;
-
 
 /// Depth of the penalty area from the goal line (16.5 m). Inside it, a
 /// midfielder arriving onto the ball is in a shooting position — same
@@ -340,14 +347,35 @@ impl StateProcessingHandler for MidfielderRunningState {
                 // The 0.30 xG floor, `has_good_angle`, the ≤2-shot cap
                 // and the 0.003 throttle below are untouched: those are
                 // chance-quality and anti-monopoly gates, not range gates.
+                // ⚠ THE xG FLOOR HAS TO BE ON THE ENGINE'S OWN xG SCALE.
+                //
+                // This asked for 0.30 expected xG before an arriving
+                // midfielder in the box was allowed a Tier-1 shot. The
+                // engine's xG never gets there: measured, xG/shot is
+                // **0.120 at under 6 m and 0.118 at 6-11 m** — the two
+                // best bands on the pitch. A 0.30 floor is therefore
+                // unreachable from anywhere, and the tier fired **4 times
+                // in 20 matches**. It read like a chance-quality gate and
+                // behaved like an off switch.
+                //
+                // 0.10 is a genuinely clear look on this scale: it is met
+                // inside ~11 m and not beyond it, which is the shape the
+                // gate was written to have.
                 let clear_good = distance_to_goal <= PENALTY_AREA_DEPTH
                     && coach.shooting_reluctance() < 0.5
                     && ctx.player().shooting().has_good_angle()
-                    && sp.expected_xg(distance_to_goal, true) >= 0.30;
-                if clear_good
-                    && ctx.memory().shots_taken <= 2
-                    && Opportunity::draw(ctx, CLEAR_CHANCE_SALT) < CLEAR_CHANCE_RATE
-                {
+                    && sp.expected_xg(distance_to_goal, true) >= 0.10;
+                // 2026-08-16: the `shots_taken <= 2` anti-monopoly cap is
+                // REMOVED. A midfielder who has already had two efforts is
+                // not thereby barred from a clear chance at the penalty
+                // spot — there is no such rule in football, and a
+                // match-long counter cannot see the chance in front of
+                // him. Removed with the other shot quotas and cooldowns;
+                // see `PlayerMemory::can_shoot`.
+                // Deterministic: the probability throttle is gone with the
+                // rest of the shot cooldowns. An arriving midfielder with
+                // a clear look inside the area shoots.
+                if clear_good {
                     #[cfg(feature = "match-logs")]
                     {
                         use std::sync::atomic::Ordering;
@@ -1550,7 +1578,11 @@ impl MidfielderRunningState {
         const PRESSURE_REACH: f32 = 11.0 * U_PER_M;
         let me = ctx.player.position;
         let mut total = 0.0f32;
-        for (opp_id, dist) in ctx.tick_context.grid.opponents(ctx.player.id, PRESSURE_REACH) {
+        for (opp_id, dist) in ctx
+            .tick_context
+            .grid
+            .opponents(ctx.player.id, PRESSURE_REACH)
+        {
             let proximity = 1.0 - (dist / PRESSURE_REACH).clamp(0.0, 1.0);
             // Quadratic: the last two metres are worth far more than the
             // first two, which is how being closed down actually feels.

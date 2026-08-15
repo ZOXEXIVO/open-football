@@ -7,10 +7,10 @@ use crate::r#match::engine::player::events::players::FoulResolver;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::state::PlayerState;
-#[cfg(feature = "match-logs")]
-use crate::mid_run_diag::CrossDiag;
 use crate::r#match::player::strategies::passing::CrossType;
 use crate::r#match::player::transition::TransitionSource;
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::CrossDiag;
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
@@ -661,11 +661,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                         ) => 3,
                         _ => 4,
                     };
-                    DefenceDiag::note_duel(
-                        (d.position - man.position).magnitude(),
-                        line,
-                        bucket,
-                    );
+                    DefenceDiag::note_duel((d.position - man.position).magnitude(), line, bucket);
                 }
             }
         }

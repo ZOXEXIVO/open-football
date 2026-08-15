@@ -406,8 +406,8 @@ impl DefenderHoldingLineState {
         // toward the middle before anything else is applied to it, by how
         // deep the danger is and how compact the side wants to be.
         let field_len = ctx.context.field_size.width as f32;
-        let danger = (1.0 - (ball_position.x - own_goal.x).abs() / field_len.max(1.0))
-            .clamp(0.0, 1.0);
+        let danger =
+            (1.0 - (ball_position.x - own_goal.x).abs() / field_len.max(1.0)).clamp(0.0, 1.0);
         let squeeze = 1.0 - (0.20 + compactness * 0.25) * danger;
         let slot_y = field_center_y + (tactical_position.y - field_center_y) * squeeze;
 

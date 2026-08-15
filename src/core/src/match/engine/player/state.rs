@@ -363,8 +363,7 @@ impl PlayerMatchState {
                 // reversal rather than a dropped strike and belongs to the
                 // pass-deferral counters.
                 #[cfg(feature = "match-logs")]
-                if player.pending_shot_reason.is_some()
-                    && !state_change_result.events.has_events()
+                if player.pending_shot_reason.is_some() && !state_change_result.events.has_events()
                 {
                     let goal_x = match player.side {
                         Some(crate::r#match::PlayerSide::Left) => context.field_size.width as f32,

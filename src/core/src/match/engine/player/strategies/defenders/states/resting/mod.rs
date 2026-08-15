@@ -68,13 +68,13 @@ impl StateProcessingHandler for DefenderRestingState {
         if ball_distance < BALL_PROXIMITY_THRESHOLD {
             // If the ball is close, check for nearby opponents
             let opponent_nearby = self.is_opponent_nearby(ctx);
-            return Some(StateChangeResult::with_defender_state(if opponent_nearby
-                || !Interception::is_available(ctx)
-            {
-                DefenderState::Marking
-            } else {
-                DefenderState::Intercepting
-            }));
+            return Some(StateChangeResult::with_defender_state(
+                if opponent_nearby || !Interception::is_available(ctx) {
+                    DefenderState::Marking
+                } else {
+                    DefenderState::Intercepting
+                },
+            ));
         }
 
         // Previous "team under threat" exit (fires if 2+ opponents in
