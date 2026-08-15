@@ -17,7 +17,22 @@ pub struct GoalkeeperDivingState {}
 
 impl StateProcessingHandler for GoalkeeperDivingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if ctx.player.has_ball(ctx) {
+        // A dive has a DURATION. He leaves his feet, takes the ball, and
+        // has to get up again before he can do anything with it.
+        //
+        // This released him on the very tick he gathered it, so every
+        // caught dive lasted a single tick — the physics save hands him
+        // the ball at the same instant it puts him here. Measured, the
+        // keeper made ~86 saves a match and `Goalkeeper: Diving` still sat
+        // below 0.25% of his ticks: he was diving and standing up inside
+        // 10 ms, which is why he reads as "sitting on the ball" rather
+        // than making a save.
+        //
+        // 45 ticks ≈ 0.45 s — the time a keeper is actually on the floor.
+        // `Diving` is already a committed action, so nothing else can
+        // abort it either.
+        const MIN_DIVE_TICKS: u64 = 45;
+        if ctx.player.has_ball(ctx) && ctx.in_state_time >= MIN_DIVE_TICKS {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Passing,
             ));

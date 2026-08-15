@@ -36,7 +36,27 @@ impl StateProcessingHandler for DefenderPushingUpState {
             ));
         }
 
-        if ball_ops.on_own_side() {
+        // Retreat when the ball is genuinely DEEP, not merely on our own
+        // half.
+        //
+        // `should_overlap` commits a full-back during `Progression` as
+        // well as `Attack` — and Progression is the MIDDLE THIRD, where
+        // the ball is routinely still a few metres our side of halfway.
+        // So he committed to the run and this branch sent him straight
+        // back on the same tick: measured, **633 overlap commitments a
+        // match and `Defender: Pushing Up` still below 0.25% of ticks**.
+        // He was flickering, not overlapping — the third instance of this
+        // exact entry/give-up disagreement found today, after the keeper's
+        // sweep and the shot gates.
+        //
+        // An overlapping full-back runs BEYOND the ball; the ball being
+        // behind him is the normal condition of the run, not a reason to
+        // abandon it. Losing possession is, and that is the branch below.
+        let side = ctx.player.side.unwrap_or(PlayerSide::Left);
+        let field_width = ctx.context.field_size.width as f32;
+        let ball_progress = side
+            .attacking_progress_x(ctx.tick_context.positions.ball.position.x, field_width);
+        if ball_progress < 1.0 / 3.0 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::TrackingBack,
             ));

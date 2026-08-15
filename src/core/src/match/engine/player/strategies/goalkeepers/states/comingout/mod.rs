@@ -1,3 +1,5 @@
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::KeeperSweepDiag;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -16,7 +18,21 @@ const CLAIM_BALL_DISTANCE: f32 = 20.0;
 /// keeper covers twenty-five metres of space behind his line; this one
 /// would not leave his six-yard box, so the whole sweeping behaviour the
 /// state exists for could never fire.
-const MAX_COMING_OUT_DISTANCE: f32 = 160.0;
+///
+/// ⚠ THIS MUST STAY STRICTLY WIDER THAN THE DISTANCE AT WHICH
+/// `should_rush_out_for_ball` COMMITS, or the pair is a two-cycle by
+/// construction — the same ordering invariant `TackleEngagement`
+/// documents (`COMMIT < DISENGAGE` is what makes the hand-off one-way).
+///
+/// 160u scaled by `0.85 + rushing * 0.55` gives up at 136-224 u, while
+/// entry commits out to 180 u. They OVERLAP, so a keeper with modest
+/// `rushing_out` entered and abandoned on the same tick: measured, he
+/// committed to coming out **175 times a match** and `ComingOut` still
+/// held under 0.25% of his ticks. He was flickering, not sweeping.
+///
+/// 240u (30 m) puts the give-up band at 204-336 u — strictly outside any
+/// entry distance, so once he commits he actually goes.
+const MAX_COMING_OUT_DISTANCE: f32 = 240.0;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperComingOutState {}
@@ -31,6 +47,8 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         // at four such episodes a match, one of them with the ball on the
         // goal line at x = 2.2.
         if ctx.player.has_ball(ctx) {
+            #[cfg(feature = "match-logs")]
+            KeeperSweepDiag::note_exit(0);
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Distributing,
             ));
@@ -49,6 +67,8 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         let ball_distance = ctx.ball().distance();
 
         if self.should_dive(ctx) {
+            #[cfg(feature = "match-logs")]
+            KeeperSweepDiag::note_exit(2);
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Diving,
             ));
@@ -95,6 +115,8 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         let max_pursuit_distance =
             MAX_COMING_OUT_DISTANCE * (0.85 + prof.rushing_out_profile * 0.55);
         if ball_distance > max_pursuit_distance {
+            #[cfg(feature = "match-logs")]
+            KeeperSweepDiag::note_exit(5);
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
             ));
@@ -102,6 +124,8 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
 
         // Check if ball is on opponent's half - return to goal
         if !ctx.ball().on_own_side() {
+            #[cfg(feature = "match-logs")]
+            KeeperSweepDiag::note_exit(6);
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
             ));

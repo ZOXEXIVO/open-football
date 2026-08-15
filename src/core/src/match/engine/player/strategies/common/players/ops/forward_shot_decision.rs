@@ -596,6 +596,76 @@ pub mod mid_run_diag {
     pub static DEF_ONBALL_IN_RANGE: AtomicU64 = AtomicU64::new(0);
     pub static DEF_SHOT_DECISIONS: AtomicU64 = AtomicU64::new(0);
 
+    /// Keeper sweep funnel: how many Standing ticks reach the come-out
+    /// question, how many have an opponent carrying the ball, how many of
+    /// those are inside his scan radius, and how many he actually commits
+    /// to. Says WHERE the sweep is being lost.
+    pub static GK_SWEEP: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+
+    /// Why a keeper ABANDONED a sweep he had committed to. 0 got the
+    /// ball, 1 shot in flight, 2 dived, 3 claimed it, 4 fast ball at him,
+    /// 5 ball beyond his pursuit range, 6 ball crossed halfway,
+    /// 7 opponent too close to risk it.
+    pub static GK_SWEEP_EXIT: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+
+    /// Overlapping-fullback funnel. `should_overlap` is a conjunction of
+    /// eight conditions; any one of them failing kills the behaviour, and
+    /// the aggregate "defenders never overlap" cannot say which.
+    /// 0 asked, 1 wide, 2 we have it, 3 phase, 4 width, 5 profile,
+    /// 6 same flank, 7 ball ahead, 8 rest-defence, 9 COMMITTED.
+    pub static OVERLAP_FUNNEL: [AtomicU64; 10] = [const { AtomicU64::new(0) }; 10];
+
+    pub struct OverlapDiag;
+
+    impl OverlapDiag {
+        pub fn note(stage: usize) {
+            if stage < 10 {
+                OVERLAP_FUNNEL[stage].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 10] {
+            let mut out = [0u64; 10];
+            for (slot, c) in out.iter_mut().zip(OVERLAP_FUNNEL.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
+    pub struct KeeperSweepDiag;
+
+    impl KeeperSweepDiag {
+        pub fn note(stage: usize) {
+            if stage < 4 {
+                GK_SWEEP[stage].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn note_exit(reason: usize) {
+            if reason < 8 {
+                GK_SWEEP_EXIT[reason].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `[reached, carrier exists, inside scan, committed]`.
+        pub fn snapshot() -> [u64; 4] {
+            let mut out = [0u64; 4];
+            for (slot, c) in out.iter_mut().zip(GK_SWEEP.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+
+        pub fn exits() -> [u64; 8] {
+            let mut out = [0u64; 8];
+            for (slot, c) in out.iter_mut().zip(GK_SWEEP_EXIT.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
     pub struct DefenderShotDiag;
 
     impl DefenderShotDiag {

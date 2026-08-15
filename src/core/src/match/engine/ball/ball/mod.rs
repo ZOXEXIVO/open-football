@@ -971,6 +971,17 @@ pub struct Ball {
     /// independent saves that often missed.
     pub pending_save_credit: Option<(u32, u32)>,
 
+    /// How hard the keeper had to work for that save, in reach ratio
+    /// (0 = straight at him, 1 = full-stretch). Consumed alongside
+    /// `pending_save_credit` to put him into the matching STATE.
+    ///
+    /// Without it the physics save resolves a shot entirely inside ball
+    /// physics and the keeper's own state machine never runs, so he never
+    /// visibly dives, catches or gets up — the ball simply stops at a
+    /// standing man. Measured: ~86 saves a match, of which only 8.4 put
+    /// him in `Diving` and `Goalkeeper: Diving` sat below 0.25% of ticks.
+    pub pending_save_reach: f32,
+
     /// Last meaningful touch on the ball. Drives restart resolution
     /// (throw-ins, corners, goal kicks) and pass-origin metadata. Updated
     /// from any path that hands ownership to a player (claim, intercept,
@@ -1313,6 +1324,7 @@ impl Ball {
             stall_anchor_tick: 0,
             cached_shot_target: None,
             pending_save_credit: None,
+            pending_save_reach: 0.0,
             last_touch_player_id: None,
             #[cfg(feature = "match-logs")]
             last_touch_position: Vector3::new(x, y, 0.0),

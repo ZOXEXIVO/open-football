@@ -627,7 +627,13 @@ impl DefenderSkillProfile {
     /// Whether a fullback should attempt an overlap run.
     #[inline]
     pub fn allows_overlap(&self) -> bool {
-        self.overlap_profile >= 0.46 && self.def_condition_mult >= 0.72
+        // 2026-08-16: 0.46/0.72 → 0.30/0.55. A hard cliff on a continuous
+        // composite, and it sat above where an ordinary full-back scores —
+        // so most of them never overlapped at all, and the ones who did
+        // stopped as soon as their condition dipped. Skill still separates
+        // an athletic full-back from a plodder; it no longer decides
+        // whether the behaviour exists.
+        self.overlap_profile >= 0.30 && self.def_condition_mult >= 0.55
     }
 
     /// Whether a fullback should attempt a late-lead overlap (riskier).

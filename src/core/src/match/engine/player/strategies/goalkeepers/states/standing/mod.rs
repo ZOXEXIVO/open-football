@@ -11,6 +11,9 @@ use nalgebra::Vector3;
 
 const DANGER_ZONE_RADIUS: f32 = 35.0;
 const CLOSE_DANGER_DISTANCE: f32 = 100.0;
+/// How far out a keeper even CONSIDERS coming for a carrier, before his
+/// own rushing-out and eccentricity widen it. 200u = 25 m.
+const SWEEP_SCAN_BASE: f32 = 200.0;
 const FAR_THREAT_DISTANCE: f32 = 300.0;
 /// Below this height the ball is on the deck — scooped up, not caught.
 const GROUND_BALL_HEIGHT: f32 = 1.2;
@@ -96,28 +99,54 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         let anticipation = ctx.player.skills.mental.anticipation / 20.0;
         let command_of_area = ctx.player.skills.goalkeeping.command_of_area / 20.0;
 
-        // Check for immediate threats requiring urgent action
+        // ── The decision to come out ──────────────────────────────────
+        //
+        // ⚠ THE OUTER GATE HAS TO BE WIDER THAN THE DECISION IT GUARDS.
+        //
+        // This asked `opponent_distance < CLOSE_DANGER_DISTANCE` — 12.5 m
+        // — before it would even CONSULT `should_rush_out_for_ball`. That
+        // function reasons about a carrier bearing down from 19 m and
+        // widens further with the keeper's risk appetite, so most of it
+        // was unreachable: by the time it was asked, the striker was
+        // already in the six-yard box and the only useful answer was
+        // "set yourself". `ComingOut` measured **below 0.25% of keeper
+        // ticks** — the keeper never swept, and every sweeper attribute
+        // he has was decorative.
+        //
+        // The scan radius is now the keeper's own: how far he is willing
+        // to come is a property of `rushing_out` and `eccentricity`, and
+        // it is `should_rush_out_for_ball`'s job to weigh it. This gate
+        // only decides whether the question is worth asking.
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::KeeperSweepDiag::note(0);
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperSweepDiag::note(1);
             let opponent_distance = opponent.distance(ctx);
+            let rushing_out = ctx.player.skills.goalkeeping.rushing_out / 20.0;
+            let eccentricity = ctx.player.skills.goalkeeping.eccentricity / 20.0;
+            // 200u = 25 m for an ordinary keeper, out to ~40 m for a
+            // rushing, eccentric one — a Neuer, who genuinely defends
+            // that space, against a line-keeper who does not.
+            let scan = SWEEP_SCAN_BASE * (1.0 + rushing_out * 0.5 + eccentricity * 0.5);
 
-            // Opponent very close with ball - prepare for save or come out
-            if opponent_distance < CLOSE_DANGER_DISTANCE {
-                // Check if should come out or prepare for shot
+            if opponent_distance < scan {
+                #[cfg(feature = "match-logs")]
+                crate::mid_run_diag::KeeperSweepDiag::note(2);
                 if self.should_rush_out_for_ball(ctx, &opponent) {
+                    #[cfg(feature = "match-logs")]
+                    crate::mid_run_diag::KeeperSweepDiag::note(3);
                     return Some(StateChangeResult::with_goalkeeper_state(
                         GoalkeeperState::ComingOut,
                     ));
-                } else {
-                    return Some(StateChangeResult::with_goalkeeper_state(
-                        GoalkeeperState::PreparingForSave,
-                    ));
                 }
             }
-
-            // Opponent approaching at medium range — the dedicated
-            // Attentive state added no behaviour over Standing (both
-            // repositioned and rechecked threats every tick), so we stay
-            // put and let the next-tick threat scan drive the response.
+            // Close, and not coming — then set yourself for the strike.
+            if opponent_distance < CLOSE_DANGER_DISTANCE {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::PreparingForSave,
+                ));
+            }
         }
 
         // Check if ball is coming toward goal — react faster to shots

@@ -5,6 +5,7 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::engine::player::events::players::FoulResolver;
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::passing::CrossType;
@@ -1067,6 +1068,52 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             return;
         }
         let shot_xg = field.ball.last_shot_xgot;
+        // ── Make the save VISIBLE ─────────────────────────────────────
+        //
+        // The physics save resolves a shot entirely inside ball physics:
+        // it changes ball state, credits the stats, and never touches the
+        // keeper's state machine. So he made ~86 saves a match while
+        // `Goalkeeper: Diving` sat below 0.25% of his ticks — the ball
+        // simply stopped at a standing man, which is the "he doesn't
+        // catch anything, he just sits on it" report.
+        //
+        // Put him into the state the save actually demanded. `reach_ratio`
+        // is how far he had to stretch, and it is already the quantity the
+        // save model scores, so the state and the physics agree about how
+        // hard the save was rather than rolling it twice.
+        {
+            /// Beyond this he has left his feet. 0.22 of full stretch is
+            /// roughly a step and a reach — anything past that is a dive,
+            /// which is most saves a keeper makes. Only the ball hit
+            /// straight at him is taken standing.
+            const DIVE_STRETCH: f32 = 0.22;
+            let reach = field.ball.pending_save_reach;
+            let held = field.ball.current_owner == Some(keeper_id);
+            let next = if reach >= DIVE_STRETCH {
+                // Full-stretch — he goes to ground whether he holds it or
+                // pushes it away.
+                GoalkeeperState::Diving
+            } else if held {
+                // Straight at him and gathered: a clean catch.
+                GoalkeeperState::Catching
+            } else {
+                // Straight at him and NOT held — he got something behind
+                // it and the rebound is live. That is a parry, and
+                // `Punching` is the state for it; `PreparingForSave`
+                // would say he is still waiting for a shot he has already
+                // stopped.
+                GoalkeeperState::Punching
+            };
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperSweepDiag::note_exit(match next {
+                GoalkeeperState::Diving => 1,
+                GoalkeeperState::Catching => 3,
+                _ => 4,
+            });
+            let gk = &mut field.players[keeper_idx];
+            gk.transition_to(PlayerState::Goalkeeper(next), TransitionSource::EventHandler);
+        }
+        field.ball.pending_save_reach = 0.0;
         {
             let gk = &mut field.players[keeper_idx];
             // The GK denied a shot worth `shot_xg` xG — books the save,

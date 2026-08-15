@@ -6018,6 +6018,67 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         mr[14], mr[15]
     );
 
+    // ── OVERLAPPING FULLBACK FUNNEL ────────────────────────────────────
+    {
+        use core::mid_run_diag::OverlapDiag;
+        let f = OverlapDiag::snapshot();
+        if f[0] > 0 {
+            println!();
+            println!("--- OVERLAPPING FULLBACK FUNNEL (survivors at each gate, /match) ---");
+            for (i, name) in [
+                "asked",
+                "is wide",
+                "we have the ball",
+                "phase Attack/Progression",
+                "team width > 0.45",
+                "profile allows",
+                "ball on same flank",
+                "ball ahead of him",
+                "enough rest defence",
+                "COMMITTED",
+            ]
+            .iter()
+            .enumerate()
+            {
+                println!(
+                    "    {:<28} {:>10.0}  ({:.1}% of asked)",
+                    name,
+                    f[i] as f64 / n_matches as f64,
+                    f[i] as f64 * 100.0 / f[0].max(1) as f64
+                );
+            }
+        }
+    }
+
+    // ── KEEPER SWEEP FUNNEL ────────────────────────────────────────────
+    {
+        use core::mid_run_diag::KeeperSweepDiag;
+        let s = KeeperSweepDiag::snapshot();
+        if s[0] > 0 {
+            println!();
+            println!(
+                "--- KEEPER SWEEP FUNNEL --- {:.0} come-out questions/match → carrier exists \
+                 {:.0} → inside scan {:.0} → COMMITTED {:.1}",
+                s[0] as f64 / n_matches as f64,
+                s[1] as f64 / n_matches as f64,
+                s[2] as f64 / n_matches as f64,
+                s[3] as f64 / n_matches as f64
+            );
+            let e = KeeperSweepDiag::exits();
+            println!(
+                "    sweep abandoned by: got-the-ball {} beyond-pursuit {} \
+                 ball-crossed-halfway {}",
+                e[0], e[5], e[6]
+            );
+            println!(
+                "    save REACTION set: diving {:.1}/match  catching {:.1}  blocked {:.1}",
+                e[1] as f64 / n_matches as f64,
+                e[3] as f64 / n_matches as f64,
+                e[4] as f64 / n_matches as f64
+            );
+        }
+    }
+
     // ── DEFENDER SHOOTING SUPPLY ───────────────────────────────────────
     // Separates "the defender is blocked from shooting" from "he never
     // has the ball anywhere near the goal", which the shot count alone

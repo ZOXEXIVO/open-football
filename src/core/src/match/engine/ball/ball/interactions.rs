@@ -1445,6 +1445,9 @@ impl Ball {
         if let Some(shooter_id) = self.previous_owner {
             self.pending_save_credit = Some((keeper_id, shooter_id));
         }
+        // How far he had to go for it — the state machine turns this into
+        // a dive, a catch or a block. See `pending_save_reach`.
+        self.pending_save_reach = reach_ratio;
         self.cached_shot_target = None;
         let tick = self.current_tick_cached;
         self.offside_snapshot = None;

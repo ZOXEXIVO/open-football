@@ -5,6 +5,8 @@ use crate::r#match::defenders::states::common::{
 };
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::OverlapDiag;
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
@@ -1601,6 +1603,8 @@ impl DefenderRunningState {
     /// healthy condition + work-rate, and a team_width_target above
     /// 0.45 so a deliberately compact / low-block side never overlaps.
     fn should_overlap(&self, ctx: &StateProcessingContext) -> bool {
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(0);
         // Must be a wide defender (starting position near touchline)
         let field_height = ctx.context.field_size.height as f32;
         let start_y = ctx.player.start_position.y;
@@ -1608,11 +1612,15 @@ impl DefenderRunningState {
         if !is_wide {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(1);
 
         // Team must control ball
         if !ctx.team().is_control_ball() {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(2);
 
         // Phase gate: only overlap in established attacking phases.
         // Transitions and build-up are too fragile — overlap during a
@@ -1622,12 +1630,23 @@ impl DefenderRunningState {
         if !matches!(phase, GamePhase::Attack | GamePhase::Progression) {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(3);
 
         // Width gate: a deliberately compact tactic (low block,
         // possession through the middle) should not push fullbacks wide.
-        if ctx.team().team_width_target() <= 0.45 {
+        // 0.45 → 0.30. `compute_team_width` is `(1 - tactic_compactness)`
+        // plus a phase bias of +0.15 in Attack and +0.05 in Progression,
+        // so any tactic with compactness at or above ~0.6 sat under the
+        // old bar permanently and its full-backs never overlapped at all.
+        // Measured, this gate alone cut the funnel by 70%. A deliberately
+        // compact side should still suppress overlaps; a merely ordinary
+        // one should not.
+        if ctx.team().team_width_target() <= 0.30 {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(4);
 
         // Skill-aware overlap gate: stamina/work_rate/pace/off_the_ball
         // composite + late-lead branch handled by the profile helpers.
@@ -1642,27 +1661,34 @@ impl DefenderRunningState {
         } else if !def_profile.allows_overlap() {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(5);
 
-        // Find teammate with ball on same flank
+        // Is the attack on MY side? That is a question about where the
+        // BALL is, not about who is standing on it.
+        //
+        // This used to require a live ball OWNER (`ctx.ball().owner_id()`)
+        // and fell through to `false` otherwise — so it was false for the
+        // whole of every pass, which is precisely when a full-back starts
+        // an overlap. `is_control_ball()` above already establishes that
+        // the possession is ours; demanding a carrier on top of it threw
+        // away the travelling ticks.
+        //
+        // Measured, this was the single biggest killer of the behaviour:
+        // the funnel went **14,850 → 593 survivors here, a 96% cut**, on a
+        // test that should be roughly a coin flip between the two
+        // full-backs. Overlaps ran at 422 a match against a back four's
+        // worth of opportunities.
         let player_on_left_flank = start_y < field_height * 0.5;
-        let has_ball_on_same_flank = if let Some(owner_id) = ctx.ball().owner_id() {
-            if let Some(owner) = ctx.context.players.by_id(owner_id) {
-                if owner.team_id != ctx.player.team_id {
-                    return false;
-                }
-                let ball_pos = ctx.tick_context.positions.ball.position;
-                let ball_on_left = ball_pos.y < field_height * 0.5;
-                ball_on_left == player_on_left_flank
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+        let ball_pos_flank = ctx.tick_context.positions.ball.position;
+        let has_ball_on_same_flank =
+            (ball_pos_flank.y < field_height * 0.5) == player_on_left_flank;
 
         if !has_ball_on_same_flank {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(6);
 
         // Defender must be behind the ball carrier
         let ball_pos = ctx.tick_context.positions.ball.position;
@@ -1672,6 +1698,8 @@ impl DefenderRunningState {
         if !ball_ahead {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(7);
 
         // Rest-defence gate: count teammates whose attacking_progress is
         // strictly behind the ball (with a 0.03 deadband to avoid
@@ -1705,6 +1733,8 @@ impl DefenderRunningState {
         if behind_ball_count < required_behind {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(8);
 
         // Check space ahead on the wing
         let wing_y = if player_on_left_flank {
@@ -1715,6 +1745,10 @@ impl DefenderRunningState {
         let ahead_pos = Vector3::new(ball_pos.x + to_goal.x * 50.0, wing_y, 0.0);
         let opponents_blocking = ctx.players().opponents().nearby_at(ahead_pos, 30.0).count();
 
+        #[cfg(feature = "match-logs")]
+        if opponents_blocking == 0 {
+            OverlapDiag::note(9);
+        }
         opponents_blocking == 0
     }
 
