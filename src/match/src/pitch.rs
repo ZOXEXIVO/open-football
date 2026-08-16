@@ -194,6 +194,16 @@ impl Pitch {
     const LINE_WIDTH: f32 = 0.14;
     const LINE_HEIGHT: f32 = 0.012;
 
+    /// The direction the stadium light travels — down, and a little across.
+    ///
+    /// Public because the contact shadows have to agree with it. There are no
+    /// shadow maps in this scene (see below), so every shadow on the turf is
+    /// a painted disc placed by hand; a disc placed symmetrically under a body
+    /// lit from 28° off the vertical is the one thing that makes a figure look
+    /// pasted onto the grass rather than standing on it. One constant, two
+    /// readers, no chance of them disagreeing.
+    pub const SUN: Vec3 = Vec3::new(-0.4, -1.0, 0.35);
+
     pub fn spawn(
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
@@ -241,7 +251,7 @@ impl Pitch {
                 shadow_maps_enabled: false,
                 ..default()
             },
-            Transform::from_xyz(0.0, 0.0, 0.0).looking_at(Vec3::new(-0.4, -1.0, 0.35), Vec3::Y),
+            Transform::from_xyz(0.0, 0.0, 0.0).looking_at(Self::SUN, Vec3::Y),
         ));
     }
 

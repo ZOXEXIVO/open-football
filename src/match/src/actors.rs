@@ -3,6 +3,7 @@ use crate::config::{PlayerInfo, ViewerConfig};
 use crate::field::Field;
 use crate::kit::{Complexion, Wardrobe};
 use crate::loader::ChunkLoader;
+use crate::pitch::Pitch;
 use crate::playback::Playback;
 use crate::replay::{ReplayTracks, Track};
 use crate::textures::Textures;
@@ -136,6 +137,20 @@ pub struct BallActor;
 #[derive(Component)]
 pub struct BallShadow;
 
+/// One player's shadow on the turf.
+///
+/// A root entity that TRACKS a player rather than a child that hangs off him,
+/// which it used to be, and the difference is the whole point of it. A shadow
+/// belongs to the light and not to the body: it has to lie along the light's
+/// bearing whichever way the player happens to be facing, and a child of an
+/// actor is rotated by his heading and scaled by his build. Following him from
+/// outside costs one transform a frame and buys a shadow that stays put while
+/// he turns.
+#[derive(Component)]
+pub struct Silhouette {
+    pub actor: Entity,
+}
+
 /// Where the ball is right now, in world space, so the camera does not have to
 /// go looking for it.
 #[derive(Resource, Default)]
@@ -181,6 +196,24 @@ pub struct BallState {
     pub nearest: Option<(u32, f32)>,
 }
 
+/// What a player hit the ball WITH.
+///
+/// The rig used to have exactly two answers — a boot, or a goalkeeper's hands
+/// — and it inferred the second from whether he happened to be carrying it.
+/// A footballer has four, and the other two are not rare: a ball arriving
+/// above head height is met with a head, and a match contains forty-odd
+/// throw-ins. Both used to be drawn as a leg swing, which at a corner is a man
+/// hooking his boot up past his own ear.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Strike {
+    Boot,
+    Head,
+    /// Out of a goalkeeper's hands, one-armed and overarm.
+    Throw,
+    /// And off the touchline, two-handed and over the head.
+    ThrowIn,
+}
+
 /// One swing of a leg — the single most repeated thing a footballer does, and
 /// the one this rig had nothing at all for.
 ///
@@ -215,12 +248,31 @@ struct Kick {
     /// Where he hit it, flattened and normalised — he opens up to the ball
     /// before he strikes it, not after.
     direction: Vec3,
-    /// Out of his hands rather than off his boot, which is a keeper throwing
-    /// the ball out.
-    thrown: bool,
+    /// And what with.
+    kind: Strike,
 }
 
-/// A kick that is about to happen.
+/// The moment the ball is about to be struck, as the recording describes it —
+/// before anybody has been blamed for it.
+#[derive(Clone, Copy)]
+pub struct Contact {
+    /// Where the boot, head or hands will meet it.
+    pub at: Vec3,
+    /// How fast it will leave when they do.
+    pub velocity: Vec3,
+    /// Seconds of match time until then. Counts down as the playhead closes
+    /// on it, and is what puts the swing in the right place: the pose is a
+    /// function of this rather than of a clock the viewer starts, so it stays
+    /// correct when the replay is scrubbed or run at 8x.
+    pub delay: f32,
+    /// What the geometry of the moment says it is. Read off the ball alone —
+    /// how high it is being met and where on the pitch — because nothing in
+    /// the recording says who is doing what, and the two answers that are not
+    /// a kick are both unmistakable in the ball's own track.
+    pub kind: Strike,
+}
+
+/// A kick that is about to happen, once it has an owner.
 ///
 /// A footballer takes a backswing. By the time the ball is moving there is
 /// nothing left to draw but the follow-through, so the strike that drives the
@@ -232,13 +284,7 @@ pub struct Impact {
     /// Who swings. The player nearest the ball at the moment it is struck,
     /// which measured over a real match is a median of 0.24 m away.
     pub by: u32,
-    /// How fast it will leave when he does.
-    pub velocity: Vec3,
-    /// Seconds of match time until contact. Counts down as the playhead
-    /// closes on it, and is what puts the swing in the right place: the pose
-    /// is a function of this rather than of a clock the viewer starts, so it
-    /// stays correct when the replay is scrubbed or run at 8x.
-    pub delay: f32,
+    pub contact: Contact,
 }
 
 /// The state of a ball in the air, kept so its rotation can be derived from
@@ -372,6 +418,13 @@ impl Actors {
     pub(crate) const BALL_RADIUS: f32 = 0.16;
     /// Width of the shadow and the team ring on the turf, in metres.
     const FOOTPRINT: f32 = 1.32;
+    /// How far up a standing body its shadow's middle lands, as a share of its
+    /// height. Low, because the legs are the wider half of a footballer's
+    /// outline and so carry most of the shadow with them.
+    const SHADOW_CENTRE: f32 = 0.42;
+    /// And how far the disc floats above the turf, in metres — under the team
+    /// ring, over the grass and the paint.
+    const SHADOW_LIFT: f32 = 0.018;
     /// Ground speed, in metres per second, that counts as flat out.
     const SPRINT: f32 = 6.0;
     /// Above this a player faces where they are going; below it they turn to
@@ -402,6 +455,24 @@ impl Actors {
     /// Ball speed, in metres per second, that counts as hit as hard as anybody
     /// hits one — the top of the swing. Measured p90 of a recorded match.
     const HAMMERED: f32 = 38.0;
+    /// Height, in metres, above which a ball is being met with a head.
+    ///
+    /// A footballer is drawn 1.79 m to the crown with his eyes at 1.66, so a
+    /// ball struck above this is above the shoulder of anybody standing under
+    /// it — which leaves a header, and nothing else that happens often enough
+    /// to draw. Under it sits the whole of the volley range, including the
+    /// chest-high ones, and those really are kicks.
+    const HEADED: f32 = 1.45;
+    /// How close to a touchline a DEAD ball has to be struck from to be a
+    /// throw-in, in metres, and how slowly it has to have been travelling
+    /// first.
+    ///
+    /// The engine sets a throw-in down two game units — a quarter of a metre —
+    /// inside the line and zeroes its velocity (`Ball::check_throw_in`), so
+    /// this is that quarter metre with room either side rather than a guess.
+    /// Nothing else in football is played from a standing start out there.
+    const TOUCHLINE_REACH: f32 = 0.45;
+    const DEAD_BALL: f32 = 0.6;
     /// How far ahead of the playhead the viewer goes looking for the next
     /// kick, as a number of probes of the recording's own 30 ms sample step.
     ///
@@ -575,7 +646,12 @@ impl Actors {
         config: Res<ViewerConfig>,
     ) {
         let parts = BodyParts::new(&mut meshes);
-        let wardrobe = Wardrobe::new(&mut materials, &mut images, &config);
+        let wardrobe = Wardrobe::new(
+            &mut materials,
+            &mut images,
+            &config,
+            &BodyParts::face_layout(),
+        );
         let patch = meshes.add(Plane3d::default().mesh().size(1.0, 1.0));
 
         for player in &config.players {
@@ -594,21 +670,21 @@ impl Actors {
                 ))
                 .id();
 
-            // Drawn under the boots, in this order: the shadow that roots the
-            // player on the turf, then their team's ring around it.
-            commands.entity(actor).with_children(|marks| {
-                marks.spawn((
-                    Mesh3d(patch.clone()),
-                    MeshMaterial3d(wardrobe.shadow()),
-                    Transform::from_xyz(0.0, 0.018, 0.0)
-                        .with_scale(Vec3::splat(Self::FOOTPRINT * 0.86)),
-                ));
-                marks.spawn((
-                    Mesh3d(patch.clone()),
-                    MeshMaterial3d(wardrobe.marker(player.is_home)),
-                    Transform::from_xyz(0.0, 0.022, 0.0).with_scale(Vec3::splat(Self::FOOTPRINT)),
-                ));
-            });
+            // The team ring goes round his boots and turns with him, which for
+            // a circle means nothing at all — so it can stay a child.
+            commands.entity(actor).with_child((
+                Mesh3d(patch.clone()),
+                MeshMaterial3d(wardrobe.marker(player.is_home)),
+                Transform::from_xyz(0.0, 0.022, 0.0).with_scale(Vec3::splat(Self::FOOTPRINT)),
+            ));
+            // The shadow does not: see [`Silhouette`].
+            commands.spawn((
+                Silhouette { actor },
+                Mesh3d(patch.clone()),
+                MeshMaterial3d(wardrobe.shadow()),
+                Transform::from_xyz(0.0, 0.018, 0.0),
+                Visibility::Hidden,
+            ));
             Footballer::assemble(
                 &mut commands,
                 actor,
@@ -765,53 +841,78 @@ impl Actors {
                     nearest = Some((actor.id, range));
                 }
             }
-            if let Some((at, _, _)) = coming {
+            if let Some(contact) = coming {
                 // Whoever will be standing over it. Not whoever is nearest the
                 // ball NOW: over a hundred and fifty milliseconds a player
                 // closing on a loose ball covers more than a metre, and the
                 // man who ends up hitting it is often not the one closest to
                 // it when the swing starts.
-                let range = boots.distance(Vec2::new(at.x, at.z));
+                let range = boots.distance(Vec2::new(contact.at.x, contact.at.z));
                 if striker.is_none_or(|(_, best)| range < best) {
                     striker = Some((actor.id, range));
                 }
             }
 
-            if !actor.is_goalkeeper || holder.is_some() {
+            let (Some(ball), None) = (ball_position, holder) else {
                 continue;
-            }
-            if let Some(ball) = ball_position {
+            };
+            // Two players on a pitch ever have the ball in their hands, and
+            // they hold it in quite different places.
+            let hold = if actor.is_goalkeeper {
                 let reach = Vec2::new(
                     ball.x - transform.translation.x,
                     ball.z - transform.translation.z,
                 )
                 .length();
-                if reach < Self::GLOVE_REACH
+                let gathered = reach < Self::GLOVE_REACH
                     && ball.y > Self::GLOVE_HEIGHT.0
-                    && ball.y < Self::GLOVE_HEIGHT.1
-                {
-                    // At his chest if he is on his feet, out at the end of the
-                    // stretch if he is not — the same blend the arms
-                    // themselves take, so the ball is wherever his gloves are
-                    // rather than wherever they would have been.
-                    let hold =
-                        Physique::CRADLE.lerp(Physique::catch(actor.lead()), actor.extended());
-                    // Carried out through the CARRIAGE, which is where the
-                    // topple and the lift live, and only then out through the
-                    // actor's own height and build. Reading the hold point
-                    // straight off the actor — as this did — left the ball at
-                    // the sternum of an upright man while the keeper it
-                    // belonged to was horizontal the better part of a metre
-                    // away, on every diving catch in the match.
-                    //
-                    // A frame behind, because this frame's topple is not
-                    // written until `animate` has run: sixteen milliseconds of
-                    // a four-hundred-millisecond dive, and worth it for not
-                    // making the ball's position depend on system ordering.
-                    let (pitch, roll) = actor.topple();
-                    let gloves = Carriage::placed(pitch, roll, actor.lift()).transform_point(hold);
-                    holder = Some((actor.id, transform.transform_point(gloves)));
-                }
+                    && ball.y < Self::GLOVE_HEIGHT.1;
+                // In the throwing hand once he has started the throw, and
+                // otherwise at his chest if he is on his feet or out at the
+                // end of the stretch if he is not — the same blend the arms
+                // themselves take, so the ball is wherever his gloves are
+                // rather than wherever they would have been.
+                //
+                // The throw is the same omission as the throw-in's: the cradle
+                // is where he holds a ball he has GATHERED, and a keeper
+                // winding one up has taken it out of there and put it behind
+                // his ear. Left at the chest it sat there while his arm went
+                // over the top of it, and then the ball set off on its own.
+                gathered.then(|| match actor.throwing_hand() {
+                    Some(side) => Physique::palm(side, actor.gait()),
+                    None => Physique::CRADLE.lerp(Physique::catch(actor.lead()), actor.extended()),
+                })
+            } else {
+                // A throw-in is taken with the ball in BOTH HANDS, and the
+                // recording cannot say so: the engine leaves it on the grass
+                // where the throw is measured from (`Ball::carry_height` only
+                // lifts a ball a keeper has gathered), so the thrower swept
+                // both arms over his head while the ball sat by his boots and
+                // then left of its own accord.
+                //
+                // Read off the rig rather than from a constant, because the
+                // hold travels with the arms — see [`Physique::hands`]. It
+                // lasts as long as the wind-up does and lets go at contact,
+                // where the ramp on the hold walks the ball back onto its own
+                // recorded flight inside a few frames.
+                actor.throwing_in().then(|| Physique::hands(actor.gait()))
+            };
+            if let Some(hold) = hold {
+                // Carried out through the CARRIAGE, which is where the topple
+                // and the lift live, and only then out through the actor's own
+                // height and build. Reading the hold point straight off the
+                // actor — as this did — left the ball at the sternum of an
+                // upright man while the keeper it belonged to was horizontal
+                // the better part of a metre away, on every diving catch in
+                // the match.
+                //
+                // A frame behind, because this frame's topple is not written
+                // until `animate` has run: sixteen milliseconds of a
+                // four-hundred-millisecond dive, and worth it for not making
+                // the ball's position depend on system ordering.
+                let (pitch, roll) = actor.topple();
+                let gloves = Carriage::placed(pitch, roll, actor.lift()).transform_point(hold);
+                holder = Some((actor.id, transform.transform_point(gloves)));
             }
         }
 
@@ -822,12 +923,8 @@ impl Actors {
         // engine putting it back on the centre spot, and none of those is a
         // man swinging a leg.
         ball_state.impact = match (coming, striker) {
-            (Some((_, velocity, delay)), Some((by, range))) if range < Self::STRIKE_REACH => {
-                Some(Impact {
-                    by,
-                    velocity,
-                    delay,
-                })
+            (Some(contact), Some((by, range))) if range < Self::STRIKE_REACH => {
+                Some(Impact { by, contact })
             }
             _ => None,
         };
@@ -878,7 +975,11 @@ impl Actors {
                 *visibility = Visibility::Inherited;
             }
             if let Ok((mut transform, mut visibility)) = shadow.single_mut() {
-                transform.translation = Vec3::new(drawn.x, 0.02, drawn.z);
+                // Thrown along the light like everything else's — see
+                // [`Actors::cast_shadows`]. A ball twenty metres up over the
+                // penalty spot does not put its shadow on the penalty spot.
+                let offset = Self::sun_throw() * drawn.y.max(0.0);
+                transform.translation = Vec3::new(drawn.x + offset.x, 0.02, drawn.z + offset.y);
                 // Fade and spread the patch with height, the way a real one does.
                 let spread = 0.62 * (1.0 + (drawn.y * 0.08).min(0.7));
                 transform.scale = Vec3::new(spread, 1.0, spread);
@@ -916,7 +1017,7 @@ impl Actors {
     /// swing is right wherever the playhead is put — scrubbed, reversed or
     /// running at 8x — instead of being right only if it was watched from the
     /// beginning.
-    fn next_impact(ball: &mut Track, now: f64) -> Option<(Vec3, Vec3, f32)> {
+    fn next_impact(ball: &mut Track, now: f64) -> Option<Contact> {
         let at = |ball: &mut Track, t: f64| {
             ball.position_ahead(t)
                 .map(|[x, y, z]| Field::to_world(x, y, z))
@@ -940,13 +1041,44 @@ impl Actors {
                 // `here` is where the ball sat at the start of the step that
                 // showed the jump, which is where the boot met it.
                 let delay = (step - 1) as f32 * Self::PROBE as f32 / 1000.0;
-                return Some((here, velocity, delay));
+                return Some(Contact {
+                    at: here,
+                    velocity,
+                    delay,
+                    kind: Self::strike_kind(here, before),
+                });
             }
             previous = here;
             here = next;
             before = (here - previous).length() / (Self::PROBE as f32 / 1000.0);
         }
         None
+    }
+
+    /// What the ball's own track says it is about to be hit with.
+    ///
+    /// Nothing in the recording names the player, let alone the limb — but for
+    /// the two strikes that are not kicks it does not have to, because both
+    /// are unmistakable in the geometry of the moment. A ball met a metre and
+    /// a half up is met with a head: nothing else of a footballer is up there.
+    /// And a ball sitting STILL a hand's width inside a touchline and then
+    /// leaving at pace is a throw-in — no other restart in football is taken
+    /// from out there, and none of them is taken from a standstill on the
+    /// paint.
+    ///
+    /// Deliberately conservative in both directions: everything that is not
+    /// clearly one of the two falls back to a kick, which is what the
+    /// overwhelming majority of the fourteen strikes a minute actually are.
+    fn strike_kind(at: Vec3, before: f32) -> Strike {
+        let dead = before < Self::DEAD_BALL;
+        let touchline = Field::HALF_WIDTH - at.z.abs() < Self::TOUCHLINE_REACH;
+        if dead && touchline && at.y < Self::AIRBORNE {
+            Strike::ThrowIn
+        } else if at.y > Self::HEADED {
+            Strike::Head
+        } else {
+            Strike::Boot
+        }
     }
 
     /// Advances the ball's rotation for this frame, from where its own path
@@ -1172,33 +1304,7 @@ impl Actors {
                 }
             }
 
-            let facing = if let Some(kick) = actor.kick.filter(|kick| kick.swing < 0.0) {
-                // Opening up to what he is ABOUT to hit. A footballer sets his
-                // body before he strikes the ball, not after it has gone —
-                // which the viewer can honour because it knows the kick is
-                // coming. Outranks everything below, including the dive: this
-                // is the same man being turned by the same intention.
-                kick.direction
-            } else if actor.dive > 1e-3 && ball.on_pitch {
-                // A keeper off his feet stays square to the shot and lets his
-                // body go over; he does not turn to face the corner he is
-                // diving into. Outranks the run for the same reason the strike
-                // does — this is a man travelling one way and pointed
-                // another, and it is also what makes `tip` decomposable onto
-                // his own right and forward.
-                ball.position - position
-            } else if let Some((direction, _)) = actor.strike {
-                // Opened up to where he played it, for as long as the follow
-                // through lasts. Outranks the run: this is the one moment a
-                // footballer is not facing where he is going.
-                direction
-            } else if actor.speed > Self::MOVING {
-                Vec3::new(step.x, 0.0, step.z)
-            } else if ball.on_pitch {
-                ball.position - position
-            } else {
-                Vec3::ZERO
-            };
+            let facing = Self::facing(&actor, &ball, position, step, gathering);
             let mut turn_signal = 0.0_f32;
             if let Some(facing) = Vec3::new(facing.x, 0.0, facing.z).try_normalize() {
                 // Rotating about Y by `atan2(x, z)` carries +Z onto the facing,
@@ -1223,7 +1329,13 @@ impl Actors {
 
             // Where he is looking. Clamped to what a neck can do — past that a
             // real player turns his whole body, which he is already doing.
-            let wanted_look = if ball.on_pitch {
+            //
+            // Not at a ball he is holding, for the same reason he does not
+            // turn toward one: it is inside his own chest, so the bearing is
+            // rounding error and the pitch of it is a man staring at his own
+            // boots. He looks where he is facing, which is up the pitch he is
+            // about to throw it to.
+            let wanted_look = if ball.on_pitch && !gathering {
                 let to_ball = ball.position - position;
                 match Vec3::new(to_ball.x, 0.0, to_ball.z).try_normalize() {
                     Some(bearing) => {
@@ -1242,7 +1354,7 @@ impl Actors {
             // shot along the floor arrives below the knee; a player who tracks
             // both of them with his chin level is watching neither. Clamped
             // harder downward than upward, which is what a neck does.
-            let wanted_pitch = if ball.on_pitch {
+            let wanted_pitch = if ball.on_pitch && !gathering {
                 let to_ball = ball.position - position;
                 let range = Vec3::new(to_ball.x, 0.0, to_ball.z).length().max(0.4);
                 ((ball.position.y - actor.height - Self::EYE) / range)
@@ -1274,7 +1386,12 @@ impl Actors {
             // deliberate — it puts the arms a fraction behind the ball, so a
             // keeper throwing it out has a follow through rather than
             // snapping back to his sides on the frame it leaves him.
-            let wanted = if ball.held_by == Some(actor.id) {
+            //
+            // A KEEPER'S hold only. A player taking a throw-in is `held_by`
+            // too, and the cradle is a goalkeeper's pose — elbows in, ball
+            // against the chest — which is not what he is doing with it; his
+            // arms belong to the throw.
+            let wanted = if actor.is_goalkeeper && ball.held_by == Some(actor.id) {
                 ball.cradle
             } else {
                 0.0
@@ -1318,6 +1435,124 @@ impl Actors {
             };
             let (pitch, roll) = actor.topple();
             *transform = Carriage::placed(pitch, roll, actor.lift());
+        }
+    }
+
+    /// Which way a player should be turned this frame, as an unnormalised
+    /// direction — or [`Vec3::ZERO`] to leave him facing where he already was.
+    ///
+    /// Its own function because it is a priority list with five branches and
+    /// every one of them is a claim about football that can be got wrong: a
+    /// man sets his body before he strikes rather than after, a keeper going
+    /// over stays square to the shot, a follow-through outranks a running
+    /// line. Buried inside `animate` none of it could be checked.
+    fn facing(
+        actor: &PlayerActor,
+        ball: &BallState,
+        position: Vec3,
+        step: Vec3,
+        holding: bool,
+    ) -> Vec3 {
+        if let Some(kick) = actor.kick.filter(|kick| kick.swing < 0.0) {
+            // Opening up to what he is ABOUT to hit. A footballer sets his
+            // body before he strikes the ball, not after it has gone — which
+            // the viewer can honour because it knows the kick is coming.
+            // Outranks everything below, including the dive: this is the same
+            // man being turned by the same intention.
+            kick.direction
+        } else if actor.dive > 1e-3 && ball.on_pitch {
+            // A keeper off his feet stays square to the shot and lets his body
+            // go over; he does not turn to face the corner he is diving into.
+            // Outranks the run for the same reason the strike does — this is a
+            // man travelling one way and pointed another, and it is also what
+            // makes `tip` decomposable onto his own right and forward.
+            ball.position - position
+        } else if let Some((direction, _)) = actor.strike {
+            // Opened up to where he played it, for as long as the follow
+            // through lasts. Outranks the run: this is the one moment a
+            // footballer is not facing where he is going.
+            direction
+        } else if actor.speed > Self::MOVING {
+            Vec3::new(step.x, 0.0, step.z)
+        } else if ball.on_pitch && !holding {
+            ball.position - position
+        } else {
+            // He keeps the heading he had. A man standing still with no ball
+            // to watch has no reason to turn, and one who has it IN HIS HANDS
+            // has less than none — which is the whole reason for that second
+            // test.
+            //
+            // The engine snaps a held ball to the middle of the man holding
+            // it, so `ball.position - position` is not a bearing: it is the
+            // difference between two independently ROUNDED positions.
+            // Measured over a real match it comes out at 1.25 cm at the 90th
+            // percentile — exactly one quantisation step — and non-zero often
+            // enough that a heading really was written from it three times in
+            // ten. The heading it wrote swung a median of 45° from one frame
+            // to the next and past a right angle one frame in nine. Since the
+            // ball is then DRAWN a third of a metre in front of whatever that
+            // came out as, a keeper standing with the ball had it orbiting
+            // him, and half the time it sat at his back.
+            Vec3::ZERO
+        }
+    }
+
+    /// How far a point one metre above the turf throws its shadow across it,
+    /// and which way. Straight off the light — see [`Pitch::SUN`].
+    fn sun_throw() -> Vec2 {
+        Vec2::new(Pitch::SUN.x, Pitch::SUN.z) / -Pitch::SUN.y
+    }
+
+    /// Lays each player's shadow on the grass where the stadium light puts it.
+    ///
+    /// The scene has no shadow maps — they are the single most expensive thing
+    /// it could ask a WebGL2 context for — so every shadow on this pitch is a
+    /// painted disc that somebody has to place. Placed symmetrically under the
+    /// boots, as these were, twenty-two footballers stand on twenty-two neat
+    /// pools of their own and the whole squad reads as pasted onto the turf:
+    /// the light comes from 28° off the vertical, so a real one lands the best
+    /// part of half a metre to the side and is stretched along that bearing.
+    ///
+    /// Its own system, after the body has been moved, and reading the actor's
+    /// world transform rather than hanging off it — see [`Silhouette`].
+    pub fn cast_shadows(
+        actors: Query<(&PlayerActor, &Transform, &Visibility)>,
+        mut shadows: Query<(&Silhouette, &mut Transform, &mut Visibility), Without<PlayerActor>>,
+    ) {
+        let throw = Self::sun_throw();
+        let bearing = throw.x.atan2(throw.y);
+        // A disc seen from the light's angle covers this much more ground
+        // along the bearing than across it.
+        let stretch = (1.0 + throw.length_squared()).sqrt();
+
+        for (mark, mut transform, mut visibility) in &mut shadows {
+            let Ok((actor, body, shown)) = actors.get(mark.actor) else {
+                *visibility = Visibility::Hidden;
+                continue;
+            };
+            if *shown == Visibility::Hidden {
+                *visibility = Visibility::Hidden;
+                continue;
+            }
+            // A body's shadow is the smear between the shadow of its boots and
+            // the shadow of its head, so it is centred on neither — and the
+            // legs are the wider half of a footballer's silhouette, which is
+            // why the middle sits low.
+            let centre = Physique::STATURE * body.scale.y * Self::SHADOW_CENTRE + actor.lift();
+            let offset = throw * centre;
+            transform.translation = Vec3::new(
+                body.translation.x + offset.x,
+                Self::SHADOW_LIFT,
+                body.translation.z + offset.y,
+            );
+            transform.rotation = Quat::from_rotation_y(bearing);
+            // It spreads as its caster leaves the ground. The material is
+            // shared by the whole squad and so cannot be faded per player, but
+            // spreading the same painted disc over more grass thins it, which
+            // is most of what a keeper half a metre up needs from it.
+            let spread = Self::FOOTPRINT * 0.86 * (1.0 + 0.30 * actor.lift().min(1.2));
+            transform.scale = Vec3::new(spread, 1.0, spread * stretch);
+            *visibility = Visibility::Inherited;
         }
     }
 
@@ -1569,15 +1804,16 @@ impl PlayerActor {
         }
 
         if let Some(impact) = coming {
+            let contact = impact.contact;
             // Square-rooted: the amplitude is a distance a boot travels and
             // the number driving it is a speed, and a linear map between them
             // leaves the median pass — 17 m/s, a firm ball over twenty yards —
             // as a third of a swing.
-            let power = ((impact.velocity.length() - Actors::TOUCHED)
+            let power = ((contact.velocity.length() - Actors::TOUCHED)
                 / (Actors::HAMMERED - Actors::TOUCHED))
                 .clamp(0.0, 1.0)
                 .sqrt();
-            let direction = Vec3::new(impact.velocity.x, 0.0, impact.velocity.z)
+            let direction = Vec3::new(contact.velocity.x, 0.0, contact.velocity.z)
                 .try_normalize()
                 .unwrap_or(Vec3::Z);
             // Which boot. Whichever leg is trailing as the swing starts: a
@@ -1599,16 +1835,22 @@ impl PlayerActor {
             let blend = self.kick.map_or(0.0, |kick| kick.blend);
             self.kick = Some(Kick {
                 // −1 at the far end of the window, 0 at contact.
-                swing: -(impact.delay / Actors::WINDUP).clamp(0.0, 1.0),
+                swing: -(contact.delay / Actors::WINDUP).clamp(0.0, 1.0),
                 power,
                 foot,
                 blend: (blend + match_delta / Actors::KICK_ONSET).min(1.0),
                 direction,
-                // Out of his hands, not off his boot. A keeper who has just
-                // gathered the ball and is about to send it upfield is
-                // throwing it, and drawing him volleying it out of his own
-                // gloves would be worse than drawing nothing.
-                thrown: self.carry > 0.5,
+                // The ball's own track has already said what the moment looks
+                // like; the one thing it cannot see is whose hands are on it.
+                // A keeper who has gathered it and is about to send it upfield
+                // is throwing it however the geometry reads, and drawing him
+                // volleying it out of his own gloves would be worse than
+                // drawing nothing at all.
+                kind: if self.carry > 0.5 {
+                    Strike::Throw
+                } else {
+                    contact.kind
+                },
             });
         } else if let Some(kick) = &mut self.kick {
             // Contact has passed out of the window ahead. The rest is the
@@ -1655,6 +1897,27 @@ impl PlayerActor {
         self.dive * (1.0 - self.grounded())
     }
 
+    /// He has the ball in both hands for a throw-in: from the moment the
+    /// swing is armed up to and INCLUDING the instant it leaves him.
+    ///
+    /// Contact is `swing == 0`, and the ball is in his hands right up to it —
+    /// letting go a frame early puts it back on the grass for one frame
+    /// before it flies, which is the sort of thing nobody sees and everybody
+    /// notices. Everything after contact is the follow through, where his
+    /// hands are empty.
+    fn throwing_in(&self) -> bool {
+        self.kick
+            .is_some_and(|kick| kick.kind == Strike::ThrowIn && kick.swing <= 0.0)
+    }
+
+    /// And which hand a KEEPER is about to throw it out of, if he is: the
+    /// same side the swing is routed to, since only that arm moves.
+    fn throwing_hand(&self) -> Option<f32> {
+        self.kick
+            .filter(|kick| kick.kind == Strike::Throw && kick.swing <= 0.0)
+            .map(|kick| if kick.foot < 0.0 { -1.0 } else { 1.0 })
+    }
+
     /// Which side of his body he committed to, −1..1. See [`Gait::lead`].
     fn lead(&self) -> f32 {
         let travel = self.tip.length();
@@ -1674,10 +1937,13 @@ impl PlayerActor {
         };
         let grounded = self.grounded();
         let extended = self.extended();
-        // A kick off the boot and a kick out of the hands are the same swing
-        // routed to different limbs, so they are two fields off one source.
-        let kicking = self.kick.filter(|kick| !kick.thrown);
-        let throwing = self.kick.filter(|kick| kick.thrown);
+        // A boot, a head, a keeper's throw and a throw-in are one swing routed
+        // to four different sets of limbs, so they are four amplitudes off one
+        // phase. At most one of them is ever non-zero.
+        let kicking = self.kick.filter(|kick| kick.kind == Strike::Boot);
+        let nodding = self.kick.filter(|kick| kick.kind == Strike::Head);
+        let throwing = self.kick.filter(|kick| kick.kind == Strike::Throw);
+        let tossing = self.kick.filter(|kick| kick.kind == Strike::ThrowIn);
         Gait {
             // A man in the air is not running, whatever the ground he is
             // covering says. Fading the run out through this one number
@@ -1708,8 +1974,15 @@ impl PlayerActor {
             power: kicking.map_or(0.0, |kick| kick.power * kick.blend),
             // A keeper rolling the ball out and one hurling it to the halfway
             // line are the same movement; the gentlest of them still has to
-            // read as a throw, hence the floor.
+            // read as a throw, hence the floor. Same again for the other two.
             throwing: throwing.map_or(0.0, |kick| kick.power.max(0.45) * kick.blend),
+            // Not while he is off his feet: a keeper punching a cross clear
+            // reads as a high contact, and he is already drawn at full stretch
+            // with both arms up, which is the right picture. Nodding at it on
+            // the way past is not.
+            header: nodding.map_or(0.0, |kick| kick.power.max(0.45) * kick.blend)
+                * (1.0 - self.dive),
+            throw_in: tossing.map_or(0.0, |kick| kick.power.max(0.55) * kick.blend),
             drive: self.drive,
             // Nobody dribbles the ball off his feet, and nobody dribbles it
             // while he is swinging at it either.
@@ -1932,6 +2205,20 @@ mod kicks {
         track
     }
 
+    /// A 20 m/s strike off the deck in the middle of the pitch, `delay`
+    /// seconds away.
+    fn coming(delay: f32) -> Option<Impact> {
+        Some(Impact {
+            by: 7,
+            contact: Contact {
+                at: Vec3::ZERO,
+                velocity: Vec3::new(0.0, 0.0, 20.0),
+                delay,
+                kind: Strike::Boot,
+            },
+        })
+    }
+
     /// The kick is found before it happens, and the countdown to it is a
     /// countdown — which is the whole reason for reading ahead at all.
     #[test]
@@ -1943,17 +2230,21 @@ mod kicks {
         // From here on it is in view, and the wait shortens by exactly the
         // time that passes.
         for (now, expected) in [(60.0, 0.12), (90.0, 0.09), (120.0, 0.06), (180.0, 0.0)] {
-            let (_, velocity, delay) =
+            let contact =
                 Actors::next_impact(&mut ball, now).unwrap_or_else(|| panic!("missed at {now}"));
             assert!(
-                (delay - expected).abs() < 1e-3,
-                "at {now} ms the wait is {delay}, not {expected}"
+                (contact.delay - expected).abs() < 1e-3,
+                "at {now} ms the wait is {}, not {expected}",
+                contact.delay
             );
             assert!(
-                (velocity.length() - 15.2).abs() < 1.0,
+                (contact.velocity.length() - 15.2).abs() < 1.0,
                 "struck at {} m/s",
-                velocity.length()
+                contact.velocity.length()
             );
+            // A rolling ball in the middle of the pitch, met on the deck: a
+            // kick and nothing more exotic.
+            assert!(contact.kind == Strike::Boot);
         }
 
         // And once it has gone there is nothing left ahead to find.
@@ -1978,13 +2269,6 @@ mod kicks {
     #[test]
     fn the_swing_arrives_with_the_ball() {
         let mut actor = PlayerActor::new(7, false);
-        let coming = |delay: f32| {
-            Some(Impact {
-                by: 7,
-                velocity: Vec3::new(0.0, 0.0, 20.0),
-                delay,
-            })
-        };
 
         // Wound up at the far end of the window and through the ball at zero.
         actor.swing_leg(coming(0.12), 0.03, false);
@@ -2010,15 +2294,7 @@ mod kicks {
     #[test]
     fn a_late_kick_still_eases_in() {
         let mut actor = PlayerActor::new(7, false);
-        actor.swing_leg(
-            Some(Impact {
-                by: 7,
-                velocity: Vec3::new(0.0, 0.0, 20.0),
-                delay: 0.0,
-            }),
-            1.0 / 60.0,
-            false,
-        );
+        actor.swing_leg(coming(0.0), 1.0 / 60.0, false);
         let kick = actor.kick.unwrap();
         assert!(kick.blend < 0.4, "no onset ramp: {}", kick.blend);
         assert!(kick.swing.abs() < 1e-3);
@@ -2029,17 +2305,188 @@ mod kicks {
     #[test]
     fn a_seek_cancels_the_swing() {
         let mut actor = PlayerActor::new(7, false);
-        actor.swing_leg(
-            Some(Impact {
-                by: 7,
-                velocity: Vec3::new(0.0, 0.0, 20.0),
-                delay: 0.06,
-            }),
-            0.03,
-            false,
-        );
+        actor.swing_leg(coming(0.06), 0.03, false);
         assert!(actor.kick.is_some());
         actor.swing_leg(None, 0.03, true);
         assert!(actor.kick.is_none());
+    }
+
+    /// The three things that are not a kick, told apart from a kick by the
+    /// ball's own track and nothing else.
+    ///
+    /// Deliberately checked from BOTH sides: the two special cases have to
+    /// fire on the geometry that produces them, and — much more importantly —
+    /// they have to stay off everything else, because there are fourteen real
+    /// strikes a minute and any one of them drawn as a throw-in is worse than
+    /// all of them drawn as kicks.
+    #[test]
+    fn the_ball_says_what_hit_it() {
+        let middle = Field::HALF_WIDTH - 20.0;
+
+        // A ball met above the shoulder is a header.
+        assert!(
+            Actors::strike_kind(Vec3::new(0.0, 1.9, middle), 4.0) == Strike::Head,
+            "a ball two metres up is not being kicked"
+        );
+        // A chest-high volley is not.
+        assert!(Actors::strike_kind(Vec3::new(0.0, 1.30, middle), 4.0) == Strike::Boot);
+        assert!(Actors::strike_kind(Vec3::new(0.0, 0.0, middle), 0.0) == Strike::Boot);
+
+        // A dead ball on the touchline is a throw-in. The engine sets one down
+        // a quarter of a metre inside the line, which is what this is.
+        let touchline = Field::HALF_WIDTH - 0.25;
+        for side in [-1.0f32, 1.0] {
+            assert!(
+                Actors::strike_kind(Vec3::new(12.0, 0.0, side * touchline), 0.0) == Strike::ThrowIn,
+                "no throw-in at z = {}",
+                side * touchline
+            );
+        }
+        // But a ball played along the touchline at pace is a pass, and a dead
+        // ball anywhere else is a free kick — which is taken with a boot.
+        assert!(
+            Actors::strike_kind(Vec3::new(12.0, 0.0, touchline), 6.0) == Strike::Boot,
+            "a ball already travelling is nobody's throw-in"
+        );
+        assert!(Actors::strike_kind(Vec3::new(12.0, 0.0, middle), 0.0) == Strike::Boot);
+        // And a cross whipped in from the touchline is not one either: it is
+        // the height that decides, and a throw-in is taken off the floor.
+        assert!(Actors::strike_kind(Vec3::new(12.0, 1.8, touchline), 0.0) == Strike::Head);
+    }
+
+    /// A man with the ball in his hands does not turn to look at it.
+    ///
+    /// The engine snaps a held ball to the middle of the man holding it, so
+    /// the bearing to it is the difference between two independently rounded
+    /// positions. Measured over a real recording that gap is one quantisation
+    /// step — 1.25 cm — at the 90th percentile, and the heading it implies
+    /// swings a median of 45° per frame. The ball is then drawn a third of a
+    /// metre in front of that, so it orbited him and spent half its time at
+    /// his back.
+    #[test]
+    fn a_held_ball_does_not_turn_the_man_holding_it() {
+        let mut ball = BallState {
+            on_pitch: true,
+            // A quantisation step off his own position, at carry height: what
+            // a real recording of a keeper with the ball in his gloves looks
+            // like.
+            position: Vec3::new(0.0125, 1.15, 0.0),
+            ..Default::default()
+        };
+        let keeper = PlayerActor::new(1, true);
+
+        assert_eq!(
+            Actors::facing(&keeper, &ball, Vec3::ZERO, Vec3::ZERO, true),
+            Vec3::ZERO,
+            "a rounding error turned a man holding the ball"
+        );
+        // And the same frame WITHOUT the hold is the bug this replaced: a
+        // bearing does get written, off a centimetre of rounding.
+        let loose = Actors::facing(&keeper, &ball, Vec3::ZERO, Vec3::ZERO, false);
+        assert!(Vec3::new(loose.x, 0.0, loose.z).length() > 0.0);
+
+        // Holding it does not freeze him, though: a keeper running the ball
+        // out still faces where he is going.
+        let mut running = PlayerActor::new(1, true);
+        running.speed = 4.0;
+        let travel = Actors::facing(&running, &ball, Vec3::ZERO, Vec3::new(0.0, 0.0, 0.6), true);
+        assert!(travel.z > 0.0 && travel.x.abs() < 1e-6);
+
+        // Nor does it stop him opening up to the throw he is about to make.
+        let mut throwing = PlayerActor::new(1, true);
+        throwing.swing_leg(coming(0.09), 0.03, false);
+        let aimed = Actors::facing(&throwing, &ball, Vec3::ZERO, Vec3::ZERO, true);
+        assert!(aimed.length() > 0.5, "he never turns to throw: {aimed:?}");
+
+        // A ball that is NOT in anybody's hands is still watched.
+        ball.position = Vec3::new(9.0, 0.0, 4.0);
+        let watching = Actors::facing(&keeper, &ball, Vec3::ZERO, Vec3::ZERO, false);
+        assert!((watching.x - 9.0).abs() < 1e-6 && (watching.z - 4.0).abs() < 1e-6);
+    }
+
+    /// A throw-in is taken with the ball in both hands, and it lets go of it.
+    #[test]
+    fn a_thrower_holds_the_ball_until_he_lets_go() {
+        let mut actor = PlayerActor::new(7, false);
+        let throw_in = |delay: f32| {
+            Some(Impact {
+                by: 7,
+                contact: Contact {
+                    at: Vec3::new(12.0, 0.0, Field::HALF_WIDTH - 0.25),
+                    velocity: Vec3::new(0.0, 3.0, -11.0),
+                    delay,
+                    kind: Strike::ThrowIn,
+                },
+            })
+        };
+
+        actor.swing_leg(throw_in(0.12), 0.03, false);
+        assert!(actor.throwing_in(), "the ball is not in his hands");
+        actor.swing_leg(throw_in(0.0), 0.03, false);
+        assert!(actor.throwing_in(), "he drops it before he throws it");
+        // Contact, and it has gone.
+        actor.swing_leg(None, 0.05, false);
+        assert!(!actor.throwing_in(), "the ball never leaves him");
+
+        // Nobody kicking one is holding it.
+        let mut booting = PlayerActor::new(7, false);
+        booting.swing_leg(coming(0.06), 0.03, false);
+        assert!(!booting.throwing_in());
+        assert!(booting.throwing_hand().is_none());
+
+        // And a keeper winding up a throw carries the ball in the hand that
+        // is doing the throwing, not against the chest it has left.
+        let mut keeper = PlayerActor::new(1, true);
+        keeper.carry = 1.0;
+        keeper.swing_leg(coming(0.09), 0.03, false);
+        let side = keeper.throwing_hand().expect("no throwing hand");
+        assert!(!keeper.throwing_in(), "a keeper's throw is not a throw-in");
+        let ball = Physique::palm(side, keeper.gait());
+        let chest = Physique::CRADLE;
+        assert!(
+            ball.distance(chest) > 0.25,
+            "the ball never leaves his chest: {ball:?}"
+        );
+        assert!(ball.y > chest.y, "it never gets above the cradle: {ball:?}");
+    }
+
+    /// The hold travels with the arms rather than sitting at one point.
+    ///
+    /// [`Physique::hands`] is asked of the rig instead of written down as a
+    /// constant precisely because a throw-in has no single hold point — and
+    /// this is that claim, as positions.
+    #[test]
+    fn the_throw_carries_the_ball_over_his_head() {
+        let posed = |swing: f32| Physique::hands(crate::body::skeleton::tossing(swing));
+
+        let cocked = posed(-0.6);
+        let over = posed(-0.2);
+        let released = posed(0.2);
+        // Behind him, up over his head, then out in front — and on the centre
+        // line the whole way, because it is held in both hands.
+        assert!(cocked.z < 0.0, "not taken back: {cocked:?}");
+        assert!(over.y > cocked.y, "never comes up: {over:?}");
+        assert!(
+            released.z > cocked.z + 0.5,
+            "never comes through: {released:?}"
+        );
+        for hold in [cocked, over, released] {
+            assert!(hold.x.abs() < 0.02, "one-handed: {hold:?}");
+        }
+    }
+
+    /// A keeper about to send the ball upfield throws it, whatever the
+    /// geometry of the moment says — he has it in his hands.
+    #[test]
+    fn a_keeper_with_the_ball_throws_it() {
+        let mut actor = PlayerActor::new(1, true);
+        actor.carry = 1.0;
+        actor.swing_leg(coming(0.06), 0.03, false);
+        assert!(actor.kick.unwrap().kind == Strike::Throw);
+
+        // And once it has left him it is his boot again.
+        let mut kicking = PlayerActor::new(1, true);
+        kicking.swing_leg(coming(0.06), 0.03, false);
+        assert!(kicking.kick.unwrap().kind == Strike::Boot);
     }
 }

@@ -1,5 +1,5 @@
 use crate::config::{PlayerInfo, TeamColors, ViewerConfig};
-use crate::textures::Textures;
+use crate::textures::{Beard, FaceLayout, FaceLook, Textures};
 use bevy::image::Image;
 use bevy::prelude::*;
 
@@ -11,6 +11,10 @@ struct Strip {
     /// Ink for the printed number: whichever of black or white the shirt can
     /// actually carry.
     print: Color,
+    /// Collar and cuffs. Every kit ever made has trim on the neck and the
+    /// sleeves, and it is the detail that separates a football shirt from a
+    /// coloured shape at any range a face is legible from.
+    trim: Color,
 }
 
 impl Strip {
@@ -28,13 +32,23 @@ impl Strip {
         } else {
             Wardrobe::LIGHT
         };
+        let print = Self::print_for(shirt);
         Strip {
             shirt,
             shorts,
             // Socks in the shirt colour: down among twenty-two pairs of legs it
             // is the last place the eye can still pick a side out.
             socks: shirt,
-            print: Self::print_for(shirt),
+            print,
+            // The club's second colour if it can be seen against the first at
+            // the width of a collar, which is a harder test than the shorts
+            // have to pass — a band two centimetres wide either contrasts or
+            // is not there at all.
+            trim: if Self::separation(shirt, contrast) > 0.35 {
+                contrast
+            } else {
+                print
+            },
         }
     }
 
@@ -54,6 +68,7 @@ impl Strip {
             shorts: Wardrobe::DARK,
             socks: Wardrobe::DARK,
             print: Self::print_for(shirt),
+            trim: Self::print_for(shirt),
         }
     }
 
@@ -70,8 +85,34 @@ impl Strip {
     }
 }
 
+/// How a footballer wears his hair. One mesh each, bar the first — a shaved
+/// head is the scalp itself, with the stubble drawn onto the face texture.
+///
+/// Written down as a type rather than an index because the mesh table and the
+/// face texture both have to be told, and they disagree about what "no hair"
+/// means: one wants nothing hung on the head and the other wants a wash of
+/// colour over the top of it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum HairStyle {
+    Shaved,
+    Crop,
+    Short,
+    Mop,
+}
+
+impl HairStyle {
+    pub fn index(self) -> usize {
+        match self {
+            HairStyle::Shaved => 0,
+            HairStyle::Crop => 1,
+            HairStyle::Short => 2,
+            HairStyle::Mop => 3,
+        }
+    }
+}
+
 /// The parts of a footballer's appearance that have nothing to do with the
-/// club: height, skin, hair and boots.
+/// club: height, skin, hair, face and boots.
 ///
 /// Picked from the player's id rather than at random, so a squad reads as
 /// eleven individuals and looks the same every time the match is replayed.
@@ -92,6 +133,14 @@ impl Complexion {
         Color::srgb(0.70, 0.56, 0.30),
         Color::srgb(0.46, 0.44, 0.42),
     ];
+    /// Irises, darkest first. Weighted toward brown below, which is what most
+    /// of the world's eyes are.
+    const EYES: [Color; 4] = [
+        Color::srgb(0.20, 0.13, 0.08),
+        Color::srgb(0.38, 0.25, 0.13),
+        Color::srgb(0.36, 0.44, 0.30),
+        Color::srgb(0.38, 0.50, 0.58),
+    ];
     const BOOTS: [Color; 4] = [
         Color::srgb(0.06, 0.06, 0.07),
         Color::srgb(0.92, 0.93, 0.95),
@@ -109,6 +158,50 @@ impl Complexion {
 
     fn boots(id: u32) -> usize {
         ((Self::hash(id) >> 16) % Self::BOOTS.len() as u32) as usize
+    }
+
+    /// Everything about a player's face that is his and not his club's.
+    ///
+    /// Drawn off SALTED hashes rather than off further bits of the one above:
+    /// that hash has thirty-two bits and six traits already spoken for, and
+    /// two features cut from overlapping bits are correlated — every blond
+    /// would end up with the same beard.
+    pub fn face(id: u32) -> FaceLook {
+        FaceLook {
+            skin: Self::SKIN[Self::skin(id)],
+            hair: Self::HAIR[Self::hair(id)],
+            eyes: Self::EYES[match Self::trait_of(id, 0x51ED) {
+                0..45 => 0,
+                45..75 => 1,
+                75..90 => 2,
+                _ => 3,
+            }],
+            // Brows carry as much of a face's expression as the eyes under
+            // them, and they are the feature that survives longest as the head
+            // minifies — so this is the one that most needs to vary.
+            brow: 0.55 + Self::trait_of(id, 0x9E37) as f32 / 222.0,
+            beard: match Self::trait_of(id, 0xB5C1) {
+                0..46 => Beard::Clean,
+                46..72 => Beard::Stubble,
+                72..84 => Beard::Goatee,
+                _ => Beard::Full,
+            },
+            shaved: Self::hair_style(id) == HairStyle::Shaved,
+        }
+    }
+
+    pub fn hair_style(id: u32) -> HairStyle {
+        match Self::trait_of(id, 0x2545) {
+            0..12 => HairStyle::Shaved,
+            12..50 => HairStyle::Crop,
+            50..82 => HairStyle::Short,
+            _ => HairStyle::Mop,
+        }
+    }
+
+    /// A 0..99 draw for one trait of one player, independent of every other.
+    fn trait_of(id: u32, salt: u32) -> u32 {
+        Self::hash(id ^ salt) % 100
     }
 
     /// Multiplier on the model's height. Spans roughly 1.70 m to 1.92 m
@@ -171,19 +264,26 @@ impl Complexion {
     }
 }
 
-/// The materials one player wears. Handles only — every one of them is shared
+/// The materials one player wears. Handles only — most of them are shared
 /// with the rest of the squad.
 #[derive(Clone)]
 pub struct Outfit {
     pub shirt: Handle<StandardMaterial>,
     pub shorts: Handle<StandardMaterial>,
     pub socks: Handle<StandardMaterial>,
+    /// Collar and cuffs.
+    pub trim: Handle<StandardMaterial>,
     pub boots: Handle<StandardMaterial>,
     pub skin: Handle<StandardMaterial>,
+    /// The head, which is his own: skin with a face painted on it.
+    pub face: Handle<StandardMaterial>,
     pub hands: Handle<StandardMaterial>,
     pub hair: Handle<StandardMaterial>,
-    /// `None` for a player the team sheet gave no shirt number.
+    pub hair_style: HairStyle,
+    /// `None` for a player the team sheet gave no shirt number, and for one
+    /// whose name has nothing the shirt printer can set.
     pub number: Option<Handle<StandardMaterial>>,
+    pub name: Option<Handle<StandardMaterial>>,
 }
 
 /// One strip, as materials.
@@ -191,6 +291,7 @@ struct Kit {
     shirt: Handle<StandardMaterial>,
     shorts: Handle<StandardMaterial>,
     socks: Handle<StandardMaterial>,
+    trim: Handle<StandardMaterial>,
 }
 
 /// Every material the twenty-two players and their markers need, built once.
@@ -206,9 +307,13 @@ pub struct Wardrobe {
     gloves: Handle<StandardMaterial>,
     markers: [Handle<StandardMaterial>; 2],
     shadow: Handle<StandardMaterial>,
-    /// One printed number per player — the only material on the pitch that
-    /// cannot be shared, since the glyphs are baked into the texture.
+    /// The three materials that cannot be shared, because what makes them
+    /// differ is baked into a texture: a printed number, a printed name and a
+    /// face. Twenty-two of each is a rounding error against the draw calls
+    /// they save everywhere else.
     numbers: Vec<(u32, Handle<StandardMaterial>)>,
+    names: Vec<(u32, Handle<StandardMaterial>)>,
+    faces: Vec<(u32, Handle<StandardMaterial>)>,
 }
 
 impl Wardrobe {
@@ -237,6 +342,7 @@ impl Wardrobe {
         materials: &mut Assets<StandardMaterial>,
         images: &mut Assets<Image>,
         config: &ViewerConfig,
+        face: &FaceLayout,
     ) -> Self {
         let skin: Vec<Handle<StandardMaterial>> = Complexion::SKIN
             .iter()
@@ -264,6 +370,7 @@ impl Wardrobe {
             shirt: Self::cloth(materials, strips[index].shirt, 0.72),
             shorts: Self::cloth(materials, strips[index].shorts, 0.75),
             socks: Self::cloth(materials, strips[index].socks, 0.88),
+            trim: Self::cloth(materials, strips[index].trim, 0.70),
         });
 
         let numbers = config
@@ -271,19 +378,30 @@ impl Wardrobe {
             .iter()
             .filter(|player| player.shirt_number > 0)
             .map(|player| {
-                let strip = &strips[Self::strip_index(player)];
                 let texture = Textures::number(images, player.shirt_number);
-                let ink = strip.print.to_srgba();
                 (
                     player.id,
-                    materials.add(StandardMaterial {
-                        base_color: Color::srgba(ink.red, ink.green, ink.blue, 1.0),
-                        base_color_texture: Some(texture),
-                        alpha_mode: AlphaMode::Blend,
-                        perceptual_roughness: 0.85,
-                        ..default()
-                    }),
+                    Self::printed(materials, strips[Self::strip_index(player)].print, texture),
                 )
+            })
+            .collect();
+        let names = config
+            .players
+            .iter()
+            .filter_map(|player| {
+                let texture = Textures::name(images, &player.last_name)?;
+                Some((
+                    player.id,
+                    Self::printed(materials, strips[Self::strip_index(player)].print, texture),
+                ))
+            })
+            .collect();
+        let faces = config
+            .players
+            .iter()
+            .map(|player| {
+                let texture = Textures::face(images, face, &Complexion::face(player.id));
+                (player.id, Self::flesh_texture(materials, texture))
             })
             .collect();
 
@@ -292,6 +410,8 @@ impl Wardrobe {
         Wardrobe {
             kits,
             numbers,
+            names,
+            faces,
             skin,
             hair,
             boots,
@@ -332,23 +452,32 @@ impl Wardrobe {
     pub fn outfit(&self, player: &PlayerInfo) -> Outfit {
         let kit = &self.kits[Self::strip_index(player)];
         let skin = self.skin[Complexion::skin(player.id)].clone();
+        let own = |table: &Vec<(u32, Handle<StandardMaterial>)>| {
+            table
+                .iter()
+                .find(|(id, _)| *id == player.id)
+                .map(|(_, material)| material.clone())
+        };
         Outfit {
             shirt: kit.shirt.clone(),
             shorts: kit.shorts.clone(),
             socks: kit.socks.clone(),
+            trim: kit.trim.clone(),
             boots: self.boots[Complexion::boots(player.id)].clone(),
             hands: if player.is_goalkeeper() {
                 self.gloves.clone()
             } else {
                 skin.clone()
             },
+            // Every player has a face; falling back to bare skin would be a
+            // head with nothing on the front of it, which is worse than any
+            // face this could draw.
+            face: own(&self.faces).unwrap_or_else(|| skin.clone()),
             skin,
             hair: self.hair[Complexion::hair(player.id)].clone(),
-            number: self
-                .numbers
-                .iter()
-                .find(|(id, _)| *id == player.id)
-                .map(|(_, material)| material.clone()),
+            hair_style: Complexion::hair_style(player.id),
+            number: own(&self.numbers),
+            name: own(&self.names),
         }
     }
 
@@ -384,6 +513,39 @@ impl Wardrobe {
             // difference between an arm and a painted stick.
             reflectance: 0.35,
             metallic: 0.0,
+            ..default()
+        })
+    }
+
+    /// The same, but with the colour coming out of an image — a face.
+    fn flesh_texture(
+        materials: &mut Assets<StandardMaterial>,
+        texture: Handle<Image>,
+    ) -> Handle<StandardMaterial> {
+        materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: Some(texture),
+            perceptual_roughness: 0.62,
+            reflectance: 0.35,
+            metallic: 0.0,
+            ..default()
+        })
+    }
+
+    /// Lettering on a shirt: the glyphs come out of the texture's alpha and
+    /// the ink colour off the strip, so black-on-white and white-on-black are
+    /// the same material with two arguments.
+    fn printed(
+        materials: &mut Assets<StandardMaterial>,
+        ink: Color,
+        texture: Handle<Image>,
+    ) -> Handle<StandardMaterial> {
+        let ink = ink.to_srgba();
+        materials.add(StandardMaterial {
+            base_color: Color::srgba(ink.red, ink.green, ink.blue, 1.0),
+            base_color_texture: Some(texture),
+            alpha_mode: AlphaMode::Blend,
+            perceptual_roughness: 0.85,
             ..default()
         })
     }

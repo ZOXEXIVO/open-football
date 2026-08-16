@@ -151,6 +151,10 @@ impl MatchViewer {
                         // Straight after, so the dive `animate` has just read
                         // out of the recording is on the body the same frame.
                         Actors::carry_body,
+                        // And after that, because a shadow is placed off where
+                        // the body it belongs to has just been put — including
+                        // how far off the ground.
+                        Actors::cast_shadows,
                         // After `follow_playhead`, which is what moves the
                         // ball: the netting is deformed by wherever the ball
                         // has just been put, so a frame's lag here would show

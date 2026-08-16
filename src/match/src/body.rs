@@ -1,19 +1,32 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::Indices;
+#[cfg(test)]
+use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 use crate::actors::Actors;
 use crate::kit::Outfit;
+use crate::textures::FaceLayout;
 
 /// One cross-section of a body part: an ellipse of half-widths `x` (across the
-/// body) and `z` (front to back) at height `y`, in the part's own space.
+/// body) and `z` (front to back) at height `y`, in the part's own space, and
+/// how far the section as a whole sits FORWARD of the part's own axis.
+///
+/// That last number is what stops every part being a body of revolution. A
+/// head is not a barrel: the chin and the brow stand in front of the ear line
+/// and the occiput hangs a good three centimetres behind it. Neither is a
+/// chest, or a seat, or a calf. Without an offset the only shape a profile can
+/// describe is a tube, which is exactly what a figure assembled out of them
+/// reads as — and no amount of extra rings fixes it, because the problem is
+/// the symmetry rather than the resolution.
 #[derive(Clone, Copy)]
 struct Ring {
     y: f32,
     x: f32,
     z: f32,
+    offset: f32,
 }
 
 impl Ring {
@@ -22,11 +35,89 @@ impl Ring {
             y,
             x: radius,
             z: radius,
+            offset: 0.0,
         }
     }
 
     const fn oval(y: f32, x: f32, z: f32) -> Self {
-        Ring { y, x, z }
+        Ring {
+            y,
+            x,
+            z,
+            offset: 0.0,
+        }
+    }
+
+    /// An ellipse carried `offset` metres in front of the axis.
+    const fn set(y: f32, x: f32, z: f32, offset: f32) -> Self {
+        Ring { y, x, z, offset }
+    }
+
+    /// The section `t` of the way from this one to `other`.
+    fn lerp(self, other: Ring, t: f32) -> Ring {
+        Ring {
+            y: self.y + (other.y - self.y) * t,
+            x: self.x + (other.x - self.x) * t,
+            z: self.z + (other.z - self.z) * t,
+            offset: self.offset + (other.offset - self.offset) * t,
+        }
+    }
+
+    /// The same section, `swell` metres bigger all round.
+    ///
+    /// How everything worn ON a body part is derived from the part itself —
+    /// hair off the skull, a collar off the shirt — rather than written out
+    /// again as its own list of numbers that then has to be kept in step.
+    fn swollen(self, swell: f32) -> Ring {
+        Ring {
+            y: self.y,
+            x: self.x + swell,
+            z: self.z + swell,
+            offset: self.offset,
+        }
+    }
+
+    /// The section a cap of hair takes over this one: `swell` metres proud
+    /// across and behind, and `clearance` metres SHORT of the front.
+    ///
+    /// The two have to be separate. Setting a hair ring back the obvious way —
+    /// shifting the whole ellipse — buries the forehead and drags the back of
+    /// the cap out behind the skull by the same amount, which at the height of
+    /// the ears is a mullet. What a hairline actually is, is the cap coming
+    /// forward over the top of the head while the FRONT of it stays behind the
+    /// face; only the front edge moves.
+    fn capped(self, swell: f32, clearance: f32) -> Ring {
+        let front = self.offset + self.z - clearance;
+        let back = self.offset - self.z - swell;
+        let mut cap = Ring {
+            y: self.y,
+            x: self.x + swell,
+            z: ((front - back) * 0.5).max(1e-3),
+            offset: (front + back) * 0.5,
+        };
+        // Once the cap is meant to be OVER the head rather than buried in it,
+        // make sure it actually is.
+        //
+        // The two ellipses do not share a centre — the cap's is pushed back to
+        // put its front edge where the hairline wants it — so giving each axis
+        // the margin it was asked for does not contain the skull between the
+        // axes. The shortfall is under a millimetre and it shows: a ring of
+        // bare scalp comes through the hair at the crown, forty-five degrees
+        // round from the face, and every player takes the field wearing a
+        // tonsure. Measured round the section rather than reasoned about,
+        // because reasoning about it is exactly what missed it.
+        if clearance <= 0.0 {
+            let mut worst: f32 = 1.0;
+            for step in 0..16 {
+                let angle = TAU * step as f32 / 16.0;
+                let across = angle.cos() * self.x / cap.x;
+                let along = (self.offset + angle.sin() * self.z - cap.offset) / cap.z;
+                worst = worst.max(across.hypot(along));
+            }
+            cap.x *= worst;
+            cap.z *= worst;
+        }
+        cap
     }
 }
 
@@ -37,11 +128,17 @@ impl Ring {
 /// shapes stay editable as a list of numbers rather than as geometry. Nothing
 /// here is loaded from disk: a glTF character would cost more to ship than the
 /// entire viewer.
-#[derive(Default)]
 struct Sculptor {
     positions: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
     indices: Vec<u32>,
+    /// Pairs of vertices that are the same point on the surface, written twice
+    /// so the texture can have a seam. See [`Sculptor::loft`].
+    seams: Vec<(u32, u32)>,
+    /// Sides around each ring of THIS part. A limb and a head do not want the
+    /// same number: nobody has ever looked at a shin, and a face is the one
+    /// surface on the pitch the eye goes to first.
+    sides: usize,
 }
 
 impl Sculptor {
@@ -49,19 +146,41 @@ impl Sculptor {
     /// the broadcast camera now sits at, and still leaves a full squad at a few
     /// thousand triangles — the meshes are shared by all twenty-two.
     const SIDES: usize = 16;
+    /// And for the head, which carries a face.
+    ///
+    /// At sixteen the front of a skull is four vertices wide, so an eye lands
+    /// between two of them and a texture drawn on it shears across the
+    /// facets. Thirty-two is one extra mesh of four hundred vertices, shared
+    /// by the whole squad — the cheapest detail in the entire figure.
+    const HEAD_SIDES: usize = 32;
     /// Rings from pole to pole on a sphere.
     const STACKS: usize = 10;
 
+    fn new(sides: usize) -> Self {
+        Sculptor {
+            positions: Vec::new(),
+            uvs: Vec::new(),
+            indices: Vec::new(),
+            seams: Vec::new(),
+            sides,
+        }
+    }
+
     /// A part described by its profile, from either end.
     fn part(rings: &[Ring]) -> Mesh {
-        let mut sculptor = Sculptor::default();
+        Self::part_at(rings, Self::SIDES)
+    }
+
+    /// The same, at a chosen resolution.
+    fn part_at(rings: &[Ring], sides: usize) -> Mesh {
+        let mut sculptor = Sculptor::new(sides);
         sculptor.loft(rings, Vec3::ZERO);
         sculptor.build()
     }
 
     /// A rounded lump — a hand, a boot — sized on each axis.
     fn ellipsoid(radii: Vec3) -> Mesh {
-        let mut sculptor = Sculptor::default();
+        let mut sculptor = Sculptor::new(Self::SIDES);
         sculptor.loft(&Self::sphere(radii), Vec3::ZERO);
         sculptor.build()
     }
@@ -75,9 +194,107 @@ impl Sculptor {
                     y: radii.y * angle.cos(),
                     x: radii.x * angle.sin(),
                     z: radii.z * angle.sin(),
+                    offset: 0.0,
                 }
             })
             .collect()
+    }
+
+    /// The cross-section a profile has at `y`, interpolated between the two
+    /// rings either side of it and clamped at both ends.
+    ///
+    /// Wants an ASCENDING profile, which the two it is used on — the skull and
+    /// the shirt — both are. Everything derived from a part rather than
+    /// written out again comes through here.
+    fn section(rings: &[Ring], y: f32) -> Ring {
+        let last = rings.len() - 1;
+        if y <= rings[0].y {
+            return Ring { y, ..rings[0] };
+        }
+        for step in 0..last {
+            let (below, above) = (rings[step], rings[step + 1]);
+            if y <= above.y {
+                let span = (above.y - below.y).max(f32::EPSILON);
+                return below.lerp(above, (y - below.y) / span);
+            }
+        }
+        Ring { y, ..rings[last] }
+    }
+
+    /// A band lathed over an existing profile — a collar over a shirt —
+    /// between two heights.
+    fn band(rings: &[Ring], from: f32, to: f32, steps: usize, swell: f32) -> Vec<Ring> {
+        (0..=steps)
+            .map(|step| {
+                let y = from + (to - from) * step as f32 / steps as f32;
+                Self::section(rings, y).swollen(swell)
+            })
+            .collect()
+    }
+
+    /// A curved sheet lying ON the surface of a lathed part: the panel a
+    /// shirt number or a name is printed on.
+    ///
+    /// It has to be curved. A flat rectangle wide enough to carry a number
+    /// stands the better part of four centimetres proud of the shirt at its
+    /// corners, because a torso's cross-section falls away fast — which is
+    /// what made the number read as a card pinned to a footballer rather than
+    /// as something printed on him. Sampling the shirt's own profile puts the
+    /// ink on the shirt.
+    ///
+    /// `bearing` is the angle its middle sits at (−π/2 is the back), `arc` how
+    /// far round it wraps, and `lift` how far clear of the cloth it floats so
+    /// the two never fight for depth.
+    fn decal(rings: &[Ring], centre: f32, height: f32, bearing: f32, arc: f32, lift: f32) -> Mesh {
+        /// Rows down the panel: the profile it follows is narrowing the whole
+        /// way, so the panel is a saddle rather than a cylinder.
+        const ROWS: usize = 5;
+        const COLUMNS: usize = 12;
+
+        let mut sculptor = Sculptor::new(0);
+        for row in 0..=ROWS {
+            // 0 at the TOP: image rows are written top down, and this is the
+            // one place in the crate where a lathe's own bottom-up `v` would
+            // print the text upside down.
+            let down = row as f32 / ROWS as f32;
+            let y = centre + height * (0.5 - down);
+            let section = Self::section(rings, y);
+            for column in 0..=COLUMNS {
+                let across = column as f32 / COLUMNS as f32;
+                // Left to right as the panel is READ, which is the opposite
+                // way round the body: seen from behind, a player's right is on
+                // the reader's left.
+                let angle = bearing + (0.5 - across) * arc;
+                sculptor.positions.push([
+                    angle.cos() * (section.x + lift),
+                    y,
+                    section.offset + angle.sin() * (section.z + lift),
+                ]);
+                sculptor.uvs.push([across, down]);
+            }
+        }
+
+        let stride = COLUMNS as u32 + 1;
+        for row in 0..ROWS as u32 {
+            for column in 0..COLUMNS as u32 {
+                let top_left = row * stride + column;
+                let top_right = top_left + 1;
+                let bottom_left = top_left + stride;
+                let bottom_right = bottom_left + 1;
+                // Wound so the face points AWAY from the body: rows descend
+                // and columns run against the lathe's own winding, and the two
+                // reversals cancel back to the order `loft` uses.
+                sculptor.indices.extend_from_slice(&[
+                    top_left,
+                    bottom_left,
+                    top_right,
+                    top_right,
+                    bottom_left,
+                    bottom_right,
+                ]);
+            }
+        }
+        sculptor.build()
     }
 
     fn loft(&mut self, rings: &[Ring], offset: Vec3) {
@@ -95,27 +312,41 @@ impl Sculptor {
         let base = self.positions.len() as u32;
         let foot = profile[0].y;
         let span = (profile[profile.len() - 1].y - foot).max(f32::EPSILON);
+        // One vertex more per ring than there are sides: the last one sits on
+        // top of the first but carries `u = 1` instead of `u = 0`.
+        //
+        // Closing the ring back onto vertex zero — which this used to do — is
+        // free right up until a part carries a texture, and then the last
+        // facet interpolates from 0.97 back to 0.0 and squeezes the ENTIRE
+        // image into one strip a few millimetres wide. Nothing lathed was
+        // textured before the face was, so the seam had never shown.
+        let stride = self.sides as u32 + 1;
         for ring in &profile {
-            for side in 0..Self::SIDES {
-                let angle = TAU * side as f32 / Self::SIDES as f32;
+            for side in 0..=self.sides {
+                let angle = TAU * side as f32 / self.sides as f32;
                 self.positions.push([
                     offset.x + angle.cos() * ring.x,
                     offset.y + ring.y,
-                    offset.z + angle.sin() * ring.z,
+                    offset.z + ring.offset + angle.sin() * ring.z,
                 ]);
                 self.uvs
-                    .push([side as f32 / Self::SIDES as f32, (ring.y - foot) / span]);
+                    .push([side as f32 / self.sides as f32, (ring.y - foot) / span]);
             }
         }
+        // The two halves of that seam are the same point on the model, so they
+        // have to end up with the same normal — otherwise the split shows as a
+        // hard crease straight down the side of every part.
+        for step in 0..profile.len() as u32 {
+            let row = base + step * stride;
+            self.seams.push((row, row + self.sides as u32));
+        }
 
-        let sides = Self::SIDES as u32;
         for step in 0..profile.len() as u32 - 1 {
-            for side in 0..sides {
-                let next = (side + 1) % sides;
-                let a = base + step * sides + side;
-                let b = base + step * sides + next;
-                let c = base + (step + 1) * sides + next;
-                let d = base + (step + 1) * sides + side;
+            for side in 0..self.sides as u32 {
+                let a = base + step * stride + side;
+                let b = a + 1;
+                let d = a + stride;
+                let c = d + 1;
                 self.indices.extend_from_slice(&[a, d, b, b, d, c]);
             }
         }
@@ -131,20 +362,21 @@ impl Sculptor {
             return;
         }
         let hub = self.positions.len() as u32;
-        self.positions.push([offset.x, offset.y + ring.y, offset.z]);
+        self.positions
+            .push([offset.x, offset.y + ring.y, offset.z + ring.offset]);
         self.uvs.push([0.5, 0.5]);
-        for side in 0..Self::SIDES {
-            let angle = TAU * side as f32 / Self::SIDES as f32;
+        for side in 0..self.sides {
+            let angle = TAU * side as f32 / self.sides as f32;
             self.positions.push([
                 offset.x + angle.cos() * ring.x,
                 offset.y + ring.y,
-                offset.z + angle.sin() * ring.z,
+                offset.z + ring.offset + angle.sin() * ring.z,
             ]);
             self.uvs
                 .push([0.5 + angle.cos() * 0.5, 0.5 + angle.sin() * 0.5]);
         }
 
-        let sides = Self::SIDES as u32;
+        let sides = self.sides as u32;
         for side in 0..sides {
             let next = (side + 1) % sides;
             if upward {
@@ -174,6 +406,14 @@ impl Sculptor {
             for index in triangle {
                 normals[*index as usize] += face;
             }
+        }
+        // The UV seam is one point on the surface written down twice, so each
+        // copy has only picked up the faces on its own side of the join. Add
+        // them together and both get the whole neighbourhood back.
+        for (first, second) in &self.seams {
+            let shared = normals[*first as usize] + normals[*second as usize];
+            normals[*first as usize] = shared;
+            normals[*second as usize] = shared;
         }
 
         let normals: Vec<[f32; 3]> = normals
@@ -256,17 +496,85 @@ impl Physique {
     pub fn catch(lead: f32) -> Vec3 {
         Self::CATCH + Vec3::X * (lead.clamp(-1.0, 1.0) * Self::CATCH_TURN)
     }
+
+    /// Where one glove is, in the figure's own space, for a player posed like
+    /// this — walked forward over the real [`Joint::pose`].
+    ///
+    /// The other two hold points on this struct are constants because they are
+    /// each ONE pose a keeper holds a ball in, and a number can be checked
+    /// against the arms that put it there. A throw-in is not one pose: the
+    /// ball travels the whole sweep of both arms, from behind his head to out
+    /// in front of it, and any constant would be right at a single instant of
+    /// it and wrong for the rest. So this asks the rig instead — four
+    /// quaternions, for at most one player on the pitch at a time.
+    ///
+    /// The WRIST, which is where the glove begins — and what
+    /// [`Physique::CRADLE`] and [`Physique::CATCH`] are both worked down the
+    /// arm to, so it is what the tests on them have to measure. Anything
+    /// drawing a ball wants [`Physique::palm`] instead.
+    #[cfg(test)]
+    pub fn glove(side: f32, gait: Gait) -> Vec3 {
+        Self::hand(side, gait).translation
+    }
+
+    /// Where a ball held in ONE hand is drawn: out along the hand rather than
+    /// on the wrist joint, which is where the glove BEGINS. The drawn ball is
+    /// 32 cm across — see [`crate::actors::Actors::BALL_RADIUS`] — so a centre
+    /// on the wrist swallows the whole glove and half the forearm with it.
+    pub fn palm(side: f32, gait: Gait) -> Vec3 {
+        Self::hand(side, gait).transform_point(Vec3::new(0.0, -Self::PALM, 0.0))
+    }
+
+    /// And where a ball held in BOTH is: between them.
+    pub fn hands(gait: Gait) -> Vec3 {
+        (Self::palm(-1.0, gait) + Self::palm(1.0, gait)) * 0.5
+    }
+
+    /// One hand, walked forward down the arm.
+    fn hand(side: f32, gait: Gait) -> Transform {
+        let hung = |limb: Limb, origin: Vec3| {
+            let joint = Joint::new(Entity::PLACEHOLDER, limb, side, origin);
+            Transform::from_translation(joint.place(gait)).with_rotation(joint.pose(gait))
+        };
+        hung(Limb::Torso, Vec3::new(0.0, Self::HIP, 0.0))
+            * hung(
+                Limb::Shoulder,
+                Vec3::new(side * Self::SHOULDER_SPREAD, Self::SHOULDER, 0.0),
+            )
+            * hung(Limb::Elbow, Vec3::new(0.0, -Self::UPPER_ARM, 0.0))
+            * hung(
+                Limb::Wrist,
+                Vec3::new(0.0, -Self::FOREARM - Self::WRIST_DROP, 0.0),
+            )
+    }
+
+    /// How far below the elbow the wrist hangs, past the forearm's own length,
+    /// and how far past the wrist the middle of the palm is.
+    pub const WRIST_DROP: f32 = 0.03;
+    const PALM: f32 = 0.075;
 }
 
 /// Every mesh a footballer is made of, built once and shared by all
 /// twenty-two: only the materials differ from player to player.
 pub struct BodyParts {
     torso: Handle<Mesh>,
+    /// The neck of the shirt, in the club's trim colour. Derived from the
+    /// torso rather than written out again — see [`Sculptor::band`].
+    collar: Handle<Mesh>,
     pelvis: Handle<Mesh>,
     head: Handle<Mesh>,
-    hair: Handle<Mesh>,
+    /// A nose and a pair of ears. Tiny, and between them most of what makes a
+    /// head read as a head from the side rather than as an egg with a face
+    /// painted on the front of it.
+    nose: Handle<Mesh>,
+    ear: Handle<Mesh>,
+    /// One cap per hair style; `None` for the shaved head, which is the scalp
+    /// itself with the stubble drawn onto the face texture.
+    hair: [Option<Handle<Mesh>>; 4],
     upper_arm: Handle<Mesh>,
     sleeve: Handle<Mesh>,
+    /// The band round the end of a sleeve, in the trim colour.
+    cuff: Handle<Mesh>,
     forearm: Handle<Mesh>,
     hand: Handle<Mesh>,
     /// A keeper's glove. Its own mesh rather than a scaled hand: the whole
@@ -278,81 +586,197 @@ pub struct BodyParts {
     shin: Handle<Mesh>,
     sock_top: Handle<Mesh>,
     boot: Handle<Mesh>,
-    /// The flat panel the shirt number is printed on.
+    /// The curved panels the shirt number and the player's name are printed
+    /// on, both lying on the shirt's own profile.
     number: Handle<Mesh>,
+    name: Handle<Mesh>,
 }
 
 impl BodyParts {
+    /// Hips, waist, chest, shoulders — the shirt. A footballer's torso is a V:
+    /// the waist is the narrowest point and the shoulders carry most of the
+    /// width, which is most of what reads as "athlete" in a silhouette this
+    /// size.
+    ///
+    /// The shoulder line is the whole problem with a figure this size. It used
+    /// to go 0.196 wide at y=0.530 and 0.150 at y=0.558 — a 23% collapse
+    /// across 28 mm — which is a coat-hanger, not a shoulder: a flat shelf
+    /// ending in a cliff, with the arm hung off the edge of it. Real shoulders
+    /// are a dome. The trapezius leaves the neck and falls away over a good
+    /// ten centimetres, and the widest point is the acromion, out at the very
+    /// end of the collarbone, with a rounded crest over it. So the crest is
+    /// broad and slightly domed (0.482-0.535 all within 4% of each other) and
+    /// the run into the neck takes three rings instead of one.
+    ///
+    /// The offsets are the second half of the same argument. A chest is not
+    /// centred on the spine: the pectorals stand a good centimetre in front of
+    /// the axis and the shoulder blades hang behind it, so the deepest part of
+    /// the back is UP at the blades and not down at the waist. Lathed
+    /// symmetrically — as this was — the same numbers describe a barrel.
+    ///
+    /// A constant rather than an argument to one call, because four other
+    /// things are derived from it: the collar, the two printed panels, and
+    /// nothing may be allowed to drift out of step with the cloth it sits on.
+    const SHIRT: [Ring; 13] = [
+        Ring::set(0.050, 0.138, 0.094, 0.005),
+        Ring::set(0.070, 0.134, 0.092, 0.006),
+        Ring::set(0.140, 0.131, 0.089, 0.006),
+        Ring::set(0.220, 0.148, 0.100, 0.004),
+        Ring::set(0.300, 0.168, 0.109, 0.006),
+        Ring::set(0.370, 0.185, 0.114, 0.008),
+        Ring::set(0.440, 0.198, 0.113, 0.004),
+        Ring::set(0.482, 0.207, 0.109, -0.002),
+        Ring::set(0.512, 0.209, 0.104, -0.004),
+        Ring::set(0.535, 0.201, 0.099, -0.004),
+        Ring::set(0.552, 0.176, 0.093, -0.004),
+        Ring::set(0.568, 0.134, 0.082, -0.006),
+        Ring::set(0.580, 0.088, 0.070, -0.008),
+    ];
+
+    /// Neck, jaw and skull, hung off the base of the neck.
+    ///
+    /// Rebuilt around the offsets, which a head needs more than any other part
+    /// of a footballer. The neck sits BEHIND the head it carries, the chin and
+    /// the cheekbones stand in front of the ear line, and the occiput hangs
+    /// two centimetres out at the back — none of which a body of revolution
+    /// can say, and all of which are what the eye uses to tell one profile
+    /// from another. It is also narrower across than it is deep, which a real
+    /// skull is by about a fifth and this one used not to be at all.
+    ///
+    /// The face texture is laid out against these numbers (see
+    /// [`BodyParts::face_layout`]), so the two move together.
+    const SKULL: [Ring; 13] = [
+        Ring::set(-0.075, 0.052, 0.056, -0.004),
+        Ring::set(-0.030, 0.050, 0.054, -0.006),
+        Ring::set(0.005, 0.052, 0.058, -0.008),
+        Ring::set(0.028, 0.062, 0.070, 0.000),
+        Ring::set(0.048, 0.072, 0.082, 0.004),
+        Ring::set(0.072, 0.082, 0.090, 0.004),
+        Ring::set(0.100, 0.088, 0.096, 0.000),
+        Ring::set(0.130, 0.090, 0.099, -0.002),
+        Ring::set(0.158, 0.089, 0.098, -0.004),
+        Ring::set(0.185, 0.084, 0.094, -0.006),
+        Ring::set(0.212, 0.073, 0.083, -0.008),
+        Ring::set(0.238, 0.052, 0.060, -0.010),
+        Ring::set(0.255, 0.000, 0.000, -0.012),
+    ];
+
+    /// Shin and sock in one: socks cover a footballer's leg to the knee.
+    ///
+    /// The calf sits high and at the BACK — which the offsets can now actually
+    /// say — and that is what stops the lower leg reading as a broom handle
+    /// when a stride opens out. The ankle steps forward again under it, the
+    /// way a leg does.
+    ///
+    /// Written bottom-up so the turnover at the top of the sock can be lathed
+    /// over it; the loft takes a profile from either end.
+    const SHIN: [Ring; 8] = [
+        Ring::set(-0.455, 0.033, 0.035, 0.003),
+        Ring::set(-0.440, 0.034, 0.036, 0.002),
+        Ring::set(-0.390, 0.036, 0.038, 0.000),
+        Ring::set(-0.300, 0.042, 0.044, -0.002),
+        Ring::set(-0.200, 0.050, 0.053, -0.004),
+        Ring::set(-0.110, 0.059, 0.063, -0.006),
+        Ring::set(-0.040, 0.062, 0.064, -0.004),
+        Ring::set(0.020, 0.060, 0.060, 0.000),
+    ];
+
+    /// Heights of the features on that skull, in its own space. The mesh puts
+    /// a nose at one of them and the texture draws the rest.
+    const EYES: f32 = 0.130;
+    const BROW: f32 = 0.158;
+    /// The base of the nose, where the nostrils are — not the tip.
+    const NOSTRILS: f32 = 0.096;
+    const MOUTH: f32 = 0.070;
+    const CHIN: f32 = 0.030;
+    /// Where the hair caps below leave the forehead, so the texture can shade
+    /// the line rather than letting a mesh edge sit on bare skin.
+    const HAIRLINE: f32 = 0.198;
+    /// Where the nose is hung, and the ears.
+    const NOSE_AT: Vec3 = Vec3::new(0.0, 0.128, 0.078);
+    const EAR_AT: Vec3 = Vec3::new(0.086, 0.106, -0.012);
+
+    /// Where the print goes on the back of the shirt: the name across the
+    /// shoulders and the number under it, both in the torso's own space.
+    ///
+    /// The arcs decide the panels' widths, since the ink follows the cloth
+    /// round the body — 1.45 radians at the number's height is a chord of
+    /// 23 cm and an arc of 23.3, which is a real shirt number. Whoever draws
+    /// the textures has to match that aspect or the glyphs come out stretched;
+    /// see [`crate::textures::Textures::number`].
+    const NAME_AT: f32 = 0.464;
+    const NAME_HEIGHT: f32 = 0.058;
+    const NAME_ARC: f32 = 1.34;
+    const NUMBER_AT: f32 = 0.316;
+    const NUMBER_HEIGHT: f32 = 0.190;
+    const NUMBER_ARC: f32 = 1.45;
+    /// How far the print floats off the cloth. Four millimetres: enough that
+    /// no depth buffer this scene will ever run on can put the two in the
+    /// wrong order, small enough that it is invisible at the panel's edges.
+    const PRINT_LIFT: f32 = 0.004;
+
     pub fn new(meshes: &mut Assets<Mesh>) -> Self {
         BodyParts {
-            // Hips, waist, chest, shoulders — the shirt. A footballer's torso
-            // is a V: the waist is the narrowest point and the shoulders carry
-            // most of the width, which is most of what reads as "athlete" in a
-            // silhouette this size.
-            // The shoulder line is the whole problem with a figure this size.
-            // It used to go 0.196 wide at y=0.530 and 0.150 at y=0.558 — a
-            // 23% collapse across 28 mm — which is a coat-hanger, not a
-            // shoulder: a flat shelf ending in a cliff, with the arm hung off
-            // the edge of it. Real shoulders are a dome. The trapezius leaves
-            // the neck and falls away over a good ten centimetres, and the
-            // widest point is the acromion, out at the very end of the
-            // collarbone, with a rounded crest over it.
+            torso: meshes.add(Sculptor::part(&Self::SHIRT)),
+            // The neck of the shirt: the top of the torso swollen by five
+            // millimetres, with a rim of its own standing a little above the
+            // cloth. Every kit on earth has one, and without it the shirt
+            // simply stops at a hole with a neck coming out of it.
+            // A crew neck: twenty-three millimetres of it, hugging the neck
+            // hole and nothing else.
             //
-            // So the crest is now broad and slightly domed (0.482-0.535 all
-            // within 4% of each other) and the run into the neck takes three
-            // rings instead of one.
-            torso: meshes.add(Sculptor::part(&[
-                Ring::oval(0.000, 0.142, 0.098),
-                Ring::oval(0.070, 0.134, 0.092),
-                Ring::oval(0.140, 0.131, 0.089),
-                Ring::oval(0.220, 0.148, 0.100),
-                Ring::oval(0.300, 0.168, 0.107),
-                Ring::oval(0.370, 0.185, 0.111),
-                Ring::oval(0.440, 0.198, 0.111),
-                Ring::oval(0.482, 0.207, 0.108),
-                Ring::oval(0.512, 0.209, 0.104),
-                Ring::oval(0.535, 0.201, 0.099),
-                Ring::oval(0.552, 0.176, 0.093),
-                Ring::oval(0.568, 0.134, 0.082),
-                Ring::oval(0.580, 0.088, 0.070),
+            // Derived from the shirt it sits on, as the sock turnover is —
+            // but starting at 0.576 rather than a comfortable-looking way
+            // down, because the torso is still 25 cm across at 0.570 and a
+            // band taken from there is not a collar, it is a yoke across the
+            // shoulders. The whole taper from the shoulder crest to the neck
+            // happens inside seven centimetres, so the collar has to live in
+            // the top two of them.
+            collar: meshes.add(Sculptor::part(&[
+                Ring::set(0.576, 0.108, 0.078, -0.0075),
+                Ring::set(0.583, 0.095, 0.073, -0.0080),
+                Ring::set(0.591, 0.087, 0.068, -0.0080),
+                Ring::set(0.599, 0.081, 0.064, -0.0080),
             ])),
             // The seat of the shorts, which stays put while the legs swing.
             pelvis: meshes.add(Sculptor::part(&[
-                Ring::oval(0.100, 0.140, 0.098),
-                Ring::oval(0.020, 0.152, 0.104),
-                Ring::oval(-0.060, 0.160, 0.108),
-                Ring::oval(-0.130, 0.154, 0.104),
+                Ring::set(0.100, 0.140, 0.098, 0.004),
+                Ring::set(0.020, 0.152, 0.106, 0.000),
+                Ring::set(-0.060, 0.161, 0.112, -0.006),
+                Ring::set(-0.130, 0.154, 0.104, -0.004),
             ])),
-            // Neck, jaw and skull, hung off the base of the neck.
-            head: meshes.add(Sculptor::part(&[
-                Ring::oval(-0.060, 0.048, 0.052),
-                Ring::oval(0.000, 0.053, 0.057),
-                Ring::oval(0.022, 0.070, 0.074),
-                Ring::oval(0.045, 0.086, 0.092),
-                Ring::oval(0.075, 0.096, 0.103),
-                Ring::oval(0.110, 0.100, 0.109),
-                Ring::oval(0.145, 0.096, 0.104),
-                Ring::oval(0.180, 0.086, 0.093),
-                Ring::oval(0.212, 0.068, 0.074),
-                Ring::oval(0.238, 0.040, 0.044),
-                Ring::oval(0.253, 0.000, 0.000),
-            ])),
-            // A cap over the skull, set back a little so a hairline reads.
-            hair: meshes.add({
-                let mut sculptor = Sculptor::default();
-                sculptor.loft(
-                    &[
-                        Ring::oval(0.085, 0.101, 0.110),
-                        Ring::oval(0.125, 0.102, 0.111),
-                        Ring::oval(0.170, 0.095, 0.103),
-                        Ring::oval(0.210, 0.078, 0.084),
-                        Ring::oval(0.240, 0.049, 0.053),
-                        Ring::oval(0.262, 0.000, 0.000),
-                    ],
-                    Vec3::new(0.0, 0.0, -0.008),
-                );
-                sculptor.build()
-            }),
+            head: meshes.add(Sculptor::part_at(&Self::SKULL, Sculptor::HEAD_SIDES)),
+            // Bridge, ball, nostrils. Two centimetres of geometry, and the
+            // difference between a face and a mask: a nose is the one feature
+            // that survives being seen from the side, which is where a
+            // footballer spends most of a match relative to the camera.
+            nose: meshes.add(Sculptor::part_at(
+                &[
+                    Ring::set(0.030, 0.009, 0.011, 0.000),
+                    Ring::set(0.012, 0.012, 0.014, 0.006),
+                    Ring::set(-0.008, 0.016, 0.018, 0.013),
+                    Ring::set(-0.022, 0.019, 0.019, 0.015),
+                    Ring::set(-0.033, 0.020, 0.015, 0.010),
+                    Ring::set(-0.040, 0.015, 0.008, 0.002),
+                ],
+                12,
+            )),
+            ear: meshes.add(Sculptor::ellipsoid(Vec3::new(0.009, 0.030, 0.020))),
+            // Shaved, a crop, short back and sides, and a mop: the three caps
+            // start lower at the temple, carry more volume and leave less
+            // forehead in turn, which is the whole axis a squad varies along.
+            //
+            // All three come down PAST the ear, and they can afford to because
+            // the burial is on the front edge alone: the cap covers the nape
+            // and the temples all the way down while the face stays clear, so
+            // the hair stops where hair stops rather than in a level line
+            // ruled round the head at ear height.
+            hair: [
+                None,
+                Some(meshes.add(Self::cap(0.098, 0.005, 0.0426))),
+                Some(meshes.add(Self::cap(0.090, 0.009, 0.0518))),
+                Some(meshes.add(Self::cap(0.082, 0.017, 0.0586))),
+            ],
             // Deltoid, bicep, taper to the elbow.
             //
             // The top ring is now narrow (0.030) and sits high, so it ends up
@@ -374,11 +798,25 @@ impl BodyParts {
             // A short sleeve, riding on the shoulder joint so it swings with
             // it. Dropped to sit over the deltoid rather than above it —
             // level with the socket it stood off the shoulder like a pad.
+            //
+            // Cut four millimetres looser than it was, all round. At its old
+            // size the top of it ran within a millimetre of the shirt at the
+            // shoulder and the two z-fought along the seam; a sleeve is a
+            // separate piece of cloth OVER a body, and it has to be drawn
+            // outside everything it covers rather than level with it.
             sleeve: meshes.add(Sculptor::part(&[
-                Ring::oval(0.030, 0.064, 0.062),
-                Ring::oval(-0.015, 0.074, 0.071),
-                Ring::oval(-0.080, 0.070, 0.067),
-                Ring::oval(-0.130, 0.062, 0.060),
+                Ring::oval(0.030, 0.068, 0.066),
+                Ring::oval(-0.015, 0.078, 0.075),
+                Ring::oval(-0.080, 0.074, 0.071),
+                Ring::oval(-0.130, 0.066, 0.064),
+            ])),
+            // And the band round the end of it. The same trim as the collar,
+            // and the pair of them together are what say "kit" rather than
+            // "coloured shape" at any distance a face is legible from.
+            cuff: meshes.add(Sculptor::part(&[
+                Ring::oval(-0.100, 0.0735, 0.0710),
+                Ring::oval(-0.130, 0.0690, 0.0670),
+                Ring::oval(-0.140, 0.0675, 0.0655),
             ])),
             forearm: meshes.add(Sculptor::part(&[
                 Ring::round(0.000, 0.046),
@@ -402,44 +840,161 @@ impl BodyParts {
                 Ring::oval(-0.135, 0.048, 0.024),
             ])),
             // The leg of the shorts: it belongs to the thigh, not to the hips.
+            //
+            // Its top ring stops UNDER the shirt's hem. Four centimetres
+            // higher, as it was, it stood up inside the shirt and the two
+            // surfaces crossed each other somewhere round the hip — two nearly
+            // tangent surfaces interpenetrating, which is the one arrangement
+            // that no amount of depth precision draws cleanly. The waist came
+            // out as a ragged blue-and-white sawtooth at any range close
+            // enough to see it. A footballer tucks his shirt in, and now so
+            // does this one: the hem ends at 0.050 and the shorts start above
+            // it, so nothing crosses anything.
             shorts_leg: meshes.add(Sculptor::part(&[
-                Ring::oval(0.040, 0.114, 0.104),
+                Ring::oval(0.012, 0.118, 0.107),
                 Ring::oval(-0.040, 0.120, 0.109),
                 Ring::oval(-0.130, 0.116, 0.105),
                 Ring::oval(-0.205, 0.106, 0.097),
             ])),
-            // Quadriceps high on the thigh, narrowing into the knee.
+            // Quadriceps high on the thigh, narrowing into the knee — and the
+            // whole muscle carried a few millimetres forward of the bone,
+            // which is where it is.
             thigh: meshes.add(Sculptor::part(&[
-                Ring::oval(-0.090, 0.089, 0.086),
-                Ring::oval(-0.160, 0.086, 0.083),
-                Ring::oval(-0.250, 0.078, 0.075),
-                Ring::oval(-0.340, 0.068, 0.066),
-                Ring::oval(-0.420, 0.059, 0.058),
-                Ring::oval(-0.455, 0.053, 0.053),
+                Ring::set(-0.090, 0.089, 0.088, 0.000),
+                Ring::set(-0.160, 0.086, 0.086, 0.002),
+                Ring::set(-0.250, 0.078, 0.078, 0.003),
+                Ring::set(-0.340, 0.068, 0.068, 0.002),
+                Ring::set(-0.420, 0.059, 0.059, 0.000),
+                Ring::set(-0.455, 0.053, 0.053, 0.000),
             ])),
-            // Shin and sock in one: socks cover a footballer's leg to the knee.
-            // The calf sits high and at the back, which is what stops the lower
-            // leg reading as a broom handle when a stride opens out.
-            shin: meshes.add(Sculptor::part(&[
-                Ring::oval(0.020, 0.060, 0.060),
-                Ring::oval(-0.040, 0.062, 0.063),
-                Ring::oval(-0.110, 0.059, 0.061),
-                Ring::oval(-0.200, 0.050, 0.052),
-                Ring::oval(-0.300, 0.042, 0.043),
-                Ring::oval(-0.390, 0.036, 0.037),
-                Ring::oval(-0.440, 0.034, 0.036),
-                Ring::oval(-0.455, 0.033, 0.035),
-            ])),
+            shin: meshes.add(Sculptor::part(&Self::SHIN)),
             // The turnover at the top of the sock, in the shorts colour — the
             // one piece of kit detail that survives at this distance.
-            sock_top: meshes.add(Sculptor::part(&[
-                Ring::oval(0.012, 0.0620, 0.0625),
-                Ring::oval(-0.030, 0.0645, 0.0655),
-                Ring::oval(-0.078, 0.0620, 0.0635),
-            ])),
+            //
+            // Taken off the sock underneath it rather than written out again.
+            // Hand-written, the two profiles agreed to within a tenth of a
+            // millimetre at the bottom of the turnover and the pair of them
+            // z-fought along a band right across the shin: at any range the
+            // sock tops came out ragged and speckled, and the closer the
+            // camera got the worse it looked.
+            sock_top: meshes.add(Sculptor::part(&Sculptor::band(
+                &Self::SHIN,
+                -0.082,
+                0.014,
+                3,
+                0.0035,
+            ))),
             boot: meshes.add(Sculptor::ellipsoid(Vec3::new(0.048, 0.038, 0.105))),
-            // A real shirt number covers most of the upper back.
-            number: meshes.add(Rectangle::new(0.250, 0.215).mesh().build()),
+            // A real shirt number covers most of the upper back, and a real
+            // name runs across the shoulders above it. Both lie ON the shirt:
+            // see [`Sculptor::decal`] for why a flat rectangle cannot.
+            number: meshes.add(Sculptor::decal(
+                &Self::SHIRT,
+                Self::NUMBER_AT,
+                Self::NUMBER_HEIGHT,
+                -FRAC_PI_2,
+                Self::NUMBER_ARC,
+                Self::PRINT_LIFT,
+            )),
+            name: meshes.add(Sculptor::decal(
+                &Self::SHIRT,
+                Self::NAME_AT,
+                Self::NAME_HEIGHT,
+                -FRAC_PI_2,
+                Self::NAME_ARC,
+                Self::PRINT_LIFT,
+            )),
+        }
+    }
+
+    /// A cap of hair over the skull, coming down to `from` at the sides,
+    /// standing `swell` proud of the head, and buried `recede` inside the face
+    /// where it starts.
+    ///
+    /// The burial FADES with height and then reverses, and that is the whole
+    /// trick: down at the temple the cap's front edge is inside the head and
+    /// by the crown it is out over it, so the curve where the two surfaces
+    /// cross IS the hairline — a real one, higher up the middle of the
+    /// forehead than at the temples, because the skull is rounder there. A
+    /// constant burial either sinks the hair to the crown or sits it down over
+    /// the eyebrows, and there is no value in between that works.
+    fn cap(from: f32, swell: f32, recede: f32) -> Mesh {
+        Sculptor::part_at(&Self::cap_rings(from, swell, recede), Sculptor::HEAD_SIDES)
+    }
+
+    /// The profile of that cap, apart from the lathe so the hairline it
+    /// produces can be measured rather than looked at.
+    fn cap_rings(from: f32, swell: f32, recede: f32) -> Vec<Ring> {
+        const STEPS: usize = 12;
+        /// Where the cap stops following the skull and pinches to its own
+        /// crown, which stands a little above the bare one.
+        const SHOULDER: f32 = 0.246;
+
+        let crown = Self::SKULL[Self::SKULL.len() - 1];
+        // Sampled at the SKULL'S OWN ring heights as well as at even steps.
+        // Both profiles are lofted with straight sides between their rings, so
+        // wherever the head has a corner the cap must have one too — across a
+        // band that contains a corner of one and not the other, the chord of
+        // the cap cuts inside the chord of the head and the scalp comes
+        // through. The same tonsure by a different route.
+        let mut heights: Vec<f32> = (0..=STEPS)
+            .map(|step| from + (SHOULDER - from) * step as f32 / STEPS as f32)
+            .chain(
+                Self::SKULL
+                    .iter()
+                    .map(|ring| ring.y)
+                    .filter(|y| *y > from && *y < SHOULDER),
+            )
+            .collect();
+        heights.sort_by(|first, second| first.total_cmp(second));
+
+        let span = SHOULDER - from;
+        let mut rings: Vec<Ring> = heights
+            .iter()
+            .map(|y| {
+                let along = ((y - from) / span).clamp(0.0, 1.0);
+                let fade = (1.0 - along) * (1.0 - along);
+                // Buried by `recede` at the bottom of the cap, standing
+                // `swell` proud of the face by the crown, and the height where
+                // that crosses zero is where the hair appears.
+                let clearance = recede * fade - swell * (1.0 - fade);
+                Sculptor::section(&Self::SKULL, *y).capped(swell, clearance)
+            })
+            .collect();
+        // Two more rings over the top of the skull before the cap closes.
+        //
+        // Without them the last band runs straight from a three-centimetre
+        // ring to a point in twelve millimetres — a cone so shallow it is
+        // effectively a lid, and it leaves a ring of bare scalp showing
+        // between itself and the rest of the cap, because a straight-sided
+        // lid cannot follow a dome. Every player with hair took the field
+        // wearing a tonsure.
+        for over in [0.250f32, 0.2535] {
+            rings.push(Sculptor::section(&Self::SKULL, over).capped(swell, -swell));
+        }
+        rings.push(Ring::set(crown.y + swell * 0.9, 0.0, 0.0, crown.offset));
+        rings
+    }
+
+    /// Where the features of a face land on this skull, for whoever is drawing
+    /// the texture that wraps it.
+    ///
+    /// The only crossing between the mesh and the paint, and deliberately the
+    /// only one: an eye drawn at a height the skull does not have there ends
+    /// up on a cheekbone, and nothing downstream can tell.
+    pub fn face_layout() -> FaceLayout {
+        let foot = Self::SKULL[0].y;
+        let crown = Self::SKULL[Self::SKULL.len() - 1].y;
+        FaceLayout {
+            foot,
+            span: crown - foot,
+            cheek: Sculptor::section(&Self::SKULL, Self::EYES).x,
+            eyes: Self::EYES,
+            brow: Self::BROW,
+            nostrils: Self::NOSTRILS,
+            mouth: Self::MOUTH,
+            chin: Self::CHIN,
+            hairline: Self::HAIRLINE,
         }
     }
 }
@@ -625,6 +1180,23 @@ pub struct Gait {
     /// them was being drawn toppling sideways with both arms over his head
     /// like a keeper going full length.
     pub jump: f32,
+    /// 0..1: he is heading the ball rather than kicking it, read together
+    /// with `swing` exactly as `power` is.
+    ///
+    /// A ball arriving above head height is met with a head, and every one of
+    /// them used to be drawn as a leg swing — a man at the back post hooking
+    /// his boot up past his own ear at a cross. The action is nothing like a
+    /// kick: it comes from the spine rather than the hip, the arms go out
+    /// instead of counter-swinging, and the contact is at the top of the
+    /// player rather than the bottom.
+    pub header: f32,
+    /// 0..1: a two-handed throw-in, ditto.
+    ///
+    /// The other strike a footballer makes that is not a kick, and there are
+    /// forty-odd of them in a match. Both arms, over the head, feet planted —
+    /// which is why it cannot borrow the keeper's throw, that one being
+    /// pointedly one-armed.
+    pub throw_in: f32,
 }
 
 impl Joint {
@@ -807,6 +1379,35 @@ impl Joint {
     const KICK_TRAIL: (f32, f32, f32) = (0.20, 0.60, 0.40);
     /// And how far across his own chest the counter-arm comes.
     const KICK_ARM_SPREAD: f32 = 0.55;
+    /// A header, as the three keys the spine passes through: arched away from
+    /// the ball, square at the moment of contact, and driven through it.
+    ///
+    /// A header is generated in the trunk and finished with the neck — the
+    /// chest opens, the head is snapped through, and the arms go out to hold
+    /// the space rather than to counter-swing. Sequenced the same way a kick
+    /// is, with the neck arriving after the chest: it is the same
+    /// ground-upward chain, just one joint higher.
+    const NOD_CHEST: (f32, f32, f32) = (-0.34, 0.14, 0.40);
+    const NOD_NECK: (f32, f32, f32) = (-0.30, 0.18, 0.30);
+    /// And what the arms do about it: out and slightly back, elbows soft. A
+    /// player attacking a cross has both of them wide, which is half of what
+    /// makes the action legible from a hundred metres away.
+    const NOD_SHOULDER: f32 = -0.30;
+    const NOD_SPREAD: f32 = 0.46;
+    const NOD_ELBOW: f32 = -0.62;
+    /// A throw-in: both arms through one sweep past a half turn, for the same
+    /// reason the keeper's throw is written that way — these interpolate as
+    /// scalars, and going the short way round between "behind the head" and
+    /// "out in front" takes the arms down past the hips.
+    const TOSS_SHOULDER: (f32, f32, f32) = (2.55, 4.05, 4.70);
+    const TOSS_ELBOW: (f32, f32, f32) = (-1.85, -0.30, -0.12);
+    /// Hands together over the head rather than out at the sides: a throw-in
+    /// is taken with both of them on the ball.
+    const TOSS_SPREAD: f32 = -0.10;
+    /// The trunk arches back over the wind-up and whips forward through the
+    /// release, and the knees give a little under it.
+    const TOSS_CHEST: (f32, f32, f32) = (-0.40, 0.16, 0.44);
+    const TOSS_KNEE: (f32, f32, f32) = (0.34, 0.20, 0.10);
     /// A keeper's throw: the same three keys as a kick, sent to his shoulder
     /// instead of his hip — cocked behind the ear, over the top, and down
     /// across the follow through.
@@ -919,6 +1520,11 @@ impl Joint {
         let taper = Self::taper(gait.swing);
         let kicking = gait.power * taper;
         let throwing = gait.throwing * taper;
+        // The two strikes a footballer makes that are not kicks. Same phase,
+        // same taper, different limbs — which is the whole reason `swing` is
+        // one number and the amplitudes are several.
+        let heading = gait.header * taper;
+        let tossing = gait.throw_in * taper;
         // +1 if this is the kicking side of the body, −1 if it is the standing
         // side. Zero for everybody not kicking, which leaves both halves equal
         // and every term below at rest.
@@ -1009,6 +1615,12 @@ impl Joint {
                             * kicking,
                     )
                     * Quat::from_rotation_z(Self::KICK_ROLL * gait.foot * kicking)
+                    // And the two strikes that come out of the trunk rather
+                    // than out of a leg. Both are identity for anybody not
+                    // making them, which is twenty-two players out of
+                    // twenty-two for most of a match.
+                    * Quat::from_rotation_x(Self::through(Self::NOD_CHEST, gait.swing) * heading)
+                    * Quat::from_rotation_x(Self::through(Self::TOSS_CHEST, gait.swing) * tossing)
             }
             // He watches the ball. The head hangs off the torso, so this yaw
             // is already relative to his chest — turning it is the single
@@ -1037,6 +1649,10 @@ impl Joint {
                         - Self::DIVE_TWIST * gait.lead * gait.stretch * (1.0 - 0.5 * gait.grounded),
                 ) * Quat::from_rotation_x(-lean * 0.75 - gait.look_pitch)
                     * Quat::from_rotation_z(steady)
+                    // The neck through a header, arriving after the chest.
+                    // Heading a ball is the one thing a footballer does with
+                    // his head that is not looking at something.
+                    * Quat::from_rotation_x(Self::through(Self::NOD_NECK, gait.swing) * heading)
             }
             Limb::Shoulder => {
                 // Arms swing against the leg on the same side, and are carried
@@ -1122,10 +1738,25 @@ impl Joint {
                 // And a keeper's throw, which is the same swing as a kick sent
                 // to the arm instead: cocked behind his ear and hurled
                 // overarm. Only the throwing side moves.
-                Self::held(
+                let hurled = Self::held(
                     down,
                     Quat::from_rotation_x(Self::through(Self::THROW_SHOULDER, gait.swing)),
                     throwing * striking.max(0.0),
+                );
+                // Attacking a cross: both arms out, holding the space he is
+                // about to jump into.
+                let attacking = Self::held(
+                    hurled,
+                    Quat::from_rotation_z(self.side * Self::NOD_SPREAD)
+                        * Quat::from_rotation_x(Self::NOD_SHOULDER),
+                    heading,
+                );
+                // A throw-in, where BOTH arms go over the head together.
+                Self::held(
+                    attacking,
+                    Quat::from_rotation_z(self.side * Self::TOSS_SPREAD)
+                        * Quat::from_rotation_x(Self::through(Self::TOSS_SHOULDER, gait.swing)),
+                    tossing,
                 )
             }
             // Elbow carriage is the most individual thing about a runner:
@@ -1151,10 +1782,16 @@ impl Joint {
                     + Self::TRAIL_ELBOW * trailing * gait.stretch;
                 let out = Self::held(holding, Quat::from_rotation_x(elbow), gait.reach);
                 let down = Self::held(out, Quat::from_rotation_x(Self::DOWN_ELBOW), bracing);
-                Self::held(
+                let hurled = Self::held(
                     down,
                     Quat::from_rotation_x(Self::through(Self::THROW_ELBOW, gait.swing)),
                     throwing * striking.max(0.0),
+                );
+                let attacking = Self::held(hurled, Quat::from_rotation_x(Self::NOD_ELBOW), heading);
+                Self::held(
+                    attacking,
+                    Quat::from_rotation_x(Self::through(Self::TOSS_ELBOW, gait.swing)),
+                    tossing,
                 )
             }
             // The hands. Loose on the run, up and open in the set, broken
@@ -1246,10 +1883,19 @@ impl Joint {
                     Quat::from_rotation_x(Self::through(Self::KICK_KNEE, gait.swing)),
                     kicking * striking.max(0.0),
                 );
-                Self::held(
+                let planted = Self::held(
                     swung,
                     Quat::from_rotation_x(Self::PLANT_KNEE),
                     kicking * (-striking).max(0.0),
+                );
+                // A throw-in is taken off both feet, and they give under it:
+                // the knees bend into the arch and push back up through the
+                // release. It is the only strike in football where the legs
+                // do the same thing as each other.
+                Self::held(
+                    planted,
+                    Quat::from_rotation_x(Self::through(Self::TOSS_KNEE, gait.swing)),
+                    tossing,
                 )
             }
         }
@@ -1392,7 +2038,7 @@ impl Footballer {
         let neck = Vec3::new(0.0, Physique::TORSO, 0.0);
         let elbow = Vec3::new(0.0, -Physique::UPPER_ARM, 0.0);
         let knee = Vec3::new(0.0, -Physique::THIGH, 0.0);
-        let wrist = Vec3::new(0.0, -Physique::FOREARM - 0.03, 0.0);
+        let wrist = Vec3::new(0.0, -Physique::FOREARM - Physique::WRIST_DROP, 0.0);
 
         let carriage = commands
             .spawn((
@@ -1418,29 +2064,59 @@ impl Footballer {
                 Transform::from_translation(hips),
             ))
             .with_children(|torso| {
-                // Printed across the shoulder blades, standing a couple of
-                // millimetres off the shirt so it never fights it for depth.
+                // Both panels lie ON the shirt rather than in front of it, so
+                // they take the torso's own transform and nothing else — see
+                // [`Sculptor::decal`].
                 if let Some(number) = outfit.number.clone() {
                     torso.spawn((
                         Mesh3d(parts.number.clone()),
                         MeshMaterial3d(number),
-                        Transform::from_xyz(0.0, 0.330, -0.115)
-                            .with_rotation(Quat::from_rotation_y(PI)),
+                        Transform::default(),
                     ));
                 }
+                if let Some(name) = outfit.name.clone() {
+                    torso.spawn((
+                        Mesh3d(parts.name.clone()),
+                        MeshMaterial3d(name),
+                        Transform::default(),
+                    ));
+                }
+                torso.spawn((
+                    Mesh3d(parts.collar.clone()),
+                    MeshMaterial3d(outfit.trim.clone()),
+                    Transform::default(),
+                ));
 
                 torso
                     .spawn((
                         Joint::new(root, Limb::Head, 0.0, neck),
                         Mesh3d(parts.head.clone()),
-                        MeshMaterial3d(outfit.skin.clone()),
+                        MeshMaterial3d(outfit.face.clone()),
                         Transform::from_translation(neck),
                     ))
-                    .with_child((
-                        Mesh3d(parts.hair.clone()),
-                        MeshMaterial3d(outfit.hair.clone()),
-                        Transform::default(),
-                    ));
+                    .with_children(|head| {
+                        if let Some(hair) = parts.hair[outfit.hair_style.index()].clone() {
+                            head.spawn((
+                                Mesh3d(hair),
+                                MeshMaterial3d(outfit.hair.clone()),
+                                Transform::default(),
+                            ));
+                        }
+                        head.spawn((
+                            Mesh3d(parts.nose.clone()),
+                            MeshMaterial3d(outfit.skin.clone()),
+                            Transform::from_translation(BodyParts::NOSE_AT),
+                        ));
+                        for side in [-1.0f32, 1.0] {
+                            head.spawn((
+                                Mesh3d(parts.ear.clone()),
+                                MeshMaterial3d(outfit.skin.clone()),
+                                Transform::from_translation(
+                                    BodyParts::EAR_AT * Vec3::new(side, 1.0, 1.0),
+                                ),
+                            ));
+                        }
+                    });
 
                 for side in [-1.0f32, 1.0] {
                     let shoulder =
@@ -1456,6 +2132,11 @@ impl Footballer {
                             arm.spawn((
                                 Mesh3d(parts.sleeve.clone()),
                                 MeshMaterial3d(outfit.shirt.clone()),
+                                Transform::default(),
+                            ));
+                            arm.spawn((
+                                Mesh3d(parts.cuff.clone()),
+                                MeshMaterial3d(outfit.trim.clone()),
                                 Transform::default(),
                             ));
                             arm.spawn((
@@ -1525,7 +2206,7 @@ impl Footballer {
 /// off and call the same [`Joint::pose`] the renderer calls, so a sign error
 /// anywhere in the chain shows up here as a body part in the wrong place.
 #[cfg(test)]
-mod skeleton {
+pub(crate) mod skeleton {
     use super::*;
 
     /// A player standing still, with nothing switched on.
@@ -1551,9 +2232,27 @@ mod skeleton {
             power: 0.0,
             foot: 0.0,
             throwing: 0.0,
+            header: 0.0,
+            throw_in: 0.0,
             drive: 0.0,
             carrying: 0.0,
         }
+    }
+
+    /// A header at this point in the swing.
+    pub fn nodding(swing: f32) -> Gait {
+        let mut gait = still();
+        gait.swing = swing;
+        gait.header = 1.0;
+        gait
+    }
+
+    /// And a throw-in.
+    pub fn tossing(swing: f32) -> Gait {
+        let mut gait = still();
+        gait.swing = swing;
+        gait.throw_in = 1.0;
+        gait
     }
 
     /// A right-footed kick at full power, at this point in the swing.
@@ -1574,15 +2273,7 @@ mod skeleton {
     /// carriage, which is where [`Physique::CRADLE`] and [`Physique::CATCH`]
     /// are expressed too.
     pub fn glove(side: f32, gait: Gait) -> Vec3 {
-        let hips = Vec3::new(0.0, Physique::HIP, 0.0);
-        let shoulder = Vec3::new(side * Physique::SHOULDER_SPREAD, Physique::SHOULDER, 0.0);
-        let elbow = Vec3::new(0.0, -Physique::UPPER_ARM, 0.0);
-        let wrist = Vec3::new(0.0, -Physique::FOREARM - 0.03, 0.0);
-        (step(Limb::Torso, 0.0, hips, gait)
-            * step(Limb::Shoulder, side, shoulder, gait)
-            * step(Limb::Elbow, side, elbow, gait)
-            * step(Limb::Wrist, side, wrist, gait))
-        .translation
+        Physique::glove(side, gait)
     }
 
     /// The sole of a boot, in the same space.
@@ -1594,12 +2285,14 @@ mod skeleton {
             .transform_point(sole)
     }
 
-    /// And the crown of the head.
+    /// And the crown of the head, off the skull's own last ring rather than
+    /// off a number written down twice.
     pub fn crown(gait: Gait) -> Vec3 {
         let hips = Vec3::new(0.0, Physique::HIP, 0.0);
         let neck = Vec3::new(0.0, Physique::TORSO, 0.0);
+        let top = BodyParts::SKULL[BodyParts::SKULL.len() - 1];
         (step(Limb::Torso, 0.0, hips, gait) * step(Limb::Head, 0.0, neck, gait))
-            .transform_point(Vec3::new(0.0, 0.253, 0.0))
+            .transform_point(Vec3::new(0.0, top.y, top.offset))
     }
 }
 
@@ -2048,6 +2741,354 @@ mod tests {
         };
         assert!(lean(1.0) > lean(0.0) + 0.15, "no drive: {}", lean(1.0));
         assert!(lean(-1.0) < lean(0.0) - 0.12, "no brake: {}", lean(-1.0));
+    }
+
+    /// A header comes out of the spine, not out of a leg.
+    ///
+    /// Every ball met above head height used to be drawn as a kick, which at
+    /// the back post is a man hooking his boot up past his own ear.
+    #[test]
+    fn a_header_comes_from_the_spine() {
+        let back = crown(nodding(-0.8));
+        let contact = crown(nodding(0.0));
+        let through = crown(nodding(0.8));
+        // The head travels forward through the ball, and keeps going.
+        assert!(
+            contact.z - back.z > 0.10,
+            "no snap: {back:?} to {contact:?}"
+        );
+        assert!(through.z > contact.z, "no follow through: {through:?}");
+        // Both arms go out to hold the space, and neither of them is a
+        // keeper's reach.
+        let arms = glove(1.0, nodding(0.0));
+        assert!(
+            arms.x.abs() > glove(1.0, still()).x.abs() + 0.05,
+            "arms not out: {arms:?}"
+        );
+        assert!(arms.y < contact.y, "arms over his head like a save");
+        // And his feet stay exactly where a run cycle would have left them:
+        // this is one action, not two.
+        for stage in [-0.8f32, 0.0, 0.8] {
+            assert!(
+                (boot(1.0, nodding(stage)) - boot(1.0, still())).length() < 1e-4,
+                "the leg swings at a header, at {stage}"
+            );
+        }
+    }
+
+    /// A throw-in is taken with BOTH hands, over the head, off both feet —
+    /// which is the whole reason it cannot borrow a goalkeeper's throw.
+    #[test]
+    fn a_throw_in_uses_both_hands() {
+        // Shoulder height, which is the line the ball must never drop below on
+        // its way round: a throw-in taken underarm is a foul throw, and this
+        // rig would happily draw one, because these keys interpolate as
+        // scalars and the short way round between "behind the head" and "out
+        // in front" goes past his hip.
+        let shoulders = Physique::HIP + Physique::SHOULDER;
+        let hanging = glove(1.0, still()).y;
+        // From the point the ball is behind his head onward. Earlier than
+        // that he is still taking it back, and the deepest part of a long
+        // throw's wind-up really does drop to about shoulder height with the
+        // ball half a metre behind him.
+        for stage in [-0.6f32, -0.3, 0.0, 0.3] {
+            let gait = tossing(stage);
+            let (left, right) = (glove(-1.0, gait), glove(1.0, gait));
+            assert!(
+                (left.x + right.x).abs() < 0.02 && (left.y - right.y).abs() < 0.02,
+                "hands doing different things at {stage}: {left:?} and {right:?}"
+            );
+            assert!(
+                left.y > shoulders,
+                "the throw goes round below his shoulder at {stage}: {left:?}"
+            );
+        }
+        // And across the whole sweep — including the blends into and out of
+        // the run cycle at each end — the hands never drop below where they
+        // hang anyway. Anything lower is an underarm bowl, which is what a
+        // scalar interpolation taking the short way round produces.
+        for step in 0..=40 {
+            let stage = -1.0 + step as f32 / 20.0;
+            let hands = glove(1.0, tossing(stage));
+            assert!(
+                hands.y > hanging - 0.01,
+                "underarm at {stage}: {hands:?}, hanging at {hanging}"
+            );
+        }
+        // Feet planted throughout: it is taken standing still, and both of
+        // them stay on the grass.
+        for stage in [-0.9f32, -0.3, 0.3, 0.9] {
+            let gait = tossing(stage);
+            for side in [-1.0f32, 1.0] {
+                assert!(
+                    boot(side, gait).y > -0.01,
+                    "boot through the turf at {stage}"
+                );
+            }
+        }
+        // Over the top of him: taken back behind the head, up over it, and
+        // well in front by the release.
+        assert!(glove(1.0, tossing(-0.8)).z < -0.35, "not taken back");
+        assert!(
+            glove(1.0, tossing(-0.3)).y > crown(tossing(-0.3)).y,
+            "the ball never gets above his head"
+        );
+        assert!(
+            glove(1.0, tossing(0.6)).z > glove(1.0, tossing(-0.8)).z + 0.6,
+            "the ball never leaves him"
+        );
+    }
+
+    /// Neither of them touches anybody who is not making it, whatever the
+    /// swing says — `swing` is written every frame for the whole squad, so a
+    /// term that ignored its own amplitude would put twenty-two players
+    /// permanently mid-header.
+    #[test]
+    fn the_amplitudes_gate_the_new_strikes() {
+        let mut idle = still();
+        idle.swing = -0.5;
+        for part in [crown(idle), glove(1.0, idle), boot(1.0, idle)] {
+            assert!((part - part).length() < 1e-6);
+        }
+        assert!((crown(idle) - crown(still())).length() < 1e-4);
+        assert!((glove(1.0, idle) - glove(1.0, still())).length() < 1e-4);
+    }
+
+    /// The print lies ON the shirt.
+    ///
+    /// A flat rectangle wide enough to carry a number stands nearly four
+    /// centimetres off a torso at its corners, which is what made the number
+    /// read as a card pinned to a footballer. Measured as the ellipse radius
+    /// each vertex lands at: 1.0 is the cloth itself.
+    #[test]
+    fn the_print_lies_on_the_shirt() {
+        for panel in [
+            Sculptor::decal(
+                &BodyParts::SHIRT,
+                BodyParts::NUMBER_AT,
+                BodyParts::NUMBER_HEIGHT,
+                -FRAC_PI_2,
+                BodyParts::NUMBER_ARC,
+                BodyParts::PRINT_LIFT,
+            ),
+            Sculptor::decal(
+                &BodyParts::SHIRT,
+                BodyParts::NAME_AT,
+                BodyParts::NAME_HEIGHT,
+                -FRAC_PI_2,
+                BodyParts::NAME_ARC,
+                BodyParts::PRINT_LIFT,
+            ),
+        ] {
+            let positions = panel
+                .attribute(Mesh::ATTRIBUTE_POSITION)
+                .and_then(|values| values.as_float3())
+                .expect("panel has positions")
+                .to_vec();
+            for point in &positions {
+                let shirt = Sculptor::section(&BodyParts::SHIRT, point[1]);
+                let radius =
+                    Vec2::new(point[0] / shirt.x, (point[2] - shirt.offset) / shirt.z).length();
+                assert!(
+                    (1.0..1.06).contains(&radius),
+                    "{point:?} sits at {radius} of the shirt's own radius"
+                );
+                // On the BACK of it, which is where print goes.
+                assert!(point[2] < shirt.offset, "print on the front: {point:?}");
+            }
+            // And it faces outward, or it is drawn from inside the player.
+            let normals = panel
+                .attribute(Mesh::ATTRIBUTE_NORMAL)
+                .and_then(|values| values.as_float3())
+                .expect("panel has normals");
+            let outward = normals.iter().filter(|normal| normal[2] < -0.5).count();
+            assert!(
+                outward > normals.len() / 2,
+                "the panel is wound inside out: {outward} of {} face backwards",
+                normals.len()
+            );
+        }
+    }
+
+    /// The face texture is laid out against the skull it wraps, and the front
+    /// of that skull is a quarter of the way round the lathe.
+    ///
+    /// The single crossing between the mesh and the paint. Get it wrong and a
+    /// squad takes the field with its eyes on the sides of its heads, which no
+    /// amount of care inside the texture generator can catch.
+    #[test]
+    fn the_face_goes_on_the_front() {
+        let head = Sculptor::part_at(&BodyParts::SKULL, Sculptor::HEAD_SIDES);
+        let positions = head
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .and_then(|values| values.as_float3())
+            .expect("head has positions")
+            .to_vec();
+        let uvs = match head.attribute(Mesh::ATTRIBUTE_UV_0) {
+            Some(VertexAttributeValues::Float32x2(values)) => values.clone(),
+            _ => panic!("head has no texture coordinates"),
+        };
+
+        // The vertex at eye level that sticks out furthest FORWARD is the
+        // middle of the face, and the texture puts the face at u = 0.25.
+        let layout = BodyParts::face_layout();
+        let mut front = (f32::MIN, 0.0f32);
+        for (point, uv) in positions.iter().zip(&uvs) {
+            if (point[1] - layout.eyes).abs() < 0.004 && point[2] > front.0 {
+                front = (point[2], uv[0]);
+            }
+        }
+        assert!(
+            (front.1 - 0.25).abs() < 0.02,
+            "the front of the head is at u = {}, not 0.25",
+            front.1
+        );
+
+        // And `v` climbs with the model, which is why the texture is written
+        // from the crown down.
+        let mut lowest = (f32::MAX, 0.0f32);
+        let mut highest = (f32::MIN, 0.0f32);
+        for (point, uv) in positions.iter().zip(&uvs) {
+            if point[1] < lowest.0 {
+                lowest = (point[1], uv[1]);
+            }
+            if point[1] > highest.0 {
+                highest = (point[1], uv[1]);
+            }
+        }
+        assert!(lowest.1 < 0.01 && highest.1 > 0.99);
+        assert!((lowest.0 - layout.foot).abs() < 1e-4);
+        assert!((highest.0 - (layout.foot + layout.span)).abs() < 1e-4);
+    }
+
+    /// Every feature the texture draws is somewhere the skull actually is, in
+    /// the order a face has them.
+    #[test]
+    fn the_features_are_in_the_right_order() {
+        let layout = BodyParts::face_layout();
+        assert!(layout.chin < layout.mouth);
+        assert!(layout.mouth < layout.nostrils);
+        assert!(layout.nostrils < layout.eyes);
+        assert!(layout.eyes < layout.brow);
+        assert!(layout.brow < layout.hairline);
+        assert!(layout.hairline < layout.foot + layout.span);
+        // The cheek half-width is what turns an angle into a distance across
+        // the face, so it has to be the skull's, at eye level.
+        assert!((layout.cheek - Sculptor::section(&BodyParts::SKULL, layout.eyes).x).abs() < 1e-6);
+        // A face is about a fifth narrower than the head is deep, which is
+        // what stops it reading as a barrel with eyes on it.
+        let widest = BodyParts::SKULL
+            .iter()
+            .fold(0.0f32, |widest, ring| widest.max(ring.x));
+        let deepest = BodyParts::SKULL
+            .iter()
+            .fold(0.0f32, |deepest, ring| deepest.max(ring.z));
+        assert!(widest < deepest * 0.95, "{widest} across by {deepest} deep");
+    }
+
+    /// The nose stands off the face and the ears off the sides, and neither of
+    /// them floats clear of the head it belongs to.
+    #[test]
+    fn the_nose_and_ears_stand_proud() {
+        let tip = BodyParts::NOSE_AT + Vec3::new(0.0, -0.022, 0.015 + 0.019);
+        let face = Sculptor::section(&BodyParts::SKULL, tip.y);
+        assert!(
+            tip.z - (face.offset + face.z) > 0.012,
+            "the nose is inside the face: {} vs {}",
+            tip.z,
+            face.offset + face.z
+        );
+        // Its root is buried, or there is a hole where it joins.
+        let root = BodyParts::NOSE_AT + Vec3::new(0.0, 0.030, -0.011);
+        let bridge = Sculptor::section(&BodyParts::SKULL, root.y);
+        assert!(root.z < bridge.offset + bridge.z, "the nose floats off");
+
+        let ear = Sculptor::section(&BodyParts::SKULL, BodyParts::EAR_AT.y);
+        let out = BodyParts::EAR_AT.x + 0.009;
+        assert!(out > ear.x + 0.004, "ears flush with the skull");
+        assert!(BodyParts::EAR_AT.x < ear.x, "ears hanging in mid-air");
+    }
+
+    /// A cap of hair leaves a forehead, and the line it leaves it at is the
+    /// one the face texture shades to meet.
+    ///
+    /// The set-back fades with height precisely so that this crossing lands
+    /// somewhere a hairline belongs; a constant offset either buries the hair
+    /// to the crown or sits it down over the eyebrows.
+    #[test]
+    fn the_hair_leaves_a_hairline() {
+        let layout = BodyParts::face_layout();
+        // The three caps, fullest last. Written out here rather than read back
+        // off the meshes because what is being checked is the recipe.
+        for (index, &(from, swell, recede)) in [
+            (0.098f32, 0.005f32, 0.0426f32),
+            (0.090, 0.009, 0.0518),
+            (0.082, 0.017, 0.0586),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let rings = BodyParts::cap_rings(from, swell, recede);
+            // Where the cap comes out through the skin, straight up the front
+            // of the head. Searched from the brow, because a fringe below that
+            // is hair over the eyes.
+            let emerges = (0..300)
+                .map(|step| layout.brow + step as f32 * 0.0005)
+                .find(|&y| {
+                    let hair = Sculptor::section(&rings, y);
+                    let skull = Sculptor::section(&BodyParts::SKULL, y);
+                    hair.offset + hair.z > skull.offset + skull.z
+                })
+                .unwrap_or_else(|| panic!("cap {index} never comes out at the front"));
+            // At or below the line the face texture shades to — never above
+            // it, which would leave a band of lit forehead with the hair
+            // starting somewhere else entirely. Below is free: the shading
+            // simply ends up underneath the cap.
+            assert!(
+                emerges < layout.hairline + 0.008,
+                "cap {index} starts at {emerges}, above the shaded line at {}",
+                layout.hairline
+            );
+            assert!(
+                emerges > layout.brow + 0.004,
+                "cap {index} comes down over the eyebrows, at {emerges}"
+            );
+            // And it covers the sides from the top of the ear up, which is
+            // where hair grows — without hanging out behind the skull, which
+            // is what setting the whole ring back used to do.
+            // Nowhere above the hairline does the skull come back out through
+            // the cap. A ring of bare scalp at the crown — which a cap that
+            // closed in one shallow cone left — is a tonsure, and it is
+            // invisible in every test that only looks at the front.
+            for step in 0..=60 {
+                let y = emerges + (0.2549 - emerges) * step as f32 / 60.0;
+                let hair = Sculptor::section(&rings, y);
+                let skull = Sculptor::section(&BodyParts::SKULL, y);
+                for turn in 0..12 {
+                    let angle = turn as f32 * PI / 6.0;
+                    // Where the skull's surface sits inside the cap's ellipse:
+                    // under 1 is covered, over 1 is hair growing out of a
+                    // scalp that is showing through it.
+                    let across = angle.cos() * skull.x / hair.x.max(1e-4);
+                    let along =
+                        (skull.offset + angle.sin() * skull.z - hair.offset) / hair.z.max(1e-4);
+                    assert!(
+                        across * across + along * along < 1.0,
+                        "cap {index} leaves scalp showing at y {y}, {angle} rad round"
+                    );
+                }
+            }
+
+            let temple = Sculptor::section(&rings, BodyParts::EAR_AT.y + 0.030);
+            let skull = Sculptor::section(&BodyParts::SKULL, BodyParts::EAR_AT.y + 0.030);
+            assert!(temple.x > skull.x, "cap {index} is bald at the temple");
+            assert!(
+                temple.offset - temple.z > skull.offset - skull.z - swell - 0.002,
+                "cap {index} is a mullet: it reaches {} behind a skull that stops at {}",
+                temple.offset - temple.z,
+                skull.offset - skull.z
+            );
+        }
     }
 
     /// The man on the ball does not run like the twenty-one who have not got
