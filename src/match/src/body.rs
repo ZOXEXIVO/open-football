@@ -231,6 +231,30 @@ impl Physique {
     /// come out of the same numbers — move one of the three and the gloves
     /// close on empty air.
     pub const CRADLE: Vec3 = Vec3::new(0.0, 1.20, 0.32);
+
+    /// And where he holds it at full stretch, in the same space.
+    ///
+    /// Same discipline as [`Physique::CRADLE`], worked down the arm from
+    /// [`Joint::REACH_SHOULDER`] / [`Joint::REACH_ELBOW`] with the claim
+    /// closing the gloves to [`Joint::CLAIM_SPREAD`]: those put the wrists at
+    /// (±0.072, 1.953, 0.054), and the ball sits a glove's length further
+    /// along the arms, between the palms.
+    ///
+    /// Without it the ball stayed at the chest point through a diving catch —
+    /// a keeper thrown full length with the ball hanging in mid-air where his
+    /// sternum would have been if he had stayed on his feet.
+    const CATCH: Vec3 = Vec3::new(0.0, 2.03, 0.06);
+    /// How far the claim travels across his body as he turns onto the ball,
+    /// in metres at a dive flat across the goal. The chest twist
+    /// ([`Joint::DIVE_TWIST`]) carries both shoulders round with it, and the
+    /// gloves go too.
+    const CATCH_TURN: f32 = 0.13;
+
+    /// Where a ball claimed at full stretch is drawn, for a dive with this
+    /// much of a leading side. See [`Gait::lead`].
+    pub fn catch(lead: f32) -> Vec3 {
+        Self::CATCH + Vec3::X * (lead.clamp(-1.0, 1.0) * Self::CATCH_TURN)
+    }
 }
 
 /// Every mesh a footballer is made of, built once and shared by all
@@ -244,6 +268,10 @@ pub struct BodyParts {
     sleeve: Handle<Mesh>,
     forearm: Handle<Mesh>,
     hand: Handle<Mesh>,
+    /// A keeper's glove. Its own mesh rather than a scaled hand: the whole
+    /// point of the thing is that it is broad and flat, and the two of them
+    /// splayed at the end of a dive are what says *catching* from the stand.
+    glove: Handle<Mesh>,
     shorts_leg: Handle<Mesh>,
     thigh: Handle<Mesh>,
     shin: Handle<Mesh>,
@@ -359,6 +387,19 @@ impl BodyParts {
                 Ring::round(-0.260, 0.027),
             ])),
             hand: meshes.add(Sculptor::ellipsoid(Vec3::new(0.035, 0.050, 0.028))),
+            // Cuff, back of the hand, then the padded palm out to the
+            // fingertips. Half again as long as a bare hand and nearly twice
+            // as wide, which is what a keeper's glove is: at this range the
+            // pair of them are the only part of him the eye actually tracks
+            // through a save.
+            glove: meshes.add(Sculptor::part(&[
+                Ring::oval(0.055, 0.036, 0.030),
+                Ring::oval(0.020, 0.044, 0.034),
+                Ring::oval(-0.010, 0.056, 0.036),
+                Ring::oval(-0.060, 0.062, 0.034),
+                Ring::oval(-0.105, 0.060, 0.030),
+                Ring::oval(-0.135, 0.048, 0.024),
+            ])),
             // The leg of the shorts: it belongs to the thigh, not to the hips.
             shorts_leg: meshes.add(Sculptor::part(&[
                 Ring::oval(0.040, 0.114, 0.104),
@@ -413,6 +454,11 @@ pub enum Limb {
     Head,
     Shoulder,
     Elbow,
+    /// The hand. Only ever visibly articulated on a goalkeeper — but a hand
+    /// welded in line with its forearm is exactly what makes a save read as a
+    /// mannequin being swung about, so the joint exists for everybody and the
+    /// run cycle simply asks very little of it.
+    Wrist,
     Hip,
     Knee,
 }
@@ -459,6 +505,10 @@ pub struct Gait {
     /// Where he is looking, as a yaw off his own facing in radians. A player
     /// watches the ball; his head does not sit welded to his chest.
     pub look: f32,
+    /// And how far up or down, in radians: positive when the ball is above
+    /// his eyeline. Without it a keeper tracks a cross along the floor and
+    /// then catches it above his head without ever having looked at it.
+    pub look_pitch: f32,
     /// 0 for everybody all match; ramps to 1 for the one goalkeeper who has
     /// the ball in his gloves.
     ///
@@ -468,19 +518,79 @@ pub struct Gait {
     /// brings the forearms up and settles the chest so it can sit in his
     /// hands instead.
     pub carry: f32,
-    /// 0..1: how far into a full-stretch dive. Only ever non-zero for a
+    /// 0..1: he is off his feet and committed. Only ever non-zero for a
     /// goalkeeper — see [`crate::actors::Actors::animate`] for how a dive is
     /// told from a run.
     ///
     /// The topple itself is not here: a body going horizontal is a rotation
     /// of the WHOLE figure and belongs on [`Carriage`]. What this drives is
-    /// everything the limbs do differently once he has left his feet — legs
-    /// together and straight instead of running, chest out of its lean.
+    /// everything the limbs do differently once he has left his feet — the
+    /// run cycle cut dead rather than faded out.
+    ///
+    /// On the instant, and held long after he lands: a keeper does not stand
+    /// straight back up.
     pub dive: f32,
+    /// 0..1: how far through the extension he is, ramped across the flight.
+    ///
+    /// The single most important number in a save, and the one this rig used
+    /// not to have. `dive` says he has left the ground, and it is true within
+    /// a frame of take-off; a man in the air is then in exactly one pose for
+    /// the next four hundred milliseconds, which is most of what made a save
+    /// look like a photograph being slid across the grass. Measured off a
+    /// recorded match, a keeper is airborne for 390–660 ms with a median of
+    /// 450 — long enough that every part of the extension has to be drawn:
+    /// he leaves the ground gathered, opens out, and is at full stretch by
+    /// the time he arrives.
+    ///
+    /// Ratchets: it climbs over the flight and is given back only by the
+    /// recovery, because nobody folds himself up again mid-air.
+    pub stretch: f32,
+    /// 0..1: how long he has been down since the landing.
+    ///
+    /// The pose he lands in is not the pose he lies in. This is what takes
+    /// him from full stretch to a man curled on his side with the ball
+    /// pulled in — and it is scaled by `dive`, so it goes away as he gets up
+    /// rather than pinning him to the turf.
+    pub grounded: f32,
+    /// −1..1: which way he went, as a share of his travel across his own
+    /// body. ±1 is a dive flat across the goal, 0 one straight down the
+    /// pitch at a striker's feet.
+    ///
+    /// Nothing in this rig used to know, so both arms and both legs did the
+    /// same thing as each other — the superman, and the one pose no
+    /// goalkeeper has ever adopted. A save has a lead side: the top arm goes
+    /// through the ball, the bottom one trails, the underneath leg stays
+    /// straight and the top one folds.
+    pub lead: f32,
     /// 0..1: both arms thrown out to their full length, for the dive and for
     /// the standing leap at a cross. Held apart from `dive` because a keeper
     /// jumping at a corner reaches without toppling at all.
     pub reach: f32,
+    /// 0..1: on his toes with a shot on — knees bent, weight forward, gloves
+    /// up and out.
+    ///
+    /// A keeper spends the overwhelming majority of a match on his feet
+    /// (measured: `Standing` alone is 8770 s of one recording against 48 s
+    /// of `Diving`), and until now he spent all of it standing exactly like
+    /// a centre-forward waiting for a throw-in. The set position is the
+    /// posture the save comes out of, so a dive with nothing in front of it
+    /// arrives from nowhere.
+    pub set: f32,
+    /// 0..1: he has the ball, at full stretch, in the air.
+    ///
+    /// The difference between a save and a catch, and they do not look alike:
+    /// a keeper covering his goal has his gloves half a metre apart because
+    /// he is trying to be in two places, and one who has actually got the
+    /// thing brings both hands onto it. Without this, a ball claimed at full
+    /// stretch hangs between two gloves that never close.
+    pub claimed: f32,
+    /// 0..1: an outfielder off the ground — a header, not a save.
+    ///
+    /// Its own signal because the sprawl is not one: twelve outfield players
+    /// in a recorded match leave the turf, up to 1.13 m, and every one of
+    /// them was being drawn toppling sideways with both arms over his head
+    /// like a keeper going full length.
+    pub jump: f32,
 }
 
 impl Joint {
@@ -520,24 +630,104 @@ impl Joint {
     /// A little outward roll at the shoulder, so the gloves close on the sides
     /// of the ball rather than inside it.
     const CRADLE_SPREAD: f32 = 0.03;
-    /// The reach, as rotations in the shoulder's and elbow's own frames. Both
-    /// arms go past the head and the elbows come nearly straight — a keeper at
-    /// full stretch is measured from his fingertips, and every degree left in
-    /// the elbow is a centimetre he does not cover.
+    /// And the wrists under it: the gloves come up around the ball rather
+    /// than hanging off the ends of the forearms.
+    const CRADLE_WRIST: f32 = -1.15;
+    /// Where the arms are on the way up, before the extension opens them
+    /// out. A keeper leaves the ground with his elbows still bent and his
+    /// hands in front of his chest — the reach happens in the air, which is
+    /// the whole reason [`Gait::stretch`] exists.
+    const LAUNCH_SHOULDER: f32 = -1.05;
+    const LAUNCH_ELBOW: f32 = -1.00;
+    /// The reach, as rotations in the shoulder's and elbow's own frames. The
+    /// leading arm goes past the head and its elbow comes nearly straight — a
+    /// keeper at full stretch is measured from his fingertips, and every
+    /// degree left in the elbow is a centimetre he does not cover.
     ///
     /// Read together with the topple on [`Carriage`]: rolled onto his side,
     /// arms along his own up-axis point ACROSS the goal, which is what makes
     /// the same two angles serve both the dive and the standing leap.
-    const REACH_SHOULDER: f32 = -2.42;
-    const REACH_ELBOW: f32 = -0.09;
+    const REACH_SHOULDER: f32 = -2.48;
+    const REACH_ELBOW: f32 = -0.07;
     /// Hands apart rather than together — he is covering an area, not
     /// catching a pass.
-    const REACH_SPREAD: f32 = 0.16;
-    /// The legs in a dive: trailing slightly behind the hips and all but
-    /// straight. A footballer in the air has nothing to push against, so the
-    /// run cycle has to stop dead rather than fade out over a stride.
+    ///
+    /// Applied with the side NEGATED, unlike every other spread in this rig,
+    /// and it has to be: a roll about +Z carries a hanging arm outward and a
+    /// RAISED one inward, because the arm has swung through the vertical and
+    /// taken its sense of "out" with it. Signed like the others, this pulled
+    /// the two gloves in to 11 cm apart — inside the shoulders, which is the
+    /// one thing a keeper covering his goal is not doing.
+    const REACH_SPREAD: f32 = 0.30;
+    /// What the TRAILING arm does instead, as offsets on the three above.
+    ///
+    /// Both arms at full stretch is the pose from the front of a cereal box.
+    /// The real one is asymmetric: the top arm is thrown through the ball,
+    /// and the bottom one stays out at shoulder height with the elbow soft —
+    /// partly for balance, mostly because it is the one that hits the ground
+    /// first and he knows it.
+    const TRAIL_SHOULDER: f32 = 0.80;
+    const TRAIL_ELBOW: f32 = -0.55;
+    const TRAIL_SPREAD: f32 = 0.24;
+    /// And what the same two arms do once they have the ball: brought in off
+    /// the spread until the gloves are a ball's width apart, and both of
+    /// them, because the trailing arm comes onto it too.
+    const CLAIM_SPREAD: f32 = -0.22;
+    /// Gloves at full stretch: broken back off the forearm and turned out, so
+    /// the palms face what is coming rather than each other.
+    const REACH_WRIST: f32 = -0.55;
+    const REACH_WRIST_SPREAD: f32 = 0.40;
+    /// The legs in a dive: trailing behind the hips and all but straight. A
+    /// footballer in the air has nothing to push against, so the run cycle
+    /// has to stop dead rather than fade out over a stride.
     const DIVE_HIP: f32 = 0.22;
     const DIVE_KNEE: f32 = 0.12;
+    /// And how the two of them differ, scaled by how square the dive is. The
+    /// leg on the side he is going to is the one he pushed off: it finishes
+    /// straight and trailing. The far one folds up over it.
+    const DIVE_SCISSOR_HIP: f32 = 0.34;
+    const DIVE_SCISSOR_KNEE: f32 = 1.35;
+    /// The chest in flight: arched away from the ball and turned onto it.
+    ///
+    /// The torso used to be cancelled outright by a dive — mathematically
+    /// upright, which reads as a shop dummy laid on its side. A keeper in the
+    /// air is the most extended a footballer ever gets: the spine is in
+    /// extension and the leading shoulder is rotated hard through the line of
+    /// the ball.
+    const DIVE_ARCH: f32 = -0.30;
+    const DIVE_TWIST: f32 = 0.38;
+    /// And on the grass: the curl over the impact, the legs coming up, the
+    /// arms pulling in. Landing is not a freeze-frame of the flight.
+    const DOWN_CURL: f32 = 0.34;
+    const DOWN_HIP: f32 = -0.58;
+    const DOWN_KNEE: f32 = 1.10;
+    const DOWN_SHOULDER: f32 = -0.85;
+    const DOWN_SPREAD: f32 = 0.04;
+    const DOWN_ELBOW: f32 = -1.35;
+    /// The set: knees bent, chest over the toes, gloves up and out in front.
+    const SET_HIP: f32 = -0.30;
+    const SET_KNEE: f32 = 0.55;
+    const SET_LEAN: f32 = 0.26;
+    /// How far the whole figure settles as those knees bend, in metres.
+    ///
+    /// Not a style choice — it is what the leg angles above cost in height,
+    /// and without it a crouching keeper's boots hang three and a half
+    /// centimetres over the grass.
+    const SET_DROP: f32 = 0.035;
+    const SET_SHOULDER: f32 = -0.62;
+    const SET_SPREAD: f32 = 0.40;
+    const SET_ELBOW: f32 = -1.10;
+    const SET_WRIST: f32 = -0.40;
+    /// An outfielder in the air: knees folded under him, arms out from his
+    /// sides for balance. A header, and nothing like a save.
+    const JUMP_HIP: f32 = -0.22;
+    const JUMP_KNEE: f32 = 1.15;
+    const JUMP_SHOULDER: f32 = -0.62;
+    const JUMP_SPREAD: f32 = 0.52;
+    const JUMP_ELBOW: f32 = -0.50;
+    /// How much of a hand's rest angle is this particular player's, so
+    /// twenty-two pairs of hands are not all cocked identically.
+    const WRIST_REST: f32 = 0.12;
 
     fn new(owner: Entity, limb: Limb, side: f32, origin: Vec3) -> Self {
         Joint {
@@ -562,7 +752,9 @@ impl Joint {
                 // Breathing, for a player who is not running. Fades out as he
                 // does, where the stride bob takes over.
                 let breathe = Self::BREATHE * (1.0 - gait.run) * (0.5 + 0.5 * gait.idle.sin());
-                self.origin + Vec3::Y * (bob + breathe)
+                // And the settle onto bent knees, which is a real loss of
+                // height rather than a pose: see [`Joint::SET_DROP`].
+                self.origin + Vec3::Y * (bob + breathe - Self::SET_DROP * gait.set)
             }
             _ => self.origin,
         }
@@ -586,6 +778,21 @@ impl Joint {
         // one. Fades out the moment he starts running.
         let standing = 1.0 - gait.run;
         let weight = (gait.idle * 0.5).sin() * standing;
+
+        // Which of a pair this limb is, relative to the way he went: +1 on
+        // the leading side of the dive, −1 on the trailing side, 0 for a man
+        // going straight forward — and 0 for everybody who is not diving,
+        // since `lead` is only ever set as a keeper leaves the ground.
+        let leading = (self.side * gait.lead).clamp(-1.0, 1.0);
+        // How much of the asymmetry this limb takes. Scaled by how sideways
+        // the dive was, so a smother at a striker's feet stays square.
+        // Squared off again once he has the ball: both arms come onto it.
+        let trailing = (1.0 - leading) * 0.5 * gait.lead.abs() * (1.0 - gait.claimed);
+        // The arms on the grass. Held apart from `grounded` because what they
+        // do down there depends entirely on whether he came up with the ball:
+        // with it, he curls around it and the cradle already has them; without
+        // it, they come in under him and take his weight.
+        let bracing = gait.grounded * (1.0 - gait.carry);
 
         match self.limb {
             // Hips counter-rotate against the shoulders — the thing that
@@ -618,10 +825,28 @@ impl Joint {
                 // A diving keeper comes out of it for the same reason and one
                 // more: the lean is the forward pitch of a man driving off the
                 // ground, and there is no ground under him.
-                let settle = (1.0 - gait.carry) * (1.0 - gait.dive);
-                Quat::from_rotation_x(lean * (1.0 + 0.16 * gait.signature) * settle)
+                let settle = (1.0 - gait.carry) * (1.0 - gait.dive) * (1.0 - gait.set);
+                let running = Quat::from_rotation_x(lean * (1.0 + 0.16 * gait.signature) * settle)
                     * Quat::from_rotation_y(-0.14 * gait.run * gait.phase.sin() * settle)
-                    * Quat::from_rotation_z(roll * settle)
+                    * Quat::from_rotation_z(roll * settle);
+                // Then, in order: the set's forward lean over bent knees, the
+                // arch and the turn onto the ball in flight, and the curl
+                // over the landing. Each one is scaled by its own signal, so
+                // for twenty-one players out of twenty-two every term after
+                // the first is identity.
+                running
+                    * Quat::from_rotation_x(Self::SET_LEAN * gait.set)
+                    * Quat::from_rotation_x(
+                        Self::DIVE_ARCH * gait.stretch * (1.0 - gait.grounded),
+                    )
+                    * Quat::from_rotation_y(
+                        Self::DIVE_TWIST * gait.lead * gait.stretch * (1.0 - 0.5 * gait.grounded),
+                    )
+                    * Quat::from_rotation_x(Self::DOWN_CURL * gait.grounded)
+                    // An outfielder's leap is a much smaller version of the
+                    // same arch, and none of the turn: he is going up at a
+                    // ball, not across a goal.
+                    * Quat::from_rotation_x(Self::DIVE_ARCH * 0.45 * gait.jump)
             }
             // He watches the ball. The head hangs off the torso, so this yaw
             // is already relative to his chest — turning it is the single
@@ -629,9 +854,21 @@ impl Joint {
             // without it twenty-two players stare rigidly down their own
             // running line all match.
             //
-            // Still kept level in pitch: a runner leans from the hips and
-            // looks up the pitch, not at his own boots.
-            Limb::Head => Quat::from_rotation_y(gait.look) * Quat::from_rotation_x(-lean * 0.75),
+            // Still kept level in pitch against his own forward lean — a
+            // runner leans from the hips and looks up the pitch, not at his
+            // own boots — and then tipped onto the ball, which for a keeper
+            // is most of what a save is: he does not take his eyes off it,
+            // and up to now he never once looked up at one.
+            //
+            // The twist is subtracted back out because the head hangs off the
+            // torso: without that, rotating the chest onto the ball in a dive
+            // swings the face straight past it.
+            Limb::Head => {
+                Quat::from_rotation_y(
+                    gait.look
+                        - Self::DIVE_TWIST * gait.lead * gait.stretch * (1.0 - 0.5 * gait.grounded),
+                ) * Quat::from_rotation_x(-lean * 0.75 - gait.look_pitch)
+            }
             Limb::Shoulder => {
                 // Arms swing against the leg on the same side, and are carried
                 // wider the harder the player is running — and wider again, or
@@ -646,54 +883,140 @@ impl Joint {
                 let arm = Self::blend(Self::ARM_SWING, gait.run) * swing * asymmetry + drift;
                 let swinging =
                     Quat::from_rotation_z(self.side * carriage) * Quat::from_rotation_x(arm);
-                let holding = Self::held(
+                let ready = Self::held(
                     swinging,
+                    Quat::from_rotation_z(self.side * Self::SET_SPREAD)
+                        * Quat::from_rotation_x(Self::SET_SHOULDER),
+                    gait.set,
+                );
+                let leaping = Self::held(
+                    ready,
+                    Quat::from_rotation_z(self.side * Self::JUMP_SPREAD)
+                        * Quat::from_rotation_x(Self::JUMP_SHOULDER),
+                    gait.jump,
+                );
+                let holding = Self::held(
+                    leaping,
                     Quat::from_rotation_z(self.side * Self::CRADLE_SPREAD)
                         * Quat::from_rotation_x(Self::CRADLE_SHOULDER),
                     gait.carry,
                 );
-                // Reach last, so a keeper who takes the ball cleanly at the
-                // top of a leap has his arms come down into the cradle rather
-                // than stay up around a ball he is already holding.
-                Self::held(
+                // The reach itself, opening out across the flight rather than
+                // arriving whole: gathered at take-off, past the head by the
+                // apex — and this arm only gets all the way there if it is
+                // the leading one.
+                let shoulder = Self::LAUNCH_SHOULDER
+                    + (Self::REACH_SHOULDER - Self::LAUNCH_SHOULDER) * gait.stretch
+                    + Self::TRAIL_SHOULDER * trailing * gait.stretch;
+                let spread = (Self::REACH_SPREAD + Self::TRAIL_SPREAD * trailing)
+                    * (1.0 - gait.claimed)
+                    + Self::CLAIM_SPREAD * gait.claimed;
+                // Reach after the cradle, so a keeper who takes the ball
+                // cleanly at the top of a leap has his arms come down into
+                // the hold rather than stay up around a ball he already has.
+                let out = Self::held(
                     holding,
-                    Quat::from_rotation_z(self.side * Self::REACH_SPREAD)
-                        * Quat::from_rotation_x(Self::REACH_SHOULDER),
+                    Quat::from_rotation_z(-self.side * spread) * Quat::from_rotation_x(shoulder),
                     gait.reach,
+                );
+                // And the landing last of all: whatever he was doing up
+                // there, the arms come in as he hits the grass.
+                Self::held(
+                    out,
+                    Quat::from_rotation_z(self.side * Self::DOWN_SPREAD)
+                        * Quat::from_rotation_x(Self::DOWN_SHOULDER),
+                    bracing,
                 )
             }
             // Elbow carriage is the most individual thing about a runner:
             // some hold them almost straight, some at a right angle.
-            Limb::Elbow => Self::held(
-                Self::held(
-                    Quat::from_rotation_x(
-                        -Self::blend(Self::ELBOW_FLEX, gait.run) * (1.0 + 0.24 * gait.signature)
-                            - 0.18 * gait.run * swing,
-                    ),
+            Limb::Elbow => {
+                let running = Quat::from_rotation_x(
+                    -Self::blend(Self::ELBOW_FLEX, gait.run) * (1.0 + 0.24 * gait.signature)
+                        - 0.18 * gait.run * swing,
+                );
+                let ready = Self::held(running, Quat::from_rotation_x(Self::SET_ELBOW), gait.set);
+                let leaping = Self::held(ready, Quat::from_rotation_x(Self::JUMP_ELBOW), gait.jump);
+                let holding = Self::held(
+                    leaping,
                     Quat::from_rotation_x(Self::CRADLE_ELBOW),
                     gait.carry,
-                ),
-                Quat::from_rotation_x(Self::REACH_ELBOW),
-                gait.reach,
-            ),
-            Limb::Hip => Self::held(
-                Quat::from_rotation_x(-Self::blend(Self::HIP_SWING, gait.run) * swing),
-                Quat::from_rotation_x(Self::DIVE_HIP),
-                gait.dive,
-            ),
+                );
+                let elbow = Self::LAUNCH_ELBOW
+                    + (Self::REACH_ELBOW - Self::LAUNCH_ELBOW) * gait.stretch
+                    + Self::TRAIL_ELBOW * trailing * gait.stretch;
+                let out = Self::held(holding, Quat::from_rotation_x(elbow), gait.reach);
+                Self::held(out, Quat::from_rotation_x(Self::DOWN_ELBOW), bracing)
+            }
+            // The hands. Loose on the run, up and open in the set, broken
+            // back and turned out at full stretch, cupped under a ball he has
+            // claimed. A glove that stays in line with its forearm reads as
+            // the end of a stick, however good the arm above it is.
+            Limb::Wrist => {
+                let loose = Quat::from_rotation_x(
+                    Self::WRIST_REST * (1.0 + 0.5 * gait.signature * self.side),
+                );
+                let ready = Self::held(
+                    loose,
+                    Quat::from_rotation_z(self.side * 0.28)
+                        * Quat::from_rotation_x(Self::SET_WRIST),
+                    gait.set,
+                );
+                let holding = Self::held(
+                    ready,
+                    Quat::from_rotation_z(-self.side * 0.20)
+                        * Quat::from_rotation_x(Self::CRADLE_WRIST),
+                    gait.carry,
+                );
+                // Splayed to cover an area, or turned in around a ball he has
+                // actually got hold of.
+                let out = Self::held(
+                    holding,
+                    Quat::from_rotation_z(
+                        self.side * Self::REACH_WRIST_SPREAD * (1.0 - 2.0 * gait.claimed),
+                    ) * Quat::from_rotation_x(Self::REACH_WRIST),
+                    gait.reach,
+                );
+                Self::held(out, Quat::from_rotation_x(Self::CRADLE_WRIST), bracing)
+            }
+            Limb::Hip => {
+                let running =
+                    Quat::from_rotation_x(-Self::blend(Self::HIP_SWING, gait.run) * swing);
+                let ready = Self::held(running, Quat::from_rotation_x(Self::SET_HIP), gait.set);
+                let leaping = Self::held(ready, Quat::from_rotation_x(Self::JUMP_HIP), gait.jump);
+                // In flight the legs trail — the near one straight behind
+                // him because it is the one he pushed off, the far one
+                // swinging up over it.
+                let diving = Self::held(
+                    leaping,
+                    Quat::from_rotation_x(Self::DIVE_HIP + Self::DIVE_SCISSOR_HIP * leading),
+                    gait.dive * gait.stretch,
+                );
+                Self::held(diving, Quat::from_rotation_x(Self::DOWN_HIP), gait.grounded)
+            }
             // Deepest as the leg folds through underneath the player, and all
             // but straight again by the time it reaches out to land. Squaring
             // the curve is what narrows the tuck to that one part of the
             // cycle; a plain cosine leaves the leading leg bent on touchdown,
             // which reads as a stumble rather than a stride.
-            Limb::Knee => Self::held(
-                Quat::from_rotation_x(
+            Limb::Knee => {
+                let running = Quat::from_rotation_x(
                     0.07 + Self::blend(Self::KNEE_FLEX, gait.run)
                         * (0.5 + 0.5 * (leg - 0.5).cos()).powi(2),
-                ),
-                Quat::from_rotation_x(Self::DIVE_KNEE),
-                gait.dive,
-            ),
+                );
+                let ready = Self::held(running, Quat::from_rotation_x(Self::SET_KNEE), gait.set);
+                let leaping = Self::held(ready, Quat::from_rotation_x(Self::JUMP_KNEE), gait.jump);
+                let diving = Self::held(
+                    leaping,
+                    Quat::from_rotation_x(Self::DIVE_KNEE + Self::DIVE_SCISSOR_KNEE * trailing),
+                    gait.dive * gait.stretch,
+                );
+                Self::held(
+                    diving,
+                    Quat::from_rotation_x(Self::DOWN_KNEE),
+                    gait.grounded,
+                )
+            }
         }
     }
 
@@ -739,14 +1062,34 @@ impl Carriage {
     /// out of his own shadow.
     pub const PIVOT: f32 = Physique::HIP;
 
+    /// And where those hips end up once he is all the way over, in metres.
+    ///
+    /// This is the number the dive was missing, and it is the difference
+    /// between a save and a mannequin being spun on a pole. Rotating a body
+    /// about a point fixed at [`Carriage::PIVOT`] means a keeper thrown flat
+    /// is horizontal *at standing hip height*: shoulders at 1.2 m, boots
+    /// half a metre in the air, and no part of him anywhere near the grass —
+    /// for the whole 390–660 ms a recorded dive lasts, and then he lands
+    /// still floating. A man lying on his side has his hips a hand's width
+    /// off the turf, so the pivot has to travel down as the body goes over.
+    ///
+    /// Taken together with the recorded height this also gets the arc right
+    /// for free. A big dive peaks at 0.5 m of recorded lift with the body
+    /// most of the way over, which puts the hips at 0.95 − 0.67·sin(tilt)
+    /// + 0.5 ≈ 0.85 m — full stretch, a metre up, exactly the shape of the
+    /// photograph — and the same expression walks him down to 0.31 m as the
+    /// lift returns to zero, which is a keeper on the ground.
+    const LYING: f32 = 0.32;
+
     /// The transform that tips a figure `pitch` radians over its toes and
     /// `roll` radians onto its side, `lift` metres off the turf, pivoting at
     /// the hips.
     ///
     /// Two axes because a keeper's dive mostly is not the poster one: across
-    /// a recorded match, seven dives in ten travel more up the pitch than
-    /// across it — a man going down at a striker's feet rather than flying
-    /// into a top corner. Roll alone drew every one of those side-on.
+    /// a recorded match, dives divide about evenly between those that travel
+    /// further across the goal and those that travel further up the pitch —
+    /// a man going down at a striker's feet rather than flying into a top
+    /// corner. Roll alone drew every one of those side-on.
     ///
     /// A Bevy `Transform` is translate-rotate-scale, so the pivot cannot be
     /// expressed directly — it is folded into the translation instead, which
@@ -755,7 +1098,15 @@ impl Carriage {
     pub fn placed(pitch: f32, roll: f32, lift: f32) -> Transform {
         let rotation = Quat::from_rotation_x(pitch) * Quat::from_rotation_z(roll);
         let pivot = Vec3::Y * Self::PIVOT;
-        Transform::from_translation(pivot - rotation * pivot + Vec3::Y * lift)
+        // How far from upright the figure has ended up, as the sine of the
+        // angle between its own up-axis and the world's. Off the composed
+        // rotation rather than off either Euler angle, so a dive that is
+        // half across the goal and half up the pitch settles as far as one
+        // that is all of either.
+        let upright = (rotation * Vec3::Y).y.clamp(-1.0, 1.0);
+        let tilt = (1.0 - upright * upright).max(0.0).sqrt();
+        let settle = (Self::PIVOT - Self::LYING) * tilt;
+        Transform::from_translation(pivot - rotation * pivot + Vec3::Y * (lift - settle))
             .with_rotation(rotation)
     }
 }
@@ -768,11 +1119,18 @@ impl Footballer {
     /// and stride. Legs hang from the [`Carriage`] so the torso can lean without
     /// taking the feet with it; arms and head hang from the torso so that they
     /// do.
-    pub fn assemble(commands: &mut Commands, root: Entity, parts: &BodyParts, outfit: &Outfit) {
+    pub fn assemble(
+        commands: &mut Commands,
+        root: Entity,
+        parts: &BodyParts,
+        outfit: &Outfit,
+        keeper: bool,
+    ) {
         let hips = Vec3::new(0.0, Physique::HIP, 0.0);
         let neck = Vec3::new(0.0, Physique::TORSO, 0.0);
         let elbow = Vec3::new(0.0, -Physique::UPPER_ARM, 0.0);
         let knee = Vec3::new(0.0, -Physique::THIGH, 0.0);
+        let wrist = Vec3::new(0.0, -Physique::FOREARM - 0.03, 0.0);
 
         let carriage = commands
             .spawn((
@@ -845,9 +1203,14 @@ impl Footballer {
                                 Transform::from_translation(elbow),
                             ))
                             .with_child((
-                                Mesh3d(parts.hand.clone()),
+                                Joint::new(root, Limb::Wrist, side, wrist),
+                                Mesh3d(if keeper {
+                                    parts.glove.clone()
+                                } else {
+                                    parts.hand.clone()
+                                }),
                                 MeshMaterial3d(outfit.hands.clone()),
-                                Transform::from_xyz(0.0, -Physique::FOREARM - 0.03, 0.0),
+                                Transform::from_translation(wrist),
                             ));
                         });
                 }
@@ -888,5 +1251,339 @@ impl Footballer {
                 });
             }
         });
+    }
+}
+
+/// Forward kinematics over the rig, so the poses above can be checked as
+/// positions rather than as angles.
+///
+/// Every constant in a save is an angle at a joint, and an angle is impossible
+/// to argue about — but "his boots are eleven centimetres under the turf" is
+/// not. These walk the same offsets [`Footballer::assemble`] hangs the meshes
+/// off and call the same [`Joint::pose`] the renderer calls, so a sign error
+/// anywhere in the chain shows up here as a body part in the wrong place.
+#[cfg(test)]
+mod skeleton {
+    use super::*;
+
+    /// A player standing still, with nothing switched on.
+    pub fn still() -> Gait {
+        Gait {
+            phase: 0.0,
+            run: 0.0,
+            signature: 0.0,
+            idle: 0.0,
+            turn: 0.0,
+            look: 0.0,
+            look_pitch: 0.0,
+            carry: 0.0,
+            dive: 0.0,
+            stretch: 0.0,
+            grounded: 0.0,
+            lead: 0.0,
+            claimed: 0.0,
+            reach: 0.0,
+            set: 0.0,
+            jump: 0.0,
+        }
+    }
+
+    fn step(limb: Limb, side: f32, origin: Vec3, gait: Gait) -> Transform {
+        let joint = Joint::new(Entity::from_raw_u32(0).unwrap(), limb, side, origin);
+        Transform::from_translation(joint.place(gait)).with_rotation(joint.pose(gait))
+    }
+
+    /// The glove centre, in the figure's own space — that is, under the
+    /// carriage, which is where [`Physique::CRADLE`] and [`Physique::CATCH`]
+    /// are expressed too.
+    pub fn glove(side: f32, gait: Gait) -> Vec3 {
+        let hips = Vec3::new(0.0, Physique::HIP, 0.0);
+        let shoulder = Vec3::new(side * Physique::SHOULDER_SPREAD, Physique::SHOULDER, 0.0);
+        let elbow = Vec3::new(0.0, -Physique::UPPER_ARM, 0.0);
+        let wrist = Vec3::new(0.0, -Physique::FOREARM - 0.03, 0.0);
+        (step(Limb::Torso, 0.0, hips, gait)
+            * step(Limb::Shoulder, side, shoulder, gait)
+            * step(Limb::Elbow, side, elbow, gait)
+            * step(Limb::Wrist, side, wrist, gait))
+        .translation
+    }
+
+    /// The sole of a boot, in the same space.
+    pub fn boot(side: f32, gait: Gait) -> Vec3 {
+        let hip = Vec3::new(side * Physique::HIP_SPREAD, Physique::HIP, 0.0);
+        let knee = Vec3::new(0.0, -Physique::THIGH, 0.0);
+        let sole = Vec3::new(0.0, -Physique::SHIN + 0.005 - 0.038, 0.035);
+        (step(Limb::Hip, side, hip, gait) * step(Limb::Knee, side, knee, gait))
+            .transform_point(sole)
+    }
+
+    /// And the crown of the head.
+    pub fn crown(gait: Gait) -> Vec3 {
+        let hips = Vec3::new(0.0, Physique::HIP, 0.0);
+        let neck = Vec3::new(0.0, Physique::TORSO, 0.0);
+        (step(Limb::Torso, 0.0, hips, gait) * step(Limb::Head, 0.0, neck, gait))
+            .transform_point(Vec3::new(0.0, 0.253, 0.0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::skeleton::*;
+    use super::*;
+    use crate::actors::Actors;
+
+    /// A keeper who has gathered the ball holds it where the viewer draws it.
+    ///
+    /// [`Physique::CRADLE`] is not a free choice — it is worked down the arm
+    /// from the two cradle angles, and the ball is drawn there rather than at
+    /// its recorded position. If the arms and the constant ever part company,
+    /// the gloves close on empty air.
+    #[test]
+    fn the_cradle_is_where_the_gloves_are() {
+        let mut gait = still();
+        gait.carry = 1.0;
+        let between = (glove(-1.0, gait) + glove(1.0, gait)) * 0.5;
+        assert!(
+            between.distance(Physique::CRADLE) < 0.16,
+            "ball drawn at {:?}, gloves meet at {between:?}",
+            Physique::CRADLE
+        );
+    }
+
+    /// And the same for a ball claimed at full stretch, which is drawn at
+    /// [`Physique::catch`] instead — out at the end of the arms rather than
+    /// against a chest that is nowhere near it.
+    #[test]
+    fn the_catch_is_where_the_gloves_are() {
+        let mut gait = still();
+        gait.reach = 1.0;
+        gait.stretch = 1.0;
+        gait.dive = 1.0;
+        gait.claimed = 1.0;
+        for lead in [-1.0f32, 0.0, 1.0] {
+            gait.lead = lead;
+            let between = (glove(-1.0, gait) + glove(1.0, gait)) * 0.5;
+            let drawn = Physique::catch(lead);
+            assert!(
+                between.distance(drawn) < 0.13,
+                "lead {lead}: ball drawn at {drawn:?}, gloves meet at {between:?}"
+            );
+            // Both hands are on it, not half a metre either side of it.
+            assert!(
+                glove(-1.0, gait).distance(glove(1.0, gait)) < 0.22,
+                "lead {lead}: gloves never close"
+            );
+        }
+        // And the two hold points are a long way apart, which is the entire
+        // reason for having both.
+        assert!(Physique::catch(0.0).distance(Physique::CRADLE) > 0.5);
+    }
+
+    /// Full stretch finishes above the crown of his head with the gloves
+    /// properly apart, which is the whole point of leaving the ground: he is
+    /// covering an area, not catching a pass.
+    #[test]
+    fn the_reach_goes_over_his_head() {
+        let mut gait = still();
+        gait.reach = 1.0;
+        gait.stretch = 1.0;
+        gait.dive = 1.0;
+        let hands = glove(1.0, gait);
+        let crown = crown(gait);
+        assert!(
+            hands.y > crown.y,
+            "gloves at {hands:?} below crown {crown:?}"
+        );
+        assert!(
+            glove(-1.0, gait).distance(glove(1.0, gait)) > 0.5,
+            "gloves converging: {:?} and {hands:?}",
+            glove(-1.0, gait)
+        );
+        // Outside the shoulders, not tucked in between them.
+        assert!(hands.x.abs() > Physique::SHOULDER_SPREAD);
+    }
+
+    /// The two arms in a lateral dive do different things. Both at full
+    /// stretch is the pose off the front of a cereal box.
+    #[test]
+    fn a_lateral_dive_has_a_leading_arm() {
+        let mut gait = still();
+        gait.reach = 1.0;
+        gait.stretch = 1.0;
+        gait.dive = 1.0;
+        gait.lead = 1.0;
+        let (trail, lead) = (glove(-1.0, gait), glove(1.0, gait));
+        // Further along his own up-axis — which, once the carriage has rolled
+        // him onto his side, is further across the goal: the top arm going
+        // through the ball while the bottom one stays out for balance.
+        assert!(
+            lead.y - trail.y > 0.12,
+            "arms level: lead {lead:?} trail {trail:?}"
+        );
+        let hips = Vec3::new(0.0, Physique::HIP, 0.0);
+        assert!(
+            hips.distance(lead) - hips.distance(trail) > 0.10,
+            "arms equally extended: {} vs {}",
+            hips.distance(lead),
+            hips.distance(trail)
+        );
+        // A dive straight down the pitch keeps them square, because it is a
+        // smother at a striker's feet and has no leading side.
+        gait.lead = 0.0;
+        assert!((glove(-1.0, gait).y - glove(1.0, gait).y).abs() < 1e-3);
+    }
+
+    /// The legs scissor with it: the leg he pushed off finishes straight and
+    /// trailing, the far one folds up over it.
+    #[test]
+    fn a_lateral_dive_has_a_trailing_leg() {
+        let mut gait = still();
+        gait.dive = 1.0;
+        gait.stretch = 1.0;
+        gait.lead = 1.0;
+        // Measured as how far each boot ends up from its own hip, because the
+        // fold is a leg getting SHORTER: comparing heights only catches it
+        // once the body is already over, and the body goes over on the
+        // carriage rather than here.
+        let hip = |side: f32| Vec3::new(side * Physique::HIP_SPREAD, Physique::HIP, 0.0);
+        let folded = hip(-1.0).distance(boot(-1.0, gait));
+        let straight = hip(1.0).distance(boot(1.0, gait));
+        assert!(
+            straight - folded > 0.15,
+            "legs together: folded {folded} straight {straight}"
+        );
+        // The straight one is the one he pushed off, so it is as long as a
+        // standing leg.
+        assert!((straight - hip(1.0).distance(boot(1.0, still()))).abs() < 0.02);
+    }
+
+    /// A keeper who has gone over comes down with it.
+    ///
+    /// Rotating a body about a pivot fixed at standing hip height leaves him
+    /// horizontal in mid-air with his boots half a metre off the grass, and
+    /// then lands him there — which is most of what stopped a save reading as
+    /// a save.
+    #[test]
+    fn going_over_brings_him_down() {
+        assert!(Carriage::placed(0.0, 0.0, 0.0).translation.length() < 1e-5);
+
+        // Flat across the goal at the moment of landing: no recorded lift
+        // left to hold him up.
+        let flat = Carriage::placed(0.0, -Actors::SPRAWL_ANGLE, 0.0);
+        let hips = flat.transform_point(Vec3::new(0.0, Physique::HIP, 0.0));
+        assert!(
+            hips.y < 0.40,
+            "hips still at {} m with the body flat",
+            hips.y
+        );
+        assert!(hips.y > 0.15, "hips through the turf at {} m", hips.y);
+
+        // And nothing on him ends up under the grass.
+        let mut gait = still();
+        gait.dive = 1.0;
+        gait.stretch = 1.0;
+        gait.grounded = 1.0;
+        gait.lead = 1.0;
+        for part in [
+            boot(-1.0, gait),
+            boot(1.0, gait),
+            crown(gait),
+            glove(-1.0, gait),
+            glove(1.0, gait),
+        ] {
+            let world = flat.transform_point(part);
+            assert!(world.y > 0.0, "{part:?} lands at {} m", world.y);
+        }
+    }
+
+    /// Two axes of topple settle him as far as either one alone: a dive half
+    /// across the goal and half up the pitch is just as horizontal.
+    #[test]
+    fn both_axes_of_topple_settle_him() {
+        let hips = |pitch: f32, roll: f32| {
+            Carriage::placed(pitch, roll, 0.0)
+                .transform_point(Vec3::new(0.0, Physique::HIP, 0.0))
+                .y
+        };
+        let sideways = hips(0.0, -1.4);
+        let forwards = hips(1.4, 0.0);
+        // Two axes that compose to the same tilt: cos(0.99)² ≈ cos(1.44).
+        let diagonal = hips(0.99, -0.99);
+        assert!((sideways - forwards).abs() < 1e-4);
+        assert!(
+            (diagonal - sideways).abs() < 0.05,
+            "diagonal {diagonal} vs square {sideways}"
+        );
+        // And standing up costs him nothing.
+        assert!((hips(0.0, 0.0) - Physique::HIP).abs() < 1e-5);
+    }
+
+    /// The set is a real crouch, so it costs real height — and the drop that
+    /// pays for it has to leave his boots on the grass.
+    #[test]
+    fn the_set_keeps_his_boots_down() {
+        let standing = boot(1.0, still());
+        let mut gait = still();
+        gait.set = 1.0;
+        let crouched = boot(1.0, gait);
+        assert!(
+            (crouched.y - standing.y).abs() < 0.015,
+            "boots move {} m into the set",
+            crouched.y - standing.y
+        );
+        // And he really is lower: the crown comes down with the knees.
+        assert!(crown(gait).y < crown(still()).y - 0.03);
+    }
+
+    /// The extension is a ramp and not a switch: a keeper halfway through a
+    /// flight is halfway out of it. This is the whole difference between a
+    /// dive and a photograph of one.
+    #[test]
+    fn the_extension_opens_out() {
+        let mut gait = still();
+        gait.dive = 1.0;
+        gait.reach = 1.0;
+        let mut reach_at = |stretch: f32| {
+            gait.stretch = stretch;
+            glove(1.0, gait).y
+        };
+        let (gathered, half, full) = (reach_at(0.0), reach_at(0.5), reach_at(1.0));
+        assert!(
+            full - gathered > 0.30,
+            "no extension at all: {gathered} to {full}"
+        );
+        assert!(
+            half > gathered + 0.08 && half < full - 0.08,
+            "not a ramp: {gathered} / {half} / {full}"
+        );
+    }
+
+    /// An outfielder leaving the ground is heading a ball, not saving one:
+    /// he tucks his knees and keeps his arms out for balance, and he does not
+    /// go over.
+    #[test]
+    fn a_header_is_not_a_dive() {
+        let mut gait = still();
+        gait.jump = 1.0;
+        assert!(
+            boot(1.0, gait).y > boot(1.0, still()).y + 0.15,
+            "knees not tucked: {:?}",
+            boot(1.0, gait)
+        );
+        let hands = glove(1.0, gait);
+        assert!(hands.y < crown(gait).y, "outfielder reaching like a keeper");
+        assert!(hands.x.abs() > glove(1.0, still()).x.abs(), "arms not out");
+    }
+
+    /// A jumping outfielder does not go over, whatever he does in the air —
+    /// the sprawl is a keeper's alone, and the tip that drives it is never
+    /// written for anybody else.
+    #[test]
+    fn only_a_keeper_sprawls() {
+        let mut gait = still();
+        gait.jump = 1.0;
+        assert_eq!(gait.dive, 0.0);
+        assert_eq!(gait.stretch, 0.0);
+        assert_eq!(gait.reach, 0.0);
     }
 }

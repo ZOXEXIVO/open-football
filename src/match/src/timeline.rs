@@ -426,10 +426,7 @@ impl Timeline {
 
     /// Keeps the speed chip's label in step. Also unconditional — see
     /// [`Self::handle_speed`].
-    pub fn refresh_speed(
-        playback: Res<Playback>,
-        mut speed: Query<&mut Text, With<SpeedLabel>>,
-    ) {
+    pub fn refresh_speed(playback: Res<Playback>, mut speed: Query<&mut Text, With<SpeedLabel>>) {
         if let Ok(mut text) = speed.single_mut() {
             let wanted = playback.speed_label();
             if text.as_str() != wanted {

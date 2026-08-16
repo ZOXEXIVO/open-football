@@ -654,5 +654,4 @@ impl Pitch {
             // structure of an open ground to stop.
         });
     }
-
 }

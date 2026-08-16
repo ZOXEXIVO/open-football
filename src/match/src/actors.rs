@@ -8,7 +8,7 @@ use crate::replay::ReplayTracks;
 use crate::textures::Textures;
 use crate::timeline::DebugOverlay;
 use bevy::prelude::*;
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 /// A player on the pitch: the root of one footballer's rig, carrying where they
 /// are, which way they are facing and where they have got to in their stride.
@@ -48,7 +48,7 @@ pub struct PlayerActor {
     is_goalkeeper: bool,
     /// How far into the hold he is, 0..1. See [`Gait::carry`].
     carry: f32,
-    /// How far into a dive, 0..1 — a body off its feet and extended rather
+    /// How far into a dive, 0..1 — a body off its feet and committed rather
     /// than a body running.
     ///
     /// Driven by the recorded height, because that is the only honest signal
@@ -58,14 +58,39 @@ pub struct PlayerActor {
     /// speed-and-lateral test caught 2 dives in 10 and fired for minutes on
     /// the shuffle. Leaving the ground is what only a dive does.
     dive: f32,
+    /// How far through the extension, 0..1 — see [`Gait::stretch`].
+    ///
+    /// The one above is a switch and this is the ramp. A recorded dive lasts
+    /// 390–660 ms; without a ramp the whole of it is a single frozen pose,
+    /// which is what a save used to look like.
+    stretch: f32,
+    /// Seconds of MATCH time off the turf, and since the landing. Only one of
+    /// the two ever runs.
+    air: f32,
+    down: f32,
+    /// Fastest rise seen since he left the ground, in metres per second of
+    /// match time.
+    ///
+    /// The angle a body leaves the ground at is the angle it travels at, so
+    /// this against his ground speed is how flat the dive is — and it is the
+    /// one measurement that separates a keeper thrown full length along the
+    /// floor from one going straight up at a corner. Recorded dives launch
+    /// at 10–15° above the horizontal; the standing leap at a cross launches
+    /// at 45°.
+    climb: f32,
+    /// How flat that made the dive, 0..1 — latched at take-off and held, and
+    /// the magnitude the tip below carries.
+    flat: f32,
+    /// Height last frame, so the rise above can be measured at all.
+    previous_height: f32,
     /// Which way he is tipping, in his own frame: x onto his right, y over
     /// his toes, each −1..1.
     ///
-    /// Latched as he leaves the ground and then held — a keeper does not
-    /// change his mind halfway across his goal. Both axes, because keepers
-    /// mostly do NOT dive sideways: measured, 7 dives in 10 travel more up
-    /// the pitch than across it, which is a man going down at a striker's
-    /// feet rather than the poster save.
+    /// Both axes, because a keeper's dive is very often not the poster one:
+    /// measured across a recorded match, dives split about evenly between
+    /// those that travel further across the goal and those that travel
+    /// further up the pitch — a man going down at a striker's feet rather
+    /// than flying into a top corner.
     tip: Vec2,
     /// How far off the turf the RECORDING says he is, in metres.
     ///
@@ -75,6 +100,11 @@ pub struct PlayerActor {
     /// wire as the fourth element of his position sample. Everything on this
     /// pitch that can be recorded should be read rather than guessed.
     height: f32,
+    /// Smoothed pitch from his eyeline to the ball, in radians.
+    look_pitch: f32,
+    /// How set he is, 0..1 — a keeper on his toes with a shot on. See
+    /// [`Gait::set`].
+    set: f32,
 }
 
 /// The name plate for one player, positioned each frame from the rig's
@@ -334,37 +364,83 @@ impl Actors {
     /// The engine's own roll/fly split sits at 0.1 m; this is under it so a
     /// ball is spinning as it flies rather than as it lands.
     const AIRBORNE: f32 = 0.05;
-    /// Height, in metres, at which a keeper counts as fully off his feet.
+    /// Height, in metres, at which a man counts as having left the turf.
     ///
-    /// Low, because the engine's dive apex starts at 0.16 m — a save along
-    /// the floor is still a man leaving the ground, just not by much — while
-    /// a standing leap at a cross runs 0.34 to 0.75. Both should read as
-    /// extended; what tells them apart is where he is going, not how high.
-    const SPRAWL_HEIGHT: f32 = 0.12;
-    /// Ground speed, in metres per second, at which a man off his feet is
-    /// travelling as flat as he ever gets.
+    /// Two quanta of the recording, which rounds height to a centimetre.
+    /// Low because it has to be: the engine's dive apex starts at 0.16 m — a
+    /// save along the floor is still a man leaving the ground, just not by
+    /// much — and the frame he goes is the frame the run cycle has to stop.
+    const AIRBORNE_FEET: f32 = 0.02;
+    /// Seconds of match time for the run cycle to give way once he leaves
+    /// the ground. Barely a ramp at all: he is committed the moment his
+    /// boots are off the grass, and a diving keeper still windmilling his
+    /// legs is the single thing that would give the whole animation away.
+    const SPRAWL_ATTACK: f32 = 0.05;
+    /// Seconds of match time to open out from the gathered take-off to full
+    /// stretch.
     ///
-    /// Not a threshold — the tip is proportional to speed over this — so a
-    /// keeper going straight up at a corner barely leans and one thrown full
-    /// length is horizontal, with every real dive somewhere between. The
-    /// number is the top of the engine's explosive band: base `max_speed` is
-    /// 0.36–0.63 u/tick, a tick is 10 ms and a unit 0.125 m, so the
-    /// goalkeeper's explosive multiplier lands at 10.5–12.5 m/s. Measured
-    /// peak across a whole recorded match: 12.3.
-    const SPRAWL_SPEED: f32 = 11.0;
-    /// Seconds of match time to get back up. There is no attack time: the
-    /// engine's own arc is the take-off, and going up is already as fast as
-    /// gravity says. Landing is where a keeper takes his time.
+    /// The number the dive was missing. A recorded dive is airborne for
+    /// 390–660 ms with a median of 450, and the extension is roughly the
+    /// first half of it: he leaves the ground with his elbows in and is at
+    /// full stretch around the apex. Everything after that is a man waiting
+    /// to land, which is exactly how it should read.
+    const EXTENSION: f32 = 0.22;
+    /// Seconds of match time he stays down after the landing before he
+    /// starts getting up, and how long the impact itself takes to settle
+    /// him from full stretch into a heap.
+    ///
+    /// The hold is cut short by any real ground speed — measured, half of
+    /// all landings are followed by the keeper covering five to seven metres
+    /// inside a second, and dragging a sprawled body along behind that is
+    /// worse than standing him up early.
+    const SPRAWL_HOLD: f32 = 0.30;
+    const GROUNDING: f32 = 0.16;
+    /// Ground speed, in metres per second, at which the hold above is gone
+    /// entirely. A jog: below it he is gathering himself where he landed and
+    /// the hold stands in full, above it the recording has him up and going
+    /// somewhere and no amount of choreography is worth dragging a sprawled
+    /// body along behind him.
+    const SPRAWL_URGENCY: f32 = 3.2;
+    /// Seconds of match time to get back up. There is no attack time on the
+    /// way out: the engine's own arc is the take-off, and going up is
+    /// already as fast as gravity says. Landing is where a keeper takes his
+    /// time.
     const SPRAWL_RECOVERY: f32 = 0.42;
-    /// How far the body goes over at full stretch, in radians, on whichever
-    /// axis he is travelling along — not the full quarter turn, because a
-    /// keeper lands on his shoulder and hip, not flat on his back.
-    const SPRAWL_ANGLE: f32 = 1.32;
+    /// Seconds of match time over which the launch angle is read. Long
+    /// enough to survive a noisy first step off the line, short enough that
+    /// it is still the take-off being measured and not the flight.
+    const LAUNCH_WINDOW: f32 = 0.10;
+    /// How far the body goes over at full stretch, in radians.
+    ///
+    /// Not quite the full quarter turn, because a keeper lands on his
+    /// shoulder and hip rather than flat on his back — but close, and much
+    /// closer than it was. What gets scaled against it is how flat he left
+    /// the ground: see [`PlayerActor::climb`]. A dive off the floor reaches
+    /// about 79° of this and a running leap at a cross about 43°, which is
+    /// the difference between the two saves and is measured rather than
+    /// assumed.
+    pub(crate) const SPRAWL_ANGLE: f32 = 1.38;
     /// How far off the ground, in metres, counts as fully airborne for the
     /// arms. The engine's own leap apex runs 0.34 m for a poor jumper to
     /// 0.75 for a good one, so this reaches full stretch partway up rather
     /// than only at the very top of the best keeper's jump.
     const REACH_HEIGHT: f32 = 0.35;
+    /// And for an outfielder, who is heading a ball rather than saving one.
+    /// Measured: twelve outfield players leave the turf in a recorded match,
+    /// up to 1.13 m.
+    const JUMP_HEIGHT: f32 = 0.40;
+    /// Distance from the ball, in metres, inside which a keeper is fully on
+    /// his toes and beyond which he is simply standing.
+    ///
+    /// A goalkeeper is not a man waiting: he is set whenever the ball is
+    /// anywhere near his goal and relaxed when it is not, and that alone is
+    /// most of what separates one from an outfielder standing in a different
+    /// coloured shirt. The near figure is roughly the top of the penalty
+    /// area, the far one the edge of the middle third.
+    const SET_RANGE: (f32, f32) = (16.5, 34.0);
+    /// Eye height, in metres, for working out how far up or down he is
+    /// looking. Crown is [`Physique::STATURE`]; eyes sit a little under it.
+    const EYE: f32 = 1.66;
 
     pub fn spawn(
         mut commands: Commands,
@@ -408,7 +484,13 @@ impl Actors {
                     Transform::from_xyz(0.0, 0.022, 0.0).with_scale(Vec3::splat(Self::FOOTPRINT)),
                 ));
             });
-            Footballer::assemble(&mut commands, actor, &parts, &wardrobe.outfit(player));
+            Footballer::assemble(
+                &mut commands,
+                actor,
+                &parts,
+                &wardrobe.outfit(player),
+                player.is_goalkeeper(),
+            );
 
             let mut plate = commands.spawn((
                 PlayerLabel { actor },
@@ -549,16 +631,26 @@ impl Actors {
                     && ball.y > Self::GLOVE_HEIGHT.0
                     && ball.y < Self::GLOVE_HEIGHT.1
                 {
-                    // Players are root entities, so the local transform is the
-                    // world one and the cradle can be carried straight out of
-                    // the rig's own space through the man's height and build.
+                    // At his chest if he is on his feet, out at the end of the
+                    // stretch if he is not — the same blend the arms
+                    // themselves take, so the ball is wherever his gloves are
+                    // rather than wherever they would have been.
+                    let hold =
+                        Physique::CRADLE.lerp(Physique::catch(actor.lead()), actor.extended());
+                    // Carried out through the CARRIAGE, which is where the
+                    // topple and the lift live, and only then out through the
+                    // actor's own height and build. Reading the hold point
+                    // straight off the actor — as this did — left the ball at
+                    // the sternum of an upright man while the keeper it
+                    // belonged to was horizontal the better part of a metre
+                    // away, on every diving catch in the match.
                     //
-                    // Plus however far off the ground he currently is: a keeper
-                    // who claims a cross at the top of his jump is holding it
-                    // half a metre above where a standing one would, and the
-                    // engine cannot say so — it parks every gathered ball at
-                    // one height because it has no vertical axis for players.
-                    let gloves = Physique::CRADLE + Vec3::Y * actor.lift();
+                    // A frame behind, because this frame's topple is not
+                    // written until `animate` has run: sixteen milliseconds of
+                    // a four-hundred-millisecond dive, and worth it for not
+                    // making the ball's position depend on system ordering.
+                    let (pitch, roll) = actor.topple();
+                    let gloves = Carriage::placed(pitch, roll, actor.lift()).transform_point(hold);
                     holder = Some((actor.id, transform.transform_point(gloves)));
                 }
             }
@@ -784,32 +876,36 @@ impl Actors {
                 }
             }
 
-            // Off his feet, and therefore extended. Straight off the recorded
+            // Off his feet, and therefore diving. Straight off the recorded
             // height — the engine takes a keeper off the ground on a real
-            // ballistic arc, so the rise needs no ramp of its own. Only the
-            // landing does: a keeper stays sprawled for a moment after the
-            // turf has stopped him.
-            let sprawl = (actor.height / Self::SPRAWL_HEIGHT).clamp(0.0, 1.0);
+            // ballistic arc — and only ever for a keeper: twelve outfield
+            // players leave the turf in a recorded match to head a ball, and
+            // every one of them used to be drawn toppling sideways with both
+            // arms over his head.
             let match_delta = delta * playback.speed.max(0.1);
-            actor.dive = if playback.seeked || sprawl >= actor.dive {
-                sprawl
-            } else {
-                actor.dive
-                    + (sprawl - actor.dive) * (1.0 - (-match_delta / Self::SPRAWL_RECOVERY).exp())
-            };
-
-            // And which way he is going over, latched as he leaves the
-            // ground. How far he tips is how fast he is travelling: straight
-            // up at a corner and he barely leans, thrown full length and he
-            // is horizontal. `heading` is where he was looking as he went —
-            // at the ball — so his own right and forward are the axes the
-            // tip decomposes onto.
-            if actor.dive > 0.0 && actor.dive >= sprawl - 1e-4 && sprawl > 0.0 {
+            // Against the instantaneous pace as well as the smoothed one: a
+            // keeper who was set and has just gone is still being caught up
+            // with by his own average.
+            let pace = actor.speed.max(observed);
+            let airborne = actor.track_flight(match_delta, pace, observed, playback.seeked);
+            // And which way, recomputed every frame he is up there — for
+            // exactly the reason it looks as though it should be latched.
+            //
+            // The tip is expressed in his OWN frame, and that frame is still
+            // turning: a diving keeper faces the ball, and at the instant of
+            // take-off his heading is still most of the way round to it off
+            // his approach run. Latch the decomposition at take-off and it is
+            // nailed to an axis that then rotates out from under it, so the
+            // topple swings across the goal with his shoulders — and a save
+            // to his right gets drawn as a man falling on his face. His
+            // travel does not change in flight, so recomputing against the
+            // current heading is what actually holds the dive still in world
+            // space.
+            if airborne {
                 let forward = Vec3::new(actor.heading.sin(), 0.0, actor.heading.cos());
                 let right = Vec3::new(actor.heading.cos(), 0.0, -actor.heading.sin());
                 if let Some(going) = Vec3::new(step.x, 0.0, step.z).try_normalize() {
-                    let flat = (actor.speed / Self::SPRAWL_SPEED).clamp(0.0, 1.0);
-                    actor.tip = Vec2::new(going.dot(right), going.dot(forward)) * flat;
+                    actor.tip = Vec2::new(going.dot(right), going.dot(forward)) * actor.flat;
                 }
             }
 
@@ -872,6 +968,36 @@ impl Actors {
             };
             actor.look += (wanted_look - actor.look) * if playback.seeked { 1.0 } else { turn };
 
+            // And how far up or down. A cross comes in above head height and a
+            // shot along the floor arrives below the knee; a player who tracks
+            // both of them with his chin level is watching neither. Clamped
+            // harder downward than upward, which is what a neck does.
+            let wanted_pitch = if ball.on_pitch {
+                let to_ball = ball.position - position;
+                let range = Vec3::new(to_ball.x, 0.0, to_ball.z).length().max(0.4);
+                ((ball.position.y - actor.height - Self::EYE) / range)
+                    .atan()
+                    .clamp(-0.45, 0.80)
+            } else {
+                0.0
+            };
+            actor.look_pitch +=
+                (wanted_pitch - actor.look_pitch) * if playback.seeked { 1.0 } else { turn };
+
+            // Set, or simply standing. A keeper drops onto his toes as the
+            // ball comes into range of his goal and stands out of it again
+            // when it goes away — which is the posture every save comes out
+            // of, and the reason a dive used to arrive from nowhere.
+            let wanted_set = if actor.is_goalkeeper && ball.on_pitch {
+                let to_ball = ball.position - position;
+                let range = Vec3::new(to_ball.x, 0.0, to_ball.z).length();
+                ((Self::SET_RANGE.1 - range) / (Self::SET_RANGE.1 - Self::SET_RANGE.0))
+                    .clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            actor.set += (wanted_set - actor.set) * if playback.seeked { 1.0 } else { pace };
+
             // The one man with the ball in his gloves takes the ramp that the
             // ball itself is riding; everybody else lets whatever they were
             // holding fall away. Following a ramp with a second one is
@@ -920,14 +1046,20 @@ impl Actors {
             let Ok(actor) = actors.get(carriage.owner) else {
                 continue;
             };
-            // Rotating about +Z carries the head toward −X, so going over onto
-            // his own right is the NEGATIVE of the sideways tip — the same
-            // sign convention as the bank into a turn in `Joint::pose`. About
-            // +X carries the head forward, which is a keeper going down at a
-            // striker's feet and needs no flip.
-            let tip = actor.tip * Self::SPRAWL_ANGLE * actor.dive;
-            *transform = Carriage::placed(tip.y, -tip.x, actor.lift());
+            let (pitch, roll) = actor.topple();
+            *transform = Carriage::placed(pitch, roll, actor.lift());
         }
+    }
+
+    /// Smoothstep on 0..1 — a ramp that leaves and arrives at rest.
+    ///
+    /// Every one of the dive's ramps runs through this rather than being
+    /// linear. A body accelerating out of a push-off and settling into full
+    /// extension has no corners in it, and a linear ramp puts one at each
+    /// end of every limb's travel.
+    pub(crate) fn ease(t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
     }
 
     /// Writes each player's current engine state under their name. Debug
@@ -1022,8 +1154,16 @@ impl PlayerActor {
             is_goalkeeper,
             carry: 0.0,
             dive: 0.0,
+            stretch: 0.0,
+            air: 0.0,
+            down: 0.0,
+            climb: 0.0,
+            flat: 0.0,
+            previous_height: 0.0,
             tip: Vec2::ZERO,
             height: 0.0,
+            look_pitch: 0.0,
+            set: 0.0,
             previous: None,
             heading: 0.0,
             // Start everyone at a different point in the run cycle. The
@@ -1052,29 +1192,344 @@ impl PlayerActor {
         self.height
     }
 
+    /// Advances the whole of a save: off his feet, through the extension, and
+    /// back up off the grass. Returns whether he is airborne this frame.
+    ///
+    /// Its own function rather than forty lines inside [`Actors::animate`]
+    /// because it is the one part of this rig that is a state machine over
+    /// TIME rather than a pose, and because the recorded height series it
+    /// consumes can then be replayed straight out of a real match and checked.
+    ///
+    /// Everything it reads is already on `self` — the recorded height, the
+    /// height it had last frame — bar what only the caller knows: how much
+    /// match time has passed, and how fast he is covering ground both
+    /// smoothed (`pace`, which survives a noisy frame) and as measured this
+    /// frame (`ground`, which does not lag).
+    fn track_flight(&mut self, match_delta: f32, pace: f32, ground: f32, seeked: bool) -> bool {
+        let climb = if seeked || match_delta <= 0.0 {
+            0.0
+        } else {
+            (self.height - self.previous_height) / match_delta
+        };
+        self.previous_height = self.height;
+        // Only ever a keeper: twelve outfield players leave the turf in a
+        // recorded match to head a ball, and every one of them used to be
+        // drawn toppling sideways with both arms over his head.
+        let airborne = self.is_goalkeeper && self.height > Actors::AIRBORNE_FEET;
+
+        if seeked {
+            // Nothing across a jump of the playhead is a trajectory. Land on
+            // whatever the frame itself says and start again.
+            self.air = 0.0;
+            self.down = 0.0;
+            self.climb = 0.0;
+            self.flat = 1.0;
+            self.dive = f32::from(airborne);
+            self.stretch = self.dive;
+        } else if airborne {
+            self.air += match_delta;
+            self.down = 0.0;
+            self.climb = self.climb.max(climb);
+            self.dive += (1.0 - self.dive) * (1.0 - (-match_delta / Actors::SPRAWL_ATTACK).exp());
+            // The extension ratchets: it opens out across the flight and is
+            // given back only by the recovery, because nobody folds himself
+            // up again in mid-air.
+            self.stretch = self
+                .stretch
+                .max(Actors::ease((self.air / Actors::EXTENSION).clamp(0.0, 1.0)));
+            // How far he goes over is the angle he left the ground at,
+            // because a body in the air travels along the vector it launched
+            // on. Latched over the first moments off the turf and then held:
+            // the rise is bleeding off to nothing by the apex anyway.
+            if self.air <= Actors::LAUNCH_WINDOW {
+                let launch = self.climb.max(0.0).atan2(pace.max(0.1));
+                self.flat = Actors::ease(1.0 - (launch / FRAC_PI_2).clamp(0.0, 1.0));
+            }
+        } else if self.dive > 1e-3 {
+            self.down += match_delta;
+            self.air = 0.0;
+            self.climb = 0.0;
+            // He lies there for a beat and then gets up — unless the
+            // recording already has him moving, in which case standing him up
+            // early is the lesser of the two lies. Measured: half of all
+            // landings are followed by the keeper covering five to seven
+            // metres inside a second, and half by him covering under one.
+            //
+            // Against the ground he is covering THIS frame and not his
+            // smoothed pace, which is the whole reason that argument exists:
+            // the smoothing takes about a fifth of a second to catch up, and
+            // for that fifth of a second every keeper still reads as
+            // travelling at the ten metres a second he dived at. Judged on
+            // that, the hold expired instantly on every save in the match and
+            // nobody ever stayed down.
+            let hurry = (ground / Actors::SPRAWL_URGENCY).clamp(0.0, 1.0);
+            if self.down > Actors::SPRAWL_HOLD * (1.0 - hurry) {
+                let release = 1.0 - (-match_delta / Actors::SPRAWL_RECOVERY).exp();
+                self.dive -= self.dive * release;
+                self.stretch -= self.stretch * release;
+            }
+        } else {
+            self.air = 0.0;
+            self.down = 0.0;
+            self.climb = 0.0;
+            self.dive = 0.0;
+            self.stretch = 0.0;
+        }
+        airborne
+    }
+
+    /// How far the whole figure has gone over, as the pitch and roll the
+    /// [`Carriage`] takes.
+    ///
+    /// Rotating about +Z carries the head toward −X, so going over onto his
+    /// own right is the NEGATIVE of the sideways tip — the same sign
+    /// convention as the bank into a turn in `Joint::pose`. About +X carries
+    /// the head forward, which is a keeper going down at a striker's feet and
+    /// needs no flip.
+    ///
+    /// Scaled by the extension rather than by the dive, so the body goes over
+    /// across the flight instead of snapping flat on the frame he leaves the
+    /// ground. One function because two callers need the answer — the
+    /// carriage itself, and the ball he may be holding — and they cannot be
+    /// allowed to disagree.
+    fn topple(&self) -> (f32, f32) {
+        let tip = self.tip * Actors::SPRAWL_ANGLE * self.stretch;
+        (tip.y, -tip.x)
+    }
+
+    /// How far into the ground-out after a landing, 0..1.
+    ///
+    /// Faded by the dive itself, so it lets go as he gets back to his feet
+    /// rather than pinning him to the turf.
+    fn grounded(&self) -> f32 {
+        (self.down / Actors::GROUNDING).clamp(0.0, 1.0) * self.dive
+    }
+
+    /// How far out at the end of a stretch he is — off his feet and not yet
+    /// gathered up on the grass. What decides whether a ball he has claimed
+    /// is in his gloves or against his chest.
+    fn extended(&self) -> f32 {
+        self.dive * (1.0 - self.grounded())
+    }
+
+    /// Which side of his body he committed to, −1..1. See [`Gait::lead`].
+    fn lead(&self) -> f32 {
+        let travel = self.tip.length();
+        if travel > 1e-3 {
+            (self.tip.x / travel).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
     fn gait(&self) -> Gait {
+        // An outfielder leaving the ground is heading a ball, not saving one.
+        let jump = if self.is_goalkeeper {
+            0.0
+        } else {
+            (self.height / Actors::JUMP_HEIGHT).clamp(0.0, 1.0)
+        };
+        let grounded = self.grounded();
+        let extended = self.extended();
         Gait {
             // A man in the air is not running, whatever the ground he is
             // covering says. Fading the run out through this one number
             // stops the stride, the bob, the arm swing and the lean all at
             // once — a diving keeper windmilling his legs is the single
             // thing that would give the whole animation away.
-            run: (self.speed / Actors::SPRINT).clamp(0.0, 1.0) * (1.0 - self.dive),
+            run: (self.speed / Actors::SPRINT).clamp(0.0, 1.0) * (1.0 - self.dive) * (1.0 - jump),
             phase: self.phase,
             signature: Complexion::carriage(self.id),
             idle: self.idle,
             turn: self.turn,
             look: self.look,
-            carry: self.carry,
+            look_pitch: self.look_pitch,
+            // The chest hold, which is only the hold once he is back under
+            // his own weight. A ball claimed at full stretch stays in the
+            // gloves that claimed it until he has landed on it.
+            carry: self.carry * (1.0 - extended),
             dive: self.dive,
-            // Both arms go out for the dive and for the leap — but not once
-            // the ball is actually in his gloves, where the cradle takes
-            // them back in. A man off the ground is reaching for something;
-            // there is no other reason for a footballer to be up there.
-            reach: self
-                .dive
-                .max((self.height / Actors::REACH_HEIGHT).clamp(0.0, 1.0))
+            stretch: self.stretch,
+            grounded,
+            lead: self.lead(),
+            // Both hands to the ball: he has it, and he is still up there.
+            claimed: self.carry * extended,
+            jump,
+            // A keeper is set whenever the ball is near his goal — but not
+            // while he is running, off his feet, or holding it: all three are
+            // things a man in the set position is by definition not doing.
+            set: self.set
+                * (1.0 - (self.speed / Actors::SPRINT).clamp(0.0, 1.0))
+                * (1.0 - self.dive)
                 * (1.0 - self.carry),
+            // Both arms go out for the dive and for the leap — but not once
+            // the ball is settled in his gloves, where the cradle takes them
+            // back in, and not once he is down. A man off the ground is
+            // reaching for something; there is no other reason for a
+            // footballer to be up there.
+            reach: if self.is_goalkeeper {
+                self.dive
+                    .max((self.height / Actors::REACH_HEIGHT).clamp(0.0, 1.0))
+                    * (1.0 - self.carry * (1.0 - extended))
+                    * (1.0 - grounded)
+            } else {
+                0.0
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod flight {
+    use super::*;
+
+    /// Recorded heights, in metres, sampled every 30 ms through one real
+    /// goalkeeper dive.
+    ///
+    /// Lifted verbatim out of `.dev/match/match_results/dev`: keeper 100 at
+    /// 1 720 080 ms, a full-length save with a 0.51 m apex over 630 ms in the
+    /// air. Every constant in the flight is titrated against a series like
+    /// this rather than against a feeling about how long a dive takes.
+    const FULL_LENGTH: [f32; 22] = [
+        0.03, 0.12, 0.20, 0.27, 0.33, 0.38, 0.42, 0.46, 0.48, 0.50, 0.51, 0.51, 0.50, 0.48, 0.45,
+        0.42, 0.37, 0.32, 0.25, 0.18, 0.10, 0.01,
+    ];
+    /// And one along the floor: keeper 100 at 292 560 ms, 0.24 m of apex over
+    /// 420 ms. The engine's low dives barely leave the grass, and they still
+    /// have to read as a man going full length rather than as a hop.
+    const ALONG_THE_FLOOR: [f32; 14] = [
+        0.04, 0.10, 0.14, 0.18, 0.21, 0.23, 0.24, 0.23, 0.22, 0.19, 0.16, 0.12, 0.07, 0.01,
+    ];
+
+    /// Runs a recorded height series through the flight tracker at the
+    /// recording's own 30 ms sample rate, and hands back what the rig would
+    /// have been drawing at each step.
+    fn fly(heights: &[f32], pace: f32, after: f32, tail: usize) -> Vec<(f32, f32, f32)> {
+        let mut actor = PlayerActor::new(1, true);
+        let mut frames = Vec::new();
+        let step = 0.03;
+        for height in heights.iter().chain(std::iter::repeat_n(&0.0, tail)) {
+            actor.height = *height;
+            actor.speed = pace;
+            // What the recording has him doing once he is down is a separate
+            // question from how fast he dived, and the two together are what
+            // decide whether he stays there.
+            let ground = if *height > Actors::AIRBORNE_FEET {
+                pace
+            } else {
+                after
+            };
+            actor.track_flight(step, pace, ground, false);
+            frames.push((actor.dive, actor.stretch, actor.flat));
+        }
+        frames
+    }
+
+    /// The whole point of the rewrite: a dive is not one pose held for half a
+    /// second. Over a recorded flight the extension has to still be opening
+    /// out well after take-off, and it has to be finished by the apex.
+    #[test]
+    fn the_flight_is_not_one_frame() {
+        let frames = fly(&FULL_LENGTH, 9.0, 9.0, 0);
+        // Committed within a couple of frames — the run cycle stops dead.
+        assert!(frames[1].0 > 0.4, "still running: {:?}", frames[1]);
+        // But nowhere near extended.
+        assert!(frames[1].1 < 0.35, "snapped flat: {:?}", frames[1]);
+        // A third of the way up, halfway out.
+        assert!(
+            (0.35..0.85).contains(&frames[4].1),
+            "not opening out: {:?}",
+            frames[4]
+        );
+        // Full stretch by the apex, which the recording puts at frame 10.
+        assert!(frames[10].1 > 0.97, "never extends: {:?}", frames[10]);
+        // And having got there it stays there for the rest of the flight: a
+        // keeper does not fold himself back up in mid-air.
+        assert!(frames[20].1 > 0.97);
+    }
+
+    /// He stays down after he lands, and then gets up. Not a bounce, and not
+    /// a body left lying on the grass either.
+    #[test]
+    fn he_lies_there_and_then_gets_up() {
+        // Landed, and standing still: nothing in the recording is pulling him
+        // anywhere, so he takes his time.
+        let frames = fly(&FULL_LENGTH, 9.0, 0.0, 60);
+        let landed = FULL_LENGTH.len();
+        assert!(
+            frames[landed + 4].0 > 0.95,
+            "up too soon: {:?}",
+            frames[landed + 4]
+        );
+        assert!(
+            frames[landed + 20].0 < 0.55,
+            "still on the grass: {:?}",
+            frames[landed + 20]
+        );
+        assert!(
+            frames[landed + 59].0 < 0.1,
+            "never gets up: {:?}",
+            frames[landed + 59]
+        );
+
+        // And a keeper the recording has running again is not dragged along
+        // the turf on his side waiting for the hold to expire.
+        let hurried = fly(&FULL_LENGTH, 9.0, 6.0, 60);
+        assert!(
+            hurried[landed + 8].0 < frames[landed + 8].0 - 0.2,
+            "hold not cut by the run: {:?} vs {:?}",
+            hurried[landed + 8],
+            frames[landed + 8]
+        );
+    }
+
+    /// How far he goes over is read off the angle he left the ground at, and
+    /// that is what separates the two saves a keeper makes.
+    #[test]
+    fn the_launch_angle_decides_the_topple() {
+        // Thrown along the floor at 9 m/s: 2 m/s of rise against that is
+        // about 12°, which is a body travelling all but horizontally.
+        let flat = fly(&ALONG_THE_FLOOR, 9.0, 9.0, 0)[6].2;
+        assert!(flat > 0.85, "a floor dive drawn upright: {flat}");
+
+        // The same keeper going straight up at a corner — 3 m/s of rise
+        // against 3 m/s of ground speed, a 45° take-off — leans, and does not
+        // topple.
+        let leap = fly(&FULL_LENGTH, 3.0, 3.0, 0)[6].2;
+        assert!(
+            (0.25..0.75).contains(&leap),
+            "a standing leap drawn as a sprawl: {leap}"
+        );
+        assert!(flat > leap + 0.2);
+    }
+
+    /// Scrubbing the playhead is not a trajectory, so nothing may be
+    /// integrated across it.
+    #[test]
+    fn a_seek_starts_the_flight_again() {
+        let mut actor = PlayerActor::new(1, true);
+        for height in FULL_LENGTH.iter().take(12) {
+            actor.height = *height;
+            actor.track_flight(0.03, 9.0, 9.0, false);
+        }
+        assert!(actor.air > 0.3 && actor.stretch > 0.97);
+        actor.height = 0.0;
+        actor.track_flight(0.03, 9.0, 9.0, true);
+        assert_eq!(
+            (actor.air, actor.down, actor.dive, actor.stretch),
+            (0.0, 0.0, 0.0, 0.0)
+        );
+    }
+
+    /// An outfielder heading a ball is a metre off the ground and is still
+    /// not diving.
+    #[test]
+    fn an_outfielder_never_dives() {
+        let mut actor = PlayerActor::new(2, false);
+        for height in [0.2, 0.6, 1.0, 1.1, 0.9, 0.4, 0.0] {
+            actor.height = height;
+            assert!(!actor.track_flight(0.03, 5.0, 5.0, false));
+            assert_eq!((actor.dive, actor.stretch), (0.0, 0.0));
         }
     }
 }

@@ -330,7 +330,11 @@ impl Netting {
             // Roof netting, sloping from the crossbar down to the back bar.
             // Its own "up" runs along the slope and its normal is the
             // perpendicular of that, tilted back over the goal.
-            let slope = Vec3::new(side * Field::NET_DEPTH, back_height - Field::GOAL_HEIGHT, 0.0);
+            let slope = Vec3::new(
+                side * Field::NET_DEPTH,
+                back_height - Field::GOAL_HEIGHT,
+                0.0,
+            );
             let length = slope.length();
             let along = slope / length;
             let above = Vec3::new(-along.y * side, along.x * side, 0.0).normalize();
