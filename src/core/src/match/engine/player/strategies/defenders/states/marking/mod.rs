@@ -5,7 +5,7 @@ use crate::r#match::defenders::states::common::{
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
-use crate::r#match::player::strategies::common::states::ContactFoul;
+use crate::r#match::player::strategies::common::states::{ContactFoul, MarkEngagement};
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -47,6 +47,34 @@ impl StateProcessingHandler for DefenderMarkingState {
         // this is the same hand-off `DefenderStandingState` has always
         // made.
         if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Running,
+            ));
+        }
+
+        // WE HAVE IT — nobody marks during their own team's possession.
+        //
+        // `MidfielderGuardingState` has always opened with this; the back
+        // line's equivalent never did, and while `Marking` released at
+        // 1.75-3.5 m that was survivable — a defender fell out of the
+        // state on his own within a second. It stops being survivable the
+        // moment the release becomes hysteretic ([`MarkEngagement`]),
+        // because then he is pinned onto whoever the fallback scan picks
+        // for as long as that man stays within 25 m.
+        //
+        // Measured with the hysteresis in and this branch missing:
+        // `Defender: Marking` took **24.8% of ALL ticks** and swallowed
+        // the back line's shape states whole — `Holding Line` 5.0% → 1.9%,
+        // `Tracking Back` 2.7% → 1.0%, and `Pushing Up` fell out of the
+        // census entirely. A back four that never steps up is a different
+        // bug from the one being fixed.
+        //
+        // `Running` rather than `Standing`, mirroring the midfielder: it
+        // is the defender's phase dispatch, which is what decides between
+        // holding the line, pushing up and dropping into a block. The
+        // plan is idle while we have the ball, so `my_mark()` is `None`
+        // and this cannot bounce straight back.
+        if ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Running,
             ));
@@ -145,36 +173,21 @@ impl StateProcessingHandler for DefenderMarkingState {
 
             // Has he lost him?
             //
-            // ⚠ THIS DISAGREES WITH `DefenderRunningState` BY AN ORDER OF
-            // MAGNITUDE, AND THE DISAGREEMENT IS LOAD-BEARING. It
-            // releases at `ideal_marking_distance * 2` (14-28u, i.e.
-            // 1.75-3.5 m) while `Running` picks a man up at
-            // `MARK_BREAK_DISTANCE` (150u, 18.75 m) — so every man
-            // between the two figures satisfies both conditions at once
-            // and the pair runs as a two-tick oscillator. Measured with
-            // `dev_match trace`: ~191,000 `Running <-> Marking` loops
-            // across three matches, an order of magnitude above anything
-            // else in the engine.
+            // This released at `ideal_marking_distance * 2` — 1.75-3.5 m —
+            // against a `Running` entry at 18.75 m, so every man between
+            // the two satisfied both conditions at once and the pair ran
+            // as a two-tick oscillator (~191,000 `Running <-> Marking`
+            // loops across three matches). It was also a category error:
+            // `ideal_marking_distance` is how close a marker wants to
+            // STAND, and says nothing about when he abandons the man.
             //
-            // Replacing it with one hysteretic pair (engage 150u, release
-            // 200u — the `ShapeStation` idiom) DOES remove the loop:
-            // flips/min 164.6 -> 140.4, pong 36.2% -> 23.0%, and the loop
-            // leaves the table entirely. It also makes the match WORSE on
-            // every axis measured: goals 4.4 -> 5.2, passes/team 890 ->
-            // 1050, ball-stuck 45 -> 114 s/match, FWD goal share 58% ->
-            // 46%.
-            //
-            // The flicker is doing real work. Alternating between this
-            // state's MAN-oriented steering and `Running`'s SHAPE-oriented
-            // steering blends the two; pinning a defender in `Marking`
-            // lets him follow his man out of the line, and
-            // `DefensiveLine::hold_shape` is not a strong enough leash to
-            // hold him there for seconds at a time.
-            //
-            // So the loop stays until `Marking`'s own steering is
-            // shape-safe. Do not "fix" it in isolation.
-            let def_profile = DefenderSkillProfile::from_ctx(ctx);
-            if distance_to_opponent > def_profile.ideal_marking_distance * 2.0 {
+            // Now [`MarkEngagement`], whose `ENGAGE < RELEASE` ordering is
+            // the same invariant `TackleEngagement` documents. See its
+            // doc-comment for why closing this is safe now and was not
+            // when it was tried and reverted: `hold_shape` clamps the
+            // steering target to his zone, and the man he is pinned onto
+            // is now the plan's rather than a locally-picked argmax.
+            if distance_to_opponent > MarkEngagement::RELEASE {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Running,
                 ));
@@ -193,7 +206,25 @@ impl StateProcessingHandler for DefenderMarkingState {
             // flipped away from Help, route back through Standing so the
             // role block can reassign us (Primary if we're now closest,
             // Cover if we're goal-side second, Hold otherwise).
-            if ctx.players().opponents().with_ball().next().is_some() {
+            //
+            // …but ONLY for a defender the plan gave nobody. There are two
+            // coordination systems here — `DefensivePlan`, which is
+            // team-level, exclusive and sticky, and
+            // `defensive_role_for_ball_carrier`, which re-ranks the back
+            // line by distance to the carrier every tick — and this branch
+            // let the second silently overrule the first. A defender who
+            // has been given a man is by construction often near the
+            // carrier too (the plan marks the carrier's outlets), so he
+            // ranked Primary or Cover and was handed out of `Marking`
+            // on the tick after he entered it, abandoning an assignment
+            // nobody else can take because it is exclusive.
+            //
+            // The plan wins, the same way it now wins in
+            // `find_best_marking_target`. The role system keeps its job of
+            // organising the defenders the plan has not given a man to.
+            if ctx.team().my_duty().target().is_none()
+                && ctx.players().opponents().with_ball().next().is_some()
+            {
                 let role = ctx.player().defensive().defensive_role_for_ball_carrier();
                 if role != DefensiveRole::Help {
                     return Some(StateChangeResult::with_defender_state(
@@ -340,12 +371,39 @@ impl StateProcessingHandler for DefenderMarkingState {
 }
 
 impl DefenderMarkingState {
-    /// Find the best marking target using the role system.
-    /// In the Help role (ball carrier active), pick the most dangerous
-    /// non-carrier unmarked opponent — this cuts pass lanes around the
-    /// primary presser. Otherwise (no live ball-carrier scenario) fall
-    /// back to the generic "find most dangerous opponent" scan.
+    /// Find the best marking target.
+    ///
+    /// # THE ASSIGNMENT WINS
+    ///
+    /// The midfielders' `compute_find_guard_target` has said this since
+    /// the plan was built; the back line did not, and the omission
+    /// quietly undid the plan for the entire defence.
+    ///
+    /// The team plan hands out man-marking duties **exclusively** across
+    /// the whole unit, and `DefenderRunningState` sends a defender here
+    /// precisely because his ASSIGNED man came within
+    /// [`MarkEngagement::ENGAGE`]. This function then ignored that and
+    /// re-picked a man locally, so:
+    ///
+    ///   * two defenders could converge on the same attacker while the
+    ///     man each was actually given ran free — the exact failure the
+    ///     exclusivity exists to prevent;
+    ///   * the release test below measured the gap to the LOCAL pick, not
+    ///     to his man, so a defender could sit "on task" in `Marking` at
+    ///     arm's length from somebody he was never assigned;
+    ///   * and the `marking duels` diagnostic — which reads
+    ///     `plan.mark_of(id)` — was measuring a pairing the state did not
+    ///     believe in. That is why it reported markers **7.4 m** from
+    ///     their men with 48% of them "in a state that acts on the duty":
+    ///     they were in the state, acting on somebody else.
+    ///
+    /// The local scans stay as the fallback for a defender the plan gave
+    /// nobody.
     fn find_best_marking_target(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        if let Some(man) = ctx.team().my_mark() {
+            return Some(man);
+        }
+
         if ctx.players().opponents().with_ball().next().is_some() {
             if let Some(help_target) = ctx.player().defensive().find_help_target() {
                 return Some(help_target);

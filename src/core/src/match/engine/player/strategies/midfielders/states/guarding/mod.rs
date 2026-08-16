@@ -4,7 +4,7 @@ use crate::r#match::midfielders::states::common::{
     ActivityIntensity, Interception, MidfielderCondition,
 };
 use crate::r#match::player::events::PlayerEvent;
-use crate::r#match::player::strategies::common::states::ContactFoul;
+use crate::r#match::player::strategies::common::states::{ContactFoul, MarkEngagement};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
@@ -141,8 +141,18 @@ impl StateProcessingHandler for MidfielderGuardingState {
                 ));
             }
 
-            // Opponent too far — give up guarding
-            if distance > MAX_GUARD_RANGE {
+            // Opponent too far — give up guarding.
+            //
+            // ⚠ This was `MAX_GUARD_RANGE` (100u), while
+            // `MidfielderRunningState` sends a midfielder here as soon as
+            // his ASSIGNED man is inside `MARK_BREAK_DISTANCE` (150u). The
+            // 100-150u band therefore satisfied the entry and the exit at
+            // once — the same two-cycle the back line had between
+            // `Running` and `Marking`, with the numbers closer together
+            // and so easier to miss. `MAX_GUARD_RANGE` still bounds which
+            // men the LOCAL scan will pick up (`find_guard_target`), which
+            // is what it was written for; it is not a state boundary.
+            if distance > MarkEngagement::RELEASE {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Returning,
                 ));

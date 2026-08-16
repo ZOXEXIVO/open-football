@@ -11,6 +11,7 @@ use crate::r#match::player::strategies::common::players::ops::defender_skill::De
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
+use crate::r#match::player::strategies::common::states::MarkEngagement;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
@@ -39,7 +40,10 @@ const MAX_SHOOTING_DISTANCE: f32 = 320.0;
 /// shape logic to go and mark him (~19 m). Wide enough that a marker
 /// genuinely tracks his runner across the final third, tight enough that
 /// he doesn't chase a full-back standing on the halfway line.
-const MARK_BREAK_DISTANCE: f32 = 150.0;
+///
+/// The ENGAGE half of [`MarkEngagement`] — `Marking` gives the man up at
+/// its `RELEASE`, strictly further out, so the two cannot two-cycle.
+const MARK_BREAK_DISTANCE: f32 = MarkEngagement::ENGAGE;
 
 /// How far the designated presser will step out to meet the man on the
 /// ball (~19 m). The same distance he will travel to pick a man up —

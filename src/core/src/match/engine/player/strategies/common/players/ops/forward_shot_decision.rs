@@ -205,6 +205,35 @@ pub mod mid_run_diag {
     /// cover, marks]` — see `DefenceDiag::note_plan_shape`.
     pub static DEF_PLAN_SHAPE: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 
+    /// Where the cards actually come from. A red has THREE independent
+    /// routes in this engine — a direct red off a violent foul, a direct
+    /// red off a reckless one, and a second yellow — and the aggregate
+    /// `red cards/match` cannot tell them apart, which is how two rounds
+    /// of tuning went into the wrong one.
+    ///
+    /// `[fouls whistled, yellows, second yellows, direct red (reckless),
+    /// direct red (violent), fouls by severity: normal, reckless,
+    /// violent]`.
+    pub static CARD_SOURCE: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+
+    pub struct CardDiag;
+
+    impl CardDiag {
+        pub fn note(slot: usize) {
+            if slot < CARD_SOURCE.len() {
+                CARD_SOURCE[slot].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 8] {
+            let mut out = [0u64; 8];
+            for (slot, c) in out.iter_mut().zip(CARD_SOURCE.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
     /// Marker-evasion coverage: how often an attacker asked to evade,
     /// how often anybody was actually marking him, and how much room the
     /// contest gave him. A low marked-rate means the read is too strict;

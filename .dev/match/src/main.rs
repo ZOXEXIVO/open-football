@@ -6395,6 +6395,37 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         }
     }
 
+    // ── CARD SOURCE CENSUS ─────────────────────────────────────────────
+    // A red has THREE independent routes — direct off a violent foul,
+    // direct off a reckless one, and a second yellow — and `red
+    // cards/match` cannot tell them apart. Two rounds of tuning went into
+    // the wrong one before this existed.
+    {
+        use core::mid_run_diag::CardDiag;
+        let c = CardDiag::snapshot();
+        if c[0] > 0 {
+            let per = |v: u64| v as f64 / n_matches as f64;
+            println!();
+            println!(
+                "--- CARD SOURCE CENSUS --- {:.1} fouls whistled/match: normal {:.1} \
+                 reckless {:.2} violent {:.3}",
+                per(c[0]),
+                per(c[5]),
+                per(c[6]),
+                per(c[7])
+            );
+            println!(
+                "  yellows {:.2}/match   REDS {:.3} = second-yellow {:.3} + direct-reckless \
+                 {:.3} + direct-violent {:.3}   (real red ~0.15-0.20)",
+                per(c[1]),
+                per(c[2]) + per(c[3]) + per(c[4]),
+                per(c[2]),
+                per(c[3]),
+                per(c[4])
+            );
+        }
+    }
+
     // ── TEAM SHAPE CENSUS ──────────────────────────────────────────────
     // Where the match time actually goes, state by state, and how far out
     // of the team's shape a player is while he is there. The `paths` mode

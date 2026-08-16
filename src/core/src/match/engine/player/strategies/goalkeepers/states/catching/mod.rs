@@ -50,6 +50,25 @@ use nalgebra::Vector3;
 /// real 33%; 75 gives 29.4% and 110 gives 24.3%, for the same goals.
 /// Treat the save-rate gap as a symptom of the keeper collecting shots
 /// that were missing anyway, not as a lever on the scoreline.
+///
+/// ⚠ **DO NOT "RE-DERIVE" THIS TO MATCH THE ARRIVAL WINDOW.** Tried and
+/// reverted 2026-08-16. When the arrival gate landed in
+/// `is_catch_successful` the roll stopped running for the whole flight,
+/// so 54 looks obviously wrong and the window arithmetic
+/// (`effective_catch_distance` ~20u ÷ 2.63 u/tick × 2 engine ticks per AI
+/// tick ≈ 4) looks obviously right. Measured, 4 took **saves/on-target
+/// 74.7% → 86.6% and goals 25.3 → 16.5** in one step: the keeper is in
+/// reach for considerably longer than the closing arithmetic suggests,
+/// because he is steering to MEET the ball rather than standing still.
+///
+/// The real defect is that a per-shot probability is being smeared over a
+/// tick count at all — the same one-shot-one-roll problem
+/// `ShotTarget::save_rolled` and `block_rolled` exist to solve. The GK
+/// state machine cannot latch on the shot the way they do (it reads a
+/// frozen `tick_context` snapshot and cannot write to the ball), so
+/// fixing it properly means either routing the latch through an event or
+/// letting `Ball::try_save_shot` be the sole resolver of a shot. Until
+/// one of those happens this constant stays where it was calibrated.
 const EXPECTED_SAVE_TICKS: f32 = 54.0;
 
 #[derive(Default, Clone)]
@@ -229,6 +248,36 @@ impl GoalkeeperCatchingState {
             let reach = 10.0 + prof.dive_reach * 12.0 + prof.shot_stopping * 4.0;
             let lateral_error = (ctx.player.position.y - target.goal_line_y).abs();
             if lateral_error > reach {
+                return false;
+            }
+
+            // …AND THE BALL HAS TO HAVE ARRIVED.
+            //
+            // The lateral test above is the right measure of how HARD the
+            // save is; it is not a statement that the save can be made
+            // yet, and this branch had nothing else. So the per-tick roll
+            // fired at a uniformly random point in the shot's flight —
+            // shots live ~29 ticks and are struck from ~18 m — and when
+            // it came off, `CaughtBall` handed the keeper a ball that was
+            // still ten or twenty metres away.
+            //
+            // What that looks like: `handle_caught_ball_event` zeroes the
+            // ball's velocity and assigns him as owner, then `Ball::move_to`
+            // finds the owner beyond `MAX_OWNER_TRACK_DISTANCE` (15u) and
+            // drops the ownership again — leaving the ball **stopped dead
+            // in mid-pitch with nobody near it**, the keeper flipping from
+            // `Catching` to `Take Ball`, and everyone converging on a
+            // frozen ball that then gets played backwards. Reported from
+            // the viewer as three frames; the counter is
+            // `reception_diag::OWNER_TOO_FAR`, printed by `dev_match stats`
+            // as "ownership dropped by move_to", which read **87 a match**.
+            //
+            // The physics save has always had this gate — `try_save_shot`
+            // returns unless the ball is within ~2.5 ticks of the goal
+            // line — which is why that path never froze anything. This is
+            // the same rule: he can only catch what has reached him.
+            let ball_distance = ctx.ball().distance();
+            if ball_distance > prof.effective_catch_distance {
                 return false;
             }
 

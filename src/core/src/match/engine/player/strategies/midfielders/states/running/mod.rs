@@ -12,6 +12,7 @@ use crate::r#match::player::strategies::common::players::ops::forward_shot_decis
     ShotDecision, evaluate_forward_shot_decision,
 };
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
+use crate::r#match::player::strategies::common::states::MarkEngagement;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, DefensiveDuty, GamePhase, MatchPlayerLite, PassEvaluator, PlayerSide,
@@ -87,8 +88,10 @@ const SNAPSHOT_RATE: f32 = 0.55;
 
 /// How close an assigned man has to be before a midfielder abandons the
 /// shape logic to go and mark him (~19 m). Same figure the back line
-/// uses, so a duty means the same thing wherever it is held.
-const MARK_BREAK_DISTANCE: f32 = 150.0;
+/// uses, so a duty means the same thing wherever it is held — the ENGAGE
+/// half of [`MarkEngagement`], against which `Guarding` gives the man up
+/// at the strictly wider `RELEASE`.
+const MARK_BREAK_DISTANCE: f32 = MarkEngagement::ENGAGE;
 
 /// Depth of the penalty area from the goal line (16.5 m). Inside it, a
 /// midfielder arriving onto the ball is in a shooting position — same

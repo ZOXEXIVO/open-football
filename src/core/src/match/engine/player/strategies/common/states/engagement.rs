@@ -111,6 +111,64 @@ impl TackleEngagement {
     }
 }
 
+/// Where a marker goes to his man, and where he gives him up.
+///
+/// # Why this exists
+///
+/// The same defect [`TackleEngagement`] was built to remove, in the
+/// marking states, and left in place for a documented reason that has
+/// since stopped being true.
+///
+/// `DefenderRunningState` broke shape to go and mark a man at 150u
+/// (18.75 m); `DefenderMarkingState` gave him up at
+/// `ideal_marking_distance * 2` — **14-28u, i.e. 1.75-3.5 m**. Every man
+/// between the two satisfied both conditions at once, so the pair ran as
+/// a two-tick oscillator: measured with `dev_match trace`, ~191,000
+/// `Running <-> Marking` loops across three matches, an order of
+/// magnitude above anything else in the engine. The midfield had the same
+/// break with the numbers closer together (enter at 150u, give up at
+/// `MAX_GUARD_RANGE` 100u).
+///
+/// **The old release figure was a STEERING distance being used as a state
+/// boundary.** `ideal_marking_distance` is how close a marker wants to
+/// stand — 1.75-3.5 m, correct — and has nothing to say about when he
+/// abandons the man. Using it as the exit meant a defender who was doing
+/// his job perfectly well from four metres was handed out of the state on
+/// the next tick.
+///
+/// # Why it is safe to close now, when it was not before
+///
+/// `defensive_shape_ownership` records this pair being closed
+/// hysteretically once before and REVERTED: the loop went away but the
+/// match got worse on every axis (goals 4.4 → 5.2), because pinning a
+/// defender in `Marking` let him follow his man clean out of the line.
+/// Two things have changed since:
+///
+///   * `DefensiveLine::hold_shape` is now applied inside `Marking`'s own
+///     steering, so the target he is pinned onto is clamped to his zone.
+///     That is exactly the "until `Marking`'s own steering is shape-safe"
+///     condition the revert note left open.
+///   * `Marking` now takes the man the **team plan** assigned rather than
+///     re-picking one locally every tick. The earlier experiment pinned
+///     defenders onto a locally-chosen argmax that swapped between
+///     candidates on sub-metre movement — pinning made that worse by
+///     construction. An assigned man is exclusive, and was chosen because
+///     this defender was the nearest free body to him.
+///
+/// The ordering `ENGAGE < RELEASE` is the whole point, and it is the same
+/// invariant `TackleEngagement` documents: a state whose give-up
+/// condition overlaps its own entry condition is a two-cycle.
+pub struct MarkEngagement;
+
+impl MarkEngagement {
+    /// Close enough that a marker breaks shape to go to his man (~19 m).
+    /// Unchanged — this is the figure both `Running` states already used.
+    pub const ENGAGE: f32 = 150.0;
+    /// …and far enough that he has genuinely lost him (~25 m). Strictly
+    /// outside `ENGAGE`, so the hand-off is one-way.
+    pub const RELEASE: f32 = 200.0;
+}
+
 /// Would a foul by this player, right now, be a penalty?
 ///
 /// # Why this is one function
@@ -204,7 +262,12 @@ impl TackleDecision {
 
     /// Commitment multiplier inside the defender's own penalty area when
     /// there is cover behind him — see [`Self::box_restraint`].
-    const BOX_RESTRAINT: f32 = 0.22;
+    ///
+    /// 0.22 → 0.14 alongside `ContactFoul::BOX_PENALTY_RESTRAINT`, and
+    /// for the same reason: this is a per-DECISION rate, and the marking
+    /// work put far more defenders into duels inside their own area, so
+    /// the same rate produced a different number of penalties per match.
+    const BOX_RESTRAINT: f32 = 0.14;
     /// …and when he is the last man, where the challenge has to be made.
     const BOX_RESTRAINT_LAST_MAN: f32 = 0.60;
 
@@ -422,10 +485,24 @@ impl ContactFoul {
     /// box contacts in twenty matches** and awarded 0.08 penalties a match
     /// against a real 0.25-0.30.
     ///
-    /// 0.30 says a defender is about three times less likely to foul with
-    /// the ball in his own box than in open play — which is the real
-    /// tendency, at a strength that produces the real rate.
-    const BOX_PENALTY_RESTRAINT: f32 = 0.30;
+    /// 0.30 said a defender is about three times less likely to foul with
+    /// the ball in his own box than in open play — the real tendency, at
+    /// a strength that produced the real rate **for the engagement volume
+    /// of the day**.
+    ///
+    /// Re-fitted 0.30 → 0.11 when the marking work landed. This model
+    /// rolls once a second *per engagement*, so its output scales with
+    /// how many defenders are engaged, and putting the back line on its
+    /// men took box contacts from 95 to 154 per 200 matches (`FOUL SOURCE
+    /// CENSUS`, `Defender: Standing` 42 → 114) with penalties following
+    /// 0.35 → 0.55 a match against a real 0.25-0.30. The rate per
+    /// engagement was never the thing that was calibrated; the rate per
+    /// MATCH was, and the divisor moved.
+    ///
+    /// Fitted in two steps because the first (0.17) recovered only a
+    /// third of it — 0.55 → 0.45 — which is the measurement that says the
+    /// box contacts really had roughly tripled rather than risen 60%.
+    const BOX_PENALTY_RESTRAINT: f32 = 0.11;
     /// Restraint when the player is in his own area but the ball is not
     /// yet — marking a runner at the back post, tracking into the box.
     /// Careful, but not the catastrophic case.
@@ -480,11 +557,20 @@ impl ContactFoul {
     /// Severity of a non-tackle foul. These are overwhelmingly cynical
     /// rather than dangerous — a shirt pull is a yellow at worst — so the
     /// reckless tail is thin and there is no violent one.
+    ///
+    /// The `losing_him` tail was trimmed `0.10 + aggr·0.22` → `0.06 +
+    /// aggr·0.14` alongside [`Self::BOX_PENALTY_RESTRAINT`], and for the
+    /// same reason. `losing_him` is true whenever the man is pulling away
+    /// from his marker, so its frequency rose with the number of live
+    /// marking duels — red cards went **0.24 → 0.46 a match against a
+    /// real 0.15-0.20** while total fouls rose only 21%, which is the
+    /// signature of a severity tail being sampled more often rather than
+    /// of more fouls.
     pub fn severity(ctx: &StateProcessingContext, losing_him: bool) -> FoulSeverity {
         let aggression = (ctx.player.skills.mental.aggression / 20.0).clamp(0.0, 1.0);
         // Stopping a man who has gone past you is the professional foul.
         let reckless_p = if losing_him {
-            0.10 + aggression * 0.22
+            0.06 + aggression * 0.14
         } else {
             0.04
         };

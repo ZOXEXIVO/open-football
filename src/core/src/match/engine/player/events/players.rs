@@ -4735,20 +4735,40 @@ impl PlayerEventDispatcher {
                 (0.04 + aggressor_factor * 0.18 + persistent * 0.6).clamp(0.02, 0.18),
                 0.0_f32,
             ),
-            // Reckless direct-red ceiling 0.18 → 0.08: reckless is
-            // yellow-card territory in real officiating — direct reds
-            // from a reckless (not violent) challenge are rare. Part of
-            // the 2026-06 discipline recalibration that brought reds
-            // down from ~1.0/match toward the real ~0.15.
+            // ⚠ RECKLESS IS A CAUTION. In the Laws that word is the
+            // DEFINITION of a yellow card — "acts with disregard to the
+            // danger to, or consequences for, an opponent" — and the
+            // sending-off tier is the separate one above it, "using
+            // excessive force or endangering the safety of an opponent",
+            // which this engine models as `Violent`. A straight red for
+            // the last genuine red offence, denying an obvious goalscoring
+            // opportunity, is modelled separately again in
+            // `officiating::management::professional_foul`.
+            //
+            // So a direct-red band on THIS tier is a third route to a
+            // sending-off that the Laws do not have, and it was producing
+            // most of them. Measured with the `CARD SOURCE CENSUS`:
+            // **REDS 0.395/match = second-yellow 0.090 + direct-reckless
+            // 0.285 + direct-violent 0.020** against a real 0.15-0.20.
+            // 6.79 reckless fouls are whistled a match and each carried a
+            // 1-8% red, so this one band out-produced every legitimate
+            // route combined — 72% of all red cards in the game.
+            //
+            // The ceiling had already been cut 0.18 → 0.08 in the 2026-06
+            // discipline round on exactly this reasoning ("reckless is
+            // yellow-card territory... direct reds from a reckless (not
+            // violent) challenge are rare"); it needed to go to a token
+            // tail, not a smaller tax. What survives is the borderline
+            // case a referee upgrades on the day.
             FoulSeverity::Reckless => (
                 (0.45 + aggressor_factor * 0.30 + persistent * 0.8).clamp(0.30, 0.85),
-                (0.03 + aggressor_factor * 0.08 + persistent * 0.5).clamp(0.01, 0.08),
+                (0.005 + aggressor_factor * 0.018 + persistent * 0.1).clamp(0.002, 0.020),
             ),
             FoulSeverity::Violent => (0.10_f32, (0.70 + aggressor_factor * 0.30).clamp(0.60, 1.0)),
         };
         let (lo_y, hi_y, lo_r, hi_r) = match severity {
             FoulSeverity::Normal => (0.02, 0.18, 0.0, 0.0),
-            FoulSeverity::Reckless => (0.30, 0.85, 0.01, 0.08),
+            FoulSeverity::Reckless => (0.30, 0.85, 0.002, 0.020),
             FoulSeverity::Violent => (0.0, 0.20, 0.60, 1.0),
         };
         Some((
@@ -4818,6 +4838,23 @@ impl PlayerEventDispatcher {
         let direct_red = roll_red < card_red_prob;
         let got_yellow = !direct_red && roll_yellow < card_yellow_prob;
 
+        #[cfg(feature = "match-logs")]
+        {
+            use crate::mid_run_diag::CardDiag;
+            CardDiag::note(0);
+            CardDiag::note(match severity {
+                FoulSeverity::Normal => 5,
+                FoulSeverity::Reckless => 6,
+                FoulSeverity::Violent => 7,
+            });
+            if direct_red {
+                CardDiag::note(match severity {
+                    FoulSeverity::Violent => 4,
+                    _ => 3,
+                });
+            }
+        }
+
         if !direct_red && !got_yellow {
             return;
         }
@@ -4842,6 +4879,8 @@ impl PlayerEventDispatcher {
                 player.statistics.add_yellow_card(match_second);
                 context.record_stoppage_time(15_000);
                 let promoted = player.yellow_cards >= 2;
+                #[cfg(feature = "match-logs")]
+                crate::mid_run_diag::CardDiag::note(if promoted { 2 } else { 1 });
                 if promoted {
                     player.statistics.add_red_card(match_second);
                     player.is_sent_off = true;
