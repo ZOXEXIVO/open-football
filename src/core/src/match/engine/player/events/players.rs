@@ -30,6 +30,9 @@ use crate::r#match::player::strategies::players::ops::effective_skill::{
 };
 #[cfg(feature = "match-logs")]
 use crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag;
+use crate::r#match::player::strategies::players::ops::goalkeeper_skill::{
+    GoalkeeperSkillInputs, GoalkeeperSkillProfile,
+};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
@@ -87,6 +90,54 @@ pub mod shot_accuracy_diag {
     /// on target once they reach the goal line.
     pub static AIM_ON_FRAME: AtomicU64 = AtomicU64::new(0);
 
+    /// **The same accounting, split by the shooter's FINISHING.**
+    ///
+    /// Accuracy is driven by `execution_skill`, a blend in which finishing
+    /// is the heaviest term — but nothing measured whether the gradient
+    /// survives to the outcome, and two of the three terms that set it are
+    /// clamped (`on_target_skill_multiplier` saturates at 1.30, i.e. the
+    /// whole top half of the skill range gets the same value). A skill
+    /// axis that is flat where it matters is not an axis.
+    ///
+    /// Three tiers by the raw `finishing` attribute — poor (≤8), ordinary,
+    /// elite (≥14) — each `[struck, on frame]`.
+    pub static BY_FINISHING: [[AtomicU64; 2]; 3] = [const { [const { AtomicU64::new(0) }; 2] }; 3];
+
+    /// Σ of `execution_skill` ×1000 over `SHOTS`, i.e. the population
+    /// anchor any centred accuracy term has to sit on.
+    pub static EXECUTION_SUM: AtomicU64 = AtomicU64::new(0);
+
+    /// Which tier a `finishing` attribute (1-20) falls in.
+    pub fn finishing_tier(finishing: f32) -> usize {
+        if finishing <= 8.0 {
+            0
+        } else if finishing >= 14.0 {
+            2
+        } else {
+            1
+        }
+    }
+
+    pub fn note_finishing(tier: usize, on_frame: bool) {
+        if tier < 3 {
+            BY_FINISHING[tier][0].fetch_add(1, Ordering::Relaxed);
+            if on_frame {
+                BY_FINISHING[tier][1].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// `[[struck, on frame]; poor / ordinary / elite]`.
+    pub fn finishing_snapshot() -> [[u64; 2]; 3] {
+        let mut out = [[0u64; 2]; 3];
+        for (t, row) in out.iter_mut().enumerate() {
+            for (i, slot) in row.iter_mut().enumerate() {
+                *slot = BY_FINISHING[t][i].load(Ordering::Relaxed);
+            }
+        }
+        out
+    }
+
     pub fn reset() {
         for c in [
             &SHOTS,
@@ -97,6 +148,11 @@ pub mod shot_accuracy_diag {
             &AIM_ON_FRAME,
         ] {
             c.store(0, Ordering::Relaxed);
+        }
+        for row in BY_FINISHING.iter() {
+            for c in row.iter() {
+                c.store(0, Ordering::Relaxed);
+            }
         }
     }
 
@@ -191,6 +247,26 @@ pub mod save_accounting_stats {
     pub static SAVE_TICKS_PAST_GOAL_LINE: AtomicU64 = AtomicU64::new(0);
     pub static SAVE_PHYSICS_FIRED: AtomicU64 = AtomicU64::new(0);
     pub static SAVE_PHYSICS_PASSED: AtomicU64 = AtomicU64::new(0);
+
+    // ── Physics-save credit delivery ────────────────────────────────────
+    //
+    // A physics save is EARNED inside `Ball::try_save_shot` but can only be
+    // BOOKED a phase later, once the tick loop has `&mut field.players`. The
+    // hand-off is `Ball::pending_save_credit`, and every way it can be lost
+    // between the two is counted here — the columns in the accounting table
+    // are equal to each other and to nothing else, which is exactly the kind
+    // of coincidence that has to be measured rather than inferred.
+    /// Physics save resolved and a credit was staged for delivery.
+    pub static PENDING_STAGED: AtomicU64 = AtomicU64::new(0);
+    /// Physics save resolved but `previous_owner` was None, so there was no
+    /// shooter to pair the save with and nothing was staged at all.
+    pub static PENDING_NO_SHOOTER: AtomicU64 = AtomicU64::new(0);
+    /// Staged credit successfully booked against keeper and shooter.
+    pub static PENDING_DELIVERED: AtomicU64 = AtomicU64::new(0);
+    /// Dropped at delivery: one of the two ids was not on the field.
+    pub static PENDING_LOST_NO_PLAYER: AtomicU64 = AtomicU64::new(0);
+    /// Dropped at delivery: keeper and shooter were team-mates.
+    pub static PENDING_LOST_SAME_TEAM: AtomicU64 = AtomicU64::new(0);
 
     pub fn reset() {
         for arr in [
@@ -1585,11 +1661,28 @@ impl PlayerEventDispatcher {
                 let comp01 = (composite / 20.0).clamp(0.0, 1.0);
                 let pos = p.position;
                 let team = p.team_id;
+                /// How close an opponent has to be to make a reception
+                /// awkward, in GAME UNITS (1u = 0.125 m). 20u = 2.5 m.
+                ///
+                /// This was `6.0`, which is **0.75 m** — close enough to
+                /// be touching him. `first_touch_loss_probability` is
+                /// tuned against "2 close opponents" (its doc-comment
+                /// quotes the curve at that pressure), and two opponents
+                /// inside 0.75 m of a receiver essentially never happens,
+                /// so the pressured lane of a curve built around it was
+                /// dead and every reception resolved on the unforced lane
+                /// alone. 2.5 m is a defender near enough to commit to the
+                /// ball as it arrives, which is what the curve means.
+                ///
+                /// The same sub-metre literal is elsewhere in the pressure
+                /// family — `is_under_immediate_pressure` uses 5.0 while
+                /// its doc-comment says "within 1m" (5u is 0.625 m).
+                const PRESSURE_RADIUS: f32 = 20.0;
                 let opp_close = field
                     .players
                     .iter()
                     .filter(|q| q.team_id != team)
-                    .filter(|q| (q.position - pos).magnitude() < 6.0)
+                    .filter(|q| (q.position - pos).magnitude() < PRESSURE_RADIUS)
                     .count();
                 (comp01, opp_close, ())
             }
@@ -1597,7 +1690,18 @@ impl PlayerEventDispatcher {
         };
 
         let bad_touch_prob = Self::first_touch_loss_probability(composite01, pressure_count);
-        if bad_touch_prob < 0.02 {
+        // ⚠ NO PROBABILITY FLOOR. This used to be
+        // `if bad_touch_prob < 0.02 { return; }`, which is not a cheap
+        // early-out — it is a rule, and the rule was "anyone better than
+        // about 2% never loses a touch at all".
+        //
+        // An average level-14 receiver (composite ≈ 0.62) with nobody
+        // inside the pressure radius computes **1.6%**, so he sat under
+        // the floor and was perfectly immune on every unpressured
+        // reception — which is most of them. Combined with the sub-metre
+        // pressure radius above, almost every reception in the game
+        // returned here having resolved nothing.
+        if bad_touch_prob <= 0.0 {
             return;
         }
 
@@ -1613,15 +1717,33 @@ impl PlayerEventDispatcher {
             return;
         }
 
-        // Severity split — the worst ~25% of bad-touch rolls AND a
-        // genuinely weak composite (≤ 0.45) get registered as a
-        // miscontrol; the remainder is a heavy touch. The rating's
-        // touch_quality drag treats miscontrols as roughly 2× the
-        // weight of heavy touches, so the split shapes how visible
-        // the failure is in the post-match line.
-        let severe_threshold = bad_touch_prob * 0.25;
+        // Severity split — how bad the bad touch was.
+        //
+        // `roll` is already known to be below `bad_touch_prob`, so
+        // `roll / bad_touch_prob` is uniform on [0,1): one draw decides
+        // both whether the touch failed and how badly, with no second
+        // call into the RNG.
+        //
+        // ⚠ THE `composite01 < 0.45` GATE IS GONE. It required a receiver
+        // to be BELOW 9/20 on the composite before he could register a
+        // miscontrol at all, so every touch an ordinary player lost was
+        // filed as a "heavy touch" and the miscontrol column belonged to
+        // the worst players in the game alone. Good players lose control
+        // of a ball too — less often, which is what the probability above
+        // is for. A skill threshold on top of a skill-driven probability
+        // charges the same attribute twice and puts a cliff in the middle
+        // of a continuous model.
+        //
+        // The share that counts as an outright miscontrol instead rises
+        // continuously as the receiver gets worse: a poor touch under
+        // pressure is more often gone entirely, a good player's rare
+        // failure is usually just heavy. Centres on ~1/3 at an average
+        // composite, which is the ~2:1 heavy:miscontrol ratio the harness
+        // reports against.
+        let severity = roll / bad_touch_prob;
+        let severe_share = (0.18 + (1.0 - composite01) * 0.38).clamp(0.15, 0.60);
         if let Some(p) = field.get_player_mut(receiver_id) {
-            if roll < severe_threshold && composite01 < 0.45 {
+            if severity < severe_share {
                 p.statistics.add_miscontrol();
             } else {
                 p.statistics.add_heavy_touch();
@@ -1641,18 +1763,70 @@ impl PlayerEventDispatcher {
     ///     registered a single loss of control all season, so nothing
     ///     in his skill profile reached the rating.
     ///
-    /// Tuned so (2 close opponents): composite ≈ 0.25 → ~13%,
-    /// ≈ 0.50 → ~5%, ≈ 0.75 → ~1%. The `^2.5` / `^2` curves keep
+    /// Tuned so (2 close opponents): composite ≈ 0.25 → capped 30%,
+    /// ≈ 0.50 → ~26%, ≈ 0.75 → ~5%. The `^2.5` / `^2` curves keep
     /// elite reception virtually immune in both lanes.
     /// Extracted as a pure function so the gradient is unit-testable
     /// without standing up a `MatchField`.
+    ///
+    /// # Scale
+    ///
+    /// The lane coefficients were `0.10` / `0.05` and are now 5× that,
+    /// keeping their 2:1 ratio. The old pair was never wrong about SHAPE —
+    /// it was calibrated while two things upstream were quietly discarding
+    /// most of its output: a `bad_touch_prob < 0.02` early return that made
+    /// every unpressured average receiver immune, and a 0.75 m pressure
+    /// radius that meant the "2 close opponents" this curve is quoted at
+    /// essentially never occurred. With both fixed the curve finally
+    /// reaches the pitch, and at its old scale it still produced only
+    /// **2.7 miscontrols per team per match against a real 8-15**.
+    ///
+    /// Titrated on miscontrols/team, 200 matches at L14:
+    ///
+    /// | scale | miscontrols | heavy touches |
+    /// |-------|-------------|---------------|
+    /// | before any fix | 1.1 | 2.6 |
+    /// | 1.0× (structural fixes only) | 2.7 | 6.1 |
+    /// | 3.6× | 7.2 | 16.0 |
+    /// | 5.0×, cap 0.30 | 9.6 | 21.2 |
+    /// | **5.0×, cap 0.55** | **9.8** | **21.6** |
+    /// | real | 8-15 | ~2× miscontrols |
+    ///
+    /// Note the last step: raising the ceiling moved the population rate
+    /// by 0.2 while restoring the skill and pressure gradients the clamp
+    /// had flattened. That is the signature of a rail doing its job rather
+    /// than doing the modelling.
+    ///
+    /// Nothing else moved: pass accuracy 78.8% (a miscontrol is charged to
+    /// the RECEIVER, so the passer's completion is untouched), tackles
+    /// 17.7, on-target 33.4%, saves/on-target 68.0%, goals 26.0.
+    ///
+    /// ⚠ The response is SUB-LINEAR — 3.6× on the coefficients bought only
+    /// 2.6× on the outcome, because the `0.30` clamp starts binding on the
+    /// pressured weak-receiver cases that the scale-up is aimed at. Expect
+    /// the same when tuning further, and raise the clamp rather than the
+    /// coefficients if the tail is what needs to move.
     #[inline]
     pub(crate) fn first_touch_loss_probability(composite01: f32, pressure_count: usize) -> f32 {
+        /// Worst any reception can be. The floor of a footballer's ability
+        /// to control a ball is not zero — even the worst player in the
+        /// game, mobbed, gets it under control more often than not.
+        ///
+        /// Raised 0.30 → 0.55 alongside the 5× scale-up, because at 5× the
+        /// old ceiling stopped being a safety rail and became the model:
+        /// a 0.25-composite receiver under 3 opponents computed 0.82 and a
+        /// 0.50-composite one computed 0.31, so BOTH pinned to 0.30 and the
+        /// skill axis flattened to nothing in exactly the region the
+        /// scale-up was aimed at. `weak_receiver_has_higher_loss_probability_than_strong`
+        /// and `pressure_amplifies_loss_probability` both caught it, which
+        /// is what they are for — a clamp that binds across half the domain
+        /// is a silent loss of gradient.
+        const MAX_LOSS: f32 = 0.55;
         let c = composite01.clamp(0.0, 1.0);
         let pressure_mult = 1.0 + (pressure_count.min(4) as f32) * 0.6;
-        let pressured = (1.0 - c).powf(2.5) * 0.10 * pressure_mult;
-        let unforced = (1.0 - c).powi(2) * 0.05;
-        (pressured + unforced).clamp(0.0, 0.30)
+        let pressured = (1.0 - c).powf(2.5) * 0.50 * pressure_mult;
+        let unforced = (1.0 - c).powi(2) * 0.25;
+        (pressured + unforced).clamp(0.0, MAX_LOSS)
     }
 
     /// Classify a completed pass and bump the passer's per-zone /
@@ -3089,6 +3263,32 @@ impl PlayerEventDispatcher {
         /// can be, in game units, before the flight-time scaling. 18u is
         /// 2.25 m — the width a placed shot beats a set keeper by.
         const KEEPER_PLACEMENT_READ: f32 = 18.0;
+        /// Population mean of `execution_skill` AT THE MOMENT OF A STRIKE
+        /// — not over all players, because who shoots is itself selected.
+        /// Measured 0.622 over 80 matches at L14 (`dev_match stats` prints
+        /// it under the off-target causes). Both forced-miss rolls are
+        /// centred here, so the population on-target rate is untouched and
+        /// only the spread around it is new. Re-derive it from the harness
+        /// if the `execution_skill` blend ever moves.
+        const POPULATION_EXECUTION: f32 = 0.622;
+        /// How far the forced-miss rolls swing either side of that for the
+        /// best and worst finisher in the game. 0.90 puts a 1/20 finisher
+        /// about 1.4× as likely to drag it wide or sky it as an average
+        /// one, and a 20/20 finisher at about 0.7×.
+        const ACCURACY_SPREAD: f32 = 0.90;
+        /// The scuffed tap-in: how much of a miss chance the worst
+        /// finisher carries at ANY range, and the best one is spared.
+        /// Distance-independent by design — see the note at
+        /// `wide_miss_chance`. 0.14 puts about seven points of extra
+        /// wide-miss on a 1/20 finisher from six yards, where the
+        /// multiplicative half is worth almost nothing.
+        const ACCURACY_SCUFF: f32 = 0.14;
+        /// How much of the miss axis a fully spent player carries. At the
+        /// 0.55 ceiling of `low_condition_penalty` this is worth 0.30 of
+        /// edge — about the same as dropping four points of finishing, so
+        /// an exhausted striker shoots like an ordinary one and an
+        /// exhausted ordinary player like a poor one.
+        const CONDITION_DRAG: f32 = 0.55;
         /// Half-width of the lane a defender must be inside to be credited
         /// with covering a shot, in game units (60u = 7.5m). Wide enough to
         /// mean "in front of goal in the danger zone" rather than "literally
@@ -3273,7 +3473,6 @@ impl PlayerEventDispatcher {
         let execution_skill = profile.execution_skill;
         let placement_skill = profile.placement_skill;
         let body_control = profile.body_control;
-        let technique_curve = profile.technique_curve;
         let poor_penalty = profile.poor_penalty;
         let low_condition_penalty = profile.low_condition_penalty;
         let pressure_penalty = profile.pressure_penalty;
@@ -3476,22 +3675,80 @@ impl PlayerEventDispatcher {
         } else {
             0.483
         };
-        // Skill-and-condition contributions trimmed (0.07/0.05 → 0.05/0.03)
-        // because they compound with `random_error_scale`, `over_bar_chance`,
-        // and `miskick_probability` against the same weak shooter — when
-        // stacked, the lvl-6 outfield was wide-missing >35% of its shots
-        // vs the lvl-18 reference's ~12%, which was crushing the upset
-        // tail to zero (see audit_engine_gap). Elite shooters are
-        // unaffected: at execution_skill ≥ 0.55, `(1 - exec)` < 0.45 and
-        // `poor_penalty` is already zero.
-        let wide_miss_chance = wide_base
-            + (1.0 - execution_skill) * 0.05
-            + poor_penalty * 0.03
+        // ── WHO STRUCK IT ─────────────────────────────────────────────
+        //
+        // The two forced-miss rolls set the population on-target rate
+        // between them (they account for 72% of every shot struck), and
+        // the shooter barely entered either. Here it was an additive
+        // `(1 - exec) * 0.05 + poor * 0.03` — at most **0.08** against a
+        // distance base running 0.132 to 0.483 — and in `over_bar_chance`
+        // it was 0.05 against a base up to 0.253, reading `technique`
+        // rather than finishing at all.
+        //
+        // Measured, that left finishing decorative: aim-on-frame ran
+        // **33.7% for a poor finisher (≤8) against 38.4% for an elite one
+        // (≥14)** — 4.7 points across the whole attribute range, where
+        // real football spreads it by twenty (a top striker puts ~45-50%
+        // of his shots on target, a poor one ~25-30%).
+        //
+        // The comment this replaces explains exactly how it got that way:
+        // the terms were TRIMMED (0.07/0.05 → 0.05/0.03) because a weak
+        // shooter's misses compounded across four independent penalties
+        // and dragged the low-division on-target rate under the real 33%.
+        // That is the right observation and the wrong repair. Shrinking a
+        // quality term to protect a population mean deletes the axis; the
+        // fix is to CENTRE it, so the average shooter is untouched and the
+        // spread opens either side of him. Same discipline as
+        // `SaveModel::strike_power` and `GoalkeeperSkillProfile::
+        // POPULATION_READ`.
+        //
+        // Multiplicative on the distance base, deliberately: a poor
+        // finisher is only slightly worse than a good one from six yards
+        // and much worse from twenty-five, which is what the bases already
+        // encode. Additive would have punished the tap-in equally.
+        //
+        // Two components, because finishing fails in two different ways.
+        // The MULTIPLICATIVE half says a poor finisher is much worse from
+        // range and only slightly worse from six yards, which is right.
+        // On its own it is not enough: once the shot mix is realistic most
+        // shots are close, the distance bases there are small (0.132 wide,
+        // 0.067 over), and scaling a small number by 1.4 changes nothing —
+        // measured, the finishing spread collapsed from 16.7 points to 3
+        // the moment the supply fix moved the mix inside the box. The
+        // ADDITIVE half is the scuffed tap-in: a fixed way of missing that
+        // does not care how far out you are, and the thing a bad finisher
+        // is actually famous for.
+        // …and a tired player shoots like a worse one, on the same axis.
+        //
+        // Legs are the second input to the same quantity: a man who has
+        // run himself out loses the clean contact and the placement in
+        // exactly the way a poor finisher never had them, which is why
+        // shooting accuracy falls through the last twenty minutes of a
+        // real match. It had a term — `low_condition_penalty * 0.03`, i.e.
+        // at most **0.0165** against a distance base running to 0.483 —
+        // and that is not a term, it is a rounding error. Fully spent, a
+        // player's shooting was indistinguishable from fresh.
+        //
+        // One-sided, deliberately, and NOT centred like the skill half.
+        // Fatigue is a cost, not a redistribution: a fresh player shoots
+        // exactly as he did and a tired one worse, so the population mean
+        // moves by however much of the match is played on empty — which is
+        // the real effect and the one worth having.
+        let accuracy_edge = ((POPULATION_EXECUTION - execution_skill) * ACCURACY_SPREAD
+            + low_condition_penalty * CONDITION_DRAG)
+            .clamp(-0.40, 0.80);
+        let wide_miss_chance = wide_base * (1.0 + accuracy_edge)
+            + accuracy_edge * ACCURACY_SCUFF
             + pressure_penalty * 0.04
-            + low_condition_penalty * 0.03
             + desperation * 0.08;
         #[cfg(feature = "match-logs")]
-        shot_accuracy_diag::SHOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        {
+            shot_accuracy_diag::SHOTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            shot_accuracy_diag::EXECUTION_SUM.fetch_add(
+                (execution_skill * 1000.0).max(0.0) as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
 
         if rng.random_range(0.0f32..1.0) < wide_miss_chance {
             #[cfg(feature = "match-logs")]
@@ -3742,25 +3999,29 @@ impl PlayerEventDispatcher {
         } else {
             0.253
         };
-        // Skill contributions trimmed (0.04 / 0.04 → 0.025 / 0.025) — same
-        // logic as `wide_miss_chance` above: the over-bar term compounds
-        // with miskick and random-error sources against weak shooters and
-        // was pushing the low-level outfield's on-target rate well below
-        // real Opta's 33% baseline. Strong shooters (technique_curve ≥
-        // 0.55, poor_penalty = 0) are unaffected.
-        let over_bar_chance = over_bar_base
-            + (1.0 - technique_curve).max(0.0) * 0.025
-            + poor_penalty * 0.025
-            + low_condition_penalty * 0.03;
+        // Same centred quality term as `wide_miss_chance` — one accuracy
+        // axis for both rolls rather than two half-axes, and the same
+        // reason the additive pair it replaces (0.025 + 0.025, reading
+        // technique rather than finishing) could not move the outcome.
+        let over_bar_chance =
+            over_bar_base * (1.0 + accuracy_edge) + accuracy_edge * ACCURACY_SCUFF * 0.6;
         let shot_goes_over_bar = rng.random_range(0.0f32..1.0) < over_bar_chance;
         #[cfg(feature = "match-logs")]
         {
             use std::sync::atomic::Ordering as AtomicOrdering;
+            let on_frame =
+                !shot_goes_over_bar && (actual_y_target - goal_center.y).abs() <= GOAL_WIDTH;
             if shot_goes_over_bar {
                 shot_accuracy_diag::OVER_FIRED.fetch_add(1, AtomicOrdering::Relaxed);
-            } else if (actual_y_target - goal_center.y).abs() <= GOAL_WIDTH {
+            } else if on_frame {
                 shot_accuracy_diag::AIM_ON_FRAME.fetch_add(1, AtomicOrdering::Relaxed);
             }
+            // …and the same outcome split by the man who struck it. See
+            // `shot_accuracy_diag::BY_FINISHING`.
+            shot_accuracy_diag::note_finishing(
+                shot_accuracy_diag::finishing_tier(finishing_skill * 20.0),
+                on_frame,
+            );
         }
         let struck_apex = if shot_goes_over_bar {
             // Skied. Peaks well clear of the 2.44 m crossbar whatever the
@@ -3923,6 +4184,11 @@ impl PlayerEventDispatcher {
             }
             if dband == 0 {
                 time_band_diag::EMITTED_CLOSE_BAND
+                    [time_band_diag::emit_tag_index(shoot_event_model.reason)]
+                .fetch_add(1, Ordering::Relaxed);
+            }
+            if dband == 2 {
+                time_band_diag::EMITTED_EDGE_BAND
                     [time_band_diag::emit_tag_index(shoot_event_model.reason)]
                 .fetch_add(1, Ordering::Relaxed);
             }
@@ -4149,9 +4415,49 @@ impl PlayerEventDispatcher {
                 // ball he can watch for longer is one he reads better —
                 // so a close-range piledriver beats him more often than a
                 // 25-yard effort, which is the right way round.
+                // …and HOW BADLY he reads it is a property of the keeper.
+                //
+                // This term had no keeper in it. The error was a constant
+                // scaled only by flight time, so the one quantity that
+                // decides whether a set keeper is standing in the right
+                // place was identical for an international and a youth
+                // third choice — all keeper quality lived downstream in
+                // the save roll. Reading the striker's body is exactly
+                // what `positioning` / `anticipation` / `decisions` /
+                // `concentration` are for, and the profile already blends
+                // them into one number.
+                //
+                // CENTRED on the population, not widened: an average
+                // keeper (0.5) gets 1.0× and the population save rate is
+                // untouched, while the band opens ±30% around it. The same
+                // discipline `SaveModel::strike_power` documents — an
+                // uncentred quality term does not add a skill axis, it
+                // silently recalibrates the whole model.
+                let keeper_read = field
+                    .players
+                    .iter()
+                    .find(|p| {
+                        p.side == Some(defending_side)
+                            && p.tactical_position.current_position.position_group()
+                                == PlayerFieldPositionGroup::Goalkeeper
+                            && !p.is_sent_off
+                    })
+                    .map(|k| {
+                        GoalkeeperSkillProfile::from_player(
+                            k,
+                            &GoalkeeperSkillInputs {
+                                minute: sc::minute_from_ms(context.total_match_time),
+                                condition_pct: k.player_attributes.condition_percentage() as f32,
+                            },
+                        )
+                        .positioning
+                    })
+                    .unwrap_or(0.5);
                 let read_error = {
                     let seen = (ticks_to_goal / 120.0).clamp(0.0, 1.0);
-                    KEEPER_PLACEMENT_READ * (1.0 - seen * 0.55)
+                    KEEPER_PLACEMENT_READ
+                        * (1.0 - seen * 0.55)
+                        * (1.0 + (GoalkeeperSkillProfile::POPULATION_READ - keeper_read) * 0.60)
                 };
                 let goal_line_y = goal_line_y + rng.jitter(0.0, read_error);
                 // Arc approximation: z under gravity, from the shared
@@ -4294,6 +4600,7 @@ impl PlayerEventDispatcher {
                     save_rolled: false,
                     block_rolled: false,
                     shooter_threat,
+                    struck_from: field.ball.position,
                 });
             } else {
                 #[cfg(feature = "match-logs")]
@@ -4336,7 +4643,14 @@ impl PlayerEventDispatcher {
         // the diving state calling this when the GK gave up on a long
         // pass. The state-machine emitters are gated on the same flag,
         // so this is belt-and-braces.
-        if field.ball.cached_shot_target.is_none() {
+        //
+        // `save_rolled` blocks the second bite: a shot the physics already
+        // resolved as beating this keeper is not his parry. See the note in
+        // `handle_caught_ball_event`.
+        let Some(target) = field.ball.cached_shot_target.as_ref() else {
+            return;
+        };
+        if target.save_rolled {
             return;
         }
         let shooter_id = field.ball.previous_owner;
@@ -4395,7 +4709,26 @@ impl PlayerEventDispatcher {
         // that ends in the keeper's hands counted as a save — pushing
         // saves/on-target above 100% (more "saves" than on-target shots).
         if opponent_ball {
-            let was_shot = field.ball.cached_shot_target.is_some();
+            // ONE SHOT, ONE ROLL — and the physics may already have had it.
+            //
+            // `Ball::try_save_shot` latches `save_rolled` BEFORE it rolls.
+            // When the keeper is beaten it returns without clearing
+            // `cached_shot_target`, because the ball is still live and still
+            // a shot. So a shot the physics had already adjudicated as BEATEN
+            // arrived here with its cache armed, and any subsequent gather —
+            // off the post, off a defender, a ball dying at his feet — was
+            // booked as a save he had already been measured as not making.
+            //
+            // `save_rolled` is exactly the right discriminator: false means
+            // the physics never adjudicated this shot at all (it was gathered
+            // before it reached the arrival window — a cross plucked out of
+            // the air, a long shot claimed early), and those ARE saves.
+            let already_adjudicated = field
+                .ball
+                .cached_shot_target
+                .as_ref()
+                .is_some_and(|t| t.save_rolled);
+            let was_shot = field.ball.cached_shot_target.is_some() && !already_adjudicated;
             if was_shot {
                 let shooter_id = field.ball.previous_owner;
                 let shot_xg = field.ball.last_shot_xgot;
@@ -5261,7 +5594,15 @@ impl PlayerEventDispatcher {
     /// 100%.
     fn gk_clearing_shot(field: &MatchField) -> Option<u32> {
         let clearer_id = field.ball.current_owner?;
-        if field.ball.cached_shot_target.is_none() {
+        // A shot the physics has already rolled belongs to that roll — see
+        // `handle_caught_ball_event`. Only an unadjudicated shot can be
+        // cleared for a save here.
+        if field
+            .ball
+            .cached_shot_target
+            .as_ref()
+            .is_none_or(|t| t.save_rolled)
+        {
             return None;
         }
         // Real shot has a real shooter, otherwise this is residual cache
@@ -6142,11 +6483,27 @@ mod first_touch_loss_tests {
     }
 
     /// Cap holds — even 0-skill under maximum pressure can't exceed
-    /// the 0.30 ceiling.
+    /// the ceiling. See `MAX_LOSS`; raised 0.30 → 0.55 when the lane
+    /// coefficients went to 5×, because at that scale the old value was
+    /// binding across the whole weak-and-pressured region rather than
+    /// catching an outlier.
     #[test]
-    fn loss_probability_capped_at_thirty_percent() {
+    fn loss_probability_capped() {
         let worst = PlayerEventDispatcher::first_touch_loss_probability(0.0, 10);
-        assert!(worst <= 0.30 + 1e-6, "cap violated: got {}", worst);
+        assert!(worst <= 0.55 + 1e-6, "cap violated: got {}", worst);
+    }
+
+    /// The ceiling must stay a RAIL, not the model: an ordinary receiver
+    /// under ordinary pressure has to sit clear of it, or the skill and
+    /// pressure axes flatten into it and the two gradient tests above
+    /// start passing only by accident.
+    #[test]
+    fn ordinary_reception_is_nowhere_near_the_cap() {
+        let ordinary = PlayerEventDispatcher::first_touch_loss_probability(0.62, 2);
+        assert!(
+            ordinary < 0.30,
+            "an average receiver under two-man pressure should be well under the rail, got {ordinary}"
+        );
     }
 
     /// Clamping protects against out-of-range composite inputs.

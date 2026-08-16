@@ -18,6 +18,11 @@ const STAMINA_THRESHOLD: f32 = 20.0; // Minimum stamina to continue marking
 const BALL_PROXIMITY_THRESHOLD: f32 = 15.0; // Increased from 10.0 - react earlier to ball
 const HEADING_HEIGHT: f32 = 1.5;
 const HEADING_DISTANCE: f32 = 5.0;
+/// How close to our goal a man on the ball has to be before his marker
+/// stops holding a zone and goes and closes him down. 240u = 30 m —
+/// beyond that the shot is genuinely speculative and the shape is worth
+/// more than the challenge. See the release in `velocity`.
+const SHOOTING_RANGE: f32 = 240.0;
 
 #[derive(Default, Clone)]
 pub struct DefenderMarkingState {}
@@ -304,7 +309,38 @@ impl StateProcessingHandler for DefenderMarkingState {
             // pitch and took an 18-metre hole in the line with him. The
             // leash is his zone: a man who runs further than that is the
             // next defender's. See [`DefensiveLine::hold_shape`].
-            let desired_position = DefensiveLine::hold_shape(ctx, desired_position);
+            //
+            // ── …EXCEPT when his man is about to shoot ────────────────
+            //
+            // The zonal argument is right for a runner. It is wrong for a
+            // man who has the ball, facing the goal, inside shooting
+            // range: nobody in football watches that from his zone, and
+            // the release already exists for the same reason one field
+            // further in (`hold_shape` hands the box to man-marking).
+            //
+            // This is the chance-supply defect in one line. Measured over
+            // 200 matches: markers sat **5.8 m** off their man against an
+            // `ideal_marking_distance` of 0.9-1.75 m, and split by who was
+            // being marked, **midfielders were marked at 8.0 m** while
+            // forwards — who are inside the box, where the leash already
+            // releases — were marked at 2.8 m. Midfielders take 94% of
+            // their shots from 11-30 m, which is exactly the band where
+            // the leash was still holding their marker back. A man
+            // receiving fifteen metres out with nobody inside eight metres
+            // of him will shoot every time, and 39% of attackers in our
+            // own third had nobody within three metres at all.
+            //
+            // Shot volume is chance SUPPLY and supply is a defending
+            // question — see the note at `TARGET_SIZE_WEIGHT`, which
+            // measured that shot SELECTION cannot fix it (the whole
+            // 0.22→0.55 sweep moved the count only 130 → 109).
+            let man_is_shooting = opponent_to_mark.has_ball(ctx)
+                && (own_goal - opponent_to_mark.position).magnitude() < SHOOTING_RANGE;
+            let desired_position = if man_is_shooting {
+                desired_position
+            } else {
+                DefensiveLine::hold_shape(ctx, desired_position)
+            };
 
             let to_desired = desired_position - ctx.player.position;
             let distance = to_desired.magnitude();
@@ -366,7 +402,27 @@ impl StateProcessingHandler for DefenderMarkingState {
         // Marking a runner means matching their movement with the ball
         // live — high intensity. Was Moderate, which capped the defender
         // to a jog and let the marked attacker pull away.
-        DefenderCondition::with_velocity(ActivityIntensity::High).process(ctx);
+        // ⚠ A MARKER MUST BE ALLOWED TO RUN AS FAST AS THE MAN HE MARKS.
+        //
+        // This is a speed CAP (`MovementEffort::speed_fraction`), not a
+        // label. It read `High` — 0.78 of top speed — while
+        // `ForwardRunningInBehindState` declares `VeryHigh`, 0.95. So the
+        // striker making the run was allowed 22% more speed than the
+        // defender tracking it, every time, and no amount of marking-
+        // distance tuning could close a gap the movement layer was opening:
+        // over a 20 m run the cap alone puts 3.6 m between them.
+        //
+        // Measured against it: markers sat **5.7 m** off their man on the
+        // ticks where they were actually in a marking state, against an
+        // `ideal_marking_distance` of 0.9-1.75 m, and the attacker got away
+        // on 59% of duels.
+        //
+        // Raising it does NOT make defenders sprint all match — the tier is
+        // a ceiling and `MovementEffort` leaves any velocity already below
+        // it untouched, so a marker shadowing a walking attacker still
+        // walks. It only stops the movement layer from forbidding him to
+        // keep up. Fatigue is 75% velocity-driven for the same reason.
+        DefenderCondition::with_velocity(ActivityIntensity::VeryHigh).process(ctx);
     }
 }
 

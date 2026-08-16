@@ -520,7 +520,8 @@ impl<'p> StateProcessor<'p> {
             // here — the one point every state's movement converges on —
             // rather than inside twenty state machines that cannot see
             // each other. See `ShapeDiscipline`.
-            let shaped = ShapeDiscipline::apply(&processing_ctx, velocity);
+            let (shaped, pull) = ShapeDiscipline::apply_with_pull(&processing_ctx, velocity);
+            result.shape_recall_pull = pull;
             // Apply coach tempo multiplier to all player movement
             let tempo = processing_ctx.team().coach_instruction().tempo_multiplier();
             result.velocity = Some(shaped * tempo);
@@ -541,6 +542,7 @@ impl<'p> StateProcessor<'p> {
                 axis_lag,
                 moving,
             );
+            Self::note_keeper_guard(&processing_ctx, moving);
         }
 
         if let Some(change) = handler.process(&processing_ctx) {
@@ -560,6 +562,88 @@ impl<'p> StateProcessor<'p> {
         }
 
         result
+    }
+
+    /// One position sample per keeper per AI tick, on ticks where the ball
+    /// is live in his defensive third. See [`KeeperGuardDiag`] for what the
+    /// numbers mean and why an event counter cannot answer the question.
+    #[cfg(feature = "match-logs")]
+    fn note_keeper_guard(ctx: &StateProcessingContext, moving: bool) {
+        use crate::mid_run_diag::KeeperGuardDiag;
+
+        let PlayerState::Goalkeeper(gk_state) = ctx.player.state else {
+            return;
+        };
+        let goal = ctx.ball().direction_to_own_goal();
+        let ball = ctx.tick_context.positions.ball.position;
+        // Live ball, in the third he is responsible for. 300u = 37.5 m.
+        if (ball - goal).magnitude() > 300.0 || !ctx.ball().on_own_side() {
+            return;
+        }
+
+        let keeper = ctx.player.position;
+        let to_ball = ball - goal;
+        let span = to_ball.norm();
+        let rel = keeper - goal;
+        // Perpendicular distance from the goal-centre→ball line: the
+        // bisector he is supposed to be standing on.
+        let off_angle = if span > 1.0 {
+            (rel.x * to_ball.y - rel.y * to_ball.x).abs() / span
+        } else {
+            0.0
+        };
+        let ball_wide = ball.y - goal.y;
+        let keeper_wide = keeper.y - goal.y;
+
+        KeeperGuardDiag::note(0);
+        KeeperGuardDiag::add(1, (off_angle * 100.0).max(0.0) as u64);
+        KeeperGuardDiag::add(2, ((keeper.x - goal.x).abs() * 100.0) as u64);
+        // Does reading the game buy anything? Split the same measurement
+        // by the keeper's own positioning composite — the one that blends
+        // positioning / anticipation / decisions / concentration.
+        let read = crate::r#match::player::strategies::players::ops::goalkeeper_skill::
+            GoalkeeperSkillProfile::from_ctx(ctx)
+            .positioning;
+        let (ticks_slot, sum_slot) = if read >= 0.55 {
+            (13, 14)
+        } else if read <= 0.40 {
+            (15, 16)
+        } else {
+            (usize::MAX, usize::MAX)
+        };
+        KeeperGuardDiag::note(ticks_slot);
+        KeeperGuardDiag::add(sum_slot, (off_angle * 100.0).max(0.0) as u64);
+        KeeperGuardDiag::add(21, (read * 1000.0).max(0.0) as u64);
+        // Ball 5 m or more off centre and he is displaced toward the far
+        // post. There is no reading of the game in which that is right.
+        if ball_wide.abs() > 40.0
+            && keeper_wide.abs() > 10.0
+            && ball_wide.signum() != keeper_wide.signum()
+        {
+            KeeperGuardDiag::note(3);
+        }
+        if !moving {
+            KeeperGuardDiag::note(4);
+        }
+
+        // A man carrying the ball at him, inside 25 m — the situation the
+        // report is about.
+        let carrier = ctx
+            .players()
+            .opponents()
+            .with_ball()
+            .next()
+            .is_some_and(|o| (o.position - keeper).magnitude() < 200.0);
+        if carrier {
+            KeeperGuardDiag::note(5);
+            KeeperGuardDiag::add(9, (off_angle * 100.0).max(0.0) as u64);
+            match gk_state {
+                GoalkeeperState::ComingOut => KeeperGuardDiag::note(6),
+                GoalkeeperState::ReturningToGoal => KeeperGuardDiag::note(7),
+                GoalkeeperState::Standing | GoalkeeperState::Walking => KeeperGuardDiag::note(8),
+                _ => {}
+            }
+        }
     }
 
     pub fn into_ctx(self) -> StateProcessingContext<'p> {
@@ -651,6 +735,19 @@ pub struct StateProcessingResult {
     /// `player.pending_shot_reason` by `state.rs` so the Shooting state
     /// can read it when composing the event.
     pub shot_reason: Option<&'static str>,
+    /// How hard `ShapeDiscipline` is recalling this player, 0..`MAX_PULL`.
+    ///
+    /// Consumed by `state.rs` as a FLOOR on the movement speed cap. The
+    /// recall is built at the player's full top speed on purpose — the
+    /// thing being modelled is a recovery run — but the cap that follows
+    /// is keyed to whatever state he happens to be drifting in, and those
+    /// are the low tiers: `Standing` is `Recovery` (0.12) and `Returning`
+    /// / `CreatingSpace` are `Moderate` (0.52). So a forward 17 m out of
+    /// shape was recalled at full speed and then throttled to an amble,
+    /// which is precisely what the tether exists to stop. Without this
+    /// floor the block measured **54.2 m while defending against a
+    /// planned 31.3 m and a real 35-45 m**.
+    pub shape_recall_pull: f32,
 }
 
 impl Default for StateProcessingResult {
@@ -667,6 +764,7 @@ impl StateProcessingResult {
             events: EventCollection::new(),
             start_tackle_cooldown: false,
             shot_reason: None,
+            shape_recall_pull: 0.0,
         }
     }
 

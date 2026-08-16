@@ -1,4 +1,6 @@
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperSweepLimit,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -46,10 +48,14 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
                 return None;
             }
             return Some(StateChangeResult::with_goalkeeper_state(
-                if ctx.player().distance_from_start_position() > 40.0 {
-                    GoalkeeperState::ReturningToGoal
-                } else {
+                // Off his line and out of the space he defends → jog back;
+                // otherwise he is already where he wants to be. Measured on
+                // the goal axis, like every other keeper excursion — see
+                // [`KeeperSweepLimit`].
+                if KeeperSweepLimit::is_within(ctx, prof.rushing_out_profile) {
                     GoalkeeperState::Standing
+                } else {
+                    GoalkeeperState::ReturningToGoal
                 },
             ));
         }

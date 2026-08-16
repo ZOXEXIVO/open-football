@@ -3638,6 +3638,30 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             sa[4] as f32 / struck * 100.0,
             sa[5] as f32 / struck * 100.0,
         );
+        // …and whether the man who struck it makes any difference. If
+        // these three are the same number, finishing is decorative.
+        let bf = core::shot_accuracy_diag::finishing_snapshot();
+        if bf[0][0] > 0 && bf[2][0] > 0 {
+            let pct = |t: usize| bf[t][1] as f32 / bf[t][0].max(1) as f32 * 100.0;
+            println!(
+                "  aim on frame by SHOOTER finishing: poor(≤8) {:.1}% ({})   \
+                 ordinary {:.1}% ({})   elite(≥14) {:.1}% ({})",
+                pct(0),
+                bf[0][0],
+                pct(1),
+                bf[1][0],
+                pct(2),
+                bf[2][0]
+            );
+            println!(
+                "  population mean execution_skill at the strike: {:.3}   \
+                 (centre any accuracy quality term here)",
+                core::shot_accuracy_diag::EXECUTION_SUM
+                    .load(std::sync::atomic::Ordering::Relaxed) as f32
+                    / 1000.0
+                    / struck
+            );
+        }
     }
     let conversion = total_goals as f32 / total_on_target.max(1) as f32 * 100.0;
     println!("on-target→goal rate : {:.1}%  (real ~30%)", conversion);
@@ -4454,6 +4478,21 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     name,
                     ct[i],
                     ct[i] as f64 / cttotal.max(1) as f64 * 100.0
+                );
+            }
+        }
+
+        let et = core::time_band_diag::edge_tag_snapshot();
+        let ettotal: u64 = et.iter().sum();
+        println!();
+        println!("  11-16.5m EMITTED shots by reason (the band the shot bar cannot reach):");
+        for (i, name) in core::time_band_diag::ETAG_NAMES.iter().enumerate() {
+            if et[i] > 0 {
+                println!(
+                    "    {:<18} {:>7}  {:>5.1}%",
+                    name,
+                    et[i],
+                    et[i] as f64 / ettotal.max(1) as f64 * 100.0
                 );
             }
         }
@@ -6130,10 +6169,11 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             println!();
             println!(
                 "--- KEEPER SWEEP FUNNEL --- {:.0} come-out questions/match → carrier exists \
-                 {:.0} → inside scan {:.0} → COMMITTED {:.1}",
+                 {:.0} → inside scan {:.0} → nobody covering him {:.0} → COMMITTED {:.1}",
                 s[0] as f64 / n_matches as f64,
                 s[1] as f64 / n_matches as f64,
                 s[2] as f64 / n_matches as f64,
+                s[4] as f64 / n_matches as f64,
                 s[3] as f64 / n_matches as f64
             );
             let e = KeeperSweepDiag::exits();
@@ -6143,11 +6183,103 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 e[0], e[5], e[6]
             );
             println!(
+                "                        TOO-FAR-FROM-SLOT {} opponent-too-close {} \
+                 carrier-going-away {} shot-in-flight {}",
+                e[8], e[7], e[9], e[10]
+            );
+            println!(
                 "    save REACTION set: diving {:.1}/match  catching {:.1}  blocked {:.1}",
                 e[1] as f64 / n_matches as f64,
                 e[3] as f64 / n_matches as f64,
                 e[4] as f64 / n_matches as f64
             );
+        }
+    }
+
+    // ── KEEPER GUARD CENSUS ────────────────────────────────────────────
+    // Where the keeper actually STANDS while his goal is under threat.
+    // Every other keeper block counts events; none of them can see a
+    // keeper who is simply in the wrong place, because that failure emits
+    // nothing at all — it shows up as a shot he never got near, which is
+    // indistinguishable in `SAVE ACCOUNTING` from a shot that was too good.
+    {
+        use core::mid_run_diag::KeeperGuardDiag;
+        let g = KeeperGuardDiag::snapshot();
+        if g[0] > 0 {
+            let ticks = g[0] as f64;
+            println!();
+            println!(
+                "--- KEEPER GUARD CENSUS ({:.0} threat ticks/match — ball live within 37.5 m) ---",
+                ticks / n_matches as f64
+            );
+            println!(
+                "  off the goal→ball line {:.2} m   off his own line {:.2} m   \
+                 WRONG SIDE {:.1}%   standing still {:.1}%",
+                g[1] as f64 / 100.0 / ticks * 0.125,
+                g[2] as f64 / 100.0 / ticks * 0.125,
+                g[3] as f64 * 100.0 / ticks,
+                g[4] as f64 * 100.0 / ticks
+            );
+            // Does reading the game buy anything? If these two rows are
+            // the same number then every keeper in the game stands in the
+            // same place and positioning is a decorative attribute.
+            if g[13] > 0 && g[15] > 0 {
+                println!(
+                    "  off-angle by keeper READ: sharp (top third) {:.2} m over {:.0} ticks   \
+                     vs dull (bottom third) {:.2} m over {:.0} ticks",
+                    g[14] as f64 / 100.0 / g[13] as f64 * 0.125,
+                    g[13] as f64 / n_matches as f64,
+                    g[16] as f64 / 100.0 / g[15] as f64 * 0.125,
+                    g[15] as f64 / n_matches as f64
+                );
+            }
+            println!(
+                "  population mean of the keeper positioning composite: {:.3}   \
+                 (any quality term multiplying a calibrated quantity must be centred here)",
+                g[21] as f64 / 1000.0 / ticks
+            );
+            // The one that matters: how far off the shot was he WHEN IT
+            // ARRIVED. If these two are equal then position selection is a
+            // decorative attribute and all keeper quality lives in the
+            // save roll.
+            if g[17] > 0 && g[19] > 0 {
+                println!(
+                    "  lateral error AT THE SAVE by keeper READ: sharp {:.2} m ({} shots)   \
+                     vs dull {:.2} m ({} shots)",
+                    g[18] as f64 / 100.0 / g[17] as f64 * 0.125,
+                    g[17],
+                    g[20] as f64 / 100.0 / g[19] as f64 * 0.125,
+                    g[19]
+                );
+            }
+            if g[5] > 0 {
+                let c = g[5] as f64;
+                println!(
+                    "  with a CARRIER inside 25 m ({:.0}/match): off-angle {:.2} m   \
+                     ComingOut {:.1}%   ReturningToGoal {:.1}%   Standing/Walking {:.1}%",
+                    c / n_matches as f64,
+                    g[9] as f64 / 100.0 / c * 0.125,
+                    g[6] as f64 * 100.0 / c,
+                    g[7] as f64 * 100.0 / c,
+                    g[8] as f64 * 100.0 / c
+                );
+            }
+            let beaten = g[10];
+            let rolled = g[12];
+            if beaten + rolled > 0 {
+                println!(
+                    "  shots arriving on frame: {:.1}/match reached his save roll, \
+                     {:.1}/match were BEYOND HIS REACH ({:.0}% — mean miss {:.2} m)",
+                    rolled as f64 / n_matches as f64,
+                    beaten as f64 / n_matches as f64,
+                    beaten as f64 * 100.0 / (beaten + rolled) as f64,
+                    if beaten > 0 {
+                        g[11] as f64 / 100.0 / beaten as f64 * 0.125
+                    } else {
+                        0.0
+                    }
+                );
+            }
         }
     }
 
@@ -6561,11 +6693,22 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             println!();
             println!(
                 "  block span along the goal axis:  planned {:.1}m   actual {:.1}m   \
-                 worst single player {:.1}m out",
+                 worst single player {:.1}m out   (ALL PHASES — see the split below)",
                 anchor_span * 0.125,
                 actual_span * 0.125,
                 worst_lag * 0.125
             );
+            {
+                let (def_anchor, def_actual, def_share) = ShapeCensus::span_defending_snapshot();
+                println!(
+                    "    while DEFENDING only ({:.0}% of refreshes):  planned {:.1}m   \
+                     actual {:.1}m   (real defending block 35-45m; attacking 50-60m, so the \
+                     all-phase line above answers neither on its own)",
+                    def_share * 100.0,
+                    def_anchor * 0.125,
+                    def_actual * 0.125,
+                );
+            }
             println!();
             for (r, name) in [(1, "GK"), (2, "DEF"), (3, "MID"), (4, "FWD")] {
                 if role_ticks[r] == 0 {
@@ -6907,14 +7050,21 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         }
     }
 
-    let chain_order = [0usize, 1, 2, 4, 5, 6, 7, 8];
+    // `has_clear_shot()` (index 6) is NOT in the chain. It was removed from
+    // the forward gate deliberately — lane quality is priced continuously by
+    // `clarity_mult` inside the helper instead — but it was still printed as
+    // a cumulative stage, so the row after it showed a **negative drop** of
+    // -114.7% and the table read as "more shots come out of the gate than
+    // went in". It is a real measurement of how many of these shots had a
+    // clear lane, which is worth knowing; it is just not a filter. Printed
+    // below the chain as its own line.
+    let chain_order = [0usize, 1, 2, 4, 5, 7, 8];
     let chain_labels = [
         "has_ball_in_range (dist <= 90)",
         "can_shoot (not on cooldown)",
         "has_settled (ownership >= 30)",
         "!defer_to_teammate",
         "dist <= max_shot_distance",
-        "has_clear_shot()",
         "willingness roll passed",
         "FIRED (Shooting state entered)",
     ];
@@ -6938,11 +7088,22 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             s[i], share_of_base, drop_from_prior, chain_labels[row_idx]
         );
     }
-    // Informational observation, not part of chain.
+    // Informational observations, not part of the chain.
     let poss_share = s[3] as f64 / base as f64 * 100.0;
     println!(
         "  [info]   {:>5.1}% of in-range ticks had prefer_possession=false",
         poss_share
+    );
+    // Not a gate — see the note on `chain_order`. Shown against the shots
+    // that actually FIRED, which is the comparison worth having: how many
+    // of the shots we took had a clear lane.
+    let fired = s[8].max(1);
+    println!(
+        "  [info]   {} of in-range ticks had has_clear_shot() — {:.0}% of the {} shots FIRED \
+         (not a gate on this path; lane quality is priced continuously in the helper)",
+        s[6],
+        s[6] as f64 / fired as f64 * 100.0,
+        s[8],
     );
 
     // Tackle flow per role: entries (state process() calls), attempts
@@ -7054,6 +7215,32 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             0.0
         }
     );
+    {
+        use core::save_accounting_stats as s;
+        use std::sync::atomic::Ordering::Relaxed;
+        let staged = s::PENDING_STAGED.load(Relaxed);
+        let no_shooter = s::PENDING_NO_SHOOTER.load(Relaxed);
+        let delivered = s::PENDING_DELIVERED.load(Relaxed);
+        let no_player = s::PENDING_LOST_NO_PLAYER.load(Relaxed);
+        let same_team = s::PENDING_LOST_SAME_TEAM.load(Relaxed);
+        let vanished = staged.saturating_sub(delivered + no_player + same_team);
+        println!(
+            "  physics-save credit: staged {}, DELIVERED {} ({:.1}%)   lost: \
+             no-shooter-to-pair {}, id not on field {}, same team {}, \
+             VANISHED BEFORE DELIVERY {}",
+            staged,
+            delivered,
+            if staged > 0 {
+                delivered as f64 / staged as f64 * 100.0
+            } else {
+                0.0
+            },
+            no_shooter,
+            no_player,
+            same_team,
+            vanished,
+        );
+    }
 }
 
 /// Runtime per-player trace of the two failure modes you can only see by

@@ -54,8 +54,8 @@ impl StateProcessingHandler for DefenderPushingUpState {
         // abandon it. Losing possession is, and that is the branch below.
         let side = ctx.player.side.unwrap_or(PlayerSide::Left);
         let field_width = ctx.context.field_size.width as f32;
-        let ball_progress = side
-            .attacking_progress_x(ctx.tick_context.positions.ball.position.x, field_width);
+        let ball_progress =
+            side.attacking_progress_x(ctx.tick_context.positions.ball.position.x, field_width);
         if ball_progress < 1.0 / 3.0 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::TrackingBack,

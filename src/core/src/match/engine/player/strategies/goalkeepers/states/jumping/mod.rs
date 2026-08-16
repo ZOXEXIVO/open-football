@@ -63,7 +63,8 @@ impl StateProcessingHandler for GoalkeeperJumpingState {
         // far away as he can. Before this the state could only ever catch.
         if self.can_reach_ball(ctx) {
             let prof = GoalkeeperSkillProfile::from_ctx(ctx);
-            let crowd = (ctx.players().opponents().nearby(24.0).count() as f32 / 3.0).clamp(0.0, 1.0);
+            let crowd =
+                (ctx.players().opponents().nearby(24.0).count() as f32 / 3.0).clamp(0.0, 1.0);
             let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
             let power = ((ball_speed - 1.2) / 2.0).clamp(0.0, 1.0);
             let catch_prob = self.catch_probability(ctx, &prof);
@@ -148,7 +149,11 @@ impl GoalkeeperJumpingState {
     /// lives in `MatchPlayer::height`, out of reach of every distance
     /// helper), so the ball's own `z` is the height to measure and the
     /// jump is counted exactly once.
-    fn reach_envelope(&self, ctx: &StateProcessingContext, prof: &GoalkeeperSkillProfile) -> (f32, f32) {
+    fn reach_envelope(
+        &self,
+        ctx: &StateProcessingContext,
+        prof: &GoalkeeperSkillProfile,
+    ) -> (f32, f32) {
         let vertical = KeeperAerialClaim::leap_ceiling(ctx.player.skills.physical.jumping);
         let horizontal = MAX_DIVING_DISTANCE + prof.dive_reach * 6.0 + prof.aerial_command * 2.0;
         (vertical, horizontal)

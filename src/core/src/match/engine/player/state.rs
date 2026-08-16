@@ -485,10 +485,24 @@ impl PlayerMatchState {
             if player_position_group != PlayerFieldPositionGroup::Goalkeeper
                 && tick_context.ball.current_owner != Some(player.id)
             {
-                max_speed *= MovementEffort::speed_fraction(
+                // …but a shape recall is a RECOVERY RUN, and must not be
+                // throttled by the state the player was drifting in.
+                //
+                // `ShapeDiscipline` builds its recall at full top speed on
+                // purpose. The states a player drifts out of shape in are
+                // the low-effort ones — `Standing` is `Recovery` (0.12),
+                // `Returning` and `CreatingSpace` are `Moderate` (0.52) —
+                // so without this floor the recall was computed at 1.0 and
+                // then served at an amble, and the tether could never close
+                // the gap it was measuring. Flooring at the pull is exact
+                // rather than approximate: `pull` is literally the share of
+                // the final velocity that IS the recall, so this permits
+                // the recovery component and nothing more.
+                let effort = MovementEffort::speed_fraction(
                     player.last_activity_intensity,
                     player.player_attributes.condition_percentage(),
                 );
+                max_speed *= effort.max(state_change_result.shape_recall_pull);
             }
 
             // NaN/Inf guard: state velocity functions compose many

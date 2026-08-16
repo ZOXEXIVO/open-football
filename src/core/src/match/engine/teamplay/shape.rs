@@ -481,7 +481,16 @@ impl ShapeBuilder<'_> {
                 ShapeCensus::note_axis_lag(role, side.forward_delta(anchor.x, p.position.x));
             }
             if a_min <= a_max && p_min <= p_max {
-                ShapeCensus::note_span(a_max - a_min, p_max - p_min, worst);
+                // Split by phase: the defending block has a 35-45 m real
+                // target, the attacking one 50-60 m, so the all-phase mean
+                // answers neither question on its own.
+                let defending = self
+                    .field
+                    .ball
+                    .current_owner
+                    .and_then(|id| self.field.players.iter().find(|p| p.id == id))
+                    .is_some_and(|p| p.team_id != self.team_id);
+                ShapeCensus::note_span(a_max - a_min, p_max - p_min, worst, defending);
             }
         }
 

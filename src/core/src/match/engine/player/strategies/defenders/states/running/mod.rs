@@ -5,8 +5,6 @@ use crate::r#match::defenders::states::common::{
 };
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-#[cfg(feature = "match-logs")]
-use crate::mid_run_diag::OverlapDiag;
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
@@ -21,6 +19,8 @@ use crate::r#match::{
 };
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::DefenderShotDiag;
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::OverlapDiag;
 use nalgebra::Vector3;
 
 /// Reachability cap only — the same 320u (40 m) the forwards and

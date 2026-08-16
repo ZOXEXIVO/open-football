@@ -674,13 +674,16 @@ pub mod mid_run_diag {
     /// question, how many have an opponent carrying the ball, how many of
     /// those are inside his scan radius, and how many he actually commits
     /// to. Says WHERE the sweep is being lost.
-    pub static GK_SWEEP: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    /// 4 is "…and nobody is covering him", the question that decides
+    /// whether the carrier is the keeper's problem or the defence's.
+    pub static GK_SWEEP: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 
     /// Why a keeper ABANDONED a sweep he had committed to. 0 got the
     /// ball, 1 shot in flight, 2 dived, 3 claimed it, 4 fast ball at him,
     /// 5 ball beyond his pursuit range, 6 ball crossed halfway,
-    /// 7 opponent too close to risk it.
-    pub static GK_SWEEP_EXIT: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+    /// 7 opponent too close to risk it, 8 too far from his kickoff slot,
+    /// 9 opponent carrying it away from goal, 10 shot in flight.
+    pub static GK_SWEEP_EXIT: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
 
     /// Overlapping-fullback funnel. `should_overlap` is a conjunction of
     /// eight conditions; any one of them failing kills the behaviour, and
@@ -753,29 +756,102 @@ pub mod mid_run_diag {
 
     impl KeeperSweepDiag {
         pub fn note(stage: usize) {
-            if stage < 4 {
+            if stage < GK_SWEEP.len() {
                 GK_SWEEP[stage].fetch_add(1, Ordering::Relaxed);
             }
         }
 
         pub fn note_exit(reason: usize) {
-            if reason < 8 {
+            if reason < GK_SWEEP_EXIT.len() {
                 GK_SWEEP_EXIT[reason].fetch_add(1, Ordering::Relaxed);
             }
         }
 
-        /// `[reached, carrier exists, inside scan, committed]`.
-        pub fn snapshot() -> [u64; 4] {
-            let mut out = [0u64; 4];
+        /// `[reached, carrier exists, inside scan, committed, uncovered]`.
+        pub fn snapshot() -> [u64; 5] {
+            let mut out = [0u64; 5];
             for (slot, c) in out.iter_mut().zip(GK_SWEEP.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
             out
         }
 
-        pub fn exits() -> [u64; 8] {
-            let mut out = [0u64; 8];
+        pub fn exits() -> [u64; 12] {
+            let mut out = [0u64; 12];
             for (slot, c) in out.iter_mut().zip(GK_SWEEP_EXIT.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
+    /// **Is the keeper guarding his goal?** — the census that answers the
+    /// report "a striker runs at him, he is on the other side of the goal
+    /// and never comes to meet him".
+    ///
+    /// Every other keeper diagnostic counts EVENTS (dives, claims, sweeps
+    /// committed). None of them can see the failure mode being described,
+    /// which is not a missing event at all: it is the keeper standing in
+    /// the wrong PLACE for the whole build-up, so that by the time the
+    /// shot is struck there is no save to make. `SAVE ACCOUNTING` records
+    /// that as a shot he never got near, indistinguishable from a shot
+    /// that was simply too good.
+    ///
+    /// So this samples POSITION, once per keeper per AI tick, but only on
+    /// ticks that matter — the ball live in his defensive third. Two
+    /// numbers carry it:
+    ///
+    /// * **off-angle** — his perpendicular distance from the line joining
+    ///   the centre of his goal to the ball. That line IS the bisector he
+    ///   is supposed to stand on; the distance from it is exactly "how far
+    ///   wrong is he", independent of how deep he is.
+    /// * **wrong side** — the ball is meaningfully wide of centre and he
+    ///   is displaced toward the OTHER post. Not a matter of degree: there
+    ///   is no defensible reading of the game in which that is right.
+    ///
+    /// Slots: 0 threat ticks, 1 Σ off-angle ×100, 2 Σ depth off his line
+    /// ×100, 3 wrong-side ticks, 4 stationary ticks, 5 ticks with an
+    /// opponent CARRYING it inside 200u, 6 of those in ComingOut, 7 in
+    /// ReturningToGoal, 8 in a set/idle state (Standing / Walking), 9 Σ
+    /// off-angle ×100 on those carrier ticks, 10 shots that reached the
+    /// goal line on frame with the keeper beyond his own reach of them,
+    /// 11 Σ that lateral miss ×100, 12 shots that did reach his save roll,
+    /// 13/14 threat ticks and Σ off-angle ×100 for keepers in the TOP
+    /// third of the positioning composite, 15/16 the same for the bottom
+    /// third.
+    ///
+    /// 17-20 are the same split taken at the OUTCOME rather than mid-play:
+    /// 17/18 on-frame arrivals and Σ lateral error ×100 for a sharp
+    /// keeper, 19/20 for a dull one. This is the pair that answers "is
+    /// reading the game worth anything" — the mid-play off-angle rows
+    /// cannot, because a keeper who anticipates is deliberately NOT on the
+    /// line to where the ball is now, so leading the play reads there as
+    /// being out of position.
+    ///
+    /// 21 is Σ of the positioning composite ×1000 over slot 0, i.e. the
+    /// population mean. Any keeper-quality term that multiplies a
+    /// calibrated quantity has to be CENTRED on this or it silently
+    /// re-levels the model instead of adding an axis to it.
+    pub static GK_GUARD: [AtomicU64; 22] = [const { AtomicU64::new(0) }; 22];
+
+    pub struct KeeperGuardDiag;
+
+    impl KeeperGuardDiag {
+        pub fn note(slot: usize) {
+            if slot < GK_GUARD.len() {
+                GK_GUARD[slot].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn add(slot: usize, n: u64) {
+            if slot < GK_GUARD.len() {
+                GK_GUARD[slot].fetch_add(n, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 22] {
+            let mut out = [0u64; 22];
+            for (slot, c) in out.iter_mut().zip(GK_GUARD.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
             out
@@ -999,6 +1075,19 @@ pub mod mid_run_diag {
     pub static SPAN_ANCHOR_X10: AtomicU64 = AtomicU64::new(0);
     pub static SPAN_ACTUAL_X10: AtomicU64 = AtomicU64::new(0);
     pub static SPAN_SAMPLES: AtomicU64 = AtomicU64::new(0);
+    /// The same span, but only on refreshes where the OPPOSITION had the
+    /// ball — i.e. the block as a defensive shape.
+    ///
+    /// The aggregate above mixes phases, and the two have completely
+    /// different real-world targets: a defending block is 35-45 m, an
+    /// attacking one is 50-60 m because the full-backs are up and the
+    /// strikers are on the last line. Reading an all-phase mean against
+    /// the defending figure is the same category of error as reading a
+    /// per-tick block rate against a per-shot one, which cost this file
+    /// three rounds of work — see `defensive_shape_ownership`.
+    pub static SPAN_ACTUAL_DEF_X10: AtomicU64 = AtomicU64::new(0);
+    pub static SPAN_ANCHOR_DEF_X10: AtomicU64 = AtomicU64::new(0);
+    pub static SPAN_SAMPLES_DEF: AtomicU64 = AtomicU64::new(0);
     /// The single worst offender each sample: how far the most
     /// out-of-position player is from his own anchor. A block stretched
     /// by ONE stray player looks identical in the mean to one stretched
@@ -1265,11 +1354,16 @@ pub mod mid_run_diag {
             out
         }
 
-        pub fn note_span(anchor_span: f32, actual_span: f32, worst_lag: f32) {
+        pub fn note_span(anchor_span: f32, actual_span: f32, worst_lag: f32, defending: bool) {
             SPAN_ANCHOR_X10.fetch_add((anchor_span * 10.0) as u64, Ordering::Relaxed);
             SPAN_ACTUAL_X10.fetch_add((actual_span * 10.0) as u64, Ordering::Relaxed);
             SPAN_WORST_LAG_X10.fetch_add((worst_lag * 10.0) as u64, Ordering::Relaxed);
             SPAN_SAMPLES.fetch_add(1, Ordering::Relaxed);
+            if defending {
+                SPAN_ANCHOR_DEF_X10.fetch_add((anchor_span * 10.0) as u64, Ordering::Relaxed);
+                SPAN_ACTUAL_DEF_X10.fetch_add((actual_span * 10.0) as u64, Ordering::Relaxed);
+                SPAN_SAMPLES_DEF.fetch_add(1, Ordering::Relaxed);
+            }
         }
 
         /// `(mean anchor span, mean actual span, mean worst lag)` in units.
@@ -1279,6 +1373,18 @@ pub mod mid_run_diag {
                 SPAN_ANCHOR_X10.load(Ordering::Relaxed) as f32 / 10.0 / n,
                 SPAN_ACTUAL_X10.load(Ordering::Relaxed) as f32 / 10.0 / n,
                 SPAN_WORST_LAG_X10.load(Ordering::Relaxed) as f32 / 10.0 / n,
+            )
+        }
+
+        /// `(mean anchor span, mean actual span, share of samples)` for the
+        /// DEFENDING phase only — the one with a 35-45 m real target.
+        pub fn span_defending_snapshot() -> (f32, f32, f32) {
+            let all = SPAN_SAMPLES.load(Ordering::Relaxed).max(1) as f32;
+            let n = SPAN_SAMPLES_DEF.load(Ordering::Relaxed).max(1) as f32;
+            (
+                SPAN_ANCHOR_DEF_X10.load(Ordering::Relaxed) as f32 / 10.0 / n,
+                SPAN_ACTUAL_DEF_X10.load(Ordering::Relaxed) as f32 / 10.0 / n,
+                SPAN_SAMPLES_DEF.load(Ordering::Relaxed) as f32 / all,
             )
         }
     }
@@ -1455,6 +1561,14 @@ pub mod time_band_diag {
     /// the goalkeeper, which is not. Two fixes were aimed at that band on
     /// the strength of the share alone and neither could be evaluated.
     pub static EMITTED_CLOSE_BAND: [AtomicU64; ETAGS] = [ZERO_ONE; ETAGS];
+    /// …and for 11-16.5 m, which is now the biggest single shot source in
+    /// the game and the one the decision layer least controls: the band
+    /// emits **5.4 shots for every one the helper approves**, 33 a team a
+    /// match against a real 2.9, so raising or lowering the shot bar
+    /// barely touches it. An aggregate share cannot say which path is
+    /// producing them; this names it, the same way the 6-11 m mirror named
+    /// `MID_CLEAR_CHANCE`.
+    pub static EMITTED_EDGE_BAND: [AtomicU64; ETAGS] = [ZERO_ONE; ETAGS];
     pub const ETAG_NAMES: [&str; ETAGS] = [
         "header",
         "snapshot",
@@ -1503,6 +1617,14 @@ pub mod time_band_diag {
         let mut out = [0u64; ETAGS];
         for i in 0..ETAGS {
             out[i] = EMITTED_CLOSE_BAND[i].load(Ordering::Relaxed);
+        }
+        out
+    }
+    /// Reason breakdown for shots struck from the edge of the area.
+    pub fn edge_tag_snapshot() -> [u64; ETAGS] {
+        let mut out = [0u64; ETAGS];
+        for i in 0..ETAGS {
+            out[i] = EMITTED_EDGE_BAND[i].load(Ordering::Relaxed);
         }
         out
     }
@@ -1842,7 +1964,26 @@ const LONG_RANGE_FLOOR: f32 = 0.20;
 /// The reliefs, the spread and the per-band shaping above are all left
 /// exactly as they are — this moves the whole curve down without
 /// disturbing the distance mix they encode.
-const SHOT_BAR_BASE: f32 = 0.520;
+/// # 2026-08-17 — the level is now separable from the shape
+///
+/// The base is a pure volume knob: the reliefs, the spread and the floor
+/// are all assembled at [`RELIEF_REFERENCE_BASE`] and the whole bar is
+/// then scaled by `SHOT_BAR_BASE / RELIEF_REFERENCE_BASE`, so moving it no
+/// longer re-shapes the distance mix. Read the note at the threshold.
+///
+/// The 0.520 experiment above has now been run to conclusion and did not
+/// pay: teams took **100 shots and scored 11 goals each** while the
+/// defending side of the bargain did not arrive, and the mix inverted so
+/// far that a player was 45× likelier to shoot from 30 m than from 6 m.
+/// Restored to a footballing height. This is NOT the end of the supply
+/// question — 44 of those 100 shots came from inside the box against a
+/// real ~8, and that half is chance supply and belongs to the defensive
+/// shape (41% of attackers in our own third have nobody within 3 m).
+const SHOT_BAR_BASE: f32 = 0.950;
+/// The base the three reliefs, the spread and the floor were all sized
+/// against. Changing this re-shapes the bar; changing `SHOT_BAR_BASE`
+/// does not.
+const RELIEF_REFERENCE_BASE: f32 = 0.520;
 /// How much of the urge a man stretching at full tilt for a ball he has
 /// not got under control gives up. See `poise`.
 const STRETCH_COST: f32 = 0.45;
@@ -1934,7 +2075,60 @@ const CORRIDOR_FLOOR_SPAN: f32 = 176.0;
 /// the game altogether, which is the failure this whole term exists to
 /// undo. At 0.30 the same span becomes 0.98 → 0.58: a real preference
 /// for the closer look, not a veto on the far one.
-const TARGET_SIZE_WEIGHT: f32 = 0.22;
+///
+/// ⚠ IT WAS 0.22, AND AT 0.22 THERE IS ESSENTIALLY NO DISTANCE SPINE.
+/// The prose above describes 0.30; the constant said 0.22, so the two had
+/// drifted. Worked through for a central shooter:
+///
+/// | from | `angle_clarity` | `^0.22` | `^0.55` |
+/// |------|-----------------|---------|---------|
+/// |  6 m |           0.830 |   0.960 |   0.902 |
+/// | 16.5 m |         0.330 |   0.784 |   0.544 |
+/// | 30 m |           0.184 |   0.689 |   0.394 |
+/// | 40 m |           0.138 |   0.647 |   0.336 |
+///
+/// At 0.22 the whole pitch spans **1.48×**. This is the ONLY term that
+/// carries distance inside the comfortable range — `reach` is flat at 1.0
+/// out to 17.7 m, `angle_quality` is distance-invariant by construction
+/// ("am I central"), and `corridor` and `press` both IMPROVE with range
+/// because there is more space out there. So four of the seven factors
+/// reward shooting from distance and the one that opposes it was turned
+/// down to nearly nothing. Measured appetite fell only 0.586 → 0.247 from
+/// the six-yard box to beyond 30 m.
+///
+/// What that produced, over 200 matches at L14: **53.1% of shots from
+/// outside the box against a real 40%**, the 22-30 m band alone taking
+/// 25.3% against a real ~15%, and a population **xG/shot of 0.047 against
+/// a real 0.11**. The engine was not choosing shots; it was taking
+/// whatever was in front of it, and half of that was hopeful.
+///
+/// **Titrated against the outside-the-box share, which is the metric this
+/// constant actually controls.** Two measured points, 200 matches at L14:
+///
+/// | weight | outside-box share | shots/team | xG/shot | 30 m+ shots |
+/// |--------|-------------------|------------|---------|-------------|
+/// | 0.22   | 53.1%             | 129.9      | 0.047   | present     |
+/// | 0.55   | **16.8%**         | 108.9      | 0.060   | **0.0%**    |
+/// | **0.33** | **41.8%**       | 119.6      | 0.052   | MID 0.8% / FWD 4.2% |
+/// | real   | ~40%              | 13         | ~0.11   | a few       |
+///
+/// 0.55 overshoots into precisely the failure this term exists to prevent:
+/// it does not merely prefer the closer look, it deletes the long shot
+/// from the game — 30 m+ read 0.0% for EVERY line, and midfielders piled
+/// 81% of their shots into the single 11-16.5 m band. 0.33 interpolates
+/// onto the real 40%, and is where the prose above always said it should
+/// be.
+///
+/// Note what this constant cannot do. Across the whole 0.22 → 0.55 sweep
+/// the shot COUNT moved only 130 → 109 (−16%), against a real 13, and at
+/// 0.55 the engine still produced **90 inside-the-box shots per team per
+/// match against a real 7.8**. Shot SELECTION decides the mix; the volume
+/// is chance SUPPLY, and that belongs to the defensive shape — the block
+/// measures 54 m against a planned 33 m, the back line spreads 13 m deep
+/// against a real 3-8 m, and 48% of attackers in the defensive third have
+/// nobody within 3 m. Do not keep winding this up to chase the shot
+/// count; past ~0.4 it buys mix distortion for almost no volume.
+const TARGET_SIZE_WEIGHT: f32 = 0.33;
 /// How much of the full relief a point-blank chance gets.
 ///
 /// Sized against shot QUALITY, not shot count. At 1.0 the close-range
@@ -2879,10 +3073,31 @@ pub fn evaluate_forward_shot_decision(
     // to 43% of all shots while 11-22 m collapsed to 19%. Move it in
     // small steps and re-read the whole distance mix, never just the
     // total.
-    // `range_ease` is now an ABSOLUTE relief in bar units — each of the
-    // three reliefs carries its own magnitude — so it is subtracted
-    // directly rather than scaled by a shared constant here.
-    let threshold = (SHOT_BAR_BASE + spread * 0.24 - range_ease).max(LONG_RANGE_FLOOR);
+    // `range_ease` is an ABSOLUTE relief in bar units — each of the three
+    // reliefs carries its own magnitude — so it is subtracted directly
+    // rather than scaled by a shared constant.
+    //
+    // …but the WHOLE assembled bar is then scaled, and that is what makes
+    // `SHOT_BAR_BASE` a usable knob.
+    //
+    // Because the reliefs subtract, raising the base by a constant does
+    // not raise the bar by a constant: it lands entirely on the bands that
+    // have no relief, and re-shapes the distance mix every time it moves.
+    // This file warns about that in three places and it is still what
+    // happens — measured, 0.520 → 0.700 cut shots 99 → 73 but drove the
+    // 11-16.5 m band to **59.7% of every shot in the game** (real 22%) and
+    // collapsed the outside-box share to 21.9% (real 40%), because the
+    // relief plateau there survived a lift that killed the speculative
+    // band around it.
+    //
+    // Shape and level are separate questions and now have separate knobs.
+    // The three reliefs and the spread were all sized against a base of
+    // `RELIEF_REFERENCE_BASE`, so the bar is assembled at that reference
+    // and scaled as a whole. The mix the long titration rounds shaped is
+    // preserved under any level, and `SHOT_BAR_BASE` moves volume alone.
+    let shape = RELIEF_REFERENCE_BASE + spread * 0.24 - range_ease;
+    let level = SHOT_BAR_BASE / RELIEF_REFERENCE_BASE;
+    let threshold = (shape * level).max(LONG_RANGE_FLOOR * level);
 
     // Sampled HERE rather than at the top of the roll so the table can
     // carry `threshold` alongside the appetite. Nothing between the two

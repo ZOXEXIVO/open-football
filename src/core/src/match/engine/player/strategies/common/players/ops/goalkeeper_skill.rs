@@ -120,6 +120,21 @@ fn handling_curve(x: f32) -> f32 {
 }
 
 impl GoalkeeperSkillProfile {
+    /// Where [`Self::positioning`] sits for the population.
+    ///
+    /// The composite is a weighted blend of eight attributes put through
+    /// `keeper_curve`, so it does NOT centre on 0.5 — measured over 60
+    /// matches at L14 (`KEEPER GUARD CENSUS`, printed by `dev_match
+    /// stats`) it comes out at **0.479**.
+    ///
+    /// Any term that multiplies a CALIBRATED quantity by keeper quality
+    /// has to be centred here rather than on 0.5, or it does not add a
+    /// skill axis — it silently re-levels the whole model by the
+    /// difference, which is exactly the trap `SaveModel::strike_power`
+    /// documents. Re-derive it from the census if the composite's weights
+    /// ever move.
+    pub const POPULATION_READ: f32 = 0.479;
+
     /// Cross-tick memoized per (condition, jadedness, minute) — see
     /// `DefenderSkillProfile::from_player_memo` for the pattern. The GK
     /// profile's only in-match-varying inputs are those three integers

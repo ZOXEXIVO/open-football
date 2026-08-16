@@ -264,11 +264,36 @@ impl SaveModel {
     /// PIPELINE`: 725 of 1482), so a 4% relative cut here is ~2%
     /// overall — below the run-to-run floor. Reach for shot volume or
     /// the willingness roll instead.
-    const SKILL_FLOOR: f32 = 0.57;
-    /// Width of the keeper-quality band. Mean skill (0.5) lands on
-    /// 0.68 — the multiplier the ~67% population save rate is
-    /// calibrated on — so restoring the spread is calibration-neutral
-    /// at the population mean while the tails move where they should.
+    ///
+    /// ⚠ THAT MEASUREMENT PREDATES THE SAVE-CREDIT LEAK FIX (2026-08-16)
+    /// and its central premise was void. Physics saves were being staged
+    /// on `Ball::pending_save_credit` and then DELETED by the dead-ball
+    /// clear before delivery, which is why the physics roll looked like it
+    /// accounted for only half the credited saves. With delivery at 100%
+    /// the split is **85% physics** (10720 of 12665), so a cut here now
+    /// carries most of the way through — which is what the 0.57 → 0.54
+    /// re-measurement below tested.
+    ///
+    /// **Back to 0.54, deliberately.** With honest accounting the engine
+    /// measured saves/on-target at 71.3%, against the harness's stated
+    /// real ~67%. 0.54 puts an ordinary duel back on `FLOOR + SLOPE/2` =
+    /// **0.68**. The keeper-quality axis is untouched — only the level
+    /// moves, and it moves at every division equally because the
+    /// multiplier is a contest.
+    const SKILL_FLOOR: f32 = 0.54;
+    /// Width of the keeper-quality band.
+    ///
+    /// Mean skill (0.5) lands on `FLOOR + SLOPE/2` = **0.68**, which is
+    /// what `an_ordinary_duel_holds_the_calibrated_population_save_rate`
+    /// pins.
+    ///
+    /// Be careful which figure you are chasing: the harness prints "real
+    /// ~67%" while `skill_multiplier`'s own header cites "a real ~69-71%
+    /// at every level". Both are defensible against real football and
+    /// they are not the same target. Between 2026-08-08 and 2026-08-16
+    /// the floor sat at 0.57 (an ordinary duel = 0.71) while three
+    /// separate prose comments still advertised 0.68, so the code and its
+    /// documentation disagreed about which of the two was in force.
     const SKILL_SLOPE: f32 = 0.28;
     const MIN_SAVE: f32 = 0.08;
     const MAX_SAVE: f32 = 0.92;
@@ -279,6 +304,99 @@ impl SaveModel {
     pub(crate) fn geometric_base(reach_ratio: f32) -> f32 {
         let r = reach_ratio.clamp(0.0, 1.0);
         Self::CENTRED_BASE - r * r * Self::STRETCH_PENALTY
+    }
+
+    /// Ticks a keeper needs, from set, to reach full stretch. ~0.45 s at
+    /// 100 engine ticks a second: the reaction plus the dive. Inside that
+    /// he is still getting there and only part of his reach is available,
+    /// which is why a shot from six yards beats keepers a shot from
+    /// twenty-five does not.
+    const FULL_STRETCH_TICKS: f32 = 45.0;
+    /// Floor on that: even a point-blank strike can hit a raised hand.
+    const REFLEX_FLOOR: f32 = 0.42;
+    /// Ceiling on the angle projection. Physically it runs away as the
+    /// keeper closes on the ball, and past a certain point the model stops
+    /// describing a save and starts describing a block.
+    const MAX_PROJECTION: f32 = 2.0;
+
+    /// **The angle the keeper is covering, priced properly.**
+    ///
+    /// # The defect this replaces
+    ///
+    /// Both save paths asked one question: how far is the keeper's `y`
+    /// from the `y` at which the ball crosses the goal line. That is the
+    /// right question for a keeper standing ON the line, and the wrong one
+    /// for every other keeper, because a keeper off his line is *between*
+    /// the ball and the goal — he covers a WEDGE, and the same dive covers
+    /// proportionally more of the mouth the further out he is. Priced flat
+    /// at the goal line, every metre he advanced to narrow the angle
+    /// counted as a metre of error instead.
+    ///
+    /// The consequence was total and invisible: the strategy that
+    /// maximised saves under it was to **stand dead centre on the goal
+    /// line and never move**. A median keeper reaches 26u and the goal is
+    /// 29u to a post, so a keeper who never leaves the middle of his line
+    /// covers 90% of the mouth by width, while the keeper who plays the
+    /// angle correctly — which is what `KeeperRestPosition` builds, and
+    /// what real keepers do — reads as out of position by construction.
+    /// Measured over 60 matches: **22% of every shot that arrived inside
+    /// the frame never reached the save roll at all, the keeper a mean
+    /// 6.10 m from the crossing point** — the reported "he is on the other
+    /// side of the goal and it goes in". No amount of state-machine work
+    /// could move that number, because the state machine was being
+    /// punished for getting it right.
+    ///
+    /// # The model
+    ///
+    /// Two terms, and they pull AGAINST each other — which is exactly why
+    /// a keeper's decision to come out is a decision at all rather than
+    /// free:
+    ///
+    /// * **Projection.** From the striker's eye the keeper's body subtends
+    ///   an angle; extended to the goal line that shadow is `r` times his
+    ///   real width, where `r = ball_depth / (ball_depth − keeper_depth)`
+    ///   measures the two along the goal-to-goal axis. Both where he is
+    ///   covering and how much he covers scale by it.
+    /// * **Time.** Coming to meet it costs him the flight time he needs to
+    ///   get to full stretch. The ball reaches a keeper six metres out
+    ///   sooner than one on his line, so the closer he comes the less of
+    ///   his reach he can actually deploy.
+    ///
+    /// A keeper on his line gets `r = 1` and a full flight to read it, so
+    /// this is **bit-identical to the old test for him** — the calibration
+    /// it was tuned on is preserved, and only the behaviour that was being
+    /// wrongly punished changes.
+    pub(crate) fn wedge(
+        struck_from: Vector3<f32>,
+        ball_speed: f32,
+        keeper: Vector3<f32>,
+        base_reach: f32,
+        goal_x: f32,
+        goal_line_y: f32,
+    ) -> (f32, f32) {
+        let ball_depth = (struck_from.x - goal_x).abs();
+        let keeper_depth = (keeper.x - goal_x).abs();
+        let gap = ball_depth - keeper_depth;
+
+        // How long the ball is in the air before it reaches HIM — the time
+        // he has to extend, not the time it takes to reach the goal.
+        let flight =
+            ((struck_from - keeper).magnitude() / ball_speed.max(0.05)) / Self::FULL_STRETCH_TICKS;
+        let ready = flight.clamp(Self::REFLEX_FLOOR, 1.0);
+
+        // Level with the ball or beyond it: he has been passed, there is
+        // no wedge left to cover and only his own body is in the way.
+        if gap <= 1.0 || ball_depth <= 1.0 {
+            return ((keeper.y - goal_line_y).abs(), base_reach * ready);
+        }
+
+        let projection = (ball_depth / gap).clamp(1.0, Self::MAX_PROJECTION);
+        // Where his body shadows the goal line, seen from the strike.
+        let shadow_y = struck_from.y + (keeper.y - struck_from.y) * projection;
+        (
+            (shadow_y - goal_line_y).abs(),
+            base_reach * projection * ready,
+        )
     }
 
     /// Speed at which a strike starts to beat a keeper on pace alone, in
@@ -422,9 +540,9 @@ impl SaveModel {
     /// gap was almost exactly the multiplier's own span: on a dead-centre
     /// shot a weak keeper sat at 0.512 and an elite one at 0.635.
     ///
-    /// An equal-quality duel returns `SKILL_FLOOR + SKILL_SLOPE/2` —
-    /// the same 0.68 the population save rate was calibrated on — so
-    /// this is calibration-neutral at the mean while removing the drift.
+    /// An equal-quality duel returns `SKILL_FLOOR + SKILL_SLOPE/2` =
+    /// **0.68**, so this is calibration-neutral at the mean while
+    /// removing the drift.
     /// Crucially it does NOT delete the keeper axis, which the previous
     /// flat-multiplier attempts did: a keeper better than the strikers
     /// he faces still saves more, and that difference is now measured
@@ -1413,11 +1531,51 @@ impl Ball {
         //   skills 1   → 20u (2.5m, standing dive — can touch the post)
         //   skills 10  → 26u (3.25m, covers most of the goal)
         //   skills 20  → 32u (4.0m, elite full-stretch — beyond the post)
-        let reach = 20.0 + scaled_agility * 8.0 + scaled_reflexes * 4.0;
-        let lateral_error = (keeper.position.y - shot_target.goal_line_y).abs();
+        let base_reach = 20.0 + scaled_agility * 8.0 + scaled_reflexes * 4.0;
+        // …and how much of the GOAL that reach is worth from where he is
+        // standing. See `SaveModel::wedge`: measuring the gap flat at the
+        // goal line charged him for every metre he came to narrow the
+        // angle. Identical to the old test for a keeper on his line.
+        let (lateral_error, reach) = SaveModel::wedge(
+            shot_target.struck_from,
+            self.velocity.norm(),
+            keeper.position,
+            base_reach,
+            goal_x,
+            shot_target.goal_line_y,
+        );
+        // How well his positioning served him on THIS shot, split by how
+        // good a reader of the game he is. Recorded before the reach test
+        // so both outcomes are in the same denominator.
+        #[cfg(feature = "match-logs")]
+        {
+            let m = &keeper.skills.mental;
+            let read = (m.positioning + m.anticipation + m.decisions + m.concentration) / 80.0;
+            let (n_slot, sum_slot) = if read >= 0.60 {
+                (17, 18)
+            } else if read <= 0.45 {
+                (19, 20)
+            } else {
+                (usize::MAX, usize::MAX)
+            };
+            crate::mid_run_diag::KeeperGuardDiag::note(n_slot);
+            crate::mid_run_diag::KeeperGuardDiag::add(sum_slot, (lateral_error * 100.0) as u64);
+        }
         if lateral_error > reach {
+            // He was not there to be beaten. Counted separately from the
+            // saves he loses on the roll — this is a POSITIONING outcome,
+            // and lumping the two together is what let the keeper's
+            // whereabouts during the build-up go unmeasured. See
+            // `KeeperGuardDiag`.
+            #[cfg(feature = "match-logs")]
+            {
+                crate::mid_run_diag::KeeperGuardDiag::note(10);
+                crate::mid_run_diag::KeeperGuardDiag::add(11, (lateral_error * 100.0) as u64);
+            }
             return;
         }
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::KeeperGuardDiag::note(12);
 
         // Base save chance. Centered shot ~0.88; full-stretch ~0.30.
         // Skill handles the rest; this curve is purely geometry.
@@ -1544,6 +1702,11 @@ impl Ball {
         // shots stat-less.
         if let Some(shooter_id) = self.previous_owner {
             self.pending_save_credit = Some((keeper_id, shooter_id));
+            #[cfg(feature = "match-logs")]
+            save_accounting_stats::PENDING_STAGED.fetch_add(1, Ordering::Relaxed);
+        } else {
+            #[cfg(feature = "match-logs")]
+            save_accounting_stats::PENDING_NO_SHOOTER.fetch_add(1, Ordering::Relaxed);
         }
         // How far he had to go for it — the state machine turns this into
         // a dive, a catch or a block. See `pending_save_reach`.
@@ -1555,6 +1718,7 @@ impl Ball {
 
         if outcome_roll < p_catch {
             // Clean catch — keeper holds.
+            self.pending_save_site = 1; // catch
             self.position = keeper_pos;
             self.position.z = 0.0;
             self.velocity = Vector3::zeros();
@@ -1567,6 +1731,7 @@ impl Ball {
         }
 
         if outcome_roll < p_safe {
+            self.pending_save_site = 0; // parry — tipped round the post
             #[cfg(feature = "match-logs")]
             crate::mid_run_diag::SAVE_PARRY_FIRED.fetch_add(1, Ordering::Relaxed);
             // Parried OUT for a corner. The outcome is already decided, so
@@ -1613,6 +1778,7 @@ impl Ball {
         // Dangerous parry — ball spills off the keeper's hands. Arms the
         // rebound window so the attacking team's follow-up shot isn't
         // killed by the team shot-spacing gate.
+        self.pending_save_site = 0; // parry — spilled
         self.last_rebound_tick = tick;
         // Real goalkeepers under pressure push the ball toward the side
         // they're already diving, not back into the central goalmouth
@@ -1689,6 +1855,56 @@ impl Ball {
 #[cfg(test)]
 mod tests {
     use super::SaveModel;
+    use nalgebra::Vector3;
+
+    /// A keeper standing ON his line must get exactly the treatment he got
+    /// before the wedge existed. Everything about the population save rate
+    /// was calibrated on that case, so if this drifts the calibration has
+    /// been moved without anyone deciding to move it.
+    #[test]
+    fn a_keeper_on_his_line_is_priced_exactly_as_before() {
+        let struck_from = Vector3::new(150.0, 300.0, 0.0);
+        let keeper = Vector3::new(0.0, 285.0, 0.0);
+        let (error, reach) = SaveModel::wedge(struck_from, 2.6, keeper, 26.0, 0.0, 270.0);
+        assert!(
+            (error - 15.0).abs() < 0.01,
+            "on the line the error is the plain lateral gap, got {error:.2}"
+        );
+        assert!(
+            (reach - 26.0).abs() < 0.01,
+            "…and his full reach is available for a shot from 19 m, got {reach:.2}"
+        );
+    }
+
+    /// Coming out to narrow the angle has to PAY, and it has to pay for
+    /// the right reason: the same body covers more of the goal the further
+    /// from it he stands. Before the wedge this was strictly punished —
+    /// every metre off his line counted as a metre of error — which made
+    /// standing dead centre on the line the optimal strategy in the engine
+    /// and turned `KeeperRestPosition`'s angle model into a liability.
+    #[test]
+    fn narrowing_the_angle_pays_and_being_off_it_costs_more() {
+        // Shot from 19 m, wide right. The goal centre is y = 270.
+        let struck_from = Vector3::new(150.0, 300.0, 0.0);
+        let goal_line_y = 255.0; // aimed back across, to the far post
+        let on_the_line = Vector3::new(0.0, 270.0, 0.0);
+        let advanced_on_angle = Vector3::new(50.0, 280.0, 0.0);
+        let advanced_off_angle = Vector3::new(50.0, 295.0, 0.0);
+
+        let deficit = |k| {
+            let (e, r) = SaveModel::wedge(struck_from, 2.6, k, 26.0, 0.0, goal_line_y);
+            e - r
+        };
+        assert!(
+            deficit(advanced_on_angle) < deficit(on_the_line),
+            "coming out ON the angle must improve his chance of reaching it"
+        );
+        assert!(
+            deficit(advanced_off_angle) > deficit(advanced_on_angle),
+            "…and coming out on the WRONG angle must cost more than staying home, \
+             because the same error is magnified by the distance"
+        );
+    }
 
     /// The keeper-quality axis must stay wide enough that a youth keeper
     /// and an international are visibly different players.
@@ -1728,14 +1944,28 @@ mod tests {
     /// at the calibration reference (`dev_match stats 200 14 14`),
     /// saves/on-target is 66.7% against a real ~67%, and goals/match
     /// 2.59 against a real ~2.5.
+    ///
+    /// ⚠ AND BACK TO 0.66-0.70 (2026-08-16), with the floor. The 66.7%
+    /// quoted above was measured through the save-credit leak — physics
+    /// saves staged on `Ball::pending_save_credit` were deleted by the
+    /// dead-ball clear before they could be booked, so roughly a third of
+    /// the engine's own saves never reached the counter. **Every
+    /// saves/on-target figure recorded in this file before that date is
+    /// understated**, including the 66.7% that justified the 0.69-0.73
+    /// band. With delivery at 100% the same 0.57 floor measured 71.3%.
     #[test]
     fn an_ordinary_duel_holds_the_calibrated_population_save_rate() {
         // An evenly-matched duel — which is what a division's average
         // keeper faces every week, at every level.
         let mid = SaveModel::skill_multiplier(0.5, SaveModel::NEUTRAL_THREAT);
+        // 0.66-0.70, centred on `SKILL_FLOOR + SKILL_SLOPE/2` = 0.68. The
+        // band was 0.69-0.73 while the floor sat at 0.57; it moved with the
+        // floor back to 0.54 — see the note on `SKILL_FLOOR`. Widening it
+        // to span both would defeat the point: the whole job of this test
+        // is to fail when the population save level drifts.
         assert!(
-            (0.69..=0.73).contains(&mid),
-            "an ordinary duel must stay in the calibrated 0.69-0.73 band, got {mid:.3}"
+            (0.66..=0.70).contains(&mid),
+            "an ordinary duel must stay in the calibrated 0.66-0.70 band, got {mid:.3}"
         );
     }
 

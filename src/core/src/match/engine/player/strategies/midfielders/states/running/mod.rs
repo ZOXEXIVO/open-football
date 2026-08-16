@@ -364,10 +364,74 @@ impl StateProcessingHandler for MidfielderRunningState {
                 // 0.10 is a genuinely clear look on this scale: it is met
                 // inside ~11 m and not beyond it, which is the shape the
                 // gate was written to have.
-                let clear_good = distance_to_goal <= PENALTY_AREA_DEPTH
+                // ⚠ …AND THE RANGE HAS TO BE THE ARRIVING RUNNER'S, NOT
+                // THE WHOLE PENALTY AREA.
+                //
+                // This tier is deterministic — no bar, no willingness
+                // roll, no cooldown, all three deliberately removed on
+                // 2026-08-16 — so its range gate is the ONLY thing
+                // deciding how often it fires. Widened from 88u to the
+                // full 132u penalty area in the same batch, it became the
+                // largest single shot source in the engine: measured over
+                // 40 matches, **82.1% of every shot struck from 11-16.5 m
+                // carries this reason**, 32 a team a match against a real
+                // 2.9 for the whole band, and the band emits 5.4 shots for
+                // every one the decision layer approves. Raising or
+                // lowering `SHOT_BAR_BASE` cannot touch any of them.
+                //
+                // The prose above describes an arriving eight at the
+                // penalty spot or the edge of the six. That is 11 m, which
+                // is what the gate used to say. Beyond it a midfielder is
+                // making an ordinary shooting decision and belongs in the
+                // decision layer with everybody else — Tier 2, immediately
+                // below, is exactly that path.
+                //
+                // The xG floor cannot substitute for the range gate: it
+                // reads `expected_xg(d, true)`, the LOCATION value with a
+                // clear lane assumed, so at 14 m it returns a comfortable
+                // number for chances that realise at 0.056.
+                const ARRIVING_RUNNER_RANGE: f32 = 88.0; // 11 m
+                // ⚠ …AND "CLEAR" HAS TO MEAN CLEAR.
+                //
+                // Narrowing the range alone does not bound a DETERMINISTIC
+                // tier — it just moves which band it owns. Measured: with
+                // the range back at 11 m, this path stopped producing 82%
+                // of the 11-16.5 m shots and immediately produced 37.7% of
+                // all shots from 6-11 m instead, at an emit-to-approval
+                // ratio of 297%. Wherever its gate ends, it saturates the
+                // band underneath, because nothing else in it is a
+                // probability.
+                //
+                // A deterministic bypass of the whole decision layer has
+                // to be reserved for the look that genuinely admits no
+                // deliberation, and that is not "a midfielder inside
+                // eleven metres". The xG floor cannot draw the line
+                // either — recorded xG/shot measures 0.096 inside six
+                // metres and 0.104 from 6-11 m, i.e. the two bands are
+                // indistinguishable by chance quality, because what
+                // separates a sitter from a scramble is not where he is
+                // standing but whether anybody is near him.
+                //
+                // So: space. Three metres of it, inside eleven, facing a
+                // good angle — that is the arriving eight at the penalty
+                // spot this tier was written for, and he shoots without
+                // thinking about it. A midfielder with a defender on him
+                // is making an ordinary decision and goes through Tier 2
+                // with everybody else. The old `has_clear_shot()` veto was
+                // rightly removed (it asked about the LANE, which is
+                // priced continuously downstream); this asks about the MAN,
+                // which nothing downstream prices at all.
+                const CLEAR_CHANCE_SPACE: f32 = 24.0; // 3 m
+                let clear_good = distance_to_goal <= ARRIVING_RUNNER_RANGE
                     && coach.shooting_reluctance() < 0.5
                     && ctx.player().shooting().has_good_angle()
-                    && sp.expected_xg(distance_to_goal, true) >= 0.10;
+                    && sp.expected_xg(distance_to_goal, true) >= 0.10
+                    && ctx
+                        .tick_context
+                        .grid
+                        .opponents(ctx.player.id, CLEAR_CHANCE_SPACE)
+                        .next()
+                        .is_none();
                 // 2026-08-16: the `shots_taken <= 2` anti-monopoly cap is
                 // REMOVED. A midfielder who has already had two efforts is
                 // not thereby barred from a clear chance at the penalty
@@ -748,9 +812,36 @@ impl StateProcessingHandler for MidfielderRunningState {
             // that beats the line is better than the run, and only the
             // GENERIC "give it to someone better placed" below is worse
             // than it.
+            // ⚠ `openness` IS A DISTANCE IN DISGUISE, AND 0.22 IS FOUR
+            // METRES. `openness = nearest / RUNNING_ROOM` with
+            // `RUNNING_ROOM` = 18 m, so the bar for "there is grass in
+            // front, run into it" was **a defender more than 4.0 m away**.
+            //
+            // Four metres is not space you carry into, it is space you
+            // pass out of — and because this branch sits above `switch`
+            // and `should_pass`, clearing that bar meant the generic
+            // "give it to someone better placed" was never asked. The
+            // result is the engine's largest departure from real football:
+            // `CARRY` took **96.9% of every on-ball tick** a midfielder
+            // had, progressive carries ran **36.8 per midfielder per match
+            // against a real ~2**, and the ball reached shooting range by
+            // being run there rather than passed there. Shots 120/team
+            // against a real 13.
+            //
+            // 0.55 is 9.9 m — a genuinely clear channel, which is what a
+            // player is looking at when he decides to drive rather than
+            // release. Below that the man ahead is close enough to be a
+            // decision, and the decision belongs to the branches beneath
+            // this one.
+            //
+            // Titration note: this is the chance-SUPPLY lever, and it is
+            // the one place raising the bar does not distort the shot mix
+            // the way `TARGET_SIZE_WEIGHT` does — it removes the arrival,
+            // not the attempt.
+            const CARRY_ROOM: f32 = 0.55;
             if goal_dist > POINT_BLANK_DISTANCE
                 && goal_dist < field_width * 0.85
-                && lane.openness > 0.22
+                && lane.openness > CARRY_ROOM
             {
                 onball_diag::record(Exit::Carry);
                 return None;

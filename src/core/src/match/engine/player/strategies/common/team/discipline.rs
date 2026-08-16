@@ -101,17 +101,27 @@ impl ShapeDiscipline {
     /// Returns the velocity unchanged whenever the ball is this player's
     /// job.
     pub fn apply(ctx: &StateProcessingContext, velocity: Vector3<f32>) -> Vector3<f32> {
+        Self::apply_with_pull(ctx, velocity).0
+    }
+
+    /// As [`Self::apply`], but also reports how hard the recall is pulling
+    /// so the caller can stop the movement-effort cap from throttling a
+    /// recovery run — see `StateProcessingResult::shape_recall_pull`.
+    pub fn apply_with_pull(
+        ctx: &StateProcessingContext,
+        velocity: Vector3<f32>,
+    ) -> (Vector3<f32>, f32) {
         // A/B control for the positional layer — see
         // `MatchContext::shape_off`.
         if MatchContext::shape_off() || Self::is_exempt(ctx) {
-            return velocity;
+            return (velocity, 0.0);
         }
 
         let anchor = ctx.team().my_anchor();
         let to_anchor = anchor - ctx.player.position;
         let lag = to_anchor.magnitude();
         if lag <= SLACK {
-            return velocity;
+            return (velocity, 0.0);
         }
 
         let pull = (((lag - SLACK) / RANGE).clamp(0.0, 1.0)) * MAX_PULL;
@@ -119,9 +129,20 @@ impl ShapeDiscipline {
         // The recall runs at the player's own top speed, so a man 30 m out
         // of shape actually recovers rather than ambling back — the
         // recovery run is the thing being modelled here.
+        //
+        // ⚠ That intent was defeated downstream for as long as this layer
+        // has existed. `state.rs` caps the finished velocity at
+        // `max_speed * MovementEffort::speed_fraction(state_intensity)`,
+        // and a player drifting out of shape is by definition NOT in a
+        // high-effort state — `Standing` declares `Recovery` (0.12),
+        // `Returning` and `CreatingSpace` declare `Moderate` (0.52). So
+        // the recall was computed at 1.0 and then served at 0.12-0.52.
+        // Reporting `pull` lets the cap floor itself at the recall's own
+        // demand, which is the honest reading: being this far out of
+        // position IS the effort, whatever the state was calling itself.
         let recall = (to_anchor / lag) * ctx.player.max_speed_with_condition_cached();
 
-        velocity * (1.0 - pull) + recall * pull
+        (velocity * (1.0 - pull) + recall * pull, pull)
     }
 
     /// Is the ball this player's job right now? Then the shape is not.

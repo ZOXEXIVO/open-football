@@ -1492,11 +1492,42 @@ impl ForwardRunningState {
         let goal_pos = ctx.player().opponent_goal_position();
         let to_goal = (goal_pos - player_pos).normalize();
 
-        // Check for opponents blocking the path ahead (within 25 units, roughly toward goal)
+        // How far ahead a body has to be before the space stops being
+        // open, in GAME UNITS (1u = 0.125 m).
+        //
+        // Was `25.0` — **3.1 m**. That is the forward's half of the same
+        // defect the midfielder's carry gate had (`CARRY_ROOM` in
+        // `midfielders/states/running`, which was 4 m): a player was
+        // deciding to drive at goal on the basis that nobody was inside
+        // three metres of him, which is not open space, it is a defender
+        // about to arrive. `prog_carries` read **23.6 per forward per
+        // match against a real ~2**.
+        //
+        // 50u = 6.25 m rather than the midfielder's ~10 m because this is
+        // a WIDE cone (`dot > 0.4`, ~66°) where the midfielder reads a
+        // narrow channel — the same radius would sweep several times the
+        // area and refuse every carry on the pitch.
+        //
+        // Note this test is read with BOTH polarities: open space feeds
+        // the drive-at-goal branch, and its negation feeds the hold-up
+        // lay-off. Widening it therefore moves play from carrying toward
+        // passing on both sides, which is the intent.
+        //
+        // ⚠ MEASURED AS A NO-OP, KEPT ON ITS OWN MERITS. 200 matches at
+        // L14, 25u → 50u: forward `prog_carries` 23.56 → 23.55 and shots
+        // 102.3 → 103.6, both inside run-to-run noise. So the forward's
+        // carrying does NOT flow through this test — the branch it gates
+        // is reachable but rare (`FWD Running stuck-exit` reports
+        // drive-at-goal at 100% of only 54.7k ticks). If you are hunting
+        // forward carry volume, this is not the path; find the one that
+        // falls through to the state's own `return None`. The radius is
+        // left corrected because 3.1 m is not open space by any reading,
+        // not because it bought anything.
+        const OPEN_SPACE_RADIUS: f32 = 50.0;
         let blockers = ctx
             .players()
             .opponents()
-            .nearby(25.0)
+            .nearby(OPEN_SPACE_RADIUS)
             .filter(|opp| {
                 let to_opp = (opp.position - player_pos).normalize();
                 to_opp.dot(&to_goal) > 0.4

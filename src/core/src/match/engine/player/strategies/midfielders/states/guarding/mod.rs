@@ -270,7 +270,11 @@ impl StateProcessingHandler for MidfielderGuardingState {
 
     fn process_conditions(&self, ctx: ConditionContext) {
         // Guarding requires constant movement — high intensity
-        MidfielderCondition::with_velocity(ActivityIntensity::High).process(ctx);
+        // Tracks a MOVING MAN, so the cap has to match the run he is
+        // tracking — see the note in `defenders/states/marking`. `High`
+        // (0.78) against an attacker's `VeryHigh` (0.95) is a marker
+        // forbidden to keep up by the movement layer.
+        MidfielderCondition::with_velocity(ActivityIntensity::VeryHigh).process(ctx);
     }
 }
 

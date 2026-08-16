@@ -982,6 +982,17 @@ pub struct Ball {
     /// him in `Diving` and `Goalkeeper: Diving` sat below 0.25% of ticks.
     pub pending_save_reach: f32,
 
+    /// Which KIND of save it was, as a `save_accounting_stats` site index
+    /// (0 = parry, 1 = catch). Consumed alongside `pending_save_credit`.
+    ///
+    /// The physics path resolves three outcomes — clean catch, parry round
+    /// the post, spilled parry — and used to book all three under "catch"
+    /// because that was the only index it had. The accounting table
+    /// therefore reported `parry 0` forever, which reads as "parries are
+    /// never credited" when in fact they were credited under the wrong
+    /// label. Carrying the outcome makes the table say what happened.
+    pub pending_save_site: u8,
+
     /// Last meaningful touch on the ball. Drives restart resolution
     /// (throw-ins, corners, goal kicks) and pass-origin metadata. Updated
     /// from any path that hands ownership to a player (claim, intercept,
@@ -1255,6 +1266,15 @@ pub struct ShotTarget {
     /// target without a shooter, which reproduces the old
     /// absolute-quality behaviour exactly for those cases.
     pub shooter_threat: f32,
+    /// Where it was struck from.
+    ///
+    /// The save contest is resolved when the ball reaches the goal line,
+    /// several ticks downstream, by which point the ball's own position
+    /// says nothing about the angle it came from. But the angle is the
+    /// whole of the keeper's geometry: how much of the mouth his body
+    /// covers, and how long he had to get there, are both properties of
+    /// the line from HERE to the goal. See `SaveModel::wedge`.
+    pub struck_from: Vector3<f32>,
 }
 
 #[derive(Default, Clone)]
@@ -1325,6 +1345,7 @@ impl Ball {
             cached_shot_target: None,
             pending_save_credit: None,
             pending_save_reach: 0.0,
+            pending_save_site: 1,
             last_touch_player_id: None,
             #[cfg(feature = "match-logs")]
             last_touch_position: Vector3::new(x, y, 0.0),
@@ -1588,7 +1609,8 @@ impl Ball {
         self.pending_pass_target = None;
         self.pending_pass_was_cross = false;
         self.offside_snapshot = None;
-        self.pending_save_credit = None;
+        // ⚠ `pending_save_credit` is NOT cleared here — it is EARNED, not
+        // in-flight. See `clear_for_dead_ball` for the full note.
         self.pending_error_to_shot_player_id = None;
         self.pending_failed_claim_gk_id = None;
         self.pending_failed_claim_charged = false;
@@ -1673,9 +1695,17 @@ impl Ball {
             if self.cached_shot_target.is_some() {
                 return Err("dead-ball restart with leftover cached_shot_target");
             }
-            if self.pending_save_credit.is_some() {
-                return Err("dead-ball restart with leftover pending_save_credit");
-            }
+            // `pending_save_credit` is deliberately NOT checked here.
+            //
+            // A save that tips the ball round the post stages its credit
+            // and triggers the corner in the same `Ball::update`, so the
+            // credit is legitimately present at a dead-ball restart for the
+            // rest of that tick. The leak this clause was defending
+            // against — a credit surviving into a LATER, unrelated restart
+            // — cannot happen: `apply_pending_save_credit` drains
+            // unconditionally after every ball update in both tick paths.
+            // Enforcing the clause instead deleted 1689 earned saves per
+            // 200 matches; see `clear_for_dead_ball`.
             if self.offside_snapshot.is_some() {
                 return Err("dead-ball restart with leftover offside_snapshot");
             }
@@ -2495,7 +2525,33 @@ impl Ball {
         self.stall_anchor_pos = self.position;
         self.stall_anchor_tick = 0;
         self.cached_shot_target = None;
-        self.pending_save_credit = None;
+        // ⚠ `pending_save_credit` IS NOT OPEN-PLAY METADATA — DO NOT CLEAR.
+        //
+        // Everything else in this function is state describing a move that
+        // is still happening (a shot in flight, a pass in the air, an
+        // offside snapshot) and is meaningless once the ball is dead. A
+        // save credit is the opposite: it records something that has
+        // already HAPPENED. The keeper stopped the shot; the only reason it
+        // is "pending" at all is that `Ball` holds `&[MatchPlayer]` and
+        // cannot write to the stats sheet itself.
+        //
+        // Clearing it here deleted the save between earning and delivery,
+        // and it did so on the largest class of saves there is. Inside one
+        // `Ball::update`: `try_save_shot` stages the credit and tips the
+        // ball round the post; sixty lines later, in the SAME call,
+        // `check_over_goal` / `check_wide_of_goal` / `check_throw_in` see
+        // the ball out of play and restart — wiping the credit before
+        // `apply_pending_save_credit` runs. Every save that put the ball
+        // out of play was uncredited: 10506 physics saves passed, 8817 were
+        // credited, and the missing 1689 dragged saves/on-target down to
+        // 63.5% against a calibrated 67%.
+        //
+        // Nothing can go stale: `apply_pending_save_credit` is called
+        // unconditionally right after the ball update in BOTH tick paths
+        // (`game_tick_light` and `game_tick_inner`), so a credit is always
+        // delivered on the tick it was earned and can never survive into a
+        // later restart — which is the only thing the invariant that used
+        // to sit on this field was defending against.
         self.last_touch_player_id = None;
         self.last_touch_team_id = None;
         self.last_touch_tick = 0;

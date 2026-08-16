@@ -1,5 +1,6 @@
 use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperBallClaim, KeeperSetPosition,
+    KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -56,19 +57,22 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let ball_speed = ball_velocity.norm();
 
-        // Check if we should attempt a save
-        // IMPORTANT: Only catch if goalkeeper is reasonably close to their goal
-        // This prevents catching balls at center field
-        let distance_from_goal = ctx.player().distance_from_start_position();
-        const MAX_DISTANCE_FROM_GOAL_TO_CATCH: f32 = 50.0; // Only catch near goal area
+        // Check if we should attempt a save — but only inside the space
+        // he is prepared to defend. That bound used to be
+        // `distance_from_start_position() < 50.0`: six metres from his
+        // kickoff dot, measured as a radius, so a keeper who had swept out
+        // to the edge of his area could not enter `Catching` for a shot at
+        // all. See [`KeeperSweepLimit`].
+        let within_his_space = KeeperSweepLimit::is_within(
+            ctx,
+            GoalkeeperSkillProfile::from_ctx(ctx).rushing_out_profile,
+        );
 
         // Shot in flight: enter Catching immediately — we need to be
         // moving toward the intercept line every tick, not waiting for
         // the ball to come within 35u first (by which point it's
         // already past the keeper).
-        if ctx.tick_context.ball.cached_shot_target.is_some()
-            && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH
-        {
+        if ctx.tick_context.ball.cached_shot_target.is_some() && within_his_space {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Catching,
             ));
@@ -102,10 +106,7 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
             && !ctx.ball().blocked_from_recollecting()
             && ctx.ball().on_own_side()
             && KeeperBallClaim::is_favourite(ctx);
-        if loose_ball_claimable
-            && ball_distance < CATCH_DISTANCE
-            && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH
-        {
+        if loose_ball_claimable && ball_distance < CATCH_DISTANCE && within_his_space {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Catching,
             ));
@@ -173,6 +174,7 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
                 target.goal_line_y,
                 (ball_position - goal_pos).magnitude(),
                 ctx.context.field_size.width as f32,
+                prof.positioning,
             );
             return Some(
                 SteeringBehavior::Arrive {

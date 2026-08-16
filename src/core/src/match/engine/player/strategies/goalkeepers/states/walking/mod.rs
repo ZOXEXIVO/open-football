@@ -2,6 +2,7 @@ use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperRestPosition,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
+use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::player::strategies::processor::StateChangeResult;
 use crate::r#match::player::strategies::processor::{
     StateProcessingContext, StateProcessingHandler,
@@ -132,8 +133,11 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
         // around his box. Same pattern removed from the outfield walking
         // states. He stands set instead.
         let optimal_position = self.calculate_intelligent_position(ctx);
-        let gap = ctx.player.position.distance_to(&optimal_position);
-        if gap < KeeperRestPosition::SET_DEADZONE {
+        if KeeperRestPosition::is_set_with(
+            ctx.player.position,
+            optimal_position,
+            GoalkeeperSkillProfile::from_ctx(ctx).concentration,
+        ) {
             return Some(Vector3::zeros());
         }
 
@@ -266,11 +270,12 @@ impl GoalkeeperWalkingState {
         KeeperRestPosition::point(
             ctx.ball().direction_to_own_goal(),
             ctx.tick_context.positions.ball.position,
+            ctx.tick_context.positions.ball.velocity,
             ctx.player.side.unwrap_or(PlayerSide::Left),
             ctx.team().tactical().defensive_line_x,
             ctx.context.field_size.width as f32,
             ctx.player.skills.goalkeeping.command_of_area / 20.0,
-            ctx.player.skills.mental.positioning / 20.0,
+            GoalkeeperSkillProfile::from_ctx(ctx).positioning,
         )
     }
 

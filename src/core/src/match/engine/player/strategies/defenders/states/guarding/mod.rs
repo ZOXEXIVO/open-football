@@ -236,7 +236,11 @@ impl StateProcessingHandler for DefenderGuardingState {
 
     fn process_conditions(&self, ctx: ConditionContext) {
         // Guarding requires constant movement mirroring the opponent — high intensity
-        DefenderCondition::with_velocity(ActivityIntensity::High).process(ctx);
+        // Tracks a MOVING MAN, so the cap has to match the run he is
+        // tracking — see the note in `defenders/states/marking`. `High`
+        // (0.78) against an attacker's `VeryHigh` (0.95) is a marker
+        // forbidden to keep up by the movement layer.
+        DefenderCondition::with_velocity(ActivityIntensity::VeryHigh).process(ctx);
     }
 }
 

@@ -1,8 +1,11 @@
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperRestPosition,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
+use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
+    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -39,7 +42,12 @@ impl StateProcessingHandler for GoalkeeperReturningGoalState {
             }
         }
 
-        if ctx.player().distance_from_start_position() < 15.0 {
+        // Roughly home is home: `Walking` owns the same rest point and the
+        // same tolerance, so the fine adjustment belongs there. Holding on
+        // for the tight lateral deadzone instead made this a sticky state
+        // — recovery ticks rose 25k → 37k a match for no gain.
+        let gap = (ctx.player.position - Self::recovery_point(ctx)).magnitude();
+        if gap < KeeperRestPosition::SET_DEADZONE {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Walking,
             ));
@@ -51,16 +59,50 @@ impl StateProcessingHandler for GoalkeeperReturningGoalState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.player.start_position,
+                target: Self::recovery_point(ctx),
                 slowing_distance: 10.0,
             }
             .calculate(ctx.player)
-            .velocity,
+            .velocity
+                * KeeperRestPosition::pace(
+                    ctx.ball().distance(),
+                    ctx.context.field_size.width as f32,
+                ),
         )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
         // Returning to goal requires high intensity as goalkeeper moves back quickly
         GoalkeeperCondition::with_velocity(ActivityIntensity::High).process(ctx);
+    }
+}
+
+impl GoalkeeperReturningGoalState {
+    /// Where "back" is.
+    ///
+    /// This state steered to `ctx.player.start_position` — the KICKOFF
+    /// DOT, a fixed point at the middle of the goal — and exited when he
+    /// was within 15u of it. That is a third, implicit copy of the
+    /// keeper's positioning model, and the one place it disagrees with the
+    /// other two is the place it matters most: a keeper recovering while
+    /// the ball is at the far post ran to the CENTRE of his goal and
+    /// arrived off the angle, then had to shuffle again from a standing
+    /// start. It is also why, coming out of the leash-driven flicker this
+    /// pass removed, he was permanently on the wrong side — every abandoned
+    /// sweep ended with a run to a spot that ignored where the ball was.
+    ///
+    /// He recovers to the same place every other keeper state wants him:
+    /// [`KeeperRestPosition`]. Recovering IS repositioning, at speed.
+    fn recovery_point(ctx: &StateProcessingContext) -> Vector3<f32> {
+        KeeperRestPosition::point(
+            ctx.ball().direction_to_own_goal(),
+            ctx.tick_context.positions.ball.position,
+            ctx.tick_context.positions.ball.velocity,
+            ctx.player.side.unwrap_or(PlayerSide::Left),
+            ctx.team().tactical().defensive_line_x,
+            ctx.context.field_size.width as f32,
+            ctx.player.skills.goalkeeping.command_of_area / 20.0,
+            GoalkeeperSkillProfile::from_ctx(ctx).positioning,
+        )
     }
 }

@@ -1,8 +1,6 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
-#[cfg(feature = "match-logs")]
-use crate::mid_run_diag::KeeperSweepDiag;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim,
+    ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -10,6 +8,8 @@ use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::KeeperSweepDiag;
 use nalgebra::Vector3;
 
 /// Close enough to gather it (~2.5 m).
@@ -61,6 +61,8 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         // for the save. Staying in ComingOut leaves the goal wide open.
         if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
             if Some(target.defending_side) == ctx.player.side {
+                #[cfg(feature = "match-logs")]
+                KeeperSweepDiag::note_exit(10);
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::PreparingForSave,
                 ));
@@ -74,11 +76,13 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         // steers there; this decides when he leaves the ground for it.
         if let Some(claim) = KeeperAerialClaim::assess(ctx) {
             if claim.at_contact(ctx.player.position) {
-                return Some(StateChangeResult::with_goalkeeper_state(if claim.standing {
-                    GoalkeeperState::Catching
-                } else {
-                    GoalkeeperState::Jumping
-                }));
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    if claim.standing {
+                        GoalkeeperState::Catching
+                    } else {
+                        GoalkeeperState::Jumping
+                    },
+                ));
             }
             // Still on his way. The give-up tests below are about chasing
             // a loose ball across the grass and would abandon a claim that
@@ -97,11 +101,15 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
             ));
         }
 
-        // If goalkeeper has reached the ball, claim it immediately
-        // IMPORTANT: Only catch if goalkeeper is reasonably close to their goal
-        // This prevents catching balls at center field
-        let distance_from_goal = ctx.player().distance_from_start_position();
-        const MAX_DISTANCE_FROM_GOAL_TO_CATCH: f32 = 50.0; // Only catch near goal area
+        // If goalkeeper has reached the ball, claim it immediately —
+        // provided he is still inside the space he is prepared to defend.
+        // That bound used to be `distance_from_start_position() < 50.0`,
+        // i.e. six metres from his kickoff dot, so a keeper who had
+        // correctly come twenty metres to meet a through-ball reached it
+        // and was then forbidden from picking it up. See
+        // [`KeeperSweepLimit`].
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+        let within_his_space = KeeperSweepLimit::is_within(ctx, prof.rushing_out_profile);
 
         // Only a LOOSE ball can be claimed. Same defect `PreparingForSave`
         // carried: reaching the ball was tested on distance alone, so a
@@ -112,10 +120,7 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         // required the ball to be unowned; these two did not, and between
         // them they are why the keeper collected 154 balls a match
         // against a real 8-12.
-        if !ctx.ball().is_owned()
-            && ball_distance < CLAIM_BALL_DISTANCE
-            && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH
-        {
+        if !ctx.ball().is_owned() && ball_distance < CLAIM_BALL_DISTANCE && within_his_space {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Catching,
             ));
@@ -138,7 +143,6 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         // Check if ball is too far. Maximum sweeper-keeper pursuit
         // distance now scales with the unified rushing-out profile so
         // weak keepers don't roam.
-        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
         let max_pursuit_distance =
             MAX_COMING_OUT_DISTANCE * (0.85 + prof.rushing_out_profile * 0.55);
         if ball_distance > max_pursuit_distance {
@@ -167,6 +171,8 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
             // If opponent has control and is very close
             if opponent_ball_distance < 2.0 && opponent_distance < 20.0 {
                 // Close opponent with ball - prepare for save/1v1
+                #[cfg(feature = "match-logs")]
+                KeeperSweepDiag::note_exit(7);
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::PreparingForSave,
                 ));
@@ -179,6 +185,8 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
                     return None;
                 } else if opponent_distance < 25.0 {
                     // Too risky - prepare for save
+                    #[cfg(feature = "match-logs")]
+                    KeeperSweepDiag::note_exit(7);
                     return Some(StateChangeResult::with_goalkeeper_state(
                         GoalkeeperState::PreparingForSave,
                     ));
@@ -194,7 +202,9 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
                 let opponent_to_goal = (own_goal - opponent.position).normalize();
                 let moving_toward_goal = opponent_velocity.normalize().dot(&opponent_to_goal);
                 // Opponent is moving away from our goal (dot < 0) and GK is already out
-                if moving_toward_goal < -0.2 && distance_from_goal > 20.0 {
+                if moving_toward_goal < -0.2 && KeeperSweepLimit::distance_off_line(ctx) > 40.0 {
+                    #[cfg(feature = "match-logs")]
+                    KeeperSweepDiag::note_exit(9);
                     return Some(StateChangeResult::with_goalkeeper_state(
                         GoalkeeperState::ReturningToGoal,
                     ));
@@ -215,16 +225,30 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
             }
         }
 
-        // Check distance from goal — GK must not wander far
-        let goal_distance = ctx.player().distance_from_start_position();
-        let max_goal_distance =
-            40.0 * (0.85 + prof.rushing_out_profile * 0.35 + prof.communication * 0.15);
-
-        if goal_distance > max_goal_distance {
+        // He has come as far as he is prepared to come.
+        //
+        // ⚠ THIS WAS THE LEASH. It read `distance_from_start_position() >
+        // 40 * (0.85 + …)` — 34 to 54 units, **four to seven metres from
+        // his kickoff dot**, as a RADIUS — against an entry condition that
+        // commits to a carrier eighteen metres away. Measured over 60
+        // matches: 175 abandons a match against 211 commitments, i.e.
+        // **83% of every sweep this keeper ever started died right here**,
+        // most of them on the first tick, and the lateral metres he had
+        // spent covering the angle counted against the same allowance. It
+        // is the fifth instance in this engine of an entry condition wider
+        // than its own give-up condition — see [`KeeperSweepLimit`] and
+        // `MAX_COMING_OUT_DISTANCE` above.
+        //
+        // Now measured along the goal-to-goal axis, at 15 m for a line
+        // keeper and 32 m for a sweeper: strictly beyond any distance at
+        // which he enters the state, so once he commits he actually goes.
+        if !KeeperSweepLimit::is_within(ctx, prof.rushing_out_profile) {
             // Getting far from goal - only continue if ball is very close and loose
             if !ctx.ball().is_owned() && ball_distance < 15.0 {
                 return None; // Ball very close and loose, commit!
             } else {
+                #[cfg(feature = "match-logs")]
+                KeeperSweepDiag::note_exit(8);
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::ReturningToGoal,
                 ));

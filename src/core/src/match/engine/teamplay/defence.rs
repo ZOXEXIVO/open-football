@@ -374,8 +374,8 @@ impl DutyAssigner<'_> {
             // Dangerous to our goal, OR near the ball — see
             // `BALL_THREAT_RADIUS`. Either makes him somebody's man.
             let near_goal = (p.position.x - own_goal.x).abs() <= depth_limit;
-            let near_ball = (p.position - self.field.ball.position).magnitude()
-                <= Self::BALL_THREAT_RADIUS;
+            let near_ball =
+                (p.position - self.field.ball.position).magnitude() <= Self::BALL_THREAT_RADIUS;
             if !near_goal && !near_ball {
                 n_skipped_depth += 1;
                 continue; // not a threat yet

@@ -1082,11 +1082,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // should already have been filtered upstream.
         let Some((keeper_idx, shooter_idx)) = field.two_player_indices(keeper_id, shooter_id)
         else {
+            #[cfg(feature = "match-logs")]
+            save_accounting_stats::PENDING_LOST_NO_PLAYER
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return;
         };
         let keeper_team = field.players[keeper_idx].team_id;
         let shooter_team = field.players[shooter_idx].team_id;
         if keeper_team == shooter_team {
+            #[cfg(feature = "match-logs")]
+            save_accounting_stats::PENDING_LOST_SAME_TEAM
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return;
         }
         let shot_xg = field.ball.last_shot_xgot;
@@ -1145,9 +1151,19 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 });
             }
             let gk = &mut field.players[keeper_idx];
-            gk.transition_to(PlayerState::Goalkeeper(next), TransitionSource::EventHandler);
+            gk.transition_to(
+                PlayerState::Goalkeeper(next),
+                TransitionSource::EventHandler,
+            );
         }
         field.ball.pending_save_reach = 0.0;
+        // Read the outcome BEFORE resetting it — the accounting block at the
+        // bottom of this function needs it, and resetting here first is why
+        // the table kept reporting `parry 0` while the parry branch was
+        // demonstrably firing 3662 times per 200 matches.
+        let save_site = field.ball.pending_save_site;
+        field.ball.pending_save_site = 1;
+        let _ = save_site; // only read by the `match-logs` accounting below
         {
             let gk = &mut field.players[keeper_idx];
             // The GK denied a shot worth `shot_xg` xG — books the save,
@@ -1163,12 +1179,19 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         #[cfg(feature = "match-logs")]
         {
             use std::sync::atomic::Ordering;
-            // Re-use the "catch" site bucket — physics-save outcomes are
-            // catches, parries, and dangerous parries indistinguishably
-            // from the stats viewpoint. The save_pipeline counters above
-            // already separate them at the physics layer.
-            save_accounting_stats::SAVES_CREDITED[1].fetch_add(1, Ordering::Relaxed);
-            save_accounting_stats::ON_TARGET_PAIRED[1].fetch_add(1, Ordering::Relaxed);
+            // Book it under the outcome the physics actually produced —
+            // catch, or either flavour of parry. This used to hard-code the
+            // "catch" bucket because the outcome wasn't carried across, so
+            // the table read `parry 0` and looked like parried shots were
+            // never credited at all. See `Ball::pending_save_site`.
+            let site = (save_site as usize).min(save_accounting_stats::SITE_LABELS.len() - 1);
+            save_accounting_stats::SAVES_CREDITED[site].fetch_add(1, Ordering::Relaxed);
+            save_accounting_stats::ON_TARGET_PAIRED[site].fetch_add(1, Ordering::Relaxed);
+            // `note_shot_faced` was called above, so this column has to move
+            // with it — the physics path used to leave it behind, which is
+            // why `shots_faced` matched `saves` only by accident.
+            save_accounting_stats::SHOTS_FACED_INC[site].fetch_add(1, Ordering::Relaxed);
+            save_accounting_stats::PENDING_DELIVERED.fetch_add(1, Ordering::Relaxed);
         }
     }
 }

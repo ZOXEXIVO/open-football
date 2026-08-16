@@ -1,7 +1,7 @@
 use crate::r#match::engine::ball::ball::interactions::SaveModel;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperSetPosition,
+    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperSetPosition, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
@@ -140,10 +140,16 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
             ));
         }
 
-        // If ball is too far, decide based on distance from goal
+        // If ball is too far, decide based on distance from goal.
+        // "Far from goal" is how far off his LINE he is, bounded by how far
+        // this keeper sweeps — not five metres from his kickoff dot, which
+        // is what `distance_from_start_position() > 40.0` meant and which
+        // made a keeper who had come to meet a through-ball turn round
+        // instead of gathering it. See [`KeeperSweepLimit`].
         if ctx.ball().distance() > 12.0 {
             // If already far from goal, return rather than chasing further
-            if ctx.player().distance_from_start_position() > 40.0 {
+            let sweeper = GoalkeeperSkillProfile::from_ctx(ctx).rushing_out_profile;
+            if !KeeperSweepLimit::is_within(ctx, sweeper) {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::ReturningToGoal,
                 ));
@@ -187,6 +193,7 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
                 target.goal_line_y,
                 (ctx.tick_context.positions.ball.position - goal_pos).magnitude(),
                 ctx.context.field_size.width as f32,
+                prof.positioning,
             );
             return Some(
                 SteeringBehavior::Arrive {
@@ -244,9 +251,20 @@ impl GoalkeeperCatchingState {
             if target.goal_line_z > 2.44 {
                 return false;
             }
-            // Effective reach in game units: weak ~14u, elite ~30u.
-            let reach = 10.0 + prof.dive_reach * 12.0 + prof.shot_stopping * 4.0;
-            let lateral_error = (ctx.player.position.y - target.goal_line_y).abs();
+            // Effective reach in game units: weak ~14u, elite ~30u…
+            let base_reach = 10.0 + prof.dive_reach * 12.0 + prof.shot_stopping * 4.0;
+            // …and what it is worth from where he is standing. Same model
+            // as the physics save — `SaveModel::wedge` — so the two paths
+            // cannot disagree about whether he was in position, and so
+            // neither of them charges him for narrowing the angle.
+            let (lateral_error, reach) = SaveModel::wedge(
+                target.struck_from,
+                ctx.tick_context.positions.ball.velocity.norm(),
+                ctx.player.position,
+                base_reach,
+                ctx.ball().direction_to_own_goal().x,
+                target.goal_line_y,
+            );
             if lateral_error > reach {
                 return false;
             }
