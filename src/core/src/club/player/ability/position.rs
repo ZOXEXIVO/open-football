@@ -155,6 +155,19 @@ impl PlayerPositionType {
         )
     }
 
+    /// The screen in front of the back four.
+    ///
+    /// `position_group()` files him under `Defender`, which is right for
+    /// duties and wrong for geometry: everything that reasons about "the
+    /// back line" has to exclude him, because he is deliberately ten to
+    /// fifteen metres in front of it. Both the shape constraint and the
+    /// harness's back-line sampler need this distinction and were making
+    /// it separately (and inconsistently).
+    #[inline]
+    pub fn is_defensive_midfielder(&self) -> bool {
+        matches!(self, PlayerPositionType::DefensiveMidfielder)
+    }
+
     #[inline]
     pub fn position_group(&self) -> PlayerFieldPositionGroup {
         match *self {

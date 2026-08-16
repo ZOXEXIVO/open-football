@@ -309,10 +309,27 @@ impl DefensiveLine {
         let forward = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
         let upfield = |x: f32| if forward > 0.0 { x } else { field_len - x };
         let line_limit = field_len * 0.60;
+        // ⚠ THE BACK LINE IS THE BACK FOUR, and `defenders()` is not.
+        //
+        // `is_defender()` is the POSITION GROUP, and that group holds
+        // `DefensiveMidfielder` — a man whose job is to sit ten to fifteen
+        // metres IN FRONT of the back four. Averaging him into the line
+        // reference does two things at once, both wrong: it drags the
+        // reference upfield so the back four is clamped to a line that is
+        // not theirs, and it then clamps the DM himself to within 2 m of
+        // that same line, so the screen in front of the back four is
+        // vacated by construction — which is precisely the band (11-22 m)
+        // the shot mix says the chances come from.
+        //
+        // The harness's own back-line spread sampler already excludes DMs
+        // for exactly this reason (`tick.rs`); this is the same exclusion
+        // on the side that does the constraining, so the measurement and
+        // the mechanism finally describe the same four players.
         let (sum_x, count) = ctx
             .players()
             .teammates()
             .defenders()
+            .filter(|p| !p.tactical_positions.is_defensive_midfielder())
             .filter(|p| upfield(p.position.x) <= line_limit)
             .map(|p| p.position.x)
             .fold((0.0f32, 0u32), |(s, c), x| (s + x, c + 1));
@@ -470,6 +487,50 @@ impl DefensiveLine {
     /// The presser is deliberately exempt: somebody has to leave the line
     /// to engage the ball, and he is the one doing it.
     pub fn hold_shape(ctx: &StateProcessingContext, target: Vector3<f32>) -> Vector3<f32> {
+        Self::hold_shape_inner(ctx, target, None)
+    }
+
+    /// The same constraint, for a defender who has been given a MAN.
+    ///
+    /// # Why marking needs its own bound
+    ///
+    /// The zonal leash is right about runners and wrong about assignments,
+    /// and the measurement is unambiguous: sampled in `Marking::velocity`
+    /// over 60 matches, the marker's OWN target sits **0.77 m** from his
+    /// man — exactly the `ideal_marking_distance` the profile asks for —
+    /// and `hold_shape` then pushes it out to **3.71 m**. Against a
+    /// midfielder it pushes it to **6.78 m**. The whole of the reported
+    /// marking gap is this displacement; nothing about the marking model
+    /// itself was wrong.
+    ///
+    /// The binding half is DEPTH, not width. `SHAPE_LEASH` allows 7.5 m
+    /// either side, which is enough to follow a man across; `DEPTH_STEP_UP`
+    /// allows **2 m** in front of the line, so a midfielder loitering eight
+    /// metres ahead of the back four cannot be marked at all — by
+    /// construction, and precisely in the band the shot mix says the
+    /// chances come from.
+    ///
+    /// The step-up bound exists because a defender ahead of his line plays
+    /// everyone behind him onside. That argument does not apply to a man
+    /// going to his own marker's position: the marking offset is
+    /// GOAL-SIDE of the man, so he can never get further forward than the
+    /// man he is marking, and the man is already setting the line. So the
+    /// allowance becomes "as far up as your man, no further" — which is
+    /// what a defender given an assignment actually does, and is offside-
+    /// safe by construction.
+    pub fn hold_shape_on_man(
+        ctx: &StateProcessingContext,
+        target: Vector3<f32>,
+        man: Vector3<f32>,
+    ) -> Vector3<f32> {
+        Self::hold_shape_inner(ctx, target, Some(man))
+    }
+
+    fn hold_shape_inner(
+        ctx: &StateProcessingContext,
+        target: Vector3<f32>,
+        man: Option<Vector3<f32>>,
+    ) -> Vector3<f32> {
         if ctx.player.has_ball(ctx) {
             return target;
         }
@@ -531,7 +592,23 @@ impl DefensiveLine {
         let forward = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
         let line_x = Self::position_x(ctx);
         let ahead_of_line = (target.x - line_x) * forward;
-        let bounded = ahead_of_line.clamp(-Self::DEPTH_DROP, Self::DEPTH_STEP_UP);
+        // "As far up as your man, no further" — see `hold_shape_on_man`.
+        // Never TIGHTER than the ordinary allowance: a man behind the line
+        // does not drag his marker backwards out of it.
+        // …but bounded. Unbounded, "go to your man" lets a centre-half
+        // follow a midfielder as far as the assignment reaches, and the
+        // back-four depth spread measured 13.2 m → 15.0 m when it was
+        // first tried. A defender goes and gets a man in front of him; he
+        // does not leave the last line to do it. 72u = 9 m is the screen
+        // in front of the back four, which is as far up as a member of it
+        // has any business being.
+        const MARK_STEP_UP_CAP: f32 = 72.0;
+        let step_up = man.map_or(Self::DEPTH_STEP_UP, |m| {
+            Self::DEPTH_STEP_UP
+                .max((m.x - line_x) * forward)
+                .min(MARK_STEP_UP_CAP)
+        });
+        let bounded = ahead_of_line.clamp(-Self::DEPTH_DROP, step_up);
         let shaped = Vector3::new(line_x + bounded * forward, leashed, target.z);
         #[cfg(feature = "match-logs")]
         {

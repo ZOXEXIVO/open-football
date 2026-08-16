@@ -204,6 +204,12 @@ impl DutyAssigner<'_> {
     /// marking them, unmarked in every sense that matters, and free to
     /// carry and shoot — which is most of why they took 75% of all shots.
     const MARK_REACH: f32 = 150.0;
+    /// How heavily an assignment that would pull a defender UPFIELD out of
+    /// his line counts against him, per unit of displacement. 0.9 nearly
+    /// doubles the depth term in the matcher's distance, so a man in front
+    /// of the back four goes to whoever is already in front of the back
+    /// four. See the note in `nearest_free`.
+    const LAYER_BIAS: f32 = 0.9;
     /// The presser has to be able to actually get there (~25 m).
     const PRESS_REACH: f32 = 200.0;
     /// Cover sits within this of the carrier (~17 m).
@@ -277,6 +283,9 @@ impl DutyAssigner<'_> {
             self.field.size.height as f32 / 2.0,
             0.0,
         );
+        // Toward the opponent goal — the axis an assignment can pull a
+        // defender along, and the one `nearest_free` charges for.
+        let forward = side.forward_dir_x();
 
         // The defensive unit: the back line AND the midfield.
         //
@@ -336,6 +345,7 @@ impl DutyAssigner<'_> {
                 carrier.position,
                 Self::PRESS_REACH,
                 previous.presser(),
+                forward,
             ) {
                 taken[i] = true;
                 n_press += 1;
@@ -347,6 +357,7 @@ impl DutyAssigner<'_> {
                 carrier.position,
                 Self::COVER_REACH,
                 None,
+                forward,
             ) {
                 taken[i] = true;
                 n_cover += 1;
@@ -412,6 +423,7 @@ impl DutyAssigner<'_> {
                 opp_pos,
                 Self::MARK_REACH,
                 incumbent,
+                forward,
             ) else {
                 n_unreachable += 1;
                 continue;
@@ -453,6 +465,7 @@ impl DutyAssigner<'_> {
         target: Vector3<f32>,
         reach: f32,
         incumbent: Option<u32>,
+        forward: f32,
     ) -> Option<usize> {
         let mut best: Option<(usize, f32)> = None;
         for (i, (id, pos)) in unit.iter().enumerate() {
@@ -463,6 +476,31 @@ impl DutyAssigner<'_> {
             if raw > reach {
                 continue;
             }
+            // ── MARK THE MAN IN YOUR LAYER ────────────────────────────
+            //
+            // Straight-line proximity has no idea which of two defenders a
+            // man BELONGS to, and the two answers are not equally good: a
+            // centre-half who takes a midfielder loitering eight metres in
+            // front of the back four has to leave the line to do it, and
+            // the screening midfielder standing next to that man — whose
+            // job it is — is left marking nobody. Real defences hand the
+            // man in front of the line to the man in front of the line.
+            //
+            // Measured: 56% of all marking assignments were on
+            // MIDFIELDERS, and once markers were allowed to reach their
+            // man (see `DefensiveLine::hold_shape_on_man`) the back-four
+            // depth spread went 13.2 m → 15.0 m — the back four following
+            // midfielders upfield, which is the right bound applied to the
+            // wrong assignment.
+            //
+            // Charging the UPFIELD component twice is the whole rule: a
+            // defender already level with the threat pays nothing, one who
+            // would have to be dragged out of his line pays for every
+            // metre of it. No roles are named and no thresholds are drawn
+            // — a screener wins the midfielder because he is already
+            // standing there, which is what being a screener means.
+            let pulled_upfield = ((target.x - pos.x) * forward).max(0.0);
+            let raw = raw + pulled_upfield * Self::LAYER_BIAS;
             // ~4 m of stickiness.
             let effective = if incumbent == Some(*id) {
                 raw - 32.0

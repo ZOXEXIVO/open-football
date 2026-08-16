@@ -388,6 +388,32 @@ pub mod mid_run_diag {
     pub static DEF_DUEL_GAP_BY_LINE_X100: [AtomicU64; 3] =
         [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
 
+    /// **Is the shape LEASH what is keeping markers off their man?**
+    ///
+    /// The duel counters say markers sit 5.8 m from the man against an
+    /// `ideal_marking_distance` of 0.9-1.75 m, and midfielders are marked
+    /// at 8.0 m. They cannot say WHY, and the two candidates need opposite
+    /// fixes: either the marker is being steered somewhere sensible and
+    /// failing to arrive (movement, speed, state churn), or
+    /// `DefensiveLine::hold_shape` is moving the target away from the man
+    /// before he ever sets off.
+    ///
+    /// Sampled in `Marking::velocity`: how far the man is from the
+    /// position the marker WANTS (`want`), and from the one the leash
+    /// leaves him with (`leashed`). If `leashed` is far larger, the shape
+    /// constraint is the cause and no amount of marking tuning will move
+    /// it. `N` is the sample count; `PULL` is the displacement the leash
+    /// itself applied.
+    pub static MARK_WANT_X100: AtomicU64 = AtomicU64::new(0);
+    pub static MARK_LEASHED_X100: AtomicU64 = AtomicU64::new(0);
+    pub static MARK_PULL_X100: AtomicU64 = AtomicU64::new(0);
+    pub static MARK_LEASH_N: AtomicU64 = AtomicU64::new(0);
+    /// …and the same three for a marked man who is a MIDFIELDER, the
+    /// group the aggregate says is being marked at eight metres.
+    pub static MARK_WANT_MID_X100: AtomicU64 = AtomicU64::new(0);
+    pub static MARK_LEASHED_MID_X100: AtomicU64 = AtomicU64::new(0);
+    pub static MARK_LEASH_MID_N: AtomicU64 = AtomicU64::new(0);
+
     impl DefenceDiag {
         /// Record one sample of how far a shape-holding defender is from
         /// the target the shape constraint just handed him.
@@ -421,6 +447,43 @@ pub mod mid_run_diag {
                 },
                 per(SHAPE_LAG_AXIS_X100[0].load(Ordering::Relaxed)),
                 per(SHAPE_LAG_AXIS_X100[1].load(Ordering::Relaxed)),
+            )
+        }
+
+        /// One sample of what the shape leash did to a marking target.
+        /// `want` / `leashed` are distances from the MAN; `is_mid` splits
+        /// out the group the duel counters say is worst served.
+        pub fn note_mark_leash(want: f32, leashed: f32, pull: f32, is_mid: bool) {
+            MARK_WANT_X100.fetch_add((want * 100.0) as u64, Ordering::Relaxed);
+            MARK_LEASHED_X100.fetch_add((leashed * 100.0) as u64, Ordering::Relaxed);
+            MARK_PULL_X100.fetch_add((pull * 100.0) as u64, Ordering::Relaxed);
+            MARK_LEASH_N.fetch_add(1, Ordering::Relaxed);
+            if is_mid {
+                MARK_WANT_MID_X100.fetch_add((want * 100.0) as u64, Ordering::Relaxed);
+                MARK_LEASHED_MID_X100.fetch_add((leashed * 100.0) as u64, Ordering::Relaxed);
+                MARK_LEASH_MID_N.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(n, want, leashed, pull, n_mid, want_mid, leashed_mid)` in units.
+        pub fn mark_leash() -> (u64, f32, f32, f32, u64, f32, f32) {
+            let n = MARK_LEASH_N.load(Ordering::Relaxed);
+            let m = MARK_LEASH_MID_N.load(Ordering::Relaxed);
+            let per = |v: u64, d: u64| {
+                if d == 0 {
+                    0.0
+                } else {
+                    v as f32 / 100.0 / d as f32
+                }
+            };
+            (
+                n,
+                per(MARK_WANT_X100.load(Ordering::Relaxed), n),
+                per(MARK_LEASHED_X100.load(Ordering::Relaxed), n),
+                per(MARK_PULL_X100.load(Ordering::Relaxed), n),
+                m,
+                per(MARK_WANT_MID_X100.load(Ordering::Relaxed), m),
+                per(MARK_LEASHED_MID_X100.load(Ordering::Relaxed), m),
             )
         }
 

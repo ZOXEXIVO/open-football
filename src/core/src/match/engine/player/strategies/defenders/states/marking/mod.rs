@@ -288,7 +288,29 @@ impl StateProcessingHandler for DefenderMarkingState {
             };
             // −MAX_READ_LAG (a step behind) … +MAX_READ_LAG (a step ahead).
             const MAX_READ_LAG: f32 = 14.0;
-            let prediction_time = (reading - 0.5) * 2.0 * MAX_READ_LAG;
+            // ── …CENTRED ON THE TIME IT TAKES HIM TO GET THERE ────────
+            //
+            // Signing the read term around ZERO means the AVERAGE marker
+            // aims at where his man is standing right now. A pursuer who
+            // does that can never close: by the time he arrives the man
+            // has moved on, and he settles at a standing lag of roughly
+            // (the man's speed × his own travel time). That is the whole
+            // of the residual gap — measured, the marker's TARGET now sits
+            // 1.87 m from his man (`hold_shape_on_man` fixed the leash)
+            // while the marker himself sits 4.2 m away. The target is
+            // right and he never reaches it.
+            //
+            // Marking is not a chase, it is an interception: you run to
+            // where he will be. So the lead is centred on the marker's own
+            // closing time, and the read term swings either side of it —
+            // a good reader is there before the man, a poor one is still
+            // a step behind, and the average one arrives with him.
+            let closing_ticks = {
+                let gap = (opponent_to_mark.position - ctx.player.position).magnitude();
+                let speed = ctx.player.max_speed_with_condition_cached().max(0.05);
+                (gap / speed).min(MAX_READ_LAG * 2.0)
+            };
+            let prediction_time = closing_ticks + (reading - 0.5) * 2.0 * MAX_READ_LAG;
             let opponent_future_position =
                 opponent_to_mark.position + opponent_velocity * prediction_time;
 
@@ -336,11 +358,25 @@ impl StateProcessingHandler for DefenderMarkingState {
             // 0.22→0.55 sweep moved the count only 130 → 109).
             let man_is_shooting = opponent_to_mark.has_ball(ctx)
                 && (own_goal - opponent_to_mark.position).magnitude() < SHOOTING_RANGE;
+            let want = desired_position;
             let desired_position = if man_is_shooting {
                 desired_position
             } else {
-                DefensiveLine::hold_shape(ctx, desired_position)
+                // The assignment bound, not the zonal one — see
+                // [`DefensiveLine::hold_shape_on_man`]. He still may not be
+                // dragged across the pitch, but he may go as far up as the
+                // man he was given.
+                DefensiveLine::hold_shape_on_man(ctx, desired_position, opponent_to_mark.position)
             };
+            // What did the leash actually cost this duel? See
+            // `DefenceDiag::note_mark_leash`.
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::DefenceDiag::note_mark_leash(
+                (want - opponent_to_mark.position).magnitude(),
+                (desired_position - opponent_to_mark.position).magnitude(),
+                (desired_position - want).magnitude(),
+                opponent_to_mark.tactical_positions.is_midfielder(),
+            );
 
             let to_desired = desired_position - ctx.player.position;
             let distance = to_desired.magnitude();

@@ -182,6 +182,24 @@ impl ShapeDiscipline {
             return true;
         }
 
+        // ⚠ NOT EXEMPT: a player holding an individual defensive duty.
+        //
+        // Tried 2026-08-17 and REVERTED, because the reasoning was good
+        // and the measurement disagreed. The argument: every exemption
+        // above says "when something else is definitely this player's
+        // job, the shape stops having opinions", and an assignment from
+        // `DefensivePlan` is exactly that — a marker tracking a midfielder
+        // eight metres in front of the back four is by definition outside
+        // `SLACK` with the ball outside `BALL_ENGAGEMENT`, so up to 85% of
+        // his velocity is replaced by a run back to his formation slot.
+        //
+        // Measured, exempting him made marking WORSE, not better: the duel
+        // gap went 5.2 m → 5.6 m and against midfielders 7.1 m → 7.8 m.
+        // Freed from the tether the marker does not close on his man, he
+        // drifts — his own steering already has a lag, and the recall was
+        // incidentally holding him inside a zone the man kept re-entering.
+        // So this layer is NOT what keeps markers off their men; see the
+        // note at `DefensiveLine::hold_shape_on_man` for what was.
         false
     }
 }

@@ -6874,6 +6874,29 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     duel_gap * 0.125,
                     duels_lost * 100.0
                 );
+                // Does the SHAPE LEASH explain the gap, or is the marker
+                // just not arriving at a target that was already right?
+                let (mn, want, leashed, pull, mmid, want_mid, leashed_mid) =
+                    DefenceDiag::mark_leash();
+                if mn > 0 {
+                    println!(
+                        "    leash cost: marker WANTS to stand {:.2}m from his man, the shape \
+                         leaves him {:.2}m (pull {:.2}m, {} samples)",
+                        want * 0.125,
+                        leashed * 0.125,
+                        pull * 0.125,
+                        mn
+                    );
+                    if mmid > 0 {
+                        println!(
+                            "                …marking a MIDFIELDER: wants {:.2}m, gets {:.2}m \
+                             ({} samples)",
+                            want_mid * 0.125,
+                            leashed_mid * 0.125,
+                            mmid
+                        );
+                    }
+                }
                 let (on_task, on_task_gap) = DefenceDiag::duel_on_task();
                 println!(
                     "    ...and only {:.0}% of those markers were in a state that ACTS on the \
