@@ -119,6 +119,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         if events.has_events() {
             EventDispatcher::dispatch(events, field, context, match_data, true);
             handle_goal_reset(field, context);
+            // Dispatch is where free kicks, penalties and offsides are
+            // awarded, and each stages a teleport — see the full tick.
+            Self::apply_pending_set_piece_teleport(field);
         }
 
         if let Some(t) = prof_t {
@@ -193,6 +196,25 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let t = prof_on.then(Instant::now);
         EventDispatcher::dispatch(events, field, context, match_data, true);
         handle_goal_reset(field, context);
+        // ⚠ DRAIN AFTER DISPATCH TOO, NOT ONLY AFTER `play_ball`.
+        //
+        // The drain above catches the set pieces the BALL awards inside
+        // `play_ball` — corners, goal kicks, throw-ins. But free kicks,
+        // penalties and offsides are awarded by their event handlers, which
+        // run here, after that drain has already taken `None`. Their
+        // teleport therefore sat staged until the next tick — and the next
+        // tick starts with `ball.update`, whose `move_to` runs first, finds
+        // the taker 30-200u from the spot and nulls the ownership. The ball
+        // is dead by then (a restart placed it), so what is left is a ball
+        // sitting motionless with no owner: `OWNER_TOO_FAR`.
+        //
+        // Measured before this: 47.3 drops a match, of which 71% had the
+        // owner beyond 30u and **98% had the ball already stopped**, with
+        // 0% in a keeper's gloves and 0% during a shot — a population that
+        // is nothing but restarts. This function's own doc-comment has
+        // always described the failure it exists to prevent; it was simply
+        // never called after the phase that stages most of them.
+        Self::apply_pending_set_piece_teleport(field);
         if let Some(t) = t {
             PhaseProf::add(PhaseProf::P_DISPATCH, t.elapsed().as_nanos() as u64);
         }

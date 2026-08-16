@@ -72,8 +72,13 @@ impl StateProcessingHandler for ForwardInterceptingState {
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
-        // Intercepting is moderate intensity - reading and reacting
-        ForwardCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+        // `High`, matching the defender and midfielder interception states,
+        // because this is a speed cap and not a mood: `Moderate` held the
+        // forward to 0.52 of top speed while `velocity()` above is a
+        // full-blooded `Pursuit` onto a moving ball. Reading the pass is
+        // the cheap part; getting there is a sprint, and the two players
+        // who might beat him to it are both allowed 0.78.
+        ForwardCondition::with_velocity(ActivityIntensity::High).process(ctx);
     }
 }
 

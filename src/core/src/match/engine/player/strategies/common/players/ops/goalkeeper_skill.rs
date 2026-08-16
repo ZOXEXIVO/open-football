@@ -1,3 +1,4 @@
+use crate::r#match::MAX_OWNER_TRACK_DISTANCE;
 use crate::r#match::MatchPlayer;
 use crate::r#match::StateProcessingContext;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
@@ -360,7 +361,33 @@ impl GoalkeeperSkillProfile {
         // 35..40u catch / dive distances regardless of skill; here, weak
         // keepers shrink to ~14..16u while elite ones extend to ~42..48u.
         let effective_dive_distance = 14.0 + dive_reach * 28.0 + positioning_profile * 6.0;
-        let effective_catch_distance = 10.0 + handling_profile * 16.0 + positioning_profile * 5.0;
+        // ⚠ A GATHER RADIUS, NOT A TRAVEL RADIUS — it is bounded by
+        // `MAX_OWNER_TRACK_DISTANCE`, and that is a hard constraint, not a
+        // taste call.
+        //
+        // How far the keeper will GO for a ball is `effective_dive_distance`
+        // above (up to 48u / 6 m). This is the much smaller question of when
+        // the ball is close enough to be **in his hands** — and the engine
+        // already has an answer for that: `MAX_OWNER_TRACK_DISTANCE` (15u /
+        // 1.9 m) is the furthest a ball can be from the player who owns it.
+        //
+        // This used to read `10.0 + handling * 16.0 + positioning * 5.0`, so
+        // a good keeper gathered at up to **31u (3.9 m)** — past the cutoff,
+        // and past any real arms-out reach. `Ball::move_to` then found the
+        // owner too far and dropped the ownership on the NEXT tick, by which
+        // time the catch handler had already zeroed the velocity: the ball
+        // was left sitting dead on the grass metres from anyone, then played
+        // away backwards by whoever converged on it. Reported from the
+        // viewer as exactly that, and counted by
+        // `reception_diag::OWNER_TOO_FAR` at 87/match.
+        //
+        // 8..15u is a keeper's real gather: ~1.0 m for a poor handler taking
+        // it into his body, ~1.9 m stretching. The skill axis survives; it
+        // now spans a range a man can actually reach. Below the cutoff at
+        // every skill level, so the ball's own 1.5 u/tick tracking pulls it
+        // into his chest instead of a teleport.
+        let effective_catch_distance = (8.0 + handling_profile * 5.0 + positioning_profile * 2.0)
+            .min(MAX_OWNER_TRACK_DISTANCE);
         let effective_punch_distance = 8.0 + aerial_command * 14.0 + parry_control * 6.0;
 
         GoalkeeperSkillProfile {

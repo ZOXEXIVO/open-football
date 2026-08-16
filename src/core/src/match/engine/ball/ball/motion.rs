@@ -482,8 +482,18 @@ impl Ball {
                 // Owner is too far - this shouldn't happen but is a safety net
                 // Clear ownership and let ball move naturally
                 #[cfg(feature = "match-logs")]
-                super::ownership::reception_diag::OWNER_TOO_FAR
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                {
+                    super::ownership::reception_diag::OWNER_TOO_FAR
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    // Split it by distance / gather / shot / already-dead so
+                    // the granting site can be identified — see `too_far`.
+                    super::ownership::reception_diag::too_far::note(
+                        distance_squared.sqrt(),
+                        self.held_in_hands,
+                        self.cached_shot_target.is_some(),
+                        self.velocity.norm(),
+                    );
+                }
                 self.previous_owner = self.current_owner;
                 self.current_owner = None;
                 self.ownership_duration = 0;
@@ -537,8 +547,16 @@ impl Ball {
                     }
                 } else {
                     #[cfg(feature = "match-logs")]
-                    super::ownership::reception_diag::OWNER_TOO_FAR
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    {
+                        super::ownership::reception_diag::OWNER_TOO_FAR
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        super::ownership::reception_diag::too_far::note(
+                            dist_sq.sqrt(),
+                            self.held_in_hands,
+                            self.cached_shot_target.is_some(),
+                            self.velocity.norm(),
+                        );
+                    }
                     self.previous_owner = self.current_owner;
                     self.current_owner = None;
                     self.ownership_duration = 0;

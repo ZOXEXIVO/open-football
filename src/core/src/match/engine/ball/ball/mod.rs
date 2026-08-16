@@ -1427,6 +1427,33 @@ impl Ball {
         if self.held_in_hands { 1.15 } else { 0.0 }
     }
 
+    /// Is this player close enough to the ball to be given it?
+    ///
+    /// # Why every grant has to ask
+    ///
+    /// [`MAX_OWNER_TRACK_DISTANCE`] is the furthest the ball will follow
+    /// the player who owns it. Grant possession beyond that and
+    /// [`Ball::move_to`] disowns the ball on the very next tick — but by
+    /// then the granting handler has already **zeroed the velocity**, so
+    /// what `move_to` releases is a dead ball. It stops in mid-pitch with
+    /// nobody near it, everyone converges on it, and somebody eventually
+    /// plays it backwards. Reported from the viewer exactly that way, and
+    /// counted at 87 times a match by `reception_diag::OWNER_TOO_FAR`.
+    ///
+    /// So the check is not new — `move_to` has always made it. It was just
+    /// made one tick too late to be survivable. Asking here, before
+    /// anything is mutated, means the grant simply does not happen and the
+    /// ball flies on untouched, which is the same outcome minus the
+    /// wreckage.
+    ///
+    /// Measured in the XY plane, exactly as `move_to` measures it: a ball
+    /// directly overhead is within reach whatever its height.
+    pub fn within_possession_reach(&self, player_position: Vector3<f32>) -> bool {
+        let dx = player_position.x - self.position.x;
+        let dy = player_position.y - self.position.y;
+        dx * dx + dy * dy <= MAX_OWNER_TRACK_DISTANCE * MAX_OWNER_TRACK_DISTANCE
+    }
+
     /// Take the ball into `keeper_id`'s gloves.
     pub fn gather_in_hands(&mut self, keeper_id: u32, team_id: u32, tick: u64) {
         #[cfg(feature = "match-logs")]

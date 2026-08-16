@@ -2772,6 +2772,15 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_claim_ball_event(player_id: u32, field: &mut MatchField, context: &MatchContext) {
+        // A claim from out of reach is not a reception — it is a booking
+        // that `Ball::move_to` cancels next tick, having already consumed
+        // `pass_target_player_id` and the pass window with it. The
+        // reception histogram says legitimate claims are 100% inside this
+        // range, so nothing real is refused here.
+        if !Self::can_take_possession(player_id, field) {
+            return;
+        }
+
         // CLAIM COOLDOWN: Prevent rapid ping-pong between players
         // If the ball was just claimed by someone else, reject this claim
         const CLAIM_COOLDOWN_TICKS: u32 = 15; // ~250ms at 60fps - time before ball can change hands
@@ -2853,6 +2862,12 @@ impl PlayerEventDispatcher {
         if field.ball.held_in_hands && field.ball.current_owner != Some(player_id) {
             return;
         }
+        // Nor dribbles one he is nowhere near — this grants ownership as
+        // well as setting a velocity, so it can strand the ball the same
+        // way the catch did.
+        if !Self::can_take_possession(player_id, field) {
+            return;
+        }
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
         // Carrying it, therefore not holding it.
@@ -2923,6 +2938,32 @@ impl PlayerEventDispatcher {
             // Opponent won the pass — accuracy window ends.
             field.ball.clear_pending_pass_metadata();
         }
+    }
+
+    /// May `player_id` be handed the ball right now?
+    ///
+    /// The backstop behind every ownership grant that does NOT snap the
+    /// ball to the player (`secure_ball_for` does, so it is exempt).
+    /// `Ball::move_to` has always refused to track a ball to an owner
+    /// beyond `MAX_OWNER_TRACK_DISTANCE` — the problem was that it refused
+    /// a tick late, after the handler had zeroed the velocity, leaving a
+    /// dead ball sitting in mid-pitch. Asking before anything is mutated
+    /// gives the same answer while the ball is still flying.
+    ///
+    /// Not a substitute for the states getting their own reach right: this
+    /// is the net under them, and `reception_diag::GRANT_OUT_OF_REACH` is
+    /// how many times a state asked for something impossible.
+    fn can_take_possession(player_id: u32, field: &MatchField) -> bool {
+        let Some(player) = field.players.iter().find(|p| p.id == player_id) else {
+            return false;
+        };
+        if field.ball.within_possession_reach(player.position) {
+            return true;
+        }
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::ball::ball::ownership::reception_diag::GRANT_OUT_OF_REACH
+            .fetch_add(1, Ordering::Relaxed);
+        false
     }
 
     // Snaps the ball to the winner's feet and zeros velocity — prevents
@@ -4322,6 +4363,15 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_caught_ball_event(player_id: u32, field: &mut MatchField, context: &MatchContext) {
+        // You cannot catch a ball you are not near. Checked BEFORE the save
+        // credit below, deliberately: a catch resolved while the ball was
+        // still metres away was being booked as a save for a shot the
+        // keeper never reached, which is how saves/on-target climbed above
+        // its calibrated 67%.
+        if !Self::can_take_possession(player_id, field) {
+            return;
+        }
+
         // Detect saves: ball was moving and came from an opponent
         let ball_was_moving = field.ball.velocity.norm_squared() > 0.25;
         let last_owner_team = field.ball.previous_owner.and_then(|prev_id| {
@@ -5179,6 +5229,18 @@ impl PlayerEventDispatcher {
             field.ball.previous_owner = field.ball.current_owner;
             field.ball.current_owner = Some(opponent_id);
             field.ball.ownership_duration = 0;
+            // Walk him to the spot, exactly as the foul free kick does.
+            //
+            // "Nearest opponent" is nearest, not near: he is routinely tens
+            // of units from where the flag went up. Awarding him the ball
+            // without moving him left the restart beyond
+            // `MAX_OWNER_TRACK_DISTANCE`, so `Ball::move_to` disowned it on
+            // the next tick — and the two lines above had already parked the
+            // ball at `position` with zero velocity, which is the dead-ball-
+            // in-mid-pitch artefact exactly. The free kick path has staged
+            // this teleport all along; the offside restart was the one
+            // set piece that forgot to.
+            field.ball.pending_set_piece_teleport = Some((opponent_id, position));
         }
 
         // Protected possession (same pattern as foul free kick)

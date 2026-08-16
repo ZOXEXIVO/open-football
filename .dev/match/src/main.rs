@@ -5407,6 +5407,34 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     too_far,
                     too_far as f32 / n_matches as f32,
                 );
+                let refused = core::reception_diag::GRANT_OUT_OF_REACH
+                    .load(std::sync::atomic::Ordering::Relaxed);
+                println!(
+                    "  grants refused before they could strand the ball: {} ({:.2}/match)   \
+                     these used to become the line above, a tick later, with the \
+                     velocity already zeroed",
+                    refused,
+                    refused as f32 / n_matches as f32,
+                );
+                {
+                    use core::reception_diag::too_far;
+                    let (bands, in_hands, during_shot, stopped) = too_far::snapshot();
+                    let tot = bands.iter().sum::<u64>().max(1);
+                    let mix: Vec<String> = too_far::BAND_NAMES
+                        .iter()
+                        .zip(bands.iter())
+                        .map(|(n, &c)| format!("{} {:.0}%", n, c as f32 / tot as f32 * 100.0))
+                        .collect();
+                    println!(
+                        "    of those drops: {}   |   in a keeper's gloves {:.0}%, \
+                         shot live {:.0}%, BALL ALREADY DEAD {:.0}% (this last is the \
+                         subset the viewer shows as a ball frozen in mid-pitch)",
+                        mix.join(", "),
+                        in_hands as f32 / tot as f32 * 100.0,
+                        during_shot as f32 / tot as f32 * 100.0,
+                        stopped as f32 / tot as f32 * 100.0,
+                    );
+                }
                 let (sw, so, sc_, snt, grj, clamped) = core::reception_diag::shot_fate_snapshot();
                 println!(
                     "  shot fate: wide {}, over the bar {}, claimed mid-flight {}, \
@@ -5437,7 +5465,11 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         ("  ├ goal", goal, ""),
                         ("  └ keeper gathered/saved", gk, ""),
                         ("out of play (corner/goal kick/throw)", out, "real ~45%"),
-                        ("claimed mid-flight by a DEFENDER", cdef, "real ~15% (blocks)"),
+                        (
+                            "claimed mid-flight by a DEFENDER",
+                            cdef,
+                            "real ~15% (blocks)",
+                        ),
                         ("claimed mid-flight by an ATTACKER", catt, "real ~5%"),
                         ("came to rest on the pitch", stopped, "real ~0%"),
                         ("still live at the 400-tick timeout", timeout, "real 0%"),
@@ -5540,7 +5572,10 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                             .collect::<Vec<_>>()
                             .join("  ")
                     };
-                    println!("      owner in-state ticks when stuck: {}", pct(&all_dwell, dsum));
+                    println!(
+                        "      owner in-state ticks when stuck: {}",
+                        pct(&all_dwell, dsum)
+                    );
                     println!(
                         "      …of which TakeBall ({} ticks): {}   owner sits {:.1}u ({:.2}m) off the ball",
                         tb_dwell.iter().sum::<u64>(),
@@ -5593,7 +5628,10 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                             "  nearest opponent to the carrier: mean {:.1} m, {:.2} opponents within 10 m",
                             mean, engagers
                         );
-                        println!("  all: {}   (real: a carrier is engaged inside 5 m most of the time)", row(&buckets, tot));
+                        println!(
+                            "  all: {}   (real: a carrier is engaged inside 5 m most of the time)",
+                            row(&buckets, tot)
+                        );
                         for (i, label) in ["own third", "middle", "attacking"].iter().enumerate() {
                             let slice = &thirds[i * 5..i * 5 + 5];
                             let t: u64 = slice.iter().sum();
@@ -5602,20 +5640,56 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     }
                     {
                         let (fo, yi, fl) = core::chase_diag::snapshot();
-                        println!("      chase designation: {:.0} forces/match, {:.0} yields/match ({:.0}% of forces during a delivery in flight)", fo as f64 / n_matches as f64, yi as f64 / n_matches as f64, fl as f64 / fo.max(1) as f64 * 100.0);
+                        println!(
+                            "      chase designation: {:.0} forces/match, {:.0} yields/match ({:.0}% of forces during a delivery in flight)",
+                            fo as f64 / n_matches as f64,
+                            yi as f64 / n_matches as f64,
+                            fl as f64 / fo.max(1) as f64 * 100.0
+                        );
                     }
                     {
-                        let (tv, cross, zones, inflight) = core::dead_ball_diag::stall_churn_snapshot();
+                        let (tv, cross, zones, inflight) =
+                            core::dead_ball_diag::stall_churn_snapshot();
                         let zt: u64 = zones.iter().sum::<u64>().max(1);
-                        let zrow = zones.iter().enumerate().map(|(i,n)| format!("{} {:.0}%", core::dead_ball_diag::ZONE_LABELS[i], *n as f64 / zt as f64 * 100.0)).collect::<Vec<_>>().join("  ");
-                        println!("      inside stalls: {:.1} turnovers/match, {:.0}% of them cross-team; {:.0}% of stuck ticks had a delivery in the air", tv as f64 / n_matches as f64, cross as f64 / tv.max(1) as f64 * 100.0, inflight as f64 / zt as f64 * 100.0);
+                        let zrow = zones
+                            .iter()
+                            .enumerate()
+                            .map(|(i, n)| {
+                                format!(
+                                    "{} {:.0}%",
+                                    core::dead_ball_diag::ZONE_LABELS[i],
+                                    *n as f64 / zt as f64 * 100.0
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("  ");
+                        println!(
+                            "      inside stalls: {:.1} turnovers/match, {:.0}% of them cross-team; {:.0}% of stuck ticks had a delivery in the air",
+                            tv as f64 / n_matches as f64,
+                            cross as f64 / tv.max(1) as f64 * 100.0,
+                            inflight as f64 / zt as f64 * 100.0
+                        );
                         println!("      stall zone: {}", zrow);
                     }
                     {
                         let (ex, sp) = core::stuck_exit_stats::snapshot();
                         let t: u64 = ex.iter().sum::<u64>().max(1);
-                        let row = ex.iter().enumerate().map(|(i,n)| format!("{} {:.0}%", core::stuck_exit_stats::NAMES[i], *n as f64 / t as f64 * 100.0)).collect::<Vec<_>>().join("  ");
-                        println!("      FWD Running stuck-exit ({} ticks, mean speed {:.3} u/tick): {}", t, sp, row);
+                        let row = ex
+                            .iter()
+                            .enumerate()
+                            .map(|(i, n)| {
+                                format!(
+                                    "{} {:.0}%",
+                                    core::stuck_exit_stats::NAMES[i],
+                                    *n as f64 / t as f64 * 100.0
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("  ");
+                        println!(
+                            "      FWD Running stuck-exit ({} ticks, mean speed {:.3} u/tick): {}",
+                            t, sp, row
+                        );
                     }
                     let (tb_ticks, tb_spells) = core::dead_ball_diag::takeball_ownership_snapshot();
                     println!(
@@ -5690,11 +5764,9 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     let jumps = core::flight_diag::FlightDiag::jump_snapshot();
                     // Restarts move the ball on purpose (a throw-in puts
                     // it on the touchline); only the rest are unexplained.
-                    let restart_total: u64 = core::flight_diag::RESTART_STAGES
-                        .map(|i| jumps[i].0)
-                        .sum();
-                    let jump_total: u64 =
-                        jumps.iter().map(|j| j.0).sum::<u64>() - restart_total;
+                    let restart_total: u64 =
+                        core::flight_diag::RESTART_STAGES.map(|i| jumps[i].0).sum();
+                    let jump_total: u64 = jumps.iter().map(|j| j.0).sum::<u64>() - restart_total;
                     println!(
                         "    relocations: {} unexplained ({:.1}/match) + {} restart placements \
                          ({:.1}/match)",
@@ -6248,8 +6320,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 goal_kicks as f64 / n_matches as f64
             );
             {
-                use core::mid_run_diag::CrossDiag;
                 use core::r#match::player::strategies::passing::CrossType;
+                use core::mid_run_diag::CrossDiag;
                 let by_type = CrossDiag::by_type();
                 let struck: u64 = by_type.iter().sum();
                 let lofted: u64 = [
@@ -7476,8 +7548,8 @@ fn run_forward_paths(minutes: u64, level: u8) {
             }
 
             if let Some(prev) = entry.prev {
-                let step = (((pos.0 - prev.0) as f64).powi(2) + ((pos.1 - prev.1) as f64).powi(2))
-                    .sqrt();
+                let step =
+                    (((pos.0 - prev.0) as f64).powi(2) + ((pos.1 - prev.1) as f64).powi(2)).sqrt();
                 entry.path_units += step;
                 // 0.5 m/s over a 30 ms sample is 0.015 m.
                 if step * M_PER_UNIT < 0.015 {
@@ -7492,8 +7564,8 @@ fn run_forward_paths(minutes: u64, level: u8) {
                 if (*other < 200) == (*id < 200) || *other % 100 == 0 {
                     continue;
                 }
-                let d = (((opos.0 - pos.0) as f64).powi(2) + ((opos.1 - pos.1) as f64).powi(2))
-                    .sqrt();
+                let d =
+                    (((opos.0 - pos.0) as f64).powi(2) + ((opos.1 - pos.1) as f64).powi(2)).sqrt();
                 nearest = nearest.min(d);
             }
             if nearest < f64::MAX {

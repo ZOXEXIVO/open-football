@@ -45,6 +45,68 @@ pub mod reception_diag {
     /// `PassTo` events rejected because the ball was out of the
     /// passer's reach.
     pub static OUT_OF_REACH: AtomicU64 = AtomicU64::new(0);
+    /// Ownership grants refused because the player was further from the
+    /// ball than it can be owned at. These are the ones that used to
+    /// become `OWNER_TOO_FAR` a tick later, with the ball's velocity
+    /// already destroyed — see `Ball::within_possession_reach`.
+    pub static GRANT_OUT_OF_REACH: AtomicU64 = AtomicU64::new(0);
+
+    /// Attribution for the `OWNER_TOO_FAR` drops, so the granting site can
+    /// be identified without auditing all fifteen of them by hand.
+    ///
+    /// Inspection has repeatedly picked the wrong suspect here, so this
+    /// splits the drops three ways at the one place they are all visible:
+    /// how far the owner actually was, whether the ball was in a keeper's
+    /// gloves (a gather), and whether a shot was live (a save path). The
+    /// distance band is the most informative: drops clustered just past
+    /// the cutoff are a reach that is marginally too generous, while drops
+    /// at 60u+ are a restart or hand-off that never moved anybody.
+    pub mod too_far {
+        use super::{AtomicU64, Ordering};
+
+        pub const BANDS: usize = 4;
+        pub const BAND_EDGES: [f32; BANDS] = [20.0, 30.0, 60.0, f32::MAX];
+        pub const BAND_NAMES: [&str; BANDS] = ["15-20u", "20-30u", "30-60u", ">60u"];
+        const ZERO: AtomicU64 = AtomicU64::new(0);
+
+        pub static AT_DISTANCE: [AtomicU64; BANDS] = [ZERO; BANDS];
+        /// Drops where the ball was in a keeper's gloves — a gather.
+        pub static IN_HANDS: AtomicU64 = AtomicU64::new(0);
+        /// Drops where a shot was still live — a save path.
+        pub static DURING_SHOT: AtomicU64 = AtomicU64::new(0);
+        /// Drops where the ball had already been stopped dead, i.e. the
+        /// ones that actually produce the reported artefact. A drop on a
+        /// ball still travelling is invisible; this is the subset that
+        /// leaves it sitting in mid-pitch.
+        pub static BALL_ALREADY_STOPPED: AtomicU64 = AtomicU64::new(0);
+
+        pub fn note(distance: f32, in_hands: bool, during_shot: bool, speed: f32) {
+            let band = BAND_EDGES.iter().position(|&e| distance < e).unwrap_or(0);
+            AT_DISTANCE[band].fetch_add(1, Ordering::Relaxed);
+            if in_hands {
+                IN_HANDS.fetch_add(1, Ordering::Relaxed);
+            }
+            if during_shot {
+                DURING_SHOT.fetch_add(1, Ordering::Relaxed);
+            }
+            if speed < 0.05 {
+                BALL_ALREADY_STOPPED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> ([u64; BANDS], u64, u64, u64) {
+            let mut bands = [0u64; BANDS];
+            for (i, b) in AT_DISTANCE.iter().enumerate() {
+                bands[i] = b.load(Ordering::Relaxed);
+            }
+            (
+                bands,
+                IN_HANDS.load(Ordering::Relaxed),
+                DURING_SHOT.load(Ordering::Relaxed),
+                BALL_ALREADY_STOPPED.load(Ordering::Relaxed),
+            )
+        }
+    }
 
     /// Ticks the ball spent in a keeper's gloves, against total ticks.
     ///

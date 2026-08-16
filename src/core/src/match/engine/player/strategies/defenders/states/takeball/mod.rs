@@ -1,8 +1,8 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::player::strategies::common::states::LooseBallChase;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -35,40 +35,8 @@ impl StateProcessingHandler for DefenderTakeBallState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Aerial balls: Arrive to the landing spot so we brake into the
-        // claim radius instead of plowing through it at full speed.
-        // Ground balls: Pursuit, which already has its own slowing ramp
-        // and uses the ball's velocity to predict interception.
-        // Seek alone would chase a moving ball's *current* position and
-        // always lag behind — fatal for a ground pass rolling through us.
-        let ball_pos = ctx.tick_context.positions.ball.position;
-        let ball_vel = ctx.tick_context.positions.ball.velocity;
-        let landing = ctx.tick_context.positions.ball.landing_position;
-
-        // Aim point crosses smoothly from the ball itself to where it will
-        // land as it rises, instead of snapping between them at a fixed
-        // height.
-        //
-        // This used to be `if ball_pos.z > 2.3 { landing } else { ball_pos }`.
-        // A bouncing ball crosses 2.3 repeatedly, and the two targets can
-        // be tens of units apart in DIFFERENT directions — so the chaser's
-        // velocity inverted on every crossing. `Defender: Take Ball`
-        // measured 6.6-7.8 velocity reversals per second held with the
-        // player never leaving the state (`dev_match trace`), which is a
-        // chaser visibly shivering next to a loose ball instead of
-        // collecting it. Blending across a band means there is no height
-        // at which the aim point can jump.
-        const GROUND_H: f32 = 1.5;
-        const AERIAL_H: f32 = 3.0;
-        let t = ((ball_pos.z - GROUND_H) / (AERIAL_H - GROUND_H)).clamp(0.0, 1.0);
-        // Smoothstep: zero gradient at both ends, so the aim point has no
-        // corner where it starts or finishes moving.
-        let aerial = t * t * (3.0 - 2.0 * t);
-        let target = ball_pos + (landing - ball_pos) * aerial;
-
-        // `Arrive` brakes into a landing spot, `Pursuit` leads a rolling
-        // ball, blended across the same aerial weight as the aim point so
-        // neither the target nor the behaviour can jump.
+        // Aim point and steering both cross smoothly from the ball itself
+        // to its landing spot as it rises — see `LooseBallChase::aim`.
         //
         // UNSOLVED — this state is the largest remaining source of
         // position flicker in the engine: 5.8-6.5 velocity reversals per
@@ -79,8 +47,9 @@ impl StateProcessingHandler for DefenderTakeBallState {
         // less than run-to-run noise, so DON'T repeat them:
         //
         //   1. the aerial/ground aim point snapping at `z > 2.3`
-        //      (blended — this fix is kept below, it removes a real
-        //      discontinuity even though it did not move the number);
+        //      (blended — this fix is kept, in `LooseBallChase::aim`; it
+        //      removes a real discontinuity even though it did not move
+        //      the number);
         //   2. the separation weight's 0.3 -> 1.0 step at 10u (smoothed);
         //   3. the separation force entirely (disabled outright);
         //   4. `Pursuit`'s discontinuous interception solver (rewritten
@@ -98,35 +67,13 @@ impl StateProcessingHandler for DefenderTakeBallState {
         // The next attempt should instrument the actual per-tick velocity
         // vectors for one chaser rather than reason about the code —
         // inspection has now been wrong five times running.
-        let mut arrive_velocity = if aerial >= 1.0 {
-            SteeringBehavior::Arrive {
-                target,
-                slowing_distance: 10.0,
-            }
-            .calculate(ctx.player)
-            .velocity
-        } else if aerial <= 0.0 {
-            SteeringBehavior::Pursuit {
-                target,
-                target_velocity: ball_vel,
-            }
-            .calculate(ctx.player)
-            .velocity
-        } else {
-            let brake = SteeringBehavior::Arrive {
-                target,
-                slowing_distance: 10.0,
-            }
-            .calculate(ctx.player)
-            .velocity;
-            let lead = SteeringBehavior::Pursuit {
-                target,
-                target_velocity: ball_vel,
-            }
-            .calculate(ctx.player)
-            .velocity;
-            lead * (1.0 - aerial) + brake * aerial
-        };
+        let (target, mut arrive_velocity) = LooseBallChase::aim(
+            ctx.player,
+            ctx.tick_context.positions.ball.position,
+            ctx.tick_context.positions.ball.velocity,
+            ctx.tick_context.positions.ball.landing_position,
+            10.0,
+        );
 
         // Add separation force to prevent player stacking
         // Reduce separation when approaching ball, but keep minimum to prevent clustering
@@ -188,6 +135,13 @@ impl StateProcessingHandler for DefenderTakeBallState {
                 * SEPARATION_WEIGHT
                 * separation_factor;
 
+            // ⚠ SEPARATION MUST NEVER SLOW THE RACE — see `LooseBallChase`.
+            // Without this an opponent standing between the defender and
+            // the ball repels him **away from the ball** at up to 0.4 of
+            // top speed, and a rival who started further away wins it.
+            separation_force =
+                LooseBallChase::keep_non_opposing(separation_force, target - ctx.player.position);
+
             // Blend arrive and separation velocities
             arrive_velocity = arrive_velocity + separation_force;
 
@@ -203,7 +157,26 @@ impl StateProcessingHandler for DefenderTakeBallState {
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
-        // Taking ball involves movement towards ball - moderate intensity
-        DefenderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+        // ⚠ THIS IS A SPEED CAP, NOT JUST FATIGUE ACCOUNTING.
+        //
+        // `MovementEffort::speed_fraction` turns the intensity into a hard
+        // ceiling on how fast the player may move, and this line used to
+        // read `Moderate` — **0.52 of his top speed** — with the comment
+        // "taking ball involves movement towards ball - moderate
+        // intensity". Midfielders and forwards chase the same loose ball
+        // at `VeryHigh` (0.95).
+        //
+        // So a defender racing a forward for a loose ball ran at 55% of
+        // the forward's speed. He lost races he started far closer to,
+        // which is exactly how it was reported from the viewer: "defenders
+        // with Take Ball not running to the ball, and the opponent is
+        // first even though he had the bigger distance".
+        //
+        // `MovementEffort`'s own tier list has always said where this
+        // belongs — "Explosive: runs in behind, shooting, tackling,
+        // **chasing loose balls**". A defender sprinting for a fifty-fifty
+        // is the same action as anyone else sprinting for it; nothing
+        // about his shirt number makes it a jog.
+        DefenderCondition::with_velocity(ActivityIntensity::VeryHigh).process(ctx);
     }
 }

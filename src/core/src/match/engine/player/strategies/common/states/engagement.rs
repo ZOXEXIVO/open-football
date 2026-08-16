@@ -1,6 +1,8 @@
 use crate::r#match::engine::context::PenaltyArea;
 use crate::r#match::player::events::FoulSeverity;
-use crate::r#match::{DefensiveDuty, PlayerSide, StateProcessingContext};
+use crate::r#match::{
+    DefensiveDuty, MatchPlayer, PlayerSide, StateProcessingContext, SteeringBehavior,
+};
 use nalgebra::Vector3;
 
 /// How far behind a challenging player a team-mate can be and still count
@@ -167,6 +169,117 @@ impl MarkEngagement {
     /// …and far enough that he has genuinely lost him (~25 m). Strictly
     /// outside `ENGAGE`, so the hand-off is one-way.
     pub const RELEASE: f32 = 200.0;
+}
+
+/// The rule that keeps a race for a loose ball a RACE.
+///
+/// # Why this exists
+///
+/// All four `TakeBall` states add a plain repulsion from every player
+/// within 25u — team-mates AND opponents — to their pursuit of the ball,
+/// at up to 0.4 of top speed. So an opponent standing between the chaser
+/// and the ball produces a force pointing away from that opponent, which
+/// is to say **away from the ball**, and the chaser visibly hangs off
+/// while a rival who started FURTHER away arrives first. Reported from
+/// the viewer exactly that way: "defenders with Take Ball not running to
+/// the ball, and the opponent is first even though he was further".
+///
+/// It applies for the whole approach, too — the states' `separation_factor`
+/// is 1.0 at every distance beyond 10u and only ramps down inside that,
+/// i.e. only once the chaser is already within claim range.
+///
+/// Real players do not give way to the man they are racing; they run the
+/// same line and fight for it shoulder to shoulder. Separation still has
+/// a job here — stopping four players stacking on one point — and that
+/// job is entirely lateral, so keeping only the part of the force that
+/// does not oppose the chase preserves it while making it impossible for
+/// anybody to be pushed off the ball.
+pub struct LooseBallChase;
+
+impl LooseBallChase {
+    /// Ball height below which the aim point is the ball itself.
+    const GROUND_H: f32 = 1.5;
+    /// Ball height above which the aim point is where it will land.
+    const AERIAL_H: f32 = 3.0;
+
+    /// Where to run for a loose ball, and the velocity to run there with.
+    ///
+    /// Returns `(target, velocity)` — the target is also what the caller
+    /// measures its separation ramp against.
+    ///
+    /// # Why the aim point is blended
+    ///
+    /// This used to be `if ball.z > 2.3 { landing } else { ball_pos }`, with
+    /// the steering switching between `Arrive` and `Pursuit` on the same
+    /// test. A bouncing ball crosses 2.3 repeatedly, and the two targets can
+    /// be tens of units apart in DIFFERENT directions — so the chaser's
+    /// velocity **inverted on every crossing**. `dev_match trace` measured
+    /// 6.6-7.8 velocity reversals per second with the player never leaving
+    /// the state: a chaser visibly shivering next to a loose ball instead of
+    /// collecting it. Crossing both the target and the behaviour smoothly
+    /// across a height band means there is no height at which either can
+    /// jump. (Smoothstep, so the aim point has zero gradient at both ends
+    /// and no corner where it starts or finishes moving.)
+    ///
+    /// `Arrive` brakes into a landing spot; `Pursuit` leads a rolling ball.
+    /// Seek alone would chase a moving ball's *current* position and always
+    /// lag behind — fatal for a ground pass rolling through the chaser.
+    pub fn aim(
+        player: &MatchPlayer,
+        ball_pos: Vector3<f32>,
+        ball_vel: Vector3<f32>,
+        landing: Vector3<f32>,
+        slowing_distance: f32,
+    ) -> (Vector3<f32>, Vector3<f32>) {
+        let t = ((ball_pos.z - Self::GROUND_H) / (Self::AERIAL_H - Self::GROUND_H)).clamp(0.0, 1.0);
+        let aerial = t * t * (3.0 - 2.0 * t);
+        let target = ball_pos + (landing - ball_pos) * aerial;
+
+        let brake = || {
+            SteeringBehavior::Arrive {
+                target,
+                slowing_distance,
+            }
+            .calculate(player)
+            .velocity
+        };
+        let lead = || {
+            SteeringBehavior::Pursuit {
+                target,
+                target_velocity: ball_vel,
+            }
+            .calculate(player)
+            .velocity
+        };
+
+        let velocity = if aerial >= 1.0 {
+            brake()
+        } else if aerial <= 0.0 {
+            lead()
+        } else {
+            lead() * (1.0 - aerial) + brake() * aerial
+        };
+
+        (target, velocity)
+    }
+
+    /// Remove the component of `separation` that points against the run to
+    /// the ball, leaving the lateral part untouched.
+    ///
+    /// A component that happens to push the chaser TOWARD the ball is left
+    /// alone: it costs nothing, and stripping it as well would be its own
+    /// arbitrary rule rather than a consequence of anything physical.
+    pub fn keep_non_opposing(separation: Vector3<f32>, to_ball: Vector3<f32>) -> Vector3<f32> {
+        let Some(chase_dir) = to_ball.try_normalize(1e-3) else {
+            return separation;
+        };
+        let opposing = separation.dot(&chase_dir);
+        if opposing < 0.0 {
+            separation - chase_dir * opposing
+        } else {
+            separation
+        }
+    }
 }
 
 /// Would a foul by this player, right now, be a penalty?

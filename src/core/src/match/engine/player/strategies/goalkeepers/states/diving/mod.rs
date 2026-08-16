@@ -5,7 +5,8 @@ use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    ConditionContext, MAX_OWNER_TRACK_DISTANCE, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler,
 };
 use nalgebra::Rotation3;
 use nalgebra::Vector3;
@@ -219,10 +220,21 @@ impl GoalkeeperDivingState {
         let ball_speed = ctx.tick_context.positions.ball.velocity.magnitude();
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
 
-        // Effective dive radius scales with skill: weak ~12u, elite
-        // ~30u. Beyond that the keeper cannot get a hand on the ball.
+        // How far a diving keeper can get a hand on the ball. Scales with
+        // skill, but bounded by `MAX_OWNER_TRACK_DISTANCE` for the same
+        // hard reason as `effective_catch_distance` — see the note there.
+        // This is where the dive ENDS, not how far he travels to make it
+        // (that is `effective_dive_distance`, up to 48u), so gathering one
+        // beyond the range a ball can be owned at left it dead on the grass
+        // a tick later with its velocity already zeroed.
+        //
+        // The `stretch` denominator below moves with it, which is correct
+        // and not incidental: stretch is "how far out on the edge of my
+        // reach is this", so it has to be measured against the reach that
+        // actually applies.
         let catch_distance =
-            6.0 + prof.dive_reach * 10.0 + prof.handling_profile * 4.0 + prof.shot_stopping * 4.0;
+            (6.0 + prof.dive_reach * 10.0 + prof.handling_profile * 4.0 + prof.shot_stopping * 4.0)
+                .min(MAX_OWNER_TRACK_DISTANCE);
         if ball_distance > catch_distance {
             return false;
         }
