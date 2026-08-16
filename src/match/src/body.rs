@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
+use crate::actors::Actors;
 use crate::kit::Outfit;
 
 /// One cross-section of a body part: an ellipse of half-widths `x` (across the
@@ -584,6 +585,39 @@ pub struct Gait {
     /// thing brings both hands onto it. Without this, a ball claimed at full
     /// stretch hangs between two gloves that never close.
     pub claimed: f32,
+    /// Where he is in a kick: −1 at the top of the backswing, 0 at the
+    /// instant the boot meets the ball, +1 at the end of the follow through.
+    /// 0 for everybody not kicking, which is why it must be read together
+    /// with `power`.
+    ///
+    /// The ball is struck 14.8 times a minute in a recorded match and none of
+    /// it used to be drawn: the ball left, the player kept running, and the
+    /// single most repeated action in football was a thing that happened to
+    /// the ball rather than a thing anybody did.
+    pub swing: f32,
+    /// How hard, 0..1 — a five-yard pass and a shot from twenty are the same
+    /// movement at very different amplitudes. Doubles as the gate on the
+    /// whole kick: at zero none of it applies.
+    pub power: f32,
+    /// Which boot: −1 left, +1 right, 0 nobody.
+    pub foot: f32,
+    /// 0..1 over a keeper throwing the ball out, which is the same swing
+    /// routed to his shoulder instead of his hip. Peaks at the release.
+    pub throwing: f32,
+    /// −1..1: driving off the mark at +1, pulling up short at −1.
+    ///
+    /// A footballer changes pace far more often than he changes direction,
+    /// and the rig had a lean for the turn but nothing at all for this — so
+    /// a man going from a standstill to a sprint did it bolt upright, and one
+    /// stopping dead just stopped.
+    pub drive: f32,
+    /// 0..1: the ball is at his feet.
+    ///
+    /// Measured, somebody is within a stride of a slow ball in 72% of frames,
+    /// so this is the standing condition of one player on the pitch rather
+    /// than a rare event — and the man with the ball ran identically to the
+    /// twenty-one without it.
+    pub carrying: f32,
     /// 0..1: an outfielder off the ground — a header, not a save.
     ///
     /// Its own signal because the sprawl is not one: twelve outfield players
@@ -728,6 +762,80 @@ impl Joint {
     /// How much of a hand's rest angle is this particular player's, so
     /// twenty-two pairs of hands are not all cocked identically.
     const WRIST_REST: f32 = 0.12;
+    /// The kick, as the three angles the kicking leg passes through: the top
+    /// of the backswing, the instant of contact, and the end of the follow
+    /// through.
+    ///
+    /// Hip first — positive carries the thigh BACK, so the backswing is
+    /// positive and everything after it is negative. The leg finishes higher
+    /// than it was at contact because a struck ball is hit through, not at:
+    /// the boot keeps going and takes the hip with it.
+    const KICK_HIP: (f32, f32, f32) = (0.85, -0.72, -1.30);
+    /// And the knee, which folds hard on the way back, snaps straight through
+    /// the ball, and stays nearly straight into the follow through. The whip
+    /// of that fold is most of where a kick's power reads from.
+    const KICK_KNEE: (f32, f32, f32) = (1.70, 0.06, 0.34);
+    /// What the standing leg does: bends to take the whole body's weight as
+    /// the other one comes through, and pushes back up out of it.
+    const PLANT_KNEE: f32 = 0.58;
+    /// And how far the whole figure sinks over it, in metres — the same
+    /// bookkeeping as [`Joint::SET_DROP`]. A bent standing leg is shorter than
+    /// a straight one, and without paying for it he kicks the ball while
+    /// hovering six centimetres above the pitch.
+    const KICK_DROP: f32 = 0.058;
+    /// How much of each end of the swing is given over to blending into and
+    /// out of the run cycle, as a fraction of it.
+    const KICK_BLEND: f32 = 0.20;
+    /// How far the hips and then the chest rotate through the ball. The hips
+    /// lead and the shoulders follow, which is the sequence that makes a kick
+    /// look like it came from the ground up rather than from the knee.
+    const KICK_TWIST: f32 = 0.44;
+    /// How far ahead of the swing the hips run, and how much more of the same
+    /// turn the shoulders take. Together they are the separation between the
+    /// two: coiled the other way at the top of the backswing, hips through
+    /// first at contact.
+    const KICK_HIP_LEAD: f32 = 0.35;
+    const KICK_CHEST: f32 = 0.90;
+    /// And how far he leans away from the kicking side, which is what keeps a
+    /// man upright while one leg is over his own head.
+    const KICK_ROLL: f32 = 0.26;
+    /// The counter-swing, as the same three keys again: the arm OPPOSITE the
+    /// kicking leg comes forward and up through the ball, and the one on the
+    /// kicking side goes back. Without it the whole action reads as a
+    /// mechanism hinged at one joint.
+    const KICK_COUNTER: (f32, f32, f32) = (-0.35, -1.25, -0.95);
+    const KICK_TRAIL: (f32, f32, f32) = (0.20, 0.60, 0.40);
+    /// And how far across his own chest the counter-arm comes.
+    const KICK_ARM_SPREAD: f32 = 0.55;
+    /// A keeper's throw: the same three keys as a kick, sent to his shoulder
+    /// instead of his hip — cocked behind the ear, over the top, and down
+    /// across the follow through.
+    ///
+    /// Written as one INCREASING sweep past a half turn rather than as the
+    /// angles it would be natural to write, because these are interpolated as
+    /// scalars: cocking at +2.35 and releasing at −1.98 is the same pair of
+    /// poses but takes the arm down past his hip to get between them, which is
+    /// an underarm bowl.
+    const THROW_SHOULDER: (f32, f32, f32) = (2.35, 4.30, 5.15);
+    const THROW_ELBOW: (f32, f32, f32) = (-1.60, -0.25, -0.15);
+    /// Driving off the mark and pulling up short: how far the chest goes over
+    /// the toes at full acceleration, and how far it sits back at a full
+    /// stop. Braking is the bigger angle — stopping is more violent than
+    /// starting, and it is the one every footballer does at the end of every
+    /// run.
+    const DRIVE_LEAN: (f32, f32) = (0.34, -0.30);
+    /// And what his legs do about it: feet driving out behind under
+    /// acceleration, planted out in front under the brakes.
+    const DRIVE_HIP: f32 = 0.16;
+    /// The man on the ball: down over it, arms out from his sides for
+    /// balance, strides shortened. All small — he is a footballer running,
+    /// not a man in a crouch — but between them they are what makes the
+    /// player with the ball findable in a crowd.
+    const CARRY_LEAN: f32 = 0.16;
+    const CARRY_KNEE: f32 = 0.16;
+    const CARRY_DROP: f32 = 0.022;
+    const CARRY_SPREAD: f32 = 0.16;
+    const CARRY_ELBOW: f32 = -0.30;
 
     fn new(owner: Entity, limb: Limb, side: f32, origin: Vec3) -> Self {
         Joint {
@@ -753,8 +861,14 @@ impl Joint {
                 // does, where the stride bob takes over.
                 let breathe = Self::BREATHE * (1.0 - gait.run) * (0.5 + 0.5 * gait.idle.sin());
                 // And the settle onto bent knees, which is a real loss of
-                // height rather than a pose: see [`Joint::SET_DROP`].
-                self.origin + Vec3::Y * (bob + breathe - Self::SET_DROP * gait.set)
+                // height rather than a pose: see [`Joint::SET_DROP`]. The man
+                // on the ball sinks over it the same way, by less.
+                self.origin
+                    + Vec3::Y
+                        * (bob + breathe
+                            - Self::SET_DROP * gait.set
+                            - Self::CARRY_DROP * gait.carrying
+                            - Self::KICK_DROP * gait.power * Self::taper(gait.swing))
             }
             _ => self.origin,
         }
@@ -793,13 +907,42 @@ impl Joint {
         // with it, he curls around it and the cradle already has them; without
         // it, they come in under him and take his weight.
         let bracing = gait.grounded * (1.0 - gait.carry);
+        // How much of the kick this limb takes, 0..1. Peaks at contact and
+        // eases away at both ends, so the swing arrives out of the run cycle
+        // and returns to it rather than being cut in and out.
+        // Full authority across the middle of the swing and a quick blend to
+        // the run cycle at each end, so the kick arrives and leaves without a
+        // pop. NOT a taper across the whole swing: the keys below put the
+        // backswing at −1 and the follow through at +1, so fading the
+        // authority out toward them cancels the two halves of a kick that are
+        // not the moment of contact — which is to say, all of it.
+        let taper = Self::taper(gait.swing);
+        let kicking = gait.power * taper;
+        let throwing = gait.throwing * taper;
+        // +1 if this is the kicking side of the body, −1 if it is the standing
+        // side. Zero for everybody not kicking, which leaves both halves equal
+        // and every term below at rest.
+        let striking = self.side * gait.foot;
 
         match self.limb {
             // Hips counter-rotate against the shoulders — the thing that
             // makes a run read as a person rather than a mechanism — and
             // carry the weight shift when he is standing.
             Limb::Pelvis => {
-                Quat::from_rotation_y(Self::HIP_TWIST * gait.run * gait.phase.sin())
+                // The hips lead a kick and the shoulders follow it: the pelvis
+                // is already opening toward the target while the boot is still
+                // travelling, which is the sequence that makes a strike look
+                // as though it came from the ground up rather than from the
+                // knee. The phase offset is what puts it ahead — at contact
+                // the hips have turned through and the chest has not.
+                //
+                // Signed off the kicking foot, so a left-footer turns the
+                // other way.
+                let opening = Self::KICK_TWIST
+                    * gait.foot
+                    * (gait.swing + Self::KICK_HIP_LEAD).clamp(-1.0, 1.0)
+                    * kicking;
+                Quat::from_rotation_y(Self::HIP_TWIST * gait.run * gait.phase.sin() - opening)
                     * Quat::from_rotation_z(Self::WEIGHT_SHIFT * weight)
             }
             Limb::Torso => {
@@ -847,6 +990,25 @@ impl Joint {
                     // same arch, and none of the turn: he is going up at a
                     // ball, not across a goal.
                     * Quat::from_rotation_x(Self::DIVE_ARCH * 0.45 * gait.jump)
+                    // Over his toes off the mark, back on his heels under the
+                    // brakes — and lower over the ball when he has it.
+                    * Quat::from_rotation_x(
+                        Self::DRIVE_LEAN.0 * gait.drive.max(0.0)
+                            + Self::DRIVE_LEAN.1 * (-gait.drive).max(0.0)
+                            + Self::CARRY_LEAN * gait.carrying,
+                    )
+                    // The chest coils further than the hips going back and
+                    // arrives after them coming through — the separation
+                    // between the two is where a kick's whip comes from — and
+                    // he leans away from the leg that is over his own head.
+                    * Quat::from_rotation_y(
+                        -Self::KICK_TWIST
+                            * Self::KICK_CHEST
+                            * gait.foot
+                            * (gait.swing - Self::KICK_HIP_LEAD).clamp(-1.0, 1.0)
+                            * kicking,
+                    )
+                    * Quat::from_rotation_z(Self::KICK_ROLL * gait.foot * kicking)
             }
             // He watches the ball. The head hangs off the torso, so this yaw
             // is already relative to his chest — turning it is the single
@@ -864,25 +1026,55 @@ impl Joint {
             // torso: without that, rotating the chest onto the ball in a dive
             // swings the face straight past it.
             Limb::Head => {
+                // A runner's head stays level while his chest rocks under it —
+                // the eyes are on the ball and the neck does the work. So the
+                // torso's own roll is subtracted back out, the same way the
+                // dive's twist is: without it the whole head tips side to side
+                // once per stride, which is the one thing nobody's does.
+                let steady = -Self::ROCK * gait.run * (gait.phase + FRAC_PI_2).sin();
                 Quat::from_rotation_y(
                     gait.look
                         - Self::DIVE_TWIST * gait.lead * gait.stretch * (1.0 - 0.5 * gait.grounded),
                 ) * Quat::from_rotation_x(-lean * 0.75 - gait.look_pitch)
+                    * Quat::from_rotation_z(steady)
             }
             Limb::Shoulder => {
                 // Arms swing against the leg on the same side, and are carried
                 // wider the harder the player is running — and wider again, or
                 // tighter, depending on the man.
-                let carriage = 0.15 + 0.07 * gait.run + 0.055 * gait.signature;
+                // — and wider again with the ball at his feet, which is a
+                // man balancing over it rather than running freely.
+                let carriage = 0.15
+                    + 0.07 * gait.run
+                    + 0.055 * gait.signature
+                    + Self::CARRY_SPREAD * gait.carrying;
                 // Nobody's two arms do the same thing. Tied to the signature
                 // so it is this player's asymmetry, the same one every time.
                 let asymmetry = 1.0 + 0.11 * gait.signature * self.side;
                 // Standing, they drift instead of locking. Offset by side so
                 // the two do not move as a pair.
                 let drift = 0.055 * standing * (gait.idle + self.side).sin();
-                let arm = Self::blend(Self::ARM_SWING, gait.run) * swing * asymmetry + drift;
-                let swinging =
-                    Quat::from_rotation_z(self.side * carriage) * Quat::from_rotation_x(arm);
+                // The counter-swing: the arm OPPOSITE the kicking leg comes
+                // forward and up through the ball while the one on the kicking
+                // side goes back. Every rotation a footballer puts into a ball
+                // has to be paid for somewhere, and this is where — without it
+                // the whole action reads as a mechanism hinged at one joint.
+                let counter = Self::through(
+                    if striking < 0.0 {
+                        Self::KICK_COUNTER
+                    } else {
+                        Self::KICK_TRAIL
+                    },
+                    gait.swing,
+                ) * kicking
+                    * striking.abs();
+                let arm =
+                    Self::blend(Self::ARM_SWING, gait.run) * swing * asymmetry + drift + counter;
+                // And the counter-arm alone comes across his chest, which is
+                // the other half of paying for the turn.
+                let across = self.side * Self::KICK_ARM_SPREAD * kicking * (-striking).max(0.0);
+                let swinging = Quat::from_rotation_z(self.side * carriage - across)
+                    * Quat::from_rotation_x(arm);
                 let ready = Self::held(
                     swinging,
                     Quat::from_rotation_z(self.side * Self::SET_SPREAD)
@@ -919,13 +1111,21 @@ impl Joint {
                     Quat::from_rotation_z(-self.side * spread) * Quat::from_rotation_x(shoulder),
                     gait.reach,
                 );
-                // And the landing last of all: whatever he was doing up
-                // there, the arms come in as he hits the grass.
-                Self::held(
+                // The landing: whatever he was doing up there, the arms come
+                // in as he hits the grass.
+                let down = Self::held(
                     out,
                     Quat::from_rotation_z(self.side * Self::DOWN_SPREAD)
                         * Quat::from_rotation_x(Self::DOWN_SHOULDER),
                     bracing,
+                );
+                // And a keeper's throw, which is the same swing as a kick sent
+                // to the arm instead: cocked behind his ear and hurled
+                // overarm. Only the throwing side moves.
+                Self::held(
+                    down,
+                    Quat::from_rotation_x(Self::through(Self::THROW_SHOULDER, gait.swing)),
+                    throwing * striking.max(0.0),
                 )
             }
             // Elbow carriage is the most individual thing about a runner:
@@ -933,7 +1133,11 @@ impl Joint {
             Limb::Elbow => {
                 let running = Quat::from_rotation_x(
                     -Self::blend(Self::ELBOW_FLEX, gait.run) * (1.0 + 0.24 * gait.signature)
-                        - 0.18 * gait.run * swing,
+                        - 0.18 * gait.run * swing
+                        // Elbows come up over a ball he is carrying, and the
+                        // counter-arm bends hard through a kick.
+                        + Self::CARRY_ELBOW * gait.carrying
+                        - 0.55 * kicking * (-striking).max(0.0),
                 );
                 let ready = Self::held(running, Quat::from_rotation_x(Self::SET_ELBOW), gait.set);
                 let leaping = Self::held(ready, Quat::from_rotation_x(Self::JUMP_ELBOW), gait.jump);
@@ -946,7 +1150,12 @@ impl Joint {
                     + (Self::REACH_ELBOW - Self::LAUNCH_ELBOW) * gait.stretch
                     + Self::TRAIL_ELBOW * trailing * gait.stretch;
                 let out = Self::held(holding, Quat::from_rotation_x(elbow), gait.reach);
-                Self::held(out, Quat::from_rotation_x(Self::DOWN_ELBOW), bracing)
+                let down = Self::held(out, Quat::from_rotation_x(Self::DOWN_ELBOW), bracing);
+                Self::held(
+                    down,
+                    Quat::from_rotation_x(Self::through(Self::THROW_ELBOW, gait.swing)),
+                    throwing * striking.max(0.0),
+                )
             }
             // The hands. Loose on the run, up and open in the set, broken
             // back and turned out at full stretch, cupped under a ball he has
@@ -980,8 +1189,12 @@ impl Joint {
                 Self::held(out, Quat::from_rotation_x(Self::CRADLE_WRIST), bracing)
             }
             Limb::Hip => {
-                let running =
-                    Quat::from_rotation_x(-Self::blend(Self::HIP_SWING, gait.run) * swing);
+                // The run, plus what his legs do about a change of pace: feet
+                // driving out behind him off the mark, planted out in front
+                // under the brakes.
+                let running = Quat::from_rotation_x(
+                    -Self::blend(Self::HIP_SWING, gait.run) * swing + Self::DRIVE_HIP * gait.drive,
+                );
                 let ready = Self::held(running, Quat::from_rotation_x(Self::SET_HIP), gait.set);
                 let leaping = Self::held(ready, Quat::from_rotation_x(Self::JUMP_HIP), gait.jump);
                 // In flight the legs trail — the near one straight behind
@@ -992,7 +1205,14 @@ impl Joint {
                     Quat::from_rotation_x(Self::DIVE_HIP + Self::DIVE_SCISSOR_HIP * leading),
                     gait.dive * gait.stretch,
                 );
-                Self::held(diving, Quat::from_rotation_x(Self::DOWN_HIP), gait.grounded)
+                let down = Self::held(diving, Quat::from_rotation_x(Self::DOWN_HIP), gait.grounded);
+                // And the kick, on the striking leg only — the other one is
+                // planted and keeps its stride.
+                Self::held(
+                    down,
+                    Quat::from_rotation_x(Self::through(Self::KICK_HIP, gait.swing)),
+                    kicking * striking.max(0.0),
+                )
             }
             // Deepest as the leg folds through underneath the player, and all
             // but straight again by the time it reaches out to land. Squaring
@@ -1001,8 +1221,11 @@ impl Joint {
             // which reads as a stumble rather than a stride.
             Limb::Knee => {
                 let running = Quat::from_rotation_x(
-                    0.07 + Self::blend(Self::KNEE_FLEX, gait.run)
-                        * (0.5 + 0.5 * (leg - 0.5).cos()).powi(2),
+                    0.07
+                        + Self::blend(Self::KNEE_FLEX, gait.run)
+                            * (0.5 + 0.5 * (leg - 0.5).cos()).powi(2)
+                        // Sunk over the ball, the way a man carrying one runs.
+                        + Self::CARRY_KNEE * gait.carrying,
                 );
                 let ready = Self::held(running, Quat::from_rotation_x(Self::SET_KNEE), gait.set);
                 let leaping = Self::held(ready, Quat::from_rotation_x(Self::JUMP_KNEE), gait.jump);
@@ -1011,17 +1234,56 @@ impl Joint {
                     Quat::from_rotation_x(Self::DIVE_KNEE + Self::DIVE_SCISSOR_KNEE * trailing),
                     gait.dive * gait.stretch,
                 );
-                Self::held(
+                let down = Self::held(
                     diving,
                     Quat::from_rotation_x(Self::DOWN_KNEE),
                     gait.grounded,
+                );
+                // The kicking knee whips through the ball; the standing one
+                // bends to take the weight while it does.
+                let swung = Self::held(
+                    down,
+                    Quat::from_rotation_x(Self::through(Self::KICK_KNEE, gait.swing)),
+                    kicking * striking.max(0.0),
+                );
+                Self::held(
+                    swung,
+                    Quat::from_rotation_x(Self::PLANT_KNEE),
+                    kicking * (-striking).max(0.0),
                 )
             }
         }
     }
 
+    /// How much authority a swing has over the pose at this point in it.
+    ///
+    /// Full across the middle and blended to the run cycle at each end, so
+    /// the kick arrives and leaves without a pop. NOT a taper across the whole
+    /// swing: the keys put the backswing at −1 and the follow through at +1,
+    /// so fading the authority out toward them cancels the two halves of a
+    /// kick that are not the moment of contact — which is to say, all of it.
+    fn taper(swing: f32) -> f32 {
+        Actors::ease((1.0 - swing.abs()) / Self::KICK_BLEND)
+    }
+
     fn blend(range: (f32, f32), run: f32) -> f32 {
         range.0 + range.1 * run
+    }
+
+    /// The angle a kicking joint holds at this point in the swing, from its
+    /// three keys: top of the backswing, contact, end of the follow through.
+    ///
+    /// Piecewise rather than one curve because contact is not a smooth point —
+    /// it is the instant a boot stops a moving ball, and the leg goes into it
+    /// and out of it at quite different rates.
+    fn through(keys: (f32, f32, f32), swing: f32) -> f32 {
+        if swing < 0.0 {
+            // Winding up: eased, so the leg gathers rather than snapping back.
+            let back = Actors::ease(-swing);
+            keys.1 + (keys.0 - keys.1) * back
+        } else {
+            keys.1 + (keys.2 - keys.1) * Actors::ease(swing)
+        }
     }
 
     /// Fades a limb off the run cycle and onto the hold as a keeper gathers
@@ -1285,7 +1547,22 @@ mod skeleton {
             reach: 0.0,
             set: 0.0,
             jump: 0.0,
+            swing: 0.0,
+            power: 0.0,
+            foot: 0.0,
+            throwing: 0.0,
+            drive: 0.0,
+            carrying: 0.0,
         }
+    }
+
+    /// A right-footed kick at full power, at this point in the swing.
+    pub fn kicking(swing: f32) -> Gait {
+        let mut gait = still();
+        gait.swing = swing;
+        gait.power = 1.0;
+        gait.foot = 1.0;
+        gait
     }
 
     fn step(limb: Limb, side: f32, origin: Vec3, gait: Gait) -> Transform {
@@ -1585,5 +1862,207 @@ mod tests {
         assert_eq!(gait.dive, 0.0);
         assert_eq!(gait.stretch, 0.0);
         assert_eq!(gait.reach, 0.0);
+    }
+
+    /// A kick is a leg going somewhere. The whole point of the swing is that
+    /// the boot travels: back behind him, through the ball, and up the other
+    /// side.
+    #[test]
+    fn the_boot_travels_through_the_ball() {
+        // Sampled inside the swing rather than at its ends, where the pose
+        // is deliberately handed back to the run cycle.
+        let back = boot(1.0, kicking(-0.8));
+        let contact = boot(1.0, kicking(0.0));
+        let through = boot(1.0, kicking(0.8));
+
+        // Behind him at the top of the backswing, in front of him at contact.
+        assert!(back.z < -0.35, "no backswing: {back:?}");
+        assert!(contact.z > 0.45, "no contact: {contact:?}");
+        assert!(
+            contact.z - back.z > 0.9,
+            "the boot barely moves: {back:?} to {contact:?}"
+        );
+        // And still rising afterwards — a struck ball is hit through, not at.
+        assert!(
+            through.y > contact.y + 0.1,
+            "no follow through: {contact:?} to {through:?}"
+        );
+        // It is a boot, not a foot through the turf.
+        for stage in [-1.0f32, -0.8, -0.5, 0.0, 0.5, 0.8, 1.0] {
+            let sole = boot(1.0, kicking(stage));
+            assert!(sole.y > -0.01, "boot under the grass at {stage}: {sole:?}");
+        }
+    }
+
+    /// Only one leg swings. The other one is planted, taking the whole body's
+    /// weight while it does.
+    #[test]
+    fn the_other_leg_stays_planted() {
+        let gait = kicking(0.0);
+        let swinging = boot(1.0, gait);
+        let planted = boot(-1.0, gait);
+        assert!(
+            swinging.z - planted.z > 0.5,
+            "both legs swinging: {swinging:?} and {planted:?}"
+        );
+        // Bent under him rather than straight: he is standing on it.
+        assert!(
+            planted.y - boot(-1.0, still()).y < 0.015,
+            "standing foot floating: {planted:?}"
+        );
+        // He sinks over it rather than standing tall on a bent leg.
+        assert!(
+            crown(gait).y < crown(still()).y - 0.03,
+            "no sink into the plant"
+        );
+        // And a left-footed kick is the mirror of a right-footed one.
+        let mut left = kicking(0.0);
+        left.foot = -1.0;
+        let mirrored = boot(-1.0, left);
+        assert!((mirrored.z - swinging.z).abs() < 1e-3);
+        assert!((mirrored.x + swinging.x).abs() < 1e-3);
+    }
+
+    /// Every rotation a footballer puts into a ball is paid for somewhere: the
+    /// arm opposite the kicking leg comes across and up.
+    #[test]
+    fn the_arms_pay_for_the_kick() {
+        let gait = kicking(0.0);
+        let counter = glove(-1.0, gait);
+        let same = glove(1.0, gait);
+        assert!(
+            counter.y - same.y > 0.15,
+            "arms doing nothing: {counter:?} and {same:?}"
+        );
+        assert!(
+            counter.y > glove(-1.0, still()).y + 0.15,
+            "counter-arm never lifts: {counter:?}"
+        );
+    }
+
+    /// Nothing happens to anybody who is not kicking, whatever the phase says.
+    /// `swing` is zero for the whole squad every frame, so a term that ignored
+    /// `power` would have twenty-two players permanently mid-kick.
+    #[test]
+    fn power_gates_the_whole_kick() {
+        let mut idle = still();
+        idle.swing = -0.5;
+        idle.foot = 1.0;
+        assert!((boot(1.0, idle) - boot(1.0, still())).length() < 1e-4);
+        assert!((glove(-1.0, idle) - glove(-1.0, still())).length() < 1e-4);
+        assert!((crown(idle) - crown(still())).length() < 1e-4);
+    }
+
+    /// A tap and a shot are the same movement at very different sizes.
+    #[test]
+    fn power_scales_the_swing() {
+        let mut gentle = kicking(0.0);
+        gentle.power = 0.15;
+        let travel = |gait: Gait| boot(1.0, gait).distance(boot(1.0, still()));
+        assert!(
+            travel(kicking(0.0)) > travel(gentle) * 2.0,
+            "a tap swings like a shot: {} vs {}",
+            travel(gentle),
+            travel(kicking(0.0))
+        );
+    }
+
+    /// The hips lead a kick and the shoulders follow, which is what makes it
+    /// look like it came from the ground up rather than from the knee.
+    #[test]
+    fn the_hips_lead_the_shoulders() {
+        // Measured as how far each has turned by the moment of contact,
+        // against where they are for a man standing still.
+        let turned = |limb: Limb, gait: Gait| {
+            let joint = Joint::new(Entity::from_raw_u32(0).unwrap(), limb, 0.0, Vec3::ZERO);
+            let point = joint.pose(gait) * Vec3::Z;
+            point.x.atan2(point.z)
+        };
+        // Going back, the chest coils further than the hips do.
+        let (hips, chest) = (
+            turned(Limb::Pelvis, kicking(-0.7)),
+            turned(Limb::Torso, kicking(-0.7)),
+        );
+        assert!(
+            hips * chest > 0.0,
+            "coiling opposite ways: {hips} vs {chest}"
+        );
+        assert!(
+            chest.abs() > hips.abs(),
+            "hips coil further: {hips} vs {chest}"
+        );
+        // Coming through, the hips arrive first: at contact they have already
+        // turned toward the target and the chest is still closed.
+        for stage in [0.0f32, 0.5] {
+            let hips = turned(Limb::Pelvis, kicking(stage));
+            let chest = turned(Limb::Torso, kicking(stage));
+            assert!(
+                hips < chest - 0.05,
+                "chest ahead of the hips at {stage}: {hips} vs {chest}"
+            );
+        }
+        // And the turn reverses between the backswing and the follow through.
+        assert!(turned(Limb::Pelvis, kicking(-0.8)) * turned(Limb::Pelvis, kicking(0.8)) < 0.0);
+    }
+
+    /// A keeper's throw is the same swing sent to his arm — and it must go
+    /// over the top, not underarm.
+    #[test]
+    fn a_throw_goes_over_the_top() {
+        let throwing = |swing: f32| {
+            let mut gait = still();
+            gait.swing = swing;
+            gait.foot = 1.0;
+            gait.throwing = 1.0;
+            gait
+        };
+        let cocked = glove(1.0, throwing(-0.8));
+        let release = glove(1.0, throwing(0.0));
+        let after = glove(1.0, throwing(0.8));
+        assert!(cocked.z < -0.1, "not cocked back: {cocked:?}");
+        assert!(
+            release.y > cocked.y,
+            "released below the wind-up: {release:?}"
+        );
+        assert!(after.z > release.z, "no follow through: {after:?}");
+        // Over the top: the hand never drops back down past the hip on the
+        // way, which is what a linear interpolation between the two end
+        // angles would have done.
+        for step in 0..=32 {
+            let swing = -0.8 + step as f32 / 20.0;
+            let hand = glove(1.0, throwing(swing));
+            assert!(hand.y > 1.05, "underarm at {swing}: {hand:?}");
+        }
+        // And his legs are not involved.
+        assert!((boot(1.0, throwing(0.0)) - boot(1.0, still())).length() < 1e-4);
+    }
+
+    /// Driving off the mark and pulling up short both bend a player, and in
+    /// opposite directions.
+    #[test]
+    fn a_change_of_pace_bends_him() {
+        let lean = |drive: f32| {
+            let mut gait = still();
+            gait.drive = drive;
+            crown(gait).z
+        };
+        assert!(lean(1.0) > lean(0.0) + 0.15, "no drive: {}", lean(1.0));
+        assert!(lean(-1.0) < lean(0.0) - 0.12, "no brake: {}", lean(-1.0));
+    }
+
+    /// The man on the ball does not run like the twenty-one who have not got
+    /// it: lower over it, arms wider, and genuinely shorter.
+    #[test]
+    fn the_carrier_runs_over_the_ball() {
+        let mut gait = still();
+        gait.carrying = 1.0;
+        assert!(crown(gait).y < crown(still()).y - 0.02, "not lower");
+        assert!(crown(gait).z > crown(still()).z + 0.05, "not over it");
+        assert!(
+            glove(1.0, gait).x.abs() > glove(1.0, still()).x.abs() + 0.02,
+            "arms not out"
+        );
+        // But still a footballer running, not a man in a crouch.
+        assert!(crown(gait).y > crown(still()).y - 0.10);
     }
 }

@@ -186,6 +186,17 @@ pub struct RecordingMetadata {
 pub struct Track {
     samples: Vec<Sample>,
     cursor: usize,
+    /// A second cursor, for queries that deliberately run ahead of the
+    /// playhead.
+    ///
+    /// The viewer has to know a kick is coming before it happens — a
+    /// footballer takes a backswing, and by the time the ball is moving there
+    /// is nothing left to draw but the follow-through. The whole recording is
+    /// already in memory, so the answer is simply there to be read; what it
+    /// must not do is drag the playback cursor forward and back every frame,
+    /// which would turn every one of the tens of thousands of normal lookups
+    /// into a binary search.
+    lookahead: usize,
 }
 
 /// How far past the last (or before the first) sample an entity is still drawn.
@@ -234,12 +245,33 @@ impl Track {
         merged.extend_from_slice(&self.samples[i..]);
         merged.extend_from_slice(&incoming[j..]);
         self.samples = merged;
+        // Both cursors: an out-of-order merge invalidates every index into the
+        // old vector, and a stale lookahead is exactly as wrong as a stale
+        // playhead.
         self.cursor = 0;
+        self.lookahead = 0;
     }
 
     /// Interpolated position at `time_ms`, or `None` when the entity has no
     /// data anywhere near that instant.
     pub fn position_at(&mut self, time_ms: f64) -> Option<[f32; 3]> {
+        let mut cursor = self.cursor;
+        let position = self.sample(time_ms, &mut cursor);
+        self.cursor = cursor;
+        position
+    }
+
+    /// The same, for a time deliberately ahead of the playhead — see
+    /// [`Track::lookahead`]. Never `Some` past the end of what has streamed in
+    /// yet, which is the honest answer: the future has not arrived.
+    pub fn position_ahead(&mut self, time_ms: f64) -> Option<[f32; 3]> {
+        let mut cursor = self.lookahead;
+        let position = self.sample(time_ms, &mut cursor);
+        self.lookahead = cursor;
+        position
+    }
+
+    fn sample(&self, time_ms: f64, cursor: &mut usize) -> Option<[f32; 3]> {
         if self.samples.is_empty() {
             return None;
         }
@@ -250,8 +282,8 @@ impl Track {
             return None;
         }
 
-        let index = self.locate(time_ms);
-        self.cursor = index;
+        let index = self.locate(time_ms, *cursor);
+        *cursor = index;
 
         let a = self.samples[index];
         if let Some(b) = self.samples.get(index + 1) {
@@ -268,10 +300,11 @@ impl Track {
         Some([a.x, a.y, a.z])
     }
 
-    /// Index of the last sample at or before `time_ms`.
-    fn locate(&self, time_ms: f64) -> usize {
+    /// Index of the last sample at or before `time_ms`, starting from
+    /// whichever cursor the caller is walking.
+    fn locate(&self, time_ms: f64, hint: usize) -> usize {
         let len = self.samples.len();
-        let hint = self.cursor.min(len - 1);
+        let hint = hint.min(len - 1);
 
         // Fast path: playback advances by a sample or two per frame, so the
         // answer is normally the cursor or its immediate successor. Bail out to

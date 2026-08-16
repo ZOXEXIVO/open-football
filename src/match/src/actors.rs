@@ -4,7 +4,7 @@ use crate::field::Field;
 use crate::kit::{Complexion, Wardrobe};
 use crate::loader::ChunkLoader;
 use crate::playback::Playback;
-use crate::replay::ReplayTracks;
+use crate::replay::{ReplayTracks, Track};
 use crate::textures::Textures;
 use crate::timeline::DebugOverlay;
 use bevy::prelude::*;
@@ -100,6 +100,13 @@ pub struct PlayerActor {
     /// wire as the fourth element of his position sample. Everything on this
     /// pitch that can be recorded should be read rather than guessed.
     height: f32,
+    /// The kick he is in the middle of, if any. See [`Kick`].
+    kick: Option<Kick>,
+    /// Smoothed acceleration along his own running line, −1..1: driving off
+    /// the mark at +1, pulling up short at −1. See [`Gait::drive`].
+    drive: f32,
+    /// How much the ball is at his feet, 0..1. See [`Gait::carrying`].
+    carrying: f32,
     /// Smoothed pitch from his eyeline to the ball, in radians.
     look_pitch: f32,
     /// How set he is, 0..1 — a keeper on his toes with a shot on. See
@@ -166,6 +173,72 @@ pub struct BallState {
     /// 0..1 ramp on the hold, shared by the ball's position and the keeper's
     /// arms so the two can never disagree about whether he has it.
     pub cradle: f32,
+    /// The next kick, read out of the recording *before* it happens. `None`
+    /// whenever nobody is about to hit it.
+    pub impact: Option<Impact>,
+    /// Whoever is nearest the ball this frame, and how far off he is in
+    /// metres. The man on the ball, when that distance is short.
+    pub nearest: Option<(u32, f32)>,
+}
+
+/// One swing of a leg — the single most repeated thing a footballer does, and
+/// the one this rig had nothing at all for.
+///
+/// Measured over a recorded match, the ball is struck **14.8 times a minute**:
+/// a pass, a clearance or a shot every four seconds, every one of which used
+/// to be drawn as a man running normally while the ball left him of its own
+/// accord. A player turned to face what he had hit and never moved a boot.
+#[derive(Clone, Copy)]
+struct Kick {
+    /// Where he is in the swing: −1 at the top of the backswing, 0 at
+    /// contact, +1 at the end of the follow through.
+    ///
+    /// One signed number rather than a phase and a flag, because a kick is one
+    /// continuous movement through the ball and the pose curve is easier to
+    /// read written that way.
+    swing: f32,
+    /// How hard, 0..1, from the speed the ball leaves at. A five-yard pass and
+    /// a shot from the edge of the box are not the same action.
+    power: f32,
+    /// Which boot: −1 left, +1 right.
+    foot: f32,
+    /// 0..1 ramp on the whole swing from the instant it was armed.
+    ///
+    /// The backswing is normally the length of the lookahead window, but only
+    /// half the time: a ball already rolling masks the jump in speed until
+    /// closer to contact, and measured over a real match one kick in ten is
+    /// found with a single frame's warning. Without a ramp of its own those
+    /// ones snap a leg into position in 16 ms. This is an animation blend and
+    /// nothing else — it is not pretending to know anything the recording has
+    /// not said.
+    blend: f32,
+    /// Where he hit it, flattened and normalised — he opens up to the ball
+    /// before he strikes it, not after.
+    direction: Vec3,
+    /// Out of his hands rather than off his boot, which is a keeper throwing
+    /// the ball out.
+    thrown: bool,
+}
+
+/// A kick that is about to happen.
+///
+/// A footballer takes a backswing. By the time the ball is moving there is
+/// nothing left to draw but the follow-through, so the strike that drives the
+/// animation is read *ahead* of the playhead rather than off the current frame
+/// — which the viewer can do for free, because the whole recording is already
+/// in memory. See [`crate::replay::Track::position_ahead`].
+#[derive(Clone, Copy)]
+pub struct Impact {
+    /// Who swings. The player nearest the ball at the moment it is struck,
+    /// which measured over a real match is a median of 0.24 m away.
+    pub by: u32,
+    /// How fast it will leave when he does.
+    pub velocity: Vec3,
+    /// Seconds of match time until contact. Counts down as the playhead
+    /// closes on it, and is what puts the swing in the right place: the pose
+    /// is a function of this rather than of a clock the viewer starts, so it
+    /// stays correct when the replay is scrubbed or run at 8x.
+    pub delay: f32,
 }
 
 /// The state of a ball in the air, kept so its rotation can be derived from
@@ -316,6 +389,58 @@ impl Actors {
     /// Seconds of match time a player stays turned toward what he just hit —
     /// the follow through, before he picks his running line back up.
     const STRIKE_HOLD: f32 = 0.45;
+    /// And how fast a ball has to be leaving to count as having been KICKED
+    /// rather than merely touched.
+    ///
+    /// Lower than [`Actors::STRUCK`], which decides whether he opens his body
+    /// up to it, because the two questions are different. Turning to face a
+    /// ball you have nudged two metres would be wrong; not moving your leg
+    /// when you nudged it would be worse. Measured over a real match, a
+    /// strike leaves at 8.6 m/s at the tenth percentile and 38 at the
+    /// ninetieth, so most of the range this scales over is real football.
+    const TOUCHED: f32 = 4.5;
+    /// Ball speed, in metres per second, that counts as hit as hard as anybody
+    /// hits one — the top of the swing. Measured p90 of a recorded match.
+    const HAMMERED: f32 = 38.0;
+    /// How far ahead of the playhead the viewer goes looking for the next
+    /// kick, as a number of probes of the recording's own 30 ms sample step.
+    ///
+    /// Five of them, so the backswing gets 150 ms. A footballer's leg is
+    /// behind him well before the ball moves, so this is the whole difference
+    /// between a kick and a man standing still while the ball leaves him. It
+    /// cannot be much longer: two players contesting a loose ball are both
+    /// within reach of it, and the longer the warning the more often the wrong
+    /// one starts swinging.
+    const WINDUP_STEPS: u32 = 5;
+    const PROBE: f64 = 30.0;
+    /// Seconds of backswing, which is the same number in the units the pose
+    /// wants it in.
+    const WINDUP: f32 = Self::WINDUP_STEPS as f32 * Self::PROBE as f32 / 1000.0;
+    /// How much faster the ball has to be going after the moment than before
+    /// it for that moment to be a kick. A ball already in flight keeps its
+    /// speed; a ball that has just been hit multiplies it.
+    const IMPACT_RATIO: f32 = 1.6;
+    /// Seconds of match time the follow through takes to play out, and how
+    /// long a player then keeps any of it.
+    const FOLLOW_THROUGH: f32 = 0.30;
+    /// And how long the swing takes to take over from the run cycle once it is
+    /// armed. See [`Kick::blend`].
+    const KICK_ONSET: f32 = 0.06;
+    /// Distance, in metres, inside which the ball counts as at a player's
+    /// feet. Measured: somebody is within 1.4 m of a slow ball in 72% of
+    /// frames, and the man who has it is a median of 6 cm from it.
+    const AT_HIS_FEET: f32 = 1.15;
+    /// Ball speed above which nobody is dribbling it — it has been played.
+    const LOOSE: f32 = 9.0;
+    /// Acceleration, in metres per second squared, that reads as a player
+    /// going as hard as he can — driving off the mark or pulling up short.
+    ///
+    /// The recording is quantised to 1.25 cm and resampled every 30 ms, so a
+    /// frame-to-frame acceleration is mostly noise (the raw p90 is 14 m/s²,
+    /// which no human produces). It is smoothed over [`Actors::DRIVE_RESPONSE`]
+    /// before being measured against this.
+    const DRIVING: f32 = 4.5;
+    const DRIVE_RESPONSE: f32 = 0.26;
     /// Radians per second of the standing-still cycle: a weight shift roughly
     /// every three and a half seconds.
     const IDLE_RATE: f32 = 1.8;
@@ -591,10 +716,22 @@ impl Actors {
             .position_at(now)
             .map(|[x, y, z]| Field::to_world(x, y, z));
 
-        // Who has it in his gloves, and where those gloves are. Resolved in
-        // the same pass that places the players, because the answer depends on
-        // where they have just been put.
+        // The next kick, found by walking the recording ahead of the playhead.
+        // Blanked on a seek: there is no continuity to predict across one.
+        let coming = if playback.seeked {
+            None
+        } else {
+            Self::next_impact(&mut tracks.ball, now)
+        };
+
+        // Who has it in his gloves, where those gloves are, and who is nearest
+        // it — both now, for the man on the ball, and at the moment it is
+        // struck, for whoever is about to swing. All resolved in the same pass
+        // that places the players, because every answer depends on where they
+        // have just been put.
         let mut holder: Option<(u32, Vec3)> = None;
+        let mut nearest: Option<(u32, f32)> = None;
+        let mut striker: Option<(u32, f32)> = None;
         for (mut actor, mut transform, mut visibility) in &mut players {
             let position = tracks
                 .players
@@ -618,7 +755,29 @@ impl Actors {
                 None => {}
             }
 
-            if !actor.is_goalkeeper || holder.is_some() || *visibility == Visibility::Hidden {
+            if *visibility == Visibility::Hidden {
+                continue;
+            }
+            let boots = Vec2::new(transform.translation.x, transform.translation.z);
+            if let Some(ball) = ball_position {
+                let range = boots.distance(Vec2::new(ball.x, ball.z));
+                if nearest.is_none_or(|(_, best)| range < best) {
+                    nearest = Some((actor.id, range));
+                }
+            }
+            if let Some((at, _, _)) = coming {
+                // Whoever will be standing over it. Not whoever is nearest the
+                // ball NOW: over a hundred and fifty milliseconds a player
+                // closing on a loose ball covers more than a metre, and the
+                // man who ends up hitting it is often not the one closest to
+                // it when the swing starts.
+                let range = boots.distance(Vec2::new(at.x, at.z));
+                if striker.is_none_or(|(_, best)| range < best) {
+                    striker = Some((actor.id, range));
+                }
+            }
+
+            if !actor.is_goalkeeper || holder.is_some() {
                 continue;
             }
             if let Some(ball) = ball_position {
@@ -657,6 +816,21 @@ impl Actors {
         }
 
         ball_state.on_pitch = ball_position.is_some();
+        ball_state.nearest = nearest;
+        // Only if somebody is actually close enough to have hit it. A ball
+        // that speeds up with nobody near it is a deflection, a restart or the
+        // engine putting it back on the centre spot, and none of those is a
+        // man swinging a leg.
+        ball_state.impact = match (coming, striker) {
+            (Some((_, velocity, delay)), Some((by, range))) if range < Self::STRIKE_REACH => {
+                Some(Impact {
+                    by,
+                    velocity,
+                    delay,
+                })
+            }
+            _ => None,
+        };
         if let Some(world) = ball_position {
             // Ball velocity, in metres per second of match time, read off the
             // RAW recorded path — never off the drawn position, which is
@@ -724,6 +898,55 @@ impl Actors {
                 *visibility = Visibility::Hidden;
             }
         }
+    }
+
+    /// Finds the next moment the ball is struck, within the backswing window
+    /// ahead of the playhead: where it will be hit, how fast it will leave,
+    /// and how long until it happens.
+    ///
+    /// Walks the window a probe at a time rather than sampling its far end,
+    /// for two reasons. The delay has to be a real countdown — the swing is a
+    /// function of it, and a fixed one would leave every player's leg stuck at
+    /// the top of the backswing until the ball had already gone. And a kick is
+    /// a LOCAL jump in speed: comparing each step against the one before it
+    /// catches a first-time volley, where the ball was already travelling
+    /// quickly and simply changed direction and got faster.
+    ///
+    /// Stateless on purpose. Nothing is remembered between frames, so the
+    /// swing is right wherever the playhead is put — scrubbed, reversed or
+    /// running at 8x — instead of being right only if it was watched from the
+    /// beginning.
+    fn next_impact(ball: &mut Track, now: f64) -> Option<(Vec3, Vec3, f32)> {
+        let at = |ball: &mut Track, t: f64| {
+            ball.position_ahead(t)
+                .map(|[x, y, z]| Field::to_world(x, y, z))
+        };
+        // One probe BEHIND the playhead, so the first step in the window has
+        // something to be a jump from.
+        let mut previous = at(ball, now - Self::PROBE)?;
+        let mut here = at(ball, now)?;
+        let mut before = (here - previous).length() / (Self::PROBE as f32 / 1000.0);
+
+        for step in 1..=Self::WINDUP_STEPS {
+            let Some(next) = at(ball, now + step as f64 * Self::PROBE) else {
+                return None;
+            };
+            let velocity = (next - here) / (Self::PROBE as f32 / 1000.0);
+            let leaving = velocity.length();
+            if leaving > Self::TOUCHED
+                && leaving < Self::TELEPORT
+                && leaving > before * Self::IMPACT_RATIO
+            {
+                // `here` is where the ball sat at the start of the step that
+                // showed the jump, which is where the boot met it.
+                let delay = (step - 1) as f32 * Self::PROBE as f32 / 1000.0;
+                return Some((here, velocity, delay));
+            }
+            previous = here;
+            here = next;
+            before = (here - previous).length() / (Self::PROBE as f32 / 1000.0);
+        }
+        None
     }
 
     /// Advances the ball's rotation for this frame, from where its own path
@@ -841,6 +1064,27 @@ impl Actors {
             } else {
                 (ground, observed)
             };
+            // Driving off the mark, or pulling up. A footballer accelerating
+            // is bent forward over his own feet and one stopping dead has his
+            // heels out in front of him, and both are constant — a player
+            // changes pace far more often than he changes direction.
+            //
+            // Read off the smoothing itself, and ahead of the line that
+            // advances it: an
+            // exponential filter's output climbs at exactly (input − output)
+            // over its response time, so the gap between what he is doing this
+            // frame and what he has been doing IS his acceleration. Dividing
+            // the same gap by the frame time instead — which is the obvious
+            // way to write it — makes the answer eleven times too big at
+            // 60 fps and a different number again at any other rate.
+            let urge =
+                ((observed - actor.speed) / Self::PACE_RESPONSE / Self::DRIVING).clamp(-1.0, 1.0);
+            actor.drive += (urge - actor.drive)
+                * if playback.seeked {
+                    1.0
+                } else {
+                    1.0 - (-delta / Self::DRIVE_RESPONSE).exp()
+                };
             actor.speed += (observed - actor.speed) * pace;
 
             // Did he just hit it? The ball has to be leaving him at pace and
@@ -876,6 +1120,25 @@ impl Actors {
                 }
             }
 
+            // The swing itself, which the recording has already told us is
+            // coming. See [`Kick`] and [`Actors::next_impact`].
+            let mine = ball.impact.filter(|impact| impact.by == actor.id);
+            actor.swing_leg(mine, delta * playback.speed.max(0.1), playback.seeked);
+
+            // And whether the ball is at his feet. Measured, somebody is
+            // within a stride of a slow ball in 72% of frames, so this is the
+            // normal state of one player on the pitch rather than a rarity —
+            // which is exactly why the man with it should not run identically
+            // to the twenty-one without it.
+            let dribbling = ball.on_pitch
+                && !gathering
+                && ball.velocity.length() < Self::LOOSE
+                && ball
+                    .nearest
+                    .is_some_and(|(id, range)| id == actor.id && range < Self::AT_HIS_FEET);
+            actor.carrying +=
+                (f32::from(dribbling) - actor.carrying) * if playback.seeked { 1.0 } else { pace };
+
             // Off his feet, and therefore diving. Straight off the recorded
             // height — the engine takes a keeper off the ground on a real
             // ballistic arc — and only ever for a keeper: twelve outfield
@@ -886,8 +1149,8 @@ impl Actors {
             // Against the instantaneous pace as well as the smoothed one: a
             // keeper who was set and has just gone is still being caught up
             // with by his own average.
-            let pace = actor.speed.max(observed);
-            let airborne = actor.track_flight(match_delta, pace, observed, playback.seeked);
+            let launch = actor.speed.max(observed);
+            let airborne = actor.track_flight(match_delta, launch, observed, playback.seeked);
             // And which way, recomputed every frame he is up there — for
             // exactly the reason it looks as though it should be latched.
             //
@@ -909,7 +1172,14 @@ impl Actors {
                 }
             }
 
-            let facing = if actor.dive > 1e-3 && ball.on_pitch {
+            let facing = if let Some(kick) = actor.kick.filter(|kick| kick.swing < 0.0) {
+                // Opening up to what he is ABOUT to hit. A footballer sets his
+                // body before he strikes the ball, not after it has gone —
+                // which the viewer can honour because it knows the kick is
+                // coming. Outranks everything below, including the dive: this
+                // is the same man being turned by the same intention.
+                kick.direction
+            } else if actor.dive > 1e-3 && ball.on_pitch {
                 // A keeper off his feet stays square to the shot and lets his
                 // body go over; he does not turn to face the corner he is
                 // diving into. Outranks the run for the same reason the strike
@@ -1153,6 +1423,9 @@ impl PlayerActor {
             id,
             is_goalkeeper,
             carry: 0.0,
+            kick: None,
+            drive: 0.0,
+            carrying: 0.0,
             dive: 0.0,
             stretch: 0.0,
             air: 0.0,
@@ -1278,6 +1551,76 @@ impl PlayerActor {
         airborne
     }
 
+    /// Takes the swing forward one frame: arms it from a kick the recording
+    /// says is coming, then carries it through the ball and out the other
+    /// side.
+    ///
+    /// The backswing is driven by the countdown to contact and the follow
+    /// through by the clock, and the join between them is at `swing = 0`,
+    /// which is the moment the boot meets the ball. Everything before contact
+    /// is therefore locked to the recording — the leg arrives exactly when the
+    /// ball leaves, at any playback speed and wherever the playhead is put —
+    /// and everything after it is free, because by then there is nothing left
+    /// to be in step with.
+    fn swing_leg(&mut self, coming: Option<Impact>, match_delta: f32, seeked: bool) {
+        if seeked {
+            self.kick = None;
+            return;
+        }
+
+        if let Some(impact) = coming {
+            // Square-rooted: the amplitude is a distance a boot travels and
+            // the number driving it is a speed, and a linear map between them
+            // leaves the median pass — 17 m/s, a firm ball over twenty yards —
+            // as a third of a swing.
+            let power = ((impact.velocity.length() - Actors::TOUCHED)
+                / (Actors::HAMMERED - Actors::TOUCHED))
+                .clamp(0.0, 1.0)
+                .sqrt();
+            let direction = Vec3::new(impact.velocity.x, 0.0, impact.velocity.z)
+                .try_normalize()
+                .unwrap_or(Vec3::Z);
+            // Which boot. Whichever leg is trailing as the swing starts: a
+            // kick is the continuation of a stride rather than an
+            // interruption of one, so taking the leg that was coming through
+            // anyway is both what a footballer does and what blends. A man
+            // standing still has no stride to continue, and uses the foot he
+            // favours.
+            let foot = self.kick.map_or_else(
+                || {
+                    if self.speed > Actors::MOVING {
+                        if self.phase.sin() < 0.0 { 1.0 } else { -1.0 }
+                    } else {
+                        Complexion::footedness(self.id)
+                    }
+                },
+                |kick| kick.foot,
+            );
+            let blend = self.kick.map_or(0.0, |kick| kick.blend);
+            self.kick = Some(Kick {
+                // −1 at the far end of the window, 0 at contact.
+                swing: -(impact.delay / Actors::WINDUP).clamp(0.0, 1.0),
+                power,
+                foot,
+                blend: (blend + match_delta / Actors::KICK_ONSET).min(1.0),
+                direction,
+                // Out of his hands, not off his boot. A keeper who has just
+                // gathered the ball and is about to send it upfield is
+                // throwing it, and drawing him volleying it out of his own
+                // gloves would be worse than drawing nothing.
+                thrown: self.carry > 0.5,
+            });
+        } else if let Some(kick) = &mut self.kick {
+            // Contact has passed out of the window ahead. The rest is the
+            // follow through, which nothing in the recording constrains.
+            kick.blend = (kick.blend + match_delta / Actors::KICK_ONSET).min(1.0);
+            kick.swing = (kick.swing.max(0.0) + match_delta / Actors::FOLLOW_THROUGH).min(1.0);
+            if kick.swing >= 1.0 {
+                self.kick = None;
+            }
+        }
+    }
+
     /// How far the whole figure has gone over, as the pitch and roll the
     /// [`Carriage`] takes.
     ///
@@ -1331,6 +1674,10 @@ impl PlayerActor {
         };
         let grounded = self.grounded();
         let extended = self.extended();
+        // A kick off the boot and a kick out of the hands are the same swing
+        // routed to different limbs, so they are two fields off one source.
+        let kicking = self.kick.filter(|kick| !kick.thrown);
+        let throwing = self.kick.filter(|kick| kick.thrown);
         Gait {
             // A man in the air is not running, whatever the ground he is
             // covering says. Fading the run out through this one number
@@ -1354,6 +1701,19 @@ impl PlayerActor {
             lead: self.lead(),
             // Both hands to the ball: he has it, and he is still up there.
             claimed: self.carry * extended,
+            // Phase and side come off the swing whichever limb it drives;
+            // which limb that is, is the two amplitudes below.
+            swing: self.kick.map_or(0.0, |kick| kick.swing),
+            foot: self.kick.map_or(0.0, |kick| kick.foot),
+            power: kicking.map_or(0.0, |kick| kick.power * kick.blend),
+            // A keeper rolling the ball out and one hurling it to the halfway
+            // line are the same movement; the gentlest of them still has to
+            // read as a throw, hence the floor.
+            throwing: throwing.map_or(0.0, |kick| kick.power.max(0.45) * kick.blend),
+            drive: self.drive,
+            // Nobody dribbles the ball off his feet, and nobody dribbles it
+            // while he is swinging at it either.
+            carrying: self.carrying * (1.0 - self.dive) * (1.0 - jump),
             jump,
             // A keeper is set whenever the ball is near his goal — but not
             // while he is running, off his feet, or holding it: all three are
@@ -1531,5 +1891,155 @@ mod flight {
             assert!(!actor.track_flight(0.03, 5.0, 5.0, false));
             assert_eq!((actor.dive, actor.stretch), (0.0, 0.0));
         }
+    }
+}
+
+#[cfg(test)]
+mod kicks {
+    use super::*;
+    use crate::replay::{Sample, Track};
+
+    /// A real pass out of `.dev/match/match_results/dev`, in engine units at
+    /// the recording's own 30 ms step: the ball drifting at about two metres a
+    /// second for a fifth of a second, then struck at 15.2 m/s.
+    ///
+    /// Contact is the sample at t = 180. Everything the detector claims is
+    /// measured against that.
+    const A_PASS: [(u32, f32, f32); 14] = [
+        (0, 8.0, 269.5),
+        (30, 7.6, 269.6),
+        (60, 7.1, 269.8),
+        (90, 6.6, 270.0),
+        (120, 6.1, 270.2),
+        (150, 5.7, 270.4),
+        (180, 5.2, 270.5),
+        (210, 2.3, 272.7),
+        (240, 2.0, 272.3),
+        (270, 2.9, 270.3),
+        (300, 3.9, 268.3),
+        (330, 4.8, 266.3),
+        (360, 5.7, 264.3),
+        (390, 6.6, 262.3),
+    ];
+
+    fn track(rows: &[(u32, f32, f32)]) -> Track {
+        let mut track = Track::default();
+        track.merge(
+            rows.iter()
+                .map(|&(t, x, y)| Sample { t, x, y, z: 0.0 })
+                .collect(),
+        );
+        track
+    }
+
+    /// The kick is found before it happens, and the countdown to it is a
+    /// countdown — which is the whole reason for reading ahead at all.
+    #[test]
+    fn a_kick_is_seen_coming() {
+        let mut ball = track(&A_PASS);
+        // Too early: contact is 150 ms off and the window only reaches 120.
+        assert!(Actors::next_impact(&mut ball, 30.0).is_none());
+
+        // From here on it is in view, and the wait shortens by exactly the
+        // time that passes.
+        for (now, expected) in [(60.0, 0.12), (90.0, 0.09), (120.0, 0.06), (180.0, 0.0)] {
+            let (_, velocity, delay) =
+                Actors::next_impact(&mut ball, now).unwrap_or_else(|| panic!("missed at {now}"));
+            assert!(
+                (delay - expected).abs() < 1e-3,
+                "at {now} ms the wait is {delay}, not {expected}"
+            );
+            assert!(
+                (velocity.length() - 15.2).abs() < 1.0,
+                "struck at {} m/s",
+                velocity.length()
+            );
+        }
+
+        // And once it has gone there is nothing left ahead to find.
+        assert!(Actors::next_impact(&mut ball, 260.0).is_none());
+    }
+
+    /// A ball that is merely rolling is not a kick, however long it rolls for.
+    #[test]
+    fn rolling_is_not_kicking() {
+        let drift: Vec<(u32, f32, f32)> = (0..14)
+            .map(|i| (i * 30, 8.0 - i as f32 * 0.45, 269.5 + i as f32 * 0.1))
+            .collect();
+        let mut ball = track(&drift);
+        for step in 0..8 {
+            assert!(Actors::next_impact(&mut ball, step as f64 * 30.0).is_none());
+        }
+    }
+
+    /// The leg arrives when the ball leaves. Everything before contact is
+    /// locked to the recording; everything after it runs on the clock, because
+    /// by then there is nothing left to be in step with.
+    #[test]
+    fn the_swing_arrives_with_the_ball() {
+        let mut actor = PlayerActor::new(7, false);
+        let coming = |delay: f32| {
+            Some(Impact {
+                by: 7,
+                velocity: Vec3::new(0.0, 0.0, 20.0),
+                delay,
+            })
+        };
+
+        // Wound up at the far end of the window and through the ball at zero.
+        actor.swing_leg(coming(0.12), 0.03, false);
+        assert!(actor.kick.unwrap().swing < -0.7, "not wound up");
+        for delay in [0.09, 0.06, 0.03, 0.0] {
+            actor.swing_leg(coming(delay), 0.03, false);
+        }
+        let contact = actor.kick.unwrap();
+        assert!(contact.swing.abs() < 1e-3, "boot late: {}", contact.swing);
+        assert!(contact.blend > 0.99, "swing never took over");
+        assert!(contact.power > 0.5, "a 20 m/s strike is not a tap");
+
+        // Then the follow through, on the clock, and gone at the end of it.
+        actor.swing_leg(None, 0.15, false);
+        assert!(actor.kick.unwrap().swing > 0.45);
+        actor.swing_leg(None, 0.15, false);
+        assert!(actor.kick.is_none(), "the swing never finishes");
+    }
+
+    /// A kick armed with almost no warning still has to arrive rather than
+    /// appear: a leg that snaps into position inside one frame is a glitch,
+    /// not a backswing.
+    #[test]
+    fn a_late_kick_still_eases_in() {
+        let mut actor = PlayerActor::new(7, false);
+        actor.swing_leg(
+            Some(Impact {
+                by: 7,
+                velocity: Vec3::new(0.0, 0.0, 20.0),
+                delay: 0.0,
+            }),
+            1.0 / 60.0,
+            false,
+        );
+        let kick = actor.kick.unwrap();
+        assert!(kick.blend < 0.4, "no onset ramp: {}", kick.blend);
+        assert!(kick.swing.abs() < 1e-3);
+    }
+
+    /// Scrubbing the playhead cancels the swing rather than leaving a leg in
+    /// the air.
+    #[test]
+    fn a_seek_cancels_the_swing() {
+        let mut actor = PlayerActor::new(7, false);
+        actor.swing_leg(
+            Some(Impact {
+                by: 7,
+                velocity: Vec3::new(0.0, 0.0, 20.0),
+                delay: 0.06,
+            }),
+            0.03,
+            false,
+        );
+        assert!(actor.kick.is_some());
+        actor.swing_leg(None, 0.03, true);
+        assert!(actor.kick.is_none());
     }
 }

@@ -148,6 +148,19 @@ impl Complexion {
         ((Self::hash(id) >> 12) % 200) as f32 / 100.0 - 1.0
     }
 
+    /// Which foot he kicks with, −1 left and +1 right.
+    ///
+    /// Only ever consulted for a player striking a ball from a standstill —
+    /// one on the move swings whichever leg was coming through anyway. About
+    /// one in four is left-footed, which is roughly the real proportion.
+    pub fn footedness(id: u32) -> f32 {
+        if (Self::hash(id) >> 4) % 4 == 0 {
+            -1.0
+        } else {
+            1.0
+        }
+    }
+
     /// Consecutive player ids have to land on unrelated appearances, and squad
     /// lists number their players consecutively.
     fn hash(id: u32) -> u32 {
