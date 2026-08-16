@@ -24,6 +24,7 @@ pub mod net;
 pub mod motion;
 pub mod ownership;
 mod restart;
+pub use restart::ThrowIn;
 // `pub` for `dead_ball_diag` — the stall attribution counters are read by
 // the dev harness, same as `ownership::reception_diag`.
 pub mod stall;
@@ -907,6 +908,12 @@ pub struct Ball {
     /// the near post, far post, penalty spot, or short. Cleared after
     /// the corner resolves. `None` whenever a corner isn't pending.
     pub pending_corner_routine: Option<CornerRoutine>,
+    /// The corner taker's `set_piece_delivery` composite (0..1), stamped
+    /// when the corner is awarded. `resolve_corner_contest` weighs the
+    /// aerial contest by it, so a specialist's whipped ball genuinely
+    /// finds a head more often than a full-back's hopeful clip. 0.5 —
+    /// an ordinary delivery — whenever no corner is pending.
+    pub pending_corner_delivery: f32,
     /// Fire-once guard for the OPEN-PLAY cross aerial contest, the
     /// sibling of `corner_contest_resolved`. A lofted cross is aimed at a
     /// patch of the box, not at a pair of feet, so it cannot be settled by
@@ -1333,6 +1340,7 @@ impl Ball {
             pending_corner_teleports: Vec::new(),
             corner_contest_resolved: true,
             pending_corner_routine: None,
+            pending_corner_delivery: 0.5,
             cross_contest_resolved: true,
             pending_cross_type: None,
             aerial_contest_winner: None,

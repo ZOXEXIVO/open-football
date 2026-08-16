@@ -140,6 +140,17 @@ pub struct TeamSkillAggregates {
     /// Mean of (concentration + teamwork) / 2 across the outfield. Used
     /// by lead-protection logic to damp panic shape changes.
     pub concentration_teamwork_avg: f32,
+    /// Highest `on_field_leadership` composite among the players
+    /// currently on the pitch — the loudest organising voice, not an
+    /// average. Organisation in football comes from the one man doing
+    /// it, and averaging eleven players hides him completely.
+    ///
+    /// Read by `ShapeDiscipline` to decide how tightly the block is
+    /// held. Kept on the *team* aggregate rather than resolved
+    /// per-player because it is a team property and this struct is
+    /// already recomputed once per ~100 ticks instead of once per
+    /// player per tick.
+    pub top_leadership: f32,
 }
 
 impl TeamSkillAggregates {
@@ -153,6 +164,7 @@ impl TeamSkillAggregates {
             attacking_quality: 0.5,
             gk_quality: 0.5,
             concentration_teamwork_avg: 0.5,
+            top_leadership: 0.5,
         }
     }
 }

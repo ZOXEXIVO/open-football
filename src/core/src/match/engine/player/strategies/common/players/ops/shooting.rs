@@ -1,10 +1,12 @@
 use crate::club::player::traits::PlayerTrait;
 use crate::r#match::MatchPlayer;
 use crate::r#match::StateProcessingContext;
+use crate::r#match::engine::set_pieces::PENALTY_EXECUTION_REFERENCE;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext as EffActionContext, effective_skill,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::players::ops::xg::ShotType;
 
 // ---------------------------------------------------------------------------
 // ShotSkillProfile — unified shooting model
@@ -38,6 +40,15 @@ pub struct ShotSkillInputs {
     /// Distance to GK if a closing keeper is in scope; None otherwise.
     pub gk_distance: Option<f32>,
     pub is_sprinting_or_recent_sprint: bool,
+    /// Set piece this strike is, if any. `None` for open play.
+    ///
+    /// A penalty and a direct free kick are not shots-from-a-distance:
+    /// they are their own actions with their own attributes and their
+    /// own conversion bands. Without this the profile scored both with
+    /// the open-play finishing curve, which is why `penalty_taking` and
+    /// `free_kicks` could pick a taker and then have no effect at all on
+    /// whether he scored.
+    pub set_piece: Option<ShotType>,
 }
 
 /// Unified shooting profile — drives every shot quality decision.
@@ -59,6 +70,9 @@ pub struct ShotSkillProfile {
     pub shooting_condition_mult: f32,
     pub low_condition_penalty: f32,
     pub pressure_penalty: f32,
+    /// Carried through from [`ShotSkillInputs::set_piece`] so
+    /// [`Self::expected_xg`] can apply the dead-ball conversion band.
+    pub set_piece: Option<ShotType>,
 }
 
 #[inline]
@@ -141,8 +155,10 @@ impl ShotSkillProfile {
         let low_condition_penalty = (1.0 - shooting_condition_mult).max(0.0).clamp(0.0, 0.55);
 
         // Per-distance execution composite — finishing-led for close,
-        // long-shots/technique-led at distance.
-        let execution_skill = if inputs.distance <= 30.0 {
+        // long-shots/technique-led at distance. A dead ball overrides the
+        // distance bands entirely below: it is struck from a standing
+        // start against a set defence, so distance is not what decides it.
+        let open_play_execution = if inputs.distance <= 30.0 {
             (pow_curve(finishing01, 1.65) * 0.42
                 + pow_curve(composure01, 1.45) * 0.22
                 + pow_curve(first_touch01, 1.45) * 0.13
@@ -166,6 +182,18 @@ impl ShotSkillProfile {
                 + pow_curve(strength01, 1.25) * 0.07
                 + pow_curve(balance01, 1.25) * 0.07)
                 .clamp(0.0, 1.0)
+        };
+
+        // Dead-ball override. `penalty_execution` is deliberately linear
+        // (a penalty is a technically trivial kick, so the skill response
+        // is close to linear and composure carries a quarter of it);
+        // `dead_ball_strike` is curved like the open-play composites,
+        // because bending one over a wall genuinely is a specialist
+        // action a mediocre striker of the ball simply cannot perform.
+        let execution_skill = match inputs.set_piece {
+            Some(ShotType::Penalty) => sc::penalty_execution(player, inputs.minute),
+            Some(ShotType::DirectFreeKick) => sc::dead_ball_strike(player, inputs.minute),
+            _ => open_play_execution,
         };
 
         // Selection — should we be shooting at all? Composure +
@@ -199,12 +227,17 @@ impl ShotSkillProfile {
         let body_control = (raw_body * sprint_factor).clamp(0.0, 1.0);
 
         // Placement — finishing + decisions + technique drive how well
-        // the player can pick a corner.
-        let placement_skill = (pow_curve(finishing01, 1.65) * 0.45
-            + pow_curve(decisions01, 1.40) * 0.25
-            + pow_curve(technique01, 1.40) * 0.20
-            + pow_curve(composure01, 1.30) * 0.10)
-            .clamp(0.0, 1.0);
+        // the player can pick a corner. On a dead ball, picking the
+        // corner IS the skill being tested and it is the specialist
+        // attribute that names it, so the same override applies.
+        let placement_skill = match inputs.set_piece {
+            Some(ShotType::Penalty) | Some(ShotType::DirectFreeKick) => execution_skill,
+            _ => (pow_curve(finishing01, 1.65) * 0.45
+                + pow_curve(decisions01, 1.40) * 0.25
+                + pow_curve(technique01, 1.40) * 0.20
+                + pow_curve(composure01, 1.30) * 0.10)
+                .clamp(0.0, 1.0),
+        };
 
         // Power — strength + technique + finishing + long_shots.
         let power_skill = (pow_curve(strength01, 1.15) * 0.32
@@ -273,6 +306,7 @@ impl ShotSkillProfile {
             shooting_condition_mult,
             low_condition_penalty,
             pressure_penalty,
+            set_piece: inputs.set_piece,
         }
     }
 
@@ -280,6 +314,31 @@ impl ShotSkillProfile {
     /// in `handle_shoot_event` (which builds the same profile in-flight)
     /// so the decision-time xG and stat-time xG agree.
     pub fn expected_xg(&self, distance: f32, has_clear_shot: bool) -> f32 {
+        // Dead balls short-circuit the geometry entirely: from the spot
+        // the kicker's only opponent is the keeper, and a direct free
+        // kick has to beat a wall as well as him. Both have their own
+        // well-established real-world conversion bands and neither is
+        // described by "an unpressured shot from this distance".
+        match self.set_piece {
+            // Real penalties convert 70-82%. The band is centred on the
+            // population of *selected* takers so wiring `penalty_taking`
+            // in redistributes conversion rather than shifting it.
+            Some(ShotType::Penalty) => {
+                let scale = (0.975 + (self.execution_skill - PENALTY_EXECUTION_REFERENCE) * 0.50)
+                    .clamp(0.85, 1.10);
+                return (0.76 * scale * self.shooting_condition_mult).clamp(0.55, 0.88);
+            }
+            // Real direct free kicks convert ~6-8% overall, and a
+            // specialist from 20m is worth several times a defender
+            // from the same spot. 60u ≈ 7.5m, 200u = 25m.
+            Some(ShotType::DirectFreeKick) => {
+                let dist_score =
+                    (1.0 - (distance.clamp(60.0, 200.0) - 60.0) / 140.0).clamp(0.0, 1.0);
+                return (0.03 + dist_score * 0.05 + self.execution_skill * 0.04).clamp(0.03, 0.12);
+            }
+            _ => {}
+        }
+
         // Distance factor — calibrated against real Opta xG at the
         // TRUE field scale: 840u = 105m → 1u = 0.125m (goal 58u=7.32m).
         // The previous breakpoints (10/30/60/120u) were written as if
@@ -427,6 +486,10 @@ impl<'p> ShootingOperationsImpl<'p> {
             has_clear_shot: self.ctx.player().has_clear_shot(),
             gk_distance,
             is_sprinting_or_recent_sprint,
+            // The ball is still on its restart, so a strike now IS that
+            // set piece — same rule the event builder classifies by, so
+            // the pre-shot gate and the in-flight resolution agree.
+            set_piece: ShotType::from_restart(self.ctx.tick_context.ball.pass_origin_restart),
         };
 
         ShotSkillProfile::from_player(player, &inputs)

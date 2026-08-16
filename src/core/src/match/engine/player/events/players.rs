@@ -34,6 +34,7 @@ use crate::r#match::player::strategies::players::ops::goalkeeper_skill::{
     GoalkeeperSkillInputs, GoalkeeperSkillProfile,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use crate::r#match::player::strategies::players::ops::xg::ShotType;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     GoalDetail, GoalPosition, MatchContext, MatchField, MatchPlayer, OffsideSnapshot,
@@ -3463,6 +3464,11 @@ impl PlayerEventDispatcher {
             has_clear_shot: true,
             gk_distance,
             is_sprinting_or_recent_sprint: false,
+            // Classified once, on the event, by `ShootingEventBuilder`.
+            set_piece: match shoot_event_model.shot_type {
+                t @ (ShotType::Penalty | ShotType::DirectFreeKick) => Some(t),
+                _ => None,
+            },
         };
         let profile = {
             let player = field.get_player(shoot_event_model.from_player_id).unwrap();
@@ -5876,6 +5882,20 @@ impl PlayerEventDispatcher {
             Some(id) => id,
             None => return, // Whole team off the field — nothing to do.
         };
+        // Measure the taker's penalty composite ONCE per awarded penalty.
+        // Noting it where the profile is built instead would weight the
+        // mean by how many ticks he stands over the ball, and the value
+        // exists to centre `PENALTY_EXECUTION_REFERENCE` on the
+        // population of penalties — one sample per penalty.
+        #[cfg(feature = "match-logs")]
+        if in_penalty_area {
+            if let Some(taker) = field.players.iter().find(|p| p.id == taker_id) {
+                let minute = sc::minute_from_ms(context.total_match_time);
+                crate::mid_run_diag::SetPieceDiag::note_penalty(sc::penalty_execution(
+                    taker, minute,
+                ));
+            }
+        }
 
         // Tell the engine to teleport the taker onto the ball next tick.
         let ball = &mut field.ball;

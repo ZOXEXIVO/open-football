@@ -7,8 +7,11 @@ use super::Ball;
 use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::engine::goal::GOAL_WIDTH;
-use crate::r#match::engine::set_pieces::{CornerScores, pick_corner_routine};
+use crate::r#match::engine::set_pieces::{
+    CornerRoutine, pick_corner_routine, score_corner_routines, score_corner_taker,
+};
 use crate::r#match::events::EventCollection;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::EndlineCensus;
@@ -16,6 +19,42 @@ use nalgebra::Vector3;
 use std::cmp::Ordering;
 
 impl Ball {
+    /// Aerial match-up for a delivery into the box, as a 0..1 score where
+    /// 0.5 is parity, >0.5 means the attacking side has the better heads.
+    ///
+    /// Reads the three best aerial threats against the three best aerial
+    /// defenders rather than averaging the whole XI — a corner is contested
+    /// by the big men who go up for it, and averaging in eight players who
+    /// will never jump reports every side as identically average, which is
+    /// what makes a routine chooser fed by it pick the same routine forever.
+    fn box_aerial_advantage(
+        players: &[MatchPlayer],
+        attacking_side: PlayerSide,
+        minute: u32,
+    ) -> f32 {
+        let mut att: Vec<f32> = Vec::with_capacity(10);
+        let mut def: Vec<f32> = Vec::with_capacity(10);
+        for p in players {
+            if p.is_sent_off || p.tactical_position.current_position.is_goalkeeper() {
+                continue;
+            }
+            match p.side {
+                Some(s) if s == attacking_side => att.push(sc::aerial_outfield_attacker(p, minute)),
+                Some(_) => def.push(sc::aerial_outfield_defender(p, minute)),
+                None => {}
+            }
+        }
+        let best_three = |mut v: Vec<f32>| -> f32 {
+            if v.is_empty() {
+                return 0.5;
+            }
+            v.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
+            let n = v.len().min(3);
+            v.iter().take(n).sum::<f32>() / n as f32
+        };
+        (0.5 + (best_three(att) - best_three(def))).clamp(0.0, 1.0)
+    }
+
     // `pub(crate)` rather than `pub(super)` so the goal / celebration
     // integration tests can drive a goal directly. The alternative is
     // standing up a full `GameTickContext` to reach it through `update`,
@@ -452,23 +491,37 @@ impl Ball {
             let near_top = self.position.y < field_height * 0.5;
             let corner_y = if near_top { 2.0 } else { field_height - 2.0 };
 
-            // Find the attacking team's designated corner taker — score by
-            // (crossing, technique, corners) like SetPieceSetup::choose, but
-            // restricted to players currently on the pitch.
+            // Find the attacking team's designated corner taker via the
+            // shared `score_corner_taker` blend (corners 0.45 / crossing
+            // 0.30 / technique 0.15 / vision 0.10), restricted to players
+            // currently on the pitch.
+            //
+            // This used to be a local `crossing*0.6 + technique*0.3 +
+            // corners*0.1`, which put a player's actual corner attribute
+            // at a *tenth* of the decision — so the best crosser took every
+            // corner and a dedicated corner specialist essentially never
+            // took his own. `corners` reached nothing else in the engine,
+            // which made it the one attribute a player could max out for
+            // no in-match effect whatsoever.
+            let score_taker = |p: &MatchPlayer| {
+                score_corner_taker(
+                    p.skills.technical.corners,
+                    p.skills.technical.crossing,
+                    p.skills.technical.technique,
+                    p.skills.mental.vision,
+                )
+            };
             let taker = players
                 .iter()
                 .filter(|p| {
                     p.side == Some(attacking_side)
+                        && !p.is_sent_off
                         && !p.tactical_position.current_position.is_goalkeeper()
                 })
                 .max_by(|a, b| {
-                    let sa = a.skills.technical.crossing * 0.6
-                        + a.skills.technical.technique * 0.3
-                        + a.skills.technical.corners * 0.1;
-                    let sb = b.skills.technical.crossing * 0.6
-                        + b.skills.technical.technique * 0.3
-                        + b.skills.technical.corners * 0.1;
-                    sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
+                    score_taker(a)
+                        .partial_cmp(&score_taker(b))
+                        .unwrap_or(Ordering::Equal)
                 });
 
             if let Some(taker) = taker {
@@ -496,27 +549,71 @@ impl Ball {
                 // restart and swallow the restart pass.
                 self.clear_open_play_metadata();
                 self.pass_origin_restart = PassOriginRestart::Corner;
-                // Pick the corner routine via the SetPieceHistory-aware
-                // helper so repeated identical routines (with no chance
-                // produced) get blocked, varying the delivery flavour
-                // across the match. The choice is stamped on the ball
-                // so the aerial-contest resolver / xG accounting can
-                // bias toward the targeted area.
-                let scores = CornerScores {
-                    near_post: 0.42,
-                    penalty_spot: 0.48,
-                    far_post: 0.46,
-                    short: 0.20,
-                    edge_cutback: 0.22,
-                };
+                // Pick the corner routine. The five routine scores used to
+                // be five hardcoded constants, which meant the routine was
+                // decided by the repeat-blocker alone: identical for a
+                // Premier League set-piece side and a pub team, in a gale
+                // and in still air, 3-0 up and 0-1 down. `score_corner_routines`
+                // is the intended model and it reads the taker's corners /
+                // crossing, the aerial match-up in the box, the keeper's
+                // command of his area, the score state and the weather.
+                let minute = (context.total_match_time / 60_000) as u32;
                 let is_home_attacking = taker_team == context.field_home_team_id;
+                let (att_goals, def_goals) = if is_home_attacking {
+                    (context.score.home_team.get(), context.score.away_team.get())
+                } else {
+                    (context.score.away_team.get(), context.score.home_team.get())
+                };
+                let late = minute >= 70;
+                let chasing_late = late && att_goals < def_goals;
+                let protecting_lead = late && att_goals > def_goals;
+
+                let aerial_advantage = Self::box_aerial_advantage(players, attacking_side, minute);
+                let gk_aerial = players
+                    .iter()
+                    .find(|p| {
+                        p.side != Some(attacking_side)
+                            && p.tactical_position.current_position.is_goalkeeper()
+                    })
+                    .map(|gk| {
+                        ((gk.skills.goalkeeping.command_of_area * 0.55
+                            + gk.skills.goalkeeping.aerial_reach * 0.45)
+                            / 20.0)
+                            .clamp(0.0, 1.0)
+                    })
+                    .unwrap_or(0.5);
+
+                let scores = score_corner_routines(
+                    taker.skills.technical.corners,
+                    taker.skills.technical.crossing,
+                    aerial_advantage,
+                    gk_aerial,
+                    chasing_late,
+                    protecting_lead,
+                    &context.environment,
+                );
                 let chosen_routine =
                     pick_corner_routine(&scores, &context.set_piece_history, is_home_attacking);
                 self.pending_corner_routine = Some(chosen_routine);
+                // Stamp the taker's delivery quality so `resolve_corner_contest`
+                // can weigh the ball that actually arrives. Without it the
+                // contest reads only the two aerial duellists and the keeper —
+                // an elite dead-ball specialist and a centre-half hitting the
+                // first man produced identical corners.
+                self.pending_corner_delivery = sc::set_piece_delivery(taker, minute);
                 #[cfg(feature = "match-logs")]
                 {
+                    use crate::mid_run_diag::SetPieceDiag;
                     use std::sync::atomic::Ordering;
                     crate::mid_run_diag::CORNERS_AWARDED.fetch_add(1, Ordering::Relaxed);
+                    let slot = match chosen_routine {
+                        CornerRoutine::NearPost => 0,
+                        CornerRoutine::PenaltySpot => 1,
+                        CornerRoutine::FarPost => 2,
+                        CornerRoutine::Short => 3,
+                        CornerRoutine::EdgeCutback => 4,
+                    };
+                    SetPieceDiag::note_corner(slot, self.pending_corner_delivery);
                 }
                 self.offside_snapshot = None;
                 self.record_touch(taker_id, taker_team, self.current_tick_cached, true);

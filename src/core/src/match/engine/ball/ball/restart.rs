@@ -61,7 +61,7 @@ impl Ball {
         let throw_y = if crossed_top { 2.0 } else { field_height - 2.0 };
         let throw_pos = Vector3::new(throw_x, throw_y, 0.0);
 
-        let thrower = pick_thrower(players, throwing_side, throw_pos);
+        let thrower = ThrowIn::pick_thrower(players, throwing_side, throw_pos);
         let thrower_id = match thrower {
             Some(id) => id,
             None => return,
@@ -111,90 +111,133 @@ impl Ball {
     }
 }
 
-/// Score-based thrower selection.
-///   0.35 distance (closer to throw point is better)
-///   0.25 position fit (fullback / wing-back / wide mid preferred)
-///   0.20 long_throws scaled
-///   0.10 decisions scaled
-///   0.05 technique scaled
-///   0.05 strength scaled
-fn pick_thrower(
-    players: &[MatchPlayer],
-    throwing_side: PlayerSide,
-    throw_pos: Vector3<f32>,
-) -> Option<u32> {
-    let mut best: Option<(u32, f32)> = None;
-    // Furthest-search radius — a player 200u from the touchline isn't
-    // realistically the thrower. We still score them; this just bounds
-    // the normalisation.
-    const MAX_REASONABLE_DISTANCE: f32 = 200.0;
+/// Throw-ins: who takes them, and what the taker's `long_throws`
+/// attribute actually buys him. Consumed by
+/// `PassEvaluator::long_throw_target` when deciding whether a ball into
+/// the box is on and who is inside range of it.
+pub struct ThrowIn;
 
-    for p in players {
-        if p.side != Some(throwing_side) {
-            continue;
-        }
-        if p.is_sent_off {
-            continue;
-        }
-        if p.tactical_position.current_position.position_group()
-            == PlayerFieldPositionGroup::Goalkeeper
-        {
-            continue;
-        }
-        let dx = p.position.x - throw_pos.x;
-        let dy = p.position.y - throw_pos.y;
-        let dist = (dx * dx + dy * dy).sqrt();
-        let dist_score = (1.0 - (dist / MAX_REASONABLE_DISTANCE).min(1.0)).max(0.0);
+impl ThrowIn {
+    /// Below this the attribute is not a long-throw specialism, it is
+    /// just an ordinary throw-in.
+    const SPECIALIST_BAR: f32 = 14.0;
 
-        // Position fit: defenders + midfielders get a small bump for
-        // throw-ins (fullbacks / wide mids most often take throws). The
-        // exact PlayerPositionType subdivision (LB/RB/LM/RM) lives one
-        // crate boundary away, so we lean on the position-group buckets
-        // that are visible here.
-        let position_fit = match p.tactical_position.current_position.position_group() {
-            PlayerFieldPositionGroup::Defender => 1.0,
-            PlayerFieldPositionGroup::Midfielder => 0.8,
-            PlayerFieldPositionGroup::Forward => 0.5,
-            PlayerFieldPositionGroup::Goalkeeper => 0.0,
-        };
-
-        let long_throws = (p.skills.technical.long_throws / 20.0).clamp(0.0, 1.0);
-        let decisions = (p.skills.mental.decisions / 20.0).clamp(0.0, 1.0);
-        let technique = (p.skills.technical.technique / 20.0).clamp(0.0, 1.0);
-        let strength = (p.skills.physical.strength / 20.0).clamp(0.0, 1.0);
-
-        let score = dist_score * 0.35
-            + position_fit * 0.25
-            + long_throws * 0.20
-            + decisions * 0.10
-            + technique * 0.05
-            + strength * 0.05;
-
-        let candidate = (p.id, score);
-        match best {
-            None => best = Some(candidate),
-            Some((_, best_score)) if score > best_score => best = Some(candidate),
-            _ => {}
-        }
+    /// Delivery range in field units, as `(min, max)`.
+    ///
+    /// 140u baseline + up to 180u extra at long_throws=20 — at this
+    /// engine's 1u ≈ 0.125 m that is 17.5 m for an ordinary thrower
+    /// rising to ~40 m for a specialist, which is the real band (Rory
+    /// Delap's were ~35-40 m). The previous 35u/70u pair was written
+    /// against a ~0.5 m/unit field and reads as 4-9 m today: shorter
+    /// than a square ball to the corner flag, so no throw could ever
+    /// have reached a target in the box through it.
+    ///
+    /// Minimum useful range 12u — anything shorter is a recycle pass.
+    pub fn range(long_throws_skill: f32) -> (f32, f32) {
+        let scaled = (long_throws_skill / 20.0).clamp(0.0, 1.0);
+        let max_range = 140.0 + scaled * 180.0;
+        (12.0, max_range)
     }
-    best.map(|(id, _)| id)
+
+    /// Whether the player can deliver a "long throw into the box" — only
+    /// in the attacking third, and only with a genuine long-throw skill.
+    pub fn can_reach_box(long_throws_skill: f32, in_attacking_third: bool) -> bool {
+        in_attacking_third && long_throws_skill >= Self::SPECIALIST_BAR
+    }
+
+    /// Score-based thrower selection.
+    ///   0.35 distance (closer to throw point is better)
+    ///   0.25 position fit (fullback / wing-back / wide mid preferred)
+    ///   0.20 long_throws scaled
+    ///   0.10 decisions scaled
+    ///   0.05 technique scaled
+    ///   0.05 strength scaled
+    fn pick_thrower(
+        players: &[MatchPlayer],
+        throwing_side: PlayerSide,
+        throw_pos: Vector3<f32>,
+    ) -> Option<u32> {
+        let mut best: Option<(u32, f32)> = None;
+        // Furthest-search radius — a player 200u from the touchline isn't
+        // realistically the thrower. We still score them; this just bounds
+        // the normalisation.
+        const MAX_REASONABLE_DISTANCE: f32 = 200.0;
+
+        for p in players {
+            if p.side != Some(throwing_side) {
+                continue;
+            }
+            if p.is_sent_off {
+                continue;
+            }
+            if p.tactical_position.current_position.position_group()
+                == PlayerFieldPositionGroup::Goalkeeper
+            {
+                continue;
+            }
+            let dx = p.position.x - throw_pos.x;
+            let dy = p.position.y - throw_pos.y;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let dist_score = (1.0 - (dist / MAX_REASONABLE_DISTANCE).min(1.0)).max(0.0);
+
+            // Position fit: defenders + midfielders get a small bump for
+            // throw-ins (fullbacks / wide mids most often take throws). The
+            // exact PlayerPositionType subdivision (LB/RB/LM/RM) lives one
+            // crate boundary away, so we lean on the position-group buckets
+            // that are visible here.
+            let position_fit = match p.tactical_position.current_position.position_group() {
+                PlayerFieldPositionGroup::Defender => 1.0,
+                PlayerFieldPositionGroup::Midfielder => 0.8,
+                PlayerFieldPositionGroup::Forward => 0.5,
+                PlayerFieldPositionGroup::Goalkeeper => 0.0,
+            };
+
+            let long_throws = (p.skills.technical.long_throws / 20.0).clamp(0.0, 1.0);
+            let decisions = (p.skills.mental.decisions / 20.0).clamp(0.0, 1.0);
+            let technique = (p.skills.technical.technique / 20.0).clamp(0.0, 1.0);
+            let strength = (p.skills.physical.strength / 20.0).clamp(0.0, 1.0);
+
+            let score = dist_score * 0.35
+                + position_fit * 0.25
+                + long_throws * 0.20
+                + decisions * 0.10
+                + technique * 0.05
+                + strength * 0.05;
+
+            let candidate = (p.id, score);
+            match best {
+                None => best = Some(candidate),
+                Some((_, best_score)) if score > best_score => best = Some(candidate),
+                _ => {}
+            }
+        }
+        best.map(|(id, _)| id)
+    }
 }
 
-/// Throw-in delivery range, in field units. Used by tactical states that
-/// pick a target from a throw-in.
-///
-/// 35u baseline + up to 35u extra at long_throws=20. Minimum useful
-/// range 12u — anything shorter is a recycle pass.
-#[allow(dead_code)]
-pub fn throw_in_range(long_throws_skill: f32) -> (f32, f32) {
-    let scaled = (long_throws_skill / 20.0).clamp(0.0, 1.0);
-    let max_range = 35.0 + scaled * 35.0;
-    (12.0, max_range)
-}
+#[cfg(test)]
+mod throw_in_tests {
+    use super::ThrowIn;
 
-/// Whether the player can deliver a "long throw into the box" — only
-/// allowed in the attacking third with a strong long_throws skill.
-#[allow(dead_code)]
-pub fn can_long_throw_into_box(long_throws_skill: f32, in_attacking_third: bool) -> bool {
-    in_attacking_third && long_throws_skill >= 14.0
+    #[test]
+    fn range_scales_with_the_attribute_and_reaches_the_box() {
+        let (min_ordinary, max_ordinary) = ThrowIn::range(6.0);
+        let (min_specialist, max_specialist) = ThrowIn::range(20.0);
+        assert_eq!(min_ordinary, min_specialist, "the floor is a recycle pass");
+        assert!(max_specialist > max_ordinary);
+        // A specialist has to out-reach the 18-yard line (132u) from the
+        // touchline, or `long_throw_target` can never find anybody and
+        // the whole long-throw path is unreachable again.
+        assert!(
+            max_specialist > 132.0,
+            "specialist range {max_specialist}u cannot reach the box"
+        );
+    }
+
+    #[test]
+    fn box_throw_needs_both_the_third_and_the_attribute() {
+        assert!(!ThrowIn::can_reach_box(20.0, false), "own half");
+        assert!(!ThrowIn::can_reach_box(9.0, true), "no long-throw skill");
+        assert!(ThrowIn::can_reach_box(16.0, true));
+    }
 }

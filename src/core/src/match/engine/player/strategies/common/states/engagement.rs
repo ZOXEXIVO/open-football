@@ -1,7 +1,8 @@
 use crate::r#match::engine::context::PenaltyArea;
 use crate::r#match::player::events::FoulSeverity;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
-    DefensiveDuty, MatchPlayer, PlayerSide, StateProcessingContext, SteeringBehavior,
+    DefensiveDuty, MatchContext, MatchPlayer, PlayerSide, StateProcessingContext, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -463,8 +464,71 @@ impl TackleDecision {
             * necessity
             * timing
             * reach
+            * Self::urgency(ctx)
             * Self::box_restraint(ctx))
         .clamp(0.0, 0.55)
+    }
+
+    /// How much the state of the match makes this defender go and get it.
+    ///
+    /// Nothing in the model above knows the score. A side a goal down with
+    /// ten minutes left presses and challenges far more than the same side
+    /// at 0-0, and a side protecting a lead drops off and stays on its
+    /// feet — this is one of the most visible things in real football and
+    /// the engine had no channel for it at all.
+    ///
+    /// The size of the swing is the player's, through
+    /// [`skill_composites::resilience`]: `determination` heads that blend,
+    /// and before this the attribute reached exactly one thing in the
+    /// whole engine — a secondary mitigation inside the fatigue model's
+    /// late-game mental penalty. A 19-determination player and a
+    /// 5-determination player behaved identically at 0-1 down in the 85th
+    /// minute, which is the one moment the attribute is *about*.
+    ///
+    /// Gated on [`MatchContext::behavioral_score_visible`], like every
+    /// other score-reactive read in the engine — the score-reaction
+    /// regime is deliberately bounded to the closing half-hour to cap its
+    /// draw-correlation budget, and `OF_SCORE_BLIND` has to switch ALL of
+    /// it off or the A/B control means nothing. Within that window
+    /// `pressure` ramps continuously to the whistle, so there is no tick
+    /// where a match visibly changes character.
+    fn urgency(ctx: &StateProcessingContext) -> f32 {
+        if !ctx.context.behavioral_score_visible() {
+            return 1.0;
+        }
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let from = MatchContext::SCORE_REACTION_FROM_MINUTE as f32;
+        let pressure = ((minute as f32 - from) / (90.0 - from)).clamp(0.0, 1.0);
+        let home = ctx.player.team_id == ctx.context.field_home_team_id;
+        let (mine, theirs) = if home {
+            (
+                ctx.context.score.home_team.get() as i32,
+                ctx.context.score.away_team.get() as i32,
+            )
+        } else {
+            (
+                ctx.context.score.away_team.get() as i32,
+                ctx.context.score.home_team.get() as i32,
+            )
+        };
+        let deficit = theirs - mine;
+        if deficit == 0 {
+            return 1.0;
+        }
+        // Two goals down is as urgent as it gets — three down is a
+        // different kind of resignation, not more chasing.
+        let magnitude = (deficit.abs().min(2) as f32) / 2.0;
+        let drive = sc::resilience(ctx.player, minute);
+        if deficit > 0 {
+            // Behind: chase. A driven player goes after it much harder
+            // than a passenger.
+            1.0 + pressure * magnitude * (0.10 + drive * 0.35)
+        } else {
+            // Ahead: see it out. Determination reads as game management
+            // here, not as diving in — the driven player is the one who
+            // stays on his feet and holds the shape.
+            1.0 - pressure * magnitude * (0.08 + drive * 0.22)
+        }
     }
 
     /// How much a defender holds back from a challenge because he is

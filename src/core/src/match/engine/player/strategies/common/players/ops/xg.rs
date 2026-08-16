@@ -1,4 +1,6 @@
+use crate::r#match::PassOriginRestart;
 use crate::r#match::StateProcessingContext;
+use crate::r#match::engine::set_pieces::PENALTY_EXECUTION_REFERENCE;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext as EffActionContext, effective_skill,
 };
@@ -27,6 +29,25 @@ pub enum ShotType {
 }
 
 impl ShotType {
+    /// The set-piece shot type implied by the ball's restart origin, or
+    /// `None` for open play. The single definition of "is this strike a
+    /// set piece", shared by the event builder and the profile builder so
+    /// the decision-time and in-flight views of the same shot can't
+    /// disagree.
+    ///
+    /// `IndirectFreeKick` deliberately does NOT map: it cannot be shot
+    /// into the goal, so a strike from one is not a free-kick chance.
+    /// Nor does the legacy generic `FreeKick`, which the offside
+    /// fallback sets — only the restart a foul actually awards
+    /// (`DirectFreeKick`) is a free kick somebody stands over.
+    pub fn from_restart(restart: PassOriginRestart) -> Option<ShotType> {
+        match restart {
+            PassOriginRestart::Penalty => Some(ShotType::Penalty),
+            PassOriginRestart::DirectFreeKick => Some(ShotType::DirectFreeKick),
+            _ => None,
+        }
+    }
+
     pub fn xg_multiplier(self) -> f32 {
         match self {
             ShotType::FootOpenPlay => 1.00,
@@ -96,8 +117,16 @@ impl ShotQualityEvaluator {
 
         // Penalty has a fixed expected value regardless of the geometry
         // factors (the kicker's only opponent is the keeper from 11m).
+        // Scaled by the *penalty* composite, not the open-play finishing
+        // one: a penalty is technically trivial and lost in the head, so
+        // it reads `penalty_taking` + composure rather than finishing.
+        // Band unchanged (0.85..1.10 around 0.76 → 0.65..0.84, real
+        // penalties convert 70-82%), so this redistributes conversion
+        // between takers without moving the population rate.
         if shot_type == ShotType::Penalty {
-            xg = 0.76 * skill_factor.clamp(0.85, 1.10);
+            let minute = sc::minute_from_ms(ctx.context.total_match_time);
+            let pen = sc::penalty_execution(ctx.player, minute);
+            xg = 0.76 * (0.975 + (pen - PENALTY_EXECUTION_REFERENCE) * 0.50).clamp(0.85, 1.10);
         }
 
         // Long-shot cap: anything over 120u with no special multiplier
@@ -106,20 +135,21 @@ impl ShotQualityEvaluator {
             xg = xg.min(0.06);
         }
 
-        // Direct free kick: 0.03-0.12 based on distance + skill. The
-        // free-kick read is fatigue-aware via `effective_skill` so a
-        // tired specialist's late-game free kicks degrade — composite
-        // routing isn't used here because free_kicks is a single raw
-        // attribute, not a multi-skill blend.
+        // Direct free kick: 0.03-0.12 based on distance + skill — real
+        // direct free kicks convert around 6-8%, and an elite specialist
+        // roughly doubles a journeyman's rate from the same spot.
+        //
+        // Reads `dead_ball_strike` rather than the raw `free_kicks`
+        // attribute: bending one over a wall is free_kicks *and* the
+        // technique to strike it, the composure to do it in front of a
+        // crowd, and the balance to plant on it. The composite is curved,
+        // so a 6/20 taker is genuinely no threat instead of scoring at
+        // half the specialist's rate, and it carries the same fatigue /
+        // late-game routing as every other skill read.
         if shot_type == ShotType::DirectFreeKick {
             let dist_score = (1.0 - (distance.clamp(60.0, 200.0) - 60.0) / 140.0).clamp(0.0, 1.0);
             let minute = sc::minute_from_ms(ctx.context.total_match_time);
-            let fk_skill = effective_skill(
-                ctx.player,
-                ctx.player.skills.technical.free_kicks,
-                EffActionContext::technical(minute),
-            );
-            let skill = (fk_skill / 20.0).clamp(0.0, 1.0);
+            let skill = sc::dead_ball_strike(ctx.player, minute);
             xg = (0.03 + dist_score * 0.05 + skill * 0.04).clamp(0.03, 0.12);
         }
 
@@ -346,6 +376,51 @@ mod shot_type_tests {
         // Real-world penalty conversion ~76%.
         let m = ShotType::Penalty.xg_multiplier();
         assert!((m - 0.76).abs() < 0.01);
+    }
+}
+
+#[cfg(test)]
+mod set_piece_shot_type_tests {
+    use super::*;
+
+    #[test]
+    fn dead_ball_restarts_classify_as_their_set_piece() {
+        assert_eq!(
+            ShotType::from_restart(PassOriginRestart::Penalty),
+            Some(ShotType::Penalty)
+        );
+        assert_eq!(
+            ShotType::from_restart(PassOriginRestart::DirectFreeKick),
+            Some(ShotType::DirectFreeKick)
+        );
+    }
+
+    #[test]
+    fn open_play_and_non_shooting_restarts_are_not_set_piece_shots() {
+        // A corner or a throw-in is not a shot type — the strike that
+        // eventually comes off one is an open-play (or header) chance.
+        for restart in [
+            PassOriginRestart::OpenPlay,
+            PassOriginRestart::Corner,
+            PassOriginRestart::ThrowIn,
+            PassOriginRestart::GoalKick,
+        ] {
+            assert_eq!(
+                ShotType::from_restart(restart),
+                None,
+                "{restart:?} should not classify as a set-piece shot"
+            );
+        }
+    }
+
+    #[test]
+    fn a_direct_free_kick_is_a_worse_chance_than_an_open_play_strike() {
+        // The whole reason for classifying it: a wall and a set keeper
+        // make it a far poorer chance than the same distance in open
+        // play. (`Penalty` is not comparable on the multiplier — its
+        // 0.76 is an absolute conversion rate the penalty branch
+        // substitutes for the geometry, not a scale factor.)
+        assert!(ShotType::DirectFreeKick.xg_multiplier() < ShotType::FootOpenPlay.xg_multiplier());
     }
 }
 

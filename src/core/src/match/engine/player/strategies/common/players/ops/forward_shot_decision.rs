@@ -1,7 +1,9 @@
 use crate::r#match::MatchPlayerLite;
+use crate::r#match::PassOriginRestart;
 use crate::r#match::PlayerSide;
 use crate::r#match::StateProcessingContext;
 use crate::r#match::engine::psychology::Psychology;
+use crate::r#match::engine::set_pieces::{FreeKickBand, score_free_kick_choices};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
@@ -347,6 +349,129 @@ pub mod mid_run_diag {
 
         pub fn reset() {
             for c in CLEAR_BY_REASON.iter() {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Set-piece counters. Everything a dead ball turns into, plus the
+    /// two population means the dead-ball models are centred on.
+    ///
+    /// `CORNER_DELIVERY_REFERENCE` and `PENALTY_EXECUTION_REFERENCE` are
+    /// the means of `set_piece_delivery` / `penalty_execution` over the
+    /// players actually *selected* to take them. Centring on a guessed
+    /// value silently shifts league-wide conversion, so both are measured
+    /// here and the constants re-fitted to what comes out.
+    pub struct SetPieceDiag;
+
+    /// Corner routines chosen, indexed by
+    /// `CornerRoutine as usize`-equivalent ordering: 0 near post,
+    /// 1 penalty spot, 2 far post, 3 short, 4 edge cutback.
+    pub static CORNER_ROUTINE: [AtomicU64; 5] = [
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+        AtomicU64::new(0),
+    ];
+    /// Sum of the corner taker's `set_piece_delivery` ×1000, and the
+    /// number of corners it was summed over.
+    pub static CORNER_DELIVERY_SUM_X1000: AtomicU64 = AtomicU64::new(0);
+    pub static CORNER_DELIVERY_N: AtomicU64 = AtomicU64::new(0);
+    /// Sum of the penalty taker's `penalty_execution` ×1000, and count.
+    pub static PENALTY_EXEC_SUM_X1000: AtomicU64 = AtomicU64::new(0);
+    pub static PENALTY_EXEC_N: AtomicU64 = AtomicU64::new(0);
+    /// ⚠ TICK-scale, not event-scale. The pass evaluator and the shot
+    /// helper both re-run every tick the taker stands over a dead ball,
+    /// so one long throw or free kick is counted many times over. They
+    /// answer "does this path fire, and in what ratio" — never a
+    /// per-match rate. (The corner and penalty counters above ARE
+    /// event-scale: both are noted once, at the award.)
+    ///
+    /// Long throws where the `LongBox` routine won.
+    pub static LONG_THROW_LAUNCHED: AtomicU64 = AtomicU64::new(0);
+    /// Direct free kicks where the taker went for goal, and where he
+    /// chose a delivery / short routine instead.
+    pub static FK_DIRECT_SHOT: AtomicU64 = AtomicU64::new(0);
+    pub static FK_DELIVERED: AtomicU64 = AtomicU64::new(0);
+
+    impl SetPieceDiag {
+        #[inline]
+        pub fn note_corner(routine_index: usize, delivery: f32) {
+            if let Some(c) = CORNER_ROUTINE.get(routine_index) {
+                c.fetch_add(1, Ordering::Relaxed);
+            }
+            CORNER_DELIVERY_SUM_X1000.fetch_add(
+                (delivery.clamp(0.0, 1.0) * 1000.0) as u64,
+                Ordering::Relaxed,
+            );
+            CORNER_DELIVERY_N.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn note_penalty(execution: f32) {
+            PENALTY_EXEC_SUM_X1000.fetch_add(
+                (execution.clamp(0.0, 1.0) * 1000.0) as u64,
+                Ordering::Relaxed,
+            );
+            PENALTY_EXEC_N.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn note_long_throw() {
+            LONG_THROW_LAUNCHED.fetch_add(1, Ordering::Relaxed);
+        }
+
+        #[inline]
+        pub fn note_free_kick(direct_shot: bool) {
+            if direct_shot {
+                FK_DIRECT_SHOT.fetch_add(1, Ordering::Relaxed);
+            } else {
+                FK_DELIVERED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `[near, spot, far, short, edge, corner_delivery_mean_x1000,
+        ///   corner_n, penalty_exec_mean_x1000, penalty_n, long_throws,
+        ///   fk_shots, fk_deliveries]`
+        pub fn snapshot() -> [u64; 12] {
+            let mean = |sum: &AtomicU64, n: &AtomicU64| -> u64 {
+                let count = n.load(Ordering::Relaxed);
+                if count == 0 {
+                    0
+                } else {
+                    sum.load(Ordering::Relaxed) / count
+                }
+            };
+            [
+                CORNER_ROUTINE[0].load(Ordering::Relaxed),
+                CORNER_ROUTINE[1].load(Ordering::Relaxed),
+                CORNER_ROUTINE[2].load(Ordering::Relaxed),
+                CORNER_ROUTINE[3].load(Ordering::Relaxed),
+                CORNER_ROUTINE[4].load(Ordering::Relaxed),
+                mean(&CORNER_DELIVERY_SUM_X1000, &CORNER_DELIVERY_N),
+                CORNER_DELIVERY_N.load(Ordering::Relaxed),
+                mean(&PENALTY_EXEC_SUM_X1000, &PENALTY_EXEC_N),
+                PENALTY_EXEC_N.load(Ordering::Relaxed),
+                LONG_THROW_LAUNCHED.load(Ordering::Relaxed),
+                FK_DIRECT_SHOT.load(Ordering::Relaxed),
+                FK_DELIVERED.load(Ordering::Relaxed),
+            ]
+        }
+
+        pub fn reset() {
+            for c in CORNER_ROUTINE.iter() {
+                c.store(0, Ordering::Relaxed);
+            }
+            for c in [
+                &CORNER_DELIVERY_SUM_X1000,
+                &CORNER_DELIVERY_N,
+                &PENALTY_EXEC_SUM_X1000,
+                &PENALTY_EXEC_N,
+                &LONG_THROW_LAUNCHED,
+                &FK_DIRECT_SHOT,
+                &FK_DELIVERED,
+            ] {
                 c.store(0, Ordering::Relaxed);
             }
         }
@@ -1050,6 +1175,7 @@ pub mod mid_run_diag {
         DefenceDiag::reset();
         ClearDiag::reset();
         EvasionDiag::reset();
+        SetPieceDiag::reset();
         for c in [
             &RUNNER_BOX_TICKS,
             &FWD_CUTBACK,
@@ -2439,6 +2565,129 @@ impl BallCarry {
     }
 }
 
+/// What a player standing over a direct free kick decides to do with it.
+pub struct FreeKickResolver;
+
+impl FreeKickResolver {
+    /// Half the 18-yard box in field units — 132u ≈ 16.5 m at
+    /// 1u = 0.125 m. Picks out who is in there to aim at.
+    const BOX_RADIUS: f32 = 132.0;
+
+    /// Resolve a direct free kick, or `None` if this isn't one.
+    ///
+    /// Returns `Shoot` when the taker goes for goal and `Pass` otherwise
+    /// — a box delivery, a short routine and a recycle are all "give it
+    /// to somebody", and the passing model already picks between them.
+    ///
+    /// The choice is drawn ONCE per set piece, the same way
+    /// [`evaluate_forward_shot_decision`] draws its appetite threshold:
+    /// the distribution [`score_free_kick_choices`] returns is sampled
+    /// with a spread hashed from the taker and the tick he took
+    /// possession of the dead ball. Deterministic for as long as he
+    /// stands over it — asking again next tick can never turn a whipped
+    /// cross into a shot — but different takers and different free kicks
+    /// genuinely differ, which plain argmax would not give: the per-band
+    /// base scores put box delivery ahead of a direct shot in every band,
+    /// so argmax means *nobody ever shoots one*, which is less true to
+    /// football, not more.
+    fn decide(
+        ctx: &StateProcessingContext,
+        distance: f32,
+        tag: &'static str,
+    ) -> Option<ShotDecision> {
+        if ctx.tick_context.ball.pass_origin_restart != PassOriginRestart::DirectFreeKick {
+            return None;
+        }
+        if ctx.ball().owner_id() != Some(ctx.player.id) {
+            return None;
+        }
+
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let late = minute >= 70;
+        let (mine, theirs) = if ctx.player.team_id == ctx.context.field_home_team_id {
+            (
+                ctx.context.score.home_team.get(),
+                ctx.context.score.away_team.get(),
+            )
+        } else {
+            (
+                ctx.context.score.away_team.get(),
+                ctx.context.score.home_team.get(),
+            )
+        };
+
+        let scores = score_free_kick_choices(
+            FreeKickBand::from_distance(distance),
+            // Indirect free kicks aren't a distinct restart in this
+            // engine; every awarded free kick is direct.
+            false,
+            ctx.player.skills.technical.free_kicks,
+            ctx.player.skills.technical.crossing,
+            Self::aerial_advantage(ctx, minute),
+            late && mine < theirs,
+            late && mine > theirs,
+            &ctx.context.environment,
+        );
+
+        let total =
+            scores.direct_shot + scores.box_delivery + scores.short_routine + scores.recycle;
+        if total <= 0.0 {
+            return Some(ShotDecision::Pass);
+        }
+        let direct = Self::spread(ctx) * total < scores.direct_shot;
+        #[cfg(feature = "match-logs")]
+        mid_run_diag::SetPieceDiag::note_free_kick(direct);
+        Some(if direct {
+            ShotDecision::Shoot { reason: tag }
+        } else {
+            // Box delivery / short / recycle are all "find a team-mate",
+            // and the passing model already picks well between a ball
+            // into the box, a square one and a recycle.
+            ShotDecision::Pass
+        })
+    }
+
+    /// Who is in the box to aim at, against who is marking them. 0.5 is
+    /// parity; 0.0 means there is nobody in there at all, so a whipped
+    /// delivery has no target and the model should look elsewhere.
+    fn aerial_advantage(ctx: &StateProcessingContext, minute: u32) -> f32 {
+        let goal = ctx.player().opponent_goal_position();
+        let in_box = |p: &MatchPlayerLite| (p.position - goal).magnitude() <= Self::BOX_RADIUS;
+        let players = ctx.players();
+        let att_best = players
+            .teammates()
+            .all()
+            .filter(in_box)
+            .filter_map(|t| ctx.context.players.by_id(t.id))
+            .map(|p| sc::aerial_outfield_attacker(p, minute))
+            .fold(0.0_f32, f32::max);
+        if att_best <= 0.0 {
+            return 0.0;
+        }
+        let def_best = players
+            .opponents()
+            .all()
+            .filter(in_box)
+            .filter_map(|t| ctx.context.players.by_id(t.id))
+            .map(|p| sc::aerial_outfield_defender(p, minute))
+            .fold(0.0_f32, f32::max);
+        (0.5 + (att_best - def_best)).clamp(0.0, 1.0)
+    }
+
+    /// Per-set-piece deterministic draw in 0..1 — the same "one
+    /// opportunity, one decision" construction as the appetite threshold
+    /// in [`evaluate_forward_shot_decision`], hashed from the taker and
+    /// the tick this dead-ball possession began.
+    fn spread(ctx: &StateProcessingContext) -> f32 {
+        let possession_start = ctx
+            .current_tick()
+            .saturating_sub(ctx.tick_context.ball.ownership_duration as u64);
+        let opportunity = possession_start.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            ^ (ctx.player.id as u64).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        (((opportunity >> 40) as f32) / ((1u32 << 24) as f32)).clamp(0.0, 1.0)
+    }
+}
+
 /// Does this player hit it?
 ///
 /// # What a footballer actually reads
@@ -2517,6 +2766,23 @@ pub fn evaluate_forward_shot_decision(
         #[cfg(feature = "match-logs")]
         time_band_diag::record_reject(0, distance);
         return ShotDecision::Hold;
+    }
+
+    // ── Dead ball: the decision was made standing over it ─────────────
+    //
+    // A direct free kick is not an open-play look, and the open-play
+    // gates below are right to refuse it: they see a 25 m strike with a
+    // wall planted in the lane and hold the ball. That is why nobody in
+    // this engine ever hit a free kick — and why `free_kicks` could
+    // decide who stood over the ball and then never touch an outcome.
+    //
+    // `score_free_kick_choices` is the model written for this exact
+    // decision (band, taker's free-kick and crossing ability, who is in
+    // the box, chasing or protecting, wind) and it had no callers at all.
+    // Resolved ahead of the open-play gates because it answers a
+    // different question.
+    if let Some(decision) = FreeKickResolver::decide(ctx, distance, tag) {
+        return decision;
     }
 
     let skills = &ctx.player.skills;

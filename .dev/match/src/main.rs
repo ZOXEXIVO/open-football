@@ -3656,8 +3656,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             println!(
                 "  population mean execution_skill at the strike: {:.3}   \
                  (centre any accuracy quality term here)",
-                core::shot_accuracy_diag::EXECUTION_SUM
-                    .load(std::sync::atomic::Ordering::Relaxed) as f32
+                core::shot_accuracy_diag::EXECUTION_SUM.load(std::sync::atomic::Ordering::Relaxed)
+                    as f32
                     / 1000.0
                     / struck
             );
@@ -6128,6 +6128,63 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         "  block→corner branch fired={}  save-parry→corner branch fired={}",
         mr[14], mr[15]
     );
+
+    // ── SET PIECES ─────────────────────────────────────────────────────
+    //
+    // The two means printed here are what `CORNER_DELIVERY_REFERENCE` and
+    // `PENALTY_EXECUTION_REFERENCE` must be set to. Both constants centre
+    // a skill term on the population of *selected* takers, so if the
+    // constant and the measured mean disagree the term stops being
+    // redistributive and starts shifting league-wide conversion.
+    {
+        use core::mid_run_diag::SetPieceDiag;
+        let sp = SetPieceDiag::snapshot();
+        let corners: u64 = sp[0] + sp[1] + sp[2] + sp[3] + sp[4];
+        let pct = |v: u64| {
+            if corners == 0 {
+                0.0
+            } else {
+                v as f64 / corners as f64 * 100.0
+            }
+        };
+        println!("\n--- SET PIECES ---");
+        println!(
+            "  corner routines ({corners}): near {} ({:.0}%)  spot {} ({:.0}%)  far {} ({:.0}%)  \
+             short {} ({:.0}%)  edge {} ({:.0}%)",
+            sp[0],
+            pct(sp[0]),
+            sp[1],
+            pct(sp[1]),
+            sp[2],
+            pct(sp[2]),
+            sp[3],
+            pct(sp[3]),
+            sp[4],
+            pct(sp[4]),
+        );
+        println!(
+            "  corner taker delivery mean {:.3} over {} corners   \
+             ← set CORNER_DELIVERY_REFERENCE to this",
+            sp[5] as f64 / 1000.0,
+            sp[6],
+        );
+        println!(
+            "  penalty taker execution mean {:.3} over {} penalties  \
+             ← set PENALTY_EXECUTION_REFERENCE to this",
+            sp[7] as f64 / 1000.0,
+            sp[8],
+        );
+        // ⚠ These three are TICK-scale, not event-scale: the pass
+        // evaluator and the shot helper both re-run every tick the taker
+        // stands over the ball, so a single long throw or free kick is
+        // counted many times. Read them as "does this path fire at all,
+        // and in what ratio", never as a per-match rate.
+        println!(
+            "  long-throw decisions: {}   direct-FK decisions: shoot {} / deliver {}  \
+             (tick-scale, not per set piece)",
+            sp[9], sp[10], sp[11],
+        );
+    }
 
     // ── OVERLAPPING FULLBACK FUNNEL ────────────────────────────────────
     {

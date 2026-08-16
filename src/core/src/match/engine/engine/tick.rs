@@ -4,6 +4,7 @@ use crate::PlayerPositionType;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::engine::player::events::players::FoulResolver;
+use crate::r#match::engine::set_pieces::{CORNER_DELIVERY_REFERENCE, CornerRoutine};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
@@ -286,6 +287,21 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         if ball.corner_contest_resolved || ball.pass_origin_restart != PassOriginRestart::Corner {
             return;
         }
+        // A short corner and a cutback to the edge are played on the floor:
+        // there is no ball into the box to attack, so the discrete aerial
+        // contest must not fire and the move simply plays out as open play.
+        //
+        // Until the routine was wired through, EVERY corner resolved as an
+        // aerial contest whatever routine had been chosen — which is why
+        // `pick_corner_routine` could be called and its answer thrown away
+        // without changing a single outcome.
+        if matches!(
+            ball.pending_corner_routine,
+            Some(CornerRoutine::Short) | Some(CornerRoutine::EdgeCutback)
+        ) {
+            field.ball.corner_contest_resolved = true;
+            return;
+        }
         // [diag] reached with an armed Corner origin.
         #[cfg(feature = "match-logs")]
         crate::mid_run_diag::CORNER_CONTEST_SEEN.fetch_add(1, Ordering::Relaxed);
@@ -372,8 +388,40 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // the same win rate converts to ~35% more corner goals (DEF
         // corner headers on goal 536 → 708 per 200 matches, DEF goal
         // share 14.5% → 18.6% against the real ~10%).
-        let att_win =
-            (0.100 + (att_score - best_def_score) * 0.50 - gk_command * 0.18).clamp(0.04, 0.36);
+        //
+        // Delivery scale: the ball that arrives is the other half of the
+        // contest, and it was missing entirely — the two duellists and the
+        // keeper decided everything, so a dead-ball specialist's whipped
+        // corner and a centre-half's hopeful clip produced identical
+        // chances.
+        //
+        // ⚠ MULTIPLICATIVE, and it has to be. For an evenly-matched box
+        // the expression below lands NEGATIVE before the clamp (0.100
+        // − gk_command·0.18 with gk_command ≈ 0.6 is −0.008), so the 0.04
+        // floor is what most corners actually return. An *additive*
+        // delivery term centred on the population mean therefore does not
+        // cancel out: the below-average half is swallowed by the floor
+        // while the above-average half escapes it, and the contest
+        // ratchets upward — measured at +30% attacker wins with a
+        // correctly-centred additive term. Scaling instead keeps the sign,
+        // so a poor delivery makes an already-floored corner more negative
+        // (still floored) and only corners with a real aerial edge move at
+        // all, in both directions.
+        let delivery_scale =
+            (field.ball.pending_corner_delivery / CORNER_DELIVERY_REFERENCE).clamp(0.55, 1.45);
+        // Routine: where the ball is put changes how cleanly it can be
+        // met. The penalty spot is the classic — most time to attack it
+        // and the keeper furthest from it. Near post is a flick, harder to
+        // time; far post gives the keeper the whole flight to read it.
+        let routine_scale = match field.ball.pending_corner_routine {
+            Some(CornerRoutine::NearPost) => 0.95,
+            Some(CornerRoutine::FarPost) => 0.92,
+            _ => 1.00,
+        };
+        let att_win = ((0.100 + (att_score - best_def_score) * 0.50 - gk_command * 0.18)
+            * delivery_scale
+            * routine_scale)
+            .clamp(0.04, 0.36);
 
         if context.rng.bernoulli(att_win) {
             #[cfg(feature = "match-logs")]
@@ -448,6 +496,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 .set_piece_history
                 .record_corner(is_home_attacking, routine, estimated_xg);
         }
+        // Back to "an ordinary delivery" so a stale specialist stamp can't
+        // leak into the next corner (or into an open-play cross contest
+        // that reads the same field).
+        field.ball.pending_corner_delivery = CORNER_DELIVERY_REFERENCE;
 
         field.ball.corner_contest_resolved = true;
     }

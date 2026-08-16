@@ -339,41 +339,15 @@ impl<'p> PlayerOperationsImpl<'p> {
         base_power * condition_factor
     }
 
-    pub fn kick_teammate_power(&self, teammate_id: u32) -> f32 {
-        let distance = self
-            .ctx
-            .tick_context
-            .grid
-            .get(self.ctx.player.id, teammate_id);
-
-        let kick_skill = self.ctx.player.skills.technical.free_kicks / 20.0;
-
-        let raw_power = distance / (kick_skill * 100.0);
-
-        let min_power = 0.1;
-        let max_power = 1.0;
-        let normalized_power = (raw_power - min_power) / (max_power - min_power);
-
-        normalized_power.clamp(0.0, 1.0)
-    }
-
-    pub fn throw_teammate_power(&self, teammate_id: u32) -> f32 {
-        let distance = self
-            .ctx
-            .tick_context
-            .grid
-            .get(self.ctx.player.id, teammate_id);
-
-        let throw_skill = self.ctx.player.skills.technical.long_throws / 20.0;
-
-        let raw_power = distance / (throw_skill * 100.0);
-
-        let min_power = 0.1;
-        let max_power = 1.0;
-        let normalized_power = (raw_power - min_power) / (max_power - min_power);
-
-        normalized_power.clamp(0.0, 1.0)
-    }
+    // `kick_teammate_power` / `throw_teammate_power` lived here and had no
+    // callers. Both divided distance by a raw attribute — `free_kicks` and
+    // `long_throws` respectively — treating a dead-ball *accuracy* skill as
+    // a generic power divisor, and both inverted at low skill (a 1/20
+    // long-throw player produced MORE power than a 20/20 one, because the
+    // divisor shrinks). Deleted rather than fixed: pass power is
+    // `pass_teammate_power` above, and the long throw now goes through
+    // `PassEvaluator::long_throw_target` + `throw_in_range`, which model
+    // range from the attribute the right way round.
 
     pub fn shoot_goal_power(&self) -> f64 {
         let goal_distance = self.goal_distance();

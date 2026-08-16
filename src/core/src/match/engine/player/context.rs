@@ -211,6 +211,13 @@ pub struct PlayerTickCache {
     /// `PassEvaluator::calculate_passer_ability` — only the per-
     /// candidate distance blend varies between calls.
     pub passing_composites: Option<(f32, f32)>,
+    /// `ShapeDiscipline::organisation` — the recall multiplier. Read on
+    /// the positional hot path (`apply_with_pull` runs for every player
+    /// every tick, and `velocity()` and `process()` both reach it), and
+    /// it builds a `SkillBands` set for `decision_quality`. Tick-frozen:
+    /// skills are static in-match and the team aggregate it reads is
+    /// itself only recomputed every ~100 ticks.
+    pub shape_organisation: Option<f32>,
 }
 
 impl Default for PlayerTickCache {
@@ -240,6 +247,7 @@ impl PlayerTickCache {
             guard_target: None,
             pass_pressure_factor: None,
             passing_composites: None,
+            shape_organisation: None,
         }
     }
 
@@ -263,6 +271,7 @@ impl PlayerTickCache {
             self.guard_target = None;
             self.pass_pressure_factor = None;
             self.passing_composites = None;
+            self.shape_organisation = None;
         }
         self
     }

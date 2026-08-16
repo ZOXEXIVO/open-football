@@ -2,8 +2,11 @@ use crate::PlayerFieldPositionGroup;
 use crate::club::player::behaviour_config::PassEvaluatorConfig;
 use crate::club::player::registry::has_risk_tolerant_passing_trait;
 use crate::club::player::traits::PlayerTrait;
+use crate::r#match::PassOriginRestart;
+use crate::r#match::engine::ball::ball::ThrowIn;
 use crate::r#match::engine::chemistry::chemistry_modifiers;
 use crate::r#match::engine::psychology::Psychology;
+use crate::r#match::engine::set_pieces::{ThrowRoutine, pick_throw_routine};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
@@ -391,6 +394,94 @@ impl PassEvaluator {
         // worse than a 10/20 passer — the downstream success formula
         // multiplies this and re-clamps the final probability anyway.
         composite.clamp(0.05, 1.0)
+    }
+
+    /// Specialist long throw into the box, or `None` if this isn't one.
+    ///
+    /// Every gate here is a real-football precondition rather than a dice
+    /// roll: it has to be a throw-in, this player has to be the thrower,
+    /// he has to be in the attacking third, he has to actually have the
+    /// long-throw attribute ([`ThrowIn::can_reach_box`] sets the bar),
+    /// there has to be somebody in the box worth aiming at, and that
+    /// somebody has to be inside his physical range ([`ThrowIn::range`]
+    /// scales it with the attribute). Fail any one and the throw is an
+    /// ordinary pass — which is what the overwhelming majority of
+    /// throw-ins are.
+    fn long_throw_target(ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        if ctx.tick_context.ball.pass_origin_restart != PassOriginRestart::ThrowIn {
+            return None;
+        }
+        if ctx.ball().owner_id() != Some(ctx.player.id) {
+            return None;
+        }
+
+        let long_throws = ctx.player.skills.technical.long_throws;
+        let field_w = ctx.context.field_size.width as f32;
+        let goal = ctx.player().opponent_goal_position();
+        let attacking_progress = 1.0 - (goal.x - ctx.player.position.x).abs() / field_w;
+        let in_attacking_third = attacking_progress >= 2.0 / 3.0;
+        if !ThrowIn::can_reach_box(long_throws, in_attacking_third) {
+            return None;
+        }
+
+        // The box is the 18-yard area: 132u deep, 72u either side of the
+        // centre of the goal at this engine's 1u ≈ 0.125 m.
+        const BOX_DEPTH: f32 = 132.0;
+        const BOX_HALF_WIDTH: f32 = 72.0;
+        let (_, max_range) = ThrowIn::range(long_throws);
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+
+        let mut best: Option<(MatchPlayerLite, f32)> = None;
+        for mate in ctx.players().teammates().nearby(max_range) {
+            if (goal.x - mate.position.x).abs() > BOX_DEPTH
+                || (goal.y - mate.position.y).abs() > BOX_HALF_WIDTH
+            {
+                continue;
+            }
+            let Some(player) = ctx.context.players.by_id(mate.id) else {
+                continue;
+            };
+            let aerial = sc::aerial_outfield_attacker(player, minute);
+            if best.map_or(true, |(_, b)| aerial > b) {
+                best = Some((mate, aerial));
+            }
+        }
+        let (target, aerial) = best?;
+
+        // A flat throw into a box full of defenders only beats a recycle
+        // when there is a genuine aerial threat to aim at.
+        // `pick_throw_routine` owns that call, plus the "chasing late,
+        // throw it anyway" case.
+        let chasing_late = {
+            let late = minute >= 75;
+            let home = ctx.player.team_id == ctx.context.field_home_team_id;
+            let (mine, theirs) = if home {
+                (
+                    ctx.context.score.home_team.get(),
+                    ctx.context.score.away_team.get(),
+                )
+            } else {
+                (
+                    ctx.context.score.away_team.get(),
+                    ctx.context.score.home_team.get(),
+                )
+            };
+            late && mine < theirs
+        };
+        let routine = pick_throw_routine(
+            long_throws,
+            in_attacking_third,
+            aerial >= 0.55,
+            chasing_late,
+        );
+        match routine {
+            ThrowRoutine::LongBox => {
+                #[cfg(feature = "match-logs")]
+                crate::mid_run_diag::SetPieceDiag::note_long_throw();
+                Some(target)
+            }
+            ThrowRoutine::ShortRecycle => None,
+        }
     }
 
     /// Calculate receiver's ability to control the pass.
@@ -1031,6 +1122,19 @@ impl PassEvaluator {
         ctx: &StateProcessingContext,
         max_distance: f32,
     ) -> Option<(MatchPlayerLite, &'static str)> {
+        // A specialist long throw is a set-piece delivery, not a pass —
+        // it goes over the general evaluator's head entirely, because the
+        // general evaluator scores progression and safety and a ball
+        // launched into a crowded six-yard box scores terribly on both.
+        // Resolved first, and only for the players and positions that
+        // earn it, so `long_throws` finally reaches something: before
+        // this it decided a fifth of the *thrower selection* and nothing
+        // else, and `throw_in_range` / `can_long_throw_into_box` — the
+        // functions written to consume it — had no callers at all.
+        if let Some(target) = Self::long_throw_target(ctx) {
+            return Some((target, "long_throw"));
+        }
+
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
 

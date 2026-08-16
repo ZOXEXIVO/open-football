@@ -50,6 +50,7 @@
 //! not the shape, is the player's job this instant.
 
 use crate::r#match::player::state::PlayerState;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, StateProcessingContext};
 use nalgebra::Vector3;
 
@@ -124,7 +125,7 @@ impl ShapeDiscipline {
             return (velocity, 0.0);
         }
 
-        let pull = (((lag - SLACK) / RANGE).clamp(0.0, 1.0)) * MAX_PULL;
+        let pull = (((lag - SLACK) / RANGE).clamp(0.0, 1.0)) * MAX_PULL * Self::organisation(ctx);
 
         // The recall runs at the player's own top speed, so a man 30 m out
         // of shape actually recovers rather than ambling back — the
@@ -143,6 +144,82 @@ impl ShapeDiscipline {
         let recall = (to_anchor / lag) * ctx.player.max_speed_with_condition_cached();
 
         (velocity * (1.0 - pull) + recall * pull, pull)
+    }
+
+    /// How well this player is being held in the block, as a multiplier
+    /// on the recall — 1.0 for an ordinarily-organised side.
+    ///
+    /// [`MAX_PULL`] was applied identically to every player in every
+    /// team, so a back four marshalled by a 19-leadership centre-half
+    /// held its shape exactly as well as four strangers. That is the one
+    /// thing organisation visibly IS in football, and it was the reason
+    /// `leadership` reached almost nothing: outside a 0.15 slot in the
+    /// keeper's communication composite and one term in the defender
+    /// profile, a maxed-out leadership attribute changed no behaviour.
+    ///
+    /// Two inputs, both continuous:
+    ///
+    /// * **His own discipline** — concentration, teamwork, work_rate and
+    ///   positioning are what keep a player in his slot when the ball is
+    ///   elsewhere. `decision_quality` is the existing composite for
+    ///   reading the game off the ball.
+    /// * **Who is organising the side** — `TeamSkillAggregates::top_leadership`,
+    ///   the best organiser on the pitch rather than an average, because
+    ///   organisation comes from the one man doing it. Lifted from the
+    ///   team aggregate, which is recomputed once per ~100 ticks, so this
+    ///   costs a field read instead of a per-tick walk over ten team-mates
+    ///   building ten `SkillBands`.
+    ///
+    /// Centred so the population mean lands on 1.0: an ordinary player in
+    /// an ordinarily-led side gets the same recall he always did, and the
+    /// band is narrow (±15%) because this is organisation, not a
+    /// different sport.
+    ///
+    /// Memoized per `(player, tick)` — `apply_with_pull` is on the
+    /// positional hot path (every player, every tick, and both
+    /// `velocity()` and `process()` reach it), and `decision_quality`
+    /// builds a full `SkillBands` set. Every input is tick-frozen.
+    fn organisation(ctx: &StateProcessingContext) -> f32 {
+        let tick = ctx.current_tick();
+        let cached = ctx
+            .tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(ctx.player.id, tick)
+            .shape_organisation;
+        if let Some(v) = cached {
+            debug_assert_eq!(
+                v.to_bits(),
+                Self::organisation_uncached(ctx).to_bits(),
+                "shape-organisation memo mismatch"
+            );
+            return v;
+        }
+        let v = Self::organisation_uncached(ctx);
+        ctx.tick_context
+            .player_agg_cache
+            .borrow_mut()
+            .slot_mut(ctx.player.id, tick)
+            .shape_organisation = Some(v);
+        v
+    }
+
+    fn organisation_uncached(ctx: &StateProcessingContext) -> f32 {
+        /// Population mean of the `own`/`organiser` blend below. Both
+        /// composites sit near it for a mid-table squad, so a mid-table
+        /// squad multiplies its recall by ~1.0.
+        const REFERENCE: f32 = 0.50;
+
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        let own = sc::decision_quality(ctx.player, minute);
+        let organiser = if ctx.player.team_id == ctx.context.field_home_team_id {
+            ctx.context.home_skill_aggregates.top_leadership
+        } else {
+            ctx.context.away_skill_aggregates.top_leadership
+        };
+
+        let shortfall = (own * 0.60 + organiser * 0.40) - REFERENCE;
+        (1.0 + shortfall * 0.30).clamp(0.85, 1.15)
     }
 
     /// Is the ball this player's job right now? Then the shape is not.
