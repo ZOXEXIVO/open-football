@@ -1,6 +1,9 @@
+use crate::club::player::skills::GoalkeeperSpeedContext;
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::KeeperSweepDiag;
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
@@ -64,6 +67,26 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
             }
         }
 
+        // Coming for a ball in the air is the same act as coming for one
+        // on the floor, so it lives here rather than in a state of its
+        // own — what differs is only where he is going: the point the
+        // ball is coming DOWN at, not the point it is at now. `velocity`
+        // steers there; this decides when he leaves the ground for it.
+        if let Some(claim) = KeeperAerialClaim::assess(ctx) {
+            if claim.at_contact(ctx.player.position) {
+                return Some(StateChangeResult::with_goalkeeper_state(if claim.standing {
+                    GoalkeeperState::Catching
+                } else {
+                    GoalkeeperState::Jumping
+                }));
+            }
+            // Still on his way. The give-up tests below are about chasing
+            // a loose ball across the grass and would abandon a claim that
+            // is bounded by construction (the meeting point has to be
+            // inside his own area and inside his own command range).
+            return None;
+        }
+
         let ball_distance = ctx.ball().distance();
 
         if self.should_dive(ctx) {
@@ -100,9 +123,13 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
 
         // Check if ball is moving very fast toward goalkeeper at close range - prepare for save
         // Only trigger for actual shots (fast balls), not slow rolling balls the GK should claim
+        // 8.0 u/tick is faster than the engine's own shot cap
+        // (`MAX_SHOT_VELOCITY` 3.2), so this branch never fired and a
+        // keeper who had come out kept coming through a shot. 1.8 is a
+        // firmly-struck ball — see the units note in `should_dive`.
         let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
         let ball_toward_keeper = ctx.ball().is_towards_player_with_angle(0.7);
-        if ball_toward_keeper && ball_distance < 150.0 && ball_speed > 8.0 {
+        if ball_toward_keeper && ball_distance < 150.0 && ball_speed > 1.8 {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::PreparingForSave,
             ));
@@ -214,6 +241,21 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         let ball_speed = ball_velocity.norm();
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
 
+        // Attacking a cross: run to where it is coming DOWN, at full tilt.
+        // Chasing its current position would have him running under a ball
+        // that is still 3 m up and 10 m from where it lands.
+        if let Some(claim) = KeeperAerialClaim::assess(ctx) {
+            return Some(
+                SteeringBehavior::Arrive {
+                    target: claim.meeting_point,
+                    slowing_distance: 4.0,
+                }
+                .calculate(ctx.player)
+                .velocity
+                    * ((1.4 + prof.rushing_out_profile * 0.75) * prof.explosive_mult),
+            );
+        }
+
         // Speed multiplier (1.2..2.05) gated by explosive multiplier
         // and rushing-out skill so weak/tired keepers arrive late.
         let speed_multiplier = (1.2 + prof.rushing_out_profile * 0.85) * prof.explosive_mult;
@@ -263,7 +305,7 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         } else {
             // Far - full sprint using Pursuit for maximum speed
             // For fast-moving balls, add extra boost
-            let final_multiplier = if ball_speed > 5.0 {
+            let final_multiplier = if ball_speed > 1.8 {
                 speed_multiplier * urgency_multiplier * 1.15
             } else {
                 speed_multiplier * urgency_multiplier
@@ -358,7 +400,27 @@ impl GoalkeeperComingOutState {
         keeper_time < (opponent_time * total_advantage)
     }
 
+    /// Should he go to ground for this one?
+    ///
+    /// ⚠ **UNITS.** Every speed bar in here was written when a shot could
+    /// leave the boot at 5.6 u/tick and ground friction was ~3.7× real.
+    /// The engine now caps a shot at `MAX_SHOT_VELOCITY` **3.2** and a
+    /// struck pass arrives at 0.5-2.2, so the ladder below — `> 15.0`,
+    /// `> 10.0`, `> 5.0` — described three bands that **cannot occur**,
+    /// and the entry gate `< 2.5` threw away everything except the top
+    /// 20% of shots. Between them, a keeper who had come off his line
+    /// never dived: measured, `ComingOut` produced zero dives a match.
+    ///
+    /// Re-anchored on the live scale, keeping the shape (a fast ball is
+    /// a reflex save, a slow one he goes and picks up):
+    ///   * `FAST` 2.2 — a struck shot from range; nothing but a dive.
+    ///   * `DRIVEN` 1.4 — a firm shot or a driven cross.
+    ///   * `LOOSE` 0.7 — a ball travelling, but he can run to it.
     fn should_dive(&self, ctx: &StateProcessingContext) -> bool {
+        const FAST: f32 = 2.2;
+        const DRIVEN: f32 = 1.4;
+        const LOOSE: f32 = 0.7;
+
         let ball_distance = ctx.ball().distance();
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let ball_speed = ball_velocity.norm();
@@ -374,15 +436,18 @@ impl GoalkeeperComingOutState {
         let positioning = prof.positioning;
 
         // Ball must be moving with reasonable speed to consider diving
-        if ball_speed < 2.5 {
+        if ball_speed < LOOSE {
             return false;
         }
 
-        // Don't dive if ball is too far - even skilled keepers have limits
-        const MAX_DIVE_DISTANCE: f32 = 8.0;
-        let skill_adjusted_max_dive = MAX_DIVE_DISTANCE + (agility * 4.0) + (reflexes * 3.0);
-
-        if ball_distance > skill_adjusted_max_dive {
+        // Don't dive if the ball is beyond his reach — and "his reach" is
+        // the one number the rest of the engine already agrees on. The
+        // local formula this replaces topped out at 15u (**1.9 m**),
+        // tighter than every branch it guarded and less than half the
+        // 14-48u `effective_dive_distance` the save model uses, so it was
+        // the binding constraint and no keeper here dived for anything he
+        // could not already touch standing.
+        if ball_distance > prof.effective_dive_distance {
             return false;
         }
 
@@ -407,11 +472,13 @@ impl GoalkeeperComingOutState {
         // If ball is moving towards keeper but not directly, adjust dive threshold
         let trajectory_factor = trajectory_alignment.max(0.0);
 
-        // Calculate time until ball reaches keeper's position
-        let time_to_reach = ball_distance / ball_speed.max(1.0);
+        // Ticks until the ball reaches him. The old `.max(1.0)` floor on
+        // the divisor made a slow ball read as arriving sooner than a fast
+        // one below 1 u/tick, which is backwards.
+        let time_to_reach = ball_distance / ball_speed.max(0.05);
 
-        // Predict where ball will be in near future
-        let predicted_ball_pos = ball_position + ball_velocity * time_to_reach.min(2.0);
+        // Where it will be when it gets there.
+        let predicted_ball_pos = ball_position + ball_velocity * time_to_reach.min(60.0);
         let predicted_distance = (predicted_ball_pos - keeper_position).magnitude();
 
         // Decision factors:
@@ -421,66 +488,68 @@ impl GoalkeeperComingOutState {
 
         let ball_getting_closer = predicted_distance < ball_distance;
 
-        // Calculate if keeper can reach the ball by running
-        let keeper_sprint_speed = ctx.player.skills.physical.pace
-            * (1.0 + ctx.player.skills.physical.acceleration / 40.0);
-        let time_to_run_to_ball = ball_distance / keeper_sprint_speed.max(1.0);
+        // How long it takes him to run there, in the same ticks. This read
+        // `skills.physical.pace` — a raw 1-20 attribute — as a speed in
+        // units per tick, i.e. up to 250 m/s, so `time_to_run_to_ball` came
+        // out near zero and "can he get there on his feet" answered YES for
+        // every ball on the pitch. `goalkeeper_max_speed` is the number the
+        // engine actually moves him at.
+        let keeper_sprint_speed = ctx
+            .player
+            .skills
+            .goalkeeper_max_speed(
+                ctx.player.player_attributes.condition,
+                GoalkeeperSpeedContext::Explosive,
+            )
+            .max(0.1);
+        let time_to_run_to_ball = ball_distance / keeper_sprint_speed;
 
         // Dive if:
         // - Ball is close and getting closer
         // - Ball speed suggests keeper can't reach by running
         // - Keeper's skills support the dive decision
-
-        let urgency_threshold = 0.8 + (anticipation * 0.3); // Better anticipation = earlier dive decision
+        //
+        // In TICKS, like everything else here — this was `0.8 + …`, i.e.
+        // "the ball arrives within eight thousandths of a second", which
+        // no ball ever does.
+        let urgency_threshold = 20.0 + (anticipation * 30.0);
         let dive_urgency = time_to_reach < urgency_threshold;
 
         // Different scenarios based on ball speed
-        if ball_speed > 15.0 {
-            // Very fast shot - need quick reflexes
-            let reflex_threshold = 0.5 - (reflexes * 0.3);
+        if ball_speed > FAST {
+            // Struck shot — there is no running to this one.
+            let reflex_threshold = 12.0 + reflexes * 14.0;
             ball_getting_closer
-                && ball_distance < (6.0 + reflexes * 5.0)
+                && ball_distance < (10.0 + agility * 16.0 + reflexes * 8.0)
                 && time_to_reach < reflex_threshold
-                && trajectory_factor > 0.6
-        } else if ball_speed > 10.0 {
-            // Fast shot - need good positioning and reflexes
+                && trajectory_factor > 0.5
+        } else if ball_speed > DRIVEN {
+            // Firm shot or a driven ball across the face of goal.
             let can_catch_running = time_to_run_to_ball < time_to_reach * 1.3;
 
             if can_catch_running {
-                // Can probably catch it running - only dive if very close or excellent skills
-                ball_distance < 4.0 && bravery > 0.6 && ball_getting_closer
+                // Can probably get there on his feet — dive only if it is
+                // right on him or he is brave enough to go through it.
+                ball_distance < 12.0 && bravery > 0.45 && ball_getting_closer
             } else {
-                // Need to dive to reach
-                ball_distance < (8.0 + agility * 3.0 + positioning * 2.0)
+                ball_distance < (12.0 + agility * 14.0 + positioning * 6.0)
                     && dive_urgency
-                    && trajectory_factor > 0.5
-                    && bravery > 0.4
-            }
-        } else if ball_speed > 5.0 {
-            // Medium speed - keeper has more time to decide
-            let can_catch_running = time_to_run_to_ball < time_to_reach * 1.5;
-
-            if can_catch_running {
-                // Prefer to run and catch - only dive if skills are high and ball is very close
-                ball_distance < 3.0
-                    && (reflexes + agility) > 1.3
-                    && bravery > 0.7
-                    && ball_getting_closer
-            } else {
-                // Ball will pass before keeper can run - dive needed
-                ball_distance < (6.0 + agility * 4.0)
-                    && predicted_distance < 8.0
-                    && trajectory_factor > 0.4
-                    && bravery > 0.5
+                    && trajectory_factor > 0.45
+                    && bravery > 0.30
             }
         } else {
-            // Slow ball - generally shouldn't dive, should run and catch
-            // Only dive if extremely close and keeper is brave/skilled
-            ball_distance < 2.5
-                && ball_getting_closer
-                && bravery > 0.8
-                && (reflexes + agility + positioning) > 2.0
-                && trajectory_factor > 0.7
+            // Rolling or a slow loose ball: he should be picking this up,
+            // not going to ground for it. Diving is for the one that is
+            // about to go past him.
+            let can_catch_running = time_to_run_to_ball < time_to_reach * 1.5;
+            if can_catch_running {
+                false
+            } else {
+                ball_distance < (8.0 + agility * 10.0)
+                    && predicted_distance < 12.0
+                    && trajectory_factor > 0.4
+                    && bravery > 0.4
+            }
         }
     }
 }

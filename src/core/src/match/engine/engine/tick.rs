@@ -1105,11 +1105,23 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 GoalkeeperState::Punching
             };
             #[cfg(feature = "match-logs")]
-            crate::mid_run_diag::KeeperSweepDiag::note_exit(match next {
-                GoalkeeperState::Diving => 1,
-                GoalkeeperState::Catching => 3,
-                _ => 4,
-            });
+            {
+                crate::mid_run_diag::KeeperSweepDiag::note_exit(match next {
+                    GoalkeeperState::Diving => 1,
+                    GoalkeeperState::Catching => 3,
+                    _ => 4,
+                });
+                // …and into the action census as well. This site does not
+                // go through `PlayerMatchState::process`, so the counters
+                // there never see it — leaving the physics save, which is
+                // where most of a keeper's dives come from, out of the one
+                // table that reports how often he dives.
+                crate::mid_run_diag::KeeperActionDiag::note(match next {
+                    GoalkeeperState::Diving => 0,
+                    GoalkeeperState::Punching => 2,
+                    _ => usize::MAX,
+                });
+            }
             let gk = &mut field.players[keeper_idx];
             gk.transition_to(PlayerState::Goalkeeper(next), TransitionSource::EventHandler);
         }

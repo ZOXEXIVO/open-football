@@ -399,10 +399,31 @@ impl PlayerMatchState {
                     apex.is_some(),
                 );
             }
+            // Keeper actions are counted HERE rather than inside the
+            // states themselves, so every inbound route is counted exactly
+            // once whoever decided it — including the physics save, which
+            // transitions him from outside the state machine entirely.
+            #[cfg(feature = "match-logs")]
+            match state {
+                PlayerState::Goalkeeper(GoalkeeperState::Diving) => {
+                    crate::mid_run_diag::KeeperActionDiag::note(0)
+                }
+                PlayerState::Goalkeeper(GoalkeeperState::Punching) => {
+                    crate::mid_run_diag::KeeperActionDiag::note(2)
+                }
+                PlayerState::Goalkeeper(GoalkeeperState::Jumping) => {
+                    crate::mid_run_diag::KeeperActionDiag::note(4)
+                }
+                _ => {}
+            }
             if let Some(apex) = apex {
                 player.leap(apex);
             }
         } else {
+            #[cfg(feature = "match-logs")]
+            if player.state == PlayerState::Goalkeeper(GoalkeeperState::Diving) {
+                crate::mid_run_diag::KeeperActionDiag::note(7);
+            }
             player.in_state_time += 1;
         }
 

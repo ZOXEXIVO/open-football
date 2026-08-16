@@ -29,8 +29,10 @@ impl StateProcessingHandler for GoalkeeperReturningGoalState {
 
         // Loose ball very close — claim it instead of ignoring it
         if !ctx.ball().is_owned() && ctx.ball().distance() < 15.0 && ctx.ball().on_own_side() {
+            // 5.0 u/tick is above `MAX_SHOT_VELOCITY` (3.2), so this bar
+            // excluded nothing and a keeper jogging back gathered shots.
             let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
-            if ball_speed < 5.0 {
+            if ball_speed < 2.0 {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::Catching,
                 ));

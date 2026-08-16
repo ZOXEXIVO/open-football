@@ -3,7 +3,7 @@ use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
-use crate::r#match::player::strategies::common::states::TackleDecision;
+use crate::r#match::player::strategies::common::states::{TackleDecision, TackleEngagement};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -78,7 +78,12 @@ impl StateProcessingHandler for MidfielderTacklingState {
         // way — and the designation is a tolerance band that swaps
         // between team-mates tick to tick, so it did exactly that. A
         // committed engagement now runs to contact or to `DISENGAGE`.
-        if ctx.in_state_time == 0 && !ctx.team().is_best_player_to_chase_ball() {
+        // …and the plan's own nomination counts as passing it — see
+        // `TackleEngagement::is_nominated_presser`.
+        if ctx.in_state_time == 0
+            && !ctx.team().is_best_player_to_chase_ball()
+            && !TackleEngagement::is_nominated_presser(ctx)
+        {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Pressing,
             ));

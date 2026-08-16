@@ -227,6 +227,34 @@ impl DutyAssigner<'_> {
     /// somebody else is the correct answer rather than a concession.
     const THREAT_DEPTH: f32 = 0.34;
 
+    /// …and how near the BALL an opponent has to be to be somebody's
+    /// problem wherever on the pitch he is standing.
+    ///
+    /// # Why depth alone is not enough
+    ///
+    /// [`Self::THREAT_DEPTH`] answers "is he dangerous to our goal",
+    /// which is one half of what a defending team marks. The other half
+    /// is the press: when the ball is in midfield the men who matter are
+    /// the ones the carrier can find with his next pass, and they are
+    /// 30-40 m from our goal, not 10.
+    ///
+    /// With depth as the only door, a side defending in midfield had
+    /// **one presser, one cover and nobody else with a job at all** —
+    /// measured, 2.8 of 8 unit members on an individual duty, and every
+    /// state-level press entry is additionally gated on being the single
+    /// best chaser. The opposition passed and carried through the centre
+    /// completely unopposed: `prog_carries` 38 per midfielder per match
+    /// against a real 1-2, `succ_dribbles` 9.2 against ~0.5, and 58% of
+    /// attackers in our own third with nobody within 3 m. From the stands
+    /// that is "nobody presses, they just run at the goal and shoot",
+    /// which is exactly how it was reported.
+    ///
+    /// 200u = 25 m — the radius a pressing unit really covers around the
+    /// ball. Deliberately generous: the assignment is exclusive and every
+    /// marker still has to be within [`Self::MARK_REACH`] of his man, so
+    /// a threat nobody can reach costs a ranking slot and nothing else.
+    const BALL_THREAT_RADIUS: f32 = 200.0;
+
     fn assign(&self, plan: &mut DefensivePlan, owner_team: Option<u32>) {
         let previous = *plan;
         *plan = DefensivePlan::idle();
@@ -295,6 +323,12 @@ impl DutyAssigner<'_> {
         // Somebody goes to the ball and somebody backs him up. These come
         // first because they are the only duties whose target is fixed;
         // everything else is a choice between men.
+        let mut n_press = 0usize;
+        let mut n_cover = 0usize;
+        let mut n_marks = 0usize;
+        let mut n_unreachable = 0usize;
+        let mut n_skipped_depth = 0usize;
+
         if let Some(carrier) = carrier {
             if let Some(i) = self.nearest_free(
                 &unit[..unit_len],
@@ -304,6 +338,7 @@ impl DutyAssigner<'_> {
                 previous.presser(),
             ) {
                 taken[i] = true;
+                n_press += 1;
                 Self::push(plan, unit[i].0, DefensiveDuty::Press);
             }
             if let Some(i) = self.nearest_free(
@@ -314,6 +349,7 @@ impl DutyAssigner<'_> {
                 None,
             ) {
                 taken[i] = true;
+                n_cover += 1;
                 Self::push(plan, unit[i].0, DefensiveDuty::Cover);
             }
         }
@@ -335,7 +371,13 @@ impl DutyAssigner<'_> {
             if Some(p.id) == plan.carrier {
                 continue; // the presser has him
             }
-            if (p.position.x - own_goal.x).abs() > depth_limit {
+            // Dangerous to our goal, OR near the ball — see
+            // `BALL_THREAT_RADIUS`. Either makes him somebody's man.
+            let near_goal = (p.position.x - own_goal.x).abs() <= depth_limit;
+            let near_ball = (p.position - self.field.ball.position).magnitude()
+                <= Self::BALL_THREAT_RADIUS;
+            if !near_goal && !near_ball {
+                n_skipped_depth += 1;
                 continue; // not a threat yet
             }
             threats[threat_len] = (p.id, p.position, self.threat_score(p, own_goal));
@@ -371,9 +413,11 @@ impl DutyAssigner<'_> {
                 Self::MARK_REACH,
                 incumbent,
             ) else {
+                n_unreachable += 1;
                 continue;
             };
             taken[i] = true;
+            n_marks += 1;
             Self::push(plan, unit[i].0, DefensiveDuty::Mark(opp_id));
         }
 
@@ -383,6 +427,17 @@ impl DutyAssigner<'_> {
                 Self::push(plan, *id, DefensiveDuty::HoldZone);
             }
         }
+
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::DefenceDiag::note_plan_shape(
+            unit_len,
+            threat_len,
+            n_skipped_depth,
+            n_unreachable,
+            n_press,
+            n_cover,
+            n_marks,
+        );
     }
 
     /// Closest unassigned unit member to `target` within `reach`.

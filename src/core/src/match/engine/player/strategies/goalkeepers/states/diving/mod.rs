@@ -1,3 +1,4 @@
+use crate::r#match::engine::ball::ball::interactions::SaveModel;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
@@ -9,7 +10,9 @@ use crate::r#match::{
 use nalgebra::Rotation3;
 use nalgebra::Vector3;
 
-const MAX_DIVE_TIME: f32 = 1.8; // Maximum time to stay in diving state (in seconds)
+/// Longest a keeper stays down, in AI ticks (20 ms each — see the units
+/// note in `process`). 90 is 1.8 s: a full sprawl plus getting back up.
+const MAX_DIVE_TICKS: u64 = 90;
 const BALL_CLAIM_DISTANCE: f32 = 14.0;
 
 #[derive(Default, Clone)]
@@ -17,25 +20,65 @@ pub struct GoalkeeperDivingState {}
 
 impl StateProcessingHandler for GoalkeeperDivingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // A dive has a DURATION. He leaves his feet, takes the ball, and
+        // A DIVE HAS A DURATION. He leaves his feet, takes the ball, and
         // has to get up again before he can do anything with it.
         //
-        // This released him on the very tick he gathered it, so every
-        // caught dive lasted a single tick — the physics save hands him
-        // the ball at the same instant it puts him here. Measured, the
-        // keeper made ~86 saves a match and `Goalkeeper: Diving` still sat
-        // below 0.25% of his ticks: he was diving and standing up inside
-        // 10 ms, which is why he reads as "sitting on the ball" rather
-        // than making a save.
+        // The physics save (`Ball::try_save_shot`) puts him here and hands
+        // him the ball on the SAME tick, so without a floor every caught
+        // dive lasted one tick — the keeper made ~86 saves a match while
+        // `Goalkeeper: Diving` sat below 0.25% of his ticks, which is what
+        // "he doesn't dive, he just sits on it" looks like from the stands.
         //
-        // 45 ticks ≈ 0.45 s — the time a keeper is actually on the floor.
-        // `Diving` is already a committed action, so nothing else can
-        // abort it either.
-        const MIN_DIVE_TICKS: u64 = 45;
-        if ctx.player.has_ball(ctx) && ctx.in_state_time >= MIN_DIVE_TICKS {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Passing,
-            ));
+        // A timer was added for that and it did not work, because
+        // `is_ball_caught` below rolls a fresh catch every tick and used to
+        // exit to `Standing` when it came off. With the ball already in his
+        // gloves that roll sees distance ≈ 0 and difficulty ≈ 0, so it came
+        // off on the FIRST tick more than half the time and the guard was
+        // bypassed on most dives. A man who already has the ball is not
+        // catching it again: the timer is now his only way out.
+        //
+        // UNITS: `in_state_time` counts AI TICKS, and only every second
+        // engine tick runs the state machine (`game_tick_light` leaves the
+        // counter alone), so one unit here is **20 ms**, not 10 — the same
+        // trap `GoalkeeperHoldingState` documents at `MIN_HOLDING_DURATION`.
+        // 40 ticks is therefore 0.8 s: leave the ground, take it, land, get
+        // back up. `Diving` is already a committed action, so nothing else
+        // can abort it either.
+        const MIN_DIVE_TICKS: u64 = 40;
+        if ctx.player.has_ball(ctx) {
+            if ctx.in_state_time >= MIN_DIVE_TICKS {
+                #[cfg(feature = "match-logs")]
+                crate::mid_run_diag::KeeperActionDiag::note(1);
+                // `HoldingBall`, not `Passing`: a keeper who has just made
+                // a save gets up, carries it out and CHOOSES how to
+                // release it — short, throw or kick — which is what
+                // `GoalkeeperHoldingState::pick_distribution` is for, and
+                // is the same route `Catching` has always taken. Going
+                // straight to `Passing` skipped the choice entirely, so a
+                // keeper's `throwing` and `kicking` did nothing after the
+                // one kind of possession he most often gets.
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::HoldingBall,
+                ));
+            }
+            return None;
+        }
+
+        // A dive he does NOT hold still costs him a trip to the floor, and
+        // he is up off it faster than one where he has the ball to
+        // protect. Without a floor here every miss let him straight back
+        // up — `is_ball_nearby` at 14u catches most parry drops on the
+        // first tick, and the parry itself puts the ball 12-30u away — so
+        // the engine's mean dive ran well under the 390-660 ms a real one
+        // spends airborne alone. 22 AI ticks is 0.44 s (see the units note
+        // above). Nothing below happens until then; the catch roll is the
+        // one thing he can still do while extended.
+        const MIN_GROUND_TICKS: u64 = 22;
+        if ctx.in_state_time < MIN_GROUND_TICKS {
+            if self.is_ball_caught(ctx) {
+                return Some(Self::gather_in_the_dive(ctx));
+            }
+            return None;
         }
 
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
@@ -54,22 +97,8 @@ impl StateProcessingHandler for GoalkeeperDivingState {
             ));
         }
 
-        if ctx.in_state_time as f32 / 100.0 > MAX_DIVE_TIME {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::ReturningToGoal,
-            ));
-        }
-
         if self.is_ball_caught(ctx) {
-            return Some(StateChangeResult::with_goalkeeper_state_and_event(
-                GoalkeeperState::Standing,
-                Event::PlayerEvent({
-                    #[cfg(feature = "match-logs")]
-                    crate::r#match::engine::ball::ball::ownership::reception_diag::GATHER_SOURCE[2]
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    PlayerEvent::CaughtBall(ctx.player.id)
-                }),
-            ));
+            return Some(Self::gather_in_the_dive(ctx));
         } else if self.is_ball_nearby(ctx) {
             let mut result = StateChangeResult::with_goalkeeper_state(GoalkeeperState::Catching);
             result
@@ -78,7 +107,11 @@ impl StateProcessingHandler for GoalkeeperDivingState {
             return Some(result);
         }
 
-        if ctx.in_state_time > 90 {
+        // Backstop: he is up and back in the game whatever happened to the
+        // ball. This replaces a PAIR of timeouts — a `MAX_DIVE_TIME` of
+        // 1.8 "seconds" read as `in_state_time / 100.0`, which in AI ticks
+        // is 3.6 s and sat behind this one, so it could never fire.
+        if ctx.in_state_time > MAX_DIVE_TICKS {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,
             ));
@@ -101,6 +134,26 @@ impl StateProcessingHandler for GoalkeeperDivingState {
 }
 
 impl GoalkeeperDivingState {
+    /// He gathers it, and he STAYS DOWN.
+    ///
+    /// This used to return `Standing`, which put him back on his feet on
+    /// the same tick his gloves closed — so the one thing that makes a
+    /// save read as a save, a keeper on the floor with the ball, lasted
+    /// 10 ms. Returning his own state is treated as "no transition" by the
+    /// processor, so the event still fires, `in_state_time` keeps running,
+    /// and the `has_ball` branch owns getting him up again.
+    fn gather_in_the_dive(ctx: &StateProcessingContext) -> StateChangeResult {
+        StateChangeResult::with_goalkeeper_state_and_event(
+            GoalkeeperState::Diving,
+            Event::PlayerEvent({
+                #[cfg(feature = "match-logs")]
+                crate::r#match::engine::ball::ball::ownership::reception_diag::GATHER_SOURCE[2]
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                PlayerEvent::CaughtBall(ctx.player.id)
+            }),
+        )
+    }
+
     fn calculate_dive_direction(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
@@ -175,8 +228,15 @@ impl GoalkeeperDivingState {
         }
 
         // Catch difficulty: stretch + power + fatigue + poor position.
+        //
+        // `power` divided by 6.0 against a ball that cannot exceed
+        // `MAX_SHOT_VELOCITY` (3.2), so the hardest strike in the game
+        // reached 0.28 of the range and how hard the ball was hit barely
+        // entered the sum — see the units note in `comingout`. Signed
+        // against an ordinary strike, which is what keeps re-opening the
+        // axis from also re-calibrating the save rate.
         let stretch = (ball_distance / catch_distance).clamp(0.0, 1.0);
-        let power = ((ball_speed - 1.5) / 6.0).clamp(0.0, 1.0);
+        let power = SaveModel::strike_power(ball_speed);
         let catch_difficulty = (power * 0.36
             + stretch * 0.30
             + (1.0 - prof.condition_mult) * 0.14
@@ -195,7 +255,16 @@ impl GoalkeeperDivingState {
                 catch_prob *= 0.50;
             }
         }
-        ctx.context.rng.unit_f32() < catch_prob
+        // ONE DIVE, ONE OPPORTUNITY. This is rolled every tick the keeper
+        // is within reach, so taken as a per-event probability it compounds
+        // to a near-certain catch over a dive of any length — the same
+        // defect `GoalkeeperCatchingState` documents at `EXPECTED_SAVE_TICKS`
+        // and the same fix: spread the per-opportunity chance across the
+        // ticks the opportunity lasts. `CONTACT_TICKS` is how long a
+        // diving keeper is actually within a glove's reach of the ball.
+        const CONTACT_TICKS: f32 = 14.0;
+        let per_tick = prof.per_tick_save(catch_prob, CONTACT_TICKS);
+        ctx.context.rng.unit_f32() < per_tick
     }
 
     fn is_ball_nearby(&self, ctx: &StateProcessingContext) -> bool {

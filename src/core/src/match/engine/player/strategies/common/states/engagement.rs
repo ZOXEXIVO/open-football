@@ -1,6 +1,6 @@
 use crate::r#match::engine::context::PenaltyArea;
 use crate::r#match::player::events::FoulSeverity;
-use crate::r#match::{PlayerSide, StateProcessingContext};
+use crate::r#match::{DefensiveDuty, PlayerSide, StateProcessingContext};
 use nalgebra::Vector3;
 
 /// How far behind a challenging player a team-mate can be and still count
@@ -81,10 +81,33 @@ impl TackleEngagement {
     /// Neither check changes how many tackles are ATTEMPTED — both were
     /// already enforced inside `Tackling` before any attempt is rolled.
     /// They only stop the state being entered to be left again.
+    /// …and the duel gate has to accept the TEAM PLAN's answer, not only
+    /// the chase election's.
+    ///
+    /// `is_best_player_to_chase_ball` scores every candidate with a
+    /// `position_factor` — Forward 1.2, Midfielder 1.1, **Defender 0.9**.
+    /// That is the right bias for a loose ball nobody owns (a forward does
+    /// gamble on those), and the wrong one entirely for "who challenges
+    /// the man carrying the ball at our box", where the defender is by
+    /// definition the man. Measured, it inverted the whole ladder:
+    /// **0.47 tackles per defender per match against 3.01 per forward**,
+    /// with a real distribution of ~1.6 / ~1.0 the other way up, and
+    /// `Defender: Tackling` below 0.25% of all ticks.
+    ///
+    /// `DefensivePlan` already nominates exactly one engager per side,
+    /// by distance and with no positional thumb on the scale, and every
+    /// other part of the defensive model treats that nomination as
+    /// authoritative. Accepting it here is what lets the nominated man
+    /// actually go in.
     pub fn should_commit(ctx: &StateProcessingContext, distance: f32) -> bool {
         distance < Self::COMMIT
             && ctx.player.can_attempt_tackle()
-            && ctx.team().is_best_player_to_chase_ball()
+            && (ctx.team().is_best_player_to_chase_ball() || Self::is_nominated_presser(ctx))
+    }
+
+    /// True when the team plan has made this player the engager.
+    pub fn is_nominated_presser(ctx: &StateProcessingContext) -> bool {
+        matches!(ctx.team().my_duty(), DefensiveDuty::Press)
     }
 }
 

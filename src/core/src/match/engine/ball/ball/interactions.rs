@@ -281,6 +281,95 @@ impl SaveModel {
         Self::CENTRED_BASE - r * r * Self::STRETCH_PENALTY
     }
 
+    /// Speed at which a strike starts to beat a keeper on pace alone, in
+    /// game units per tick (1 u/tick = 12.5 m/s). Below this he has time
+    /// to set himself and how hard it was hit does not matter.
+    const HARD_STRUCK: f32 = 1.2;
+    /// Speed above `HARD_STRUCK` at which the curve reaches half its
+    /// ceiling. `MAX_SHOT_VELOCITY` is 3.2, so the hardest strike the
+    /// engine can produce sits on the half-way point and the curve
+    /// saturates smoothly beyond it rather than clipping.
+    const SPEED_HALF_SPAN: f32 = 2.0;
+    /// Width of the pace axis for a keeper with no reflexes at all.
+    const SPEED_SPREAD: f32 = 0.44;
+    /// Where an ORDINARY strike sits on that curve — measured as the mean
+    /// speed of shots arriving at the save roll (`GOALKEEPER ACTION
+    /// CENSUS`: **2.62 u/tick**, 13 687 shots over 200 matches at L14),
+    /// pushed through `pace_position`. Subtracting it is what makes the
+    /// term a SPREAD rather than a tax: the average shot in the game costs
+    /// the keeper nothing, a rocket costs him, and a tame effort hands him
+    /// a little back.
+    ///
+    /// **Re-derive it from the census whenever the strike model moves.**
+    /// It is the whole of this term's calibration: set 0.09 too low it
+    /// took saves/on-target from 77.3% to 72.6% on its own, with the
+    /// shape of the curve unchanged.
+    const ORDINARY_PACE: f32 = 0.4169;
+
+    /// Position of a strike on the pace curve, 0..1 and strictly
+    /// increasing in speed at every input. Kept separate so
+    /// `ORDINARY_PACE` above can be quoted in the same units.
+    #[inline]
+    fn pace_position(speed: f32) -> f32 {
+        let excess = (speed - Self::HARD_STRUCK).max(0.0);
+        excess / (excess + Self::SPEED_HALF_SPAN)
+    }
+
+    /// Speed an ORDINARY shot arrives at, in game units per tick —
+    /// measured off `GOALKEEPER ACTION CENSUS` (2.63 u/tick over 14 068
+    /// shots, 200 matches at L14). The anchor every "how hard was it hit"
+    /// term in the goalkeeping model is centred on, here and in the
+    /// goalkeeper states.
+    pub(crate) const ORDINARY_STRIKE: f32 = 2.63;
+    /// Half-width of the strike-speed band. `MAX_SHOT_VELOCITY` is 3.2 and
+    /// a ball sheds pace in flight, so ±1.4 covers everything from a
+    /// scuffed effort to a piledriver.
+    const STRIKE_SPAN: f32 = 1.4;
+
+    /// How much harder than an ORDINARY shot this one was, −1..1.
+    ///
+    /// **Centred, and that is the point.** Every keeper site that reads
+    /// shot power feeds it into an additive difficulty sum, so an
+    /// uncentred 0..1 term does not just restore the power axis, it makes
+    /// every shot in the game harder and drops the population save rate
+    /// with it. A signed deviation spreads the difficulty around an
+    /// ordinary strike instead: a rocket is harder, a scuffed one easier,
+    /// and the average shot is exactly what it was.
+    #[inline]
+    pub(crate) fn strike_power(speed: f32) -> f32 {
+        ((speed - Self::ORDINARY_STRIKE) / Self::STRIKE_SPAN).clamp(-1.0, 1.0)
+    }
+
+    /// How much of the geometric ceiling the ball's PACE takes away —
+    /// negative for a shot struck softer than average.
+    ///
+    /// ⚠ **UNITS — this was inert.** Both call sites computed
+    /// `(speed − 3.0).max(0) * 0.08`, written when a shot could leave the
+    /// boot at 5.6 u/tick. `MAX_SHOT_VELOCITY` is now **3.2**, and a ball
+    /// sheds pace in flight, so `speed − 3.0` was **at most 0.2** and the
+    /// penalty at most **0.016** — three decimal places below anything
+    /// that could move a save. How hard a shot was struck had, in
+    /// practice, no effect on whether the keeper saved it, which is why a
+    /// powerful finisher gained nothing from his power and a keeper with
+    /// elite reflexes gained nothing from his.
+    ///
+    /// Rebuilt as a saturating curve **centred on an ordinary strike**,
+    /// which is what keeps it calibration-neutral: restoring an axis that
+    /// had gone flat must not also move the population save rate, and a
+    /// one-sided penalty does (measured, an uncentred version took
+    /// saves/on-target 77.3% → 68.8% in one step). Monotone at any input
+    /// because the post-shot expectation is pinned on that — a clamped
+    /// line made a rocket and a firm shot worth exactly the same.
+    ///
+    /// `reflexes01` is the keeper's normalised reflexes: a quick keeper
+    /// gives away half as much to pace as a slow one.
+    #[inline]
+    pub(crate) fn speed_penalty(speed: f32, reflexes01: f32) -> f32 {
+        (Self::pace_position(speed) - Self::ORDINARY_PACE)
+            * Self::SPEED_SPREAD
+            * (1.0 - reflexes01.clamp(0.0, 1.0) * 0.5)
+    }
+
     /// Threat value standing in for "an ordinary shooter" on the paths
     /// that build a shot target without a striker behind it (tests,
     /// synthesised targets).
@@ -422,9 +511,7 @@ impl SaveModel {
             return 1.0 - Self::MIN_SAVE;
         }
         let reach_ratio = (lateral.abs() / Self::REFERENCE_REACH).clamp(0.0, 1.0);
-        let speed_excess = (speed - 3.0).max(0.0);
-        let speed_penalty =
-            (speed_excess * 0.08 * (1.0 - Self::REFERENCE_REFLEXES * 0.5)).min(0.40);
+        let speed_penalty = Self::speed_penalty(speed, Self::REFERENCE_REFLEXES);
         // Height is not in the live geometric term (the save model is
         // lateral-only), but a ball lifted toward the angle is measurably
         // harder and ignoring it would let a keeper's expectation read
@@ -1336,10 +1423,17 @@ impl Ball {
         // Skill handles the rest; this curve is purely geometry.
         let reach_ratio = (lateral_error / reach).clamp(0.0, 1.0);
 
-        // Shot-speed penalty — elite shots beat keepers more often.
+        // Shot-speed penalty — elite shots beat keepers more often. Shared
+        // with the post-shot expectation so the two cannot drift apart;
+        // see `SaveModel::speed_penalty` for why the old inline form was
+        // returning ~0.01 for every shot in the game.
         let ball_speed = self.velocity.norm();
-        let speed_excess = (ball_speed - 3.0).max(0.0);
-        let speed_penalty = (speed_excess * 0.08 * (1.0 - scaled_reflexes * 0.5)).min(0.40);
+        #[cfg(feature = "match-logs")]
+        {
+            crate::mid_run_diag::KeeperActionDiag::note(9);
+            crate::mid_run_diag::KeeperActionDiag::add(10, (ball_speed * 100.0).max(0.0) as u64);
+        }
+        let speed_penalty = SaveModel::speed_penalty(ball_speed, scaled_reflexes);
 
         // Keeper quality. The composite blend (`gk_shot_stopping`) feeds
         // reflexes, handling, agility, positioning, concentration,
@@ -1409,7 +1503,13 @@ impl Ball {
         let positioning = (effective_skill(keeper, keeper.skills.mental.positioning, mental_ctx)
             / 20.0)
             .clamp(0.0, 1.0);
-        let shot_power_norm = (ball_speed / 8.0).clamp(0.0, 1.0);
+        // Against the engine's own 3.2 u/tick shot ceiling, `/ 8.0` meant
+        // the hardest strike possible reached 0.4 of this range and the
+        // catch/parry split barely read the ball's pace at all — the very
+        // thing that decides whether a keeper holds it or pushes it away.
+        // Signed against an ordinary strike so the split still averages
+        // where it was calibrated; see `SaveModel::strike_power`.
+        let shot_power_norm = SaveModel::strike_power(ball_speed);
         let reach_stretch = reach_ratio;
         let catch_prob =
             (0.12 + scaled_handling * 0.26 + positioning * 0.10 + scaled_concentration * 0.06
@@ -1677,6 +1777,81 @@ mod tests {
             strong - weak >= 0.05,
             "a better keeper must still save more against the same striker; \
              weak {weak:.3} strong {strong:.3}"
+        );
+    }
+
+    /// The pace term must be a SPREAD, not a tax. It was rebuilt because
+    /// the old form was inert (see `SaveModel::speed_penalty`), and the
+    /// first working version promptly moved the population save rate by
+    /// nearly five points — restoring a dead axis must not also re-calibrate
+    /// the game. An ordinary strike is the zero point.
+    ///
+    /// This also pins `ORDINARY_PACE` to `ORDINARY_STRIKE`: the two are one
+    /// measurement expressed twice, and re-deriving the speed from the
+    /// census without re-deriving the pace anchor is exactly how the
+    /// population save rate walks off unnoticed.
+    #[test]
+    fn an_ordinary_strike_costs_the_keeper_nothing_on_pace() {
+        for reflexes in [0.0f32, 0.55, 1.0] {
+            let p = SaveModel::speed_penalty(SaveModel::ORDINARY_STRIKE, reflexes);
+            assert!(
+                p.abs() < 0.005,
+                "an average-paced shot must be pace-neutral at reflexes {reflexes}, got {p:.3}; \
+                 ORDINARY_PACE must equal pace_position(ORDINARY_STRIKE)"
+            );
+        }
+        assert!(
+            SaveModel::strike_power(SaveModel::ORDINARY_STRIKE).abs() < 1e-6,
+            "the state machine's power term must be centred on the same strike"
+        );
+    }
+
+    /// …and either side of it, power has to matter — in both directions.
+    ///
+    /// Monotone everywhere and STRICTLY so above `HARD_STRUCK`. Below that
+    /// the curve is deliberately flat: a ball arriving under ~15 m/s gives
+    /// the keeper time to set himself and how hard it was hit stops
+    /// mattering, so 0.0 and 0.8 u/tick are worth the same. The strict
+    /// half is what the post-shot expectation depends on — a clamped
+    /// version of this curve made a rocket and a firm shot identical, and
+    /// `expected_goal_on_target_reads_placement_power_and_height` is the
+    /// test that catches it.
+    #[test]
+    fn pace_is_monotone_and_cuts_both_ways() {
+        let mut previous = f32::MIN;
+        for speed in [0.0f32, 0.8, 1.2, 2.0, 2.63, 3.2, 5.0, 8.0, 12.0] {
+            let p = SaveModel::speed_penalty(speed, 0.55);
+            assert!(
+                p >= previous,
+                "a harder strike must never cost the keeper LESS; \
+                 {speed} u/tick gave {p:.3} against {previous:.3}"
+            );
+            if speed > SaveModel::HARD_STRUCK {
+                assert!(
+                    p > previous,
+                    "above the set-yourself speed it must be strictly increasing; \
+                     {speed} u/tick gave {p:.3} against {previous:.3}"
+                );
+            }
+            previous = p;
+        }
+        assert!(
+            SaveModel::speed_penalty(0.5, 0.55) < 0.0,
+            "a tame effort must be EASIER than an ordinary one, not merely no harder"
+        );
+    }
+
+    /// Reflexes are what a keeper answers pace with, so they have to be
+    /// the thing that shrinks it.
+    #[test]
+    fn reflexes_halve_what_pace_takes_away() {
+        let slow = SaveModel::speed_penalty(3.2, 0.0);
+        let quick = SaveModel::speed_penalty(3.2, 1.0);
+        assert!(slow > 0.0 && quick > 0.0);
+        assert!(
+            (quick / slow - 0.5).abs() < 0.01,
+            "an elite reactor must give away half what a slow one does; \
+             slow {slow:.3} quick {quick:.3}"
         );
     }
 

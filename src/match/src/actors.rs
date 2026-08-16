@@ -433,6 +433,12 @@ impl Actors {
     /// No footballer covers ground this fast. Anything quicker is a seek, a
     /// substitution or a restart, and has to be cut to rather than run.
     const TELEPORT: f32 = 25.0;
+    /// And the same for the ball, which is struck rather than run and needs a
+    /// higher bar. Measured over a real match, the hardest strike in the
+    /// recording is about 40 m/s and the next population up starts at 50 —
+    /// see `Track::TELEPORT_SPEED`, which holds the same line for the drawn
+    /// position.
+    const BALL_TELEPORT: f32 = 45.0;
     /// How close the ball has to be to count as struck by this player — within
     /// a stride of him.
     const STRIKE_REACH: f32 = 1.7;
@@ -933,8 +939,24 @@ impl Actors {
             // RAW recorded path — never off the drawn position, which is
             // displaced while a keeper has it. Blanked on a seek, where the
             // jump is the playhead moving and not the ball.
+            // Nothing across a TELEPORT is a velocity either. The engine puts
+            // the ball down for a restart, a catch or a block rather than
+            // moving it there, and reading a speed off that hands `BallSpin`
+            // a two-hundred-metre-a-second launch: it spins the ball up to its
+            // own cap, opens a `Flight` on a heading that never existed, and
+            // holds both for the next second of play. The recording is not
+            // describing a ball that travelled — see `Track::teleported`.
             ball_state.velocity = match ball_state.previous {
-                Some(previous) if !playback.seeked => (world - previous) / delta,
+                Some(previous) if !playback.seeked => {
+                    let step = (world - previous) / delta;
+                    if step.length() > Self::BALL_TELEPORT {
+                        ball_state.spin = Vec3::ZERO;
+                        ball_state.flight = None;
+                        Vec3::ZERO
+                    } else {
+                        step
+                    }
+                }
                 _ => Vec3::ZERO,
             };
             ball_state.previous = Some(world);

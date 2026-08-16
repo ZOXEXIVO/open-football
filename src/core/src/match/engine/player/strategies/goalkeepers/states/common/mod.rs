@@ -1,7 +1,10 @@
+use crate::club::player::skills::GoalkeeperSpeedContext;
+use crate::r#match::engine::ball::ball::{AerialReach, GRAVITY_PER_TICK};
 use crate::r#match::engine::player::strategies::common::{
     ActivityIntensityConfig, ConditionProcessor, GOALKEEPER_JADEDNESS_INCREMENT,
     GOALKEEPER_JADEDNESS_INTERVAL, GOALKEEPER_LOW_CONDITION_THRESHOLD,
 };
+use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{PlayerSide, StateProcessingContext};
 use nalgebra::Vector3;
 
@@ -264,14 +267,31 @@ pub struct KeeperBallClaim;
 
 impl KeeperBallClaim {
     /// How much nearer the keeper is allowed to let an opponent be while
-    /// still going for it. He has hands and a dive, so he wins a ball
-    /// he is marginally further from — but only marginally. 8u = 1 m.
+    /// still going for a ball ON THE FLOOR. He has hands and a dive, so he
+    /// wins one he is marginally further from — but only marginally.
+    /// 8u = 1 m.
     const HANDS_ADVANTAGE: f32 = 8.0;
+
+    /// …and how much that edge grows as the ball climbs. Above head height
+    /// nobody else on the pitch can put a hand on it, which is the whole
+    /// reason a keeper comes for a cross through four people — so the
+    /// advantage there is not "marginal", it is decisive. 26u = 3.25 m at
+    /// full height, on top of the ground advantage.
+    ///
+    /// Without this the test was purely horizontal, so the same 1 m
+    /// allowance decided a ball rolling at his feet and one dropping over
+    /// a crowd at 2.5 m. That is what made [`KeeperAerialClaim`] send him
+    /// for a cross he had correctly judged was his, only for the catch
+    /// gate in `GoalkeeperCatchingState` to hand it back to whichever
+    /// attacker happened to be standing a metre nearer.
+    const AERIAL_ADVANTAGE: f32 = 26.0;
 
     /// Is this keeper favourite for the loose ball in front of him?
     pub fn is_favourite(ctx: &StateProcessingContext) -> bool {
         let ball = ctx.tick_context.positions.ball.position;
-        let mine = (ball - ctx.player.position).magnitude() - Self::HANDS_ADVANTAGE;
+        let aerial = (ball.z / AerialReach::STANDING).clamp(0.0, 1.0);
+        let edge = Self::HANDS_ADVANTAGE + Self::AERIAL_ADVANTAGE * aerial;
+        let mine = (ball - ctx.player.position).magnitude() - edge;
         !ctx.players()
             .opponents()
             .all()
@@ -279,8 +299,299 @@ impl KeeperBallClaim {
     }
 }
 
+/// A high ball the keeper has decided to come and take.
+#[derive(Debug, Clone, Copy)]
+pub struct AerialClaim {
+    /// Where he has to be to meet it.
+    pub meeting_point: Vector3<f32>,
+    /// Height of the ball there, in metres.
+    pub height: f32,
+    /// Ticks until it gets there.
+    pub ticks: f32,
+    /// 0..1 — how much traffic he has to come through.
+    pub traffic: f32,
+    /// True when he can take it with both feet on the floor; false means
+    /// the claim needs a leap.
+    pub standing: bool,
+}
+
+impl AerialClaim {
+    /// A keeper takes off to meet the ball, he does not jump and wait for
+    /// it. His hang time for the apexes `PlayerMatchState::leap_apex` asks
+    /// for is ~55-75 ticks, so leaving the ground with the ball ~30 ticks
+    /// away puts the top of the leap and the ball in the same place.
+    pub const TAKEOFF_TICKS: f32 = 30.0;
+
+    /// Close enough to play it from where he is standing (1.5 m).
+    pub const CONTACT_RANGE: f32 = 12.0;
+
+    /// Is he at the meeting point with the ball arriving now?
+    pub fn at_contact(&self, keeper: Vector3<f32>) -> bool {
+        self.ticks <= Self::TAKEOFF_TICKS
+            && (self.meeting_point - keeper).magnitude() <= Self::CONTACT_RANGE
+    }
+}
+
+/// Whether a ball in the air over the keeper's own box is HIS.
+///
+/// # Why this exists
+///
+/// `GoalkeeperState::Jumping` had exactly one inbound transition in the
+/// whole engine — from `Punching`, on the branch that fires when the ball
+/// is already out of punching range. So a keeper never once left the
+/// ground to attack a cross, a corner or a chipped through-ball, and
+/// `aerial_reach`, `command_of_area`, `punching`, `jumping` and `bravery`
+/// were decorative: the only thing that ever read them was the post-hoc
+/// flap contest in `gk_claim.rs`, which runs *after* the ball has already
+/// arrived at a keeper who happened to be standing there.
+///
+/// From the stands that is most of what "he isn't in the game" means. A
+/// real keeper's most visible act of authority is coming through a crowd
+/// to take a ball off somebody's head, and this engine had no mechanism
+/// for it at all — deliveries into the six-yard box were contested by the
+/// outfield players alone while the keeper watched from his line.
+///
+/// # The model
+///
+/// Project the flight; find the first moment the ball is inside his own
+/// penalty area, within the envelope his arms and his leap can reach, and
+/// he can be there. Then ask whether he is FAVOURITE for it the same way
+/// [`KeeperBallClaim`] does for a ground ball — a keeper who comes for
+/// everything gets lobbed and beaten to it, which is why
+/// `command_of_area` sets how far he comes and `bravery` how much traffic
+/// he will come through, rather than either of them simply making him
+/// better.
+pub struct KeeperAerialClaim;
+
+impl KeeperAerialClaim {
+    /// Below this the ball is not in the air in any meaningful sense and
+    /// the ground-ball claim owns it.
+    const MIN_HEIGHT: f32 = 1.35;
+    /// How much higher than an outfielder a keeper plays the ball — he
+    /// has his hands above his head and is allowed to use them.
+    const ARMS: f32 = 0.45;
+    /// How far he comes for one at all (6 m), before `command_of_area`.
+    const RANGE_BASE: f32 = 48.0;
+    /// …and how much of the box `command_of_area` adds (up to ~20 m).
+    const RANGE_COMMAND: f32 = 112.0;
+    /// How far ahead the flight is projected (1.5 s) and at what
+    /// resolution. Coarse on purpose: this runs every tick for both
+    /// keepers, and the answer only has to be good enough to start
+    /// running — he re-reads it on the way.
+    const LOOKAHEAD_TICKS: f32 = 150.0;
+    const STEP_TICKS: f32 = 10.0;
+    /// Radius around the meeting point that counts as traffic (3.5 m).
+    const TRAFFIC_RADIUS: f32 = 28.0;
+
+    /// The highest ball this keeper can take standing / at full stretch.
+    pub fn standing_ceiling() -> f32 {
+        AerialReach::STANDING + Self::ARMS
+    }
+
+    pub fn leap_ceiling(jumping: f32) -> f32 {
+        AerialReach::ceiling(jumping) + Self::ARMS
+    }
+
+    /// Book a claim the keeper has just decided to go for. Called only at
+    /// the two states a claim can START from, so a claim he spends a
+    /// second running to counts once rather than once per tick.
+    #[allow(unused_variables)]
+    pub fn note_start(ctx: &StateProcessingContext, claim: &AerialClaim) {
+        #[cfg(feature = "match-logs")]
+        {
+            crate::mid_run_diag::KeeperActionDiag::note(3);
+            let range = (claim.meeting_point - ctx.player.position).magnitude();
+            crate::mid_run_diag::KeeperActionDiag::add(8, (range * 100.0).max(0.0) as u64);
+        }
+    }
+
+    /// Read the flight and decide. `None` means it is not his ball —
+    /// either it is not an aerial claim at all, or somebody else is
+    /// better placed for it.
+    pub fn assess(ctx: &StateProcessingContext) -> Option<AerialClaim> {
+        // ── Cheap rejects, in the order that kills the most ticks ─────
+        let ball = &ctx.tick_context.positions.ball;
+        // Airborne now, or on its way up. A ball rolling along the floor
+        // is `KeeperBallClaim`'s.
+        if ball.position.z < Self::MIN_HEIGHT && ball.velocity.z <= 0.0 {
+            return None;
+        }
+        if ctx.ball().is_owned() || ctx.ball().blocked_from_recollecting() {
+            return None;
+        }
+        if !ctx.ball().on_own_side() {
+            return None;
+        }
+
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+        let keeper = ctx.player.position;
+        // How far he is willing to come. A commanding keeper defends the
+        // whole six-yard box and most of the penalty area; a line-keeper
+        // comes for what lands on him.
+        let range = Self::RANGE_BASE + prof.aerial_command * Self::RANGE_COMMAND;
+        // Nothing beyond that plus the distance the ball can still travel
+        // is worth projecting.
+        if (ball.position - keeper).magnitude() > range + Self::LOOKAHEAD_TICKS * 2.0 {
+            return None;
+        }
+
+        let penalty_area = ctx
+            .context
+            .penalty_area(ctx.player.side == Some(PlayerSide::Left));
+        let leap_ceiling = Self::leap_ceiling(ctx.player.skills.physical.jumping);
+        let standing_ceiling = Self::standing_ceiling();
+        // His travel speed for the race. `Explosive` is the band the
+        // engine gives him in `Jumping` / `ComingOut`, so the race he
+        // thinks he can win is the one he actually runs.
+        let speed = ctx
+            .player
+            .skills
+            .goalkeeper_max_speed(
+                ctx.player.player_attributes.condition,
+                GoalkeeperSpeedContext::Explosive,
+            )
+            .max(0.1);
+
+        // ── Project the flight ────────────────────────────────────────
+        let mut t = Self::STEP_TICKS;
+        while t <= Self::LOOKAHEAD_TICKS {
+            let at = t;
+            t += Self::STEP_TICKS;
+            let z = ball.position.z + ball.velocity.z * at - 0.5 * GRAVITY_PER_TICK * at * at;
+            if z <= 0.0 {
+                break; // it has landed; anything after this is a bounce
+            }
+            let point = Vector3::new(
+                ball.position.x + ball.velocity.x * at,
+                ball.position.y + ball.velocity.y * at,
+                0.0,
+            );
+
+            if z < Self::MIN_HEIGHT || z > leap_ceiling {
+                continue;
+            }
+            // Hands are only legal in his own area, and a keeper who
+            // leaves it to punch a cross is not commanding his box, he is
+            // lost. The `Clearing` path owns everything outside.
+            if !(penalty_area.min.x..=penalty_area.max.x).contains(&point.x)
+                || !(penalty_area.min.y..=penalty_area.max.y).contains(&point.y)
+            {
+                continue;
+            }
+            let travel = (point - keeper).magnitude();
+            if travel > range {
+                continue;
+            }
+            // Can he be there? `at` is measured from now, and he is
+            // already moving, so this is deliberately a plain foot-race
+            // rather than a full arrival model. He wants to be set half a
+            // take-off before the ball arrives.
+            let arrive = travel / speed;
+            if arrive > at - AerialClaim::TAKEOFF_TICKS * 0.5 {
+                continue;
+            }
+
+            // ── Is it his? ────────────────────────────────────────────
+            let mut traffic = 0.0f32;
+            let mut opponent_beats_him = false;
+            for opponent in ctx.players().opponents().nearby_at(point, 64.0) {
+                let d = (point - opponent.position).magnitude();
+                if d <= Self::TRAFFIC_RADIUS {
+                    traffic += 1.0;
+                }
+                // Hands and a leap win him a ball he is marginally
+                // further from — the same allowance `KeeperBallClaim`
+                // makes, widened by how far up the ball is (nobody else
+                // can put a hand on it).
+                let aerial_edge = 1.15 + prof.aerial_command * 0.35;
+                if d * aerial_edge < travel {
+                    opponent_beats_him = true;
+                    break;
+                }
+            }
+            if opponent_beats_him {
+                return None;
+            }
+            let traffic = 1.0 - (-traffic / 1.5).exp();
+            // Coming through a crowd is a matter of nerve, and a keeper
+            // who has none stays on his line and lets his defenders head
+            // it. `eccentricity` is appetite, not quality, so it only
+            // moves how speculative a claim he will take on.
+            let nerve = (ctx.player.skills.mental.bravery / 20.0).clamp(0.0, 1.0) * 0.7
+                + prof.eccentricity * 0.3;
+            if traffic > 0.25 + nerve * 0.70 {
+                return None;
+            }
+
+            return Some(AerialClaim {
+                meeting_point: point,
+                height: z,
+                ticks: at,
+                traffic,
+                standing: z <= standing_ceiling,
+            });
+        }
+
+        None
+    }
+}
+
 /// Goalkeeper condition processor (type alias for clarity)
 pub type GoalkeeperCondition = ConditionProcessor<GoalkeeperConfig>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A keeper plays the ball higher than anyone else on the pitch,
+    /// standing or jumping — that is what the gloves are for. If these
+    /// ever invert, `KeeperAerialClaim` sends him for balls he cannot
+    /// reach and `GoalkeeperJumpingState` refuses ones he can.
+    #[test]
+    fn a_keeper_reaches_higher_than_an_outfielder() {
+        assert!(KeeperAerialClaim::standing_ceiling() > AerialReach::STANDING);
+        for jumping in [1.0f32, 10.0, 20.0] {
+            let leap = KeeperAerialClaim::leap_ceiling(jumping);
+            assert!(
+                leap > KeeperAerialClaim::standing_ceiling(),
+                "leaping must beat standing at jumping {jumping}: {leap:.2}"
+            );
+            assert!(
+                leap > AerialReach::ceiling(jumping),
+                "a keeper's hands must beat an outfielder's head at jumping {jumping}"
+            );
+        }
+        assert!(
+            KeeperAerialClaim::leap_ceiling(20.0) > KeeperAerialClaim::leap_ceiling(1.0),
+            "a better leaper must reach higher"
+        );
+    }
+
+    /// `Jumping` fires `PlayerMatchState::leap_apex` on ENTRY, so entering
+    /// it early means landing before the ball arrives. The take-off window
+    /// has to be inside the leap's own hang time, and the contact test has
+    /// to require he is actually at the meeting point.
+    #[test]
+    fn he_only_leaves_the_ground_when_the_ball_is_arriving() {
+        let here = Vector3::new(100.0, 100.0, 0.0);
+        let claim = |ticks: f32, point: Vector3<f32>| AerialClaim {
+            meeting_point: point,
+            height: 2.5,
+            ticks,
+            traffic: 0.0,
+            standing: false,
+        };
+        assert!(claim(10.0, here).at_contact(here), "arriving, and he is there");
+        assert!(
+            !claim(90.0, here).at_contact(here),
+            "still a second away — he must run to it, not jump early"
+        );
+        assert!(
+            !claim(10.0, Vector3::new(140.0, 100.0, 0.0)).at_contact(here),
+            "arriving, but 5 m away — jumping on the spot achieves nothing"
+        );
+    }
+}
 
 // Re-export for convenience
 pub use crate::r#match::engine::player::strategies::common::ActivityIntensity;

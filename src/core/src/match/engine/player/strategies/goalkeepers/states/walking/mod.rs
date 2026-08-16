@@ -24,11 +24,17 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
             }
         }
 
-        // Direct catch for very close slow balls
+        // Direct catch for very close SLOW balls.
+        //
+        // ⚠ Both speed bars in this state were above the engine's own
+        // `MAX_SHOT_VELOCITY` (3.2 u/tick), so neither excluded anything:
+        // "slow ball" meant every ball, and a keeper mid-stroll reached
+        // out and collected shots. 2.0 u/tick (25 m/s) is a driven ball —
+        // past that he is making a save, not picking it up.
         if ctx.ball().distance() < 5.0
             && !ctx.ball().is_owned()
             && ctx.ball().on_own_side()
-            && ctx.tick_context.positions.ball.velocity.norm() < 8.0
+            && ctx.tick_context.positions.ball.velocity.norm() < 2.0
         {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Catching,
@@ -52,7 +58,7 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
         // Loose ball nearby — go claim it directly
         if !ctx.ball().is_owned() && ctx.ball().distance() < 30.0 && ctx.ball().on_own_side() {
             let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
-            if ball_speed < 5.0 {
+            if ball_speed < 2.0 {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::Catching,
                 ));
@@ -176,9 +182,12 @@ impl GoalkeeperWalkingState {
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let ball_speed = ball_velocity.norm();
 
-        // Use anticipation to predict threats
+        // Use anticipation to predict threats. `> 10.0` u/tick is three
+        // times the engine's shot cap, so this term never once fired and
+        // a ball travelling at the keeper contributed nothing to his read
+        // of the danger.
         let anticipation_factor = ctx.player.skills.mental.anticipation / 20.0;
-        if ball_speed > 10.0 && ctx.ball().is_towards_player_with_angle(0.6) {
+        if ball_speed > 1.5 && ctx.ball().is_towards_player_with_angle(0.6) {
             threat += 0.4 * anticipation_factor;
         }
 
@@ -265,27 +274,11 @@ impl GoalkeeperWalkingState {
         )
     }
 
-    /// Limit position to penalty area with some flexibility based on skills
-    fn limit_to_penalty_area(
-        &self,
-        position: Vector3<f32>,
-        ctx: &StateProcessingContext,
-    ) -> Vector3<f32> {
-        let penalty_area = ctx
-            .context
-            .penalty_area(ctx.player.side == Some(PlayerSide::Left));
-
-        // Allow slight extension for sweeper-keepers with high command of area
-        let command_of_area = ctx.player.skills.goalkeeping.command_of_area / 20.0;
-        let extension_factor = 1.0 + (command_of_area * 0.1); // Up to 10% extension for excellent keepers
-
-        let extended_min_x = penalty_area.min.x - (2.0 * extension_factor);
-        let extended_max_x = penalty_area.max.x + (2.0 * extension_factor);
-
-        Vector3::new(
-            position.x.clamp(extended_min_x, extended_max_x),
-            position.y.clamp(penalty_area.min.y, penalty_area.max.y),
-            0.0,
-        )
-    }
+    // NB the old `limit_to_penalty_area` helper is gone. It clamped the
+    // keeper into his own box (plus a token 10% for a commanding one),
+    // which is the constraint `KeeperRestPosition` exists to remove: a
+    // keeper cannot come and meet a ball played in behind if he is not
+    // allowed out of his area, and the Laws only stop him HANDLING it
+    // there. `GoalkeeperStandingState::clamp_sweep_range` is the bound
+    // that replaced it, and this copy had been dead since.
 }

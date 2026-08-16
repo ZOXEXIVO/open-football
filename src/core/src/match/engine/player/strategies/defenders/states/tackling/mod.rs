@@ -90,7 +90,16 @@ impl StateProcessingHandler for DefenderTacklingState {
             // Entry condition only — see the midfielder/forward variants.
             // Re-checking a flickering designation every tick could only
             // abandon a challenge already under way.
-            if ctx.in_state_time == 0 && !ctx.team().is_best_player_to_chase_ball() {
+            // …and the plan's own nomination counts as passing it, or the
+            // chase election's `position_factor` (Defender 0.9 against
+            // Forward 1.2) hands the challenge to whichever forward
+            // happens to be in the area. Measured, that inverted the
+            // ladder completely: 0.47 tackles per defender per match
+            // against 3.01 per forward. See `TackleEngagement`.
+            if ctx.in_state_time == 0
+                && !ctx.team().is_best_player_to_chase_ball()
+                && !TackleEngagement::is_nominated_presser(ctx)
+            {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Pressing,
                 ));

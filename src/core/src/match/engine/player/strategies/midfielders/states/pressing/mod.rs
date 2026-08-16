@@ -74,28 +74,47 @@ impl StateProcessingHandler for MidfielderPressingState {
             ));
         }
 
-        // Early exit if a teammate is significantly closer to avoid circular running
+        // Hand the press over when somebody else is genuinely taking it.
+        //
+        // ⚠ This used to break off whenever ANY team-mate was 10 units —
+        // **1.25 metres** — closer to the ball. In a defending block that
+        // is true of everybody except the single closest man, on almost
+        // every tick, so the state emptied itself: one player chased and
+        // the other nine dropped straight back into `Running`. It is the
+        // mechanical half of the report "no opposing player is pressing,
+        // or only one player is pressing".
+        //
+        // Two things replace it. The plan already nominates ONE engager
+        // (`DefensiveDuty::Press`) and the whole defensive model treats
+        // that as authoritative, so a nominated presser does not defer to
+        // anybody. Everyone else hands over only when a team-mate is
+        // clearly on it — `HANDOVER_MARGIN` is a hand-over distance, not
+        // a tie-break — and what he does instead is his own duty, which
+        // is now a MARK on one of the carrier's outlets rather than
+        // nothing at all (see `teamplay::defence::BALL_THREAT_RADIUS`).
+        const HANDOVER_MARGIN: f32 = 60.0;
         let ball_distance = ctx.ball().distance();
         let ball_position = ctx.tick_context.positions.ball.position;
 
-        if let Some(closest_teammate) = ctx
-            .players()
-            .teammates()
-            .all()
-            .filter(|t| t.id != ctx.player.id)
-            .min_by(|a, b| {
-                let dist_a = (a.position - ball_position).magnitude();
-                let dist_b = (b.position - ball_position).magnitude();
-                dist_a.total_cmp(&dist_b)
-            })
-        {
-            let teammate_distance = (closest_teammate.position - ball_position).magnitude();
+        if !TackleEngagement::is_nominated_presser(ctx) {
+            if let Some(closest_teammate) = ctx
+                .players()
+                .teammates()
+                .all()
+                .filter(|t| t.id != ctx.player.id)
+                .min_by(|a, b| {
+                    let dist_a = (a.position - ball_position).magnitude();
+                    let dist_b = (b.position - ball_position).magnitude();
+                    dist_a.total_cmp(&dist_b)
+                })
+            {
+                let teammate_distance = (closest_teammate.position - ball_position).magnitude();
 
-            // If teammate is closer by 10+ units, give up pressing
-            if teammate_distance < ball_distance - 10.0 {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Running,
-                ));
+                if teammate_distance < ball_distance - HANDOVER_MARGIN {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Running,
+                    ));
+                }
             }
         }
 

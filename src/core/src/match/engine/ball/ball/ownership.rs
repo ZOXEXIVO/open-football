@@ -424,7 +424,24 @@ impl Ball {
             }
         };
 
-        self.position = receiver_position;
+        // A failed touch happens where the BALL is, not where the receiver is.
+        //
+        // Same rule as `try_block_shot`, for the same reason. The claim that
+        // brings us here fires at `CONTROL_DISTANCE`, and the ball travels
+        // further inside the tick, so an unconditional move put it down up to
+        // two metres from where it had been — with no kick, no bounce and
+        // nothing touching it, which is the "ball suddenly somewhere else"
+        // report. Measured over a real match, one arrival in twenty was from
+        // beyond two metres.
+        //
+        // Beyond his reach the contact is a stretched leg that got a toe on
+        // it: the ball deflects from its own position and he does not get to
+        // drag it to himself first.
+        let reach =
+            (receiver_position.x - self.position.x).hypot(receiver_position.y - self.position.y);
+        if reach <= super::CONTROL_DISTANCE {
+            self.position = receiver_position;
+        }
         self.position.z = 0.0;
         self.velocity = out_dir * out_speed;
         self.velocity.z = 0.0;

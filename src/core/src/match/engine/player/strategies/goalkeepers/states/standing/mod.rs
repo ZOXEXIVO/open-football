@@ -1,5 +1,5 @@
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperRestPosition,
+    ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperBallClaim, KeeperRestPosition,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
@@ -53,12 +53,18 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         let own_dead_delivery = ctx.ball().blocked_from_recollecting();
 
         let ball_distance = ctx.ball().distance();
+        // The speed bar is what separates a ball he can gather from one
+        // he has to save. It was 10.0 u/tick — above the engine's own
+        // `MAX_SHOT_VELOCITY` of 3.2, so it excluded nothing and the
+        // keeper "picked up" balls travelling faster than any shot in the
+        // game. 2.0 u/tick (25 m/s) is a driven ball; past that he is
+        // making a save, not collecting.
         if ball_distance < 10.0
             && !ctx.ball().is_owned()
             && !own_dead_delivery
             && KeeperBallClaim::is_favourite(ctx)
             && ctx.ball().on_own_side()
-            && ctx.tick_context.positions.ball.velocity.norm() < 10.0
+            && ctx.tick_context.positions.ball.velocity.norm() < 2.0
         {
             let grounded = ctx.tick_context.positions.ball.position.z < GROUND_BALL_HEIGHT;
             // Hands are only legal inside our own penalty area.
@@ -94,6 +100,25 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         }
 
         let ball_on_own_side = ctx.ball().on_own_side();
+
+        // A ball in the air over my box is MINE. This is the single most
+        // visible thing a goalkeeper does and the engine had no mechanism
+        // for it — see [`KeeperAerialClaim`]. He goes and gets it: takes
+        // off if it is arriving now, runs to the meeting point if not.
+        if let Some(claim) = KeeperAerialClaim::assess(ctx) {
+            KeeperAerialClaim::note_start(ctx, &claim);
+            return Some(StateChangeResult::with_goalkeeper_state(
+                if claim.at_contact(ctx.player.position) {
+                    if claim.standing {
+                        GoalkeeperState::Catching
+                    } else {
+                        GoalkeeperState::Jumping
+                    }
+                } else {
+                    GoalkeeperState::ComingOut
+                },
+            ));
+        }
 
         // Skill-based threat assessment
         let anticipation = ctx.player.skills.mental.anticipation / 20.0;

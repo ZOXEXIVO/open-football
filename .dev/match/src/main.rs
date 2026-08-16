@@ -6079,6 +6079,106 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         }
     }
 
+    // ── GOALKEEPER STATE CENSUS ────────────────────────────────────────
+    // The general shape census cuts at 0.25% of ALL ticks, and every
+    // reflex state a keeper has — the dive, the leap, the punch — is two
+    // orders of magnitude below that by construction (two keepers, a
+    // handful of events each, half a second apiece). So the states the
+    // report "he never dives, he isn't in the game" is actually about are
+    // invisible in it. Print the keeper's own breakdown, uncut, with the
+    // ENTRY COUNT next to the tick share: a state can be entered often and
+    // still hold no time, and those two failures need different fixes.
+    {
+        use core::mid_run_diag::ShapeCensus;
+        let rows = ShapeCensus::snapshot();
+        // `compact_id` is role-banded: goalkeepers are 100..200.
+        let gk: Vec<_> = rows.iter().filter(|r| (100..200).contains(&r.0)).collect();
+        let gk_ticks: u64 = gk.iter().map(|r| r.1).sum();
+        if gk_ticks > 0 {
+            println!();
+            println!("--- GOALKEEPER STATE CENSUS (share of the two keepers' own ticks) ---");
+            println!(
+                "  {:<26} {:>10}  {:>7}  {:>10}  {:>7}",
+                "state", "ticks", "share", "ticks/match", "still"
+            );
+            let mut sorted = gk.clone();
+            sorted.sort_by(|a, b| b.1.cmp(&a.1));
+            for (id, ticks, _lag, _axis, still) in sorted {
+                println!(
+                    "  {:<26} {:>10} {:>6.2}%  {:>10.1}  {:>6.0}%",
+                    StateNames::of(*id),
+                    ticks,
+                    *ticks as f64 * 100.0 / gk_ticks as f64,
+                    *ticks as f64 / n_matches as f64,
+                    still * 100.0
+                );
+            }
+            // A state with no ticks at all drops out of the census
+            // entirely, which reads as "fine" when it is the loudest
+            // possible signal — `Jumping` had no inbound transition in the
+            // whole engine for months and nothing said so. Walk the state
+            // universe and name the silent ones.
+            for state in PlayerState::all() {
+                let id = state.compact_id();
+                if (100..200).contains(&id) && !gk.iter().any(|r| r.0 == id) {
+                    println!("  {:<26} {:>10}  ** NEVER ENTERED **", state.to_string(), 0);
+                }
+            }
+        }
+    }
+
+    // ── GOALKEEPER ACTION CENSUS ───────────────────────────────────────
+    // How often the keeper actually does each of the things a keeper does,
+    // counted at the moment he commits rather than at the moment a stat is
+    // credited. Real-football reference in the header of each line.
+    {
+        use core::mid_run_diag::KeeperActionDiag;
+        let a = KeeperActionDiag::snapshot();
+        if a.iter().any(|&n| n > 0) {
+            let per = |i: usize| a[i] as f64 / n_matches as f64 / 2.0;
+            println!();
+            println!("--- GOALKEEPER ACTION CENSUS (per keeper per match) ---");
+            println!(
+                "  dives {:.2} (real 2-4)   held it {:.2}   punches entered {:.2}  connected {:.2}",
+                per(0),
+                per(1),
+                per(2),
+                per(6)
+            );
+            println!(
+                "  aerial claims started {:.2} (real 3-6)   left the ground {:.2}   caught {:.2}",
+                per(3),
+                per(4),
+                per(5)
+            );
+            println!(
+                // ×20: `in_state_time` counts AI ticks, and the AI runs on
+                // every SECOND engine tick, so one is 20 ms not 10.
+                "  mean dive duration {:.0} ms   mean claim range {:.1} m",
+                if a[0] > 0 {
+                    a[7] as f64 * 20.0 / a[0] as f64
+                } else {
+                    0.0
+                },
+                if a[3] > 0 {
+                    a[8] as f64 * 0.125 / 100.0 / a[3] as f64
+                } else {
+                    0.0
+                }
+            );
+            // The anchor `SaveModel::ORDINARY_PACE` is derived from — a
+            // pace term centred anywhere else silently moves the whole
+            // population save rate.
+            if a[9] > 0 {
+                println!(
+                    "  mean speed of shots reaching the save roll {:.2} u/tick ({} shots)",
+                    a[10] as f64 / 100.0 / a[9] as f64,
+                    a[9]
+                );
+            }
+        }
+    }
+
     // ── DEFENDER SHOOTING SUPPLY ───────────────────────────────────────
     // Separates "the defender is blocked from shooting" from "he never
     // has the ball anywhere near the goal", which the shot count alone
@@ -6562,6 +6662,23 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 println!(
                     "  duty plan: live on {:.0}% of refreshes, {individual:.1} of the unit on an individual duty (press/cover/mark) when live",
                     active as f64 / refresh as f64 * 100.0
+                );
+                // WHY the rest have nothing to do. "Too few threats
+                // ranked" and "too few markers in range" need opposite
+                // fixes and the aggregate above cannot tell them apart.
+                let s = DefenceDiag::plan_shape();
+                println!(
+                    "    per refresh: unit {:.1}, threats ranked {:.1} (skipped as too deep {:.1}, \
+                     nobody in reach {:.1})  →  press {:.2}  cover {:.2}  marks {:.2}  \
+                     holding a zone {:.1}",
+                    s[0],
+                    s[1],
+                    s[2],
+                    s[3],
+                    s[4],
+                    s[5],
+                    s[6],
+                    (s[0] - s[4] - s[5] - s[6]).max(0.0)
                 );
             }
         }

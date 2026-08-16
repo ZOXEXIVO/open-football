@@ -14,8 +14,8 @@ use crate::r#match::player::strategies::common::players::ops::forward_shot_decis
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
-    ConditionContext, GamePhase, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
-    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    ConditionContext, DefensiveDuty, GamePhase, MatchPlayerLite, PassEvaluator, PlayerSide,
+    StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 use std::cmp::Ordering;
@@ -981,6 +981,52 @@ impl StateProcessingHandler for MidfielderRunningState {
                 ));
             }
 
+            // DUTY BEFORE SHAPE — the midfield half of the rule the back
+            // line already follows. A midfielder the plan gave a man goes
+            // to him; `Guarding` is the midfielder's marking state.
+            //
+            // ⚠ THIS USED TO SIT INSIDE `ball().on_own_side()`, and that
+            // is where midfield defending went to die. The plan only
+            // assigns a duty while the team is DEFENDING and only to a
+            // marker within `MARK_REACH` of his man, so the extra gate
+            // added nothing except this: while the opposition built up or
+            // carried through the middle — the whole period the report
+            // "nobody presses, they just run at goal" is about — every
+            // midfielder ignored the man he had been given.
+            //
+            // Measured: opening the plan up to mark the carrier's outlets
+            // (`teamplay::defence::BALL_THREAT_RADIUS`) took assigned
+            // marks from 2.15 to 4.40 per refresh and `Defender: Marking`
+            // from 6.3% to 8.2% of all ticks, while `Midfielder: Guarding`
+            // did not move **at all** — the back line acted on its new
+            // duties from the equivalent branch, which carries no such
+            // gate, and the midfield could not.
+            if let Some(man) = ctx.team().my_mark() {
+                if (man.position - ctx.player.position).magnitude() < MARK_BREAK_DISTANCE {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Guarding,
+                    ));
+                }
+            }
+
+            // …and the same for the man on the ball. The back line has
+            // carried this branch since the plan was built; the midfield
+            // never did, so a midfielder nominated as the ENGAGER had no
+            // way to act on it from `Running` and every press he made had
+            // to come through the single-best-chaser election instead.
+            //
+            // No `on_own_side` gate here, unlike the defenders' copy: a
+            // back four steps out to meet a carrier rather than chasing
+            // him upfield, but pressing in the opposition half is exactly
+            // what a midfield is for.
+            if matches!(ctx.team().my_duty(), DefensiveDuty::Press)
+                && ctx.ball().distance() < MARK_BREAK_DISTANCE
+            {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Pressing,
+                ));
+            }
+
             // Track dangerous runners — opponent forwards sprinting toward our goal
             if ctx.ball().on_own_side() {
                 let own_goal = ctx.ball().direction_to_own_goal();
@@ -999,22 +1045,8 @@ impl StateProcessingHandler for MidfielderRunningState {
                     alignment > 0.5
                 });
 
-                // DUTY BEFORE SHAPE — the midfield half of the rule the
-                // back line already follows. A midfielder the plan gave a
-                // man goes to him; `Guarding` is the midfielder's marking
-                // state and now prefers that assignment.
-                //
-                // Without this the plan could assign midfield duties and
-                // nothing would act on them, which is exactly how the
-                // back line's `Press` duty sat unused while carriers
-                // walked to the edge of the box.
-                if let Some(man) = ctx.team().my_mark() {
-                    if (man.position - ctx.player.position).magnitude() < MARK_BREAK_DISTANCE {
-                        return Some(StateChangeResult::with_midfielder_state(
-                            MidfielderState::Guarding,
-                        ));
-                    }
-                }
+                // (The duty branch that used to sit here has been hoisted
+                // above the `on_own_side` gate — see the note there.)
 
                 // Dangerous runner detected — close them down via Guarding.
                 // TrackingRunner was a single-entry ghost state that did the

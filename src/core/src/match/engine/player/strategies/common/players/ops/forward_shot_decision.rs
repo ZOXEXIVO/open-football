@@ -201,6 +201,9 @@ pub mod mid_run_diag {
     pub static DEF_PLAN_REFRESH: AtomicU64 = AtomicU64::new(0);
     pub static DEF_PLAN_ACTIVE: AtomicU64 = AtomicU64::new(0);
     pub static DEF_PLAN_INDIVIDUAL: AtomicU64 = AtomicU64::new(0);
+    /// `[refreshes, unit, threats, skipped-by-depth, unreachable, press,
+    /// cover, marks]` — see `DefenceDiag::note_plan_shape`.
+    pub static DEF_PLAN_SHAPE: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 
     /// Marker-evasion coverage: how often an attacker asked to evade,
     /// how often anybody was actually marking him, and how much room the
@@ -476,6 +479,48 @@ pub mod mid_run_diag {
             }
         }
 
+        /// One refresh's composition: how big the defending unit was, how
+        /// many opponents it ranked as threats, how many it had to skip
+        /// because nobody was in reach, and how many men ended up with
+        /// each kind of duty.
+        ///
+        /// The aggregate "N of the unit on an individual duty" cannot say
+        /// WHY the rest have nothing to do — too few threats ranked, or
+        /// too few markers in range — and those need opposite fixes.
+        #[allow(clippy::too_many_arguments)]
+        pub fn note_plan_shape(
+            unit: usize,
+            threats: usize,
+            skipped_depth: usize,
+            unreachable: usize,
+            press: usize,
+            cover: usize,
+            marks: usize,
+        ) {
+            DEF_PLAN_SHAPE[0].fetch_add(1, Ordering::Relaxed);
+            for (slot, v) in DEF_PLAN_SHAPE[1..].iter().zip([
+                unit,
+                threats,
+                skipped_depth,
+                unreachable,
+                press,
+                cover,
+                marks,
+            ]) {
+                slot.fetch_add(v as u64, Ordering::Relaxed);
+            }
+        }
+
+        /// Per-refresh means of everything `note_plan_shape` records.
+        pub fn plan_shape() -> [f32; 7] {
+            let n = DEF_PLAN_SHAPE[0].load(Ordering::Relaxed).max(1) as f32;
+            let mut out = [0.0f32; 7];
+            for (slot, c) in out.iter_mut().zip(DEF_PLAN_SHAPE[1..].iter()) {
+                *slot = c.load(Ordering::Relaxed) as f32 / n;
+            }
+            out
+        }
+
         /// `(refreshes, active, mean_individual_duties_when_live)`
         pub fn plan_snapshot() -> (u64, u64, f32) {
             let a = DEF_PLAN_ACTIVE.load(Ordering::Relaxed);
@@ -627,6 +672,48 @@ pub mod mid_run_diag {
         pub fn snapshot() -> [u64; 10] {
             let mut out = [0u64; 10];
             for (slot, c) in out.iter_mut().zip(OVERLAP_FUNNEL.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
+    /// What the keeper actually DOES, counted where he commits rather
+    /// than where a stat is credited.
+    ///
+    /// The save counters answer "did he stop it"; these answer "did he
+    /// play like a goalkeeper" — which is a different question and the one
+    /// the "he never dives, he isn't in the game" report is about. A save
+    /// credited to a man standing still and a save credited to a full-
+    /// stretch dive are the same row in `SAVE ACCOUNTING`.
+    ///
+    /// Slots: 0 dives entered, 1 dives that ended holding the ball,
+    /// 2 punches entered, 3 aerial claims STARTED, 4 leaps, 5 claims
+    /// caught, 6 punches that connected, 7 total dive ticks (÷0 for the
+    /// mean duration), 8 total claim range in units×100 (÷3 for the mean),
+    /// 9 shots that reached the save roll, 10 sum of their speed ×100
+    /// (÷9 for the mean arriving shot speed — the anchor
+    /// `SaveModel::speed_penalty` is centred on).
+    pub static GK_ACTIONS: [AtomicU64; 11] = [const { AtomicU64::new(0) }; 11];
+
+    pub struct KeeperActionDiag;
+
+    impl KeeperActionDiag {
+        pub fn note(slot: usize) {
+            if slot < GK_ACTIONS.len() {
+                GK_ACTIONS[slot].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn add(slot: usize, n: u64) {
+            if slot < GK_ACTIONS.len() {
+                GK_ACTIONS[slot].fetch_add(n, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 11] {
+            let mut out = [0u64; 11];
+            for (slot, c) in out.iter_mut().zip(GK_ACTIONS.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
             out

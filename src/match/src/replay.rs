@@ -1,3 +1,4 @@
+use crate::field::Field;
 use bevy::prelude::Resource;
 use serde::de::{Error as DeError, IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -214,6 +215,31 @@ const PRESENCE_TOLERANCE_MS: f64 = 1000.0;
 /// that turns a restart into the ball gliding sixty metres up the pitch.
 const INTERPOLATION_GAP_MS: f64 = 200.0;
 
+/// Fastest anything on this pitch can actually travel, in metres per second.
+///
+/// The guard above tests the wrong thing on its own. It asks how long the gap
+/// between two samples is, when what makes a jump a teleport is how far the
+/// thing went in that time — and the recorder emits a sample every 30 ms
+/// whatever the engine does, so a restart lands between two CONSECUTIVE
+/// samples and sails straight through a test keyed on 200 ms.
+///
+/// Measured over a real match, and not by counting steps — by asking whether
+/// each fast step is part of a FLIGHT or stands alone, which is what separates
+/// a struck ball from a placed one. Below 45 m/s the fast steps come in runs:
+/// 212 of them in the 38-45 band belong to a flight against 43 that do not.
+/// Above 45 that reverses completely — 5 belong to a flight, 270 stand alone,
+/// each one a goal kick, a throw-in, a corner, a catch or a block, where the
+/// engine puts the ball somewhere rather than moving it there.
+///
+/// So this is not a guess at how hard a footballer can strike a ball. It is
+/// the line the engine's own two behaviours fall either side of.
+///
+/// Players are cut by the same number with a hundredfold margin: nobody covers
+/// ground above 8 m/s, and a substitution or a set-piece placement moves one
+/// across the pitch inside a single sample — up to 3,270 m/s of implied pace,
+/// which used to be drawn as a man skating the length of the field.
+const TELEPORT_SPEED: f32 = 45.0;
+
 impl Track {
     /// Fold a chunk's samples in. Chunks normally arrive in playback order, in
     /// which case this is an append; seeking can pull them in out of order, so
@@ -288,7 +314,7 @@ impl Track {
         let a = self.samples[index];
         if let Some(b) = self.samples.get(index + 1) {
             let span = (b.t as f64) - (a.t as f64);
-            if span > 0.0 && span <= INTERPOLATION_GAP_MS {
+            if span > 0.0 && span <= INTERPOLATION_GAP_MS && !Self::teleported(a, *b, span) {
                 let f = (((time_ms - a.t as f64) / span) as f32).clamp(0.0, 1.0);
                 return Some([
                     a.x + (b.x - a.x) * f,
@@ -298,6 +324,21 @@ impl Track {
             }
         }
         Some([a.x, a.y, a.z])
+    }
+
+    /// Whether the engine PUT this thing here rather than it having travelled.
+    ///
+    /// Holding the earlier sample until the playhead passes the later one is
+    /// how a teleport gets drawn: as a cut. Sliding between them draws a goal
+    /// kick as the ball flying backwards out of the net at two hundred metres
+    /// a second, which is the bug this exists to stop — and then the viewer
+    /// reads that flight back off the path and spins the ball like a top.
+    fn teleported(from: Sample, to: Sample, span: f64) -> bool {
+        // `x`/`y` are engine grid units and `z` is already metres — the one
+        // place in the crate where the two axes carry different units.
+        let across = ((to.x - from.x).hypot(to.y - from.y)) * Field::METERS_PER_UNIT;
+        let travelled = across.hypot(to.z - from.z);
+        travelled > TELEPORT_SPEED * (span as f32 / 1000.0)
     }
 
     /// Index of the last sample at or before `time_ms`, starting from
@@ -361,5 +402,90 @@ impl ReplayTracks {
             self.events.extend(chunk.events);
             self.events.sort_by_key(|event| event.timestamp);
         }
+    }
+}
+
+#[cfg(test)]
+mod cuts {
+    use super::*;
+
+    fn track(rows: &[(u32, f32, f32, f32)]) -> Track {
+        let mut track = Track::default();
+        track.merge(
+            rows.iter()
+                .map(|&(t, x, y, z)| Sample { t, x, y, z })
+                .collect(),
+        );
+        track
+    }
+
+    /// A ball the engine PUT somewhere is cut to, not flown to.
+    ///
+    /// Measured off a real recording: a goal kick moves the ball about six
+    /// metres between two samples thirty milliseconds apart, which the old
+    /// guard — keyed on a 200 ms gap — interpolated into a two-hundred-metre-
+    /// a-second flight backwards out of the goal. That is the "ball bounces
+    /// off the goal" report.
+    #[test]
+    fn a_restart_is_cut_to_rather_than_flown_to() {
+        // Rolling out over the goal line, then placed on the six-yard line.
+        let mut ball = track(&[
+            (0, 18.5, 314.7, 0.0),
+            (30, 1.9, 317.7, 0.0),
+            (60, 49.8, 306.6, 0.0),
+        ]);
+
+        // Mid-way through the jump the ball is still where it was, not half a
+        // goal kick up the pitch.
+        let held = ball.position_at(45.0).expect("a sample");
+        assert!(
+            (held[0] - 1.9).abs() < 1e-3 && (held[1] - 317.7).abs() < 1e-3,
+            "interpolated across a teleport: {held:?}"
+        );
+        // And it is there the moment the playhead reaches it.
+        let arrived = ball.position_at(60.0).expect("a sample");
+        assert!((arrived[0] - 49.8).abs() < 1e-3);
+    }
+
+    /// The hardest strike a footballer produces is still drawn as travel.
+    ///
+    /// The two populations do not overlap — real steps stop around 40 m/s and
+    /// the placements start above 50 — but a cut that swallowed a shot would
+    /// be a worse bug than the one it fixes.
+    #[test]
+    fn a_hard_shot_is_still_interpolated() {
+        // 40 m/s: 320 units of travel per second, 9.6 over a 30 ms step.
+        let mut ball = track(&[(0, 400.0, 272.0, 0.5), (30, 409.6, 272.0, 0.5)]);
+        let middle = ball.position_at(15.0).expect("a sample");
+        assert!(
+            (middle[0] - 404.8).abs() < 0.05,
+            "a legal shot was cut instead of flown: {middle:?}"
+        );
+    }
+
+    /// Height counts too: the recorder's vertical axis is already in metres
+    /// while the other two are grid units, and a ball dropped eight metres
+    /// onto a keeper in one sample is a placement however little ground it
+    /// covered.
+    #[test]
+    fn a_vertical_teleport_is_a_teleport() {
+        let mut ball = track(&[(0, 400.0, 272.0, 8.9), (30, 400.4, 272.0, 0.0)]);
+        let middle = ball.position_at(15.0).expect("a sample");
+        assert!(
+            (middle[2] - 8.9).abs() < 1e-3,
+            "slid down the drop: {middle:?}"
+        );
+    }
+
+    /// And a player who is walked across the pitch for a set piece is cut to
+    /// as well — 3,270 m/s of implied pace in the same recording.
+    #[test]
+    fn a_set_piece_placement_does_not_skate() {
+        let mut player = track(&[(0, 700.0, 250.0, 0.0), (30, 60.0, 300.0, 0.0)]);
+        let middle = player.position_at(15.0).expect("a sample");
+        assert!(
+            (middle[0] - 700.0).abs() < 1e-3,
+            "skated the length of the pitch: {middle:?}"
+        );
     }
 }

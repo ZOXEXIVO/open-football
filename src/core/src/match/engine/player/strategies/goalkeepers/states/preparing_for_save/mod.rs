@@ -1,5 +1,5 @@
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperSetPosition,
+    ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperBallClaim, KeeperSetPosition,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -29,6 +29,26 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         if self.should_dive(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Diving,
+            ));
+        }
+
+        // A cross or a chip hanging over the box is his to take — see
+        // [`KeeperAerialClaim`]. Below the dive so a shot he can still get
+        // a hand to always wins, above everything else because a keeper
+        // set for a shot that never comes should be attacking the
+        // delivery instead of watching it drop onto a forehead.
+        if let Some(claim) = KeeperAerialClaim::assess(ctx) {
+            KeeperAerialClaim::note_start(ctx, &claim);
+            return Some(StateChangeResult::with_goalkeeper_state(
+                if claim.at_contact(ctx.player.position) {
+                    if claim.standing {
+                        GoalkeeperState::Catching
+                    } else {
+                        GoalkeeperState::Jumping
+                    }
+                } else {
+                    GoalkeeperState::ComingOut
+                },
             ));
         }
 
@@ -116,7 +136,7 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
 
         // Check if ball is moving away and we should come out
         let ball_toward_goal = self.is_ball_toward_goal(ctx);
-        if !ball_toward_goal && ball_distance < 30.0 && ball_speed < 5.0 {
+        if !ball_toward_goal && ball_distance < 30.0 && ball_speed < 2.0 {
             // Loose ball not heading to goal - come out to claim
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ComingOut,
@@ -260,7 +280,19 @@ impl GoalkeeperPreparingForSaveState {
             0.0
         };
 
-        let power_factor = ((ball_speed - 4.0) / 8.0).clamp(0.0, 1.0);
+        // ⚠ UNITS. Every speed bar in this function was written against a
+        // 5.6 u/tick shot cap and a friction model that has since been
+        // corrected; the engine now caps a shot at `MAX_SHOT_VELOCITY`
+        // 3.2 and a struck pass leaves the foot at 0.5-2.2. So the `> 8.0`
+        // and `> 6.0` branches below could never fire and `power_factor`
+        // was pinned at ZERO for every ball in the game — the punch
+        // decision could not see how hard the ball was hit at all, which
+        // is the one thing that decides whether a keeper catches it or
+        // pushes it away. Re-anchored on the live scale: `DRIVEN` is a
+        // firmly-struck delivery, and power runs 0..1 from there to the
+        // hardest strike the engine can produce.
+        const DRIVEN: f32 = 1.2;
+        let power_factor = ((ball_speed - DRIVEN) / 2.0).clamp(0.0, 1.0);
         // Build a synthetic catch_prob: aerial command + handling
         // discounted by crowd + power.
         let synthetic_catch = (prof.handling_profile * 0.55 + prof.aerial_command * 0.45
@@ -268,13 +300,13 @@ impl GoalkeeperPreparingForSaveState {
             - crowd * 0.20)
             .clamp(0.0, 1.0);
 
-        if is_high_ball && ball_speed > 8.0 {
+        if is_high_ball && ball_speed > 2.2 {
             return true;
         }
         if crowd >= 0.5 && ball_distance < 10.0 {
             return prof.should_punch(synthetic_catch, crowd, power_factor);
         }
-        if prof.handling_profile < 0.5 && ball_speed > 6.0 && is_high_ball {
+        if prof.handling_profile < 0.5 && ball_speed > 1.8 && is_high_ball {
             return true;
         }
         false

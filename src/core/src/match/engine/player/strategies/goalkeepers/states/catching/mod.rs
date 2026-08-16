@@ -1,3 +1,4 @@
+use crate::r#match::engine::ball::ball::interactions::SaveModel;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperSetPosition,
@@ -76,6 +77,11 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
 
             let mut holding_result =
                 StateChangeResult::with_goalkeeper_state(GoalkeeperState::HoldingBall);
+
+            #[cfg(feature = "match-logs")]
+            if ctx.tick_context.positions.ball.position.z > 1.35 {
+                crate::mid_run_diag::KeeperActionDiag::note(5);
+            }
 
             holding_result.events.add_player_event({
                 #[cfg(feature = "match-logs")]
@@ -230,7 +236,12 @@ impl GoalkeeperCatchingState {
             // reaction-window, and keeper-offline factors.
             let placement = (lateral_error / reach).clamp(0.0, 1.0);
             let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
-            let power = ((ball_speed - 2.0) / 6.0).clamp(0.0, 1.0);
+            // `(speed - 2.0) / 6.0` against the engine's 3.2 u/tick shot
+            // ceiling capped this at 0.2 of its range, so how hard the
+            // shot was hit barely entered the difficulty. Signed against
+            // an ordinary strike — see `SaveModel::strike_power` for why
+            // it has to be centred rather than simply widened.
+            let power = SaveModel::strike_power(ball_speed);
             let lateral_factor = placement; // already a 0..1 lateral error.
             let height_factor = (target.goal_line_z / 2.44).clamp(0.0, 1.0);
             let reaction = (1.0 - prof.shot_stopping).clamp(0.0, 1.0) * 0.4;
@@ -294,6 +305,10 @@ impl GoalkeeperCatchingState {
             return false;
         }
 
+        // NB this branch is a LOOSE ball, not a shot, so it keeps its own
+        // (gentler) power scale — `SaveModel::strike_power` is centred on
+        // a struck shot and would read every trickling ball as maximally
+        // easy.
         let ball_height = ctx.tick_context.positions.ball.position.z;
         let stretch = (distance_to_ball / max_catch_distance).clamp(0.0, 1.0);
         let power = ((ball_speed - 1.5) / 6.0).clamp(0.0, 1.0);
