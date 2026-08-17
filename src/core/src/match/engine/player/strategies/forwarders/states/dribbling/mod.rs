@@ -1,7 +1,7 @@
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
-    ShotDecision, evaluate_forward_shot_decision,
+    BallCarry, ShotDecision, evaluate_forward_shot_decision,
 };
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -90,10 +90,13 @@ impl StateProcessingHandler for ForwardDribblingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // Past the defender's shoulder, and no closer than a position he
+        // could shoot from — see `BallCarry::target`. This used to `Arrive` at
+        // the goal centre, i.e. run at the goalkeeper.
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.player().opponent_goal_position(),
-                slowing_distance: 150.0,
+                target: BallCarry::target(ctx),
+                slowing_distance: 30.0,
             }
             .calculate(ctx.player)
             .velocity,

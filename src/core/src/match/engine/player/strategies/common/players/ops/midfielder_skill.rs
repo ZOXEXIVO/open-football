@@ -480,29 +480,18 @@ impl MidfielderSkillProfile {
         self.long_pass_profile >= 0.44
     }
 
-    /// True if the midfielder should carry into space. Lowered so a
-    /// typical central midfielder (carry_selection ~0.35-0.45) actually
-    /// drives the ball forward instead of recycling it on the first
-    /// touch — the user wants MCs running with the ball more.
-    #[inline]
-    pub fn allows_carry_into_space(&self) -> bool {
-        self.carry_selection >= 0.32 && self.mid_condition_mult >= 0.70
-    }
-
-    /// True if the midfielder should attempt to take on a single defender.
-    /// Lowered so MCs penetrate toward goal (a take-on is how they get
-    /// from the edge of the final third into shooting range) rather than
-    /// stopping at the first defender and passing back.
-    #[inline]
-    pub fn allows_take_on_one(&self) -> bool {
-        self.carry_selection >= 0.40
-    }
-
-    /// True if the midfielder should attempt to take on two defenders.
-    #[inline]
-    pub fn allows_take_on_two(&self) -> bool {
-        self.carry_selection >= 0.58
-    }
+    // `allows_carry_into_space` (>= 0.32), `allows_take_on_one` (0.40)
+    // and `allows_take_on_two` (0.58) used to live here. Three booleans
+    // on one composite, and `carry_selection` is a weighted mean of
+    // eight curved skills, so it clusters: a uniform 10/20 midfielder
+    // scores 0.39 and a uniform 12/20 scores 0.50. The league-average
+    // central midfielder was therefore on the wrong side of the take-on
+    // line by a hundredth and never attempted one, while a slightly
+    // better one attempted every single take-on the geometry allowed.
+    // The decision is now continuous and situational — see
+    // `midfielders::states::common::carry::TakeOn`, which reads
+    // `carry_selection` as one input among room, traffic, territory and
+    // temperament rather than as a verdict.
 
     /// True if the midfielder should engage in counterpress chasing.
     #[inline]
@@ -595,7 +584,13 @@ mod tests {
             .player_attributes(attrs)
             .build()
             .unwrap();
-        MatchPlayer::from_player(1, &player, PlayerPositionType::MidfielderCenter, false, None)
+        MatchPlayer::from_player(
+            1,
+            &player,
+            PlayerPositionType::MidfielderCenter,
+            false,
+            None,
+        )
     }
 
     fn default_inputs() -> MidfielderSkillInputs {
@@ -639,18 +634,24 @@ mod tests {
     }
 
     #[test]
-    fn poor_skill_blocks_take_ons() {
-        let poor = build_player(5.0, 9000);
-        let prof = MidfielderSkillProfile::from_player(&poor, &default_inputs());
-        assert!(!prof.allows_take_on_one());
-        assert!(!prof.allows_take_on_two());
-    }
-
-    #[test]
-    fn elite_unlocks_take_ons() {
-        let elite = build_player(18.0, 9000);
-        let prof = MidfielderSkillProfile::from_player(&elite, &default_inputs());
-        assert!(prof.allows_take_on_one());
+    fn carry_selection_separates_the_population() {
+        // The take-on used to be three thresholds on this number; it is
+        // now a continuous input to `TakeOn::appetite`. What still has
+        // to hold is that it ORDERS players and spreads them over a
+        // usable range — a composite that lands everyone within a
+        // hundredth of each other cannot drive a decision either way.
+        let poor = MidfielderSkillProfile::from_player(&build_player(5.0, 9000), &default_inputs());
+        let mid = MidfielderSkillProfile::from_player(&build_player(11.0, 9000), &default_inputs());
+        let elite =
+            MidfielderSkillProfile::from_player(&build_player(18.0, 9000), &default_inputs());
+        assert!(poor.carry_selection < mid.carry_selection);
+        assert!(mid.carry_selection < elite.carry_selection);
+        assert!(
+            elite.carry_selection - poor.carry_selection > 0.35,
+            "poor={} elite={}",
+            poor.carry_selection,
+            elite.carry_selection
+        );
     }
 
     #[test]

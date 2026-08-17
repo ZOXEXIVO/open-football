@@ -1,6 +1,7 @@
 use crate::TacticalStyle;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
@@ -22,10 +23,18 @@ enum ForwardMovementPattern {
 use nalgebra::Vector3;
 use std::cmp::Ordering;
 
-const MAX_DISTANCE_FROM_BALL: f32 = 80.0;
-const MIN_DISTANCE_FROM_BALL: f32 = 30.0;
-const OPTIMAL_PASSING_DISTANCE_MIN: f32 = 20.0;
-const OPTIMAL_PASSING_DISTANCE_MAX: f32 = 70.0;
+/// ~35 m. Scaled with `MIN_DISTANCE_FROM_BALL` — the two are a BAND and
+/// leaving the ceiling at 80u (10 m) while lifting the floor to 120u
+/// inverted it, making every "am I a useful distance from the ball"
+/// test unsatisfiable.
+const MAX_DISTANCE_FROM_BALL: f32 = 280.0;
+/// ~15 m. Was 30u — 3.75 m.
+const MIN_DISTANCE_FROM_BALL: f32 = 120.0;
+/// ~15 m. Was 20u — 2.5 m.
+const OPTIMAL_PASSING_DISTANCE_MIN: f32 = 120.0;
+/// ~30 m — the far end of the band whose floor is
+/// `OPTIMAL_PASSING_DISTANCE_MIN`.
+const OPTIMAL_PASSING_DISTANCE_MAX: f32 = 240.0;
 #[allow(dead_code)]
 const SPACE_SCAN_RADIUS: f32 = 250.0;
 #[allow(dead_code)]
@@ -54,14 +63,34 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        // If ball is close and moving toward player
-        if ctx.ball().distance() < 100.0 && ctx.ball().is_towards_player_with_angle(0.8) {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Intercepting,
-            ));
-        }
+        // A branch routing to `Intercepting` used to sit here. Like the
+        // one in `assisting`, it is only reachable while OUR side has the
+        // ball (the check above returns `Running` otherwise), and
+        // `Intercepting` rejects that on its first line — so a forward
+        // with a pass coming to him abandoned his run. See the note in
+        // `assisting`; the receiver is the dispatcher's business.
 
         // Check if created good space
+        //
+        // ⚠ THE HOP THROUGH `Assisting` LOOKS POINTLESS AND IS NOT.
+        // `Assisting` is an on-ball state by design — its first act for a
+        // player without the ball is to hand him to `CreatingSpace` or
+        // `Running` — and a forward who has just created space does not
+        // have the ball, so this transition always bounces.
+        // `Creating Space <-> Assisting` is the third-largest loop in the
+        // engine at ~15,000 round trips per three matches.
+        //
+        // Routing straight to `Running` when off-ball (the destination
+        // `Assisting` picks for him a tick later) was measured and is
+        // WORSE: FWD goal share 60% -> 47-53%, FWD shots 1120 -> ~965,
+        // and flips/min went UP 149 -> 154. The bounce is doing work —
+        // `Assisting` re-asks `should_create_space` on the way through,
+        // so the round trip is how a forward decides to keep making the
+        // run instead of dropping into the generic off-ball repertoire.
+        //
+        // Third measured case in this engine of a two-state cycle being
+        // load-bearing; see also `defenders/states/marking` and the
+        // in-flight chase designation in `strategies/processor.rs`.
         if self.has_created_good_space(ctx) {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Assisting,
@@ -91,18 +120,68 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
 
         let goal_pos = ctx.player().opponent_goal_position();
 
-        // Forwards must always push TOWARD the opponent goal, never drop back.
-        // Target X: between the ball and the goal, biased heavily toward goal.
-        let forward_x = goal_pos.x * 0.6 + ball_pos.x * 0.4;
-        // Never behind the ball — always ahead
+        // An assigned box slot IS this forward's space. The gap scan below
+        // is a good fallback but it only de-duplicates among FORWARDS
+        // (`slot_index` counts forward teammates by id) and cannot see the
+        // midfielders arriving into the same area, so a forward's channel
+        // and an arriving midfielder's were free to be the same patch of
+        // grass. The team plan de-duplicates across the whole side.
+        if let Some(slot_target) = ctx.team().my_box_slot_target() {
+            // Creating space against a man who is marking you IS the
+            // marker evasion — blind side, seam, check-and-spin. See
+            // `MarkerEvasion`.
+            let target = MarkerEvasion::evade(ctx, slot_target);
+            let dist = (target - ctx.player.position).magnitude();
+            if dist < 6.0 {
+                return Some(Vector3::zeros());
+            }
+            return Some(
+                SteeringBehavior::Arrive {
+                    target,
+                    slowing_distance: 20.0,
+                }
+                .calculate(ctx.player)
+                .velocity
+                    * MarkerEvasion::burst(ctx),
+            );
+        }
+
+        // DEPTH comes from the team block; this state chooses the LANE.
+        //
+        // What used to be here was "forwards must always push TOWARD the
+        // opponent goal, never drop back": a target 60% of the way from
+        // the ball to the goal, floored at 40% of the pitch and never
+        // behind the ball. With the ball on the halfway line that puts a
+        // forward 21 m from the opponent's goal — inside the box —
+        // whenever his side has possession anywhere, and there is no ball
+        // position from which the rule lets him come and get it.
+        //
+        // Measured, it was the single largest contributor to the block
+        // length: forwards sat a mean **+8.9 m further forward than the
+        // team plan** while defenders sat 3.7 m deeper, and those two
+        // numbers ARE the split team. It also put a forward within 12 m
+        // of goal for 18% of the match.
+        //
+        // The forward's depth is the front of his team's block, which
+        // already accounts for the ball, the phase, the press and the
+        // line height. He gets his lane from the gap scan below — that
+        // part was doing real work and is kept.
+        let anchor = ctx.team().my_anchor();
+        // He may lead the block, but by a stride or two, not by a third
+        // of a pitch: this is the striker's licence to play on the
+        // shoulder rather than a licence to leave.
+        const LEAD: f32 = 40.0;
+        let lead_x = anchor.x + attacking_direction * LEAD;
         let (raw_min, raw_max) = if attacking_direction > 0.0 {
-            (ball_pos.x.max(field_width * 0.4), field_width - 30.0)
+            (anchor.x, (lead_x).min(field_width - 30.0))
         } else {
-            (30.0, ball_pos.x.min(field_width * 0.6))
+            ((lead_x).max(30.0), anchor.x)
         };
-        // Safety: ensure min <= max when ball is near the edge
         let min_x = raw_min.min(raw_max);
-        let target_x = forward_x.clamp(min_x, raw_max);
+        let target_x = lead_x.clamp(min_x, raw_max.max(min_x));
+        // `goal_pos` still drives the box-slot branch above; the gap scan
+        // below keys off the ball.
+        let _ = goal_pos;
 
         // Find gaps between defenders in the attacking zone — and
         // assign a DIFFERENT gap to each of our forwards so they run
@@ -151,6 +230,29 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         }
         gaps[..gaps_len].sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
 
+        // Re-order the shortlist SPATIALLY before assigning it.
+        //
+        // Ranking by width alone is not a stable assignment, whatever the
+        // slot index does. The gaps are recomputed every tick from live
+        // defender positions, so two gaps of similar width trade ranks
+        // constantly — and they can be at opposite ends of the pitch, so
+        // `gaps[gap_idx]` jumps the target the full width of the field.
+        // With the velocity saturated at the speed clamp, that inverts
+        // the forward's heading rather than nudging it: the dumps show
+        // four or five ticks of steady movement at a constant 0.290 and
+        // then the y component flipping sign outright (`dev_match trace`
+        // reversal dumps). The `Creating Space` states between them were
+        // the largest remaining block of fast reversals.
+        //
+        // Widest-first still chooses WHICH spaces are worth attacking —
+        // that shortlist is kept. Sorting the shortlist by position then
+        // makes "my slot" mean a consistent channel (left to right)
+        // instead of a volatile width rank, so a rank swap inside the
+        // shortlist moves a forward to an adjacent gap at most, and
+        // usually not at all.
+        let shortlist = gaps_len.min(4).max(1);
+        gaps[..shortlist].sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+
         // Rank THIS forward among our forwards by id so each one picks
         // a distinct gap (id-based so the assignment is stable tick
         // to tick — forwards don't swap targets and swap back).
@@ -166,7 +268,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         // there are fewer gaps than forwards. Also skew slightly
         // toward a different gap than the nearest teammate would have
         // picked (nearest forward might still be in my slot range).
-        let gap_idx = slot_index.min(gaps_len.saturating_sub(1));
+        let gap_idx = slot_index.min(shortlist.saturating_sub(1));
         let target_y = if gaps_len == 0 {
             field_height / 2.0
         } else {

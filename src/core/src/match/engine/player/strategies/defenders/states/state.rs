@@ -1,3 +1,4 @@
+use crate::r#match::defenders::states::common::DefensiveRecovery;
 use crate::r#match::defenders::states::{
     DefenderAttackingCornerState, DefenderClearingState, DefenderCoveringState,
     DefenderCrossingState, DefenderGuardingState, DefenderHeadingState, DefenderHoldingLineState,
@@ -6,7 +7,6 @@ use crate::r#match::defenders::states::{
     DefenderShootingState, DefenderStandingState, DefenderTacklingState, DefenderTakeBallState,
     DefenderTrackingBackState, DefenderWalkingState,
 };
-use crate::r#match::defenders::states::common::DefensiveRecovery;
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use nalgebra::Vector3;
 use std::fmt::Result;
@@ -117,8 +117,15 @@ impl DefenderStrategies {
         };
 
         let mut result = Self::dispatch(state, state_processor);
-        if let (Some(depth), Some(velocity)) = (depth_override, result.velocity) {
-            result.velocity = Some(Vector3::new(depth, velocity.y, velocity.z));
+        if let (Some((depth, weight)), Some(velocity)) = (depth_override, result.velocity) {
+            // Blend rather than replace. The recovery depth is an order of
+            // magnitude larger than a state's own velocity, so overwriting
+            // x outright made the rule's on/off boundary a velocity
+            // INVERSION — see `DefensiveRecovery::depth_override` for the
+            // per-tick dump that showed defenders alternating between
+            // sprinting at the ball and sprinting at their own goal.
+            let x = velocity.x * (1.0 - weight) + depth * weight;
+            result.velocity = Some(Vector3::new(x, velocity.y, velocity.z));
         }
         result
     }

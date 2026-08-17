@@ -1,6 +1,8 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, MidfielderCondition, U_PER_M,
+};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -60,7 +62,13 @@ impl MidfielderDistributingState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        let vision_range = ctx.player.skills.mental.vision * 10.0; // Adjust the factor as needed
+        // How far he can pick a man out. `vision * 10` units is 1.25 m
+        // per point of vision — a 15/20 playmaker could see 19 m, which
+        // is a five-yard ball in real money. Written in metres: from
+        // ~14 m for a player who sees nothing to ~40 m for one who sees
+        // everything.
+        let vision01 = (ctx.player.skills.mental.vision / 20.0).clamp(0.0, 1.0);
+        let vision_range = (14.0 + vision01 * 26.0) * U_PER_M;
 
         ctx.players()
             .teammates()
@@ -77,7 +85,11 @@ impl MidfielderDistributingState {
     }
 
     fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        let opponent_distance_threshold = 5.0; // Adjust the threshold as needed
+        // "Open" was no opponent within 5u — 62 cm. Every team-mate on
+        // the pitch qualified, so this state passed to whoever scored
+        // best on a space metric that was equally blind. 2.5 m is a
+        // man you can play into.
+        let opponent_distance_threshold = 2.5 * U_PER_M;
 
         // Use distance closure: from teammate's perspective, opponents are nearby
         ctx.tick_context
@@ -87,20 +99,21 @@ impl MidfielderDistributingState {
             .is_none()
     }
 
+    /// Room around the receiver, 0..1. The old form subtracted a head
+    /// count from a radius — a length minus a cardinal — and scanned
+    /// 10u (1.25 m), so it read 10.0 for practically everybody and the
+    /// `max_by` over it was picking arbitrarily.
     fn calculate_space_around_player(
         &self,
         ctx: &StateProcessingContext,
         player: &MatchPlayerLite,
     ) -> f32 {
-        let space_radius = 10.0; // Adjust the radius as needed
-
-        // Use distance closure instead of scanning all opponents
-        let num_opponents_nearby = ctx
-            .tick_context
-            .grid
-            .opponents(player.id, space_radius)
-            .count();
-
-        space_radius - num_opponents_nearby as f32
+        const SPACE_RADIUS: f32 = 6.0 * U_PER_M;
+        let mut crowding = 0.0f32;
+        for (_id, dist) in ctx.tick_context.grid.opponents(player.id, SPACE_RADIUS) {
+            let proximity = 1.0 - (dist / SPACE_RADIUS).clamp(0.0, 1.0);
+            crowding += proximity * proximity;
+        }
+        1.0 / (1.0 + crowding)
     }
 }

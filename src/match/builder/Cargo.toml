@@ -1,0 +1,19 @@
+[package]
+name = "match_viewer_build"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Host-side build helper for the WebAssembly viewer that lives one directory
+# up. Two crates need to compile and stage that viewer — `src/web` (which
+# embeds it into the server) and `.dev/match` (which serves it from the match
+# harness) — and neither should have to carry a copy of the recipe.
+#
+# Depending on the wasm-bindgen *library* rather than shelling out to the
+# `wasm-bindgen` CLI keeps both consumers to a plain `cargo build` with no tool
+# to install first, and pins the generator to the exact `wasm-bindgen` version
+# the viewer crate links against.
+
+[dependencies]
+flate2 = "1.1.9"
+wasm-bindgen-cli-support = "=0.2.127"

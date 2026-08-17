@@ -1,3 +1,4 @@
+use crate::r#match::engine::ball::ball::HandlingVerdict;
 use crate::r#match::result::VectorExtensions;
 use crate::r#match::{BallSide, PlayerSide, StateProcessingContext};
 use nalgebra::Vector3;
@@ -89,18 +90,90 @@ impl<'b> BallOperationsImpl<'b> {
         self.ctx.tick_context.ball.current_owner
     }
 
+    /// Who is CARRYING the ball — the player another can go and challenge.
+    ///
+    /// [`Self::owner_id`] with one exception: a goalkeeper with the ball in
+    /// his gloves owns it, but he is not carrying it in any sense another
+    /// player can act on. You cannot press him, tackle him, or intercept
+    /// off him; the ball is out of play until he throws or kicks it.
+    ///
+    /// Every press / tackle / close-down decision in the engine keys off
+    /// "does an opponent have the ball", and while that answered yes for a
+    /// keeper holding it, each of those states reached the same conclusion
+    /// — go and challenge him — and each one bounced straight back out
+    /// again when the state it entered found there was nothing to do. The
+    /// result was a one-tick loop (`Pressing → Running → Pressing`) that
+    /// showed on the pitch as the whole forward line shaking in place.
+    ///
+    /// Three earlier attempts fixed that inside the individual states and
+    /// every one of them cost goals, because a state is the wrong altitude
+    /// for it: eight of them route into pressing alone, and patching each
+    /// exit just moved the loop somewhere else. This is the predicate they
+    /// all consult, so correcting it here closes all of them at once —
+    /// and it is a plain statement of the football, which is why it does
+    /// not need a special case per state.
+    #[inline]
+    pub fn carrier_id(&self) -> Option<u32> {
+        if self.ctx.tick_context.ball.held_in_hands {
+            return None;
+        }
+        self.ctx.tick_context.ball.current_owner
+    }
+
+    /// True when this player just put the ball into play himself and it
+    /// has not gone anywhere yet, so he may not collect it again. Stops
+    /// the kick → lands at my feet → kick cycle; see
+    /// `Ball::blocked_recollect_player` for the bounds that keep it from
+    /// becoming a deadlock of its own.
+    #[inline]
+    pub fn blocked_from_recollecting(&self) -> bool {
+        self.ctx.tick_context.ball.recollect_blocked_player == Some(self.ctx.player.id)
+    }
+
     /// Check if the opponent goalkeeper currently holds the ball (in hands — unchallenageable)
+    ///
+    /// Now genuinely means IN HANDS. It used to return true for any ball
+    /// merely owned by the opposing keeper, which called off the press
+    /// while he had it at his feet — the one moment a side most wants to
+    /// press him.
     pub fn is_held_by_opponent_goalkeeper(&self) -> bool {
-        if let Some(owner_id) = self.ctx.tick_context.ball.current_owner {
-            // Ball must be owned by someone on the OTHER team
-            if let Some(owner) = self.ctx.context.players.by_id(owner_id) {
-                if owner.team_id == self.ctx.player.team_id {
-                    return false; // Our team has it
-                }
-                return owner.tactical_position.current_position.is_goalkeeper();
+        if !self.ctx.tick_context.ball.held_in_hands {
+            return false;
+        }
+        match self.ctx.tick_context.ball.current_owner {
+            Some(owner_id) => self
+                .ctx
+                .context
+                .players
+                .by_id(owner_id)
+                .is_some_and(|owner| owner.team_id != self.ctx.player.team_id),
+            None => false,
+        }
+    }
+
+    /// Whether THIS player — assumed to be a goalkeeper — may legally take
+    /// the ball in his hands right now, and if not, why not.
+    ///
+    /// The three prohibitions of Law 12 in one place, so the two states
+    /// that actually close a keeper's gloves on the ball (`Catching` and
+    /// `PickingUpBall`) are the only sites that need to ask. Every other
+    /// route into a catch — from `Standing`, `Walking`, `ComingOut`,
+    /// `TakeBall`, `Diving`, `Jumping`, `PreparingForSave`,
+    /// `ReturningToGoal`, eight doors in all — is covered by construction.
+    pub fn handling_verdict(&self) -> HandlingVerdict {
+        let keeper = self.ctx.player;
+        if !self.in_own_penalty_area() {
+            return HandlingVerdict::OutsideArea;
+        }
+        if self.ctx.tick_context.ball.hands_released_by == Some(keeper.id) {
+            return HandlingVerdict::SecondTouch;
+        }
+        if let Some((kicker, team)) = self.ctx.tick_context.ball.deliberate_kick_by {
+            if team == keeper.team_id && kicker != keeper.id {
+                return HandlingVerdict::BackPass;
             }
         }
-        false
+        HandlingVerdict::Legal
     }
 
     #[inline]

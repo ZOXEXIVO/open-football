@@ -1,13 +1,24 @@
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperSweepLimit,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    Ball, ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
 
-const PUNCHING_DISTANCE_THRESHOLD: f32 = 2.0; // Maximum distance to attempt punching
+/// How long the contact and the landing take.
+///
+/// UNITS: AI ticks, and the AI runs on every SECOND engine tick, so one is
+/// **20 ms** — 22 is ~0.44 s, quicker than a dive because he is punching
+/// from his feet or from a leap rather than lying on the floor with the
+/// ball. A punch used to resolve and leave inside a single tick, which is
+/// invisible and let him re-enter the state on the next one. It is a
+/// committed action (`PlayerState::is_committed_action`) so nothing else
+/// can pull him out of it either.
+const MIN_PUNCH_TICKS: u64 = 22;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperPunchingState {}
@@ -15,14 +26,54 @@ pub struct GoalkeeperPunchingState {}
 impl StateProcessingHandler for GoalkeeperPunchingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
-        // Punch reach now scales with aerial command + parry control:
-        // weak ~1.6u, elite ~3.0u against the previous flat 2.0u.
-        let punch_threshold = PUNCHING_DISTANCE_THRESHOLD
-            * (0.85 + prof.aerial_command * 0.40 + prof.parry_control * 0.25);
-        if ctx.ball().distance() > punch_threshold {
+        // How far he can put a fist on it. `effective_punch_distance` is
+        // the engine's own number for that (8-28u, i.e. 1-3.5 m) and it is
+        // what the rest of the goalkeeping model uses.
+        //
+        // The local formula this replaces was `2.0 * (0.85 + …)` — **21 to
+        // 39 CENTIMETRES**, written when units were being read as metres.
+        // A ball that close is in his chest, not at the end of a fist, so
+        // the branch below fired on essentially every punch and sent him
+        // to `Jumping` instead: a standing vertical leap, on the spot,
+        // right after he had already made contact. That is the keeper
+        // hopping in the air for no reason after a parry.
+        // ONE PUNCH PER ENTRY. The contact resolves on the tick he arrives
+        // and the rest of the state is the follow-through: he is landing
+        // and getting up, not winding up again. Without this the roll below
+        // re-ran every tick the ball stayed in reach and could strike it
+        // repeatedly, and the state's exit put him back on his feet inside
+        // 20 ms — invisible, and free to re-enter on the next tick.
+        if ctx.in_state_time > 0 {
+            if ctx.in_state_time < MIN_PUNCH_TICKS {
+                return None;
+            }
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Jumping,
+                // Off his line and out of the space he defends → jog back;
+                // otherwise he is already where he wants to be. Measured on
+                // the goal axis, like every other keeper excursion — see
+                // [`KeeperSweepLimit`].
+                if KeeperSweepLimit::is_within(ctx, prof.rushing_out_profile) {
+                    GoalkeeperState::Standing
+                } else {
+                    GoalkeeperState::ReturningToGoal
+                },
             ));
+        }
+
+        // Out of reach on arrival: he has already made his contact — this
+        // is the route the physics parry uses, and the ball is out there
+        // BECAUSE he punched it. Hold the follow-through and get up.
+        //
+        // The bar this replaces was `2.0 * (0.85 + …)` — **21 to 39
+        // CENTIMETRES**, written when units were being read as metres. A
+        // ball that close is in his chest, not at the end of a fist, so it
+        // was true of essentially every punch and sent him to `Jumping`
+        // instead: a standing vertical leap, on the spot, right after he
+        // had already made contact. That is the keeper hopping in the air
+        // for no reason after a parry. `effective_punch_distance` is the
+        // engine's own number for a fist's reach (8-28u, i.e. 1-3.5 m).
+        if ctx.ball().distance() > prof.effective_punch_distance {
+            return None;
         }
 
         // Crowd / pressure from nearby opponents — high crowd punishes
@@ -44,17 +95,28 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
         let punch_success = ctx.context.rng.unit_f32() < punch_success_prob;
 
         if punch_success {
-            // Punch is successful
+            // Contact made. He STAYS in the punch — returning his own
+            // state is a no-op transition for the processor, so the event
+            // fires and the duration branch at the top of `process` owns
+            // getting him back on his feet. Exiting to `Standing` here put
+            // him upright on the same tick his fist met the ball.
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperActionDiag::note(6);
             let mut state_change =
-                StateChangeResult::with_goalkeeper_state(GoalkeeperState::Standing);
+                StateChangeResult::with_goalkeeper_state(GoalkeeperState::Punching);
 
             // Punch AWAY from the own goal, through the ball, with real
             // loft. `direction_to_own_goal()` returns the own-goal
             // POSITION (not a direction), so the outward line is
-            // ball-minus-goal. A punch is a shorter, flatter contact
-            // than the Clearing hoof (3.8-4.8 h / 4.5-5.5 v): strong
-            // aerial keepers push it toward midfield, weak ones only
-            // shift the danger a few metres.
+            // ball-minus-goal. A punch is a shorter, flatter contact than
+            // the Clearing hoof: strong aerial keepers push it toward
+            // midfield, weak ones only shift the danger a few metres.
+            //
+            // Both components were pre-metric, calibrated against the
+            // Clearing hoof this comment used to quote — and that hoof
+            // was itself a 10 km rocket (see `GoalkeeperClearingState`).
+            // A `z` of 2.6 is 260 m/s, an apex of ~3.4 km. Solved from an
+            // apex now, like every other kick in the engine.
             let ball_pos = ctx.tick_context.positions.ball.position;
             let own_goal = ctx.ball().direction_to_own_goal();
             let fallback_x = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
@@ -68,11 +130,18 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
             let punch_dir = Vector3::new(outward_dir.x, outward_dir.y + y_jitter, 0.0)
                 .try_normalize(1e-4)
                 .unwrap_or(outward_dir);
-            let punch_power = 2.8 + prof.aerial_command * 1.2; // 2.8 - 4.0 u/tick
+            // Flatter and shorter than the kicked clearance: a punch is
+            // struck off the fist under pressure, so it goes up 6-10 m
+            // and travels 15-25 m rather than clearing the halfway line.
+            let punch_apex = 6.0 + prof.aerial_command * 4.0;
+            let punch_vz = Ball::launch_speed_for_apex(punch_apex);
+            let punch_range = 120.0 + prof.aerial_command * 80.0; // 15 - 25 m
+            let hang = Ball::hang_ticks(punch_vz).max(1.0);
+            let punch_power = (punch_range / hang).clamp(0.30, 2.2);
             let punch_velocity = Vector3::new(
                 punch_dir.x * punch_power,
                 punch_dir.y * punch_power,
-                2.6 + prof.aerial_command * 0.8, // flatter arc than a kicked clearance
+                punch_vz,
             );
 
             // Generate a punch event

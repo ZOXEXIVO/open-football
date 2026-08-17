@@ -1,10 +1,10 @@
-use crate::IntegerUtils;
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
-use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, Interception,
+};
 use crate::r#match::{
-    ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior, VectorExtensions,
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior, VectorExtensions,
 };
 use nalgebra::Vector3;
 
@@ -18,8 +18,6 @@ pub struct DefenderWalkingState {}
 
 impl StateProcessingHandler for DefenderWalkingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        let mut result = StateChangeResult::new();
-
         // Attacking corner: centre-backs push up to attack the delivery.
         if !ctx.player.has_ball(ctx)
             && ctx
@@ -99,7 +97,8 @@ impl StateProcessingHandler for DefenderWalkingState {
         }
 
         // Priority 3: Intercept ball if it's coming towards player
-        if ctx.ball().is_towards_player_with_angle(0.8)
+        if Interception::is_available(ctx)
+            && ctx.ball().is_towards_player_with_angle(0.8)
             && ctx.ball().distance() < INTERCEPTION_DISTANCE
         {
             return Some(StateChangeResult::with_defender_state(
@@ -107,23 +106,29 @@ impl StateProcessingHandler for DefenderWalkingState {
             ));
         }
 
-        // Priority 4: Return to position if far away and no immediate threats
-        if ctx.player().position_to_distance() != PlayerDistanceFromStartPosition::Small
-            && !self.has_nearby_threats(ctx)
-        {
+        // Priority 4: Recovery run when he is a long way out of the block
+        // and nothing needs him where he stands. Anchor-relative, so
+        // "out of position" tracks the block as it slides rather than
+        // measuring against the spot he kicked off from.
+        const RECOVERY_RUN: f32 = 100.0;
+        if ctx.team().distance_from_anchor() > RECOVERY_RUN && !self.has_nearby_threats(ctx) {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Returning,
             ));
         }
 
-        // Priority 5: Adjust position if needed
-        let optimal_position = self.calculate_optimal_position(ctx);
-        if ctx.player.position.distance_to(&optimal_position) > 2.0 {
-            result
-                .events
-                .add_player_event(PlayerEvent::MovePlayer(ctx.player.id, optimal_position));
-            return Some(result);
-        }
+        // Anything short of that is walked off by this state's own
+        // velocity, which steers at the same anchor.
+        //
+        // What used to be here was a `PlayerEvent::MovePlayer` — and that
+        // event **assigns `player.position` directly** (see
+        // `handle_move_player_event`). So a walking defender was TELEPORTED
+        // every tick he was more than 2u (25 cm) from
+        // `team_centroid * 0.7 + ball * 0.3`: a destination every defender
+        // computes identically, reached instantly, ignoring his own speed,
+        // his velocity, and the collision clamp. Four defenders were being
+        // snapped onto one point, continuously, whenever they were not
+        // marking or pressing.
 
         None
     }
@@ -139,7 +144,7 @@ impl StateProcessingHandler for DefenderWalkingState {
                     SteeringBehavior::FollowPath {
                         waypoints,
                         current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: 5.0, // Some randomness for natural movement
+                        crowd_offset: ctx.player().separation_offset(),
                     }
                     .calculate(ctx.player)
                     .velocity,
@@ -147,30 +152,27 @@ impl StateProcessingHandler for DefenderWalkingState {
             }
         }
 
-        // 1. If this is the first tick in the state, initialize wander behavior
-        if ctx.in_state_time % 100 == 0 {
-            return Some(
-                SteeringBehavior::Wander {
-                    target: ctx.player.start_position,
-                    radius: IntegerUtils::random(5, 15) as f32,
-                    jitter: IntegerUtils::random(1, 5) as f32,
-                    distance: IntegerUtils::random(10, 20) as f32,
-                    angle: IntegerUtils::random(0, 360) as f32,
-                }
-                .calculate(ctx.player)
-                .velocity,
-            );
+        // Walk into the team's live anchor. Two things used to happen
+        // here and neither was football: a periodic `Wander` around the
+        // kickoff dot, and a fallback that steered at
+        // `team_centroid * 0.7 + ball * 0.3` — a quantity every defender
+        // computes identically, so all four walked at the same point.
+        // The anchor is per-player and exclusive by construction.
+        let anchor = ctx.team().my_anchor();
+        let to_anchor = anchor - ctx.player.position;
+        if to_anchor.magnitude() < 5.0 {
+            return Some(Vector3::zeros());
         }
 
-        // Fallback to moving towards optimal position
-        let optimal_position = self.calculate_optimal_position(ctx);
-        let direction = (optimal_position - ctx.player.position).normalize();
-
-        let walking_speed =
-            (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.stamina) / 2.0
-                * 0.1;
-
-        Some(direction * walking_speed)
+        Some(
+            SteeringBehavior::Arrive {
+                target: anchor,
+                slowing_distance: 30.0,
+            }
+            .calculate(ctx.player)
+            .velocity
+                * 0.45,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
@@ -180,32 +182,6 @@ impl StateProcessingHandler for DefenderWalkingState {
 }
 
 impl DefenderWalkingState {
-    fn calculate_optimal_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        // This is a simplified calculation. You might want to make it more sophisticated
-        // based on team formation, tactics, and the current game situation.
-        let team_center = self.calculate_team_center(ctx);
-        let ball_position = ctx.tick_context.positions.ball.position;
-
-        // Position between team center and ball, slightly closer to team center
-        (team_center * 0.7 + ball_position * 0.3).into()
-    }
-
-    fn calculate_team_center(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let (sum, count) = ctx
-            .players()
-            .teammates()
-            .all()
-            .fold((Vector3::zeros(), 0u32), |(s, c), p| {
-                (s + p.position, c + 1)
-            });
-
-        if count == 0 {
-            Vector3::zeros()
-        } else {
-            sum / count as f32
-        }
-    }
-
     fn has_nearby_threats(&self, ctx: &StateProcessingContext) -> bool {
         let threat_distance = 20.0; // Adjust this value as needed
 

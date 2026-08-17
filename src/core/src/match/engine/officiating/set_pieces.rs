@@ -102,6 +102,38 @@ pub fn score_free_kick_taker(
         + n(pressure_attr_0_20) * 0.06
 }
 
+/// Population mean of `skill_composites::set_piece_delivery` among the
+/// players actually *selected* as corner takers.
+///
+/// Takers are chosen as their side's best on [`score_corner_taker`], so
+/// this sits well above a squad-wide average — a mid-table side's best
+/// corner taker is a specialist, not an average player. The corner
+/// aerial-contest delivery term is centred on this value so that wiring
+/// the taker's quality into the contest *redistributes* corner threat
+/// between good and bad set-piece sides rather than shifting the
+/// league-wide corner conversion rate the contest base is calibrated to.
+///
+/// Measured at 0.669-0.671 over 3 455-5 393 corners (`dev_match stats`,
+/// the SET PIECES block, which prints this number for exactly this
+/// purpose).
+/// Re-measure after any change to [`score_corner_taker`]'s weights or to
+/// `set_piece_delivery` — a stale value turns the delivery term from
+/// redistributive into a league-wide conversion shift.
+pub const CORNER_DELIVERY_REFERENCE: f32 = 0.670;
+
+/// Population mean of `skill_composites::penalty_execution` among the
+/// players actually *selected* as penalty takers by
+/// [`score_penalty_taker`]. Same role as [`CORNER_DELIVERY_REFERENCE`]:
+/// the penalty xG scale is centred on it so reading the taker's own
+/// composite redistributes conversion between good and bad takers
+/// instead of moving the league-wide penalty conversion rate (real:
+/// 70-82%).
+///
+/// Measured at 0.669, one sample per awarded penalty (`dev_match stats`,
+/// SET PIECES block). Penalties are rare enough that this needs a long
+/// run to settle — 59 samples over 250 matches.
+pub const PENALTY_EXECUTION_REFERENCE: f32 = 0.669;
+
 /// Score for picking a corner taker.
 ///
 /// `corners*0.45 + crossing*0.30 + technique*0.15 + vision*0.10`.

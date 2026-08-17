@@ -1,51 +1,7 @@
-{% extends "layout.html" %}
+{% extends "match/match_layout.html" %}
 
 {% block content %}
 <div class="fm-page fm-match-page">
-    <div class="fm-match-scoreboard">
-        <a href="/{{ lang }}/leagues/{{ league_slug }}" class="fm-sb-league">{{ league_name }}</a>
-        <div class="fm-sb-main">
-            <div class="fm-sb-team fm-sb-team-home">
-                <a href="/{{ lang }}/teams/{{ home_team_slug }}" class="fm-sb-team-name">{{ home_team_name }}</a>
-                <div class="fm-sb-goals{% if home_goal_events.len() <= 5 %} fm-sb-goals-expanded{% endif %}" id="home-goals">
-                    {% for goal in home_goal_events %}
-                    <a href="/{{ lang }}/players/{{ goal.player_slug }}" class="fm-sb-goal">{{ goal.player_name }} {{ goal.minute }}'{% if goal.is_auto_goal %} (OG){% endif %}</a>
-                    {% endfor %}
-                </div>
-                {% if home_goal_events.len() > 5 %}
-                <button class="fm-sb-expander" onclick="var g=document.getElementById('home-goals');g.classList.toggle('fm-sb-goals-expanded');this.textContent=g.classList.contains('fm-sb-goals-expanded')?'−':'···  +{{ home_goal_events.len() - 5 }}'">
-                    ···  +{{ home_goal_events.len() - 5 }}
-                </button>
-                {% endif %}
-            </div>
-            <div class="fm-sb-score">
-                <span class="fm-sb-digit">{{ home_goals }}</span>
-                <span class="fm-sb-sep"></span>
-                <span class="fm-sb-digit">{{ away_goals }}</span>
-            </div>
-            <div class="fm-sb-team fm-sb-team-away">
-                <a href="/{{ lang }}/teams/{{ away_team_slug }}" class="fm-sb-team-name">{{ away_team_name }}</a>
-                <div class="fm-sb-goals{% if away_goal_events.len() <= 5 %} fm-sb-goals-expanded{% endif %}" id="away-goals">
-                    {% for goal in away_goal_events %}
-                    <a href="/{{ lang }}/players/{{ goal.player_slug }}" class="fm-sb-goal">{{ goal.player_name }} {{ goal.minute }}'{% if goal.is_auto_goal %} (OG){% endif %}</a>
-                    {% endfor %}
-                </div>
-                {% if away_goal_events.len() > 5 %}
-                <button class="fm-sb-expander" onclick="var g=document.getElementById('away-goals');g.classList.toggle('fm-sb-goals-expanded');this.textContent=g.classList.contains('fm-sb-goals-expanded')?'−':'···  +{{ away_goal_events.len() - 5 }}'">
-                    ···  +{{ away_goal_events.len() - 5 }}
-                </button>
-                {% endif %}
-            </div>
-        </div>
-        <div class="fm-sb-ft">{{ i18n.t("full_time") }}</div>
-        {% if player_of_the_match_id > 0 %}
-        <div class="fm-sb-motm">
-            <span class="fm-motm-star">&#9733;</span>
-            <span class="fm-motm-label">{{ i18n.t("player_of_the_match") }}</span>
-            <a href="/{{ lang }}/players/{{ player_of_the_match_slug }}" class="fm-motm-name">{{ player_of_the_match_name }}</a>
-        </div>
-        {% endif %}
-    </div>
     <div class="container-fluid">
         <div class="row">
             <div class="col-xl-2 d-none d-xl-block">
@@ -81,41 +37,75 @@
                 </div>
             </div>
             <div class="col-xl-8">
-                {% if match_recordings_enabled %}
+                {% if match_recordings_enabled && match_viewer_available %}
                 <div id="match-play-area">
-                    <div class="time-scrollbar-wrapper" id="time-scrollbar-wrapper" style="display:none">
-                        <div class="time-scrollbar-container">
-                            <div class="half-labels">
-                                <span class="half-label">{{ i18n.t("first_half") }}</span>
-                                <span class="half-label">{{ i18n.t("second_half") }}</span>
-                            </div>
-                            <div class="time-scrollbar-track" id="time-scrollbar-track">
-                                <div class="halftime-delimiter" style="left:50%">
-                                    <div class="delimiter-line"></div>
-                                    <div class="delimiter-label">{{ i18n.t("ht") }}</div>
-                                </div>
-                                <div id="goal-markers"></div>
-                                <div class="time-progress" id="time-progress"></div>
-                                <div class="time-scrollbar-slider" id="time-slider">
-                                    <div class="time-display" id="time-display">0:00</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div id="match-container">
-                        <div class="loading-spinner" id="loading-spinner">
+                    {# The two camera controls the replay never says out loud — the
+                       transport bar shows the ones it has buttons for, and these
+                       have none. Each icon is the mouse itself with the part that
+                       does the work lit, so the picture names the control and the
+                       words only have to say what it does. Above the stage rather
+                       than below: it is what stands between the header and the
+                       replay, so the page needs no padding of its own. Hidden on
+                       touch, where there is neither a wheel nor a right button. #}
+                    <p class="match-hints">
+                        <span class="match-hint">
+                            <svg class="match-hint-icon" viewBox="0 0 14 20" aria-hidden="true" focusable="false">
+                                <rect class="mh-shell" x="1" y="1" width="12" height="18" rx="6"/>
+                                <path class="mh-shell" d="M1.1 8.6H12.9"/>
+                                <rect class="mh-live" x="5.9" y="2.6" width="2.2" height="4.2" rx="1.1"/>
+                            </svg>
+                            {{ i18n.t("match_hint_zoom") }}
+                        </span>
+                        <span class="match-hint">
+                            <svg class="match-hint-icon" viewBox="0 0 14 20" aria-hidden="true" focusable="false">
+                                <path class="mh-live" d="M8.6 1.22A6 6 0 0 1 13 7v1.6H8.6Z"/>
+                                <rect class="mh-shell" x="1" y="1" width="12" height="18" rx="6"/>
+                                <path class="mh-shell" d="M1.1 8.6H12.9"/>
+                                <rect class="mh-shell" x="5.9" y="2.6" width="2.2" height="4.2" rx="1.1"/>
+                            </svg>
+                            {{ i18n.t("match_hint_camera") }}
+                        </span>
+                        <span class="match-hint">
+                            <svg class="match-hint-icon match-hint-icon--keys" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                                <rect class="mh-shell" x="7.2" y="3.95" width="5.6" height="5.6" rx="1.2"/>
+                                <rect class="mh-shell" x="0.7" y="10.45" width="5.6" height="5.6" rx="1.2"/>
+                                <rect class="mh-shell" x="7.2" y="10.45" width="5.6" height="5.6" rx="1.2"/>
+                                <rect class="mh-shell" x="13.7" y="10.45" width="5.6" height="5.6" rx="1.2"/>
+                                <path class="mh-live" d="M10 5.75L11.25 7.75H8.75Z"/>
+                                <path class="mh-live" d="M10 14.25L8.75 12.25H11.25Z"/>
+                                <path class="mh-live" d="M2.5 13.25L4.5 12V14.5Z"/>
+                                <path class="mh-live" d="M17.5 13.25L15.5 12V14.5Z"/>
+                            </svg>
+                            {{ i18n.t("match_hint_fly") }}
+                        </span>
+                    </p>
+                    <div class="match-stage" id="match-stage">
+                        <div class="match-stage-placeholder">
                             <i class="fas fa-spinner fa-spin fa-2x"></i>
                             <p>{{ i18n.t("loading_match") }}</p>
                         </div>
-                        <div id="pixi-container" class="match-container"></div>
+                        <canvas id="match-canvas" class="match-canvas"></canvas>
+                        <button type="button" id="match-fullscreen" class="match-fullscreen"
+                                title="{{ i18n.t("match_fullscreen") }}"
+                                aria-label="{{ i18n.t("match_fullscreen") }}"
+                                data-enter-label="{{ i18n.t("match_fullscreen") }}"
+                                data-exit-label="{{ i18n.t("match_exit_fullscreen") }}">
+                            <i class="fas fa-expand" aria-hidden="true"></i>
+                        </button>
                     </div>
+                </div>
+                {% else if match_recordings_enabled %}
+                <div class="fm-match-recording-disabled">
+                    <i class="fa fa-cubes"></i>
+                    <p>{{ i18n.t("match_viewer_missing") }}</p>
+                    <p class="fm-match-recording-note"><code>rustup target add wasm32-unknown-unknown</code></p>
                 </div>
                 {% else %}
                 <div class="fm-match-recording-disabled">
                     <i class="fa fa-video-slash"></i>
                     <p>{{ i18n.t("match_recording_disabled") }}</p>
                     <p>{{ i18n.t("match_recording_disabled_local") }}</p>
-                    <p class="fm-match-recording-note"><code>open_football --match-recording-enabled</code></p>
+                    <p class="fm-match-recording-note"><code>open_football</code></p>
                     <a href="https://github.com/ZOXEXIVO/open-football/releases" target="_blank" rel="noopener">{{ i18n.t("match_recording_disabled_link") }}</a>
                 </div>
                 {% endif %}
@@ -220,499 +210,154 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/pixi.min.js"></script>
+{% if match_recordings_enabled && match_viewer_available %}
 <script>
-(function() {
-    const leagueSlug = "{{ league_slug }}";
-    const matchId = "{{ match_id }}";
-    const matchTimeMsTotal = {{ match_time_ms }};
-    const goalsData = {{ goals_json|safe }};
-    const playersData = {{ players_json|safe }};
-    const homeColorBackground = "{{ home_color_background }}";
-    const homeColorForeground = "{{ home_color_foreground }}";
-    const awayColorBackground = "{{ away_color_background }}";
-    const awayColorForeground = "{{ away_color_foreground }}";
-
-    const maxWidth = 1400;
-    const maxHeight = 950;
-    const aspectRatio = 16 / 10;
-
-    let app = null;
-    let background = null;
-    let gameContainer = null;
-    let currentTime = 0;
-    let isPlaying = false;
-    let lastTickTime = 0;
-    let ballData = [];
-    let playerPositions = {};
-    let playerGraphics = {};
-    let playerIds = [];
-    let ballObj = null;
-    let loadedChunks = new Set();
-    let loadingChunks = new Set();
-    let totalChunks = 0;
-    let chunkDurationMs = 300000;
-    let playerMap = {};
-    let isDragging = false;
-
-    // Debug event logging
-    let eventData = [];
-    let lastEventIdx = 0;
-
-    // Cached DOM elements (set once in init)
-    let sliderEl = null;
-    let progressEl = null;
-    let displayEl = null;
-
-    // Temporal coherence: remember last search index per entity
-    let lastBallIdx = 0;
-    let lastPlayerIdx = {};
-
-    // Frame throttle for 30fps
-    const TARGET_FPS = 30;
-    const FRAME_INTERVAL = 1000 / TARGET_FPS;
-    let lastFrameTime = 0;
-
-    const fieldWidth = 840;
-    const fieldHeight = 545;
-    // Field rectangle within the 1400x950 SVG canvas
-    const fieldOffsetX = 62;
-    const fieldOffsetY = 60;
-    const fieldPixelW = 1260;
-    const fieldPixelH = 810;
-
-    // Precomputed scale factors
-    const scaleX = fieldPixelW / fieldWidth;
-    const scaleY = fieldPixelH / fieldHeight;
-
-    function translateToField(x, y) {
-        return { x: x * scaleX + fieldOffsetX, y: y * scaleY + fieldOffsetY };
-    }
-
-    function getChunkNumber(time) {
-        return Math.floor(time / chunkDurationMs);
-    }
-
-    async function loadChunk(chunkNum) {
-        if (!Number.isFinite(chunkNum) || loadedChunks.has(chunkNum) || loadingChunks.has(chunkNum) || chunkNum < 0 || chunkNum >= totalChunks) return;
-        loadingChunks.add(chunkNum);
-        try {
-            const res = await fetch(`/api/match/${matchId}/chunk/${chunkNum}`);
-            const data = await res.json();
-            mergeData(data, chunkNum);
-            loadedChunks.add(chunkNum);
-        } finally {
-            loadingChunks.delete(chunkNum);
-        }
-    }
-
-    // Compact format: each entry is [timestamp, x, y] or [timestamp, x, y, z]
-    // Access: entry[0]=timestamp, entry[1]=x, entry[2]=y, entry[3]=z (optional)
-    function mergeSorted(existing, incoming) {
-        if (existing.length === 0) return incoming;
-        // Chunks arrive in order, so incoming timestamps are usually all after existing
-        if (incoming.length > 0 && incoming[0][0] >= existing[existing.length - 1][0]) {
-            return existing.concat(incoming);
-        }
-        // Fallback: full merge for out-of-order loads
-        const merged = new Array(existing.length + incoming.length);
-        let i = 0, j = 0, k = 0;
-        while (i < existing.length && j < incoming.length) {
-            if (existing[i][0] <= incoming[j][0]) merged[k++] = existing[i++];
-            else merged[k++] = incoming[j++];
-        }
-        while (i < existing.length) merged[k++] = existing[i++];
-        while (j < incoming.length) merged[k++] = incoming[j++];
-        return merged;
-    }
-
-    function mergeData(data, chunkNum) {
-        if (data.ball) {
-            ballData = mergeSorted(ballData, data.ball);
-        }
-        if (data.players) {
-            const entries = Object.entries(data.players);
-            for (let i = 0; i < entries.length; i++) {
-                const id = entries[i][0];
-                const positions = entries[i][1];
-                if (!playerPositions[id]) {
-                    playerPositions[id] = positions;
-                    // Create graphic for substitute entering the field
-                    if (gameContainer && !playerGraphics[id] && positions.length > 0) {
-                        const player = playerMap[Number(id)];
-                        if (player) {
-                            const pos = translateToField(positions[0][1], positions[0][2]);
-                            const gfx = createPlayerGraphic(pos.x, pos.y, player);
-                            playerGraphics[id] = gfx;
-                            playerIds.push(id);
-                            gameContainer.addChild(gfx);
-                        }
-                    }
-                } else {
-                    playerPositions[id] = mergeSorted(playerPositions[id], positions);
-                }
-            }
-        }
-        if (data.events && data.events.length > 0) {
-            eventData = mergeSorted(eventData, data.events);
-        }
-    }
-
-    function findIndexNear(arr, time, hint) {
-        const len = arr.length;
-        if (len === 0) return -1;
-        // Try hint and nearby (temporal coherence - usually advances by 1-2)
-        if (hint >= 0 && hint < len) {
-            if (arr[hint][0] <= time) {
-                // Scan forward from hint
-                let i = hint;
-                while (i + 1 < len && arr[i + 1][0] <= time) i++;
-                return i;
-            } else {
-                // Scan backward a bit
-                let i = hint - 1;
-                while (i >= 0 && arr[i][0] > time) i--;
-                return Math.max(i, 0);
-            }
-        }
-        // Fallback: binary search
-        let lo = 0, hi = len - 1;
-        while (lo < hi) {
-            const mid = (lo + hi + 1) >> 1;
-            if (arr[mid][0] <= time) lo = mid;
-            else hi = mid - 1;
-        }
-        return lo;
-    }
-
-    // Compact format: entry = [timestamp, x, y] or [timestamp, x, y, z]
-    function interpolatePosition(arr, idx, time) {
-        const a = arr[idx];
-        if (idx + 1 < arr.length) {
-            const b = arr[idx + 1];
-            const dt = b[0] - a[0];
-            if (dt > 0) {
-                const t = (time - a[0]) / dt;
-                return [
-                    a[1] + (b[1] - a[1]) * t,
-                    a[2] + (b[2] - a[2]) * t,
-                    (a[3] || 0) + ((b[3] || 0) - (a[3] || 0)) * t
-                ];
-            }
-        }
-        return [a[1], a[2], a[3] || 0];
-    }
-
-    function updatePositions(time) {
-        lastBallIdx = findIndexNear(ballData, time, lastBallIdx);
-        if (lastBallIdx >= 0 && ballObj) {
-            const pos3 = interpolatePosition(ballData, lastBallIdx, time);
-            const z = pos3[2] || 0;
-            const pos = translateToField(pos3[0], pos3[1]);
-            ballObj.position.x = pos.x;
-            ballObj.position.y = pos.y;
-            const heightScale = 1.0 + Math.min(z / 15.0, 0.4);
-            ballObj.scale.set(heightScale);
-        }
-
-        for (let i = 0; i < playerIds.length; i++) {
-            const id = playerIds[i];
-            const positions = playerPositions[id];
-            const gfx = playerGraphics[id];
-            if (!positions || !gfx) continue;
-            const hint = lastPlayerIdx[id] || 0;
-            const pi = findIndexNear(positions, time, hint);
-            lastPlayerIdx[id] = pi;
-            if (pi >= 0) {
-                // Hide player if current time is past their last position data
-                // (subbed off) or before their first (not yet on field)
-                const lastTs = positions[positions.length - 1][0];
-                const firstTs = positions[0][0];
-                if (time > lastTs + 1000 || time < firstTs - 1000) {
-                    gfx.visible = false;
-                    continue;
-                }
-                gfx.visible = true;
-                const pos3 = interpolatePosition(positions, pi, time);
-                const pos = translateToField(pos3[0], pos3[1]);
-                gfx.position.x = pos.x - 10;
-                gfx.position.y = pos.y - 10;
-            }
-        }
-    }
-
-    function formatMatchTime(ms) {
-        const totalSeconds = Math.floor(ms / 1000);
-        const minutes = Math.floor(totalSeconds / 60);
-        const seconds = totalSeconds % 60;
-        const halfDuration = matchTimeMsTotal / 2;
-        if (ms < halfDuration) {
-            return minutes + ':' + String(seconds).padStart(2, '0') + ' (1st)';
-        } else {
-            const s2 = Math.floor((ms - halfDuration) / 1000);
-            const m2 = Math.floor(s2 / 60);
-            const sec2 = s2 % 60;
-            return m2 + ':' + String(sec2).padStart(2, '0') + ' (2nd)';
-        }
-    }
-
-    function logEvents(time) {
-        while (lastEventIdx < eventData.length && eventData[lastEventIdx].timestamp <= time) {
-            const evt = eventData[lastEventIdx];
-            const timeStr = formatMatchTime(evt.timestamp);
-            if (evt.category === 'ball') {
-                console.log(`%c[${timeStr}] Ball: ${evt.description}`, 'color: #4fc3f7');
-            } else {
-                console.log(`%c[${timeStr}] Player: ${evt.description}`, 'color: #81c784');
-            }
-            lastEventIdx++;
-        }
-    }
-
-    function updateSlider() {
-        if (matchTimeMsTotal <= 0) return;
-        const pct = (currentTime / matchTimeMsTotal) * 100;
-        sliderEl.style.left = pct + '%';
-        progressEl.style.width = pct + '%';
-        displayEl.textContent = formatMatchTime(currentTime);
-    }
-
-    function tick(now) {
-        if (!isPlaying) return;
-
-        // Throttle to target FPS
-        const elapsed = now - lastFrameTime;
-        if (elapsed < FRAME_INTERVAL) return;
-        lastFrameTime = now - (elapsed % FRAME_INTERVAL);
-
-        if (lastTickTime === 0) lastTickTime = now;
-        const delta = now - lastTickTime;
-        lastTickTime = now;
-        currentTime += delta;
-
-        if (currentTime >= matchTimeMsTotal) {
-            currentTime = matchTimeMsTotal;
-            isPlaying = false;
-        }
-
-        // Preload current + next chunk
-        const chunkNeeded = getChunkNumber(currentTime);
-        if (!loadedChunks.has(chunkNeeded)) loadChunk(chunkNeeded);
-        const nextChunk = chunkNeeded + 1;
-        if (nextChunk < totalChunks && !loadedChunks.has(nextChunk)) loadChunk(nextChunk);
-
-        updatePositions(currentTime);
-        logEvents(currentTime);
-        if (!isDragging) updateSlider();
-    }
-
-    function hexToInt(hex) {
-        return parseInt(hex.replace('#', ''), 16);
-    }
-
-    const homeBg = hexToInt(homeColorBackground);
-    const homeFg = hexToInt(homeColorForeground);
-    const awayBg = hexToInt(awayColorBackground);
-    const awayFg = hexToInt(awayColorForeground);
-    const gkColor = 0xf7e300;
-
-    function createPlayerGraphic(x, y, player) {
-        const container = new PIXI.Container();
-        container.position.x = x - 10;
-        container.position.y = y - 10;
-
-        const isGK = player.position === 'GK';
-        const fillColor = isGK ? gkColor : (player.is_home ? homeBg : awayBg);
-        const textColor = isGK ? 'black' : (player.is_home ? homeColorForeground : awayColorForeground);
-        const borderColor = isGK ? 0x000000 : (player.is_home ? homeFg : awayFg);
-
-        const border = new PIXI.Graphics();
-        border.circle(6, 6, 19).fill(borderColor);
-        container.addChild(border);
-
-        const circle = new PIXI.Graphics();
-        circle.circle(6, 6, 16).fill(fillColor);
-        container.addChild(circle);
-
-        const numStyle = new PIXI.TextStyle({
-            fontFamily: 'Arial, sans-serif',
-            fontSize: 14,
-            fontWeight: 'bold',
-            fill: textColor,
-            align: 'center'
-        });
-        const numText = new PIXI.Text({text: String(player.shirt_number), style: numStyle});
-        numText.anchor.set(0.5);
-        numText.position.set(6, 6);
-        container.addChild(numText);
-
-        const nameStyle = new PIXI.TextStyle({
-            fontFamily: 'Verdana, sans-serif',
-            fontSize: 17,
-            fill: 'white',
-            wordWrap: false,
-            align: 'center'
-        });
-        const nameText = new PIXI.Text({text: player.last_name, style: nameStyle});
-        nameText.x = 10;
-        nameText.y = 40;
-        nameText.anchor.set(0.5);
-        container.addChild(nameText);
-
-        return container;
-    }
-
-    async function fetchMetadata() {
-        const metaRes = await fetch(`/api/match/${matchId}/metadata`);
-        if (!metaRes.ok) return null;
-        return await metaRes.json();
-    }
-
-    async function init() {
-        let metadata = await fetchMetadata();
-        if (!metadata) {
-            document.getElementById('loading-spinner').innerHTML = '<div class="fm-match-not-ready"><i class="fas fa-spinner fa-spin fa-2x"></i><p>{{ i18n.t("loading_match") }}</p></div>';
-            const pollInterval = setInterval(async () => {
-                metadata = await fetchMetadata();
-                if (metadata) {
-                    clearInterval(pollInterval);
-                    document.getElementById('loading-spinner').innerHTML = '<i class="fas fa-spinner fa-spin fa-2x"></i><p>{{ i18n.t("loading_match") }}</p>';
-                    await startMatch(metadata);
-                }
-            }, 3000);
+    // Two measurements the stylesheet cannot take for itself, both explained
+    // where they are used: `--match-chrome` (the stage is sized against what
+    // the header leaves of the viewport, and this header grows with the number
+    // of scorers) and `--fm-actions-w` (the left rail carries the width of the
+    // header actions so the score lands on the page's centre line). Writing
+    // only on change keeps the observer from ringing itself.
+    (function () {
+        var header = document.querySelector(".fm-header");
+        var actions = header && header.querySelector(".fm-header-actions");
+        var area = document.getElementById("match-play-area");
+        if (!header || !area) {
             return;
         }
-        await startMatch(metadata);
-    }
 
-    async function startMatch(metadata) {
-
-        totalChunks = metadata.chunk_count || 0;
-        chunkDurationMs = metadata.chunk_duration_ms || 300000;
-
-        const chunkRes = await fetch(`/api/match/${matchId}/chunk/0`);
-        const firstChunk = await chunkRes.json();
-        mergeData(firstChunk, 0);
-        loadedChunks.add(0);
-
-        app = new PIXI.Application();
-        await app.init({
-            antialias: true,
-            autoDensity: true,
-            resolution: window.devicePixelRatio,
-            width: maxWidth,
-            height: maxHeight,
-            backgroundAlpha: 0
-        });
-
-        const container = document.getElementById('pixi-container');
-        container.appendChild(app.canvas);
-
-        const bgTexture = await PIXI.Assets.load('/static/images/match/field.svg');
-        background = new PIXI.Sprite(bgTexture);
-        background.width = maxWidth;
-        background.height = maxHeight;
-        app.stage.addChild(background);
-
-        gameContainer = new PIXI.Container();
-        app.stage.addChild(gameContainer);
-
-        // Build a lookup map for players by id
-        for (let i = 0; i < playersData.length; i++) playerMap[playersData[i].id] = playersData[i];
-
-        const chunkPlayers = Object.entries(firstChunk.players || {});
-        for (let i = 0; i < chunkPlayers.length; i++) {
-            const id = chunkPlayers[i][0];
-            const positions = chunkPlayers[i][1];
-            const player = playerMap[Number(id)];
-            if (player && positions.length > 0) {
-                const pos = translateToField(positions[0][1], positions[0][2]);
-                const gfx = createPlayerGraphic(pos.x, pos.y, player);
-                playerGraphics[id] = gfx;
-                playerIds.push(id);
-                gameContainer.addChild(gfx);
+        function set(element, name, value) {
+            if (element.style.getPropertyValue(name) !== value) {
+                element.style.setProperty(name, value);
             }
         }
 
-        const ballContainer = new PIXI.Container();
-        const ballCircle = new PIXI.Graphics();
-        ballCircle.circle(0, 0, 6).fill(0xFFFFFF);
-        ballCircle.circle(0, 0, 6).stroke({width: 2, color: 0x000000});
-        ballContainer.addChild(ballCircle);
-        if (firstChunk.ball && firstChunk.ball.length > 0) {
-            const bp = translateToField(firstChunk.ball[0][1], firstChunk.ball[0][2]);
-            ballContainer.position.x = bp.x;
-            ballContainer.position.y = bp.y;
+        function apply() {
+            set(area, "--match-chrome", header.getBoundingClientRect().height + "px");
+            if (actions) {
+                set(header, "--fm-actions-w", actions.getBoundingClientRect().width + "px");
+            }
         }
-        gameContainer.addChild(ballContainer);
-        ballObj = ballContainer;
 
-        resizeApp();
-        window.addEventListener('resize', resizeApp);
-
-        document.getElementById('loading-spinner').style.display = 'none';
-        document.getElementById('time-scrollbar-wrapper').style.display = 'block';
-
-        const markersDiv = document.getElementById('goal-markers');
-        goalsData.forEach(goal => {
-            const pct = (goal.time / matchTimeMsTotal) * 100;
-            const player = playersData.find(p => p.id === goal.player_id);
-            const isHome = player ? player.is_home : true;
-            const marker = document.createElement('div');
-            marker.className = 'goal-marker ' + (isHome ? 'goal-marker-home' : 'goal-marker-away');
-            marker.style.left = pct + '%';
-            marker.innerHTML = '<div class="goal-icon">\u26BD</div>';
-            markersDiv.appendChild(marker);
-        });
-
-        document.getElementById('time-scrollbar-track').addEventListener('mousedown', async (e) => {
-            const rect = e.currentTarget.getBoundingClientRect();
-            const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-            currentTime = pct * matchTimeMsTotal;
-            lastEventIdx = 0;
-            await loadChunk(getChunkNumber(currentTime));
-            updatePositions(currentTime);
-            updateSlider();
-        });
-
-        // Cache DOM elements for slider updates
-        sliderEl = document.getElementById('time-slider');
-        progressEl = document.getElementById('time-progress');
-        displayEl = document.getElementById('time-display');
-
-        isPlaying = true;
-        lastTickTime = 0;
-        app.ticker.add(() => {
-            tick(performance.now());
-        });
-    }
-
-    function resizeApp() {
-        if (!app || !background || !gameContainer) return;
-        const container = document.getElementById('pixi-container');
-        // Reset canvas inline size so the container can shrink freely
-        app.canvas.style.width = '';
-        app.canvas.style.height = '';
-
-        let w = container.clientWidth;
-        let h = w / aspectRatio;
-
-        app.renderer.resize(w, h);
-        const scale = Math.min(w / maxWidth, h / maxHeight);
-        app.stage.scale.set(scale);
-        app.stage.position.set(
-            (w - maxWidth * scale) / 2,
-            (h - maxHeight * scale) / 2
-        );
-        background.width = maxWidth;
-        background.height = maxHeight;
-
-        // Let CSS handle responsive scaling
-        app.canvas.style.width = '100%';
-        app.canvas.style.height = 'auto';
-    }
-
-    init();
-})();
+        apply();
+        if (window.ResizeObserver) {
+            var observer = new ResizeObserver(apply);
+            observer.observe(header);
+            if (actions) {
+                observer.observe(actions);
+            }
+        } else {
+            window.addEventListener("resize", apply);
+        }
+    })();
 </script>
+<script>
+    // Fullscreen for the replay stage. Deliberately a plain script rather than
+    // part of the module below: it is the one control that has to work even
+    // when the WebAssembly viewer fails to load, and a module that throws on
+    // import takes everything in it down with it.
+    (function () {
+        var stage = document.getElementById("match-stage");
+        var button = document.getElementById("match-fullscreen");
+        if (!stage || !button) {
+            return;
+        }
+
+        var icon = button.querySelector("i");
+        // Safari still ships the prefixed names, and the unprefixed ones are
+        // simply absent there rather than aliased.
+        var request = stage.requestFullscreen || stage.webkitRequestFullscreen;
+        var exit = document.exitFullscreen || document.webkitExitFullscreen;
+
+        // iOS Safari has no element fullscreen at all — only video gets it. The
+        // fallback pins the stage over the viewport, which is the same picture
+        // minus the browser chrome, and is why the Escape handler below is not
+        // redundant with the browser's own. Native fullscreen suppresses the
+        // page's scrollbar itself; the fallback has to be told, or the bar
+        // stays and takes a strip off the width the stage is covering.
+        var FALLBACK = "match-stage-faux-fullscreen";
+        var LOCK = "match-scroll-locked";
+
+        function isNative() {
+            return (document.fullscreenElement || document.webkitFullscreenElement) === stage;
+        }
+
+        function isOpen() {
+            return isNative() || stage.classList.contains(FALLBACK);
+        }
+
+        function sync() {
+            var open = isOpen();
+            var label = button.getAttribute(open ? "data-exit-label" : "data-enter-label");
+            button.setAttribute("title", label);
+            button.setAttribute("aria-label", label);
+            icon.classList.toggle("fa-expand", !open);
+            icon.classList.toggle("fa-compress", open);
+        }
+
+        function open() {
+            if (request) {
+                // A rejected promise means the browser declined (an iframe
+                // without the permission, a policy block) — fall back rather
+                // than leave the button dead.
+                var started = request.call(stage);
+                if (started && typeof started.catch === "function") {
+                    started.catch(function () {
+                        openFallback();
+                    });
+                }
+            } else {
+                openFallback();
+            }
+            sync();
+        }
+
+        function openFallback() {
+            stage.classList.add(FALLBACK);
+            document.documentElement.classList.add(LOCK);
+            sync();
+        }
+
+        function close() {
+            if (isNative() && exit) {
+                exit.call(document);
+            }
+            stage.classList.remove(FALLBACK);
+            document.documentElement.classList.remove(LOCK);
+            sync();
+        }
+
+        button.addEventListener("click", function () {
+            if (isOpen()) {
+                close();
+            } else {
+                open();
+            }
+        });
+
+        // Escape. The browser already exits NATIVE fullscreen on it, and this
+        // handler is what covers the fallback — plus the case where the canvas
+        // has keyboard focus, since the viewer claims keys on it.
+        document.addEventListener("keydown", function (event) {
+            if ((event.key === "Escape" || event.key === "Esc") && isOpen()) {
+                close();
+            }
+        });
+
+        // Leaving fullscreen any other way — the browser's own chrome, a
+        // window-manager shortcut — has to put the icon back.
+        document.addEventListener("fullscreenchange", sync);
+        document.addEventListener("webkitfullscreenchange", sync);
+    })();
+</script>
+<script type="module">
+    // Everything the replay does lives in the WebAssembly viewer built from
+    // `src/match`; this hands it the canvas and the fixture, and steps back.
+    import init, { MatchViewer } from "/static/viewer/match_viewer.js?v={{ match_viewer_version }}";
+
+    init({ module_or_path: "/static/viewer/match_viewer_bg.wasm?v={{ match_viewer_version }}" })
+        .then(() => MatchViewer.start(JSON.stringify({{ viewer_config_json|safe }})))
+        .catch((error) => console.error("match viewer failed to start", error));
+</script>
+{% endif %}
 {% endblock %}

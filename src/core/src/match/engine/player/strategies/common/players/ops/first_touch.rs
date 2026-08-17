@@ -142,6 +142,27 @@ pub struct FirstTouchResolution {
 /// roll uses an externally-supplied random in [0.0, 1.0) so callers can
 /// drive it with whatever RNG they already use (`ctx.context.rng.unit_f32()`
 /// is the project idiom).
+///
+/// ⚠ THIS RESOLVER IS NOT WIRED INTO THE MATCH. Its only callers are unit
+/// tests (here and `intelligence_tests.rs`). The live reception path is
+/// `PlayerEventDispatcher::maybe_record_first_touch_loss`, which has its
+/// own probability model and does not consult this file.
+///
+/// Worth knowing before drawing conclusions from it: the miscontrol
+/// shortfall (1.1 per team per match against a real 8-15) was diagnosed
+/// here first — outcome bands are hard thresholds on `control_score` and
+/// `roll` is consulted only for the two premium outcomes, so control
+/// failure is fully deterministic — and that diagnosis was **wrong about
+/// the cause**, because none of it runs in a match. The real defects were
+/// in the live path and are fixed there.
+///
+/// The determinism is still a latent defect in this resolver if it is ever
+/// wired up: a first touch is pure execution, and the standing rule (see
+/// `evaluate_forward_shot_decision`) is that randomness belongs in
+/// execution. Note the bands sit 0.15 apart, so noise wide enough to make
+/// ~2.5% of touches miscontrols from a 0.62 score also makes ~30% of them
+/// heavy against a real ~5-10%; the bands would need re-shaping together
+/// rather than perturbing.
 pub fn resolve_first_touch(
     receiver: &MatchPlayer,
     pass_ctx: PassContext,

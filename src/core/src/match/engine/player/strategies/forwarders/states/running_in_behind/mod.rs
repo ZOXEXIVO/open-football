@@ -1,11 +1,14 @@
+use crate::r#match::engine::ball::ball::OffsideLine;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
+use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -14,6 +17,20 @@ use nalgebra::Vector3;
 /// range-based abort gates. Kept in step with `FINISHING_RANGE` in the
 /// finishing state and `POINT_BLANK_DISTANCE` in the running state.
 const FINISHING_HANDOFF_RANGE: f32 = 48.0;
+
+impl ForwardRunningInBehindState {
+    /// How far past the last defender a forward with no sense of timing
+    /// drifts while he waits, in game units. 20u = 2.5 m — comfortably
+    /// offside, which is the point: the real four-to-six flags a match are
+    /// mistimed runs, and a rig where nobody ever mistimes one produces
+    /// none at all.
+    const STRAY: f32 = 20.0;
+    /// …and how far BEHIND it a forward who does time it holds. 8u = 1 m.
+    /// Level with the last man is both offside on any tolerance and the
+    /// most dangerous standing position in football; a yard behind him is
+    /// where a runner actually waits.
+    const LINE_MARGIN: f32 = 8.0;
+}
 
 #[derive(Default, Clone)]
 pub struct ForwardRunningInBehindState {}
@@ -119,13 +136,91 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
         let direction = (to_goal + lateral_offset).normalize();
 
         // Sprint at maximum pace with acceleration bonus
-        let pace = ctx.player.skills.physical.pace;
         let acceleration = ctx.player.skills.physical.acceleration / 20.0;
         // Counter-attack: extra burst of speed
         let counter_bonus = if is_counter { 0.3 } else { 0.0 };
-        let sprint_speed = pace * (1.5 + acceleration * 0.5 + counter_bonus);
 
-        Some(direction * sprint_speed)
+        // Steer toward a point out ahead on the run rather than assigning
+        // the velocity outright.
+        //
+        // `direction * (pace * 1.5..)` produced an absolute velocity of up
+        // to ~40 u/tick against a ~0.63 u/tick top speed, with no
+        // reference to the velocity the forward already had. The
+        // engine-wide clamp scaled it back to a full sprint along
+        // whichever way `direction` happened to point that tick — and
+        // `direction` swings, because the curved-run term above sways on a
+        // sine wave and `to_goal` rotates as the player moves. So the
+        // forward could invert his heading between consecutive ticks at
+        // full pace. `Seek` takes the same direction and integrates it
+        // from the current velocity under a force limit, which cut this
+        // state from 9.8 reversals per second held to 5.3.
+        const RUN_LOOKAHEAD: f32 = 60.0;
+        // Run ACROSS the marker, not just at the goal. A run in behind is
+        // beaten by a defender who simply runs the same line goal-side of
+        // you; what beats HIM is going across his body onto his blind
+        // side, so he has to turn and you do not. `MarkerEvasion` supplies
+        // that offset and the separation burst, both scaled by this
+        // forward's timing and pace against his marker's reading of it.
+        let mut aim = MarkerEvasion::evade(ctx, current_position + direction * RUN_LOOKAHEAD);
+
+        // **HOLD THE LINE UNTIL THE BALL IS PLAYED.**
+        //
+        // The comment above this block has always said the run stays level
+        // with the last defender and goes past him when the ball is played,
+        // and none of the code did it: the aim was the opposing goal and
+        // the "curve" was a sine wave with no reference to the defence at
+        // all. So a forward simply ran beyond the last man and stayed
+        // there, and every ball played to him was offside by definition —
+        // measured at **25.4 offsides a match against a real 4-6**, which
+        // no amount of restraint on the PASSER can fix, because he still
+        // has to pass to somebody.
+        //
+        // Reading the line through [`OffsideLine`] is the point: a forward
+        // holding a line one unit away from the one the referee uses is
+        // still offside, and would look like he was holding nothing.
+        if !ball_coming {
+            if let Some(side) = ctx.player.side {
+                let line = OffsideLine::second_last(
+                    ctx.players().opponents().all().map(|o| o.position.x),
+                    side,
+                );
+                if let Some(line) = line {
+                    // …but he is not a laser. Timing a run is
+                    // `off_the_ball` and `anticipation`, and a forward who
+                    // holds the last line PERFECTLY is both unrealistic and
+                    // the most dangerous position on the pitch: clamped
+                    // exactly, offsides fell to 9 a match and goals rose
+                    // 5.1 → 6.0, because every flagged run became a clean
+                    // one instead. A good runner sits on the shoulder; a
+                    // poor one strays past it and gets flagged, which is
+                    // where the real four-to-six a match come from.
+                    let timing = ((ctx.player.skills.mental.off_the_ball
+                        + ctx.player.skills.mental.anticipation)
+                        / 40.0)
+                        .clamp(0.0, 1.0);
+                    let stray = Self::STRAY * (1.0 - timing);
+                    // Held a stride BEHIND the line rather than level with
+                    // it, for the same reason: a man permanently on the
+                    // shoulder is played in every time the ball is worked
+                    // wide.
+                    let hold = line + side.forward_dir_x() * (stray - Self::LINE_MARGIN);
+                    let beyond = match side {
+                        PlayerSide::Left => aim.x > hold,
+                        PlayerSide::Right => aim.x < hold,
+                    };
+                    if beyond {
+                        aim.x = hold;
+                    }
+                }
+            }
+        }
+        Some(
+            SteeringBehavior::Seek { target: aim }
+                .calculate(ctx.player)
+                .velocity
+                * (1.0 + acceleration * 0.15 + counter_bonus)
+                * MarkerEvasion::burst(ctx),
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

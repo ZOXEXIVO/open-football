@@ -1,18 +1,56 @@
+use crate::PlayerFieldPositionGroup;
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefensiveLine,
+};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
+    ShotDecision, evaluate_forward_shot_decision,
+};
+use crate::r#match::player::strategies::common::states::MarkEngagement;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
-    ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
-    StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    ConditionContext, DefensiveDuty, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition,
+    PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
-use crate::{IntegerUtils, PlayerFieldPositionGroup};
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::DefenderShotDiag;
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::OverlapDiag;
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 30.0; // Defenders almost never shoot, only from very close
+/// Reachability cap only — the same 320u (40 m) the forwards and
+/// midfielders use. The shared shot helper owns the decision from there.
+///
+/// 2026-08-16: was **30.0 — three and three-quarter metres**. A defender
+/// could only shoot from inside the six-yard box, essentially on the goal
+/// line, while every other line was live from 40 m. Defenders took 1.4%
+/// of all shots as a result. A centre-back arriving at a corner, or a
+/// full-back cutting in, does shoot in football; whether HE shoots is a
+/// question about his finishing and the look, and the helper prices both
+/// continuously. A blanket range veto answered it before it was asked.
+/// Part of the shooting-blocker teardown — see `PlayerMemory::can_shoot`.
+const MAX_SHOOTING_DISTANCE: f32 = 320.0;
+
+/// How close an assigned man has to be before a defender abandons the
+/// shape logic to go and mark him (~19 m). Wide enough that a marker
+/// genuinely tracks his runner across the final third, tight enough that
+/// he doesn't chase a full-back standing on the halfway line.
+///
+/// The ENGAGE half of [`MarkEngagement`] — `Marking` gives the man up at
+/// its `RELEASE`, strictly further out, so the two cannot two-cycle.
+const MARK_BREAK_DISTANCE: f32 = MarkEngagement::ENGAGE;
+
+/// How far the designated presser will step out to meet the man on the
+/// ball (~19 m). The same distance he will travel to pick a man up —
+/// stepping to the carrier is the same decision as stepping to a runner,
+/// and giving them different numbers is how a back line ends up with a
+/// duty it never acts on.
+const PRESS_BREAK_DISTANCE: f32 = 150.0;
 
 #[derive(Default, Clone)]
 pub struct DefenderRunningState {}
@@ -97,7 +135,43 @@ impl StateProcessingHandler for DefenderRunningState {
                         )),
                     ));
                 }
-                // No pass target — clear the ball rather than lose it
+                // Nothing from the bespoke search — ask the real one
+                // before hoofing it.
+                //
+                // `find_emergency_pass_target` is a local, hand-rolled
+                // scan and it comes up empty far more often than the
+                // situation warrants: instrumented, this branch alone is
+                // 59% of every clearance in the match (~25 per team per
+                // match) and is why defenders measure 10 clearances each
+                // against a real ~3.5. The engine already has a pass
+                // search that knows about congestion, interception risk,
+                // personality and direction; a defender under pressure
+                // should consult THAT before deciding there is no ball on.
+                // NB `find_safe_pass_option()` is NOT the search to use
+                // here: it scans `nearby(50.0)` — fifty units is 6.25 m —
+                // so it only ever sees a team-mate close enough to be in
+                // the same huddle, and it comes up empty for the same
+                // reason the bespoke scan does. `find_best_pass_option`
+                // is the evaluator every other line on the pitch uses,
+                // at a distance a defender can actually pass.
+                if let Some((safe, _)) = ctx
+                    .player()
+                    .passing()
+                    .find_best_pass_option_with_distance(220.0)
+                {
+                    return Some(StateChangeResult::with_defender_state_and_event(
+                        DefenderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(safe.id)
+                                .with_reason("DEF_EMERGENCY_SAFE_PASS")
+                                .build(ctx),
+                        )),
+                    ));
+                }
+                #[cfg(feature = "match-logs")]
+                crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(2);
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Clearing,
                 ));
@@ -115,18 +189,37 @@ impl StateProcessingHandler for DefenderRunningState {
                 ));
             }
 
-            // Defenders should almost always pass — only shoot if very close with clear shot.
-            // Routes through `shooting_close` so the threshold reads
-            // fatigue-aware finishing/composure/decisions, not raw
-            // finishing alone — a tired CB makes a worse shoot/no-shoot
-            // call here.
-            if self.is_in_shooting_range(ctx) {
-                let minute = sc::minute_from_ms(ctx.context.total_match_time);
-                let shoot_quality = sc::shooting_close(ctx.player, minute);
-                if shoot_quality > 0.40 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Shooting,
-                    ));
+            // Defenders consult the SAME shot helper as everyone else.
+            //
+            // This used to be a bespoke `shooting_close(..) > 0.40`
+            // threshold behind a 3.75 m range cap — the only line in the
+            // engine that never reached `evaluate_forward_shot_decision`.
+            // Two consequences: a defender's shoot/no-shoot call ignored
+            // the angle, the lane, the keeper and the game state that
+            // every other player weighs, and no amount of work on the
+            // shared model could reach him.
+            //
+            // Through the helper, a centre-back with 6 finishing still
+            // rarely shoots — `execution_skill` and `selection_skill`
+            // price exactly that — but he does so because of who he is
+            // rather than because of a blanket veto on his position.
+            #[cfg(feature = "match-logs")]
+            DefenderShotDiag::note_onball(self.is_in_shooting_range(ctx));
+
+            if self.is_in_shooting_range(ctx) && ctx.team().can_shoot() && ctx.player().can_shoot()
+            {
+                #[cfg(feature = "match-logs")]
+                DefenderShotDiag::note_decision();
+                match evaluate_forward_shot_decision(ctx, "DEF_SHOOT") {
+                    ShotDecision::Shoot { reason } => {
+                        return Some(
+                            StateChangeResult::with_defender_state(DefenderState::Shooting)
+                                .with_shot_reason(reason),
+                        );
+                    }
+                    // A defender who is better off laying it off does that
+                    // through his normal passing path, as before.
+                    ShotDecision::Pass | ShotDecision::Hold => {}
                 }
             }
 
@@ -201,9 +294,23 @@ impl StateProcessingHandler for DefenderRunningState {
                             ));
                         }
                         DefensiveRole::Hold => {
-                            return Some(StateChangeResult::with_defender_state(
-                                DefenderState::HoldingLine,
-                            ));
+                            // Same shared predicate as the phase dispatch
+                            // and the idle default: settle into the line
+                            // only once actually in it. This was the last
+                            // ungated `-> HoldingLine` leg in the state,
+                            // and it kept the pair alive on its own — a
+                            // defender with role Hold but off the line was
+                            // sent to `HoldingLine`, whose first act is to
+                            // notice he is off the line and send him back.
+                            // ~6,300 round trips a match after every other
+                            // leg had been gated (`dev_match trace`).
+                            if DefensiveLine::is_in_line(ctx) {
+                                return Some(StateChangeResult::with_defender_state(
+                                    DefenderState::HoldingLine,
+                                ));
+                            }
+                            // Off the line — keep running back to it.
+                            return None;
                         }
                         DefensiveRole::Primary => {
                             // Primary — fall through to tackle/press checks below.
@@ -296,8 +403,13 @@ impl StateProcessingHandler for DefenderRunningState {
             // Gated on "near start position" so a defender caught upfield
             // doesn't stall there; the earlier `Returning` branch handles Big
             // displacement and this covers the Small/Medium idle case.
+            // Same shared predicate as the phase dispatch above: settle
+            // into the line only once we're actually in it, or this
+            // branch just re-opens the HoldingLine <-> Running loop from
+            // the other end 20 ticks later.
             if ctx.in_state_time > 20
                 && ctx.player().position_to_distance() != PlayerDistanceFromStartPosition::Big
+                && DefensiveLine::is_in_line(ctx)
             {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::HoldingLine,
@@ -307,11 +419,27 @@ impl StateProcessingHandler for DefenderRunningState {
 
         // SMART BUILD-UP: Graduated response instead of always clearing
         if ctx.player.has_ball(ctx) && ctx.in_state_time > 80 {
-            // Under immediate pressure — clear immediately
-            if ctx.players().opponents().exists(15.0) && ctx.in_state_time > 80 {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Clearing,
-                ));
+            // Under immediate pressure — clear, but only with nothing on.
+            //
+            // This sat ABOVE the safe-pass search below it and returned
+            // unconditionally, so the "graduated response" the block is
+            // named for never graduated: any opponent within 15u (1.9 m)
+            // after 0.8 s on the ball meant hoof, and the 80-150 tick
+            // look-for-a-pass rung underneath was unreachable whenever a
+            // defender was actually being closed down — which is the only
+            // time it matters. A defender under pressure looks for the
+            // out FIRST; that is what playing out of the back is.
+            if ctx.players().opponents().exists(15.0) {
+                let def_profile = DefenderSkillProfile::from_ctx(ctx);
+                if def_profile.must_clear_under_pressure()
+                    || self.find_safe_buildup_pass(ctx, 150.0).is_none()
+                {
+                    #[cfg(feature = "match-logs")]
+                    crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(3);
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Clearing,
+                    ));
+                }
             }
 
             // 80-150 ticks: Look for safe short pass to nearby midfielder or defender
@@ -348,6 +476,8 @@ impl StateProcessingHandler for DefenderRunningState {
 
             // 250+ ticks: Force clear as last resort
             if ctx.in_state_time > 250 {
+                #[cfg(feature = "match-logs")]
+                crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(4);
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Clearing,
                 ));
@@ -358,23 +488,39 @@ impl StateProcessingHandler for DefenderRunningState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        if ctx.player.should_follow_waypoints(ctx) {
-            let waypoints = ctx.player.get_waypoints_as_vectors();
-
-            if !waypoints.is_empty() {
-                return Some(
-                    SteeringBehavior::FollowPath {
-                        waypoints,
-                        current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: IntegerUtils::random(1, 10) as f32,
-                    }
-                    .calculate(ctx.player)
-                    .velocity
-                        + ctx.player().separation_velocity(),
-                );
-            }
-        }
-
+        // NOTE: no waypoint branch here, deliberately.
+        //
+        // This state used to lead with `should_follow_waypoints`, which
+        // steered the defender along his tactical route — a straight line
+        // running 320u UPFIELD from his base position. The two problems
+        // with that compounded each other.
+        //
+        // First, the predicate is not stable: it returns false while the
+        // player is the designated ball-chaser, and that designation is a
+        // tolerance band that swaps between team-mates from one tick to
+        // the next. So the velocity alternated between "march up my route"
+        // and "go to the ball" — frequently opposite directions — without
+        // the player ever leaving `Running`. `Defender: Running` was by
+        // some distance the largest single source of position flicker
+        // left in the engine at that point: **11.7 velocity reversals per
+        // second held, 694k of them across three matches, with 94% of all
+        // this state's reversals happening with no state change under
+        // them** (`dev_match trace`). Zeroing the crowding term changed
+        // nothing, which is what identified the branch alternation rather
+        // than the steering composition as the cause.
+        //
+        // Second, and more basic: marching an attacking route is not what
+        // this state is for. `Running` is where a defender recovers his
+        // shape or goes to engage; pushing up the pitch has its own state
+        // (`PushingUp`) and its own phase dispatch. Following the route
+        // here also dragged defenders off the defensive line, which is
+        // what kept `DefensiveLine::is_in_line` failing in the first
+        // place. The route branches remain in `Standing` and `Walking`,
+        // where idle shape drift is the intent.
+        //
+        // What is left are the two ball-relative behaviours below, which
+        // cannot invert against each other: engage a nearby carrier, or
+        // recover the mark.
         if ctx.player.has_ball(ctx) {
             // With ball: move toward opponent goal, separation matters
             Some(
@@ -387,44 +533,111 @@ impl StateProcessingHandler for DefenderRunningState {
                     + ctx.player().separation_velocity(),
             )
         } else {
-            // Without ball: close down on nearby ball carrier, or return to position
+            // Without ball: engage a nearby carrier, or recover the mark —
+            // BLENDED, not switched.
+            //
+            // These were two branches either side of a hard 120u test, and
+            // they point in opposite directions: at 119u the defender ran
+            // at the carrier, at 121u he ran home. A carrier drifting
+            // along that radius therefore inverted the defender's velocity
+            // from one tick to the next, for as long as he stayed near it.
+            // A hard cut between two opposed behaviours is a flicker
+            // generator wherever it appears, and no amount of hysteresis
+            // on a memoryless branch selection removes it.
+            //
+            // Weighting the two continuously does. `engage` runs 1 at
+            // close range down to 0 at 140u with a smooth shoulder, so a
+            // defender near the carrier closes him down, one far away
+            // holds his mark, and the defenders in between shade toward
+            // the ball while keeping their shape — which is what a back
+            // line actually does. There is no distance at which the
+            // velocity can jump.
+            // "Home" is the slot in the unit's CURRENT shape, not the
+            // kickoff formation slot.
+            //
+            // Both recovery targets below were `start_position`, so a
+            // defender running back reassembled the line at its kick-off
+            // width every time — and this state is 31% of what the back
+            // line does, so that is most of where the 18-metre gaps came
+            // from. See [`DefensiveLine::compact_slot_y`].
+            // DEPTH deliberately stays the kickoff one. Recovering to
+            // `DefensiveLine::position_x` (the live back-line average)
+            // was tried and REVERTED: it made depth spread WORSE, 137u →
+            // 174u. Only the ~31% of the line in this state converge on
+            // the average, while the ~31% in `Marking` are pulled to
+            // their men's depth — so pulling one group to the mean simply
+            // opened a gap against the other. Depth needs the same
+            // treatment as width, applied everywhere at once; doing it in
+            // one state makes it worse, not better.
+            let home_slot = Vector3::new(
+                ctx.player.start_position.x,
+                DefensiveLine::compact_slot_y(ctx),
+                ctx.player.start_position.z,
+            );
+            let carrier = ctx.players().opponents().with_ball().next();
+            let engage = carrier
+                .map(|c| {
+                    /// Inside this the defender is fully committed to the carrier.
+                    const FULL_ENGAGE: f32 = 80.0;
+                    /// Beyond this the carrier no longer pulls him at all.
+                    const NO_ENGAGE: f32 = 140.0;
+                    let d = (ctx.player.position - c.position).magnitude();
+                    let t = ((NO_ENGAGE - d) / (NO_ENGAGE - FULL_ENGAGE)).clamp(0.0, 1.0);
+                    // Smoothstep — zero gradient at both ends, so the
+                    // weight (and therefore the velocity) has no corner.
+                    t * t * (3.0 - 2.0 * t)
+                })
+                .unwrap_or(0.0);
 
-            // Check if an opponent has the ball nearby — engage them instead of returning home
-            if let Some(ball_carrier) = ctx.players().opponents().with_ball().next() {
-                let dist_to_carrier = (ctx.player.position - ball_carrier.position).magnitude();
-
-                if dist_to_carrier < 120.0 {
-                    // Get carrier's velocity for pursuit prediction
+            if engage > 0.0 {
+                if let Some(ball_carrier) = carrier {
                     let carrier_velocity =
                         ctx.tick_context.positions.players.velocity(ball_carrier.id);
-
-                    // Use Pursuit to intercept the ball carrier's predicted path
-                    let base = SteeringBehavior::Pursuit {
+                    let pursuit = SteeringBehavior::Pursuit {
                         target: ball_carrier.position,
                         target_velocity: carrier_velocity,
                     }
                     .calculate(ctx.player)
                     .velocity;
 
-                    return Some(base + ctx.player().separation_velocity());
+                    if engage >= 1.0 {
+                        return Some(pursuit + ctx.player().separation_velocity());
+                    }
+
+                    let home = SteeringBehavior::Arrive {
+                        target: home_slot + ctx.player().separation_offset(),
+                        slowing_distance: 30.0,
+                    }
+                    .calculate(ctx.player)
+                    .velocity;
+                    return Some(pursuit * engage + home * (1.0 - engage));
                 }
             }
 
-            // No nearby ball carrier — return to tactical position
-            let base = SteeringBehavior::Arrive {
-                target: ctx.player.start_position,
-                slowing_distance: 30.0,
-            }
-            .calculate(ctx.player)
-            .velocity;
-
-            // Only compute separation if close to start (near other defenders)
-            let dist_to_start = (ctx.player.position - ctx.player.start_position).magnitude();
-            if dist_to_start < 40.0 {
-                Some(base + ctx.player().separation_velocity())
+            // No carrier in range — recover the mark.
+            //
+            // Crowding shifts the MARK rather than being added to the
+            // velocity. Added as a velocity it fought `Arrive` with no
+            // stable fixed point — `Arrive` brakes to zero inside 3u of
+            // the mark, so avoidance always won there and pushed the
+            // defender back out, and this state became the single
+            // largest source of on-the-spot twitch left in the engine.
+            // Steering at one shifted target instead lets him settle a
+            // step off his mark, which is where he should stand anyway.
+            let dist_to_start = (ctx.player.position - home_slot).magnitude();
+            let target = if dist_to_start < 40.0 {
+                home_slot + ctx.player().separation_offset()
             } else {
-                Some(base)
-            }
+                home_slot
+            };
+            Some(
+                SteeringBehavior::Arrive {
+                    target,
+                    slowing_distance: 30.0,
+                }
+                .calculate(ctx.player)
+                .velocity,
+            )
         }
     }
 
@@ -512,6 +725,57 @@ impl DefenderRunningState {
         let ball_dist = ctx.ball().distance();
         let near_start =
             ctx.player().position_to_distance() != PlayerDistanceFromStartPosition::Big;
+
+        // DUTY BEFORE SHAPE.
+        //
+        // Everything below this point answers "where is the line?" and
+        // nothing below it answers "where is my man?" — no branch in the
+        // phase table consults an opponent at all. That is survivable only
+        // if this state is rare, and it is not: `Running` is 50% of the
+        // back line's state at the moment a shot is struck, and it had no
+        // transition to `Marking` anywhere in the file. Half the defence
+        // was structurally incapable of picking anybody up, which is most
+        // of why 74% of attackers inside our own third had nobody within
+        // three metres.
+        //
+        // A defender the team plan has given a man goes to him. Distance
+        // still decides whether it is worth breaking shape for: a marker
+        // whose man is thirty metres away holds his position and lets the
+        // phase logic run, which is also what a real defender does.
+        if let Some(man) = ctx.team().my_mark() {
+            if (man.position - ctx.player.position).magnitude() < MARK_BREAK_DISTANCE {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Marking,
+                ));
+            }
+        }
+
+        // …and the same for the man on the ball.
+        //
+        // The phase table below engages a carrier only inside 60u — SEVEN
+        // AND A HALF METRES. Past that every defender holds the line, so
+        // a midfielder could carry to the edge of the box completely
+        // unpressed and strike. That is not a theory: 95% of all approved
+        // shots from beyond 22 m were tagged `MID_SHOOT`, midfielders
+        // took 75% of every shot in the game against a target of 32%, and
+        // the marking diagnostic showed why the front line couldn't
+        // compete for them — forwards are marked at 4.7 m while
+        // midfielders sit 13 m from the man nominally assigned to them.
+        //
+        // The plan already nominates a presser. He just had no way to act
+        // on it from the state he spends half his time in.
+        //
+        // Held to our own half so the back line steps out to meet a
+        // carrier rather than chasing him upfield.
+        if matches!(ctx.team().my_duty(), DefensiveDuty::Press)
+            && ctx.ball().on_own_side()
+            && ball_dist < PRESS_BREAK_DISTANCE
+        {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Pressing,
+            ));
+        }
+
         match phase {
             // Settled defence in a low block — four defenders form a
             // compact horizontal line. Route to HoldingLine if we're
@@ -522,9 +786,20 @@ impl DefenderRunningState {
                         DefenderState::Returning,
                     ));
                 }
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::HoldingLine,
-                ));
+                // Settle into the line only once we have actually reached
+                // it. This used to hand off unconditionally on
+                // `near_start`, while `HoldingLine` left again on line
+                // DEVIATION — two different measurements of the same
+                // thing, so a defender near his start but off the drifted
+                // line ping-ponged between the two states every tick.
+                // `DefensiveLine::is_in_line` is now the one predicate
+                // both sides read; until it holds, keep running back.
+                if DefensiveLine::is_in_line(ctx) {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::HoldingLine,
+                    ));
+                }
+                return None;
             }
             // Mid-block: similar to low block but higher up. Same
             // shape-first defaults.
@@ -539,9 +814,12 @@ impl DefenderRunningState {
                 if ball_dist < 60.0 && ctx.team().is_best_player_to_chase_ball() {
                     return None; // fall through to the tackling logic
                 }
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::HoldingLine,
-                ));
+                if DefensiveLine::is_in_line(ctx) {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::HoldingLine,
+                    ));
+                }
+                return None;
             }
             // Defensive transition — the one closest defender engages,
             // others recover shape.
@@ -608,13 +886,47 @@ impl DefenderRunningState {
     }
 
     pub fn should_clear(&self, ctx: &StateProcessingContext) -> bool {
-        // Clear if in own penalty area with opponents pressing close
-        if ctx.ball().in_own_penalty_area() && ctx.players().opponents().exists(30.0) {
-            return true;
+        // Clear if in own penalty area under REAL pressure, and only if
+        // this defender is not the sort who plays out of it.
+        //
+        // The test was `in_own_penalty_area() && opponents().exists(30.0)`
+        // — 30u is 3.75 m, which in a defended penalty area is true of
+        // essentially every touch a defender takes. So every centre-half
+        // hoofed every ball he received in his own box, whoever he was:
+        // measured 15.2 clearances per defender per match against a real
+        // ~3.5. It also asked nothing about the man. `buildup_profile`
+        // already models exactly this distinction — and
+        // `must_clear_under_pressure()` was being consulted on the
+        // PASSING path while the far busier running path ignored it.
+        //
+        // Real defending: a ball-playing centre-half under close pressure
+        // looks for the out and only clears when there isn't one; a
+        // limited one clears on principle. Both clear when nobody is
+        // available. 14u (1.75 m) is a man actually on you rather than a
+        // man in the same part of the pitch.
+        if ctx.ball().in_own_penalty_area() && ctx.players().opponents().exists(14.0) {
+            let def_profile = DefenderSkillProfile::from_ctx(ctx);
+            // Same search as the emergency branch, for the same reason:
+            // `find_safe_pass_option()` only looks 6.25 m and so reports
+            // "no pass" whenever the nearest team-mate is a normal
+            // distance away.
+            if def_profile.must_clear_under_pressure()
+                || ctx
+                    .player()
+                    .passing()
+                    .find_best_pass_option_with_distance(220.0)
+                    .is_none()
+            {
+                #[cfg(feature = "match-logs")]
+                crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(0);
+                return true;
+            }
         }
 
         // Clear if congested anywhere (not just boundaries)
         if self.is_congested_near_boundary(ctx) || ctx.player().movement().is_congested() {
+            #[cfg(feature = "match-logs")]
+            crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(1);
             return true;
         }
 
@@ -908,8 +1220,23 @@ impl DefenderRunningState {
             let opp_velocity = ctx.tick_context.positions.players.velocity(_opp_id);
             let opp_speed = opp_velocity.magnitude();
 
-            // Must be moving fast (sprinting)
-            if opp_speed < 1.5 {
+            // Must be moving fast (sprinting).
+            //
+            // 1.5 is in u/tick, and a human's maximum in this engine is
+            // 0.63 — so this `continue` skipped EVERY opponent and the
+            // whole predictive read below it (alignment, closing speed,
+            // time-to-arrival) has never once executed. The same
+            // wrong-scale class of bug as the old `DANGEROUS_RUN_SPEED`
+            // values, which "exceeded human max speed, so run-tracking
+            // never fired".
+            //
+            // With it dead, `is_opponent_closing_fast` collapsed to the
+            // crude `dist < 10.0` above — an opponent within 1.25 m,
+            // whatever he was doing — and that is what has been sending
+            // defenders to `Clearing`: 59.5% of every clearance in the
+            // match comes from this branch failing to find a pass.
+            // 0.40 u/tick is 5 m/s, a genuine attacking run.
+            if opp_speed < 0.40 {
                 continue;
             }
 
@@ -941,7 +1268,29 @@ impl DefenderRunningState {
         let mut best: Option<(MatchPlayerLite, f32)> = None;
 
         for teammate in ctx.players().teammates().nearby(250.0) {
-            if teammate.tactical_positions.is_goalkeeper() {
+            // The keeper is an OUTLET, not an exclusion.
+            //
+            // Skipping him outright meant a defender with his back to
+            // goal and a man on him had no ball to play except forward
+            // into traffic — and when that wasn't on, the caller hoofed
+            // it. Playing back to the goalkeeper is the single most
+            // common answer to exactly this situation in real football,
+            // and the pass evaluator's own build-up logic already treats
+            // it as a legitimate pattern under press.
+            //
+            // Scored below every outfield option so it stays the last
+            // resort it should be, and only when he is genuinely free —
+            // a back-pass to a pressed keeper is how goals get given
+            // away.
+            let is_gk = teammate.tactical_positions.is_goalkeeper();
+            if is_gk
+                && ctx
+                    .tick_context
+                    .grid
+                    .opponents(teammate.id, 40.0)
+                    .next()
+                    .is_some()
+            {
                 continue;
             }
 
@@ -964,6 +1313,11 @@ impl DefenderRunningState {
             if teammate.tactical_positions.is_midfielder() {
                 score += 15.0;
             }
+            // Behind every outfield option: taken when there is nothing
+            // else, which is the point of him.
+            if is_gk {
+                score -= 60.0;
+            }
 
             if let Some((_, best_score)) = &best {
                 if score > *best_score {
@@ -977,10 +1331,15 @@ impl DefenderRunningState {
         best.map(|(t, _)| t)
     }
 
+    /// Reachability only.
+    ///
+    /// `has_clear_shot()` is dropped here for the reason it was dropped
+    /// on both forward paths and the midfielder path: it is a hard binary
+    /// veto on lane quality, and lane is already priced continuously
+    /// inside the helper, which also still rejects a genuinely blocked
+    /// one. The defender path was the last place it survived.
     fn is_in_shooting_range(&self, ctx: &StateProcessingContext) -> bool {
-        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-
-        distance_to_goal <= MAX_SHOOTING_DISTANCE && ctx.player().has_clear_shot()
+        ctx.ball().distance_to_opponent_goal() <= MAX_SHOOTING_DISTANCE
     }
 
     /// Should this defender deliver a cross?
@@ -1248,6 +1607,8 @@ impl DefenderRunningState {
     /// healthy condition + work-rate, and a team_width_target above
     /// 0.45 so a deliberately compact / low-block side never overlaps.
     fn should_overlap(&self, ctx: &StateProcessingContext) -> bool {
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(0);
         // Must be a wide defender (starting position near touchline)
         let field_height = ctx.context.field_size.height as f32;
         let start_y = ctx.player.start_position.y;
@@ -1255,11 +1616,15 @@ impl DefenderRunningState {
         if !is_wide {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(1);
 
         // Team must control ball
         if !ctx.team().is_control_ball() {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(2);
 
         // Phase gate: only overlap in established attacking phases.
         // Transitions and build-up are too fragile — overlap during a
@@ -1269,12 +1634,23 @@ impl DefenderRunningState {
         if !matches!(phase, GamePhase::Attack | GamePhase::Progression) {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(3);
 
         // Width gate: a deliberately compact tactic (low block,
         // possession through the middle) should not push fullbacks wide.
-        if ctx.team().team_width_target() <= 0.45 {
+        // 0.45 → 0.30. `compute_team_width` is `(1 - tactic_compactness)`
+        // plus a phase bias of +0.15 in Attack and +0.05 in Progression,
+        // so any tactic with compactness at or above ~0.6 sat under the
+        // old bar permanently and its full-backs never overlapped at all.
+        // Measured, this gate alone cut the funnel by 70%. A deliberately
+        // compact side should still suppress overlaps; a merely ordinary
+        // one should not.
+        if ctx.team().team_width_target() <= 0.30 {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(4);
 
         // Skill-aware overlap gate: stamina/work_rate/pace/off_the_ball
         // composite + late-lead branch handled by the profile helpers.
@@ -1289,27 +1665,34 @@ impl DefenderRunningState {
         } else if !def_profile.allows_overlap() {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(5);
 
-        // Find teammate with ball on same flank
+        // Is the attack on MY side? That is a question about where the
+        // BALL is, not about who is standing on it.
+        //
+        // This used to require a live ball OWNER (`ctx.ball().owner_id()`)
+        // and fell through to `false` otherwise — so it was false for the
+        // whole of every pass, which is precisely when a full-back starts
+        // an overlap. `is_control_ball()` above already establishes that
+        // the possession is ours; demanding a carrier on top of it threw
+        // away the travelling ticks.
+        //
+        // Measured, this was the single biggest killer of the behaviour:
+        // the funnel went **14,850 → 593 survivors here, a 96% cut**, on a
+        // test that should be roughly a coin flip between the two
+        // full-backs. Overlaps ran at 422 a match against a back four's
+        // worth of opportunities.
         let player_on_left_flank = start_y < field_height * 0.5;
-        let has_ball_on_same_flank = if let Some(owner_id) = ctx.ball().owner_id() {
-            if let Some(owner) = ctx.context.players.by_id(owner_id) {
-                if owner.team_id != ctx.player.team_id {
-                    return false;
-                }
-                let ball_pos = ctx.tick_context.positions.ball.position;
-                let ball_on_left = ball_pos.y < field_height * 0.5;
-                ball_on_left == player_on_left_flank
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+        let ball_pos_flank = ctx.tick_context.positions.ball.position;
+        let has_ball_on_same_flank =
+            (ball_pos_flank.y < field_height * 0.5) == player_on_left_flank;
 
         if !has_ball_on_same_flank {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(6);
 
         // Defender must be behind the ball carrier
         let ball_pos = ctx.tick_context.positions.ball.position;
@@ -1319,6 +1702,8 @@ impl DefenderRunningState {
         if !ball_ahead {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(7);
 
         // Rest-defence gate: count teammates whose attacking_progress is
         // strictly behind the ball (with a 0.03 deadband to avoid
@@ -1352,6 +1737,8 @@ impl DefenderRunningState {
         if behind_ball_count < required_behind {
             return false;
         }
+        #[cfg(feature = "match-logs")]
+        OverlapDiag::note(8);
 
         // Check space ahead on the wing
         let wing_y = if player_on_left_flank {
@@ -1362,6 +1749,10 @@ impl DefenderRunningState {
         let ahead_pos = Vector3::new(ball_pos.x + to_goal.x * 50.0, wing_y, 0.0);
         let opponents_blocking = ctx.players().opponents().nearby_at(ahead_pos, 30.0).count();
 
+        #[cfg(feature = "match-logs")]
+        if opponents_blocking == 0 {
+            OverlapDiag::note(9);
+        }
         opponents_blocking == 0
     }
 

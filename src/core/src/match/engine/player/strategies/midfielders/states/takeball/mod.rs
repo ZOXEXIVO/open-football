@@ -1,8 +1,8 @@
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::player::strategies::common::states::LooseBallChase;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -39,27 +39,19 @@ impl StateProcessingHandler for MidfielderTakeBallState {
         // ball's velocity; reduces to Seek when the ball is stationary.
         // Seek alone would chase a moving ball's *current* position and
         // always lag behind — fatal for a ground pass rolling through us.
-        let ball_pos = ctx.tick_context.positions.ball.position;
-        let ball_vel = ctx.tick_context.positions.ball.velocity;
-        let landing = ctx.tick_context.positions.ball.landing_position;
-        let is_aerial = ball_pos.z > 2.3;
-        let target = if is_aerial { landing } else { ball_pos };
-
-        let mut arrive_velocity = if is_aerial {
-            SteeringBehavior::Arrive {
-                target,
-                slowing_distance: 10.0,
-            }
-            .calculate(ctx.player)
-            .velocity
-        } else {
-            SteeringBehavior::Pursuit {
-                target,
-                target_velocity: ball_vel,
-            }
-            .calculate(ctx.player)
-            .velocity
-        };
+        //
+        // Aim point and steering both cross smoothly from the ball itself
+        // to its landing spot as it rises. This used to snap at
+        // `ball_pos.z > 2.3`, which inverted the chaser's velocity every
+        // time a bouncing ball crossed that height — see
+        // `LooseBallChase::aim` for the measurement.
+        let (target, mut arrive_velocity) = LooseBallChase::aim(
+            ctx.player,
+            ctx.tick_context.positions.ball.position,
+            ctx.tick_context.positions.ball.velocity,
+            ctx.tick_context.positions.ball.landing_position,
+            10.0,
+        );
 
         // Add separation force to prevent player stacking
         // Reduce separation when approaching ball, but keep minimum to prevent clustering
@@ -110,6 +102,13 @@ impl StateProcessingHandler for MidfielderTakeBallState {
             let max_speed = ctx.player.max_speed_with_condition_cached();
 
             separation_force = separation_force * max_speed * SEPARATION_WEIGHT * separation_factor;
+
+            // ⚠ SEPARATION MUST NEVER SLOW THE RACE — see `LooseBallChase`.
+            // Without this an opponent standing between this player and the
+            // ball repels him **away from the ball** at up to 0.5 of top
+            // speed, and a rival who started further away wins it.
+            separation_force =
+                LooseBallChase::keep_non_opposing(separation_force, target - ctx.player.position);
 
             // Blend arrive and separation velocities
             arrive_velocity = arrive_velocity + separation_force;

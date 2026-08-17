@@ -2,8 +2,11 @@ use crate::PlayerFieldPositionGroup;
 use crate::club::player::behaviour_config::PassEvaluatorConfig;
 use crate::club::player::registry::has_risk_tolerant_passing_trait;
 use crate::club::player::traits::PlayerTrait;
+use crate::r#match::PassOriginRestart;
+use crate::r#match::engine::ball::ball::{OffsideLine, ThrowIn};
 use crate::r#match::engine::chemistry::chemistry_modifiers;
 use crate::r#match::engine::psychology::Psychology;
+use crate::r#match::engine::set_pieces::{ThrowRoutine, pick_throw_routine};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
@@ -391,6 +394,94 @@ impl PassEvaluator {
         // worse than a 10/20 passer — the downstream success formula
         // multiplies this and re-clamps the final probability anyway.
         composite.clamp(0.05, 1.0)
+    }
+
+    /// Specialist long throw into the box, or `None` if this isn't one.
+    ///
+    /// Every gate here is a real-football precondition rather than a dice
+    /// roll: it has to be a throw-in, this player has to be the thrower,
+    /// he has to be in the attacking third, he has to actually have the
+    /// long-throw attribute ([`ThrowIn::can_reach_box`] sets the bar),
+    /// there has to be somebody in the box worth aiming at, and that
+    /// somebody has to be inside his physical range ([`ThrowIn::range`]
+    /// scales it with the attribute). Fail any one and the throw is an
+    /// ordinary pass — which is what the overwhelming majority of
+    /// throw-ins are.
+    fn long_throw_target(ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        if ctx.tick_context.ball.pass_origin_restart != PassOriginRestart::ThrowIn {
+            return None;
+        }
+        if ctx.ball().owner_id() != Some(ctx.player.id) {
+            return None;
+        }
+
+        let long_throws = ctx.player.skills.technical.long_throws;
+        let field_w = ctx.context.field_size.width as f32;
+        let goal = ctx.player().opponent_goal_position();
+        let attacking_progress = 1.0 - (goal.x - ctx.player.position.x).abs() / field_w;
+        let in_attacking_third = attacking_progress >= 2.0 / 3.0;
+        if !ThrowIn::can_reach_box(long_throws, in_attacking_third) {
+            return None;
+        }
+
+        // The box is the 18-yard area: 132u deep, 72u either side of the
+        // centre of the goal at this engine's 1u ≈ 0.125 m.
+        const BOX_DEPTH: f32 = 132.0;
+        const BOX_HALF_WIDTH: f32 = 72.0;
+        let (_, max_range) = ThrowIn::range(long_throws);
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+
+        let mut best: Option<(MatchPlayerLite, f32)> = None;
+        for mate in ctx.players().teammates().nearby(max_range) {
+            if (goal.x - mate.position.x).abs() > BOX_DEPTH
+                || (goal.y - mate.position.y).abs() > BOX_HALF_WIDTH
+            {
+                continue;
+            }
+            let Some(player) = ctx.context.players.by_id(mate.id) else {
+                continue;
+            };
+            let aerial = sc::aerial_outfield_attacker(player, minute);
+            if best.map_or(true, |(_, b)| aerial > b) {
+                best = Some((mate, aerial));
+            }
+        }
+        let (target, aerial) = best?;
+
+        // A flat throw into a box full of defenders only beats a recycle
+        // when there is a genuine aerial threat to aim at.
+        // `pick_throw_routine` owns that call, plus the "chasing late,
+        // throw it anyway" case.
+        let chasing_late = {
+            let late = minute >= 75;
+            let home = ctx.player.team_id == ctx.context.field_home_team_id;
+            let (mine, theirs) = if home {
+                (
+                    ctx.context.score.home_team.get(),
+                    ctx.context.score.away_team.get(),
+                )
+            } else {
+                (
+                    ctx.context.score.away_team.get(),
+                    ctx.context.score.home_team.get(),
+                )
+            };
+            late && mine < theirs
+        };
+        let routine = pick_throw_routine(
+            long_throws,
+            in_attacking_third,
+            aerial >= 0.55,
+            chasing_late,
+        );
+        match routine {
+            ThrowRoutine::LongBox => {
+                #[cfg(feature = "match-logs")]
+                crate::mid_run_diag::SetPieceDiag::note_long_throw();
+                Some(target)
+            }
+            ThrowRoutine::ShortRecycle => None,
+        }
     }
 
     /// Calculate receiver's ability to control the pass.
@@ -882,6 +973,44 @@ impl PassEvaluator {
             tactical_value += long_pass_bonus * 0.15;
         }
 
+        // ── THE PLAN ─────────────────────────────────────────────────
+        // Everything above scores STATIC GEOMETRY: where the receiver is
+        // standing, how much space he has, whether the ball moves
+        // forward. None of it knows that a run was made, or who it was
+        // made for — so a run and a pass were two independent processes
+        // that only coincided by luck, and the man arriving at the far
+        // post was worth exactly as much as the man standing next to him.
+        //
+        // The team plan closes that loop: the carrier now prefers the
+        // target the attack was built around. Deliberately a bias, not an
+        // override — the plan is a shared intention, and a passer who can
+        // see a better ball is still allowed to play it.
+        let team_ops = ctx.team();
+        let plan = team_ops.attack_plan();
+        if plan.active {
+            if plan.primary_target == Some(receiver.id) {
+                tactical_value += 0.30;
+            } else if plan.slot_of(receiver.id).is_some() {
+                tactical_value += 0.18;
+            } else if plan.far_runner == Some(receiver.id) {
+                // Only worth finding when the ball can actually be played
+                // in behind — otherwise this is a hopeful hoof.
+                if forward_value > 0.0 {
+                    tactical_value += 0.14;
+                }
+            } else if plan.near_support == Some(receiver.id) {
+                // The outlet is valuable precisely when nothing forward
+                // is on, so it is credited as a floor rather than a bonus.
+                tactical_value += 0.06;
+            }
+            // Rest defence is not an attacking option. Playing the ball to
+            // the man whose job is to stay home is how a possession loses
+            // its shape.
+            if plan.is_rest_defence(receiver.id) && forward_value > 0.0 {
+                tactical_value -= 0.10;
+            }
+        }
+
         // Allow negative tactical values for backward passes
         tactical_value.clamp(-0.5, 1.8)
     }
@@ -993,6 +1122,19 @@ impl PassEvaluator {
         ctx: &StateProcessingContext,
         max_distance: f32,
     ) -> Option<(MatchPlayerLite, &'static str)> {
+        // A specialist long throw is a set-piece delivery, not a pass —
+        // it goes over the general evaluator's head entirely, because the
+        // general evaluator scores progression and safety and a ball
+        // launched into a crowded six-yard box scores terribly on both.
+        // Resolved first, and only for the players and positions that
+        // earn it, so `long_throws` finally reaches something: before
+        // this it decided a fifth of the *thrower selection* and nothing
+        // else, and `throw_in_range` / `can_long_throw_into_box` — the
+        // functions written to consume it — had no callers at all.
+        if let Some(target) = Self::long_throw_target(ctx) {
+            return Some((target, "long_throw"));
+        }
+
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
 
@@ -1035,6 +1177,30 @@ impl PassEvaluator {
         let is_pragmatic = roll()
             < SkillCurve::new(dec_raw, 15.0, 0.6).probability()
                 * SkillCurve::new(pass_raw, 12.0, 0.6).probability();
+
+        // **THE OFFSIDE LINE.** Computed once for the whole scan rather
+        // than per candidate — it is a property of the defence, not of the
+        // man being considered. See [`OffsideLine`]: the passer reads the
+        // same line the referee will, which is the only way avoiding it
+        // can mean anything.
+        //
+        // `None` when the restart exempts the receiver (a throw-in, a
+        // corner, a goal kick) — there is nothing to avoid, and pretending
+        // otherwise would make a side refuse to throw the ball forward.
+        let attacking_side = ctx.player.side.unwrap_or(PlayerSide::Left);
+        let offside_line = if ctx
+            .tick_context
+            .ball
+            .pass_origin_restart
+            .is_offside_exempt()
+        {
+            None
+        } else {
+            OffsideLine::second_last(
+                ctx.players().opponents().all().map(|o| o.position.x),
+                attacking_side,
+            )
+        };
 
         // Calculate minimum pass distance based on pressure
         // NOTE: This filter prevents "too short" passes that don't progress the ball
@@ -1237,6 +1403,69 @@ impl PassEvaluator {
                 1.0
             };
 
+            // Which way is this ball actually going?
+            //
+            // Only `is_direct` players had an opinion about that (1.4
+            // forward against 0.5 back). Every other personality —
+            // playmaker, conservative, team player, pragmatic, and the plain
+            // default that most players fall into — scored a pass to the man
+            // BEHIND the ball exactly like a pass to the man in front.
+            //
+            // Combined with `congestion_penalty` above, which pays 1.8 for
+            // an isolated receiver and 0.02 for a crowded one, the evaluator
+            // did not merely tolerate retreating, it preferred it: the
+            // penalty area is the most crowded ground on the pitch and the
+            // spare man in the attacking third is the one nobody has
+            // bothered to mark, who is behind the ball. That is the "passes
+            // backwards in front of goal" report, and it is the same
+            // evaluator every declined shot routes into.
+            //
+            // Recycling is a real option, so this is a discount rather than
+            // a veto — scaled by how far up the pitch we are, because
+            // turning away from goal costs more the nearer you are to it.
+            let side_now = ctx.player.side.unwrap_or(PlayerSide::Left);
+            let goes_backward =
+                side_now.forward_delta(ctx.player.position.x, teammate.position.x) < 0.0;
+            let retreat_penalty = if goes_backward {
+                let width = ctx.context.field_size.width as f32;
+                let progress = side_now.attacking_progress_x(ctx.player.position.x, width);
+                // ── HOW FAR BACK, not just how far forward he is ──────
+                //
+                // This read the PASSER's position only, so a two-metre
+                // lay-back and a seventy-metre ball to your own
+                // centre-half were penalised identically — and it floored
+                // at a third of the value, which is nowhere near enough
+                // to stop one. That is the reported bug in full: a
+                // midfielder carries into the opposition goal area and
+                // plays it the length of the pitch to his own goal.
+                //
+                // It survives because FOUR of the six personality
+                // branches below score on `success_probability` and
+                // `positioning_bonus` alone and never read
+                // `tactical_value`, which is the only other term that
+                // knows which way the ball is going. An unmarked
+                // team-mate seventy metres behind the play is the best
+                // pass on the pitch by both of those measures: nobody is
+                // near him, so he is certain to receive it. This
+                // multiplier is the one direction guard every archetype
+                // must pass through, so it has to carry the distance
+                // itself.
+                //
+                // `retreat` is the share of the pitch the pass gives
+                // back. Cost is the product of the two: giving up ground
+                // is free in your own half, ordinary in midfield, and
+                // effectively forbidden once you are in the area — which
+                // is where a real player either shoots, holds it, or
+                // squares it, and never turns and hits it seventy metres.
+                let retreat = (-side_now.forward_delta(ctx.player.position.x, teammate.position.x)
+                    / width)
+                    .clamp(0.0, 1.0);
+                let advanced = ((progress - 0.40) / 0.60).clamp(0.0, 1.0);
+                (1.0 - advanced * (0.55 + retreat * 3.0)).clamp(0.02, 1.0)
+            } else {
+                1.0
+            };
+
             // GOALKEEPER PENALTY: Almost completely eliminate passing to goalkeeper
             let is_goalkeeper = matches!(
                 teammate.tactical_positions.position_group(),
@@ -1377,6 +1606,37 @@ impl PassEvaluator {
                         * optimal_distance_bonus
                         * goalkeeper_penalty
                 }
+            };
+            // Applied once, outside the personality branches, so no
+            // archetype can quietly opt out of it.
+            let score = score * retreat_penalty;
+
+            // **He can see the linesman.** A ball to a man standing beyond
+            // the last defender is not a pass, it is a free kick to the
+            // other side, and no personality above knew that: the engine
+            // gave 25.4 offsides a match against a real 4-6 purely because
+            // the evaluator had no term for it.
+            //
+            // A DISCOUNT and not a veto, deliberately. Real offsides are
+            // rare but they are not zero, and what produces the real ones
+            // is a runner and a passer disagreeing by a fraction of a
+            // second — which is exactly what survives a heavy discount and
+            // exactly what a veto would delete. Sized like the other hard
+            // discounts here (`goalkeeper_penalty` in open play is 0.0005,
+            // the huddle end of `congestion_penalty` is 0.02): enough that
+            // an offside man is only chosen when there is nothing else.
+            let score = match offside_line {
+                Some(line)
+                    if OffsideLine::is_beyond(
+                        attacking_side,
+                        teammate.position.x,
+                        ctx.player.position.x,
+                        line,
+                    ) =>
+                {
+                    score * 0.02
+                }
+                _ => score,
             };
 
             // Hard reject: never pass through 2+ opponents unless

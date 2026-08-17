@@ -1,5 +1,18 @@
+//! Catching: the keeper gathering a ball that has reached him.
+//!
+//! ⚠ **THE SAVE ROLL FOR A SHOT IN FLIGHT NO LONGER LIVES HERE.** It moved
+//! verbatim to `KeeperShotSave`, along with the whole derivation of
+//! `EXPECTED_SAVE_TICKS` — a number that has been "corrected" four times and
+//! whose history is worth more than the constant. It had to move because the
+//! keeper can now spend part of a flight in `Diving` (see `KeeperShotDive`),
+//! and two copies of one model would make the realised save rate depend on
+//! when he left his feet.
+
 use crate::r#match::events::Event;
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperSetPosition, KeeperShotDive,
+    KeeperShotReaction, KeeperShotSave, KeeperSmother, KeeperSweepLimit,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -9,60 +22,65 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-/// Length of the save window, in AI ticks, that `per_tick_save` spreads a
-/// per-SHOT save probability across. Get this wrong and the keeper's
-/// realised save rate drifts away from `save_probability` even though
-/// that model is untouched: the per-tick die is rolled once per tick the
-/// keeper spends in the save, so a longer window compounds to a higher
-/// cumulative save rate.
-///
-/// Was 3.0, derived when the loose-ball override could yank a keeper out
-/// of `Catching` / `Diving` part-way through a save. Keepers now hold
-/// those states to completion (see `PlayerState::is_committed_action`),
-/// so the real window is longer and the constant that described it was
-/// stale. 3.8 is the re-derived length.
-///
-/// NB this state-machine save roll is the minor of the two save paths —
-/// the dominant one is the per-tick physics check in
-/// `Ball::try_save_shot`, and that is where the population save rate was
-/// actually recalibrated. Measured on its own, moving this constant
-/// 3.0 → 3.8 was within run-to-run noise; it is corrected because it is
-/// now the honest number, not because it moved the aggregate.
-/// CORRECTED 3.8 → 38: the early-return at the top of `process`
-/// holds the keeper in Catching for the ENTIRE shot flight, so the
-/// per-shot→per-tick conversion was dividing by a residency ~10x
-/// shorter than the real one and the save was rolled 30-110 times.
-/// That made this the DOMINANT save path (population save% sat at
-/// 77.7% vs real 67% even after the physics roll was latched to one
-/// roll per shot) and made every `skill_mult` retune inert.
-/// LEFT AT 54 after the 2026-08 possession fix, deliberately. Shots now
-/// stay live for their projected flight rather than a flat 40 ticks, so
-/// the keeper's residency here did grow and the population save rate rose
-/// with it (79.7% against a real ~67%). Re-deriving the constant upward
-/// was tried and REVERTED: 54 → 75 → 110 cut the save rate as expected
-/// but did not add a single goal, because the shots the keeper stops
-/// catching were not goal-bound — they miss instead. All it moved was the
-/// engine's on-target rate, which is defined as (saves + goals) and so
-/// falls one-for-one with saves. 54 measures on-target at 33.5% against a
-/// real 33%; 75 gives 29.4% and 110 gives 24.3%, for the same goals.
-/// Treat the save-rate gap as a symptom of the keeper collecting shots
-/// that were missing anyway, not as a lever on the scoreline.
-const EXPECTED_SAVE_TICKS: f32 = 54.0;
-
 #[derive(Default, Clone)]
 pub struct GoalkeeperCatchingState {}
 
 impl StateProcessingHandler for GoalkeeperCatchingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if self.is_catch_successful(ctx) {
+            // Are hands legal on THIS ball? Asked at the moment the gloves
+            // close, NOT while he is moving to it. The Laws bite on the act
+            // of handling, and a keeper crossing his own box to reach a
+            // shot spends most of that journey with the ball still outside
+            // the area â judging it per-tick made him abandon virtually
+            // every save from range (goals went 2.3 â 4.0 a match).
+            //
+            // Illegal means he plays it with his feet, which is what a
+            // keeper receiving a back-pass actually does. `Clearing` is the
+            // honest default: he is on the ball, usually with a forward
+            // bearing down.
+            if !ctx.ball().handling_verdict().is_legal() {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::Clearing,
+                ));
+            }
+
             let mut holding_result =
                 StateChangeResult::with_goalkeeper_state(GoalkeeperState::HoldingBall);
 
-            holding_result
-                .events
-                .add_player_event(PlayerEvent::CaughtBall(ctx.player.id));
+            #[cfg(feature = "match-logs")]
+            if ctx.tick_context.positions.ball.position.z > 1.35 {
+                crate::mid_run_diag::KeeperActionDiag::note(5);
+            }
+
+            holding_result.events.add_player_event({
+                #[cfg(feature = "match-logs")]
+                crate::r#match::engine::ball::ball::ownership::reception_diag::GATHER_SOURCE[0]
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                PlayerEvent::CaughtBall(ctx.player.id)
+            });
 
             return Some(holding_result);
+        }
+
+        // A man at his feet with the ball: take it off him. Reachable
+        // from here because `PreparingForSave` sends the keeper straight
+        // into `Catching` for any live shot, and a rebound off the first
+        // save falls to a striker inside the six-yard box more often than
+        // anything else in football. See [`KeeperSmother`].
+        if let Some(attempt) = KeeperSmother::assess(ctx) {
+            return Some(KeeperSmother::commit(ctx, &attempt));
+        }
+
+        // He cannot get to this one on his feet. LEAVE THEM â now, while
+        // the ball is still in the air, so the dive travels to the corner
+        // instead of being drawn after the ball has already stopped. See
+        // [`KeeperShotDive`]; the save itself is unaffected, because
+        // `Diving` rolls the identical `KeeperShotSave`.
+        if KeeperShotDive::should_launch(ctx) {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Diving,
+            ));
         }
 
         // Shot is live: stay in Catching and keep sprinting toward the
@@ -74,7 +92,7 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
             return None;
         }
 
-        // Ball is moving away from the keeper at speed — only credit
+        // Ball is moving away from the keeper at speed â only credit
         // a parry when the ball was actually within reach (the keeper
         // got a hand to it). Otherwise the shot just missed past the
         // keeper and "parry" would falsely credit a save for a wide
@@ -93,10 +111,16 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
             ));
         }
 
-        // If ball is too far, decide based on distance from goal
+        // If ball is too far, decide based on distance from goal.
+        // "Far from goal" is how far off his LINE he is, bounded by how far
+        // this keeper sweeps â not five metres from his kickoff dot, which
+        // is what `distance_from_start_position() > 40.0` meant and which
+        // made a keeper who had come to meet a through-ball turn round
+        // instead of gathering it. See [`KeeperSweepLimit`].
         if ctx.ball().distance() > 12.0 {
             // If already far from goal, return rather than chasing further
-            if ctx.player().distance_from_start_position() > 40.0 {
+            let sweeper = GoalkeeperSkillProfile::from_ctx(ctx).rushing_out_profile;
+            if !KeeperSweepLimit::is_within(ctx, sweeper) {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::ReturningToGoal,
                 ));
@@ -127,13 +151,35 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
         let speed_boost =
             (1.6 + prof.shot_stopping * 0.5 + prof.dive_reach * 0.5) * prof.explosive_mult;
 
-        // Shot in flight → commit to the intercept line, don't chase
+        // Shot in flight â commit to the intercept line, don't chase
         // the current ball position (it's moving at 5.6 u/tick and
         // outrunning the keeper's pursuit steering).
         if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
             let goal_pos = ctx.ball().direction_to_own_goal();
-            let intercept = Vector3::new(goal_pos.x, target.goal_line_y, 0.0);
-            return Some(
+            // Off the line, not on it â see `KeeperSetPosition`. This is
+            // the site that decides where a CAUGHT ball ends up, because
+            // the physics save snaps the ball onto the keeper.
+            let intercept = KeeperSetPosition::set_point(
+                goal_pos,
+                // Where he THINKS it is going, not where it is going. See
+                // [`KeeperShotReaction::crossing_y`] — steering at the true
+                // crossing point from the tick of the strike is a tracking
+                // servo, and a servo never has to dive.
+                KeeperShotReaction::crossing_y(ctx, &prof, goal_pos, target),
+                (ctx.tick_context.positions.ball.position - goal_pos).magnitude(),
+                ctx.context.field_size.width as f32,
+                prof.positioning,
+            );
+            // ...AT A SET KEEPER'S PACE. `speed_boost` on top of the
+            // `Active` band is 8-13 m/s sideways, which is how this keeper
+            // came to track every shot in the game to the exact point it
+            // crossed the line and gather it standing up: the answer to
+            // "can he get there on his feet?" was always yes, so he never
+            // had to dive. A man still running when the ball arrives has
+            // not made a save. See [`KeeperShotReaction`].
+            return Some(KeeperShotReaction::on_foot(
+                ctx,
+                &prof,
                 SteeringBehavior::Arrive {
                     target: intercept,
                     slowing_distance: 2.0,
@@ -141,7 +187,7 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
                 .calculate(ctx.player)
                 .velocity
                     * speed_boost,
-            );
+            ));
         }
 
         let ball_distance = ctx.ball().distance();
@@ -180,54 +226,35 @@ impl GoalkeeperCatchingState {
 
         // Shot-in-flight: judge the save from the *intercept line*, not
         // from current ball distance. A ball aimed into the corner
-        // passes the GK 8-15 units wide of their current position —
+        // passes the GK 8-15 units wide of their current position â
         // real keepers reach 3-4 m (6-8 u) diving, so the relevant
         // metric is "how far off the line am I?", not "am I touching
         // the ball right now?".
-        if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
-            // Ball over the bar — no save attempt worth making.
-            if target.goal_line_z > 2.44 {
-                return false;
-            }
-            // Effective reach in game units: weak ~14u, elite ~30u.
-            let reach = 10.0 + prof.dive_reach * 12.0 + prof.shot_stopping * 4.0;
-            let lateral_error = (ctx.player.position.y - target.goal_line_y).abs();
-            if lateral_error > reach {
-                return false;
-            }
+        if ctx.tick_context.ball.cached_shot_target.is_some() {
+            return KeeperShotSave::roll(ctx);
+        }
 
-            // Build shot difficulty in 0..1 from placement, power,
-            // reaction-window, and keeper-offline factors.
-            let placement = (lateral_error / reach).clamp(0.0, 1.0);
-            let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
-            let power = ((ball_speed - 2.0) / 6.0).clamp(0.0, 1.0);
-            let lateral_factor = placement; // already a 0..1 lateral error.
-            let height_factor = (target.goal_line_z / 2.44).clamp(0.0, 1.0);
-            let reaction = (1.0 - prof.shot_stopping).clamp(0.0, 1.0) * 0.4;
-
-            let shot_difficulty = (power * 0.28
-                + placement * 0.24
-                + lateral_factor * 0.18
-                + height_factor * 0.10
-                + reaction * 0.10
-                + (1.0 - prof.condition_mult) * 0.10)
-                .clamp(0.0, 1.0);
-
-            // Per-shot save probability, then converted to per-tick.
-            let mut save_prob = prof.save_probability(shot_difficulty);
-            // Deflection damping: the GK was set for the original
-            // trajectory. A redirected shot arrives on a line they
-            // haven't committed to, so reaction window is shorter.
-            // Real PL data: deflected on-target shots produce ~30% goals
-            // vs ~10% for clean on-target shots — a ~3× boost to
-            // goal-per-shot, which we model as a ~0.50 multiplier to
-            // save_prob (keepers save the rest by reflex or blocked
-            // shot recovery).
-            if target.deflected {
-                save_prob *= 0.50;
-            }
-            let per_tick = prof.per_tick_save(save_prob, EXPECTED_SAVE_TICKS);
-            return ctx.context.rng.unit_f32() < per_tick;
+        // Past a shot in flight, the gloves only close on a ball that is
+        // genuinely FREE and genuinely his.
+        //
+        // This roll runs every tick the keeper spends in `Catching` and
+        // asked nothing at all about who the ball belonged to â only how
+        // far away it was, how fast, and whether it was coming towards
+        // him. A forward carrying the ball into the area satisfies all
+        // three, so the keeper rolled `catch_prob` against him on every
+        // tick until the dice came up and then took it off his foot.
+        // That is the ball ping-ponging between the keeper and the
+        // players in front of him, and it is why catches (44 a match)
+        // outnumbered shots (24) â most of them were not saves of
+        // anything.
+        //
+        // The keeper still comes for what is his: a loose ball he is
+        // favourite for. He does not tackle with his hands.
+        if ctx.ball().is_owned() && !ctx.player.has_ball(ctx) {
+            return false;
+        }
+        if !KeeperBallClaim::is_favourite(ctx) {
+            return false;
         }
 
         let distance_to_ball = ctx.ball().distance();
@@ -241,6 +268,10 @@ impl GoalkeeperCatchingState {
             return false;
         }
 
+        // NB this branch is a LOOSE ball, not a shot, so it keeps its own
+        // (gentler) power scale â `SaveModel::strike_power` is centred on
+        // a struck shot and would read every trickling ball as maximally
+        // easy.
         let ball_height = ctx.tick_context.positions.ball.position.z;
         let stretch = (distance_to_ball / max_catch_distance).clamp(0.0, 1.0);
         let power = ((ball_speed - 1.5) / 6.0).clamp(0.0, 1.0);

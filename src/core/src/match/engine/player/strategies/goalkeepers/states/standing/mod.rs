@@ -1,14 +1,20 @@
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperBallClaim,
+    KeeperCarrierThreat, KeeperRestPosition,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
+use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
-    VectorExtensions,
 };
 use nalgebra::Vector3;
 
 const DANGER_ZONE_RADIUS: f32 = 35.0;
 const CLOSE_DANGER_DISTANCE: f32 = 100.0;
+/// How far out a keeper even CONSIDERS coming for a carrier, before his
+/// own rushing-out and eccentricity widen it. 200u = 25 m.
+const SWEEP_SCAN_BASE: f32 = 200.0;
 const FAR_THREAT_DISTANCE: f32 = 300.0;
 /// Below this height the ball is on the deck — scooped up, not caught.
 const GROUND_BALL_HEIGHT: f32 = 1.2;
@@ -39,11 +45,27 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         // implemented but previously unreachable — and stops a stationary
         // ball at the keeper's feet being modelled as a claim out of the
         // air.
+        // …unless this is the ball we ourselves just put into play and it
+        // has not travelled. A keeper whose delivery drops back at his feet
+        // used to collect it and distribute again on the spot, over and
+        // over — the pick-up path grants ownership directly, so the
+        // ownership layer's own guard never saw it. Declining here is what
+        // breaks the cycle: the ball stays live and an outfielder takes it.
+        let own_dead_delivery = ctx.ball().blocked_from_recollecting();
+
         let ball_distance = ctx.ball().distance();
+        // The speed bar is what separates a ball he can gather from one
+        // he has to save. It was 10.0 u/tick — above the engine's own
+        // `MAX_SHOT_VELOCITY` of 3.2, so it excluded nothing and the
+        // keeper "picked up" balls travelling faster than any shot in the
+        // game. 2.0 u/tick (25 m/s) is a driven ball; past that he is
+        // making a save, not collecting.
         if ball_distance < 10.0
             && !ctx.ball().is_owned()
+            && !own_dead_delivery
+            && KeeperBallClaim::is_favourite(ctx)
             && ctx.ball().on_own_side()
-            && ctx.tick_context.positions.ball.velocity.norm() < 10.0
+            && ctx.tick_context.positions.ball.velocity.norm() < 2.0
         {
             let grounded = ctx.tick_context.positions.ball.position.z < GROUND_BALL_HEIGHT;
             // Hands are only legal inside our own penalty area.
@@ -80,32 +102,77 @@ impl StateProcessingHandler for GoalkeeperStandingState {
 
         let ball_on_own_side = ctx.ball().on_own_side();
 
+        // A ball in the air over my box is MINE. This is the single most
+        // visible thing a goalkeeper does and the engine had no mechanism
+        // for it — see [`KeeperAerialClaim`]. He goes and gets it: takes
+        // off if it is arriving now, runs to the meeting point if not.
+        if let Some(claim) = KeeperAerialClaim::assess(ctx) {
+            KeeperAerialClaim::note_start(ctx, &claim);
+            return Some(StateChangeResult::with_goalkeeper_state(
+                if claim.at_contact(ctx.player.position) {
+                    if claim.standing {
+                        GoalkeeperState::Catching
+                    } else {
+                        GoalkeeperState::Jumping
+                    }
+                } else {
+                    GoalkeeperState::ComingOut
+                },
+            ));
+        }
+
         // Skill-based threat assessment
         let anticipation = ctx.player.skills.mental.anticipation / 20.0;
         let command_of_area = ctx.player.skills.goalkeeping.command_of_area / 20.0;
 
-        // Check for immediate threats requiring urgent action
+        // ── The decision to come out ──────────────────────────────────
+        //
+        // ⚠ THE OUTER GATE HAS TO BE WIDER THAN THE DECISION IT GUARDS.
+        //
+        // This asked `opponent_distance < CLOSE_DANGER_DISTANCE` — 12.5 m
+        // — before it would even CONSULT `should_rush_out_for_ball`. That
+        // function reasons about a carrier bearing down from 19 m and
+        // widens further with the keeper's risk appetite, so most of it
+        // was unreachable: by the time it was asked, the striker was
+        // already in the six-yard box and the only useful answer was
+        // "set yourself". `ComingOut` measured **below 0.25% of keeper
+        // ticks** — the keeper never swept, and every sweeper attribute
+        // he has was decorative.
+        //
+        // The scan radius is now the keeper's own: how far he is willing
+        // to come is a property of `rushing_out` and `eccentricity`, and
+        // it is `should_rush_out_for_ball`'s job to weigh it. This gate
+        // only decides whether the question is worth asking.
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::KeeperSweepDiag::note(0);
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperSweepDiag::note(1);
             let opponent_distance = opponent.distance(ctx);
+            let rushing_out = ctx.player.skills.goalkeeping.rushing_out / 20.0;
+            let eccentricity = ctx.player.skills.goalkeeping.eccentricity / 20.0;
+            // 200u = 25 m for an ordinary keeper, out to ~40 m for a
+            // rushing, eccentric one — a Neuer, who genuinely defends
+            // that space, against a line-keeper who does not.
+            let scan = SWEEP_SCAN_BASE * (1.0 + rushing_out * 0.5 + eccentricity * 0.5);
 
-            // Opponent very close with ball - prepare for save or come out
-            if opponent_distance < CLOSE_DANGER_DISTANCE {
-                // Check if should come out or prepare for shot
+            if opponent_distance < scan {
+                #[cfg(feature = "match-logs")]
+                crate::mid_run_diag::KeeperSweepDiag::note(2);
                 if self.should_rush_out_for_ball(ctx, &opponent) {
+                    #[cfg(feature = "match-logs")]
+                    crate::mid_run_diag::KeeperSweepDiag::note(3);
                     return Some(StateChangeResult::with_goalkeeper_state(
                         GoalkeeperState::ComingOut,
                     ));
-                } else {
-                    return Some(StateChangeResult::with_goalkeeper_state(
-                        GoalkeeperState::PreparingForSave,
-                    ));
                 }
             }
-
-            // Opponent approaching at medium range — the dedicated
-            // Attentive state added no behaviour over Standing (both
-            // repositioned and rechecked threats every tick), so we stay
-            // put and let the next-tick threat scan drive the response.
+            // Close, and not coming — then set yourself for the strike.
+            if opponent_distance < CLOSE_DANGER_DISTANCE {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::PreparingForSave,
+                ));
+            }
         }
 
         // Check if ball is coming toward goal — react faster to shots
@@ -127,8 +194,20 @@ impl StateProcessingHandler for GoalkeeperStandingState {
             // enough to matter.
         }
 
-        // Check for loose ball in dangerous area
+        // NB a wider "sweep up slow balls in my area" branch was tried
+        // here and REMOVED: it fired on under 0.25% of keeper ticks and
+        // moved nothing. The balls trickling over the goal line are
+        // crossing WIDE of the penalty area, near the corner flags, where
+        // a keeper correctly does not go — and where a defender who
+        // touched it last would be conceding a corner rather than saving
+        // one. The endline losses are not a keeper-positioning problem.
+        // See `EndlineCensus`.
+        //
+        // Check for loose ball in dangerous area — same self-recollect bar
+        // as the close-ball branch above, or `ComingOut` simply becomes the
+        // second door into the same cycle.
         if !ctx.ball().is_owned()
+            && !own_dead_delivery
             && ball_on_own_side
             && ball_distance < 40.0 * (1.0 + command_of_area * 0.3)
         {
@@ -170,45 +249,46 @@ impl StateProcessingHandler for GoalkeeperStandingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Calculate optimal position based on ball and goal
         let optimal_position = self.calculate_optimal_position(ctx);
-        let distance_to_optimal = ctx.player.position.distance_to(&optimal_position);
 
-        // GKs need to reposition quickly to track the ball
-        if distance_to_optimal < 5.0 {
-            // Close to position — small adjustments to stay ready
-            Some(
-                SteeringBehavior::Arrive {
-                    target: optimal_position,
-                    slowing_distance: 3.0,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    * 0.7,
-            )
-        } else if distance_to_optimal < 15.0 {
-            // Repositioning needed — move with purpose
-            Some(
-                SteeringBehavior::Arrive {
-                    target: optimal_position,
-                    slowing_distance: 6.0,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    * 1.0,
-            )
-        } else {
-            // Urgently out of position — sprint
-            Some(
-                SteeringBehavior::Arrive {
-                    target: optimal_position,
-                    slowing_distance: 10.0,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    * 1.3,
-            )
+        // A keeper is not always repositioning. Standing still, set, is a
+        // real and common thing for him to be doing, and the target moves
+        // continuously with the ball — so without a deadzone he chases it
+        // every tick and ends up covering more ground than a midfielder.
+        //
+        // But the tolerance is ANISOTROPIC, and that is the whole point:
+        // slack in depth, where a metre is nothing, and tight across the
+        // goal, where a metre is a goal. See
+        // `KeeperRestPosition::LATERAL_DEADZONE`.
+        if KeeperRestPosition::is_set_with(
+            ctx.player.position,
+            optimal_position,
+            GoalkeeperSkillProfile::from_ctx(ctx).concentration,
+        ) {
+            return Some(Vector3::zeros());
         }
+
+        // URGENCY. How fast he travels is set by how near the ball is, not
+        // by how far he has to go — which is the difference between a
+        // keeper strolling out to the edge of his box while play is at the
+        // other end, and the same keeper sprinting to the same spot with
+        // a striker running through. Without this he moves at repositioning
+        // pace always, and covers 12.8 km a match against a real ~5 km.
+        let ball_distance = ctx.ball().distance();
+        let field_width = ctx.context.field_size.width as f32;
+        let urgency = (1.0 - ball_distance / (field_width * 0.55)).clamp(0.0, 1.0);
+        // Amble ↔ sprint.
+        let pace = 0.18 + urgency * urgency * 1.12;
+
+        Some(
+            SteeringBehavior::Arrive {
+                target: optimal_position,
+                slowing_distance: 8.0,
+            }
+            .calculate(ctx.player)
+            .velocity
+                * pace,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
@@ -312,6 +392,53 @@ impl GoalkeeperStandingState {
         let risk_appetite =
             (ctx.player.skills.goalkeeping.eccentricity / 20.0).clamp(0.0, 1.0) - 0.5;
 
+        // A man dribbling at the goal has to be MET. This is the constraint
+        // that was missing entirely: the race conditions below only ever
+        // fired for a loose ball or a poor controller, so a forward with
+        // the ball at his feet and decent first touch was free to carry it
+        // all the way in while the keeper stood on his line and watched.
+        // That is why forwards were seen running to within a couple of feet
+        // of the keeper before shooting — there was nothing there to stop
+        // them, and no amount of restraint on the FORWARD is the right fix
+        // for a goalkeeper who does not come out.
+        //
+        // He is not racing for the ball here, he is closing the angle, so
+        // this deliberately bypasses `can_reach_first` — a keeper who only
+        // advances when he can win the ball first never advances at all
+        // against a carrier.
+        //
+        // ⚠ …but "a carrier inside 19 m" is NOT the same question as "is
+        // he through". A striker 18 m out with two centre-backs in front of
+        // him belongs to the defence, and a keeper who charges out at him
+        // leaves an empty net to chip. Worse, `Standing` asks this question
+        // BEFORE it asks whether to set himself, so a trigger firing at
+        // 19 m made `PreparingForSave` unreachable for every carrier inside
+        // 12.5 m — the exact situation that state exists for. He committed,
+        // hit the excursion limit, turned round, and committed again: with
+        // a carrier inside 25 m he spent 18.6% of those ticks running back
+        // to his line against 13.5% coming out.
+        //
+        // The real rule is the simple one — he comes when there is nobody
+        // between him and the ball. See [`KeeperCarrierThreat`].
+        //
+        // 150u ≈ 19 m: the carrier is into the area the keeper is
+        // responsible for. Risk appetite widens it, so an eccentric sweeper
+        // comes further and a cautious one holds his line longer.
+        let carrier_bearing_down = ctx.ball().is_owned()
+            && keeper_to_ball < 150.0 * (1.0 + risk_appetite * 0.4)
+            && !ctx.ball().is_held_by_opponent_goalkeeper();
+        if carrier_bearing_down {
+            if KeeperCarrierThreat::is_through(ctx, opponent) {
+                #[cfg(feature = "match-logs")]
+                crate::mid_run_diag::KeeperSweepDiag::note(4);
+                return true;
+            }
+            // Covered. He does not charge — he sets himself and narrows
+            // the angle, which is `PreparingForSave`'s job and the branch
+            // immediately below this call in `process`.
+            return false;
+        }
+
         let can_reach_first =
             keeper_time < opponent_time * (1.0 + rushing_out * 0.2 + risk_appetite * 0.15);
         let ball_loose_or_poor_control = !ctx.ball().is_owned() || opponent_control < 0.5;
@@ -322,65 +449,68 @@ impl GoalkeeperStandingState {
     }
 
     /// Calculate optimal goalkeeper position based on ball and goal
+    /// Where the keeper should be standing.
+    ///
+    /// # Why this was rebuilt
+    ///
+    /// A keeper in this engine stood on his line and never left it. He
+    /// spent **88% of the match motionless** and sat 11.4 m deeper than
+    /// even the modest anchor the team shape gave him, which is the "only
+    /// the GK stays in the goal" report.
+    ///
+    /// The old model had two faults, and the first is the interesting one:
+    /// **its depth was inverted.** With the ball in the opponent's half it
+    /// put him `12 + command * 8` units — **1.5 to 2.5 metres** — off his
+    /// line. That is the moment a real keeper is FURTHEST out, 20-30 m up,
+    /// sweeping behind his defence. With the ball near him it brought him
+    /// *further* out. Across every input the whole range came to about
+    /// 1-4 m, so nothing he did was visible.
+    ///
+    /// Second, every result was clamped inside the penalty area, so
+    /// sweeping up to meet a ball played in behind was impossible by
+    /// construction.
+    ///
+    /// # The model
+    ///
+    /// A keeper's depth is set by **where the ball is** and **how high his
+    /// own defence is**, and his lateral position by **the angle** — he
+    /// stands on the line from the centre of his goal to the ball, which
+    /// is what "narrowing the angle" physically means.
+    ///
+    /// Real reference points, which the constants below reproduce:
+    ///   * ball in the opponent's half behind a high line — 20-28 m out,
+    ///     effectively a sweeper;
+    ///   * ball in midfield — 12-18 m;
+    ///   * ball entering our final third — 6-10 m;
+    ///   * ball in the box — 2-5 m, on the angle, ready to spread.
     fn calculate_optimal_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let goal_center = ctx.ball().direction_to_own_goal();
-        let ball_position = ctx.tick_context.positions.ball.position;
-
-        // Goalkeeper skills affecting positioning
-        let positioning_skill = ctx.player.skills.mental.positioning / 20.0;
-        let command_of_area = ctx.player.skills.goalkeeping.command_of_area / 20.0;
-
-        // Calculate distance from goal to ball
-        let goal_to_ball = ball_position - goal_center;
-        let distance_to_ball = goal_to_ball.magnitude();
-
-        // Base distance from goal line (in meters/units)
-        let mut optimal_distance_from_goal = 10.0; // Start about 10 units from goal line
-
-        // Adjust based on ball position
-        if ctx.ball().on_own_side() {
-            // Ball on defensive half - position based on threat level
-            let threat_distance = distance_to_ball.min(300.0) / 300.0; // Normalize to 0-1
-
-            // Closer ball = come out more (but not too far)
-            optimal_distance_from_goal += (1.0 - threat_distance) * 20.0 * command_of_area;
-
-            // Better positioning = more accurate placement
-            optimal_distance_from_goal *= 0.8 + positioning_skill * 0.4;
-
-            // Narrow the angle - position on line between goal and ball
-            let direction_to_ball = if distance_to_ball > 1.0 {
-                goal_to_ball.normalize()
-            } else {
-                Vector3::new(1.0, 0.0, 0.0) // Fallback if ball too close to goal
-            };
-
-            let mut new_position = goal_center + direction_to_ball * optimal_distance_from_goal;
-
-            // Lateral adjustment for angle coverage
-            let ball_y_offset = ball_position.y - goal_center.y;
-            let lateral_adjustment = ball_y_offset * 0.2 * positioning_skill;
-            new_position.y += lateral_adjustment;
-
-            // Keep within penalty area
-            self.clamp_to_penalty_area(ctx, new_position)
-        } else {
-            // Ball on opponent's half - stay closer to goal but ready
-            optimal_distance_from_goal = 12.0 + command_of_area * 8.0;
-
-            let mut new_position = goal_center;
-            new_position.x += optimal_distance_from_goal
-                * (if ctx.player.side == Some(PlayerSide::Left) {
-                    1.0
-                } else {
-                    -1.0
-                });
-
-            self.clamp_to_penalty_area(ctx, new_position)
-        }
+        let point = KeeperRestPosition::point(
+            ctx.ball().direction_to_own_goal(),
+            ctx.tick_context.positions.ball.position,
+            ctx.tick_context.positions.ball.velocity,
+            ctx.player.side.unwrap_or(PlayerSide::Left),
+            ctx.team().tactical().defensive_line_x,
+            ctx.context.field_size.width as f32,
+            ctx.player.skills.goalkeeping.command_of_area / 20.0,
+            GoalkeeperSkillProfile::from_ctx(ctx).positioning,
+        );
+        self.clamp_sweep_range(ctx, point)
     }
 
-    fn clamp_to_penalty_area(
+    /// Bound the keeper's standing position.
+    ///
+    /// Replaces a hard clamp into the penalty area. That clamp made
+    /// sweeping impossible by construction — a keeper cannot come and
+    /// meet a ball played in behind if he is not allowed out of his box —
+    /// and it is not what the laws or the football say: a keeper may go
+    /// anywhere, he just cannot handle the ball outside the area, which
+    /// the handling code enforces separately.
+    ///
+    /// What actually bounds him is how far he dares leave his goal, which
+    /// is `depth`, already computed from the ball and his defensive line.
+    /// Laterally he stays within the width of his own area — a keeper
+    /// drifting to the touchline is lost, not sweeping.
+    fn clamp_sweep_range(
         &self,
         ctx: &StateProcessingContext,
         position: Vector3<f32>,
@@ -388,8 +518,23 @@ impl GoalkeeperStandingState {
         let penalty_area = ctx
             .context
             .penalty_area(ctx.player.side == Some(PlayerSide::Left));
+        let goal_center = ctx.ball().direction_to_own_goal();
+        let side = ctx.player.side.unwrap_or(PlayerSide::Left);
+        let field_width = ctx.context.field_size.width as f32;
+
+        // Never behind his own goal line, and never past halfway —
+        // `KeeperRestPosition` already bounds the depth, this is the
+        // backstop. Laterally he stays within the width of his own area:
+        // a keeper drifting toward a touchline is lost, not sweeping.
+        let far_x = goal_center.x + side.forward_dir_x() * (field_width * 0.5 - 20.0);
+        let (lo_x, hi_x) = if side.forward_dir_x() > 0.0 {
+            (goal_center.x, far_x)
+        } else {
+            (far_x, goal_center.x)
+        };
+
         Vector3::new(
-            position.x.clamp(penalty_area.min.x, penalty_area.max.x),
+            position.x.clamp(lo_x, hi_x),
             position.y.clamp(penalty_area.min.y, penalty_area.max.y),
             0.0,
         )

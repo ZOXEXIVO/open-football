@@ -1,0 +1,82 @@
+[package]
+name = "match_viewer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Deliberately excluded from the root workspace (see the root `Cargo.toml`
+# `exclude` list): this crate only ever builds for `wasm32-unknown-unknown`
+# with its own profile, and the web crate's `build.rs` drives that build
+# through a nested `cargo` invocation with a separate target dir.
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Hand-picked rather than a feature collection: the collections drag in audio,
+# glTF, sprites, gamepads and the desktop windowing backends, none of which a
+# replay viewer in a browser tab has any use for.
+bevy = { version = "0.19", default-features = false, features = [
+    "async_executor",
+    "bevy_asset",
+    "bevy_camera",
+    "bevy_color",
+    "bevy_core_pipeline",
+    "bevy_image",
+    "bevy_input_focus",
+    "bevy_light",
+    "bevy_log",
+    "bevy_material",
+    "bevy_mesh",
+    "bevy_pbr",
+    "bevy_render",
+    "bevy_shader",
+    "bevy_state",
+    "bevy_text",
+    "bevy_ui",
+    "bevy_ui_render",
+    "bevy_window",
+    "bevy_winit",
+    "default_font",
+    "keyboard",
+    "ktx2",
+    "mouse",
+    "std",
+    "tonemapping_luts",
+    "webgl2",
+    "zstd_rust",
+] }
+wasm-bindgen = "=0.2.127"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "console",
+    "Headers",
+    "Request",
+    "RequestInit",
+    "Response",
+    "Window",
+    "MouseEvent",
+    "WheelEvent",
+    "KeyboardEvent",
+    "AddEventListenerOptions",
+    "Document",
+    "Element",
+    "EventTarget",
+    # Focusing the canvas on load, so the flight keys answer the first press.
+    "HtmlElement",
+    "FocusOptions",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+console_error_panic_hook = "0.1"
+
+# `opt-level = "z"` over `3`: the replay viewer is not compute bound (a few
+# hundred transform writes per frame) and every megabyte here is embedded
+# into the web binary and shipped over the wire.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

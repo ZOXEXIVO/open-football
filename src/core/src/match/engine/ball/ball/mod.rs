@@ -8,20 +8,39 @@
 //! | [`ownership`]   | Pass-target claims, deadlock resolution, stall safety nets, ball-ownership claim flow |
 //! | [`interactions`]| Intercept / shot-block / shot-save resolution                |
 //! | [`goal`]        | Goal / over-the-bar / wide-of-goal handling                  |
+//! | [`frame`]       | The woodwork: posts and crossbar, and rebounds off them      |
+//! | [`net`]         | What the ball does after it crosses the line                 |
 //! | [`motion`]      | Velocity integration, owner tracking, boundary inset         |
 //! | [`stall`]       | Position-anchor stall detector + snapshot diagnostics        |
 
+// `pub` for `GoalFrame` / `FramePart` — the replay viewer draws the same
+// posts the physics rebounds off, and the two geometries must agree.
+pub mod frame;
 mod goal;
 pub mod interactions;
-mod motion;
+// `pub` for `GoalNet` / `BallInNet` — the celebration choreography in the
+// flow layer reads the goal geometry to send a keeper in after the ball,
+// and the replay viewer needs the same net depth to draw it.
+pub mod net;
+// `pub` for `SpinModel` — the strike sites (shot / cross) solve the
+// rotation they need from the same Magnus coefficient the physics
+// integrates, so the two can never drift apart.
+pub mod motion;
 pub mod ownership;
 mod restart;
-mod stall;
+pub use restart::ThrowIn;
+// `pub` for `dead_ball_diag` — the stall attribution counters are read by
+// the dev harness, same as `ownership::reception_diag`.
+pub mod stall;
 
+use crate::r#match::engine::ball::ball::net::BallInNet;
 use crate::r#match::engine::ball::events::BallEvent;
 use crate::r#match::engine::set_pieces::CornerRoutine;
 use crate::r#match::events::EventCollection;
+use crate::r#match::player::strategies::passing::CrossType;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::{CrossDiag, PassWeightCensus};
 use nalgebra::Vector3;
 use std::collections::VecDeque;
 
@@ -74,6 +93,57 @@ impl PassOriginRestart {
     }
 }
 
+/// **A dead ball waiting for the man who has to take it.**
+///
+/// # Why this exists
+///
+/// Every restart in this engine used to place the ball and TELEPORT the
+/// taker onto it (`pending_set_piece_teleport`). For a corner or a goal
+/// kick that is a defensible shortcut — there is a real stoppage of thirty
+/// seconds there and the sim has nothing to fill it with. For a throw-in
+/// it is not, and it was the reported bug: measured over 60 matches, the
+/// taker was teleported on **100% of throw-ins, a mean of 21.5 m**, so a
+/// player materialised on the touchline roughly every forty seconds of
+/// watched football.
+///
+/// The ball instead lies where it went out, out of play and untouchable,
+/// while the taker runs to it. He is a normal player under normal AI while
+/// he does it, so the run costs him the stamina it should and the picture
+/// is a man jogging to the line rather than one appearing there.
+///
+/// The teleport survives as the TIMEOUT (see [`Self::PATIENCE_TICKS`]):
+/// a restart that never happens would stall the match, and no visual is
+/// worth that.
+#[derive(Debug, Clone, Copy)]
+pub struct AwaitedRestart {
+    /// Who is taking it.
+    pub taker_id: u32,
+    /// Where the ball is and where he has to get to.
+    pub spot: Vector3<f32>,
+    /// Which restart this is, re-applied when he arrives — the origin
+    /// decides offside exemption and how the delivery is scored.
+    pub origin: PassOriginRestart,
+    /// The tick it was awarded on, for the patience bound.
+    pub awarded_tick: u64,
+}
+
+impl AwaitedRestart {
+    /// Close enough to pick the ball up, in game units. 12u = 1.5 m.
+    ///
+    /// Deliberately generous: the taker is steered by the ordinary chase
+    /// behaviour, which slows and settles rather than landing on a point,
+    /// and a tolerance tighter than his own settling distance leaves him
+    /// jogging beside the ball until the patience bound fires. At 8u a
+    /// quarter of all throw-ins still timed out and were teleported.
+    pub const REACH: f32 = 12.0;
+
+    /// How long the ball is allowed to wait, in engine ticks. 500 = 5 s —
+    /// longer than the 21.5 m the taker used to be teleported takes to
+    /// run, and short enough that a taker who gets stuck (blocked, or
+    /// pulled into another state) cannot hold the match up.
+    pub const PATIENCE_TICKS: u64 = 500;
+}
+
 /// Snapshot of the offside-relevant geometry at the moment a pass is
 /// kicked. Stored on the ball for the duration of an in-flight pass so
 /// the offside check can fire on receiver involvement (touch / claim /
@@ -93,21 +163,72 @@ pub struct OffsideSnapshot {
 
 impl OffsideSnapshot {
     /// Decide whether the snapshot represents an offside position.
-    /// Tolerance 1.5u absorbs foot-vs-shoulder ambiguity.
     pub fn is_offside(&self) -> bool {
-        const TOLERANCE: f32 = 1.5;
-        match self.passer_side {
+        OffsideLine::is_beyond(
+            self.passer_side,
+            self.receiver_x_at_kick,
+            self.ball_x_at_kick,
+            self.second_last_defender_x,
+        )
+    }
+}
+
+/// **The offside line, and the one rule for being beyond it.**
+///
+/// # Why it is shared
+///
+/// The referee had this rule and nobody else did. `build_offside_snapshot`
+/// worked the line out at the moment of the pass and flagged the receiver
+/// afterwards, while the pass evaluator — which chooses that receiver —
+/// had no offside term at all: measured over 60 matches, **25.4 offsides a
+/// match against a real 4-6**, because a passer would cheerfully play a
+/// ball to a man standing two metres beyond the last defender.
+///
+/// Real football's offside rate is low not because the flag is rare but
+/// because nobody deliberately plays one. That only holds if the passer
+/// reads the SAME line the referee does — a passer avoiding a line one
+/// unit away from the official one would still concede them, and would
+/// look like it was avoiding nothing.
+pub struct OffsideLine;
+
+impl OffsideLine {
+    /// Absorbs foot-vs-shoulder ambiguity, in game units.
+    pub const TOLERANCE: f32 = 1.5;
+
+    /// The second-last opponent's `x` — the line itself — for a side
+    /// attacking in `attacking`'s direction.
+    ///
+    /// One pass and no allocation, because the pass evaluator asks this
+    /// on every tick a player is on the ball. `None` when fewer than two
+    /// opponents are on the pitch, where there is no line to speak of.
+    pub fn second_last(xs: impl Iterator<Item = f32>, attacking: PlayerSide) -> Option<f32> {
+        // "Deepest" means nearest the goal being attacked, so the two are
+        // tracked in the direction that side plays.
+        let (mut deepest, mut second) = (None::<f32>, None::<f32>);
+        let beyond = |a: f32, b: f32| match attacking {
+            PlayerSide::Left => a > b,
+            PlayerSide::Right => a < b,
+        };
+        for x in xs {
+            if deepest.is_none_or(|d| beyond(x, d)) {
+                second = deepest;
+                deepest = Some(x);
+            } else if second.is_none_or(|s| beyond(x, s)) {
+                second = Some(x);
+            }
+        }
+        second
+    }
+
+    /// Is a receiver at `receiver_x` in an offside position — beyond both
+    /// the ball and the line?
+    pub fn is_beyond(attacking: PlayerSide, receiver_x: f32, ball_x: f32, line_x: f32) -> bool {
+        match attacking {
             PlayerSide::Left => {
-                if self.receiver_x_at_kick <= self.ball_x_at_kick + TOLERANCE {
-                    return false;
-                }
-                self.receiver_x_at_kick > self.second_last_defender_x + TOLERANCE
+                receiver_x > ball_x + Self::TOLERANCE && receiver_x > line_x + Self::TOLERANCE
             }
             PlayerSide::Right => {
-                if self.receiver_x_at_kick >= self.ball_x_at_kick - TOLERANCE {
-                    return false;
-                }
-                self.receiver_x_at_kick < self.second_last_defender_x - TOLERANCE
+                receiver_x < ball_x - Self::TOLERANCE && receiver_x < line_x - Self::TOLERANCE
             }
         }
     }
@@ -182,6 +303,323 @@ pub mod assist_diag {
     }
 }
 
+/// Where the ball actually goes, and which line of code sent it there.
+///
+/// Two symptoms motivated this and neither is visible in any existing
+/// counter: balls that climb absurdly high, and balls that arrive
+/// somewhere far away in a single tick without having travelled. Both
+/// are silent — the physics never complains, the stat sheet is
+/// unaffected, and only somebody watching the 3D replay sees it.
+///
+/// # Why a launch census rather than a height histogram
+///
+/// The vertical axis is in METRES while `x`/`y` are in game units (see
+/// [`GRAVITY_PER_TICK`]). A hand-written `z` therefore reads as a
+/// perfectly sane number and means something absurd: `4.5` looks like a
+/// firm hoof and is a 10 km apex. Sampling `position.z` per tick would
+/// mostly measure how long the ball spends on the deck; sampling the
+/// APEX IMPLIED AT LAUNCH names the offending kick directly, which is
+/// what a fix needs.
+///
+/// # Why teleports are attributed per stage
+///
+/// `Ball::update` runs seventeen passes over the ball and six of them
+/// can move it without touching the velocity. "The ball jumped" is not
+/// actionable; "the ball jumped 91u inside `try_block_shot`" is.
+#[cfg(feature = "match-logs")]
+pub mod flight_diag {
+    use nalgebra::Vector3;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Apex bands in metres. A real football tops out around 30 m from
+    /// the most violent hoof, so everything from `Absurd` up is a bug by
+    /// construction — the bands exist to say HOW absurd, because the
+    /// error is a unit confusion and the magnitude identifies which one.
+    pub const APEX_BANDS: [f32; 8] = [1.0, 3.0, 6.0, 12.0, 30.0, 100.0, 1000.0, f32::INFINITY];
+    pub const APEX_LABELS: [&str; 8] = [
+        "<1m", "1-3m", "3-6m", "6-12m", "12-30m", "30-100m", "0.1-1km", ">1km",
+    ];
+
+    /// One counter per band, over every launch the ball takes.
+    pub static APEX_HIST: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+    /// Highest apex any single launch implied, x1000 (millimetres).
+    pub static APEX_MAX_MM: AtomicU64 = AtomicU64::new(0);
+    /// Launches seen.
+    pub static LAUNCHES: AtomicU64 = AtomicU64::new(0);
+    /// Launches above 30 m — impossible for a human — split by the state
+    /// the striker was in. Sized past the state machine's 78 variants so
+    /// a newly added state cannot silently fall off the end.
+    pub static ABSURD_BY_STATE: [AtomicU64; 96] = [const { AtomicU64::new(0) }; 96];
+
+    /// Highest the ball's own `position.z` ever actually reached, in mm.
+    /// Read against `APEX_MAX_MM`: a launch apex that never materialises
+    /// means something cut the flight short (a boundary clamp, a claim),
+    /// which is its own bug.
+    pub static PEAK_Z_MM: AtomicU64 = AtomicU64::new(0);
+
+    /// Fastest horizontal speed observed on an unowned ball, x1000.
+    pub static PEAK_SPEED_X1000: AtomicU64 = AtomicU64::new(0);
+
+    /// The passes of `Ball::update` that can relocate the ball, in the
+    /// order they run.
+    ///
+    /// The four endline / touchline resolvers are listed separately from
+    /// `boundary` on purpose. They were folded into it at first and the
+    /// bucket read 64 unexplained relocations a match with a worst case
+    /// of 53 m, which looks exactly like a bug and is not one: a throw-in
+    /// puts the ball on the touchline and a goal kick puts it in the six-
+    /// yard box, and both are supposed to move it a long way. Only the
+    /// LAST entry is a genuine "nothing decided this" clamp.
+    pub const STAGES: [&str; 12] = [
+        "intercept",
+        "block_shot",
+        "save_shot",
+        "deadlock_claim",
+        "position_stall",
+        "ownership",
+        "move_to",
+        "restart:goal",
+        "restart:over_bar",
+        "restart:wide",
+        "restart:throw_in",
+        "boundary_clamp",
+    ];
+    pub const STAGE_INTERCEPT: usize = 0;
+    pub const STAGE_BLOCK: usize = 1;
+    pub const STAGE_SAVE: usize = 2;
+    pub const STAGE_DEADLOCK: usize = 3;
+    pub const STAGE_STALL: usize = 4;
+    pub const STAGE_OWNERSHIP: usize = 5;
+    pub const STAGE_MOVE: usize = 6;
+    pub const STAGE_GOAL: usize = 7;
+    pub const STAGE_OVER_BAR: usize = 8;
+    pub const STAGE_WIDE: usize = 9;
+    pub const STAGE_THROW_IN: usize = 10;
+    pub const STAGE_BOUNDARY: usize = 11;
+
+    /// The stages above that are RESTARTS — moving the ball is their job,
+    /// so their relocations are reported apart from the unexplained ones.
+    pub const RESTART_STAGES: std::ops::Range<usize> = STAGE_GOAL..STAGE_BOUNDARY;
+
+    /// Horizontal jumps a stage produced that its own velocity cannot
+    /// explain, and their summed / worst magnitude in game units.
+    pub static JUMPS: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
+    pub static JUMP_SUM_X100: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
+    pub static JUMP_MAX_X100: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
+    /// Fastest the ball was travelling as each stage left it, x1000.
+    /// `PEAK_SPEED_X1000` says a runaway speed exists; this says which
+    /// pass over the ball put it there.
+    pub static STAGE_PEAK_SPEED_X1000: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
+
+    /// Height (mm) at which an interception fired, summed, and how many
+    /// fired above a standing player's reach — the ones that need a leap
+    /// and never get one.
+    pub static INTERCEPTS: AtomicU64 = AtomicU64::new(0);
+    pub static INTERCEPT_Z_SUM_MM: AtomicU64 = AtomicU64::new(0);
+    pub static INTERCEPTS_ABOVE_REACH: AtomicU64 = AtomicU64::new(0);
+    /// Interceptions taken with both feet on the floor at a height that
+    /// needs a jump. `INTERCEPTS_ABOVE_REACH` minus this is the number
+    /// that were properly won in the air.
+    pub static INTERCEPTS_NO_LEAP: AtomicU64 = AtomicU64::new(0);
+
+    /// Headers contested, and how many of those were won by a player who
+    /// actually left the ground.
+    pub static HEADERS: AtomicU64 = AtomicU64::new(0);
+    pub static HEADERS_AIRBORNE: AtomicU64 = AtomicU64::new(0);
+
+    /// Accessors. Grouped on a struct so the module exposes no free
+    /// functions; the statics stay module-level because Rust has no
+    /// associated statics.
+    pub struct FlightDiag;
+
+    impl FlightDiag {
+        /// Record a kick: `vz` is the launch speed in m/tick, `z` the
+        /// height it was struck from. `striker_state` is the compact id
+        /// of the state the player who last had the ball was in, which is
+        /// what names the offending site when an apex comes back absurd —
+        /// a bare count says a bug exists but not which kick wrote it.
+        pub fn note_launch(vz: f32, z: f32, striker_state: Option<usize>) {
+            let apex = super::Ball::apex_for_launch(vz) + z.max(0.0);
+            LAUNCHES.fetch_add(1, Ordering::Relaxed);
+            let band = APEX_BANDS.iter().position(|&b| apex < b).unwrap_or(7);
+            APEX_HIST[band].fetch_add(1, Ordering::Relaxed);
+            APEX_MAX_MM.fetch_max((apex.max(0.0) * 1000.0) as u64, Ordering::Relaxed);
+            // Only the absurd ones are worth attributing; a histogram over
+            // every launch in the match would be all noise.
+            if apex > 30.0 {
+                if let Some(id) = striker_state {
+                    if let Some(c) = ABSURD_BY_STATE.get(id) {
+                        c.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+
+        /// Per-state count of launches above 30 m, indexed by
+        /// `PlayerState::compact_id`.
+        pub fn absurd_by_state() -> [u64; 96] {
+            std::array::from_fn(|i| ABSURD_BY_STATE[i].load(Ordering::Relaxed))
+        }
+
+        /// Sample the ball's realised flight once per tick.
+        pub fn note_tick(position: Vector3<f32>, velocity: Vector3<f32>, owned: bool) {
+            PEAK_Z_MM.fetch_max((position.z.max(0.0) * 1000.0) as u64, Ordering::Relaxed);
+            if !owned {
+                let speed = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
+                PEAK_SPEED_X1000.fetch_max((speed.max(0.0) * 1000.0) as u64, Ordering::Relaxed);
+            }
+        }
+
+        /// Book a relocation `stage` produced beyond what its velocity
+        /// accounts for.
+        pub fn note_jump(stage: usize, distance: f32) {
+            if stage >= STAGES.len() {
+                return;
+            }
+            JUMPS[stage].fetch_add(1, Ordering::Relaxed);
+            let x100 = (distance.max(0.0) * 100.0) as u64;
+            JUMP_SUM_X100[stage].fetch_add(x100, Ordering::Relaxed);
+            JUMP_MAX_X100[stage].fetch_max(x100, Ordering::Relaxed);
+        }
+
+        /// Book an interception at `z` metres, by a player `airborne` or
+        /// not. `reach` is a standing player's ceiling.
+        pub fn note_intercept(z: f32, reach: f32, airborne: bool) {
+            INTERCEPTS.fetch_add(1, Ordering::Relaxed);
+            INTERCEPT_Z_SUM_MM.fetch_add((z.max(0.0) * 1000.0) as u64, Ordering::Relaxed);
+            if z > reach {
+                INTERCEPTS_ABOVE_REACH.fetch_add(1, Ordering::Relaxed);
+                if !airborne {
+                    INTERCEPTS_NO_LEAP.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        pub fn note_header(airborne: bool) {
+            HEADERS.fetch_add(1, Ordering::Relaxed);
+            if airborne {
+                HEADERS_AIRBORNE.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(launches, apex_hist, apex_max_m, peak_z_m, peak_speed)`
+        pub fn launch_snapshot() -> (u64, [u64; 8], f32, f32, f32) {
+            (
+                LAUNCHES.load(Ordering::Relaxed),
+                std::array::from_fn(|i| APEX_HIST[i].load(Ordering::Relaxed)),
+                APEX_MAX_MM.load(Ordering::Relaxed) as f32 / 1000.0,
+                PEAK_Z_MM.load(Ordering::Relaxed) as f32 / 1000.0,
+                PEAK_SPEED_X1000.load(Ordering::Relaxed) as f32 / 1000.0,
+            )
+        }
+
+        /// Per-stage `(count, mean_units, max_units, peak_speed)`.
+        pub fn jump_snapshot() -> [(u64, f32, f32, f32); 12] {
+            std::array::from_fn(|i| {
+                let n = JUMPS[i].load(Ordering::Relaxed);
+                let mean = if n == 0 {
+                    0.0
+                } else {
+                    JUMP_SUM_X100[i].load(Ordering::Relaxed) as f32 / 100.0 / n as f32
+                };
+                (
+                    n,
+                    mean,
+                    JUMP_MAX_X100[i].load(Ordering::Relaxed) as f32 / 100.0,
+                    STAGE_PEAK_SPEED_X1000[i].load(Ordering::Relaxed) as f32 / 1000.0,
+                )
+            })
+        }
+
+        /// `(intercepts, mean_z_m, above_reach, above_reach_no_leap,
+        ///   headers, headers_airborne)`
+        pub fn aerial_snapshot() -> (u64, f32, u64, u64, u64, u64) {
+            let n = INTERCEPTS.load(Ordering::Relaxed);
+            let mean = if n == 0 {
+                0.0
+            } else {
+                INTERCEPT_Z_SUM_MM.load(Ordering::Relaxed) as f32 / 1000.0 / n as f32
+            };
+            (
+                n,
+                mean,
+                INTERCEPTS_ABOVE_REACH.load(Ordering::Relaxed),
+                INTERCEPTS_NO_LEAP.load(Ordering::Relaxed),
+                HEADERS.load(Ordering::Relaxed),
+                HEADERS_AIRBORNE.load(Ordering::Relaxed),
+            )
+        }
+
+        pub fn reset() {
+            for c in APEX_HIST.iter() {
+                c.store(0, Ordering::Relaxed);
+            }
+            for c in ABSURD_BY_STATE.iter() {
+                c.store(0, Ordering::Relaxed);
+            }
+            for i in 0..STAGES.len() {
+                JUMPS[i].store(0, Ordering::Relaxed);
+                JUMP_SUM_X100[i].store(0, Ordering::Relaxed);
+                JUMP_MAX_X100[i].store(0, Ordering::Relaxed);
+                STAGE_PEAK_SPEED_X1000[i].store(0, Ordering::Relaxed);
+            }
+            for c in [
+                &APEX_MAX_MM,
+                &LAUNCHES,
+                &PEAK_Z_MM,
+                &PEAK_SPEED_X1000,
+                &INTERCEPTS,
+                &INTERCEPT_Z_SUM_MM,
+                &INTERCEPTS_ABOVE_REACH,
+                &INTERCEPTS_NO_LEAP,
+                &HEADERS,
+                &HEADERS_AIRBORNE,
+            ] {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Walks `Ball::update` alongside the ball, comparing where each pass
+    /// left it against where its velocity said it should be.
+    pub struct StageProbe {
+        position: Vector3<f32>,
+    }
+
+    impl StageProbe {
+        pub fn new(position: Vector3<f32>) -> Self {
+            Self { position }
+        }
+
+        /// Book whatever `stage` did. `allowance` is the horizontal
+        /// distance the stage was entitled to move the ball — its own
+        /// velocity for `move_to`, nothing for a pass that is only
+        /// supposed to change ownership.
+        pub fn note(
+            &mut self,
+            stage: usize,
+            position: Vector3<f32>,
+            velocity: Vector3<f32>,
+            allowance: f32,
+        ) {
+            let dx = position.x - self.position.x;
+            let dy = position.y - self.position.y;
+            let moved = (dx * dx + dy * dy).sqrt();
+            // 1u (12.5 cm) of slack absorbs the sub-unit nudges several
+            // passes legitimately apply.
+            if moved > allowance + 1.0 {
+                FlightDiag::note_jump(stage, moved - allowance);
+            }
+            if stage < STAGES.len() {
+                let speed = (velocity.x * velocity.x + velocity.y * velocity.y).sqrt();
+                STAGE_PEAK_SPEED_X1000[stage]
+                    .fetch_max((speed.max(0.0) * 1000.0) as u64, Ordering::Relaxed);
+            }
+            self.position = position;
+        }
+    }
+}
+
 /// Per-tick rolling-friction decay for a ball on the ground: each tick
 /// its horizontal speed is multiplied by `1 - GROUND_FRICTION`.
 ///
@@ -200,6 +638,174 @@ pub mod assist_diag {
 /// Shared so the physics and the pass-weighting can never disagree again
 /// — they were separate literals in `motion.rs` and `players.rs`.
 pub const GROUND_FRICTION: f32 = 0.0016;
+
+/// Downward acceleration applied to an airborne ball, in **m/tick²**.
+///
+/// # The ball's vertical axis is in METRES
+///
+/// `x` and `y` are in game units (1u = 0.125 m); `z` is in metres. The
+/// engine has always said so — `GOAL_HEIGHT` is annotated "crossbar height
+/// in meters (z-axis is in meters)", and every reach threshold in the
+/// engine (`PLAYER_JUMP_REACH` 3.5, `is_aerial` 2.3, the receiver ceiling
+/// 2.8, the heading band 1.4-2.5) is a sane figure in metres and a
+/// nonsense one in units. What did NOT honour the convention was the
+/// motion: gravity and the launch velocities were written in units, so a
+/// ball climbing to "4.0" was climbing four metres' worth of threshold at
+/// four units' worth of speed.
+///
+/// This constant is the reconciliation. At 10 ms a tick,
+/// `9.81 m/s² × (0.01 s)² = 9.81e-4 m/tick²`. It replaces `9.81 * 0.016`
+/// (= 0.157), which was 160× too strong in metres — the ball fell like a
+/// stone, so nothing could hang, so the pass solver had to fire lofted
+/// balls at 85 m/s to get them anywhere, and clearances and shots were
+/// each hand-fitted to that in their own units.
+///
+/// Consequences, all of them wanted: hang times become real (a 30 m cross
+/// hangs ~2.3 s instead of ~0.5 s), lofted passes come back inside normal
+/// pass speeds, and every height threshold in the engine starts meaning
+/// what it says.
+///
+/// Every site that integrates or inverts vertical motion MUST read this
+/// (or the helpers below) rather than carry its own literal — the physics,
+/// the landing projection, the pass solver, the shot arc, the clearance
+/// and the cross-chase all used to hold private copies of `9.81`-something
+/// in three different unit systems.
+pub const GRAVITY_PER_TICK: f32 = 9.81 * 0.01 * 0.01;
+
+impl Ball {
+    /// Vertical launch speed (m/tick) that peaks at `apex` metres.
+    ///
+    /// Apex is the natural way to ask for a trajectory: it is the one
+    /// property of a kick a player actually aims at ("clip it over him",
+    /// "put it on his head", "row Z"), it reads in metres so it can be
+    /// sanity-checked against a human being, and it is unit-clean — the
+    /// alternative, a launch angle, cannot be expressed at all when the
+    /// horizontal and vertical axes carry different units.
+    #[inline]
+    pub fn launch_speed_for_apex(apex_metres: f32) -> f32 {
+        (2.0 * GRAVITY_PER_TICK * apex_metres.max(0.0)).sqrt()
+    }
+
+    /// How long a ball launched at `vertical_speed` (m/tick) stays up, in
+    /// ticks, before returning to the height it left from.
+    #[inline]
+    pub fn hang_ticks(vertical_speed: f32) -> f32 {
+        2.0 * vertical_speed.max(0.0) / GRAVITY_PER_TICK
+    }
+
+    /// Peak height in metres of a ball launched at `vertical_speed`.
+    #[inline]
+    pub fn apex_for_launch(vertical_speed: f32) -> f32 {
+        vertical_speed * vertical_speed / (2.0 * GRAVITY_PER_TICK)
+    }
+}
+
+/// How high a footballer can play the ball, and what it costs him to do
+/// it. All heights in metres, matching the ball's vertical axis (see
+/// [`GRAVITY_PER_TICK`]).
+///
+/// # Why this is one model rather than a constant per call site
+///
+/// Every aerial decision in the engine used to carry its own literal —
+/// `2.5` in the intercept gate, `3.5` in the claim loop, `2.8` for a pass
+/// receiver, `1.5` to enter a header — and none of them agreed with any
+/// other or with a human being. Worse, all of them were BINARY: below the
+/// number the ball was as easy to play as one rolling along the floor,
+/// above it the ball did not exist. A binary gate is what produces the
+/// two symptoms that look opposite and share a cause — a defender picking
+/// a ball out of the air at shoulder height without moving, and nobody at
+/// all going for one a few centimetres higher.
+///
+/// Height is a difficulty, not a door. [`Self::reach_difficulty`] is the
+/// curve; [`Self::ceiling`] is the only genuine door, and it is a
+/// property of the player rather than of the engine.
+pub struct AerialReach;
+
+impl AerialReach {
+    /// Head height of an average player.
+    pub const HEAD: f32 = 1.8;
+
+    /// The highest a player can play the ball with both feet on the
+    /// floor: a raised boot, a stretched neck, a chest-high volley.
+    /// Above this he has to leave the ground, and if he does not, he
+    /// should not be getting the ball.
+    pub const STANDING: f32 = 2.2;
+
+    /// Ball height a poor leaper reaches at the top of a jump.
+    const JUMP_MIN: f32 = 2.5;
+    /// Ball height an elite leaper reaches at the top of a jump. Real
+    /// aerial specialists head the ball around 2.9-3.0 m.
+    const JUMP_MAX: f32 = 3.1;
+
+    /// The highest ball this player can play, given his `jumping`
+    /// attribute on the raw 1-20 scale.
+    #[inline]
+    pub fn ceiling(jumping: f32) -> f32 {
+        let spring = ((jumping - 1.0) / 19.0).clamp(0.0, 1.0);
+        Self::JUMP_MIN + spring * (Self::JUMP_MAX - Self::JUMP_MIN)
+    }
+
+    /// True when the ball is high enough that playing it means leaving
+    /// the ground.
+    #[inline]
+    pub fn needs_leap(ball_z: f32) -> bool {
+        ball_z > Self::STANDING
+    }
+
+    /// How much of his usual chance a player keeps at this ball height,
+    /// 1.0 on the deck falling to 0 at his own ceiling.
+    ///
+    /// Squared rather than linear because the hard part of an aerial ball
+    /// is the last few centimetres: a ball at knee height and one at
+    /// chest height are both simply *there*, while one at the very top of
+    /// the jump is a fingertip touch that mostly does not come off.
+    #[inline]
+    pub fn reach_difficulty(ball_z: f32, jumping: f32) -> f32 {
+        if ball_z <= Self::HEAD {
+            return 1.0;
+        }
+        let ceiling = Self::ceiling(jumping);
+        if ball_z >= ceiling {
+            return 0.0;
+        }
+        let over = (ball_z - Self::HEAD) / (ceiling - Self::HEAD);
+        (1.0 - over * over).clamp(0.0, 1.0)
+    }
+
+    /// Apex, in metres, of the jump this player must make to meet a ball
+    /// at `ball_z` with whatever he plays it with — a boot, a knee, a
+    /// shoulder. Zero when he can reach it standing.
+    ///
+    /// He jumps to bring his own reach up to the ball and no further —
+    /// an aerial challenge is timed, not maximal, and a player who
+    /// launched himself to his ceiling for every ball above his head
+    /// would spend the match in orbit.
+    #[inline]
+    pub fn leap_for(ball_z: f32, jumping: f32) -> f32 {
+        Self::leap_from(ball_z, jumping, Self::STANDING)
+    }
+
+    /// The same, for a ball he is going to HEAD.
+    ///
+    /// A header is played off the forehead, not off a raised boot, so it
+    /// is measured from [`Self::HEAD`] — 40 cm lower than
+    /// [`Self::STANDING`]. Using the standing reach here is what would
+    /// keep a player flat-footed for every header between 1.8 m and
+    /// 2.2 m, which is most of them.
+    #[inline]
+    pub fn header_leap_for(ball_z: f32, jumping: f32) -> f32 {
+        Self::leap_from(ball_z, jumping, Self::HEAD)
+    }
+
+    #[inline]
+    fn leap_from(ball_z: f32, jumping: f32, reach: f32) -> f32 {
+        if ball_z <= reach {
+            return 0.0;
+        }
+        let ceiling = Self::ceiling(jumping);
+        (ball_z - reach).min((ceiling - reach).max(0.0)).max(0.0)
+    }
+}
 
 /// How close a player must be to the ball to take control of it, in game
 /// units (1u = 0.125 m, so this is 1.5 m — one stride, a real first-touch
@@ -309,6 +915,19 @@ pub struct Ball {
     pub start_position: Vector3<f32>,
     pub position: Vector3<f32>,
     pub velocity: Vector3<f32>,
+    /// Angular velocity in rad/tick. Set at strike time from where on the
+    /// ball the player's foot met it, integrated as a Magnus force while
+    /// airborne, and scrubbed off on contact with the turf or a player.
+    /// This is the only channel in the engine that can turn a flight
+    /// sideways — see [`SpinModel`](super::ball::SpinModel).
+    pub spin: Vector3<f32>,
+    /// `velocity.z` as this tick's physics left it, so the next tick can
+    /// tell a KICK from the rest of the flight. Anything that raises the
+    /// vertical speed between two `update` calls came from outside the
+    /// physics — a clearance, a punch, a shot — and is the only event the
+    /// apex census wants to count. Diagnostic only.
+    #[cfg(feature = "match-logs")]
+    pub settled_vz: f32,
     pub center_field_position: f32,
 
     pub field_width: f32,
@@ -357,6 +976,13 @@ pub struct Ball {
     /// the duration. Cleared on ownership resume.
     pub stall_start_snapshot: Option<String>,
     pub goal_scored: bool,
+    /// The ball is in the goal — see [`BallInNet`]. Set the instant it
+    /// crosses the line and cleared by the restart, so it outlives
+    /// `goal_scored` (which the flow layer consumes on the same tick to arm
+    /// the celebration). Every resolver that would otherwise see a ball
+    /// behind the goal line and award a corner, a goal kick or a boundary
+    /// clamp keys off this being `Some`.
+    pub in_net: Option<BallInNet>,
     pub kickoff_team_side: Option<PlayerSide>,
     pub cached_landing_position: Vector3<f32>,
     /// When a set-piece (corner, goal kick) rewrites ownership to a
@@ -366,6 +992,9 @@ pub struct Ball {
     /// after `ball.update` returns, so the owner is on the ball before
     /// the next `move_to` distance check can null their ownership.
     pub pending_set_piece_teleport: Option<(u32, Vector3<f32>)>,
+    /// A dead ball lying on the touchline waiting for its taker to WALK to
+    /// it. See [`AwaitedRestart`].
+    pub awaiting_restart: Option<AwaitedRestart>,
     /// Attacking centre-backs to teleport into the box when a corner is
     /// awarded — the dead-ball set-up (in real football the big men walk
     /// up during the stoppage). Populated in the corner branch of
@@ -388,6 +1017,33 @@ pub struct Ball {
     /// the near post, far post, penalty spot, or short. Cleared after
     /// the corner resolves. `None` whenever a corner isn't pending.
     pub pending_corner_routine: Option<CornerRoutine>,
+    /// The corner taker's `set_piece_delivery` composite (0..1), stamped
+    /// when the corner is awarded. `resolve_corner_contest` weighs the
+    /// aerial contest by it, so a specialist's whipped ball genuinely
+    /// finds a head more often than a full-back's hopeful clip. 0.5 —
+    /// an ordinary delivery — whenever no corner is pending.
+    pub pending_corner_delivery: f32,
+    /// Fire-once guard for the OPEN-PLAY cross aerial contest, the
+    /// sibling of `corner_contest_resolved`. A lofted cross is aimed at a
+    /// patch of the box, not at a pair of feet, so it cannot be settled by
+    /// whichever player's state machine happens to run first — the engine
+    /// resolves one skill-weighted contest (best attacking header vs the
+    /// nearest defenders vs the keeper's command of his area) and drops
+    /// the ball on the winner. `false` = armed (a lofted cross is in the
+    /// air, not yet resolved); `true` = nothing to resolve, which is also
+    /// the resting state for ground deliveries and every ordinary pass.
+    pub cross_contest_resolved: bool,
+    /// Which delivery the crossing model chose for the ball currently in
+    /// flight. Read by the contest (a whipped near-post ball is harder for
+    /// a keeper to claim than a floated one) and cleared with the rest of
+    /// the pending-pass metadata.
+    pub pending_cross_type: Option<CrossType>,
+    /// Player an engine-level aerial contest has already awarded the ball
+    /// to. Their heading state must NOT roll a second duel — the contest
+    /// is the duel, and re-rolling it is double jeopardy (the bug the
+    /// corner path documents and works around with a clean-contact
+    /// floor). Cleared on the next touch or when the ball settles.
+    pub aerial_contest_winner: Option<u32>,
     /// Counter for "ball is owned but nothing is happening" stalls.
     /// The unowned-stall warning can't see these because ownership is
     /// set, but visually the ball sits with a player who isn't moving,
@@ -395,6 +1051,11 @@ pub struct Ball {
     /// warning. Reset whenever owner changes or any meaningful motion
     /// resumes; fires a separate warning once it crosses the threshold.
     pub owned_stuck_ticks: u32,
+    /// Diagnostic only: was the ball owned by a player in a TakeBall
+    /// state on the previous full tick? Used to count spells rather
+    /// than ticks — see `dead_ball_diag::TAKEBALL_OWN_SPELLS`.
+    #[cfg(feature = "match-logs")]
+    pub takeball_owned_last_tick: bool,
     pub owned_stuck_logged: bool,
     /// Position-based stall detector — catches cases the owned/unowned
     /// counters miss, specifically: rapid ownership flipping keeps
@@ -426,12 +1087,38 @@ pub struct Ball {
     /// independent saves that often missed.
     pub pending_save_credit: Option<(u32, u32)>,
 
+    /// How hard the keeper had to work for that save, in reach ratio
+    /// (0 = straight at him, 1 = full-stretch). Consumed alongside
+    /// `pending_save_credit` to put him into the matching STATE.
+    ///
+    /// Without it the physics save resolves a shot entirely inside ball
+    /// physics and the keeper's own state machine never runs, so he never
+    /// visibly dives, catches or gets up — the ball simply stops at a
+    /// standing man. Measured: ~86 saves a match, of which only 8.4 put
+    /// him in `Diving` and `Goalkeeper: Diving` sat below 0.25% of ticks.
+    pub pending_save_reach: f32,
+
+    /// Which KIND of save it was, as a `save_accounting_stats` site index
+    /// (0 = parry, 1 = catch). Consumed alongside `pending_save_credit`.
+    ///
+    /// The physics path resolves three outcomes — clean catch, parry round
+    /// the post, spilled parry — and used to book all three under "catch"
+    /// because that was the only index it had. The accounting table
+    /// therefore reported `parry 0` forever, which reads as "parries are
+    /// never credited" when in fact they were credited under the wrong
+    /// label. Carrying the outcome makes the table say what happened.
+    pub pending_save_site: u8,
+
     /// Last meaningful touch on the ball. Drives restart resolution
     /// (throw-ins, corners, goal kicks) and pass-origin metadata. Updated
     /// from any path that hands ownership to a player (claim, intercept,
     /// block, save, pass) and from foot-deflections that don't transfer
     /// ownership but still count as a touch for the dead-ball decision.
     pub last_touch_player_id: Option<u32>,
+    /// Where the last touch happened. Diagnostic-only, so it exists only
+    /// under `match-logs` — see `EndlineCensus`.
+    #[cfg(feature = "match-logs")]
+    pub last_touch_position: Vector3<f32>,
     pub last_touch_team_id: Option<u32>,
     pub last_touch_tick: u64,
     pub last_touch_was_controlled: bool,
@@ -509,6 +1196,17 @@ pub struct Ball {
     /// single largest reason the engine scored 1.6 goals a game.
     pub last_shot_struck_tick: u64,
 
+    /// Shot-lifecycle census state (`match-logs` only). Set at the strike
+    /// and cleared the moment the shot resolves; see
+    /// [`Ball::census_shot_fate`], which is the only reader. `0.0` in
+    /// `census_shot_dist` means no shot is being tracked.
+    #[cfg(feature = "match-logs")]
+    pub census_shot_live: bool,
+    #[cfg(feature = "match-logs")]
+    pub census_shot_dist: f32,
+    #[cfg(feature = "match-logs")]
+    pub census_shot_side: Option<PlayerSide>,
+
     /// Tick of the most recent live rebound — a dangerous GK parry or
     /// a loose shot-block deflection that left the ball contestable in
     /// front of goal. Read by the team shot gate: within the rebound
@@ -561,6 +1259,76 @@ pub struct Ball {
     /// to credit progressive carries and box entries.
     pub carry_owner: Option<u32>,
     pub carry_start_position: Vector3<f32>,
+
+    /// Who last put the ball into play out of their own control — a pass,
+    /// a goal kick, a clearance — with where and when they did it.
+    ///
+    /// Read by [`Ball::blocked_recollect_player`] to stop the releaser
+    /// immediately re-collecting a delivery that has barely moved. Real
+    /// football has no rule against running onto your own pass, but the
+    /// engine had a degenerate cycle that did need one: a goalkeeper
+    /// whose kick landed at his feet picked it up, kicked again, and
+    /// never got out of his own six-yard box. The ball-travel test (not a
+    /// blanket ban) is what keeps a legitimate one-two or chip-over-the-
+    /// top intact.
+    ///
+    /// Cleared the moment any OTHER player touches the ball, and on every
+    /// dead-ball restart.
+    pub last_release_player_id: Option<u32>,
+    pub last_release_position: Vector3<f32>,
+    pub last_release_tick: u64,
+    /// Whether that release was out of a goalkeeper's HANDS. Drives the
+    /// second-touch half of Law 12: once a keeper puts the ball back into
+    /// play he may not handle it again until someone else has played it.
+    pub last_release_from_hands: bool,
+
+    /// The ball is in a goalkeeper's gloves.
+    ///
+    /// Distinct from `current_owner` being a keeper, which only says he has
+    /// it at his feet. A ball in the hands is out of play in every sense
+    /// that matters to the other twenty-one players: it cannot be tackled,
+    /// intercepted, or claimed, and pressing it is pointless. Nothing
+    /// represented that before — a keeper who had caught a cross could be
+    /// dispossessed by a forward standing next to him, because
+    /// `check_ball_ownership` just hands the ball to the best tackler
+    /// within 5u whoever they are.
+    pub held_in_hands: bool,
+
+    /// The last touch was a team-mate deliberately playing the ball with
+    /// their feet (a pass or a throw-in), which is what arms the back-pass
+    /// prohibition. Set by [`Ball::note_deliberate_kick`] and cleared by
+    /// [`Ball::record_touch`] — so ANY subsequent touch by anyone, of any
+    /// kind, disarms it automatically. That is exactly the Law: a header
+    /// back, a deflection, an opponent's touch, all restore the keeper's
+    /// right to use his hands.
+    pub last_touch_was_deliberate_kick: bool,
+}
+
+/// Whether a goalkeeper may pick this ball up, and if not, why not.
+///
+/// The engine had no notion of this at all: `Catching` never checked where
+/// it was happening, so a keeper would take the ball cleanly in his hands
+/// forty metres from his own goal, and a back-pass was gathered exactly
+/// like a cross.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandlingVerdict {
+    /// Hands are legal — gather it.
+    Legal,
+    /// Outside his own penalty area. Handling here is a direct free kick
+    /// (and usually a red card), so a keeper simply does not do it.
+    OutsideArea,
+    /// Deliberately kicked to him by a team-mate, or thrown in by one.
+    /// Indirect free kick if he handles it, so he plays it with his feet.
+    BackPass,
+    /// He has already released it and nobody else has touched it since.
+    SecondTouch,
+}
+
+impl HandlingVerdict {
+    #[inline]
+    pub fn is_legal(self) -> bool {
+        matches!(self, HandlingVerdict::Legal)
+    }
 }
 
 /// Projection of a shot at the moment it's taken. The `PreparingForSave`
@@ -596,6 +1364,26 @@ pub struct ShotTarget {
     /// defender stays in the lane, so the block rate becomes a function
     /// of flight timing rather than of the model.
     pub block_rolled: bool,
+    /// A defender who has WON the block but whom the ball has not reached
+    /// yet, with the outcome roll already drawn for him.
+    ///
+    /// The block window reaches 90u (11 m) ahead of the ball, because that
+    /// is the range over which a defender can still get across to a shot.
+    /// The deflection used to fire on the tick the roll succeeded, so the
+    /// ball turned up to eleven metres before it got to the man who turned
+    /// it — the same defect the save had, and between them they were the
+    /// only rebounds near a goal a viewer ever saw. Committing here and
+    /// resolving when the ball arrives keeps the block RATE exactly where
+    /// it was calibrated (one roll, at the same moment, off the same
+    /// candidate) while putting the contact on the body.
+    ///
+    /// The outcome roll — which of controlled / corner / safe / loose /
+    /// unlucky the deflection is — is drawn when the block is WON and
+    /// carried here, so that the branch a block takes is decided at the same
+    /// point in the shared RNG stream as before. Only the deflection's
+    /// direction spread is drawn on arrival, and that picks an angle rather
+    /// than an outcome.
+    pub blocked_by: Option<(u32, f32)>,
     /// Set when the shot took a deflection off a body in the lane.
     /// Catching/Diving states damp the save probability — the keeper
     /// was set for the original trajectory and the redirected ball is
@@ -614,6 +1402,15 @@ pub struct ShotTarget {
     /// target without a shooter, which reproduces the old
     /// absolute-quality behaviour exactly for those cases.
     pub shooter_threat: f32,
+    /// Where it was struck from.
+    ///
+    /// The save contest is resolved when the ball reaches the goal line,
+    /// several ticks downstream, by which point the ball's own position
+    /// says nothing about the angle it came from. But the angle is the
+    /// whole of the keeper's geometry: how much of the mouth his body
+    /// covers, and how long he had to get there, are both properties of
+    /// the line from HERE to the goal. See `SaveModel::wedge`.
+    pub struck_from: Vector3<f32>,
 }
 
 #[derive(Default, Clone)]
@@ -640,6 +1437,9 @@ impl Ball {
             field_width,
             field_height,
             velocity: Vector3::zeros(),
+            spin: Vector3::zeros(),
+            #[cfg(feature = "match-logs")]
+            settled_vz: 0.0,
             center_field_position: x, // initial ball position = center field
             flags: BallFlags::default(),
             previous_owner: None,
@@ -662,19 +1462,31 @@ impl Ball {
             unowned_ticks: 0,
             stall_start_snapshot: None,
             goal_scored: false,
+            in_net: None,
             kickoff_team_side: None,
             cached_landing_position: Vector3::new(x, y, 0.0),
             pending_set_piece_teleport: None,
+            awaiting_restart: None,
             pending_corner_teleports: Vec::new(),
             corner_contest_resolved: true,
             pending_corner_routine: None,
+            pending_corner_delivery: 0.5,
+            cross_contest_resolved: true,
+            pending_cross_type: None,
+            aerial_contest_winner: None,
             owned_stuck_ticks: 0,
+            #[cfg(feature = "match-logs")]
+            takeball_owned_last_tick: false,
             owned_stuck_logged: false,
             stall_anchor_pos: Vector3::new(x, y, 0.0),
             stall_anchor_tick: 0,
             cached_shot_target: None,
             pending_save_credit: None,
+            pending_save_reach: 0.0,
+            pending_save_site: 1,
             last_touch_player_id: None,
+            #[cfg(feature = "match-logs")]
+            last_touch_position: Vector3::new(x, y, 0.0),
             last_touch_team_id: None,
             last_touch_tick: 0,
             last_touch_was_controlled: false,
@@ -692,6 +1504,12 @@ impl Ball {
             last_shot_xgot: 0.0,
             last_shot_shooter_id: None,
             last_shot_struck_tick: 0,
+            #[cfg(feature = "match-logs")]
+            census_shot_live: false,
+            #[cfg(feature = "match-logs")]
+            census_shot_dist: 0.0,
+            #[cfg(feature = "match-logs")]
+            census_shot_side: None,
             last_rebound_tick: 0,
             last_giveaway_player_id: None,
             last_giveaway_team_id: None,
@@ -703,12 +1521,197 @@ impl Ball {
             pending_failed_claim_charged: false,
             carry_owner: None,
             carry_start_position: Vector3::new(x, y, 0.0),
+            last_release_player_id: None,
+            last_release_position: Vector3::new(x, y, 0.0),
+            last_release_tick: 0,
+            last_release_from_hands: false,
+            held_in_hands: false,
+            last_touch_was_deliberate_kick: false,
         }
+    }
+
+    /// Record that `player_id` has just released the ball into open play
+    /// from `position`. See [`Ball::last_release_player_id`].
+    pub fn note_release(&mut self, player_id: u32, position: Vector3<f32>, tick: u64) {
+        self.last_release_player_id = Some(player_id);
+        self.last_release_position = position;
+        self.last_release_tick = tick;
+        // Any release puts the ball back in open play — it is no longer in
+        // anyone's gloves. `from_hands` is stamped separately by the
+        // goalkeeper release paths.
+        self.last_release_from_hands = self.held_in_hands;
+        self.held_in_hands = false;
+    }
+
+    /// A field player has deliberately played the ball with their feet.
+    ///
+    /// Routed through `record_touch` so the touch bookkeeping stays in one
+    /// place, then raises the deliberate-kick flag that
+    /// [`Ball::is_backpass_to`] reads. Because `record_touch` LOWERS the
+    /// flag, the very next touch by anybody disarms the back-pass bar with
+    /// no explicit clearing anywhere.
+    pub fn note_deliberate_kick(&mut self, player_id: u32, team_id: u32, tick: u64) {
+        self.record_touch(player_id, team_id, tick, true);
+        self.last_touch_was_deliberate_kick = true;
+    }
+
+    /// True when handling this ball would breach the back-pass law: the
+    /// last touch was a team-mate of `keeper_id` deliberately kicking or
+    /// throwing it.
+    pub fn is_backpass_to(&self, keeper_id: u32, keeper_team: u32) -> bool {
+        self.last_touch_was_deliberate_kick
+            && self.last_touch_team_id == Some(keeper_team)
+            && self.last_touch_player_id != Some(keeper_id)
+    }
+
+    /// True when `keeper_id` put this ball back into play from his hands
+    /// and nobody has played it since — the second-touch prohibition.
+    pub fn awaiting_touch_after_release_by(&self, keeper_id: u32) -> bool {
+        self.last_release_from_hands && self.last_release_player_id == Some(keeper_id)
+    }
+
+    /// Height the ball rides at while it is being carried, in metres.
+    ///
+    /// At a player's feet normally — and at CHEST HEIGHT in a keeper's
+    /// gloves. `held_in_hands` was a rules concept only: the ball still
+    /// snapped to z = 0, so a keeper who had just caught a cross was drawn
+    /// with it lying on the grass by his boots, and the replay showed a
+    /// goalkeeper who never uses his hands for anything. Nothing else was
+    /// wrong — the viewer draws exactly the height it is given.
+    ///
+    /// 1.15 m is where a man of the model's 1.79 m holds a ball into his
+    /// chest. It stays well under `is_aerial`'s 2.3 m and under the 2.44 m
+    /// crossbar, so no height-gated rule changes behaviour because of it.
+    pub fn carry_height(&self) -> f32 {
+        if self.held_in_hands { 1.15 } else { 0.0 }
+    }
+
+    /// Is this player close enough to the ball to be given it?
+    ///
+    /// # Why every grant has to ask
+    ///
+    /// [`MAX_OWNER_TRACK_DISTANCE`] is the furthest the ball will follow
+    /// the player who owns it. Grant possession beyond that and
+    /// [`Ball::move_to`] disowns the ball on the very next tick — but by
+    /// then the granting handler has already **zeroed the velocity**, so
+    /// what `move_to` releases is a dead ball. It stops in mid-pitch with
+    /// nobody near it, everyone converges on it, and somebody eventually
+    /// plays it backwards. Reported from the viewer exactly that way, and
+    /// counted at 87 times a match by `reception_diag::OWNER_TOO_FAR`.
+    ///
+    /// So the check is not new — `move_to` has always made it. It was just
+    /// made one tick too late to be survivable. Asking here, before
+    /// anything is mutated, means the grant simply does not happen and the
+    /// ball flies on untouched, which is the same outcome minus the
+    /// wreckage.
+    ///
+    /// Measured in the XY plane, exactly as `move_to` measures it: a ball
+    /// directly overhead is within reach whatever its height.
+    pub fn within_possession_reach(&self, player_position: Vector3<f32>) -> bool {
+        let dx = player_position.x - self.position.x;
+        let dy = player_position.y - self.position.y;
+        dx * dx + dy * dy <= MAX_OWNER_TRACK_DISTANCE * MAX_OWNER_TRACK_DISTANCE
+    }
+
+    /// Take the ball into `keeper_id`'s gloves.
+    pub fn gather_in_hands(&mut self, keeper_id: u32, team_id: u32, tick: u64) {
+        #[cfg(feature = "match-logs")]
+        ownership::reception_diag::GATHERS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.record_touch(keeper_id, team_id, tick, true);
+        self.held_in_hands = true;
+        self.last_release_from_hands = false;
+    }
+
+    /// The player currently barred from re-collecting the ball because
+    /// they released it themselves and it has not yet gone anywhere, or
+    /// `None` when nobody is barred.
+    ///
+    /// Bounded on BOTH axes so it can never become a deadlock of its own:
+    /// the bar lifts as soon as the ball has travelled `MIN_TRAVEL`, and
+    /// unconditionally after `MAX_BLOCK_TICKS` whether it moved or not.
+    /// Without the time bound, a ball that stops 2 m from a lone player
+    /// with no one else nearby would sit there forever.
+    pub fn blocked_recollect_player(&self) -> Option<u32> {
+        /// 5 m. Short enough that a genuine one-two or a chip over the top
+        /// is unaffected; long enough that a delivery which never left the
+        /// striker's own feet is caught.
+        const MIN_TRAVEL: f32 = 40.0;
+        /// 2 s. Deadlock escape — see above.
+        const MAX_BLOCK_TICKS: u64 = 200;
+
+        let releaser = self.last_release_player_id?;
+        if self
+            .current_tick_cached
+            .saturating_sub(self.last_release_tick)
+            > MAX_BLOCK_TICKS
+        {
+            return None;
+        }
+        let dx = self.position.x - self.last_release_position.x;
+        let dy = self.position.y - self.last_release_position.y;
+        if dx * dx + dy * dy >= MIN_TRAVEL * MIN_TRAVEL {
+            return None;
+        }
+        Some(releaser)
     }
 
     /// Record a meaningful touch. Drives restart resolution. `controlled`
     /// distinguishes a clean reception from a deflection / failed save.
     pub fn record_touch(&mut self, player_id: u32, team_id: u32, tick: u64, controlled: bool) {
+        // Where the touch happened, so a downstream diagnostic can ask how
+        // far the ball ran afterwards. Diagnostic-only — see
+        // `EndlineCensus`.
+        #[cfg(feature = "match-logs")]
+        {
+            self.last_touch_position = self.position;
+            // A lofted delivery that somebody touches before the aerial
+            // contest resolves it never gets contested at all — the ball
+            // was reserved for one named receiver rather than fought for
+            // by the box. Counting these says whether the crossing gap is
+            // a DELIVERY problem or a RECEPTION problem.
+            if !self.cross_contest_resolved
+                && self.pending_cross_type.is_some_and(CrossType::is_lofted)
+            {
+                CrossDiag::note_touched_first();
+            }
+            // Pass OVERSHOOT, measured at the chokepoint every touch goes
+            // through: a live pass that somebody has just touched tells us
+            // how far it was meant to travel and how far it actually did.
+            // The whole question "is the ball being struck too hard" is
+            // this ratio, and nothing else measures it.
+            if let (Some(origin), Some(target)) =
+                (self.pending_pass_origin, self.pending_pass_target)
+            {
+                PassWeightCensus::note(
+                    (target - origin).magnitude(),
+                    (self.position - origin).magnitude(),
+                    self.pass_target_player_id == Some(player_id),
+                );
+            }
+        }
+        // Somebody else has been on the ball — whatever the last releaser
+        // did is history, and their re-collect bar lifts.
+        if self
+            .last_release_player_id
+            .is_some_and(|id| id != player_id)
+        {
+            self.last_release_player_id = None;
+            // Somebody else has played it, so the keeper who put it into
+            // play may use his hands again (Law 12's second-touch bar
+            // lifts on any other player's touch).
+            self.last_release_from_hands = false;
+        }
+        // Every touch disarms the back-pass bar. `note_deliberate_kick`
+        // re-raises it immediately afterwards for the one touch that
+        // should — see its docs.
+        self.last_touch_was_deliberate_kick = false;
+        // A touch ends whatever aerial contest awarded the ball: the
+        // planted header has been struck, or somebody else got there
+        // first. Either way the "don't re-roll the duel" grant is spent.
+        self.aerial_contest_winner = None;
+        // A foot or a chest kills the rotation. Whatever the ball was
+        // doing in the air, the next kick decides what it does now.
+        self.spin = Vector3::zeros();
         self.last_touch_player_id = Some(player_id);
         self.last_touch_team_id = Some(team_id);
         self.last_touch_tick = tick;
@@ -744,7 +1747,8 @@ impl Ball {
         self.pending_pass_target = None;
         self.pending_pass_was_cross = false;
         self.offside_snapshot = None;
-        self.pending_save_credit = None;
+        // ⚠ `pending_save_credit` is NOT cleared here — it is EARNED, not
+        // in-flight. See `clear_for_dead_ball` for the full note.
         self.pending_error_to_shot_player_id = None;
         self.pending_failed_claim_gk_id = None;
         self.pending_failed_claim_charged = false;
@@ -753,6 +1757,13 @@ impl Ball {
         // A dead ball ends the shot: without this a stale strike would
         // let the next pass that rolls over the line stand as a goal.
         self.last_shot_struck_tick = 0;
+        // A restart is a fresh delivery — the taker may legally be the
+        // player who last released the ball in open play, and no dead ball
+        // is ever in a keeper's gloves.
+        self.last_release_player_id = None;
+        self.last_release_from_hands = false;
+        self.held_in_hands = false;
+        self.last_touch_was_deliberate_kick = false;
     }
 
     /// Soft invariant check on the ball's lifecycle flags. Returns the
@@ -822,9 +1833,17 @@ impl Ball {
             if self.cached_shot_target.is_some() {
                 return Err("dead-ball restart with leftover cached_shot_target");
             }
-            if self.pending_save_credit.is_some() {
-                return Err("dead-ball restart with leftover pending_save_credit");
-            }
+            // `pending_save_credit` is deliberately NOT checked here.
+            //
+            // A save that tips the ball round the post stages its credit
+            // and triggers the corner in the same `Ball::update`, so the
+            // credit is legitimately present at a dead-ball restart for the
+            // rest of that tick. The leak this clause was defending
+            // against — a credit surviving into a LATER, unrelated restart
+            // — cannot happen: `apply_pending_save_credit` drains
+            // unconditionally after every ball update in both tick paths.
+            // Enforcing the clause instead deleted 1689 earned saves per
+            // 200 matches; see `clear_for_dead_ball`.
             if self.offside_snapshot.is_some() {
                 return Err("dead-ball restart with leftover offside_snapshot");
             }
@@ -845,7 +1864,238 @@ impl Ball {
                 return Err("carry_owner disagrees with current_owner");
             }
         }
+        // A ball in the gloves has a keeper holding it. Nothing else in
+        // the engine may take ownership away without lowering the flag,
+        // or the ball becomes permanently unclaimable.
+        if self.held_in_hands && self.current_owner.is_none() {
+            return Err("held_in_hands with no owner");
+        }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod aerial_reach_tests {
+    use super::*;
+
+    /// Height must be a difficulty, not a door. The engine's aerial gates
+    /// were all binary: below the number the ball was as easy to play as
+    /// one on the floor, above it the ball did not exist. That single
+    /// shape produced both reported symptoms — defenders picking balls
+    /// out of the air without moving, and nobody at all going for one a
+    /// few centimetres higher.
+    #[test]
+    fn reach_difficulty_falls_away_smoothly_instead_of_switching_off() {
+        let jumping = 12.0;
+        let ceiling = AerialReach::ceiling(jumping);
+        assert_eq!(
+            AerialReach::reach_difficulty(0.0, jumping),
+            1.0,
+            "a ball on the deck is no harder than a ball on the deck"
+        );
+        assert_eq!(
+            AerialReach::reach_difficulty(AerialReach::HEAD, jumping),
+            1.0,
+            "up to head height costs nothing"
+        );
+        assert_eq!(
+            AerialReach::reach_difficulty(ceiling + 0.01, jumping),
+            0.0,
+            "past his own ceiling he cannot play it at all"
+        );
+
+        // Strictly decreasing in between — no plateau a player could sit
+        // on, and no cliff.
+        let mut previous = 1.0;
+        let mut z = AerialReach::HEAD;
+        while z < ceiling {
+            let d = AerialReach::reach_difficulty(z, jumping);
+            assert!(
+                d <= previous,
+                "difficulty must not rise as the ball climbs (at {z} m)"
+            );
+            assert!((0.0..=1.0).contains(&d), "difficulty stays a fraction");
+            previous = d;
+            z += 0.05;
+        }
+        assert!(
+            previous < 0.25,
+            "a ball at the very top of the jump must be a fingertip touch, got {previous}"
+        );
+    }
+
+    /// The ceiling belongs to the PLAYER. The old flat `2.5` gate meant
+    /// the best header of the ball in the division and the worst had
+    /// exactly the same aerial range.
+    #[test]
+    fn a_better_leaper_reaches_a_higher_ball() {
+        let poor = AerialReach::ceiling(1.0);
+        let elite = AerialReach::ceiling(20.0);
+        assert!(
+            elite > poor + 0.4,
+            "jumping must be worth real height: {poor} vs {elite}"
+        );
+        // A ball an elite leaper can just about reach is out of a poor
+        // one's range entirely.
+        let z = poor + 0.1;
+        assert_eq!(AerialReach::reach_difficulty(z, 1.0), 0.0);
+        assert!(AerialReach::reach_difficulty(z, 20.0) > 0.0);
+    }
+
+    /// A jump is timed to the ball, not maximal — otherwise a player
+    /// would launch himself to his ceiling for every ball above his head.
+    #[test]
+    fn a_leap_reaches_the_ball_and_no_further() {
+        let jumping = 14.0;
+        assert_eq!(
+            AerialReach::leap_for(AerialReach::STANDING - 0.1, jumping),
+            0.0,
+            "a ball he can reach standing needs no jump"
+        );
+        let low = AerialReach::leap_for(AerialReach::STANDING + 0.2, jumping);
+        let high = AerialReach::leap_for(AerialReach::STANDING + 0.6, jumping);
+        assert!(low > 0.0 && high > low, "higher ball, bigger jump");
+        // Never asked to jump past his own ceiling.
+        let ceiling = AerialReach::ceiling(jumping);
+        let beyond = AerialReach::leap_for(ceiling + 5.0, jumping);
+        assert!(
+            beyond <= ceiling - AerialReach::STANDING + 1.0e-4,
+            "the leap is bounded by what he can actually jump"
+        );
+    }
+
+    /// A header is played off the forehead, not off a raised boot, so it
+    /// starts 40 cm lower. Measuring it from the standing reach is what
+    /// would keep a player flat-footed for most real headers.
+    #[test]
+    fn a_header_leaves_the_ground_earlier_than_a_boot_does() {
+        let jumping = 12.0;
+        let z = AerialReach::HEAD + 0.15; // 1.95 m — a normal header
+        assert_eq!(
+            AerialReach::leap_for(z, jumping),
+            0.0,
+            "a boot can still reach this standing"
+        );
+        assert!(
+            AerialReach::header_leap_for(z, jumping) > 0.0,
+            "but heading it means jumping"
+        );
+    }
+}
+
+#[cfg(test)]
+mod gk_handling_tests {
+    use super::*;
+
+    const KEEPER: u32 = 1;
+    const KEEPER_TEAM: u32 = 10;
+    const DEFENDER: u32 = 2;
+    const OPPONENT: u32 = 3;
+    const OPPONENT_TEAM: u32 = 20;
+
+    fn ball() -> Ball {
+        Ball::with_coord(840.0, 545.0)
+    }
+
+    #[test]
+    fn a_teammates_deliberate_kick_bars_the_keepers_hands() {
+        let mut b = ball();
+        b.note_deliberate_kick(DEFENDER, KEEPER_TEAM, 100);
+        assert!(b.is_backpass_to(KEEPER, KEEPER_TEAM));
+    }
+
+    #[test]
+    fn any_later_touch_disarms_the_backpass_bar() {
+        // The Law: a header back, a deflection, an opponent's touch — each
+        // restores the keeper's right to use his hands. This falls out of
+        // `record_touch` lowering the flag rather than from any explicit
+        // clearing, so it holds for touch paths that do not exist yet.
+        for (toucher, team, controlled) in [
+            (DEFENDER, KEEPER_TEAM, false),   // deflection off a team-mate
+            (OPPONENT, OPPONENT_TEAM, true),  // opponent played it
+            (OPPONENT, OPPONENT_TEAM, false), // opponent deflected it
+        ] {
+            let mut b = ball();
+            b.note_deliberate_kick(DEFENDER, KEEPER_TEAM, 100);
+            b.record_touch(toucher, team, 120, controlled);
+            assert!(
+                !b.is_backpass_to(KEEPER, KEEPER_TEAM),
+                "touch by {toucher} (controlled={controlled}) should have disarmed the bar"
+            );
+        }
+    }
+
+    #[test]
+    fn an_opponents_pass_is_not_a_backpass() {
+        let mut b = ball();
+        b.note_deliberate_kick(OPPONENT, OPPONENT_TEAM, 100);
+        assert!(!b.is_backpass_to(KEEPER, KEEPER_TEAM));
+    }
+
+    #[test]
+    fn a_keeper_does_not_bar_himself_by_kicking() {
+        // His own distribution is governed by the second-touch rule, not
+        // the back-pass one — and that rule only bites if he released it
+        // from his HANDS.
+        let mut b = ball();
+        b.note_deliberate_kick(KEEPER, KEEPER_TEAM, 100);
+        assert!(!b.is_backpass_to(KEEPER, KEEPER_TEAM));
+    }
+
+    #[test]
+    fn releasing_from_the_hands_bars_a_second_handling() {
+        let mut b = ball();
+        b.gather_in_hands(KEEPER, KEEPER_TEAM, 100);
+        assert!(b.held_in_hands);
+
+        b.note_release(KEEPER, Vector3::new(20.0, 270.0, 0.0), 400);
+        assert!(!b.held_in_hands, "releasing empties the gloves");
+        assert!(b.awaiting_touch_after_release_by(KEEPER));
+    }
+
+    #[test]
+    fn the_second_touch_bar_lifts_once_anyone_else_plays_it() {
+        let mut b = ball();
+        b.gather_in_hands(KEEPER, KEEPER_TEAM, 100);
+        b.note_release(KEEPER, Vector3::new(20.0, 270.0, 0.0), 400);
+        b.record_touch(DEFENDER, KEEPER_TEAM, 460, true);
+        assert!(!b.awaiting_touch_after_release_by(KEEPER));
+    }
+
+    #[test]
+    fn a_kick_off_the_deck_does_not_arm_the_second_touch_bar() {
+        // Only a release FROM THE HANDS does. A keeper who sweeps a ball
+        // clear with his feet may pick up the next one.
+        let mut b = ball();
+        b.note_release(KEEPER, Vector3::new(20.0, 270.0, 0.0), 400);
+        assert!(!b.awaiting_touch_after_release_by(KEEPER));
+    }
+
+    #[test]
+    fn a_dead_ball_clears_every_handling_bar() {
+        let mut b = ball();
+        b.note_deliberate_kick(DEFENDER, KEEPER_TEAM, 100);
+        b.gather_in_hands(KEEPER, KEEPER_TEAM, 110);
+        b.note_release(KEEPER, Vector3::new(20.0, 270.0, 0.0), 400);
+
+        b.clear_open_play_metadata();
+
+        assert!(!b.held_in_hands);
+        assert!(!b.is_backpass_to(KEEPER, KEEPER_TEAM));
+        assert!(!b.awaiting_touch_after_release_by(KEEPER));
+    }
+
+    #[test]
+    fn a_held_ball_keeps_the_invariants() {
+        let mut b = ball();
+        b.current_owner = Some(KEEPER);
+        b.gather_in_hands(KEEPER, KEEPER_TEAM, 100);
+        assert!(b.check_invariants().is_ok());
+
+        // Ownership taken away without lowering the flag would leave the
+        // ball permanently unclaimable — the claim path skips it entirely.
+        b.current_owner = None;
+        assert!(b.check_invariants().is_err());
     }
 }
 
@@ -913,21 +2163,104 @@ impl Ball {
         events: &mut EventCollection,
     ) {
         self.current_tick_cached = context.current_tick();
+        #[cfg(feature = "match-logs")]
+        let owner_at_entry = self.current_owner;
+        #[cfg(feature = "match-logs")]
+        let spell_at_entry = self.ownership_duration;
+        #[cfg(feature = "match-logs")]
+        {
+            use std::sync::atomic::Ordering;
+            ownership::reception_diag::TOTAL_TICKS.fetch_add(1, Ordering::Relaxed);
+            if self.held_in_hands {
+                ownership::reception_diag::HELD_TICKS.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        // The ball is in the goal: the netting owns it and play is dead
+        // until the restart. Nothing below applies — there is no pass to
+        // intercept, no shot to save, no owner to track and no boundary to
+        // clamp against — and several of those passes would actively
+        // misread it (see the guards in `goal.rs`). The celebration drives
+        // the ball from here; this covers the ticks between the goal and
+        // the flow layer noticing it, plus any caller driving `update`
+        // directly.
+        if self.in_net.is_some() {
+            self.tick_net(&context.goal_positions);
+            return;
+        }
 
         // Decrement claim cooldown
         if self.claim_cooldown > 0 {
             self.claim_cooldown -= 1;
         }
 
+        // A vertical speed that is higher than the one this ball's own
+        // physics produced last tick was put there by a kick — see
+        // `settled_vz`. Sampled before `update_velocity` so the bounce
+        // it applies is not mistaken for one.
+        #[cfg(feature = "match-logs")]
+        {
+            if self.velocity.z > self.settled_vz + 1.0e-5 && self.velocity.z > 0.0 {
+                let striker = self
+                    .current_owner
+                    .or(self.previous_owner)
+                    .and_then(|id| players.iter().find(|p| p.id == id))
+                    .map(|p| p.state.compact_id() as usize);
+                flight_diag::FlightDiag::note_launch(self.velocity.z, self.position.z, striker);
+            }
+        }
+        #[cfg(feature = "match-logs")]
+        let mut probe = flight_diag::StageProbe::new(self.position);
+
+        // ── A ball that is OUT OF PLAY ────────────────────────────────
+        //
+        // Everything below this point is the machinery of a live ball:
+        // interception, blocks, saves, the loose-ball chase signals, the
+        // stall detectors and the ownership scan. None of it applies to a
+        // ball lying on the touchline waiting to be thrown in, and every
+        // one of them would fight the restart — the chase signals would
+        // send an OPPONENT to fetch it, and `check_ball_ownership` would
+        // simply give it to whoever was nearest. So the restart is ticked
+        // here and the rest of the update is skipped outright.
+        //
+        // The physics below is skipped too, deliberately: the ball is
+        // pinned on the line by `tick_awaited_restart` and a dead ball
+        // does not roll. See [`AwaitedRestart`].
+        if self.awaiting_restart.is_some() {
+            self.tick_awaited_restart(context, players, events);
+            if self.awaiting_restart.is_some() {
+                self.update_landing_cache();
+                return;
+            }
+        }
+
         self.update_velocity();
 
         self.try_intercept(context, players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(
+            flight_diag::STAGE_INTERCEPT,
+            self.position,
+            self.velocity,
+            0.0,
+        );
         self.try_block_shot(context, players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(flight_diag::STAGE_BLOCK, self.position, self.velocity, 0.0);
         self.try_save_shot(context, players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(flight_diag::STAGE_SAVE, self.position, self.velocity, 0.0);
         self.try_notify_standing_ball(players, events);
 
         // NUCLEAR OPTION: Force claiming if ball unowned and stopped for too long
         self.force_claim_if_deadlock(players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(
+            flight_diag::STAGE_DEADLOCK,
+            self.position,
+            self.velocity,
+            0.0,
+        );
 
         // Unconditional unowned safety net - forces nearest players to TakeBall
         self.force_takeball_if_unowned_too_long(players, events);
@@ -937,19 +2270,252 @@ impl Ball {
         // hasn't moved ANYWHERE in 1000 ticks, regardless of who owns
         // it. That's a real stall.
         self.detect_position_stall(players);
+        #[cfg(feature = "match-logs")]
+        probe.note(flight_diag::STAGE_STALL, self.position, self.velocity, 0.0);
 
         self.process_ownership(context, players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(
+            flight_diag::STAGE_OWNERSHIP,
+            self.position,
+            self.velocity,
+            0.0,
+        );
         self.tick_carry_tracker(events);
 
         // Move ball FIRST, then check goal/boundary on new position
+        // `move_to` is entitled to a tick of its own velocity, plus the
+        // owner-tracking step it uses instead when the ball is carried.
+        #[cfg(feature = "match-logs")]
+        let move_allowance = (self.velocity.x * self.velocity.x
+            + self.velocity.y * self.velocity.y)
+            .sqrt()
+            .max(1.5);
         self.move_to(tick_context);
+        #[cfg(feature = "match-logs")]
+        probe.note(
+            flight_diag::STAGE_MOVE,
+            self.position,
+            self.velocity,
+            move_allowance,
+        );
+        // The woodwork, ahead of every out-of-play resolver: a ball that has
+        // hit the frame has not crossed the line, gone over the bar or gone
+        // out, and each of those would otherwise claim it.
+        self.check_frame_rebound(context, events);
         self.check_goal(context, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(flight_diag::STAGE_GOAL, self.position, self.velocity, 0.0);
         self.check_over_goal(context, players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(
+            flight_diag::STAGE_OVER_BAR,
+            self.position,
+            self.velocity,
+            0.0,
+        );
         self.check_wide_of_goal(context, players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(flight_diag::STAGE_WIDE, self.position, self.velocity, 0.0);
         self.check_throw_in(context, players, events);
+        #[cfg(feature = "match-logs")]
+        probe.note(
+            flight_diag::STAGE_THROW_IN,
+            self.position,
+            self.velocity,
+            0.0,
+        );
         self.check_boundary_collision(context);
+        #[cfg(feature = "match-logs")]
+        probe.note(
+            flight_diag::STAGE_BOUNDARY,
+            self.position,
+            self.velocity,
+            0.0,
+        );
         self.expire_offside_snapshot(context);
         self.update_landing_cache();
+
+        #[cfg(feature = "match-logs")]
+        {
+            flight_diag::FlightDiag::note_tick(
+                self.position,
+                self.velocity,
+                self.current_owner.is_some(),
+            );
+            self.settled_vz = self.velocity.z;
+
+            // Possession churn, sampled once per full tick around the
+            // whole ball update — so it catches every release site,
+            // including the ones inside `move_to` and the boundary
+            // checks, without a counter planted at each.
+            use crate::r#match::engine::ball::ball::stall::dead_ball_diag as dbd;
+            use std::sync::atomic::Ordering;
+
+            // Pressure on the man in possession — the "is anybody coming
+            // to him" number. Sampled here rather than in any state
+            // because it is a property of the SITUATION, and every state
+            // that could measure it has already decided not to engage.
+            if let Some(owner) = self
+                .current_owner
+                .and_then(|id| players.iter().find(|p| p.id == id))
+            {
+                let mut nearest = f32::MAX;
+                let mut engagers = 0u64;
+                for opp in players.iter() {
+                    if opp.team_id == owner.team_id || opp.is_sent_off {
+                        continue;
+                    }
+                    let d = (opp.position - owner.position).magnitude();
+                    nearest = nearest.min(d);
+                    if d < 80.0 {
+                        engagers += 1;
+                    }
+                }
+                if nearest < f32::MAX {
+                    let m = nearest * 0.125;
+                    let bucket = if m < 2.0 {
+                        0
+                    } else if m < 5.0 {
+                        1
+                    } else if m < 10.0 {
+                        2
+                    } else if m < 20.0 {
+                        3
+                    } else {
+                        4
+                    };
+                    dbd::CARRIER_PRESSURE[bucket].fetch_add(1, Ordering::Relaxed);
+                    // Thirds from the CARRIER's point of view, so "own
+                    // third" means his own regardless of which way he
+                    // is playing.
+                    let attacking_right = owner.side == Some(crate::r#match::PlayerSide::Left);
+                    let progress = if attacking_right {
+                        self.position.x / self.field_width
+                    } else {
+                        1.0 - self.position.x / self.field_width
+                    };
+                    let third = if progress < 0.333 {
+                        0
+                    } else if progress < 0.667 {
+                        1
+                    } else {
+                        2
+                    };
+                    dbd::CARRIER_PRESSURE_BY_THIRD[third * 5 + bucket]
+                        .fetch_add(1, Ordering::Relaxed);
+                    dbd::CARRIER_NEAREST_X10.fetch_add((nearest * 10.0) as u64, Ordering::Relaxed);
+                    dbd::CARRIER_ENGAGERS.fetch_add(engagers, Ordering::Relaxed);
+                    dbd::CARRIER_SAMPLES.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+
+            // Whole-match TakeBall ownership, not just stalls: is this a
+            // state that holds the ball, or the state everybody is in on
+            // the tick they claim it?
+            let tb_now = self
+                .current_owner
+                .and_then(|id| players.iter().find(|p| p.id == id))
+                .is_some_and(|p| p.state.is_take_ball());
+            if tb_now {
+                dbd::TAKEBALL_OWN_TICKS.fetch_add(1, Ordering::Relaxed);
+                if !self.takeball_owned_last_tick || owner_at_entry != self.current_owner {
+                    dbd::TAKEBALL_OWN_SPELLS.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            self.takeball_owned_last_tick = tb_now;
+
+            if owner_at_entry != self.current_owner {
+                // Turnovers that happen while the ball is already judged
+                // stuck. Cross-team means a real scramble; same-team
+                // means it is bouncing around one side, which would be a
+                // passing problem rather than a contest.
+                if self.stall_anchor_tick >= 250 && self.current_owner.is_some() {
+                    dbd::STALL_TURNOVERS.fetch_add(1, Ordering::Relaxed);
+                    let team_of = |id: Option<u32>| {
+                        id.and_then(|i| players.iter().find(|p| p.id == i))
+                            .map(|p| p.team_id)
+                    };
+                    let before = team_of(owner_at_entry);
+                    let after = team_of(self.current_owner);
+                    if before.is_some() && after.is_some() && before != after {
+                        dbd::STALL_TURNOVERS_CROSS_TEAM.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+                if owner_at_entry.is_some() {
+                    dbd::OWNERSHIP_LOST.fetch_add(1, Ordering::Relaxed);
+                    dbd::SPELL_LENGTH[dbd::spell_bucket(spell_at_entry)]
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                if self.current_owner.is_some() {
+                    dbd::OWNERSHIP_GAINED.fetch_add(1, Ordering::Relaxed);
+                    if self.current_owner == self.previous_owner {
+                        dbd::OWNERSHIP_RECLAIMED_SELF.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        #[cfg(feature = "match-logs")]
+        self.census_shot_fate(context, players);
+    }
+
+    /// Classify how the shot in flight ended, exactly once, at the end of
+    /// the tick it ended on. Diagnostic only — see the `FATE_*` counters
+    /// in `ownership::reception_diag` for why this exists.
+    ///
+    /// Deliberately central rather than a flag planted at each exit: the
+    /// per-site counters that came before it accounted for ~20 of every
+    /// 3500 shots struck, because most shots do not leave through any of
+    /// the sites that had one.
+    #[cfg(feature = "match-logs")]
+    fn census_shot_fate(&mut self, context: &MatchContext, players: &[MatchPlayer]) {
+        use ownership::reception_diag as d;
+        use std::sync::atomic::Ordering;
+
+        if !self.census_shot_live {
+            return;
+        }
+        d::FATE_LIVE_TICKS.fetch_add(1, Ordering::Relaxed);
+
+        let dist_x100 = (self.census_shot_dist * 100.0) as u64;
+        let mut resolve = |counter: &'static std::sync::atomic::AtomicU64, reached_goal: bool| {
+            counter.fetch_add(1, Ordering::Relaxed);
+            if reached_goal {
+                d::FATE_REACHED_DIST_X100.fetch_add(dist_x100, Ordering::Relaxed);
+            }
+        };
+
+        if self.goal_scored {
+            resolve(&d::FATE_GOAL, true);
+        } else if self.pass_origin_restart != PassOriginRestart::OpenPlay {
+            // A restart was staged this tick — corner, goal kick or
+            // throw. The shot went out of play.
+            resolve(&d::FATE_OUT, false);
+        } else if let Some(owner) = self.current_owner {
+            let owner_p = players.iter().find(|p| p.id == owner);
+            let is_gk = owner_p
+                .map(|p| p.tactical_position.current_position.is_goalkeeper())
+                .unwrap_or(false);
+            let same_side = owner_p.and_then(|p| p.side) == self.census_shot_side;
+            if is_gk && !same_side {
+                resolve(&d::FATE_GK, true);
+            } else if same_side {
+                resolve(&d::FATE_CLAIMED_ATT, false);
+            } else {
+                resolve(&d::FATE_CLAIMED_DEF, false);
+            }
+        } else if self.is_delivery_spent() {
+            resolve(&d::FATE_STOPPED, false);
+        } else if context
+            .current_tick()
+            .saturating_sub(self.last_shot_struck_tick)
+            > 400
+        {
+            resolve(&d::FATE_TIMEOUT, false);
+        } else {
+            return; // still in the air
+        }
+        self.census_shot_live = false;
     }
 
     /// Light update: full ball logic but reads owner position from players slice directly.
@@ -961,8 +2527,35 @@ impl Ball {
     ) {
         self.current_tick_cached = context.current_tick();
 
+        // See `Ball::update` — the netting owns a ball that has gone in.
+        if self.in_net.is_some() {
+            self.tick_net(&context.goal_positions);
+            return;
+        }
+
         if self.claim_cooldown > 0 {
             self.claim_cooldown -= 1;
+        }
+
+        #[cfg(feature = "match-logs")]
+        if self.velocity.z > self.settled_vz + 1.0e-5 && self.velocity.z > 0.0 {
+            let striker = self
+                .current_owner
+                .or(self.previous_owner)
+                .and_then(|id| players.iter().find(|p| p.id == id))
+                .map(|p| p.state.compact_id() as usize);
+            flight_diag::FlightDiag::note_launch(self.velocity.z, self.position.z, striker);
+        }
+
+        // Out of play — same skip as the full update above, and it has to
+        // be here too or the ball waits for its taker on alternate ticks
+        // and is fought over on the others.
+        if self.awaiting_restart.is_some() {
+            self.tick_awaited_restart(context, players, events);
+            if self.awaiting_restart.is_some() {
+                self.update_landing_cache();
+                return;
+            }
         }
 
         self.update_velocity();
@@ -974,6 +2567,7 @@ impl Ball {
 
         // Move ball: find owner position from players slice directly
         self.move_to_with_players(players);
+        self.check_frame_rebound(context, events);
         self.check_goal(context, events);
         self.check_over_goal(context, players, events);
         self.check_wide_of_goal(context, players, events);
@@ -981,6 +2575,16 @@ impl Ball {
         self.check_boundary_collision(context);
         self.expire_offside_snapshot(context);
         self.update_landing_cache();
+
+        #[cfg(feature = "match-logs")]
+        {
+            flight_diag::FlightDiag::note_tick(
+                self.position,
+                self.velocity,
+                self.current_owner.is_some(),
+            );
+            self.settled_vz = self.velocity.z;
+        }
     }
 
     /// Calculate where an aerial ball will land (when z reaches 0).
@@ -999,7 +2603,7 @@ impl Ball {
             return self.position;
         }
 
-        const G_PER_TICK: f32 = 9.81 * 0.016;
+        const G_PER_TICK: f32 = GRAVITY_PER_TICK;
         let vz = self.velocity.z;
         let h = self.position.z;
 
@@ -1019,7 +2623,12 @@ impl Ball {
     /// Check if the ball is aerial (in the air above player reach)
     pub fn is_aerial(&self) -> bool {
         const PLAYER_REACH_HEIGHT: f32 = 2.3;
-        self.position.z > PLAYER_REACH_HEIGHT && self.velocity.z.abs() > 0.1
+        // 0.005 m/tick = 0.5 m/s. The old 0.1 was 10 m/s — a bar set in
+        // the units gravity used to be written in, which meant a ball
+        // hanging at head height read as "not aerial" the moment it
+        // slowed near its apex.
+        const MOVING_VERTICALLY: f32 = 0.005;
+        self.position.z > PLAYER_REACH_HEIGHT && self.velocity.z.abs() > MOVING_VERTICALLY
     }
 
     pub fn is_stands_outside(&self) -> bool {
@@ -1057,7 +2666,20 @@ impl Ball {
         self.position.z = 0.0;
 
         self.velocity = Vector3::zeros();
+        // The goal is over — whatever is left of it goes with the restart.
+        self.in_net = None;
 
+        self.clear_for_dead_ball();
+    }
+
+    /// Everything [`Ball::reset`] drops apart from where the ball IS.
+    ///
+    /// Split out for the goal path: a ball that has just crossed the line is
+    /// as dead as one on the centre spot — no owner, no pass in flight, no
+    /// shot target, no offside snapshot — but it is emphatically not on the
+    /// centre spot, it is in the net travelling at whatever it was hit at.
+    /// Sharing the body is what stops the two drifting apart.
+    fn clear_for_dead_ball(&mut self) {
         self.current_owner = None;
         self.previous_owner = None;
         self.ownership_duration = 0;
@@ -1073,13 +2695,40 @@ impl Ball {
         self.unowned_ticks = 0;
         self.cached_landing_position = self.position;
         self.pending_set_piece_teleport = None;
+        self.awaiting_restart = None;
         self.pending_corner_teleports.clear();
         self.owned_stuck_ticks = 0;
         self.owned_stuck_logged = false;
         self.stall_anchor_pos = self.position;
         self.stall_anchor_tick = 0;
         self.cached_shot_target = None;
-        self.pending_save_credit = None;
+        // ⚠ `pending_save_credit` IS NOT OPEN-PLAY METADATA — DO NOT CLEAR.
+        //
+        // Everything else in this function is state describing a move that
+        // is still happening (a shot in flight, a pass in the air, an
+        // offside snapshot) and is meaningless once the ball is dead. A
+        // save credit is the opposite: it records something that has
+        // already HAPPENED. The keeper stopped the shot; the only reason it
+        // is "pending" at all is that `Ball` holds `&[MatchPlayer]` and
+        // cannot write to the stats sheet itself.
+        //
+        // Clearing it here deleted the save between earning and delivery,
+        // and it did so on the largest class of saves there is. Inside one
+        // `Ball::update`: `try_save_shot` stages the credit and tips the
+        // ball round the post; sixty lines later, in the SAME call,
+        // `check_over_goal` / `check_wide_of_goal` / `check_throw_in` see
+        // the ball out of play and restart — wiping the credit before
+        // `apply_pending_save_credit` runs. Every save that put the ball
+        // out of play was uncredited: 10506 physics saves passed, 8817 were
+        // credited, and the missing 1689 dragged saves/on-target down to
+        // 63.5% against a calibrated 67%.
+        //
+        // Nothing can go stale: `apply_pending_save_credit` is called
+        // unconditionally right after the ball update in BOTH tick paths
+        // (`game_tick_light` and `game_tick_inner`), so a credit is always
+        // delivered on the tick it was earned and can never survive into a
+        // later restart — which is the only thing the invariant that used
+        // to sit on this field was defending against.
         self.last_touch_player_id = None;
         self.last_touch_team_id = None;
         self.last_touch_tick = 0;
@@ -1090,6 +2739,10 @@ impl Ball {
         self.last_completed_pass_receiver_id = None;
         self.last_completed_pass_tick = 0;
         self.last_shot_struck_tick = 0;
+        self.last_release_player_id = None;
+        self.last_release_from_hands = false;
+        self.held_in_hands = false;
+        self.last_touch_was_deliberate_kick = false;
     }
 
     /// Snapshot the most-recent completed pass so the shot-handler
@@ -1108,12 +2761,17 @@ impl Ball {
         if self.current_owner == Some(player_id) {
             self.current_owner = None;
             self.ownership_duration = 0;
+            // A substituted / sent-off keeper cannot still be holding it.
+            self.held_in_hands = false;
         }
         if self.previous_owner == Some(player_id) {
             self.previous_owner = None;
         }
         if self.pass_target_player_id == Some(player_id) {
             self.pass_target_player_id = None;
+        }
+        if self.last_release_player_id == Some(player_id) {
+            self.last_release_player_id = None;
         }
         if self.last_completed_pass_passer_id == Some(player_id)
             || self.last_completed_pass_receiver_id == Some(player_id)
@@ -1261,10 +2919,23 @@ impl Ball {
     /// in flight (claim, interception, expiry, set-piece restart).
     #[inline]
     pub fn clear_pending_pass_metadata(&mut self) {
+        // A lofted delivery being disarmed here never reached the aerial
+        // contest. Record the height it died at — that says whether it
+        // was cut out on the way up, at head height, or after landing,
+        // and those are three different bugs.
+        #[cfg(feature = "match-logs")]
+        if !self.cross_contest_resolved && self.pending_cross_type.is_some_and(CrossType::is_lofted)
+        {
+            CrossDiag::note_disarmed_at(self.position.z);
+        }
         self.pending_pass_passer = None;
         self.pending_pass_origin = None;
         self.pending_pass_target = None;
         self.pending_pass_was_cross = false;
+        self.pending_cross_type = None;
+        // Disarm the aerial contest with the delivery it belonged to — a
+        // cross that has been claimed, cleared or intercepted is over.
+        self.cross_contest_resolved = true;
     }
 
     /// Drop any in-flight shot metadata (xG / shooter id). Called once

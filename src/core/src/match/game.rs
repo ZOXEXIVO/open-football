@@ -78,7 +78,17 @@ impl Match {
         let away_team_id = self.away_squad.team_id;
         let away_team_name = String::from(&self.away_squad.team_name);
 
-        let match_recordings = MatchRuntime::recordings_mode() && !self.is_friendly;
+        // One flag for every match. Friendlies used to be excluded here — and
+        // again at the store and again on the match page — from when a
+        // recording meant a full ninety minutes of samples and there were six
+        // times as many youth fixtures as senior ones to pay for. A recording
+        // is now the goals and nothing else by default
+        // (`RecordingScope::Goals`), which is the same reason
+        // `Settings::match_recordings` became opt-OUT, and it applies just as
+        // well to a reserve derby: there is no longer a cost worth carrying a
+        // special case for. A goal in an U19 game is a goal somebody wants to
+        // watch.
+        let match_recordings = MatchRuntime::recordings_mode();
         let match_result = FootballEngine::<840, 545>::play(
             self.home_squad,
             self.away_squad,

@@ -2,6 +2,9 @@ use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::players::ops::forward_shot_decision::{
+    ShotDecision, evaluate_forward_shot_decision,
+};
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
@@ -27,11 +30,51 @@ impl StateProcessingHandler for ForwardPassingState {
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
-        // Very close to goal with clear shot — shoot instead of passing
-        if distance_to_goal < 40.0 && ctx.player().has_clear_shot() {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Shooting,
-            ));
+        // Very close to goal — ask whether the shot is actually on, using
+        // the SAME helper `ForwardShootingState` will ask on arrival.
+        //
+        // This used to be a bare `distance < 40 && has_clear_shot()`, which
+        // is not the question the shooting state answers. `Shooting` runs
+        // `evaluate_forward_shot_decision` as its last-mile check and, when
+        // that says pass, sends the forward straight back here — where the
+        // crude geometric test still said shoot. The two never agreed, and
+        // `Forward: Passing <-> Forward: Shooting` became the single
+        // largest remaining loop in the engine at ~14,400 round trips per
+        // match (`dev_match trace`). Because both are on-ball states they
+        // are also exempt from the decision-commitment guard, by design —
+        // an on-ball picture must stay reactive — so nothing else was
+        // damping it.
+        //
+        // Routing through the helper means the decision is made once, with
+        // the xG / pass-EV / clear-shot gates the rest of the engine uses,
+        // and `with_shot_reason` carries it forward so `Shooting` honours
+        // the verdict instead of re-rolling it (see `dispatch_shot` in the
+        // dribbling state for the same pattern).
+        //
+        // Asked ONCE, on entry. The helper rolls shot willingness, so
+        // calling it every tick would turn a single chance into a per-tick
+        // lottery the forward eventually wins by attrition — the
+        // "resolve once per opportunity, never a per-tick lottery" rule
+        // the rest of the shot code follows. A chance is one chance; the
+        // player looks up, decides, and commits for this visit.
+        // `MAX_PASS_DURATION` bounds how long that is, and losing the ball
+        // or a defender closing still exits below.
+        //
+        // Measured over 5x60 matches, adding this shot path costs nothing
+        // in goals (4.74 -> 5.01 per match, inside a +/-0.3 run-to-run
+        // spread) while removing the loop.
+        if distance_to_goal < 40.0 && ctx.in_state_time == 0 {
+            match evaluate_forward_shot_decision(ctx, "FWD_PASSING_CLOSE") {
+                ShotDecision::Shoot { reason } => {
+                    return Some(
+                        StateChangeResult::with_forward_state(ForwardState::Shooting)
+                            .with_shot_reason(reason),
+                    );
+                }
+                // Helper says the shot isn't on — carry on looking for the
+                // pass, which is what this state is for.
+                ShotDecision::Pass | ShotDecision::Hold => {}
+            }
         }
 
         // Brief scanning delay before executing pass (unless under pressure)
@@ -206,8 +249,27 @@ impl ForwardPassingState {
         // Forward-specific factors - much more goal-oriented than midfielders
         let mut score = base_score.expected_value;
 
-        // Space multiplier: scale all bonuses by how free the receiver is
-        // This prevents huge bonuses from overwhelming space considerations
+        // Space multiplier: scale the attacking bonuses by how free the
+        // receiver is, so a huge through-ball bonus can't override the
+        // fact that the man is in a thicket.
+        //
+        // NOTE, and a negative result. `receiver_positioning` is ALREADY
+        // priced into `base_score.expected_value` — it feeds
+        // `success_probability`, which the expected value multiplies — so
+        // scaling every attacking term by it again discounts a marked
+        // receiver quadratically, and a receiver in an attacking position
+        // is marked essentially by definition. Softening the bands to
+        // 1.0/0.85/0.70/0.55 to end that double-count was tried and
+        // REVERTED: measured over 3 matches it left a forward's
+        // final-third back-pass rate at 52-55% (from 46-50%, i.e. inside
+        // the noise) and moved nothing in the scoreline.
+        //
+        // The reason is geometric, not evaluative: a forward in the final
+        // third IS the most advanced man, so nearly every option is
+        // behind him. Only 1.3-1.9 team-mates are ahead of the ball when
+        // a shot is struck (real 2-4). The back-pass rate is a symptom of
+        // the SUPPORT model, not of how passes are scored — fix the
+        // runners first, then re-test this.
         let receiver_space = base_score.factors.receiver_positioning;
         let space_multiplier = if receiver_space > 0.8 {
             1.0 // Free player - full bonuses

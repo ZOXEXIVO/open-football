@@ -1,5 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefensiveLine, Interception,
+};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
@@ -28,6 +30,22 @@ pub struct DefenderCoveringState {}
 
 impl StateProcessingHandler for DefenderCoveringState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // A player who has won the ball is not doing this any more.
+        //
+        // Nothing here asked whether HE had it, so a defender who
+        // intercepted or was simply the nearest body when it arrived
+        // carried on with an off-ball job while holding it — the same
+        // fixed point `Defender: Marking` was measured freezing on
+        // (99% of its stuck ticks with the owner 250-plus AI ticks into
+        // the state). `Running` is where a defender's on-ball decisions
+        // live, and this is the hand-off `DefenderStandingState` has
+        // always made.
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Running,
+            ));
+        }
+
         // AERIAL BALL — a cross dropping onto a covering defender is
         // headed clear. Checked first: the heading window is a couple of
         // ticks wide and everything below assumes a ball playable with
@@ -208,7 +226,10 @@ impl StateProcessingHandler for DefenderCoveringState {
             }
         }
 
-        if ball_ops.is_towards_player() && ball_ops.distance() < INTERCEPTION_DISTANCE {
+        if Interception::is_available(ctx)
+            && ball_ops.is_towards_player()
+            && ball_ops.distance() < INTERCEPTION_DISTANCE
+        {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Intercepting,
             ));
@@ -230,6 +251,14 @@ impl StateProcessingHandler for DefenderCoveringState {
                 // are in Cover-adjacent states.
                 let tether = 0.2;
                 let target = cover_point * (1.0 - tether) + ctx.player.start_position * tether;
+                // The last shape-holding state that still answered only to
+                // its own job. Cover is a line role — sitting behind the
+                // presser is exactly the `DEPTH_DROP` this constraint
+                // exists to allow — so it belongs inside the shape, not
+                // outside it. The `start_position` tether above is also
+                // the kickoff slot, the same anchor the rest of the back
+                // line has now stopped using.
+                let target = DefensiveLine::hold_shape(ctx, target);
                 let to_target = target - ctx.player.position;
                 let distance = to_target.magnitude();
 

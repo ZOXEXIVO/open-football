@@ -1,4 +1,5 @@
 use crate::r#match::engine::ball::ball::PossessionSource;
+use crate::r#match::engine::ball::ball::frame::FramePart;
 use crate::r#match::engine::player::events::players::PlayerEventDispatcher;
 use crate::r#match::events::{Event, EventCollection};
 use crate::r#match::player::events::PlayerEvent;
@@ -61,6 +62,15 @@ pub enum BallEvent {
     /// an opposition shot inside the response window charges
     /// `errors_leading_to_shot` to the RECEIVER, not the passer.
     FirstTouchFailed(u32, u32, bool),
+    /// The ball struck the woodwork: `(which member, contact position)`.
+    ///
+    /// Nobody played it, so there is no player to credit and the dispatcher
+    /// only books the team-level count. It exists as an event rather than a
+    /// silent physics detail because "off the post" is a thing that happens
+    /// in a football match — it belongs in the recorded event stream the
+    /// replay and the match report read, and the woodwork count is a real
+    /// line in a match summary.
+    HitFrame(FramePart, Vector3<f32>),
 }
 
 #[derive(Copy, Clone, Debug, PartialOrd, PartialEq)]
@@ -168,7 +178,12 @@ impl BallEventDispatcher {
                     remaining_events.add(Event::PlayerEvent(PlayerEvent::Assist(assist_id)));
                 }
 
-                field.reset_players_positions();
+                // The formation rebuild used to happen here as well as in
+                // `handle_goal_reset` — the same call, twice, on the same
+                // tick. It now belongs solely to the restart at the END of
+                // the post-goal window, because teleporting everybody onto
+                // their formation spot the instant the ball crosses the line
+                // is precisely what left nobody to celebrate.
             }
             BallEvent::Claimed(player_id) => {
                 // Settle the pass window HERE rather than leaving it to
@@ -355,6 +370,13 @@ impl BallEventDispatcher {
                 } else if let Some(receiver) = field.get_player_mut(receiver_id) {
                     receiver.statistics.add_heavy_touch();
                 }
+            }
+            BallEvent::HitFrame(..) => {
+                // Nobody touched it, so there is nobody to credit: the
+                // physics has already turned the ball round and retired the
+                // shot (see `Ball::check_frame_rebound`). The event is
+                // carried so the recorded stream — which the replay and the
+                // match report read — says the woodwork was struck.
             }
         }
     }

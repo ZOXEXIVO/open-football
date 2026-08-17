@@ -1,5 +1,7 @@
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, Interception, MidfielderCondition,
+};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -46,7 +48,7 @@ impl StateProcessingHandler for MidfielderWalkingState {
         // so midfielders contest it instead of letting opposing players
         // collect every clearance. Same pattern as Standing: run the
         // intercept state if predicted landing is inside our reach.
-        if !ctx.ball().is_owned() && ctx.ball().is_in_flight() {
+        if Interception::is_available(ctx) && ctx.ball().is_in_flight() {
             let landing = ctx.tick_context.positions.ball.landing_position;
             if (landing - ctx.player.position).norm_squared() < 100.0 * 100.0 {
                 return Some(StateChangeResult::with_midfielder_state(
@@ -65,11 +67,13 @@ impl StateProcessingHandler for MidfielderWalkingState {
         }
 
         if ctx.team().is_control_ball() {
-            if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 250.0 {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Intercepting,
-                ));
-            }
+            // A branch routing to `Intercepting` used to sit here. It can
+            // only fire while OUR side has the ball, and `Intercepting`
+            // rejects that on sight (`is_control_ball` => `Running`), so
+            // a team-mate's pass travelling toward this midfielder bought
+            // him a wasted state change and nothing else. Receiving is
+            // the dispatcher's job — see `should_force_takeball`'s
+            // `pass_target` rule.
         } else {
             if ctx.ball().distance() < 200.0 && ctx.ball().stopped() {
                 return Some(StateChangeResult::with_midfielder_state(
@@ -78,7 +82,7 @@ impl StateProcessingHandler for MidfielderWalkingState {
             }
 
             if ctx.ball().is_towards_player_with_angle(0.8) {
-                if ctx.ball().distance() < 100.0 {
+                if Interception::is_available(ctx) && ctx.ball().distance() < 100.0 {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Intercepting,
                     ));
@@ -144,7 +148,7 @@ impl StateProcessingHandler for MidfielderWalkingState {
                     SteeringBehavior::FollowPath {
                         waypoints,
                         current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: 5.0,
+                        crowd_offset: ctx.player().separation_offset(),
                     }
                     .calculate(ctx.player)
                     .velocity,
@@ -152,16 +156,20 @@ impl StateProcessingHandler for MidfielderWalkingState {
             }
         }
 
-        // Walk toward start position at reduced speed — no random jitter
-        let to_start = ctx.player.start_position - ctx.player.position;
-        let dist = to_start.magnitude();
+        // Walk into the team's live anchor at reduced speed. This used to
+        // aim at `start_position` — the kickoff dot — which is why the
+        // midfield ran 23.6 km a match: the block never moved, so every
+        // recovery was a full-length trek back to a coordinate the ball
+        // had long left.
+        let anchor = ctx.team().my_anchor();
+        let dist = (anchor - ctx.player.position).magnitude();
         if dist < 5.0 {
             return Some(Vector3::zeros());
         }
 
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.player.start_position,
+                target: anchor,
                 slowing_distance: 30.0,
             }
             .calculate(ctx.player)

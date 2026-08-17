@@ -1,6 +1,8 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, MidfielderCondition, Opportunity,
+};
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
@@ -8,11 +10,19 @@ use crate::r#match::player::strategies::common::players::ops::forward_shot_decis
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
+    Ball, ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 use std::cmp::Ordering;
+
+/// Edge of the penalty area (16.5 m) and the distance beyond which the
+/// shot helper itself calls a strike hopeless (35 m).
+const COMFORTABLE_RANGE: f32 = 132.0;
+const LONG_SHOT_LIMIT: f32 = 280.0;
+
+/// Per-call-site salt for `Opportunity`.
+const BAILOUT_SALT: u64 = 0x3C79_AC49_2BA7_B653;
 
 #[derive(Default, Clone)]
 pub struct MidfielderPassingState {}
@@ -111,61 +121,58 @@ impl StateProcessingHandler for MidfielderPassingState {
         };
         if ctx.in_state_time > bail_time {
             let goal_dist = ctx.ball().distance_to_opponent_goal();
-            // AM carve-out for the bailout shot: forward helper picks
-            // the trigger so a low-skill #10 still attempts shots when
-            // the pass options have dried up.
-            if ctx
-                .player
-                .tactical_position
-                .current_position
-                .is_attacking_midfielder()
-            {
-                if let ShotDecision::Shoot { reason } =
-                    evaluate_forward_shot_decision(ctx, "AM_PASS_BAILOUT_FWD")
-                {
-                    return Some(
-                        StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
-                            .with_shot_reason(reason),
-                    );
-                }
-            }
-            // Shoot bailout ONLY when we're in a real shooting spot
-            // with a clear lane AND good angle. Tightened further: the
-            // "can't find a pass, so shoot" pivot at medium range was
-            // producing 14% of total shots. A midfielder who can't find
-            // a pass should DRIBBLE or HOLD — shooting in that spot is
-            // the desperation long-shot real football strictly limits
-            // to specialists in ideal conditions.
+
+            // The AM carve-out that used to sit here called
+            // `evaluate_forward_shot_decision` a second time, under a
+            // different tag, for attacking midfielders only. The FIRST
+            // line of this state already calls it — every tick, for
+            // every midfielder — so the carve-out could only ever repeat
+            // an answer that had just been given, and the position gate
+            // said a #10 is allowed a shot that an #8 in the identical
+            // spot is not. Both are gone; the helper is the one place
+            // the shoot/pass question is asked.
+            //
+            // What is left is the genuinely different situation: he has
+            // been looking for a pass and there isn't one. That earns a
+            // slightly bolder look than the helper's standing bar, on a
+            // continuous willingness rather than the two absolute skill
+            // bars (0.46 / 0.58) this used to carry. Absolute bars mean
+            // the DIVISION decides whether long shots exist — the same
+            // fault the DistanceShooting tiers had, where senior
+            // football reached an 18% outside-box share and youth 2.5%
+            // on identical code.
             let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
             let shot_profile = ctx.player().shooting().shot_profile();
-            return if goal_dist < 60.0
-                && ctx.player().has_clear_shot()
-                && ctx.player().shooting().has_good_angle()
-                && shot_profile.expected_xg(goal_dist, true) >= 0.26
-                && mid_profile.mid_shot_selection >= 0.46
-            {
-                Some(
-                    StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
-                        .with_shot_reason("MID_PASS_BAILOUT_SHOOT"),
-                )
-            } else if goal_dist < 144.0
-                && ctx.player().has_clear_shot()
-                && ctx.player().shooting().has_good_angle()
-                && mid_profile.mid_shot_selection >= 0.58
-                && shot_profile.execution_skill >= 0.45
-            {
-                // Long-shot specialists only — gated by mid_shot_selection
-                // (skill-curved long_shots/technique/composure blend).
-                Some(
-                    StateChangeResult::with_midfielder_state(MidfielderState::DistanceShooting)
-                        .with_shot_reason("MID_PASS_BAILOUT_DISTANCE"),
-                )
-            } else {
-                // Far from goal — dribble forward
-                Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Dribbling,
-                ))
-            };
+            let sighted = ctx.player().has_clear_shot() && ctx.player().shooting().has_good_angle();
+
+            if sighted && goal_dist < LONG_SHOT_LIMIT {
+                // Falls from 1 at the edge of the box to 0 where the
+                // helper itself calls a strike hopeless.
+                let reach = 1.0
+                    - ((goal_dist - COMFORTABLE_RANGE) / (LONG_SHOT_LIMIT - COMFORTABLE_RANGE))
+                        .clamp(0.0, 1.0);
+                let strike =
+                    mid_profile.mid_shot_selection * 0.55 + shot_profile.execution_skill * 0.45;
+                // No outlet is itself a reason: a player with nothing on
+                // has less to lose by hitting it.
+                let willingness = strike * (0.45 + reach.powf(0.6) * 0.75);
+                let spread = Opportunity::draw(ctx, BAILOUT_SALT);
+                if willingness >= 0.34 + spread * 0.30 {
+                    return Some(if goal_dist > COMFORTABLE_RANGE {
+                        StateChangeResult::with_midfielder_state(MidfielderState::DistanceShooting)
+                            .with_shot_reason("MID_PASS_BAILOUT_DISTANCE")
+                    } else {
+                        StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                            .with_shot_reason("MID_PASS_BAILOUT_SHOOT")
+                    });
+                }
+            }
+
+            // No pass and no shot — carry it and look again from
+            // somewhere better.
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Dribbling,
+            ));
         }
 
         None
@@ -517,8 +524,18 @@ impl MidfielderPassingState {
         let dist = to_target.norm().max(0.1);
         let dir = to_target / dist;
 
-        let horizontal_speed = 4.0_f32;
-        let z_velocity = 5.0_f32;
+        // Solved from an apex, not written. The vertical axis is in
+        // METRES (see `GRAVITY_PER_TICK`), so the `5.0` this used to
+        // carry was 500 m/s straight up — a **12.7 km** apex and a hang
+        // time of a minute and a half. It was the single worst launch
+        // left in the engine after the metric conversion, and the ball
+        // flight census pinned it by its apex alone.
+        const OUTLET_APEX_M: f32 = 10.0;
+        let z_velocity = Ball::launch_speed_for_apex(OUTLET_APEX_M);
+        // The arc's hang time is the budget: reach the aim point inside
+        // it and the hoof lands where it was aimed.
+        let hang = Ball::hang_ticks(z_velocity).max(1.0);
+        let horizontal_speed = (dist / hang).clamp(0.30, 2.6);
 
         let ball_velocity = Vector3::new(
             dir.x * horizontal_speed,

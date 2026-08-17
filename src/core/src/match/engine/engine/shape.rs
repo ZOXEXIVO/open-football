@@ -436,9 +436,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             (&field.right_team_tactics, &field.left_team_tactics)
         };
 
+        let home_side = if home_is_left {
+            PlayerSide::Left
+        } else {
+            PlayerSide::Right
+        };
+
         let inputs = TacticalRefreshInputs {
             field,
             home_team_id: context.field_home_team_id,
+            home_side,
             tick_interval,
             coach_wants_high_press_home: home_high_press,
             coach_wants_high_press_away: away_high_press,
@@ -458,6 +465,63 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             &mut context.tactical_home,
             &mut context.tactical_away,
             &inputs,
+        );
+
+        // Attacking roles are assigned on the same cadence and read the
+        // tactical state that was just produced — the phase decides
+        // WHETHER to commit bodies forward, the plan decides WHO and
+        // WHERE. Without this second half every player derives his own
+        // destination from the same geometry and they all arrive at the
+        // same one; see `teamplay::attack`.
+        let attack_inputs = AttackRefreshInputs {
+            field,
+            home_team_id: context.field_home_team_id,
+            away_team_id: context.field_away_team_id,
+            home_attacking: context.tactical_home.wants_bodies_forward(),
+            away_attacking: context.tactical_away.wants_bodies_forward(),
+            home_rest_defence: context.tactical_home.rest_defense_count,
+            away_rest_defence: context.tactical_away.rest_defense_count,
+        };
+        AttackPlan::refresh(
+            &mut context.attack_home,
+            &mut context.attack_away,
+            &attack_inputs,
+        );
+
+        // The defensive half of the same idea. Assigned on the same
+        // cadence so the two plans always describe the same instant, and
+        // unconditionally on phase — a side without the ball is defending
+        // whatever the tactical phase says, and the duties are what stop
+        // the back line computing its position from the ball alone.
+        let defence_inputs = DefenceRefreshInputs {
+            field,
+            home_team_id: context.field_home_team_id,
+            away_team_id: context.field_away_team_id,
+        };
+        DefensivePlan::refresh(
+            &mut context.defence_home,
+            &mut context.defence_away,
+            &defence_inputs,
+        );
+
+        // …and the positional layer under all three. The plans above name
+        // the players involved with the ball; this gives EVERY player a
+        // live place to be, so the seven or eight who aren't involved stop
+        // steering at a kickoff dot they were drawn on before the match.
+        // Runs last because it reads the tactical state the first refresh
+        // produced (line height, compactness, width, press intensity).
+        let shape_inputs = ShapeRefreshInputs {
+            field,
+            home_team_id: context.field_home_team_id,
+            away_team_id: context.field_away_team_id,
+            home_tactical: &context.tactical_home,
+            away_tactical: &context.tactical_away,
+            tick_interval,
+        };
+        TeamShape::refresh(
+            &mut context.shape_home,
+            &mut context.shape_away,
+            &shape_inputs,
         );
 
         // Cumulative possession + field-tilt counters feed the rolling

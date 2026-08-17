@@ -11,8 +11,11 @@ use crate::r#match::player::state::PlayerState::{Defender, Forward, Goalkeeper, 
 use crate::r#match::player::strategies::common::PlayerOperationsImpl;
 use crate::r#match::player::strategies::common::PlayersOperationsImpl;
 use crate::r#match::player::transition::TransitionSource;
-use crate::r#match::team::TeamOperationsImpl;
+use crate::r#match::player_context::LooseBallChase;
+use crate::r#match::team::{ShapeDiscipline, TeamOperationsImpl};
 use crate::r#match::{BallOperationsImpl, GameTickContext, MatchContext, MatchPlayer, PlayerSide};
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::ShapeCensus;
 use log::debug;
 use nalgebra::Vector3;
 
@@ -27,6 +30,34 @@ pub trait StateProcessingHandler {
     }
     /// Side-effects after the state resolves. Default: no-op.
     fn process_conditions(&self, _ctx: ConditionContext) {}
+}
+
+#[cfg(feature = "match-logs")]
+pub mod chase_diag {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Times the dispatcher forced a player into TakeBall, and times it
+    /// yielded him back out. If the two are close and both large, the
+    /// chase DESIGNATION is flip-flopping rather than the ball changing
+    /// hands — the hysteresis is not holding.
+    pub static FORCE: AtomicU64 = AtomicU64::new(0);
+    pub static YIELD: AtomicU64 = AtomicU64::new(0);
+    /// Of the forces, how many happened while a delivery was in flight.
+    pub static FORCE_IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
+
+    pub fn reset() {
+        for c in [&FORCE, &YIELD, &FORCE_IN_FLIGHT] {
+            c.store(0, Ordering::Relaxed);
+        }
+    }
+
+    pub fn snapshot() -> (u64, u64, u64) {
+        (
+            FORCE.load(Ordering::Relaxed),
+            YIELD.load(Ordering::Relaxed),
+            FORCE_IN_FLIGHT.load(Ordering::Relaxed),
+        )
+    }
 }
 
 impl PlayerFieldPositionGroup {
@@ -57,6 +88,18 @@ impl PlayerFieldPositionGroup {
         // That is what made a goalkeeper redirected into `TakeBall` trip
         // its own `in_state_time > 200` give-up guard on tick two and
         // flap straight back to `Standing`.
+        #[cfg(feature = "match-logs")]
+        {
+            use std::sync::atomic::Ordering;
+            if Self::should_yield_takeball(*self, player, tick_context) {
+                chase_diag::YIELD.fetch_add(1, Ordering::Relaxed);
+            } else if Self::should_force_takeball(*self, player, tick_context) {
+                chase_diag::FORCE.fetch_add(1, Ordering::Relaxed);
+                if tick_context.ball.is_in_flight_state > 0 {
+                    chase_diag::FORCE_IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
         let override_state_time = if Self::should_yield_takeball(*self, player, tick_context) {
             player.redirect_to_fresh(
                 Self::yield_state_for(*self),
@@ -199,6 +242,40 @@ impl PlayerFieldPositionGroup {
         // every tick, turning the chase into a ping-pong where each
         // player keeps yielding to the other and nobody commits long
         // enough to cover the final few units into the claim radius.
+        //
+        // ⚠ AND IT HAS TO BE WIDER WHILE THE BALL IS IN THE AIR, because
+        // then the target itself is moving: `landing_position` slides as
+        // the ball travels, so "closest man to where it will land" is a
+        // different player from tick to tick and a 1 m margin on a moving
+        // point buys nothing.
+        //
+        // Measured: **4,987 forces and 17,505 yields a match, 98% of the
+        // forces during a delivery in flight** — three and a half yields
+        // per force, and `Midfielder: Running <-> Take Ball` the second
+        // largest loop in the engine (~20,500 round trips per three
+        // matches).
+        //
+        // ⚠ …AND SUPPRESSING IT COSTS GOALS. Both ways of doing so were
+        // measured over three runs each, and both lose in proportion to
+        // how much churn they remove:
+        //
+        //   | variant                    | yields/match | goals |
+        //   |----------------------------|--------------|-------|
+        //   | as written (8u)            | 17,505       | 4.4   |
+        //   | 40u margin while in flight | ~15,100      | 4.95  |
+        //   | hold the chase all flight  | 9,952        | 5.25  |
+        //
+        // The re-election IS the defending. Because `landing_position`
+        // moves, asking every tick is how the man who is ACTUALLY closest
+        // to where the ball ends up gets there; freezing the designation
+        // at the first tick of a delivery commits the wrong man and the
+        // pass completes. The churn is a symptom of a moving target, not
+        // a bug in the hand-off, and `Midfielder: Running <-> Take Ball`
+        // stays near the top of the loop table because of it.
+        //
+        // Same lesson as the `Running <-> Marking` loop in
+        // `defenders/states/marking`: in this engine a two-state cycle is
+        // often load-bearing. Measure the match, not the loop count.
         const HYSTERESIS: f32 = 8.0;
         let yield_threshold_sq = {
             let my_dist = my_dist_sq.sqrt();
@@ -236,8 +313,7 @@ impl PlayerFieldPositionGroup {
             if tm.player_id == player.id || tm.side != my_side || !tm.chase_eligible {
                 continue;
             }
-            let d_sq = (ball_pos - tm.position).norm_squared();
-            if d_sq < yield_threshold_sq {
+            if LooseBallChase::chase_dist_sq(tm, ball_pos) < yield_threshold_sq {
                 return true;
             }
         }
@@ -374,7 +450,10 @@ impl PlayerFieldPositionGroup {
             if tm.player_id == player.id || tm.side != my_side || !tm.chase_eligible {
                 continue;
             }
-            let d_sq = (ball_pos - tm.position).norm_squared();
+            // `my_dist_sq` is deliberately the caller's raw distance, as the
+            // table query compares it: only the teammate being weighed gets
+            // the striker gamble.
+            let d_sq = LooseBallChase::chase_dist_sq(tm, ball_pos);
             if d_sq < my_dist_sq {
                 return false;
             }
@@ -436,9 +515,34 @@ impl<'p> StateProcessor<'p> {
         let mut result = StateProcessingResult::new();
 
         if let Some(velocity) = handler.velocity(&processing_ctx) {
+            // Positional discipline first: keep the state's own intent
+            // inside the space the team plan gave this player. Applied
+            // here — the one point every state's movement converges on —
+            // rather than inside twenty state machines that cannot see
+            // each other. See `ShapeDiscipline`.
+            let (shaped, pull) = ShapeDiscipline::apply_with_pull(&processing_ctx, velocity);
+            result.shape_recall_pull = pull;
             // Apply coach tempo multiplier to all player movement
             let tempo = processing_ctx.team().coach_instruction().tempo_multiplier();
-            result.velocity = Some(velocity * tempo);
+            result.velocity = Some(shaped * tempo);
+        }
+
+        // Shape census — one sample per AI tick per player, at the single
+        // point every state passes through. See `ShapeCensus`.
+        #[cfg(feature = "match-logs")]
+        {
+            let moving = result.velocity.is_some_and(|v| v.magnitude() > 0.02);
+            let anchor = processing_ctx.team().my_anchor();
+            let axis_lag = processing_ctx.player.side.map_or(0.0, |s| {
+                s.forward_delta(anchor.x, processing_ctx.player.position.x)
+            });
+            ShapeCensus::note(
+                processing_ctx.player.state.compact_id(),
+                (processing_ctx.player.position - anchor).magnitude(),
+                axis_lag,
+                moving,
+            );
+            Self::note_keeper_guard(&processing_ctx, moving);
         }
 
         if let Some(change) = handler.process(&processing_ctx) {
@@ -458,6 +562,88 @@ impl<'p> StateProcessor<'p> {
         }
 
         result
+    }
+
+    /// One position sample per keeper per AI tick, on ticks where the ball
+    /// is live in his defensive third. See [`KeeperGuardDiag`] for what the
+    /// numbers mean and why an event counter cannot answer the question.
+    #[cfg(feature = "match-logs")]
+    fn note_keeper_guard(ctx: &StateProcessingContext, moving: bool) {
+        use crate::mid_run_diag::KeeperGuardDiag;
+
+        let PlayerState::Goalkeeper(gk_state) = ctx.player.state else {
+            return;
+        };
+        let goal = ctx.ball().direction_to_own_goal();
+        let ball = ctx.tick_context.positions.ball.position;
+        // Live ball, in the third he is responsible for. 300u = 37.5 m.
+        if (ball - goal).magnitude() > 300.0 || !ctx.ball().on_own_side() {
+            return;
+        }
+
+        let keeper = ctx.player.position;
+        let to_ball = ball - goal;
+        let span = to_ball.norm();
+        let rel = keeper - goal;
+        // Perpendicular distance from the goal-centre→ball line: the
+        // bisector he is supposed to be standing on.
+        let off_angle = if span > 1.0 {
+            (rel.x * to_ball.y - rel.y * to_ball.x).abs() / span
+        } else {
+            0.0
+        };
+        let ball_wide = ball.y - goal.y;
+        let keeper_wide = keeper.y - goal.y;
+
+        KeeperGuardDiag::note(0);
+        KeeperGuardDiag::add(1, (off_angle * 100.0).max(0.0) as u64);
+        KeeperGuardDiag::add(2, ((keeper.x - goal.x).abs() * 100.0) as u64);
+        // Does reading the game buy anything? Split the same measurement
+        // by the keeper's own positioning composite — the one that blends
+        // positioning / anticipation / decisions / concentration.
+        let read = crate::r#match::player::strategies::players::ops::goalkeeper_skill::
+            GoalkeeperSkillProfile::from_ctx(ctx)
+            .positioning;
+        let (ticks_slot, sum_slot) = if read >= 0.55 {
+            (13, 14)
+        } else if read <= 0.40 {
+            (15, 16)
+        } else {
+            (usize::MAX, usize::MAX)
+        };
+        KeeperGuardDiag::note(ticks_slot);
+        KeeperGuardDiag::add(sum_slot, (off_angle * 100.0).max(0.0) as u64);
+        KeeperGuardDiag::add(21, (read * 1000.0).max(0.0) as u64);
+        // Ball 5 m or more off centre and he is displaced toward the far
+        // post. There is no reading of the game in which that is right.
+        if ball_wide.abs() > 40.0
+            && keeper_wide.abs() > 10.0
+            && ball_wide.signum() != keeper_wide.signum()
+        {
+            KeeperGuardDiag::note(3);
+        }
+        if !moving {
+            KeeperGuardDiag::note(4);
+        }
+
+        // A man carrying the ball at him, inside 25 m — the situation the
+        // report is about.
+        let carrier = ctx
+            .players()
+            .opponents()
+            .with_ball()
+            .next()
+            .is_some_and(|o| (o.position - keeper).magnitude() < 200.0);
+        if carrier {
+            KeeperGuardDiag::note(5);
+            KeeperGuardDiag::add(9, (off_angle * 100.0).max(0.0) as u64);
+            match gk_state {
+                GoalkeeperState::ComingOut => KeeperGuardDiag::note(6),
+                GoalkeeperState::ReturningToGoal => KeeperGuardDiag::note(7),
+                GoalkeeperState::Standing | GoalkeeperState::Walking => KeeperGuardDiag::note(8),
+                _ => {}
+            }
+        }
     }
 
     pub fn into_ctx(self) -> StateProcessingContext<'p> {
@@ -544,11 +730,27 @@ pub struct StateProcessingResult {
     /// Propagated up from the per-state `StateChangeResult`. Consumed by
     /// `state.rs` to bump `player.tackle_cooldown`.
     pub start_tackle_cooldown: bool,
+    /// …and the goalkeeper's much shorter one. See
+    /// [`StateChangeResult::start_keeper_cooldown`].
+    pub start_keeper_cooldown: bool,
     /// Tagged reason to attach to the next Shoot event fired by this
     /// player. Matches the pass-reason pattern. Written to
     /// `player.pending_shot_reason` by `state.rs` so the Shooting state
     /// can read it when composing the event.
     pub shot_reason: Option<&'static str>,
+    /// How hard `ShapeDiscipline` is recalling this player, 0..`MAX_PULL`.
+    ///
+    /// Consumed by `state.rs` as a FLOOR on the movement speed cap. The
+    /// recall is built at the player's full top speed on purpose — the
+    /// thing being modelled is a recovery run — but the cap that follows
+    /// is keyed to whatever state he happens to be drifting in, and those
+    /// are the low tiers: `Standing` is `Recovery` (0.12) and `Returning`
+    /// / `CreatingSpace` are `Moderate` (0.52). So a forward 17 m out of
+    /// shape was recalled at full speed and then throttled to an amble,
+    /// which is precisely what the tether exists to stop. Without this
+    /// floor the block measured **54.2 m while defending against a
+    /// planned 31.3 m and a real 35-45 m**.
+    pub shape_recall_pull: f32,
 }
 
 impl Default for StateProcessingResult {
@@ -564,7 +766,9 @@ impl StateProcessingResult {
             velocity: None,
             events: EventCollection::new(),
             start_tackle_cooldown: false,
+            start_keeper_cooldown: false,
             shot_reason: None,
+            shape_recall_pull: 0.0,
         }
     }
 
@@ -591,6 +795,7 @@ impl StateProcessingResult {
     /// rather than a silently vanishing event.
     pub fn merge_state_change(&mut self, change: StateChangeResult) {
         self.start_tackle_cooldown = change.start_tackle_cooldown;
+        self.start_keeper_cooldown = change.start_keeper_cooldown;
         self.shot_reason = change.shot_reason;
         if change.state.is_some() {
             self.state = change.state;
@@ -611,6 +816,16 @@ pub struct StateChangeResult {
     /// applied directly in the state) because `ctx.player` is an
     /// immutable borrow inside the state processor.
     pub start_tackle_cooldown: bool,
+    /// Same signal for a GOALKEEPER who has just gone to ground at a
+    /// carrier's feet. Its own flag because the two cooldowns are wildly
+    /// different lengths and for different reasons: a defender's is thirty
+    /// seconds and exists to hold the whole team's tackle COUNT down to a
+    /// realistic one, while a keeper's is a few seconds and exists only so
+    /// that a smother he loses does not repeat on the tick he gets up. Sharing
+    /// the defender's constant would leave a beaten keeper standing and
+    /// watching the next man through for half a minute.
+    /// See `MatchPlayer::start_keeper_cooldown`.
+    pub start_keeper_cooldown: bool,
     /// Tag the NEXT Shoot event fired by this player with this reason.
     /// Set by transitions to the Shooting state so the resulting
     /// Shoot event carries the decision-path context. Mirrors how
@@ -631,6 +846,7 @@ impl StateChangeResult {
             state: None,
             events: EventCollection::new(),
             start_tackle_cooldown: false,
+            start_keeper_cooldown: false,
             shot_reason: None,
         }
     }

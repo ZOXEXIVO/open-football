@@ -1,5 +1,7 @@
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::forwarders::states::common::{
+    ActivityIntensity, ForwardCondition, InterceptionRange,
+};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -24,7 +26,11 @@ impl StateProcessingHandler for ForwardInterceptingState {
 
         let ball_distance = ctx.ball().distance();
 
-        if ball_distance > 150.0 {
+        // Give up beyond the OUTER band. `Returning` commits at
+        // `InterceptionRange::COMMIT`, so the give-up distance has to sit
+        // outside it or the overlap makes the two states a two-cycle —
+        // see `InterceptionRange` for the measurement.
+        if ball_distance > InterceptionRange::GIVE_UP {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Returning,
             ));
@@ -66,8 +72,13 @@ impl StateProcessingHandler for ForwardInterceptingState {
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
-        // Intercepting is moderate intensity - reading and reacting
-        ForwardCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+        // `High`, matching the defender and midfielder interception states,
+        // because this is a speed cap and not a mood: `Moderate` held the
+        // forward to 0.52 of top speed while `velocity()` above is a
+        // full-blooded `Pursuit` onto a moving ball. Reading the pass is
+        // the cheap part; getting there is a sprint, and the two players
+        // who might beat him to it are both allowed 0.78.
+        ForwardCondition::with_velocity(ActivityIntensity::High).process(ctx);
     }
 }
 
@@ -79,11 +90,19 @@ impl ForwardInterceptingState {
         let defender_speed = ctx.player.skills.physical.pace.max(0.1); // Avoid division by zero
         let defender_time = defender_distance / defender_speed;
 
-        // Find the minimum time for any opponent to reach the interception point
+        // Find the minimum time for any opponent to reach the interception point.
+        //
+        // The man CARRYING the ball is excluded: his distance to the
+        // interception point is zero, so including him made this test
+        // `false` for every owned ball and the whole state a pass-through
+        // to `Pressing`. You do not race someone for a ball he already
+        // has — you press him, which is what the callers now do directly.
+        let carrier = ctx.ball().owner_id();
         let opponent_time = ctx
             .players()
             .opponents()
             .all()
+            .filter(|opponent| Some(opponent.id) != carrier)
             .map(|opponent| {
                 let player = ctx.player();
                 let skills = player.skills(opponent.id);

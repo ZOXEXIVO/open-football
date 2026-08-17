@@ -2,7 +2,9 @@ use crate::r#match::PlayerSide;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::context::SubstitutionRecord;
 use crate::r#match::engine::events::dispatcher::EventCollection;
-use crate::r#match::engine::goal::{assign_kickoff, handle_goal_reset};
+use crate::r#match::engine::goal::{
+    advance_goal_celebration, assign_kickoff, finish_goal_celebration, handle_goal_reset,
+};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
 use crate::r#match::engine::rating::RatingContext;
@@ -17,9 +19,10 @@ use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::{
-    CoachInstruction, GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad,
-    MatchState, PenaltyShootoutKick, Score, StateManager, SubstitutionInfo, TacticalRefreshInputs,
-    TeamTacticalState,
+    AttackPlan, AttackRefreshInputs, CoachInstruction, DefenceRefreshInputs, DefensivePlan,
+    GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState,
+    PenaltyShootoutKick, Score, ShapeRefreshInputs, StateManager, SubstitutionInfo,
+    TacticalRefreshInputs, TeamShape, TeamTacticalState,
 };
 use crate::{MatchRuntime, PlayerFieldPositionGroup};
 #[cfg(feature = "match-logs")]
@@ -61,6 +64,7 @@ struct SkillAccumulator {
     gk_count: u32,
     conc_team_sum: f32,
     conc_team_count: u32,
+    top_leadership: f32,
 }
 
 impl SkillAccumulator {
@@ -78,6 +82,7 @@ impl SkillAccumulator {
             gk_count: 0,
             conc_team_sum: 0.0,
             conc_team_count: 0,
+            top_leadership: 0.0,
         }
     }
 
@@ -90,6 +95,11 @@ impl SkillAccumulator {
     }
 
     fn add(&mut self, p: &MatchPlayer, minute: u32) {
+        // The loudest organising voice on the pitch, keeper included — a
+        // shouting keeper marshals a back four as well as any captain,
+        // and `on_field_leadership` reads the same attribute for both.
+        self.top_leadership = self.top_leadership.max(sc::on_field_leadership(p, minute));
+
         let group = p.tactical_position.current_position.position_group();
         match group {
             PlayerFieldPositionGroup::Goalkeeper => {
@@ -226,6 +236,12 @@ impl SkillAccumulator {
             attacking_quality: weighted(self.attacking_sum, self.attacking_weight, 0.5),
             gk_quality: avg(self.gk_sum, self.gk_count, 0.5),
             concentration_teamwork_avg: avg(self.conc_team_sum, self.conc_team_count, 0.5),
+            // A team with nobody on the pitch reads neutral, not silent.
+            top_leadership: if self.top_leadership > 0.0 {
+                self.top_leadership.clamp(0.0, 1.0)
+            } else {
+                0.5
+            },
         }
     }
 }

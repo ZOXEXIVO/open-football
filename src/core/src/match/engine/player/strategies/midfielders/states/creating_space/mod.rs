@@ -1,6 +1,8 @@
 use crate::TacticalStyle;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
+use crate::r#match::midfielders::states::common::{
+    ActivityIntensity, Interception, MidfielderCondition,
+};
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
@@ -9,11 +11,16 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::cmp::Ordering;
 
-const MAX_DISTANCE_FROM_BALL: f32 = 120.0;
-const MIN_DISTANCE_FROM_BALL: f32 = 25.0;
-const SPACE_CREATION_RADIUS: f32 = 20.0;
+/// ~35 m — scaled with the floor, which the two are a band across.
+const MAX_DISTANCE_FROM_BALL: f32 = 280.0;
+/// ~15 m. Was 25u (3.1 m) — written as metres, so "move away from the
+/// ball to create space" meant three strides.
+const MIN_DISTANCE_FROM_BALL: f32 = 120.0;
+/// ~15 m of space to work in. Was 20u — 2.5 m.
+const SPACE_CREATION_RADIUS: f32 = 120.0;
 #[allow(dead_code)]
-const HALF_SPACE_WIDTH: f32 = 15.0;
+/// A half-space is ~10 m wide. Was 15u — 1.9 m.
+const HALF_SPACE_WIDTH: f32 = 80.0;
 
 #[derive(Default, Clone)]
 pub struct MidfielderCreatingSpaceState {}
@@ -35,7 +42,10 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
         }
 
         // If ball is coming toward player and close, prepare to receive
-        if ctx.ball().distance() < 80.0 && ctx.ball().is_towards_player_with_angle(0.85) {
+        if Interception::is_available(ctx)
+            && ctx.ball().distance() < 80.0
+            && ctx.ball().is_towards_player_with_angle(0.85)
+        {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Intercepting,
             ));
@@ -67,12 +77,25 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Use consistent target: scan every 15 ticks, hold direction otherwise
-        let target_position = if ctx.in_state_time % 15 == 0 {
-            self.find_opposite_side_free_zone(ctx)
-        } else {
-            self.calculate_simple_opposite_target(ctx)
-        };
+        // One target function, evaluated every tick.
+        //
+        // This used to read `if in_state_time % 15 == 0 { free_zone_scan }
+        // else { simple_target }`, described as "scan every 15 ticks, hold
+        // direction otherwise". It holds nothing — there is nowhere to
+        // hold it. What it actually did was swap between two DIFFERENT
+        // target computations on a 15-tick cycle, so the aim point jumped
+        // every 15 ticks by construction, and the midfielder lurched
+        // toward the scanned zone for exactly one tick before reverting.
+        // The scan therefore never achieved anything except the jump, and
+        // `Midfielder: Creating Space` carried ~24,000 in-state velocity
+        // reversals across five matches on the back of it (`dev_match
+        // trace`).
+        //
+        // Keeping the target that was already in force 14 ticks out of 15
+        // preserves the behaviour and removes the discontinuity. Reviving
+        // the free-zone scan needs somewhere to persist its answer, so
+        // that the choice can survive long enough to be acted on.
+        let target_position = self.calculate_simple_opposite_target(ctx);
 
         // Dead zone: already at target — hold position
         let dist_to_target = (target_position - ctx.player.position).magnitude();
@@ -165,6 +188,12 @@ impl MidfielderCreatingSpaceState {
     }
 
     /// Find free zone on the opposite side of play
+    /// Parked, not dead: this is the "find real space" scan the target
+    /// selection used to call one tick in fifteen. It needs somewhere to
+    /// PERSIST its answer before it can be used — see the note in
+    /// `velocity`, where calling it on a cycle made the aim point jump
+    /// every 15 ticks instead of steering anywhere.
+    #[allow(dead_code)]
     fn find_opposite_side_free_zone(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let ball_pos = ctx.tick_context.positions.ball.position;
         let field_width = ctx.context.field_size.width as f32;
@@ -639,6 +668,17 @@ impl MidfielderCreatingSpaceState {
         let team_attacking = ctx.team().is_control_ball();
         let has_energy = ctx.player.player_attributes.condition_percentage() > 60;
         if !(ball_in_good_position && team_attacking && has_energy) {
+            return false;
+        }
+        // The destination's own staying condition. `AttackSupporting`
+        // drops back here the moment the ball is more than 300u from the
+        // PLAYER, while this check only asked whether the ball was within
+        // 300u of the opposing GOAL — two different distances, so a
+        // midfielder far from a well-advanced ball satisfied both at once
+        // and the pair ran as a two-cycle (~2,800 round trips a match,
+        // `dev_match trace`). Asking the same question here means a run is
+        // only started when there is a supporting run to make.
+        if ctx.ball().distance() > 300.0 {
             return false;
         }
         let p = SkillCurve::new(ctx.player.skills.mental.off_the_ball, 12.0, 0.6).probability();

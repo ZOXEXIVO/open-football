@@ -2,7 +2,9 @@ use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
-use crate::r#match::player::strategies::common::passing::resolve_aerial_duel;
+use crate::r#match::player::strategies::common::passing::CrossModel;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::mid_run_diag::CROSS_HEADER_ON_GOAL;
 use crate::r#match::player::strategies::players::ShotType;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -10,6 +12,8 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 use std::cmp::Ordering;
+#[cfg(feature = "match-logs")]
+use std::sync::atomic::Ordering as AtomicOrdering;
 
 const HEADING_HEIGHT_THRESHOLD: f32 = 1.5;
 const HEADING_DISTANCE_THRESHOLD: f32 = 4.0;
@@ -44,21 +48,40 @@ impl StateProcessingHandler for ForwardHeadingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        // Corner-contest carve-out: when the discrete corner aerial
-        // contest (engine `resolve_corner_contest`) has ALREADY decided
-        // this player won the jump and dropped the ball on their head,
-        // rolling a second full aerial duel here is double jeopardy —
-        // the same bug the CB AttackingCorner state documents and fixes
-        // with a clean-contact floor (0.62-0.95). Mirror that fix:
-        // contact-only roll, with the header's accuracy still graded by
-        // the shooting pipeline. Open-play crosses (no corner origin)
-        // keep the full duel below — there, no upstream contest decided
-        // anything.
-        if ctx.ball().is_team_attacking_corner() {
+        // Contest carve-out: when a discrete engine-level aerial contest
+        // (`resolve_corner_contest` for corners, `resolve_cross_contest`
+        // for open-play crosses) has ALREADY decided this player won the
+        // jump and dropped the ball on their head, rolling a second full
+        // aerial duel here is double jeopardy — the same bug the CB
+        // AttackingCorner state documents and fixes with a clean-contact
+        // floor (0.62-0.95). Mirror that fix: contact-only roll, with the
+        // header's accuracy still graded by the shooting pipeline.
+        //
+        // A loose aerial ball that NO contest resolved still takes the
+        // full duel below — there, nothing upstream decided anything.
+        let contest_awarded = ctx.tick_context.ball.aerial_contest_winner == Some(ctx.player.id);
+        let on_corner = ctx.ball().is_team_attacking_corner();
+        if contest_awarded || on_corner {
             let heading = ctx.player.skills.technical.heading / 20.0;
             let jumping = ctx.player.skills.physical.jumping / 20.0;
-            let p = (0.62 + (heading + jumping) * 0.5 * 0.30).clamp(0.55, 0.95);
+            // A corner is a set jump at a ball aimed at your head, so a
+            // won contest nearly always produces an attempt. An OPEN-PLAY
+            // cross is not: the ball is moving, the runner is moving, and
+            // most won aerials come off as flick-ons, knock-downs and
+            // mistimed contacts. Real football gets ~1.5-2 headed shots
+            // per team per match from open play; giving both paths the
+            // corner's clean-contact floor produced closer to three.
+            let (base, floor) = if on_corner {
+                (0.62, 0.55)
+            } else {
+                (0.34, 0.28)
+            };
+            let p = (base + (heading + jumping) * 0.5 * 0.30).clamp(floor, 0.95);
             return if ctx.context.rng.unit_f32() < p {
+                #[cfg(feature = "match-logs")]
+                if contest_awarded {
+                    CROSS_HEADER_ON_GOAL.fetch_add(1, AtomicOrdering::Relaxed);
+                }
                 Some(StateChangeResult::with_forward_state_and_event(
                     ForwardState::Running,
                     Event::PlayerEvent(PlayerEvent::Shoot(
@@ -71,7 +94,22 @@ impl StateProcessingHandler for ForwardHeadingState {
                     )),
                 ))
             } else {
-                Some(StateChangeResult::with_forward_state(ForwardState::Running))
+                // Not a clean contact — but he still HEADED it. Leaving
+                // the ball hanging at head height in the six-yard area
+                // instead is not "no attempt", it is a free point-blank
+                // scramble: whoever reacts first snapshots it from two
+                // yards. That is a manufactured chance, and with the
+                // open-play contest live it was worth about two extra
+                // shots per team per match.
+                //
+                // A mistimed header goes SOMEWHERE — flicked on, nodded
+                // down, glanced wide. Send it away from the six-yard box
+                // so the next phase is a real second ball rather than a
+                // tap-in queue.
+                Some(StateChangeResult::with_forward_state_and_event(
+                    ForwardState::Running,
+                    Event::PlayerEvent(PlayerEvent::ClearBall(self.glanced_contact(ctx))),
+                ))
             };
         }
 
@@ -100,7 +138,7 @@ impl StateProcessingHandler for ForwardHeadingState {
 
         let minute = (ctx.context.total_match_time / 60_000) as u32;
         let won_duel = match attacker_full {
-            Some(att) => resolve_aerial_duel(ctx, att, defender_full, minute),
+            Some(att) => CrossModel::resolve_aerial_duel(ctx, att, defender_full, minute),
             None => self.attempt_heading(ctx),
         };
 
@@ -148,6 +186,35 @@ impl StateProcessingHandler for ForwardHeadingState {
 }
 
 impl ForwardHeadingState {
+    /// Where a mistimed header goes. Not a clearance and not a shot — the
+    /// glance, the flick-on, the ball headed across the face and away.
+    ///
+    /// Direction is sideways-and-on rather than back toward the crosser,
+    /// which is what a contact you didn't quite get over actually does,
+    /// and it takes the ball out of the six-yard box. A better header of
+    /// the ball keeps more control over even his poor contacts, so the
+    /// glance travels less far and stays more playable.
+    fn glanced_contact(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+        let heading = (ctx.player.skills.technical.heading / 20.0).clamp(0.0, 1.0);
+        let forward_x = ctx.player.side.map_or(1.0, |side| side.forward_dir_x());
+        let field_height = ctx.context.field_size.height as f32;
+        // Glance toward the nearer touchline — away from the goalmouth.
+        let away_y = if ctx.player.position.y >= field_height / 2.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        // A clean striker of the ball glances it 8-10 m; a poor one skews
+        // it further and higher.
+        let power = 1.5 - heading * 0.4;
+        let lift = 0.10 - heading * 0.03;
+        Vector3::new(
+            -forward_x * power * 0.35 + ctx.context.rng.jitter(0.0, 0.2),
+            away_y * power,
+            lift.max(0.03),
+        )
+    }
+
     /// Determines if the forward successfully heads the ball based on skills and random chance.
     fn attempt_heading(&self, ctx: &StateProcessingContext) -> bool {
         let heading_skill = ctx.player.skills.technical.heading / 20.0;

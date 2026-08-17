@@ -3,6 +3,7 @@ use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
+use crate::r#match::player::strategies::common::states::{TackleDecision, TackleEngagement};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -71,7 +72,18 @@ impl StateProcessingHandler for MidfielderTacklingState {
         // them inside the 50u pressing radius simultaneously entered
         // Tackling. Only the best-positioned one actually engages; the
         // rest revert to Pressing to cover passing lanes.
-        if !ctx.team().is_best_player_to_chase_ball() {
+        // Entry condition only. `TackleEngagement::should_commit` already
+        // applies this before anyone is sent here, so re-checking it on
+        // every tick could only ever ABANDON a challenge already under
+        // way — and the designation is a tolerance band that swaps
+        // between team-mates tick to tick, so it did exactly that. A
+        // committed engagement now runs to contact or to `DISENGAGE`.
+        // …and the plan's own nomination counts as passing it — see
+        // `TackleEngagement::is_nominated_presser`.
+        if ctx.in_state_time == 0
+            && !ctx.team().is_best_player_to_chase_ball()
+            && !TackleEngagement::is_nominated_presser(ctx)
+        {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Pressing,
             ));
@@ -83,6 +95,26 @@ impl StateProcessingHandler for MidfielderTacklingState {
         if let Some(opponent) = opponents_with_ball.next() {
             let opponent_distance = ctx.tick_context.grid.get(ctx.player.id, opponent.id);
             if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
+                // JOCKEY FIRST — the same rule the defenders got, and for
+                // the same reason. Reaching contact range is not a reason
+                // to lunge; the cooldown alone was the limiter, so a
+                // midfielder in range challenged roughly once a second for
+                // as long as he stayed there. Measured: 7,411 attempts and
+                // 2,846 successes against a back line that had already
+                // been fixed down to 1,445 / 604 — midfielders were
+                // essentially the entire remaining excess, 47.2 successful
+                // tackles per team per match against a real ~18.
+                //
+                // Declining keeps him in the state containing, exactly as
+                // it does for a defender.
+                if !TackleDecision::is_decision_tick(ctx)
+                    || !ctx
+                        .context
+                        .rng
+                        .bernoulli(TackleDecision::commit_probability(ctx, opponent_distance))
+                {
+                    return None;
+                }
                 #[cfg(feature = "match-logs")]
                 crate::tackle_stats::MID_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
                 let (tackle_success, committed_foul, foul_severity) =
@@ -197,7 +229,11 @@ impl MidfielderTacklingState {
         // discipline recalibration rationale (fouls ran at half the
         // real rate; reds at ~6× it).
         // 0.044 → 0.062 in the second lift — see defenders/tackling.
-        let mut base_foul = 0.062 + aggression01 * 0.11 - mid_profile.discipline * 0.07;
+        // Lifted ~3× alongside the defender model — see the note there
+        // for why the old rate was fitted against a tackle volume ten
+        // times real, and starved the foul / card / free-kick chain once
+        // the volume was corrected.
+        let mut base_foul = 0.30 + aggression01 * 0.32 - mid_profile.discipline * 0.19;
         if !tackle_success {
             base_foul *= 1.75;
         }
@@ -211,7 +247,7 @@ impl MidfielderTacklingState {
             .penalty_area(ctx.player.side == Some(PlayerSide::Left))
             .contains(&ctx.tick_context.positions.ball.position);
         if in_own_box {
-            base_foul *= 0.30;
+            base_foul *= 0.008;
         }
         // Self-preservation on a booking — see defenders/tackling.
         if ctx.player.yellow_cards > 0 {

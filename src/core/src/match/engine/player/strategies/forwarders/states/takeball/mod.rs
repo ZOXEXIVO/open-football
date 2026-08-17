@@ -1,8 +1,8 @@
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::player::strategies::common::states::LooseBallChase;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -41,32 +41,21 @@ impl StateProcessingHandler for ForwardTakeBallState {
         // velocity, which is what we want whether the ball is rolling flat,
         // arriving from a lofted pass, or stationary (Pursuit reduces to
         // Seek when target velocity is ~0).
-        let ball_pos = ctx.tick_context.positions.ball.position;
-        let ball_vel = ctx.tick_context.positions.ball.velocity;
-        let landing = ctx.tick_context.positions.ball.landing_position;
-
-        // If the ball is aerial (well above the ground), the stable target
-        // is the landing point — Pursuit on a flying ball overshoots. For
-        // ground balls (z ≈ 0) use Pursuit with the current position +
-        // velocity so we lead the ball.
-        let is_aerial = ball_pos.z > 2.3;
-        let target = if is_aerial { landing } else { ball_pos };
-
-        let mut arrive_velocity = if is_aerial {
-            SteeringBehavior::Arrive {
-                target,
-                slowing_distance: 10.0,
-            }
-            .calculate(ctx.player)
-            .velocity
-        } else {
-            SteeringBehavior::Pursuit {
-                target,
-                target_velocity: ball_vel,
-            }
-            .calculate(ctx.player)
-            .velocity
-        };
+        //
+        // If the ball is aerial the stable target is the landing point —
+        // Pursuit on a flying ball overshoots — and for ground balls it is
+        // the ball itself, led by its velocity. Both the aim point and the
+        // steering cross smoothly between the two as it rises. This used to
+        // snap at `ball_pos.z > 2.3`, which inverted the chaser's velocity
+        // every time a bouncing ball crossed that height — see
+        // `LooseBallChase::aim` for the measurement.
+        let (target, mut arrive_velocity) = LooseBallChase::aim(
+            ctx.player,
+            ctx.tick_context.positions.ball.position,
+            ctx.tick_context.positions.ball.velocity,
+            ctx.tick_context.positions.ball.landing_position,
+            10.0,
+        );
 
         // Add separation force to prevent player stacking
         // Reduce separation when approaching ball, but keep minimum to prevent clustering
@@ -118,6 +107,13 @@ impl StateProcessingHandler for ForwardTakeBallState {
                 * ctx.player.max_speed_with_condition_cached()
                 * SEPARATION_WEIGHT
                 * separation_factor;
+
+            // ⚠ SEPARATION MUST NEVER SLOW THE RACE — see `LooseBallChase`.
+            // Without this an opponent standing between this player and the
+            // ball repels him **away from the ball** at up to 0.5 of top
+            // speed, and a rival who started further away wins it.
+            separation_force =
+                LooseBallChase::keep_non_opposing(separation_force, target - ctx.player.position);
 
             // Blend arrive and separation velocities
             arrive_velocity = arrive_velocity + separation_force;

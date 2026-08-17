@@ -2,6 +2,7 @@ use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::player::strategies::players::ops::midfielder_skill::MidfielderSkillProfile;
+use crate::r#match::position_players::PlayerFieldMetadata;
 use crate::r#match::{
     MatchField, MatchObjectsPositions, MatchPlayerCollection, MatchPlayerLite, PassOriginRestart,
     PlayerSide, ShotTarget, Space, SpatialGrid,
@@ -169,7 +170,13 @@ pub struct PlayerTickCache {
     /// them). Every input is tick-frozen (skills static, condition
     /// updated once before the state runs, grid/ball snapshots), so the
     /// memo is bit-identical.
-    pub defender_profile: Option<DefenderSkillProfile>,
+    ///
+    /// The defender slot carries the condition/jadedness it was built at
+    /// as well: the goal-side rule reads a profile *before* dispatch, and
+    /// dispatch is what applies the tick's fatigue, so this one memo can
+    /// legitimately be asked for a profile on both sides of a condition
+    /// change. See `DefenderSkillProfile::from_ctx`.
+    pub defender_profile: Option<(u32, DefenderSkillProfile)>,
     pub midfielder_profile: Option<MidfielderSkillProfile>,
     /// Deepest outfield opponent's x (the offside line) as computed by
     /// `MidfielderAttackSupportingState::is_offside_risk` — a roster
@@ -204,6 +211,13 @@ pub struct PlayerTickCache {
     /// `PassEvaluator::calculate_passer_ability` — only the per-
     /// candidate distance blend varies between calls.
     pub passing_composites: Option<(f32, f32)>,
+    /// `ShapeDiscipline::organisation` — the recall multiplier. Read on
+    /// the positional hot path (`apply_with_pull` runs for every player
+    /// every tick, and `velocity()` and `process()` both reach it), and
+    /// it builds a `SkillBands` set for `decision_quality`. Tick-frozen:
+    /// skills are static in-match and the team aggregate it reads is
+    /// itself only recomputed every ~100 ticks.
+    pub shape_organisation: Option<f32>,
 }
 
 impl Default for PlayerTickCache {
@@ -233,6 +247,7 @@ impl PlayerTickCache {
             guard_target: None,
             pass_pressure_factor: None,
             passing_composites: None,
+            shape_organisation: None,
         }
     }
 
@@ -256,6 +271,7 @@ impl PlayerTickCache {
             self.guard_target = None;
             self.pass_pressure_factor = None;
             self.passing_composites = None;
+            self.shape_organisation = None;
         }
         self
     }
@@ -373,6 +389,22 @@ impl LooseBallChase {
         a.dist_sq < b.dist_sq || (a.dist_sq == b.dist_sq && a.id < b.id)
     }
 
+    /// The distance a chase designation is judged on — not the geometric
+    /// one.
+    ///
+    /// Striker gamble: forwards read rebounds early and commit, so they win
+    /// loose balls a real midfielder at the same distance would not. 0.82 on
+    /// `dist_sq` is ~10% on distance.
+    ///
+    /// Both the table and the reference scans that check it go through here.
+    /// They have to weigh a candidate identically or the debug oracles fire
+    /// on a table that is doing exactly what it was asked to.
+    #[inline]
+    pub fn chase_dist_sq(meta: &PlayerFieldMetadata, ball_pos: Vector3<f32>) -> f32 {
+        let raw = (ball_pos - meta.position).norm_squared();
+        if meta.is_forward { raw * 0.82 } else { raw }
+    }
+
     pub fn update(&mut self, positions: &MatchObjectsPositions) {
         let ball_pos = positions.ball.landing_position;
         self.left = [None; 2];
@@ -387,12 +419,8 @@ impl LooseBallChase {
             if !meta.chase_eligible {
                 continue;
             }
-            // Striker gamble: forwards read rebounds early and commit,
-            // so they win loose balls a real midfielder at the same
-            // distance would not. 0.82 on dist_sq is ~10% on distance.
-            let raw = (ball_pos - meta.position).norm_squared();
             let entry = ChaseEntry {
-                dist_sq: if meta.is_forward { raw * 0.82 } else { raw },
+                dist_sq: Self::chase_dist_sq(meta, ball_pos),
                 id: meta.player_id,
             };
             let slots = match meta.side {
@@ -733,6 +761,37 @@ pub struct BallMetadata {
     /// the pass ran through to nobody. Read by the receiving override in
     /// `PlayerFieldPositionGroup::process`.
     pub pass_target: Option<u32>,
+
+    /// The player currently barred from re-collecting the ball because he
+    /// released it himself and it has not travelled yet, if any.
+    ///
+    /// The ownership layer enforces this on its own claim paths, but the
+    /// goalkeeper reaches ownership through his state machine
+    /// (`Standing` → `PickingUpBall` → `CaughtBall` → `secure_ball_for`),
+    /// which bypasses those paths entirely. Surfacing the bar here lets
+    /// the keeper decline to go for it in the first place, instead of
+    /// lunging at a ball the engine will not let him have.
+    /// See `Ball::blocked_recollect_player`.
+    pub recollect_blocked_player: Option<u32>,
+
+    /// The ball is in a goalkeeper's hands — uncontestable. Read by the
+    /// pressing states (there is nothing to press) and by anything that
+    /// would otherwise treat the keeper as a carrier who can be closed
+    /// down. See `Ball::held_in_hands`.
+    pub held_in_hands: bool,
+    /// `(player, team)` of the team-mate whose deliberate kick or throw-in
+    /// was the last touch, if the last touch was one. Feeds the back-pass
+    /// half of `BallOperationsImpl::handling_verdict`.
+    pub deliberate_kick_by: Option<(u32, u32)>,
+    /// Goalkeeper who released the ball from his hands and is waiting for
+    /// somebody else to play it before he may handle it again.
+    pub hands_released_by: Option<u32>,
+    /// Player an engine-level aerial contest has already awarded the ball
+    /// to (`resolve_corner_contest` / `resolve_cross_contest`). Their
+    /// heading state reads this to take a clean-contact roll instead of
+    /// re-rolling the duel the contest just decided.
+    /// See `Ball::aerial_contest_winner`.
+    pub aerial_contest_winner: Option<u32>,
 }
 
 impl BallMetadata {
@@ -773,6 +832,21 @@ impl BallMetadata {
         self.pass_origin_restart = field.ball.pass_origin_restart;
         self.last_rebound_tick = field.ball.last_rebound_tick;
         self.pass_target = field.ball.pass_target_player_id;
+        self.recollect_blocked_player = field.ball.blocked_recollect_player();
+        self.held_in_hands = field.ball.held_in_hands;
+        self.aerial_contest_winner = field.ball.aerial_contest_winner;
+        self.deliberate_kick_by = if field.ball.last_touch_was_deliberate_kick {
+            field
+                .ball
+                .last_touch_player_id
+                .zip(field.ball.last_touch_team_id)
+        } else {
+            None
+        };
+        self.hands_released_by = field
+            .ball
+            .last_release_player_id
+            .filter(|_| field.ball.last_release_from_hands);
     }
 }
 
@@ -792,6 +866,11 @@ impl From<&MatchField> for BallMetadata {
             pass_origin_restart: PassOriginRestart::OpenPlay,
             last_rebound_tick: 0,
             pass_target: None,
+            recollect_blocked_player: None,
+            held_in_hands: false,
+            deliberate_kick_by: None,
+            hands_released_by: None,
+            aerial_contest_winner: None,
         };
         meta.update(field);
         meta

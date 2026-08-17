@@ -3,7 +3,11 @@
 //! between modules so future refactors don't drift combined behavior.
 
 mod fatigue_calibration_tests;
+mod friendly_recording_tests;
+mod goal_celebration_tests;
+mod goal_clip_recording_tests;
 mod intelligence_tests;
 mod match_realism_tests;
 mod solid_engine_tests;
 mod state_reachability_tests;
+mod throw_in_tests;

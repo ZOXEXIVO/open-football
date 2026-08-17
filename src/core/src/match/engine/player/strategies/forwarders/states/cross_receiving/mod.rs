@@ -61,9 +61,14 @@ impl StateProcessingHandler for ForwardCrossReceivingState {
 
         // For aerial balls, pursue the estimated landing position
         let target = if ball_position.z >= 1.5 && ball_velocity.z < 0.0 {
-            // Estimate where the ball will land (simple ballistic: t = -vz/g, then x += vx*t)
-            let gravity = 9.81;
-            let time_to_land = (-ball_velocity.z / gravity).max(0.0);
+            // Estimate where the ball will land (simple ballistic: t = -vz/g,
+            // then x += vx*t). `t` comes out in TICKS, which is what the
+            // horizontal step below is denominated in — the bare `9.81` here
+            // was a per-second figure and under-estimated the flight ~100×,
+            // so the chaser aimed at the ball's current position and the
+            // cross dropped behind him.
+            let time_to_land =
+                (-ball_velocity.z / crate::r#match::engine::ball::ball::GRAVITY_PER_TICK).max(0.0);
             Vector3::new(
                 ball_position.x + ball_velocity.x * time_to_land,
                 ball_position.y + ball_velocity.y * time_to_land,

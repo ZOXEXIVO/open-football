@@ -25,12 +25,16 @@ RUN sed -i 's|http://deb.debian.org/debian|https://mirror.yandex.ru/debian|g' \
     && apt-get -o Acquire::Retries=5 update \
     && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 \
     && rm -rf /var/lib/apt/lists/*
-RUN rustup target add x86_64-pc-windows-gnu
+# The wasm target is for `src/web/build.rs`, which compiles the Bevy match
+# viewer (src/match) and embeds it. Every platform stage needs it: without it
+# the binary still builds, but ships without a replay viewer.
+RUN rustup target add x86_64-pc-windows-gnu wasm32-unknown-unknown
 
 COPY ./ ./
 
 RUN --mount=type=cache,id=cargo-registry-windows,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target/x86_64-pc-windows-gnu \
+    --mount=type=cache,id=match-viewer-windows,target=/src/src/match/target \
     cargo build --release --target x86_64-pc-windows-gnu && \
     mkdir -p /dist && \
     cp target/x86_64-pc-windows-gnu/release/open_football.exe /dist/
@@ -39,10 +43,14 @@ RUN --mount=type=cache,id=cargo-registry-windows,target=/usr/local/cargo/registr
 
 FROM rust:${RUST_VERSION} AS build-linux
 WORKDIR /src
+
+RUN rustup target add wasm32-unknown-unknown
+
 COPY ./ ./
 
 RUN --mount=type=cache,id=cargo-registry-linux,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target/release \
+    --mount=type=cache,id=match-viewer-linux,target=/src/src/match/target \
     cargo build --release && \
     mkdir -p /dist && \
     cp target/release/open_football /dist/
@@ -58,7 +66,7 @@ WORKDIR /src
 # wiring lives in /root/.cargo/config and is unaffected by the Rust bump.
 RUN rustup toolchain install ${RUST_VERSION} --profile minimal \
     && rustup default ${RUST_VERSION} \
-    && rustup target add x86_64-apple-darwin
+    && rustup target add x86_64-apple-darwin wasm32-unknown-unknown
 
 COPY ./ ./
 
@@ -68,6 +76,7 @@ COPY ./ ./
 ENV CC=o64-clang CXX=o64-clang++
 RUN --mount=type=cache,id=cargo-registry-mac-intel,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/target/x86_64-apple-darwin \
+    --mount=type=cache,id=match-viewer-mac-intel,target=/src/src/match/target \
     cargo build --release --target x86_64-apple-darwin && \
     mkdir -p /dist && \
     cp target/x86_64-apple-darwin/release/open_football /dist/
@@ -80,13 +89,14 @@ WORKDIR /src
 
 RUN rustup toolchain install ${RUST_VERSION} --profile minimal \
     && rustup default ${RUST_VERSION} \
-    && rustup target add aarch64-apple-darwin
+    && rustup target add aarch64-apple-darwin wasm32-unknown-unknown
 
 COPY ./ ./
 
 ENV CC=oa64-clang CXX=oa64-clang++
 RUN --mount=type=cache,id=cargo-registry-mac-m-series,target=/root/.cargo/registry \
     --mount=type=cache,target=/src/target/aarch64-apple-darwin \
+    --mount=type=cache,id=match-viewer-mac-m-series,target=/src/src/match/target \
     cargo build --release --target aarch64-apple-darwin && \
     mkdir -p /dist && \
     cp target/aarch64-apple-darwin/release/open_football /dist/

@@ -651,6 +651,130 @@ pub fn gk_rush_out(player: &MatchPlayer, minute: u32) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
+// Dead-ball composites
+//
+// Set pieces are the one part of a match where a *single* attribute is
+// allowed to dominate: a corner specialist is a corner specialist even
+// when the rest of his sheet is ordinary. These four composites are the
+// only consumers of `corners`, `free_kicks`, `penalty_taking` and
+// `long_throws`, which is why each of those sits at the head of its
+// blend rather than being diluted into a general technical read.
+// ---------------------------------------------------------------------------
+
+/// Corner / whipped-delivery composite — how well the taker puts the ball
+/// on a head. This is the *quality of the delivery*, not who takes it.
+/// `corners*0.32 + crossing*0.26 + technique*0.18 + vision*0.12
+///  + composure*0.07 + concentration*0.05`
+pub fn set_piece_delivery(player: &MatchPlayer, minute: u32) -> f32 {
+    let b = SkillBands::for_player(player, minute);
+    let s = &player.skills;
+    let v = (n(b.apply(s.technical.corners, TECH)) * 0.32
+        + n(b.apply(s.technical.crossing, TECH)) * 0.26
+        + n(b.apply(s.technical.technique, TECH)) * 0.18
+        + n(b.apply(s.mental.vision, MENT)) * 0.12
+        + n(b.apply(s.mental.composure, MENT)) * 0.07
+        + n(b.apply(s.mental.concentration, MENT)) * 0.05)
+        .clamp(0.0, 1.0);
+    clamp_composite(v)
+}
+
+/// Direct free-kick strike composite — bending one over the wall.
+/// Curved like the shooting composites: a 6/20 free-kick taker should
+/// not score at half an elite specialist's rate, he should barely
+/// threaten at all.
+/// `free_kicks^1.70*0.38 + technique^1.55*0.22 + composure^1.40*0.14
+///  + long_shots^1.55*0.10 + vision^1.30*0.08 + balance^1.25*0.08`
+pub fn dead_ball_strike(player: &MatchPlayer, minute: u32) -> f32 {
+    let b = SkillBands::for_player(player, minute);
+    let s = &player.skills;
+    let v = (curve(n(b.apply(s.technical.free_kicks, TECH)), 1.70) * 0.38
+        + curve(n(b.apply(s.technical.technique, TECH)), 1.55) * 0.22
+        + curve(n(b.apply(s.mental.composure, MENT)), 1.40) * 0.14
+        + curve(n(b.apply(s.technical.long_shots, TECH)), 1.55) * 0.10
+        + curve(n(b.apply(s.mental.vision, MENT)), 1.30) * 0.08
+        + curve(n(b.apply(s.physical.balance, TECH)), 1.25) * 0.08)
+        .clamp(0.0, 1.0);
+    clamp_composite(v)
+}
+
+/// Penalty execution composite. Deliberately **linear** and heavy on
+/// composure: a penalty is a technically trivial kick that is lost in
+/// the head, not in the feet. Sits opposite `gk_shot_stopping` in the
+/// spot-kick contest, so it must share that composite's linear scale.
+/// `penalty_taking*0.36 + composure*0.24 + technique*0.15
+///  + finishing*0.13 + concentration*0.07 + balance*0.05`
+pub fn penalty_execution(player: &MatchPlayer, minute: u32) -> f32 {
+    let b = SkillBands::for_player(player, minute);
+    let s = &player.skills;
+    let v = (n(b.apply(s.technical.penalty_taking, TECH)) * 0.36
+        + n(b.apply(s.mental.composure, MENT)) * 0.24
+        + n(b.apply(s.technical.technique, TECH)) * 0.15
+        + n(b.apply(s.technical.finishing, TECH)) * 0.13
+        + n(b.apply(s.mental.concentration, MENT)) * 0.07
+        + n(b.apply(s.physical.balance, TECH)) * 0.05)
+        .clamp(0.0, 1.0);
+    clamp_composite(v)
+}
+
+/// Long-throw composite — the flat missile into the box. `long_throws`
+/// carries most of the weight because it is a trained, specialist
+/// action; strength alone does not buy it.
+/// `long_throws*0.44 + strength*0.24 + technique*0.16 + balance*0.10
+///  + concentration*0.06`
+pub fn long_throw_delivery(player: &MatchPlayer, minute: u32) -> f32 {
+    let b = SkillBands::for_player(player, minute);
+    let s = &player.skills;
+    let v = (n(b.apply(s.technical.long_throws, TECH)) * 0.44
+        + n(b.apply(s.physical.strength, EXPL)) * 0.24
+        + n(b.apply(s.technical.technique, TECH)) * 0.16
+        + n(b.apply(s.physical.balance, TECH)) * 0.10
+        + n(b.apply(s.mental.concentration, MENT)) * 0.06)
+        .clamp(0.0, 1.0);
+    clamp_composite(v)
+}
+
+// ---------------------------------------------------------------------------
+// Character composites
+// ---------------------------------------------------------------------------
+
+/// Resilience composite — does this player keep running when the match
+/// has stopped being fun. `determination` heads the blend; before this
+/// the attribute only ever reached the fatigue model's secondary mental
+/// penalty, so a 20-determination player and a 4-determination player
+/// were indistinguishable at 0-2 down in the 80th minute.
+/// `determination*0.34 + work_rate*0.20 + bravery*0.14
+///  + concentration*0.12 + stamina*0.12 + teamwork*0.08`
+pub fn resilience(player: &MatchPlayer, minute: u32) -> f32 {
+    let b = SkillBands::for_player(player, minute);
+    let s = &player.skills;
+    let v = (n(b.apply(s.mental.determination, MENT)) * 0.34
+        + n(b.apply(s.mental.work_rate, MENT)) * 0.20
+        + n(b.apply(s.mental.bravery, MENT)) * 0.14
+        + n(b.apply(s.mental.concentration, MENT)) * 0.12
+        + n(b.apply(s.physical.stamina, EXPL)) * 0.12
+        + n(b.apply(s.mental.teamwork, MENT)) * 0.08)
+        .clamp(0.0, 1.0);
+    clamp_composite(v)
+}
+
+/// On-field leadership composite — the captain dragging a wobbling side
+/// back into shape. Read at TEAM level (best leader on the pitch), not
+/// per-player, by the callers that consume it.
+/// `leadership*0.38 + composure*0.20 + determination*0.16
+///  + teamwork*0.14 + concentration*0.12`
+pub fn on_field_leadership(player: &MatchPlayer, minute: u32) -> f32 {
+    let b = SkillBands::for_player(player, minute);
+    let s = &player.skills;
+    let v = (n(b.apply(s.mental.leadership, MENT)) * 0.38
+        + n(b.apply(s.mental.composure, MENT)) * 0.20
+        + n(b.apply(s.mental.determination, MENT)) * 0.16
+        + n(b.apply(s.mental.teamwork, MENT)) * 0.14
+        + n(b.apply(s.mental.concentration, MENT)) * 0.12)
+        .clamp(0.0, 1.0);
+    clamp_composite(v)
+}
+
+// ---------------------------------------------------------------------------
 // Re-exports for convenience
 // ---------------------------------------------------------------------------
 
@@ -1015,6 +1139,12 @@ mod tests {
             ("loose_ball_claim", loose_ball_claim(&max, m)),
             ("tackle_timing", tackle_timing(&max, m)),
             ("gk_rush_out", gk_rush_out(&max, m)),
+            ("set_piece_delivery", set_piece_delivery(&max, m)),
+            ("dead_ball_strike", dead_ball_strike(&max, m)),
+            ("penalty_execution", penalty_execution(&max, m)),
+            ("long_throw_delivery", long_throw_delivery(&max, m)),
+            ("resilience", resilience(&max, m)),
+            ("on_field_leadership", on_field_leadership(&max, m)),
         ];
         for (name, value) in composites {
             assert!(
@@ -1164,6 +1294,12 @@ mod tests {
             ("loose_ball_claim", loose_ball_claim),
             ("tackle_timing", tackle_timing),
             ("gk_rush_out", gk_rush_out),
+            ("set_piece_delivery", set_piece_delivery),
+            ("dead_ball_strike", dead_ball_strike),
+            ("penalty_execution", penalty_execution),
+            ("long_throw_delivery", long_throw_delivery),
+            ("resilience", resilience),
+            ("on_field_leadership", on_field_leadership),
         ];
         for (name, f) in pairs {
             let p = f(&poor, m);
@@ -1172,6 +1308,100 @@ mod tests {
             assert!(p < a, "{name}: poor {p} >= avg {a}");
             assert!(a < e, "{name}: avg {a} >= elite {e}");
         }
+    }
+
+    /// Each dead-ball composite exists so ONE specialist attribute can
+    /// carry it. Pin that: a player who is ordinary everywhere except
+    /// the headline attribute must beat an identical player who is
+    /// ordinary everywhere *including* it. Without this the specialist
+    /// attributes silently dilute back into a general technical read,
+    /// which is exactly the state these composites were written to fix.
+    #[test]
+    fn dead_ball_composites_are_carried_by_their_specialist_attribute() {
+        let m = 30u32;
+        let cases: &[(&str, fn(&mut MatchPlayer), fn(&MatchPlayer, u32) -> f32)] = &[
+            (
+                "corners",
+                |p: &mut MatchPlayer| p.skills.technical.corners = 19.0,
+                set_piece_delivery,
+            ),
+            (
+                "free_kicks",
+                |p: &mut MatchPlayer| p.skills.technical.free_kicks = 19.0,
+                dead_ball_strike,
+            ),
+            (
+                "penalty_taking",
+                |p: &mut MatchPlayer| p.skills.technical.penalty_taking = 19.0,
+                penalty_execution,
+            ),
+            (
+                "long_throws",
+                |p: &mut MatchPlayer| p.skills.technical.long_throws = 19.0,
+                long_throw_delivery,
+            ),
+            (
+                "determination",
+                |p: &mut MatchPlayer| p.skills.mental.determination = 19.0,
+                resilience,
+            ),
+            (
+                "leadership",
+                |p: &mut MatchPlayer| p.skills.mental.leadership = 19.0,
+                on_field_leadership,
+            ),
+        ];
+        for (name, raise, f) in cases {
+            let ordinary = build_player(10.0, 9000);
+            let mut specialist = build_player(10.0, 9000);
+            raise(&mut specialist);
+            let base = f(&ordinary, m);
+            let spec = f(&specialist, m);
+            // 9 points of a single attribute at ≥0.32 weight is worth
+            // ≥0.14 of composite; assert a conservative 0.10 so the
+            // curved composites (which compress the top) still pass.
+            assert!(
+                spec > base + 0.10,
+                "{name}: specialist {spec} barely beats ordinary {base} \
+                 — the headline attribute is no longer load-bearing"
+            );
+        }
+    }
+
+    /// A gifted all-rounder with a *blank* specialist attribute must not
+    /// out-deliver a dedicated set-piece taker. This is the other half of
+    /// the pin above: without it, weighting corners at 0.32 still lets a
+    /// 18-everything winger beat a 19-corners specialist, and the engine
+    /// goes back to handing corners to whoever is generally best.
+    #[test]
+    fn specialist_beats_all_rounder_without_the_specialism() {
+        let m = 30u32;
+        let mut all_rounder = build_player(16.0, 9000);
+        all_rounder.skills.technical.corners = 4.0;
+        all_rounder.skills.technical.free_kicks = 4.0;
+        all_rounder.skills.technical.penalty_taking = 4.0;
+        all_rounder.skills.technical.long_throws = 4.0;
+
+        let mut specialist = build_player(10.0, 9000);
+        specialist.skills.technical.corners = 19.0;
+        specialist.skills.technical.free_kicks = 19.0;
+        specialist.skills.technical.penalty_taking = 19.0;
+        specialist.skills.technical.long_throws = 19.0;
+
+        assert!(set_piece_delivery(&specialist, m) > set_piece_delivery(&all_rounder, m));
+        assert!(dead_ball_strike(&specialist, m) > dead_ball_strike(&all_rounder, m));
+        assert!(long_throw_delivery(&specialist, m) > long_throw_delivery(&all_rounder, m));
+        // Penalties are the exception the weights encode on purpose:
+        // composure is 0.24 of the blend, so a calm 16-everywhere player
+        // is genuinely a defensible penalty taker even without the
+        // trained attribute. Only require he doesn't *dominate* the
+        // specialist.
+        let all_pen = penalty_execution(&all_rounder, m);
+        let spec_pen = penalty_execution(&specialist, m);
+        assert!(
+            (spec_pen - all_pen).abs() < 0.12,
+            "penalty gap {spec_pen} vs {all_pen} too wide in either direction"
+        );
     }
 
     #[test]

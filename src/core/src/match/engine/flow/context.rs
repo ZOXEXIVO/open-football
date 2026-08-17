@@ -56,8 +56,9 @@ impl MatchEngineConfig {
     }
 }
 use crate::r#match::{
-    GameState, GoalDetail, GoalPosition, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MatchCoach,
-    MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, PlayerSide, Score,
+    AttackPlan, DefensivePlan, GameState, GoalCelebration, GoalDetail, GoalPosition,
+    MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MatchCoach, MatchField, MatchFieldSize,
+    MatchPlayerCollection, MatchState, MatchTime, PlayerSide, Score, TeamShape,
     TeamSkillAggregates, TeamTacticalState, TeamsTactics,
 };
 use nalgebra::Vector3;
@@ -147,6 +148,32 @@ pub struct MatchContext {
     pub tactical_home: TeamTacticalState,
     pub tactical_away: TeamTacticalState,
 
+    /// Per-possession attacking role assignment for each side — who is
+    /// the primary target, who occupies which patch of the box, who holds
+    /// as rest defence. Refreshed alongside `tactical_home/away` and read
+    /// by off-ball movement and the pass evaluator so eleven players stop
+    /// independently computing the same destination. See
+    /// [`AttackPlan`](crate::r#match::AttackPlan).
+    pub attack_home: AttackPlan,
+    pub attack_away: AttackPlan,
+
+    /// Per-possession defensive duty assignment for each side — who
+    /// presses, who covers, and which opponent each remaining defender is
+    /// responsible for. Refreshed alongside `tactical_home/away`. Without
+    /// it, defensive position is computed against the ball and the
+    /// kickoff formation and never against an opponent. See
+    /// [`DefensivePlan`](crate::r#match::DefensivePlan).
+    pub defence_home: DefensivePlan,
+    pub defence_away: DefensivePlan,
+
+    /// The live positional block for each side, and every player's anchor
+    /// inside it. The three plans above only ever name the handful of
+    /// players involved with the ball; this one covers all eleven, in
+    /// every phase, and is what off-ball movement steers at instead of the
+    /// static kickoff dot. See [`TeamShape`](crate::r#match::TeamShape).
+    pub shape_home: TeamShape,
+    pub shape_away: TeamShape,
+
     /// Knockout-format match — enables extra time + penalty shootout when
     /// the score is level at the end of regulation.
     pub is_knockout: bool,
@@ -194,6 +221,11 @@ pub struct MatchContext {
     /// equalizer-within-5-minutes rate ran 2.5x real), and it means
     /// play always resumes against a SET defense. 0 = play is live.
     pub dead_ball_until_ms: u64,
+    /// The goal currently being celebrated, if any — the choreography that
+    /// plays out inside the `dead_ball_until_ms` window and performs the
+    /// restart at the end of it. `None` whenever play is live. See
+    /// [`GoalCelebration`](crate::r#match::GoalCelebration).
+    pub goal_celebration: Option<GoalCelebration>,
     /// Sim-minute at which the FIRST shape change fired in this match
     /// (any side). Stamped once and never overwritten so the result
     /// summary can show the moment the manager pivoted. `None` while
@@ -358,6 +390,12 @@ impl MatchContext {
             coach_away: MatchCoach::new(),
             tactical_home: TeamTacticalState::initial(),
             tactical_away: TeamTacticalState::initial(),
+            attack_home: AttackPlan::idle(),
+            attack_away: AttackPlan::idle(),
+            defence_home: DefensivePlan::idle(),
+            defence_away: DefensivePlan::idle(),
+            shape_home: TeamShape::idle(),
+            shape_away: TeamShape::idle(),
             is_knockout,
             environment: MatchEnvironment::default(),
             referee: RefereeProfile::default(),
@@ -368,6 +406,7 @@ impl MatchContext {
             tactical_familiarity_away: TacticalFamiliarity::default(),
             last_shape_change_tick: u64::MAX,
             dead_ball_until_ms: 0,
+            goal_celebration: None,
             first_shape_change_minute: None,
             starting_home_tactic: None,
             starting_away_tactic: None,
@@ -420,6 +459,33 @@ impl MatchContext {
     #[inline]
     pub fn invalidate_skill_aggregates(&mut self) {
         self.skill_aggregates_dirty = true;
+    }
+
+    /// This team's attacking role assignment for the current possession.
+    pub fn attack_plan_for_team(&self, team_id: u32) -> &AttackPlan {
+        if team_id == self.field_home_team_id {
+            &self.attack_home
+        } else {
+            &self.attack_away
+        }
+    }
+
+    /// This team's defensive duty assignment for the current possession.
+    pub fn defence_plan_for_team(&self, team_id: u32) -> &DefensivePlan {
+        if team_id == self.field_home_team_id {
+            &self.defence_home
+        } else {
+            &self.defence_away
+        }
+    }
+
+    /// This team's live positional block.
+    pub fn shape_for_team(&self, team_id: u32) -> &TeamShape {
+        if team_id == self.field_home_team_id {
+            &self.shape_home
+        } else {
+            &self.shape_away
+        }
     }
 
     pub fn tactical_for_team(&self, team_id: u32) -> &TeamTacticalState {
@@ -504,6 +570,48 @@ impl MatchContext {
         use std::sync::OnceLock;
         static BLIND: OnceLock<bool> = OnceLock::new();
         *BLIND.get_or_init(|| std::env::var("OF_SCORE_BLIND").is_ok())
+    }
+
+    /// Diagnostic switch: when the `OF_SHAPE_OFF` env var is set, the
+    /// team-shape layer is inert — [`TeamShape`] stops handing out
+    /// anchors and `ShapeDiscipline` stops pulling on anybody, so every
+    /// off-ball consumer falls back to the kickoff formation dot exactly
+    /// as it did before the layer existed.
+    ///
+    /// This is the A/B control for the whole positional system. Its
+    /// effects reach every player on every tick, so "did the shape work
+    /// cause this?" cannot be answered by reading the diff — and it must
+    /// not be answered by checking out an older revision either, because
+    /// the working tree moves under you. Same pattern and same purpose as
+    /// [`score_blind`](Self::score_blind); read once per process. Debug
+    /// infrastructure — do not remove.
+    pub fn shape_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_SHAPE_OFF").is_ok())
+    }
+
+    /// Diagnostic switch: with `OF_PRESS_OFF` set, [`DefensivePlan`]
+    /// nominates a presser only when an opponent is actually CARRYING
+    /// the ball, and only from the back line and midfield — the model as
+    /// it stood before 2026-08-17.
+    ///
+    /// The two halves of that are what the switch exists to A/B, because
+    /// between them they decide whether anybody closes the ball down at
+    /// all: `carrier` is `None` for every pass in flight and every loose
+    /// ball, which is most of a match, and the front line was not in the
+    /// pool. Measured with this on: press 0.25 duties per refresh,
+    /// `Forward: Pressing` 0.3% of AI ticks, ball stuck 18.0 s/match.
+    ///
+    /// Same pattern and same purpose as [`shape_off`](Self::shape_off) —
+    /// the effect reaches every defensive tick, so the question "did the
+    /// press work cause this?" cannot be answered from the diff, and must
+    /// not be answered by checking out an older revision either.
+    /// Debug infrastructure — do not remove.
+    pub fn press_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_PRESS_OFF").is_ok())
     }
 
     /// Match minute before which BEHAVIORAL score reactions stay off —

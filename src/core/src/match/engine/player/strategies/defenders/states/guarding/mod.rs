@@ -1,5 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, Interception,
+};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -22,6 +24,17 @@ pub struct DefenderGuardingState {}
 
 impl StateProcessingHandler for DefenderGuardingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Won it — a defender with the ball is not guarding anybody any
+        // more. `Guarding` had no `has_ball` exit at all, so a defender
+        // who ended up on the ball stood over it marking his man until
+        // the ball's stall detector took it off him ~16 s later. Same
+        // hole `GoalkeeperComingOutState` had; see the sweep note there.
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Passing,
+            ));
+        }
+
         // BOX EMERGENCY — engage the carrier immediately if they're in
         // our box and we're one of the two closest defenders. Guarding
         // an off-ball runner is the wrong duty at that moment.
@@ -123,7 +136,8 @@ impl StateProcessingHandler for DefenderGuardingState {
             }
 
             // 4. Ball coming towards our guarded opponent — try to intercept
-            if ball_distance < 80.0
+            if Interception::is_available(ctx)
+                && ball_distance < 80.0
                 && ctx.ball().is_towards_player_with_angle(0.7)
                 && ball_distance < distance_to_opponent + 10.0
             {
@@ -222,7 +236,11 @@ impl StateProcessingHandler for DefenderGuardingState {
 
     fn process_conditions(&self, ctx: ConditionContext) {
         // Guarding requires constant movement mirroring the opponent — high intensity
-        DefenderCondition::with_velocity(ActivityIntensity::High).process(ctx);
+        // Tracks a MOVING MAN, so the cap has to match the run he is
+        // tracking — see the note in `defenders/states/marking`. `High`
+        // (0.78) against an attacker's `VeryHigh` (0.95) is a marker
+        // forbidden to keep up by the movement layer.
+        DefenderCondition::with_velocity(ActivityIntensity::VeryHigh).process(ctx);
     }
 }
 

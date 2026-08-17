@@ -1,5 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::player::PlayerSide;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::state::PlayerState;
@@ -50,6 +51,13 @@ impl StateProcessingHandler for DefenderClearingState {
         let rng = &ctx.context.rng;
         let poor_clearance = rng.random::<f32>() < def_profile.poor_clearance_chance.min(0.95);
 
+        // NB "hook it behind for a corner" — the largest real-world
+        // corner source — was implemented here and REMOVED, because this
+        // state does not run: `Defender: Clearing` is below 0.25% of AI
+        // ticks in the state census, so the logic was correct and dead.
+        // Defensive clearances in this engine happen in the cross
+        // contest's headed-clear branch (`resolve_cross_contest`) and in
+        // the heading states, not here.
         let halfway_x = field_width * 0.5;
         let nominal_target_x = if is_left_side {
             halfway_x.max(ball_position.x + 30.0)
@@ -87,18 +95,33 @@ impl StateProcessingHandler for DefenderClearingState {
         let to_target_dist = to_target.norm().max(0.1);
         let direction_to_target = to_target / to_target_dist;
 
-        // Lofted clearance: clean clearances get a stronger, flatter
-        // trajectory (controlled outlet); poor ones produce a weak
-        // skewed strike that rolls back into trouble.
-        let base_speed = if at_boundary { 5.0 } else { 4.0 };
+        // Lofted clearance, solved the same way a lofted pass is: pick how
+        // high the hoof goes (in metres), which fixes its hang time, and
+        // the horizontal speed then follows from the distance it has to
+        // cover. A clean clearance is a controlled outlet that finds the
+        // touchline area; a poor one is a weak skewed strike that drops
+        // short and rolls back into trouble.
+        //
+        // Previously the two components were independent constants — 4-5
+        // u/tick horizontally and 5-6 "z" — fitted to a gravity that was
+        // 160× too strong in metres. That produced a 40 m hoof with a
+        // 0.6 s hang time, and the numbers only worked as a pair, so
+        // neither could be reasoned about on its own.
+        let apex_metres = if at_boundary { 12.0 } else { 9.0 };
+        let apex_mult = 0.85 + (ctx.player.skills.technical.technique / 20.0).powf(1.30) * 0.15;
+        let z_velocity = Ball::launch_speed_for_apex(
+            apex_metres * apex_mult * if poor_clearance { 0.55 } else { 1.0 },
+        );
+
         let speed_mult =
             (0.85 + def_profile.clearance_profile * 0.30) * def_profile.clearance_condition_mult;
-        let clear_speed = base_speed * speed_mult * if poor_clearance { 0.65 } else { 1.0 };
+        // Reach the aim point within the hang time, then trim by execution.
+        // Clamped to a realistic hoof: 2.6 u/tick = 32 m/s.
+        let hang = Ball::hang_ticks(z_velocity).max(1.0);
+        let clear_speed =
+            ((to_target_dist / hang) * speed_mult * if poor_clearance { 0.65 } else { 1.0 })
+                .clamp(0.30, 2.6);
         let horizontal_velocity = direction_to_target * clear_speed;
-
-        let z_base = if at_boundary { 6.0 } else { 5.0 };
-        let z_mult = 0.85 + (ctx.player.skills.technical.technique / 20.0).powf(1.30) * 0.15;
-        let z_velocity = z_base * z_mult * if poor_clearance { 0.80 } else { 1.0 };
 
         let ball_velocity = Vector3::new(horizontal_velocity.x, horizontal_velocity.y, z_velocity);
 

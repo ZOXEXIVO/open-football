@@ -358,18 +358,43 @@ impl MatchCoach {
         };
     }
 
-    /// Whether the team should allow a shot right now (team-level cooldown).
-    /// 500 ticks = 5 seconds between any shot by this team.
+    /// Whether the team should allow a shot right now. **Always yes.**
     ///
-    /// Math: real football ≈ 13 shots / team / 90min = one shot every
-    /// ~4100 ticks. A 500-tick floor caps team shots at 108 per match
-    /// and lets the rate fall well below that when opportunities don't
-    /// materialise. At 200 ticks the cap was 270, which the simulator
-    /// was approaching in desperation-attack matches (one team losing
-    /// 0-5 and spam-shooting from anywhere). At 500, a losing team
-    /// can still fire ~100 times (plenty) but can't rebound-spam the
-    /// same possession four times per second.
-    pub fn can_shoot(&self, current_tick: u64, rebound_live: bool) -> bool {
+    /// 2026-08-16: the three team-level shot gates are REMOVED — a
+    /// spacing cooldown (one shot per 7.5 s), a build-up delay (no shot
+    /// within 1 s of winning the ball), and a per-possession quota (at
+    /// most two attempts).
+    ///
+    /// None of them has a real-life analogue. Football has no per-team
+    /// shot timer and no attempt quota: a side that works three openings
+    /// in one spell of pressure takes three shots. What these gates did
+    /// was veto a strike on WHO SHOT LAST AND WHEN, without being able to
+    /// see the chance at all — so a speculative 25-yarder locked the team
+    /// out of a tap-in four seconds later. The note kept below recorded
+    /// the symptom without drawing the conclusion: across the shot-bar
+    /// titration ON-TARGET shots FELL 3.0 → 2.4 per team while total
+    /// shots rose 12.6 → 30.1.
+    ///
+    /// Shot volume is not theirs to hold down. It belongs to defending —
+    /// pressure, blocks, and the quality of the look — which is where the
+    /// pressing work will put it. See `SHOT_BAR_BASE` for the rest of the
+    /// teardown.
+    ///
+    /// Kept as a method, and the counters it read (`last_shot_tick`,
+    /// `shots_this_possession`, `last_possession_gain_tick`) are still
+    /// maintained, so a real constraint can be reintroduced here without
+    /// re-plumbing every caller.
+    pub fn can_shoot(&self, _current_tick: u64, _rebound_live: bool) -> bool {
+        true
+    }
+
+    /// The gates this replaced, preserved for the pressing work.
+    ///
+    /// Their reasoning is sound about SPAM and wrong about football: they
+    /// filter by timing rather than by chance quality. If something like
+    /// them comes back, it should read the look, not the clock.
+    #[allow(dead_code)]
+    fn legacy_shot_gates(&self, current_tick: u64, rebound_live: bool) -> bool {
         // Per-team shot cadence — see type docs for the full rationale.
         // 500 → 750 ticks (~7.5s spacing). Briefly tried 1000 but it
         // disproportionately hurt weak teams: they shoot rarely already,
@@ -385,6 +410,16 @@ impl MatchCoach {
         // gate blocked EVERY second-chance strike — contradicting the
         // possession-cap design note below, and deleting one of
         // football's core goal patterns (~4-6% of real goals).
+        //
+        // Suspected 2026-08-13 of costing more than it saves: it filters
+        // by TIMING rather than by chance quality, so a speculative
+        // 25-yarder locks the team out of a tap-in four seconds later,
+        // and across the shot-bar titration ON-TARGET shots FELL 3.0 →
+        // 2.4 per team while total shots went 12.6 → 30.1. Tried at 250
+        // ticks: goals 1.90 → 2.00 and 0-0 15% → 13%, both inside the
+        // n=60 noise floor, and `ball STUCK` went the wrong way (29.9 →
+        // 47.8 s/match). Left at 750 for want of evidence — re-test it
+        // with n≥300 alongside the chance-supply work.
         let shot_spaced = rebound_live || current_tick.saturating_sub(self.last_shot_tick) >= 750;
         // Build-up gate: a team that just won possession can't fire
         // within ~1 second. Real football: even elite counter-attacks

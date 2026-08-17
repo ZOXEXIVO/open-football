@@ -24,11 +24,19 @@ impl StateProcessingHandler for ForwardAssistingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        if ctx.ball().distance() < 200.0 && ctx.ball().is_towards_player_with_angle(0.9) {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Intercepting,
-            ));
-        }
+        // A branch routing to `Intercepting` used to sit here, and it
+        // could only ever fire while OUR side had the ball — the check
+        // above returns `Running` otherwise. `Intercepting`'s first act
+        // is to reject exactly that (`is_control_ball` => `Returning`),
+        // so the net effect was that a forward with a team-mate's pass
+        // travelling toward him turned and ran back. Measured:
+        // `Forward: Intercepting` exited after a mean of **0.0 AI ticks**
+        // with 99.7% of visits lasting a single tick.
+        //
+        // You do not intercept your own team's pass, you receive it, and
+        // the dispatcher already designates the intended receiver as the
+        // chaser (see `should_force_takeball`'s `pass_target` rule). So
+        // there is nothing to do here but keep making the run.
 
         // Check if the player is on the opponent's side of the field
         if ctx.team().is_control_ball()
@@ -101,10 +109,43 @@ impl StateProcessingHandler for ForwardAssistingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // Take up a supporting position in the box, not the goal itself.
+        //
+        // This used to `Arrive` at `opponent_goal_position()` — a fixed
+        // point ON the goal line. This state is entered mostly OFF the
+        // ball (see `process`), so every assisting forward converged into
+        // the net, where they stacked on one spot and ground against the
+        // pitch boundary. It was the highest-RATE flicker state left in
+        // the engine at ~2.7 velocity reversals per second held
+        // (`dev_match trace`), and standing in the goal is not a
+        // supporting position in the first place.
+        //
+        // Depth comes back off the line toward the ball, so the forward
+        // occupies the area a cutback or cross is played into. Laterally
+        // he mostly holds his own channel, drawn gently central — that
+        // keeps forwards in separate lanes instead of piling onto a
+        // single aim point, and it is continuous in his own position, so
+        // it cannot introduce a jump.
+        const SUPPORT_DEPTH: f32 = 90.0; // ~11 m off the line
+        let goal = ctx.player().opponent_goal_position();
+        let ball = ctx.tick_context.positions.ball.position;
+        let to_ball = ball - goal;
+        let dir = if to_ball.magnitude() > 0.01 {
+            to_ball.normalize()
+        } else {
+            Vector3::new(1.0, 0.0, 0.0)
+        };
+        let depth_point = goal + dir * SUPPORT_DEPTH;
+        let target = Vector3::new(
+            depth_point.x,
+            ctx.player.position.y * 0.7 + goal.y * 0.3,
+            0.0,
+        );
+
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.player().opponent_goal_position(),
-                slowing_distance: 10.0,
+                target,
+                slowing_distance: 20.0,
             }
             .calculate(ctx.player)
             .velocity,

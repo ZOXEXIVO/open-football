@@ -1,5 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, Interception,
+};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -23,6 +25,22 @@ pub struct DefenderRestingState {}
 
 impl StateProcessingHandler for DefenderRestingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // A player who has won the ball is not doing this any more.
+        //
+        // Nothing here asked whether HE had it, so a defender who
+        // intercepted or was simply the nearest body when it arrived
+        // carried on with an off-ball job while holding it — the same
+        // fixed point `Defender: Marking` was measured freezing on
+        // (99% of its stuck ticks with the owner 250-plus AI ticks into
+        // the state). `Running` is where a defender's on-ball decisions
+        // live, and this is the hand-off `DefenderStandingState` has
+        // always made.
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Running,
+            ));
+        }
+
         let stamina = ctx.player.player_attributes.condition_percentage() as f32;
 
         // Crisis engage — only exit to Pressing if we have enough
@@ -50,11 +68,13 @@ impl StateProcessingHandler for DefenderRestingState {
         if ball_distance < BALL_PROXIMITY_THRESHOLD {
             // If the ball is close, check for nearby opponents
             let opponent_nearby = self.is_opponent_nearby(ctx);
-            return Some(StateChangeResult::with_defender_state(if opponent_nearby {
-                DefenderState::Marking
-            } else {
-                DefenderState::Intercepting
-            }));
+            return Some(StateChangeResult::with_defender_state(
+                if opponent_nearby || !Interception::is_available(ctx) {
+                    DefenderState::Marking
+                } else {
+                    DefenderState::Intercepting
+                },
+            ));
         }
 
         // Previous "team under threat" exit (fires if 2+ opponents in

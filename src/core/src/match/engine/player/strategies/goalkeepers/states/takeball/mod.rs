@@ -1,6 +1,7 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
+use crate::r#match::player::strategies::common::states::LooseBallChase;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -124,6 +125,13 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
             // Average and scale the separation force
             separation_force = separation_force / (neighbor_count as f32);
             separation_force = separation_force * max_speed * SEPARATION_WEIGHT * separation_factor;
+
+            // ⚠ SEPARATION MUST NEVER SLOW THE RACE — see `LooseBallChase`.
+            // A keeper coming for a loose ball is the last man; being
+            // repelled off it by the striker he is racing is the worst
+            // version of this bug on the pitch.
+            separation_force =
+                LooseBallChase::keep_non_opposing(separation_force, target - ctx.player.position);
 
             // Blend arrive and separation velocities
             arrive_velocity = arrive_velocity + separation_force;

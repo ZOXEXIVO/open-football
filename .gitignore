@@ -2,6 +2,9 @@
 **/*.rs.bk
 styles.min.css
 
+# Built by src/web/build.rs from src/match, same as styles.min.css above.
+src/web/assets/static/viewer/
+
 **/target
 
 .idea/

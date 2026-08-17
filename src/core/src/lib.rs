@@ -12,7 +12,7 @@ pub mod transfers;
 pub mod utils;
 
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 pub use competitions::*;
 pub use config::SimulatorConfig;
@@ -422,9 +422,13 @@ pub use club::{
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::assist_diag;
 #[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::ball::ball::flight_diag;
+#[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::interactions::block_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::ball::ball::ownership::reception_diag;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::ball::ball::stall::dead_ball_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::events::gk_claim::gk_claim_diag;
 #[cfg(feature = "match-logs")]
@@ -432,9 +436,19 @@ pub use crate::r#match::engine::player::events::players::key_pass_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::events::players::save_accounting_stats;
 #[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::player::events::players::shot_accuracy_diag;
+#[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::strategies::forwarders::states::running::shot_gate_stats;
 #[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::player::strategies::forwarders::states::running::stuck_exit_stats;
+#[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::strategies::forwarders::states::running::tackle_stats;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::engine::player::strategies::processor::chase_diag;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::midfielders::states::common::onball_diag as mid_onball_diag;
+#[cfg(feature = "match-logs")]
+pub use crate::r#match::player::motion_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::player::strategies::players::ops::forward_shot_decision::helper_diag;
 #[cfg(feature = "match-logs")]
@@ -444,6 +458,10 @@ pub use crate::r#match::player::strategies::players::ops::forward_shot_decision:
 
 static STORE_MATCH_EVENTS_MODE: AtomicBool = AtomicBool::new(false);
 static MATCH_RECORDINGS_MODE: AtomicBool = AtomicBool::new(false);
+/// Defaults to `Full`, so anything that plays a match without going through
+/// `settings.rs` — `.dev/match`, the calibration harness, every test — keeps
+/// the whole recording. The game narrows it at startup.
+static MATCH_RECORDING_SCOPE: AtomicU8 = AtomicU8::new(0);
 static MATCH_STORE_MAX_THREADS: AtomicUsize = AtomicUsize::new(4);
 static MATCH_ENGINE_POOL: OnceLock<r#match::MatchPlayEnginePool> = OnceLock::new();
 
@@ -468,6 +486,16 @@ impl MatchRuntime {
 
     pub fn recordings_mode() -> bool {
         MATCH_RECORDINGS_MODE.load(Ordering::SeqCst)
+    }
+
+    /// How much of each recorded match to keep. See
+    /// [`r#match::RecordingScope`].
+    pub fn set_recording_scope(scope: r#match::RecordingScope) {
+        MATCH_RECORDING_SCOPE.store(scope.as_u8(), Ordering::SeqCst);
+    }
+
+    pub fn recording_scope() -> r#match::RecordingScope {
+        r#match::RecordingScope::from_u8(MATCH_RECORDING_SCOPE.load(Ordering::SeqCst))
     }
 
     pub fn set_store_max_threads(n: usize) {

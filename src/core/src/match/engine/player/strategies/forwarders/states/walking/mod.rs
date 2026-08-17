@@ -1,4 +1,3 @@
-use crate::IntegerUtils;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::{
@@ -6,6 +5,11 @@ use crate::r#match::{
     SteeringBehavior,
 };
 use nalgebra::Vector3;
+
+/// Fraction of full speed a walking player moves at. This is the
+/// recovery gear — the state exists so a forward can reorganise without
+/// burning condition, so he covers ground but does not sprint.
+const WALK_PACE: f32 = 0.45;
 
 #[derive(Default, Clone)]
 pub struct ForwardWalkingState {}
@@ -52,7 +56,7 @@ impl StateProcessingHandler for ForwardWalkingState {
                     SteeringBehavior::FollowPath {
                         waypoints,
                         current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: IntegerUtils::random(1, 10) as f32,
+                        crowd_offset: ctx.player().separation_offset(),
                     }
                     .calculate(ctx.player)
                     .velocity,
@@ -60,16 +64,25 @@ impl StateProcessingHandler for ForwardWalkingState {
             }
         }
 
+        // Walking is the low-energy off-ball state, and it used to be a
+        // literal `Wander` around the kickoff dot: a random walk, on a
+        // point fixed before the match started. That is the single line
+        // most responsible for "the forward is strolling about not playing
+        // football" — a striker whose team had the ball 60 m away spent
+        // the possession describing small circles on the spot he was
+        // drawn on.
+        //
+        // A forward off the ball is doing the opposite of nothing: he is
+        // getting into the shape his team needs him in, at a jog. Steer at
+        // the anchor and stop when he is there.
         Some(
-            SteeringBehavior::Wander {
-                target: ctx.player.start_position,
-                radius: IntegerUtils::random(5, 15) as f32,
-                jitter: IntegerUtils::random(1, 5) as f32,
-                distance: IntegerUtils::random(10, 20) as f32,
-                angle: IntegerUtils::random(0, 360) as f32,
+            SteeringBehavior::Arrive {
+                target: ctx.team().my_anchor(),
+                slowing_distance: 30.0,
             }
             .calculate(ctx.player)
-            .velocity,
+            .velocity
+                * WALK_PACE,
         )
     }
 

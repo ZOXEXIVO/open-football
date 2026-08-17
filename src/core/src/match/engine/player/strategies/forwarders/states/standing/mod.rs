@@ -3,6 +3,7 @@ use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondi
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -10,7 +11,20 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const PRESS_DISTANCE: f32 = 20.0; // Distance within which to press opponents
+/// How near the carrier a standing forward has to be before he goes to
+/// him off his own bat (~7.5 m).
+///
+/// Was 20u — **2.5 metres** — with a "very close, anyone reacts" band at
+/// 10u, i.e. 1.25 m. Both are inside tackling range rather than pressing
+/// range, so this gate was structurally false: a forward standing five
+/// metres from an opponent receiving the ball had no route into
+/// `Pressing` at all unless he was also the single best chaser on the
+/// team. Same class of defect as the sub-metre defaults documented in
+/// `ops/pressure.rs`, and the same read of the units (1u = 12.5 cm).
+const PRESS_DISTANCE: f32 = 60.0;
+/// …and the range at which he simply reacts, without waiting to be the
+/// nominated man (~2.5 m). A ball that close is nobody's to delegate.
+const REACT_DISTANCE: f32 = 20.0;
 
 #[derive(Default, Clone)]
 pub struct ForwardStandingState {}
@@ -20,11 +34,12 @@ impl StateProcessingHandler for ForwardStandingState {
         // Check if the forward still has the ball
         if ctx.player.has_ball(ctx) {
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-            // Settle before striking: 30 ticks = ~300ms. Without this the
-            // forward can receive + shoot in the same half-second, which
-            // turns every possession into a strike.
-            let ownership_ticks = ctx.tick_context.ball.ownership_duration;
-            let has_settled = ownership_ticks >= 30;
+            // 2026-08-16: the "settle for 300 ms before you may strike"
+            // timer is REMOVED. A first-time finish is not a bug — it is
+            // most of what a striker does, and the timer forbade exactly
+            // the shot that arriving onto a cutback is FOR. Removed with
+            // the other shot cooldowns; see `PlayerMemory::can_shoot`.
+            let has_settled = true;
             let can_shoot = ctx.team().can_shoot() && ctx.player().can_shoot();
 
             // Point-blank (≤24u / ~12m) — defer to the centralised helper
@@ -59,14 +74,11 @@ impl StateProcessingHandler for ForwardStandingState {
                 }
             }
 
-            // Cooldown for medium/long range shots to prevent rapid-fire spam.
-            const SHOOTING_COOLDOWN: u64 = 20;
-
-            if has_settled
-                && can_shoot
-                && ctx.player().should_attempt_shot()
-                && ctx.in_state_time > SHOOTING_COOLDOWN
-            {
+            // 2026-08-16: the medium/long-range shot cooldown is REMOVED
+            // for the same reason as the rest — it gated on how long the
+            // player had been standing, which is not a footballing
+            // constraint on striking a ball.
+            if has_settled && can_shoot && ctx.player().should_attempt_shot() {
                 if let Some(result) = dispatch_shot(ctx, "FWD_STAND_RANGE") {
                     return Some(result);
                 }
@@ -98,6 +110,25 @@ impl StateProcessingHandler for ForwardStandingState {
             // Minimum time in standing state to prevent rapid state oscillation
             if ctx.in_state_time < 10 {
                 return None;
+            }
+
+            // Standing is only legitimate while he is roughly WHERE HIS
+            // TEAM WANTS HIM. The block slides with the ball every
+            // refresh, so an anchor that was under his feet a moment ago
+            // has moved, and this state's velocity used to be exactly
+            // zero — which is how a forward came to spend 63% of a match
+            // motionless while his side attacked without him.
+            //
+            // The threshold is a genuine recovery run, not a nudge: the
+            // velocity fn below already shuffles him toward a nearby
+            // anchor, and `ShapeDiscipline` pulls on him from 6 m out
+            // whatever state he is in. A tight trigger here just adds a
+            // transition on top of two mechanisms that already handle it
+            // — at 3 m it fired on nearly every tick, because the settled
+            // anchor lag is 12 m, and measurably raised state churn.
+            const OUT_OF_SHAPE: f32 = 160.0;
+            if ctx.team().distance_from_anchor() > OUT_OF_SHAPE {
+                return Some(StateChangeResult::with_forward_state(ForwardState::Walking));
             }
 
             // Offside discipline — if we're stranded beyond the opposing
@@ -135,7 +166,7 @@ impl StateProcessingHandler for ForwardStandingState {
                     SteeringBehavior::FollowPath {
                         waypoints,
                         current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: 3.0,
+                        crowd_offset: ctx.player().separation_offset(),
                     }
                     .calculate(ctx.player)
                     .velocity
@@ -144,9 +175,25 @@ impl StateProcessingHandler for ForwardStandingState {
             }
         }
 
-        // Standing = completely still. Separation is handled by transitioning
-        // to Running state, not by applying forces while stationary.
-        Some(Vector3::zeros())
+        // Standing = holding position, which is not the same as being
+        // frozen. `process` sends him to Walking once he is more than a
+        // couple of strides out of shape; inside that band he adjusts his
+        // feet toward the anchor rather than standing on a spot the block
+        // has already moved off. `Arrive` decelerates into its target, so
+        // this is a shuffle that stops on arrival, not a drift.
+        let to_anchor = ctx.team().my_anchor() - ctx.player.position;
+        if to_anchor.magnitude() < 4.0 {
+            return Some(Vector3::zeros());
+        }
+        Some(
+            SteeringBehavior::Arrive {
+                target: ctx.player.position + to_anchor,
+                slowing_distance: 20.0,
+            }
+            .calculate(ctx.player)
+            .velocity
+                * 0.35,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
@@ -195,11 +242,17 @@ impl ForwardStandingState {
 
     /// Decides whether the forward should press the opponent.
     fn should_press(&self, ctx: &StateProcessingContext) -> bool {
+        // The team plan's nomination is authoritative — see the same
+        // acceptance in `ForwardRunningState::should_press` and in
+        // `TackleEngagement::should_commit`.
+        if TackleEngagement::is_nominated_presser(ctx) {
+            return true;
+        }
         // Only press if opponent has the ball AND is close AND we're best positioned
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             let dist = opponent.distance(ctx);
             // Very close — anyone reacts
-            if dist < 10.0 {
+            if dist < REACT_DISTANCE {
                 return true;
             }
             // Otherwise only the best chaser presses

@@ -1,15 +1,18 @@
 use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefensiveLine, Interception,
+};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
+    ConditionContext, DefensiveDuty, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
 };
 
-const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 35.0; // Tighter line — less room for attackers
+// Line deviation now lives on `DefensiveLine` (shared with the Running
+// state, with hysteresis) — see `defenders/states/common`.
 const BALL_PROXIMITY_THRESHOLD: f32 = 150.0; // React to ball from further out
 const MARKING_DISTANCE_THRESHOLD: f32 = 50.0; // Pick up attackers from further away
 const PRESSING_DISTANCE_THRESHOLD: f32 = 60.0; // Step out to press ball carrier earlier
@@ -21,6 +24,14 @@ const DANGEROUS_RUN_ANGLE: f32 = 0.5; // Wider angle detection for goal-bound ru
 // state.
 const AERIAL_HEADING_HEIGHT: f32 = 1.5;
 const AERIAL_HEADING_DISTANCE: f32 = 5.0;
+/// How far off the line a covering defender drops (~4.5 m). This is the
+/// near end of the back line's diagonal.
+const COVER_DROP: f32 = 36.0;
+/// How far the far-side defender tucks back when the ball is fully on the
+/// opposite flank (~7.5 m). Scaled continuously by how far across the
+/// pitch the ball actually is, so the diagonal grows and shrinks with the
+/// play instead of switching on.
+const FAR_SIDE_DROP: f32 = 60.0;
 
 #[derive(Default, Clone)]
 pub struct DefenderHoldingLineState {}
@@ -84,14 +95,13 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             ));
         }
 
-        // 1. Calculate the defensive line position (x-axis: goal-to-goal)
-        let defensive_line_position = self.calculate_defensive_line_position(ctx);
-
-        // 2. Calculate the distance from the defender to the defensive line
-        let distance_from_line = (ctx.player.position.x - defensive_line_position).abs();
-
-        // 3. If the defender is too far from the defensive line, switch to Running state
-        if distance_from_line > MAX_DEFENSIVE_LINE_DEVIATION {
+        // Off the line — run back to it. `DefensiveLine::is_in_line`
+        // is the SAME predicate `DefenderRunningState` uses to decide
+        // we've arrived, so the two states can no longer disagree and
+        // bounce the defender between them every tick (see
+        // `DefensiveLine`). Holding is the current state here, so this
+        // reads the generous `EXIT_BAND`.
+        if !DefensiveLine::is_in_line(ctx) {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Running,
             ));
@@ -141,11 +151,23 @@ impl StateProcessingHandler for DefenderHoldingLineState {
                             DefenderState::Pressing,
                         ));
                     }
-                    // Primary but out of range — chase via Running so we
-                    // can close the gap instead of holding the line.
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Running,
-                    ));
+                    // Primary but the carrier is still beyond pressing
+                    // range: hold the line and let him come. This used to
+                    // return `Running`, and `DefenderRunningState` — for a
+                    // defender who is in the line, in a settled block,
+                    // with the ball more than 60u away — sends him
+                    // straight back to `HoldingLine`. Neither view was
+                    // wrong on its own; together they were a two-cycle
+                    // that survived the shared-line fix and still ran
+                    // ~55k round trips a match.
+                    //
+                    // Holding is the correct half of the disagreement: a
+                    // block's nearest defender does not sprint 60u+ at a
+                    // carrier, he keeps his shape until the carrier
+                    // arrives — at which point the `Pressing` branch
+                    // above fires. Fall through to the dangerous-run,
+                    // through-ball and ball-proximity checks below, which
+                    // are exactly the reasons he SHOULD break early.
                 }
                 DefensiveRole::Cover => {
                     if distance < 100.0 && ctx.ball().on_own_side() {
@@ -212,7 +234,7 @@ impl StateProcessingHandler for DefenderHoldingLineState {
                     ball_pos.x > ctx.player.position.x - 15.0
                 };
 
-                if is_behind_or_level {
+                if is_behind_or_level && Interception::is_available(ctx) {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Intercepting,
                     ));
@@ -360,46 +382,95 @@ impl DefenderHoldingLineState {
         // squeezes harder toward the ball side than the legacy 0.12 cap.
         let compactness = ctx.team().compactness_target();
 
+        // ── THE LINE HAS TO NARROW, NOT JUST SLIDE ───────────────────
+        //
+        // Every lateral term below is an offset from `tactical_position.y`
+        // — the KICKOFF FORMATION SLOT — and `shift` applies the same
+        // translation to all four defenders. So the back line moved toward
+        // the ball as a rigid body and its WIDTH never changed: it was the
+        // kickoff width in the 90th minute of a goalmouth siege.
+        //
+        // Measured: widest gap between adjacent defenders 147u (18.4 m)
+        // against a real 3-8 m, 54% of attackers in our own third with
+        // nobody within 3 m, and — the consequence that matters — of the
+        // opponents inside the block window when a shot is struck, 95.8%
+        // are wider than the corridor, mean 102u (12.8 m) off the line.
+        // Defenders are not in front of shots because the back line has
+        // 18-metre holes in it, so only 0.9% of shots are blocked against
+        // a real 18-22%.
+        //
+        // A defending back four is not its kickoff shape. It squeezes
+        // toward its own centre as the ball comes at it — the far-side
+        // full-back tucks in, and the unit that spans 50 m at kickoff
+        // defends its own box across barely 30. So the slot is pulled
+        // toward the middle before anything else is applied to it, by how
+        // deep the danger is and how compact the side wants to be.
+        let field_len = ctx.context.field_size.width as f32;
+        let danger =
+            (1.0 - (ball_position.x - own_goal.x).abs() / field_len.max(1.0)).clamp(0.0, 1.0);
+        let squeeze = 1.0 - (0.20 + compactness * 0.25) * danger;
+        let slot_y = field_center_y + (tactical_position.y - field_center_y) * squeeze;
+
         let target_y = if let Some(opponent) = nearest_opponent_in_zone {
-            // Track opponent laterally but don't go too far from zone
+            // Track opponent laterally but don't go too far from zone.
+            //
+            // `max_drift` was 25u — 3.1 m — while the zone this defender
+            // is responsible for is 50u wide, so he could see a man in his
+            // zone and was forbidden from getting to him. That is the
+            // marking-duel number: markers sat 6.4 m off their man and the
+            // attacker had got away on 47% of samples. He is allowed to go
+            // as far as his zone extends; beyond it the man belongs to
+            // somebody else.
             let opponent_y = opponent.position.y;
-            let max_drift = 25.0;
-            let drift = (opponent_y - tactical_position.y).clamp(-max_drift, max_drift);
-            tactical_position.y + drift
+            let max_drift = zone_half_width;
+            let drift = (opponent_y - slot_y).clamp(-max_drift, max_drift);
+            slot_y + drift
         } else {
             let ball_offset = ball_position.y - field_center_y;
             let shift = ball_offset * (0.08 + compactness * 0.18);
-            tactical_position.y + shift
+            slot_y + shift
         };
 
-        Vector3::new(target_x, target_y, 0.0)
-    }
-
-    /// Calculates the defensive line position based on team tactics and defender positions.
-    /// Uses tactical defensive line height to bias the position forward or deep.
-    fn calculate_defensive_line_position(&self, ctx: &StateProcessingContext) -> f32 {
-        let (sum_x, count) = ctx
-            .players()
-            .teammates()
-            .defenders()
-            .map(|p| p.position.x)
-            .fold((0.0f32, 0u32), |(s, c), x| (s + x, c + 1));
-
-        let avg_x = if count > 0 {
-            sum_x / count as f32
-        } else {
-            ctx.player.position.x
+        // ── ROLE STAGGER ─────────────────────────────────────────────
+        //
+        // Everything above computes depth from the ball and lateral
+        // position from `start_position` — the kickoff formation slot.
+        // Four defenders whose slots differ by a constant therefore hold
+        // a line whose SHAPE is a constant too: flat, evenly spaced, and
+        // identical in every situation the match produces.
+        //
+        // A real back line is never flat. It is a diagonal, and the
+        // diagonal comes from ROLES: the man covering the presser drops
+        // off him, and the far-side full-back tucks in and drops deeper
+        // still because the ball cannot reach him quickly. Both are depth
+        // offsets relative to what this defender is DOING, which is
+        // exactly the quantity the formation slot cannot express.
+        let stagger = match ctx.team().my_duty() {
+            // Covering — sit off the line, behind whoever is engaging.
+            DefensiveDuty::Cover => COVER_DROP,
+            // Holding the far side of a ball-side overload: tuck in and
+            // drop, scaled by how far across the pitch the ball is, so
+            // the diagonal is proportional rather than switched on.
+            DefensiveDuty::HoldZone => {
+                let ball_offset = (ball_position.y - field_center_y) / field_center_y.max(1.0);
+                let my_offset = (ctx.player.position.y - field_center_y) / field_center_y.max(1.0);
+                // Positive when the ball is on the opposite flank to me.
+                let far_side = (-ball_offset * my_offset).clamp(0.0, 1.0);
+                far_side * FAR_SIDE_DROP
+            }
+            // A presser or a marker is where his job is; his depth is
+            // already set by the duty anchor.
+            _ => 0.0,
         };
+        let forward_sign = ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
+        let staggered_x = target_x - forward_sign * stagger;
 
-        // Use the team-shared defensive_line_x — already phase-aware
-        // (high in Attack/HighPress, deep in LowBlock). Blend toward it
-        // rather than overwrite, so the live back-line average still
-        // matters (avoids teleporting one CB out of an organised line).
-        let target_line_x = ctx
-            .context
-            .tactical_for_team(ctx.player.team_id)
-            .defensive_line_x;
-        avg_x * 0.6 + target_line_x * 0.4
+        // Through the same unit constraint the individual-duty states now
+        // use, so the whole back line — whatever each man happens to be
+        // doing — reads ONE reference for its depth and its width. The
+        // role stagger above still shapes the diagonal; `hold_shape` only
+        // bounds how far the result may sit from the line.
+        DefensiveLine::hold_shape(ctx, Vector3::new(staggered_x, target_y, 0.0))
     }
 
     /// Checks if an opponent player is nearby within the MARKING_DISTANCE_THRESHOLD.

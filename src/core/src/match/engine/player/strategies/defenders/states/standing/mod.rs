@@ -1,7 +1,9 @@
 use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
+use crate::r#match::defenders::states::common::{
+    ActivityIntensity, DefenderCondition, DefensiveLine,
+};
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
@@ -298,7 +300,7 @@ impl StateProcessingHandler for DefenderStandingState {
                     SteeringBehavior::FollowPath {
                         waypoints,
                         current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: 3.0,
+                        crowd_offset: ctx.player().separation_offset(),
                     }
                     .calculate(ctx.player)
                     .velocity
@@ -316,7 +318,13 @@ impl StateProcessingHandler for DefenderStandingState {
             let field_width = ctx.context.field_size.width as f32;
             let urgency = 1.0 - (ball_to_goal_dist / field_width).clamp(0.0, 1.0);
             // Blend: more toward ball when it's close to goal, more toward midpoint when far
+            // A blend of the ball and our own goal is the SAME point for
+            // every defender who computes it, so this branch pulled the
+            // whole back line onto one spot on the ball-to-goal line with
+            // no reference to the shape at all. Bounded by the unit
+            // constraint like every other shape-holding state.
             let target = ball_pos * (0.3 + urgency * 0.3) + goal_pos * (0.7 - urgency * 0.3);
+            let target = DefensiveLine::hold_shape(ctx, target);
             let to_target = target - ctx.player.position;
             if to_target.magnitude() > 5.0 {
                 return Some(to_target.normalize() * (2.0 + urgency * 2.0));

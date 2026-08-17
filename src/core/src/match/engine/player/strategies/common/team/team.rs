@@ -1,5 +1,6 @@
 use crate::r#match::{
-    CoachInstruction, GamePhase, MatchCoach, PlayerSide, StateProcessingContext, TeamTacticalState,
+    AttackPlan, BoxSlot, CoachInstruction, DefensiveDuty, DefensivePlan, GamePhase, MatchCoach,
+    MatchPlayerLite, PlayerSide, StateProcessingContext, TeamShape, TeamTacticalState,
 };
 use crate::{PlayerFieldPositionGroup, Tactics};
 use nalgebra::Vector3;
@@ -19,6 +20,12 @@ impl<'b> TeamOperationsImpl<'b> {
 }
 
 impl<'b> TeamOperationsImpl<'b> {
+    /// How far goal-side of the carrier a covering defender sits (~2.5 m).
+    const COVER_DEPTH: f32 = 20.0;
+    /// How far goal-side of his man a marker sits (~1.5 m) — touch-tight
+    /// enough to contest, not so tight he is turned every time.
+    const MARK_SHOULDER: f32 = 12.0;
+
     pub fn tactics(&self) -> &Tactics {
         // A sent-off / mid-swap player can transiently have no side
         // before they're removed from the field. Fall back to the left
@@ -53,6 +60,160 @@ impl<'b> TeamOperationsImpl<'b> {
     /// Shortcut — most branching just needs the phase.
     pub fn phase(&self) -> GamePhase {
         self.tactical().phase
+    }
+
+    /// This team's attacking role assignment for the current possession:
+    /// who the attack is for, who occupies which patch of the box, who
+    /// holds. The counterpart to [`tactical`](Self::tactical) — that says
+    /// how we are playing, this says who is doing what. All eleven read
+    /// the same plan, which is the point: the destinations are exclusive,
+    /// so two players cannot be sent to the same patch of grass.
+    pub fn attack_plan(&self) -> &AttackPlan {
+        self.ctx
+            .context
+            .attack_plan_for_team(self.ctx.player.team_id)
+    }
+
+    /// The box slot this player has been given, if any.
+    pub fn my_box_slot(&self) -> Option<BoxSlot> {
+        self.attack_plan().slot_of(self.ctx.player.id)
+    }
+
+    /// This team's defensive duty assignment — who presses, who covers,
+    /// and which opponent each remaining defender has. The counterpart to
+    /// [`attack_plan`](Self::attack_plan): with the ball it says who the
+    /// move is for, without it says who each man is responsible for.
+    pub fn defensive_plan(&self) -> &DefensivePlan {
+        self.ctx
+            .context
+            .defence_plan_for_team(self.ctx.player.team_id)
+    }
+
+    /// What THIS player is responsible for defensively. `HoldZone` when
+    /// nothing has been assigned, which is the pre-plan behaviour.
+    pub fn my_duty(&self) -> DefensiveDuty {
+        self.defensive_plan().duty_of(self.ctx.player.id)
+    }
+
+    /// The opponent this player is man-marking, resolved to a live
+    /// position. `None` when he holds a zone, presses, or covers — or
+    /// when his man has left the pitch.
+    pub fn my_mark(&self) -> Option<MatchPlayerLite> {
+        let target = self.my_duty().target()?;
+        self.ctx
+            .players()
+            .opponents()
+            .all()
+            .find(|opp| opp.id == target)
+    }
+
+    /// Where this player should be standing to do his duty: goal-side of
+    /// his man, goal-side of the carrier if he is covering, on the
+    /// carrier if he is pressing. `None` for a zone-holder, whose
+    /// position is his state's business.
+    ///
+    /// This is the single geometry that replaces the shared `ball_x ± 24`
+    /// every defender used to steer at — see `teamplay::defence`.
+    pub fn my_duty_anchor(&self) -> Option<Vector3<f32>> {
+        let own_goal = self.ctx.ball().direction_to_own_goal();
+        // The point of attack, in the same terms `DutyAssigner` nominated
+        // over: the man on the ball, or — while the ball is travelling
+        // and nobody has it — the ball. Without the second half a presser
+        // nominated onto a pass in flight had NO anchor at all (`?` on an
+        // empty `with_ball()`), and that is the half of the press that
+        // runs between one man releasing the ball and the next taking it.
+        let point_of_attack = || {
+            self.ctx
+                .players()
+                .opponents()
+                .with_ball()
+                .next()
+                .map(|c| c.position)
+                .or_else(|| {
+                    (!self.ctx.ball().is_owned())
+                        .then(|| self.ctx.tick_context.positions.ball.position)
+                })
+        };
+        match self.my_duty() {
+            DefensiveDuty::HoldZone => None,
+            DefensiveDuty::Press => point_of_attack(),
+            DefensiveDuty::Cover => {
+                let point = point_of_attack()?;
+                // A stride and a half behind the presser's man, on the
+                // line he would run if he got past him.
+                let to_goal = (own_goal - point).try_normalize(0.01)?;
+                Some(point + to_goal * Self::COVER_DEPTH)
+            }
+            DefensiveDuty::Mark(_) => {
+                let man = self.my_mark()?;
+                // Goal-side shoulder, leaning toward the ball — the same
+                // blend `DefenderMarkingState` steers onto, so the anchor
+                // and the state agree about where marking happens.
+                let to_goal = (own_goal - man.position).try_normalize(0.01)?;
+                Some(man.position + to_goal * Self::MARK_SHOULDER)
+            }
+        }
+    }
+
+    /// Where this player's assigned box slot actually is. `None` when he
+    /// has no slot in the current attack.
+    pub fn my_box_slot_target(&self) -> Option<Vector3<f32>> {
+        let slot = self.my_box_slot()?;
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::PlanDiag::note_slot_tick();
+        let goal = self.ctx.player().opponent_goal_position();
+        let field_height = self.ctx.context.field_size.height as f32;
+        let forward_dir = self.ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
+        let ball_y = self.ctx.tick_context.positions.ball.position.y;
+        Some(slot.target(goal, ball_y, field_height, forward_dir))
+    }
+
+    /// This side's live positional block.
+    pub fn shape(&self) -> &TeamShape {
+        self.ctx.context.shape_for_team(self.ctx.player.team_id)
+    }
+
+    /// **The one place this player is trying to be right now**, when he
+    /// has no ball to play.
+    ///
+    /// This is the single-target resolver: four team-level systems can
+    /// each have an opinion about where a player belongs, and this is the
+    /// order they win in.
+    ///
+    /// 1. **Box slot** — he has been given a patch of the penalty area in
+    ///    the current attack ([`AttackPlan`]). Most specific, so it wins.
+    /// 2. **Defensive duty** — he has been given a man, a cover angle, or
+    ///    the ball carrier ([`DefensivePlan`]). Only applies while his
+    ///    side is actually defending.
+    /// 3. **Team shape** — his anchor inside the live block
+    ///    ([`TeamShape`]). Always available, covers all eleven, and is
+    ///    what makes the side one body rather than eleven agents.
+    /// 4. **Kickoff dot** — the pre-plan fallback, kept only for the
+    ///    first tick of a match and for a player who has somehow left
+    ///    every roster.
+    ///
+    /// Every off-ball state steers at this instead of deriving its own
+    /// destination, which is what stops two players computing the same
+    /// answer from the same global geometry and running to the same patch
+    /// of grass.
+    pub fn my_anchor(&self) -> Vector3<f32> {
+        if let Some(slot) = self.my_box_slot_target() {
+            return slot;
+        }
+        if !self.tactical().in_possession {
+            if let Some(duty) = self.my_duty_anchor() {
+                return duty;
+            }
+        }
+        if let Some(anchor) = self.shape().anchor_of(self.ctx.player.id) {
+            return anchor;
+        }
+        self.ctx.player.start_position
+    }
+
+    /// How far this player is from the place his team wants him.
+    pub fn distance_from_anchor(&self) -> f32 {
+        (self.ctx.player.position - self.my_anchor()).magnitude()
     }
 
     /// Is the attack ready to progress? True when at least one of our

@@ -3,6 +3,7 @@ use crate::club::player::traits::PlayerTrait;
 use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::DefenderCondition;
+use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK};
 use crate::r#match::engine::engine::MATCH_HALF_TIME_MS;
 use crate::r#match::engine::result::PlayerMatchPhysicalSnapshot;
 use crate::r#match::engine::tactics::TacticalPositions;
@@ -45,6 +46,42 @@ pub struct MatchPlayer {
     pub skills: PlayerSkills,
     pub tactical_position: TacticalPositions,
     pub velocity: Vector3<f32>,
+    /// Upward speed in **metres per tick**, and the reason it is not simply
+    /// `velocity.z`.
+    ///
+    /// The two axes do not share a unit: `velocity.x/y` are 0.125 m grid
+    /// units per 10 ms tick, while the vertical axis is metric — the same
+    /// split the ball carries (see [`GRAVITY_PER_TICK`]). Folding a metric
+    /// rise into the horizontal vector puts it inside the acceleration
+    /// limiter and the `max_speed` clamp in `PlayerMatchState::process`,
+    /// both of which take a 3-D norm, so a leap is scaled by a limit
+    /// expressed in the wrong unit and then thrown away entirely by
+    /// [`MatchPlayer::move_to`], which only ever integrated x and y.
+    ///
+    /// That is exactly what happened to the goalkeeper jump for as long as
+    /// it existed: `GoalkeeperJumpingState` computed a textbook `sin` arc,
+    /// spent part of the keeper's horizontal speed budget on it, and never
+    /// moved him a millimetre. Kept apart here so it cannot happen again.
+    pub vertical_speed: f32,
+    /// Metres above the turf. Deliberately NOT `position.z`, which stays 0
+    /// for every player exactly as it always has.
+    ///
+    /// `position` is a two-dimensional pitch coordinate with a vestigial
+    /// third component, and the engine is full of helpers that treat it as a
+    /// true 3-vector — `VectorExtensions::distance_to`, every
+    /// `(ball - player).magnitude()` — while the ball's z is metres and the
+    /// player's x/y are 0.125 m grid units. Putting a real height into
+    /// `position.z` therefore silently adds the keeper's own leap to his
+    /// distance from the ball, in the wrong unit, inside every reach and
+    /// catch gate in the goalkeeper state machine. Measured: it moved
+    /// save% by double digits.
+    ///
+    /// So the leap lives here instead, where nothing can read it by
+    /// accident, and the recorder copies it into the sample's z on the way
+    /// out (`MatchPositionData::write_match_positions`) so the replay still
+    /// shows a keeper leaving the ground. Making those distance helpers
+    /// genuinely 2-D-plus-height is the real fix, and a much larger one.
+    pub height: f32,
     pub side: Option<PlayerSide>,
     pub state: PlayerState,
     /// Ticks spent in the current `state`, counted in **AI ticks** (full
@@ -58,6 +95,11 @@ pub struct MatchPlayer {
     /// overrides) deliberately PRESERVES it. See `game_tick_light` for why
     /// light ticks leave it alone.
     pub in_state_time: u64,
+    /// The state occupied immediately BEFORE the current one, ignoring
+    /// self-transitions. Read by the decision-commitment guard in
+    /// [`PlayerMatchState::process`] to recognise a transition that
+    /// merely undoes the last one; see `DecisionCommitment`.
+    pub previous_state: Option<PlayerState>,
     pub statistics: MatchPlayerStatistics,
     pub use_extended_state_logging: bool,
 
@@ -201,6 +243,12 @@ pub struct MatchPlayer {
     /// share rosters across match threads.
     max_speed_memo: MaxSpeedMemo,
 
+    /// Per-tick motion / state-churn accumulator for the runtime flicker
+    /// tracer. Dev-only: the field, and every site that touches it,
+    /// compile out without `match-logs`.
+    #[cfg(feature = "match-logs")]
+    pub(crate) motion_trace: crate::r#match::player::motion_diag::MotionTrace,
+
     /// Memo for the fatigue processor's velocity curve, keyed on
     /// `(intensity_ratio_sq bits, sprint_peak bits)` — see
     /// `ConditionProcessor::velocity_fatigue_curve`. The curve costs a
@@ -309,6 +357,32 @@ impl PlayerSide {
         }
     }
 
+    /// The end the other team is defending.
+    #[inline]
+    pub fn opposite(self) -> PlayerSide {
+        match self {
+            PlayerSide::Left => PlayerSide::Right,
+            PlayerSide::Right => PlayerSide::Left,
+        }
+    }
+
+    /// Own-goal x for a team defending this end.
+    #[inline]
+    pub fn own_goal_x(self, field_width: f32) -> f32 {
+        match self {
+            PlayerSide::Left => 0.0,
+            PlayerSide::Right => field_width,
+        }
+    }
+
+    /// The pitch x that sits `progress` of the way from this side's own
+    /// goal line to the opponent's — the inverse of
+    /// [`attacking_progress_x`](Self::attacking_progress_x).
+    #[inline]
+    pub fn x_at_progress(self, progress: f32, field_width: f32) -> f32 {
+        self.own_goal_x(field_width) + self.forward_dir_x() * progress * field_width
+    }
+
     /// Attacking progress for an x-coordinate, normalised to [0.0, 1.0]:
     ///   0.0 = own goal line, 1.0 = opponent goal line.
     /// Use this everywhere a "what fraction of the pitch have we
@@ -373,10 +447,13 @@ impl MatchPlayer {
             player_attributes: player.player_attributes,
             skills: player.skills,
             velocity: Vector3::zeros(),
+            vertical_speed: 0.0,
+            height: 0.0,
             tactical_position: TacticalPositions::new(position, None),
             side: None,
             state: Self::default_state(position),
             in_state_time: 0,
+            previous_state: None,
             statistics: MatchPlayerStatistics::new(),
             waypoint_manager: WaypointManager::new(),
             use_extended_state_logging,
@@ -402,6 +479,8 @@ impl MatchPlayer {
             matchday_form: player.matchday_form(now),
             max_speed_memo: MaxSpeedMemo::new(),
             velocity_fatigue_memo: (0, 0, 0.0),
+            #[cfg(feature = "match-logs")]
+            motion_trace: Default::default(),
         }
     }
 
@@ -441,10 +520,13 @@ impl MatchPlayer {
             player_attributes,
             skills,
             velocity: Vector3::zeros(),
+            vertical_speed: 0.0,
+            height: 0.0,
             tactical_position: TacticalPositions::new(tactical_position, side),
             side,
             state: Self::default_state(tactical_position),
             in_state_time: 0,
+            previous_state: None,
             statistics: MatchPlayerStatistics::new(),
             waypoint_manager: WaypointManager::new(),
             use_extended_state_logging,
@@ -477,6 +559,8 @@ impl MatchPlayer {
             matchday_form,
             max_speed_memo: MaxSpeedMemo::new(),
             velocity_fatigue_memo: (0, 0, 0.0),
+            #[cfg(feature = "match-logs")]
+            motion_trace: Default::default(),
         }
     }
 
@@ -640,6 +724,24 @@ impl MatchPlayer {
         self.tackle_cooldown = 3000;
     }
 
+    /// Start the post-smother cooldown for a GOALKEEPER.
+    ///
+    /// Same field, deliberately different number. A defender's thirty
+    /// seconds is a rate limit on the whole team's challenge COUNT — ten
+    /// outfielders sharing one ball. A keeper's is not: there is one of him,
+    /// he only ever gets to a 1-v-1 a couple of times a match, and the only
+    /// thing that needs suppressing is the repeat — he goes down at a
+    /// striker's feet, is beaten, is back on his feet 0.44 s later with the
+    /// same striker still on the same ball, and commits again.
+    ///
+    /// 500 ticks = 5 s: long enough that the attack he was beaten in has
+    /// resolved, short enough that the next one still finds a keeper who
+    /// will come. See `KeeperSmother`.
+    #[inline]
+    pub fn start_keeper_cooldown(&mut self) {
+        self.tackle_cooldown = 500;
+    }
+
     pub fn rebuild_waypoint_cache(&mut self) {
         self.cached_waypoints = self
             .tactical_position
@@ -671,8 +773,22 @@ impl MatchPlayer {
 
         self.update_waypoint_index_at(field_index, tick_context);
 
-        self.check_boundary_collision(context);
+        // Move first, THEN clamp. Clamping before the move meant the
+        // boundary check could never actually stop anyone leaving the
+        // pitch — it corrected the position a tick late, and its
+        // velocity-zeroing test read a stale position, so a player
+        // steering outward was never stopped. He ended each tick a
+        // fraction off-field (dumps caught x = -0.2) and was dragged
+        // back the next, which is a velocity reversal per tick for as
+        // long as his state kept pointing outward.
         self.move_to();
+        self.check_boundary_collision(context);
+        #[cfg(feature = "match-logs")]
+        self.trace_motion(
+            context,
+            tick_context.positions.ball.position,
+            tick_context.positions.ball.velocity,
+        );
     }
 
     /// Reduced-cadence (LOD) update for a far-from-ball player in a
@@ -692,7 +808,12 @@ impl MatchPlayer {
     ///     clamp applies — identical to a light tick).
     ///
     /// The player re-decides on the next full tick, ~20 ms later.
-    pub fn lod_skip_update(&mut self, context: &MatchContext) {
+    pub fn lod_skip_update(
+        &mut self,
+        context: &MatchContext,
+        ball_pos: Vector3<f32>,
+        ball_vel: Vector3<f32>,
+    ) {
         self.tick_tackle_cooldown();
 
         let half_ms = MATCH_HALF_TIME_MS as f32;
@@ -725,8 +846,18 @@ impl MatchPlayer {
         }
 
         self.in_state_time += 1;
-        self.check_boundary_collision(context);
+        // Move first, THEN clamp. Clamping before the move meant the
+        // boundary check could never actually stop anyone leaving the
+        // pitch — it corrected the position a tick late, and its
+        // velocity-zeroing test read a stale position, so a player
+        // steering outward was never stopped. He ended each tick a
+        // fraction off-field (dumps caught x = -0.2) and was dragged
+        // back the next, which is a velocity reversal per tick for as
+        // long as his state kept pointing outward.
         self.move_to();
+        self.check_boundary_collision(context);
+        #[cfg(feature = "match-logs")]
+        self.trace_motion(context, ball_pos, ball_vel);
     }
 
     #[inline]
@@ -774,8 +905,12 @@ impl MatchPlayer {
     /// and consumed there, so a blanket wipe would drop the shot-reason tag.
     #[inline]
     pub fn transition_to(&mut self, state: PlayerState, source: TransitionSource) {
-        self.in_state_time = 0;
+        // Record BEFORE zeroing: `set_state_internal` reads the running
+        // `in_state_time` as the dwell of the state being left, which is
+        // the only signal that separates a normal transition from an
+        // every-tick oscillation (see `motion_diag`).
         self.set_state_internal(state, source);
+        self.in_state_time = 0;
     }
 
     /// Out-of-band state override that PRESERVES the running `in_state_time`.
@@ -809,8 +944,8 @@ impl MatchPlayer {
     /// state now routes through here.
     #[inline]
     pub fn redirect_to_fresh(&mut self, state: PlayerState, source: TransitionSource) {
-        self.in_state_time = 0;
         self.set_state_internal(state, source);
+        self.in_state_time = 0;
     }
 
     /// The one place `self.state` is written. Both `transition_to` and
@@ -823,9 +958,28 @@ impl MatchPlayer {
         self.state = state;
 
         #[cfg(feature = "match-logs")]
-        crate::r#match::TransitionGraph::record(_from, state, source);
+        {
+            crate::r#match::TransitionGraph::record(_from, state, source);
+            // Dwell = how long the player actually stayed. The graph
+            // dedups edges, so only this number tells a real hand-off
+            // apart from a per-tick oscillation.
+            crate::r#match::player::motion_diag::record_transition(
+                self.id,
+                _from,
+                state,
+                self.in_state_time,
+                source,
+                self.previous_state,
+            );
+        }
         #[cfg(not(feature = "match-logs"))]
         let _ = source;
+
+        // A self-transition is not a move through the state sequence, so
+        // it must not shift the history the commitment guard reads.
+        if _from.compact_id() != state.compact_id() {
+            self.previous_state = Some(_from);
+        }
     }
 
     pub fn set_default_state(&mut self, source: TransitionSource) {
@@ -866,6 +1020,24 @@ impl MatchPlayer {
         if self.state.is_committed_action() {
             return;
         }
+        // Already chasing — leave the state alone. `redirect_to_fresh`
+        // below zeroes `in_state_time`, so re-firing this on a player who
+        // is ALREADY in TakeBall restarted their chase clock every tick
+        // the signal repeated, and every give-up timeout inside TakeBall
+        // (the goalkeeper's 120 / 200-tick abort, the outfield yields)
+        // became unreachable: the player chased a ball they were never
+        // going to reach until something else moved them.
+        // `should_force_takeball` in `strategies::processor` has carried
+        // this same guard from the start — the event path never got it.
+        if matches!(
+            self.state,
+            PlayerState::Goalkeeper(GoalkeeperState::TakeBall)
+                | PlayerState::Defender(DefenderState::TakeBall)
+                | PlayerState::Midfielder(MidfielderState::TakeBall)
+                | PlayerState::Forward(ForwardState::TakeBall)
+        ) {
+            return;
+        }
         let target = match self.tactical_position.current_position.position_group() {
             PlayerFieldPositionGroup::Goalkeeper => {
                 PlayerState::Goalkeeper(GoalkeeperState::TakeBall)
@@ -880,6 +1052,70 @@ impl MatchPlayer {
         // must start now too (the goalkeeper variant bails at 120 / 200
         // ticks and a carried-over timer tripped both on entry).
         self.redirect_to_fresh(target, TransitionSource::EventHandler);
+    }
+
+    /// Take off, aiming to peak `apex_metres` above the turf.
+    ///
+    /// Asked for in apex rather than in launch speed for the same reason the
+    /// ball's kicks are (see [`Ball::launch_speed_for_apex`]): apex is the
+    /// property a human being can be measured against — a good standing jump
+    /// lifts a keeper's hips about three quarters of a metre — where a launch
+    /// speed in metres per tick means nothing to anybody.
+    ///
+    /// Ignored in mid-air. Nobody jumps twice off the same ground, and a
+    /// state re-entered while the player is still up would otherwise hold him
+    /// there indefinitely.
+    #[inline]
+    pub fn leap(&mut self, apex_metres: f32) {
+        if apex_metres > 0.0 && self.height <= 0.0 {
+            self.vertical_speed = Ball::launch_speed_for_apex(apex_metres);
+        }
+    }
+
+    /// True while both feet are off the ground.
+    #[inline]
+    pub fn is_airborne(&self) -> bool {
+        self.height > 0.0
+    }
+
+    /// Where this player should be RECORDED: his pitch coordinate carrying
+    /// his real height in the vertical slot the replay format expects.
+    ///
+    /// The two live apart inside the engine — see [`MatchPlayer::height`] —
+    /// and are only brought back together here, on the way out to a file
+    /// nothing makes decisions from.
+    #[inline]
+    pub fn recorded_position(&self) -> Vector3<f32> {
+        Vector3::new(self.position.x, self.position.y, self.height)
+    }
+
+    /// One tick of free flight: the height and the rise a body at `height`
+    /// climbing at `rise` has after `GRAVITY_PER_TICK` has had its turn. Both
+    /// in metres and metres per tick — the vertical axis is metric where the
+    /// horizontal one is grid units.
+    ///
+    /// A free function of the pair rather than a method so the trajectory can
+    /// be checked against a stopwatch without standing up a whole match. The
+    /// axis it integrates spent the engine's life being silently discarded by
+    /// [`MatchPlayer::move_to`] (see [`MatchPlayer::vertical_speed`]), and
+    /// nothing downstream complains when a height quietly disappears — so it
+    /// gets a test rather than a comment.
+    ///
+    /// The turf is a floor, not a surface to fall through: a body already on
+    /// it stays on it at rest instead of accumulating fall speed for the
+    /// whole ninety minutes.
+    #[inline]
+    pub fn fall(height: f32, rise: f32) -> (f32, f32) {
+        if !rise.is_finite() {
+            return (height.max(0.0), 0.0);
+        }
+        let rise = rise - GRAVITY_PER_TICK;
+        let height = height + rise;
+        if !height.is_finite() || height <= 0.0 {
+            (0.0, 0.0)
+        } else {
+            (height, rise)
+        }
     }
 
     #[inline]
@@ -897,6 +1133,15 @@ impl MatchPlayer {
 
         if self.velocity.y.is_finite() {
             self.position.y += self.velocity.y;
+        }
+
+        // The vertical axis, integrated on its own terms. Only a leap ever
+        // makes `vertical_speed` non-zero, so for twenty-one players out of
+        // twenty-two on almost every tick this is one comparison and out.
+        if self.vertical_speed != 0.0 || self.height != 0.0 {
+            let (height, rise) = Self::fall(self.height, self.vertical_speed);
+            self.height = height;
+            self.vertical_speed = rise;
         }
 
         // Last-resort salvage: if position is already corrupt from an
@@ -932,6 +1177,126 @@ impl MatchPlayer {
                     self.velocity.y
                 );
             }
+        }
+    }
+
+    /// Sample this tick's motion for the runtime flicker tracer. Called
+    /// right after `move_to` on every tick that advances the player —
+    /// full AI ticks, LOD-skipped ticks and light ticks alike — so the
+    /// measured path is the path the viewer actually renders.
+    ///
+    /// Accumulation is entirely player-local; only the closing of a
+    /// one-second window touches the shared store.
+    #[cfg(feature = "match-logs")]
+    pub fn trace_motion(
+        &mut self,
+        context: &MatchContext,
+        ball_pos: Vector3<f32>,
+        ball_vel: Vector3<f32>,
+    ) {
+        use crate::r#match::player::motion_diag;
+
+        let pos = self.position;
+        let vel = self.velocity;
+        let state = self.state;
+        let group = match self.tactical_position.current_position.position_group() {
+            PlayerFieldPositionGroup::Goalkeeper => 0u8,
+            PlayerFieldPositionGroup::Defender => 1,
+            PlayerFieldPositionGroup::Midfielder => 2,
+            PlayerFieldPositionGroup::Forward => 3,
+        };
+        let id = self.id;
+        let t_ms = context.total_match_time;
+        let t = &mut self.motion_trace;
+
+        if !t.seeded {
+            t.seeded = true;
+            t.win_start = pos;
+            t.prev_pos = pos;
+            t.prev_velocity = vel;
+            return;
+        }
+
+        let step = (pos - t.prev_pos).norm();
+        t.prev_pos = pos;
+        t.win_path += step;
+        t.win_ticks += 1;
+        if step < motion_diag::STILL_STEP_U {
+            t.win_still += 1;
+        }
+
+        // Direction reversal: this tick's velocity points back against the
+        // last one, with both fast enough for the direction to be a
+        // decision rather than float noise. Light ticks reuse the previous
+        // velocity unchanged, so they can never register a false reversal.
+        let same_state = t.last_state.map(|s| s.compact_id()) == Some(state.compact_id());
+        if !same_state {
+            if t.last_state.is_some() {
+                t.win_state_changes += 1;
+            }
+            t.last_state = Some(state);
+        }
+
+        let prev = t.prev_velocity;
+        let speed = vel.norm();
+        let prev_speed = prev.norm();
+        let reversed = speed > motion_diag::REVERSAL_MIN_SPEED_U
+            && prev_speed > motion_diag::REVERSAL_MIN_SPEED_U
+            && vel.dot(&prev) < 0.0;
+        // A reversal taken at running speed is a visible twitch; one taken
+        // at a crawl is a player settling onto a target.
+        let fast = speed > motion_diag::REVERSAL_FAST_SPEED_U
+            && prev_speed > motion_diag::REVERSAL_FAST_SPEED_U;
+        motion_diag::note_tick(state, reversed && same_state, fast);
+
+        // Keep the last few ticks so a reversal can be shown in context.
+        t.ring[t.ring_idx] = (pos, vel);
+        t.ring_idx = (t.ring_idx + 1) % motion_diag::RING;
+        if reversed && same_state && fast {
+            // Unwind the ring oldest-to-newest.
+            let mut samples = Vec::with_capacity(motion_diag::RING);
+            for k in 0..motion_diag::RING {
+                let s = t.ring[(t.ring_idx + k) % motion_diag::RING];
+                if s.0 != Vector3::zeros() || s.1 != Vector3::zeros() {
+                    samples.push(s);
+                }
+            }
+            motion_diag::capture_reversal(state, t_ms, id, samples, ball_pos, ball_vel);
+        }
+        if reversed {
+            t.win_reversals += 1;
+            // A reversal with no state change under it means one state's
+            // own velocity fn flipped direction — a steering problem.
+            // With a state change, two states disagree about where to go
+            // — a decision problem. The split decides which to fix.
+            if same_state {
+                t.win_reversals_in_state += 1;
+            }
+        }
+        t.prev_velocity = vel;
+
+        if t.win_ticks >= motion_diag::WINDOW_TICKS {
+            let net = (pos - t.win_start).norm();
+            motion_diag::record_window(
+                id,
+                group,
+                t_ms,
+                state,
+                t.win_path,
+                net,
+                t.win_reversals,
+                t.win_reversals_in_state,
+                t.win_state_changes,
+                t.win_still,
+                t.win_ticks,
+            );
+            t.win_start = pos;
+            t.win_path = 0.0;
+            t.win_ticks = 0;
+            t.win_reversals = 0;
+            t.win_reversals_in_state = 0;
+            t.win_state_changes = 0;
+            t.win_still = 0;
         }
     }
 
@@ -1209,5 +1574,68 @@ mod tests {
         p.set_default_state(TransitionSource::Reset);
         assert_eq!(p.state, PlayerState::Defender(DefenderState::Standing));
         assert_eq!(p.in_state_time, 0, "set_default_state resets the timer");
+    }
+
+    /// The vertical axis is the one that goes missing without anything
+    /// downstream complaining. `move_to` integrated x and y only for the
+    /// engine's whole life, so `GoalkeeperJumpingState` computed a textbook
+    /// arc every tick into a value nobody applied — and the only symptom was
+    /// a keeper who never left the ground. These pin the trajectory against
+    /// a stopwatch and a tape measure so it cannot quietly vanish again.
+    #[test]
+    fn a_leap_peaks_where_it_was_aimed_and_comes_back_down() {
+        let mut keeper = build_player(PlayerPositionType::Goalkeeper);
+        keeper.leap(0.75);
+
+        let mut peak = 0.0f32;
+        let mut ticks = 0u32;
+        loop {
+            keeper.move_to();
+            ticks += 1;
+            peak = peak.max(keeper.height);
+            if !keeper.is_airborne() {
+                break;
+            }
+            assert!(ticks < 1000, "a leap that never lands");
+        }
+
+        // Stepwise integration undershoots the closed-form apex by about half
+        // a tick of climb — 2.5% here, and 4% covers every height a
+        // footballer reaches.
+        assert!((peak - 0.75).abs() < 0.75 * 0.04, "peaked at {peak} m");
+        // `2v/g` ticks at 10 ms each: 0.78 s off the ground for a 0.75 m
+        // jump, which is what a human being does.
+        assert!(
+            (ticks as i64 - 78).abs() <= 2,
+            "{ticks} ticks in the air, expected ~78"
+        );
+        assert_eq!(keeper.height, 0.0, "landed short of the turf");
+        assert_eq!(keeper.vertical_speed, 0.0, "still climbing on the ground");
+    }
+
+    #[test]
+    fn nobody_jumps_twice_off_the_same_ground() {
+        let mut keeper = build_player(PlayerPositionType::Goalkeeper);
+        keeper.leap(0.75);
+        keeper.move_to();
+        let climbing = keeper.vertical_speed;
+
+        // A state re-entered mid-flight must not re-arm the take-off, or the
+        // keeper hangs up there for as long as it keeps firing.
+        keeper.leap(0.75);
+        assert_eq!(keeper.vertical_speed, climbing);
+    }
+
+    #[test]
+    fn a_player_on_the_turf_never_sinks_into_it() {
+        let mut player = build_player(PlayerPositionType::MidfielderCenter);
+        for _ in 0..500 {
+            player.move_to();
+        }
+        assert_eq!(player.height, 0.0);
+        assert_eq!(
+            player.vertical_speed, 0.0,
+            "gravity accumulated on a man standing still"
+        );
     }
 }
