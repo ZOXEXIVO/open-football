@@ -27,6 +27,7 @@
 
 use crate::actors::{Actors, BallState};
 use crate::field::Field;
+use crate::textures::Textures;
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::Indices;
 use bevy::prelude::*;
@@ -76,6 +77,11 @@ impl NetPanel {
     /// 22 cm across and the mesh it drags with it is about three times that.
     const SPREAD: f32 = 0.62;
 
+    /// Extra spread per metre of push — see [`Self::weight`]. A little over
+    /// one, so a shot that bags the net half a metre drags getting on for a
+    /// metre of mesh with it either side of the contact.
+    const SPREAD_PER_DEPTH: f32 = 1.15;
+
     /// Frequency and decay of the wobble after the ball settles. A goal net
     /// rings at a few hertz and is dead inside a second — it is mostly
     /// damping, held between the frame and the ball lying in the bottom of it.
@@ -119,7 +125,16 @@ impl NetPanel {
                 let edge = edge_near + (edge_far - edge_near) * t;
                 param.push(Vec2::new(u, v));
                 rest.push(across * (u * half_across) + up * (v * edge));
-                uvs.push([t, v]);
+                // The mesh-square count is baked into the UVs rather than
+                // set per material with `uv_transform`, for two reasons: one
+                // material can then serve all ten panels, and — because the
+                // side panels are TRAPEZOIDS — the repeat has to follow the
+                // local edge length or the squares shear as the panel
+                // narrows. A net's mesh does not stretch.
+                uvs.push([
+                    t * (half_across * 2.0) / Netting::MESH_SQUARE,
+                    v * edge / Netting::MESH_SQUARE,
+                ]);
             }
         }
 
@@ -186,7 +201,21 @@ impl NetPanel {
             // The mesh is wherever the ball is: project the ball onto the
             // panel and push that point out by however far past it the ball
             // has travelled.
-            self.contact = offset - self.normal * offset.dot(self.normal);
+            //
+            // CLAMPED into the panel's own extent, and that is load-bearing.
+            // `within` allows half a ball of grace past each edge so a shot
+            // into the top corner still takes the netting with it — but the
+            // Gaussian in `weight` is measured from this point, so a contact
+            // left outside the panel puts its own peak where there are no
+            // vertices and the visible bulge collapses to the tail of the
+            // curve. A ball resting against a post is exactly that case, and
+            // it is the commonest place for one to finish.
+            let flat = offset - self.normal * offset.dot(self.normal);
+            let along = flat
+                .dot(self.across)
+                .clamp(-self.half_across, self.half_across);
+            let up = flat.dot(self.up).clamp(0.0, self.edge_at(u));
+            self.contact = self.across * along + self.up * up;
             self.amplitude = out;
             self.phase = 0.0;
             return true;
@@ -221,9 +250,21 @@ impl NetPanel {
     /// How much of the deflection this vertex takes: a Gaussian around the
     /// contact — in metres, because that is where the membrane lives — pinned
     /// to zero at the frame.
+    ///
+    /// The spread WIDENS with the push. A membrane does not have a fixed
+    /// influence radius: leaning on it a centimetre moves a hand's breadth
+    /// of mesh, and putting half a metre of it into the stanchion drags the
+    /// whole panel in. With `SPREAD` alone the deep bulges came out as a
+    /// narrow spike rather than a bag, which is neither what a net does nor
+    /// what makes the movement readable.
     fn weight(&self, rest: Vec3, param: Vec2) -> f32 {
-        let reach = (rest - self.contact).length() / Self::SPREAD;
+        let spread = Self::SPREAD + self.amplitude.abs() * Self::SPREAD_PER_DEPTH;
+        let reach = (rest - self.contact).length() / spread;
         let bulge = (-reach * reach).exp();
+        // Pinned at the two edges the panel is TIED to. The exponent decides
+        // how much of the panel the pin steals: at the 4th power the
+        // constraint is felt only in the last fifth, which is what a cord
+        // lashed to a bar actually does.
         let pin_across = 1.0 - param.x.abs().powi(4);
         let pin_up = 1.0 - (param.y * 2.0 - 1.0).abs().powi(4);
         bulge * pin_across.max(0.0) * pin_up.max(0.0)
@@ -234,7 +275,10 @@ impl NetPanel {
 pub struct Netting;
 
 impl Netting {
-    const POST_RADIUS: f32 = 0.07;
+    /// Matching `GoalFrame::POST_RADIUS` in the engine — see
+    /// [`Field::POST_RADIUS`] for why the two have to agree now that the
+    /// physics rebounds the ball off the woodwork.
+    const POST_RADIUS: f32 = Field::POST_RADIUS;
 
     /// Grid resolution per panel. Fine enough that the bulge reads as a
     /// curve rather than a tent, coarse enough that rewriting one is a few
@@ -243,31 +287,64 @@ impl Netting {
     const SIDE_STEPS: UVec2 = UVec2::new(10, 8);
     const ROOF_STEPS: UVec2 = UVec2::new(18, 6);
 
+    /// Side of one mesh square, in metres. A goal net is knotted at about
+    /// this pitch, and it is what turns the panel's real size into a texture
+    /// repeat count — see [`Textures::netting`].
+    const MESH_SQUARE: f32 = 0.12;
+
     pub fn spawn(
         commands: &mut Commands,
         meshes: &mut Assets<Mesh>,
         materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
     ) {
         let frame = materials.add(StandardMaterial {
             base_color: Color::srgb(0.97, 0.97, 0.97),
             perceptual_roughness: 0.5,
             ..default()
         });
+        // The cords come from the texture's alpha, so the base colour carries
+        // only their brightness — tinting it as well would darken the twine
+        // twice. `cull_mode: None` because a goal is looked into from the
+        // front and out of from behind.
+        //
+        // **Unlit, and that is a statement about the geometry rather than a
+        // shortcut.** A panel's normal is a fiction here: the surface being
+        // drawn is not a sheet facing one way, it is a mesh of cylinders
+        // facing every way at once, so from any angle some part of every cord
+        // has the light on it. Shaded as a sheet, the side panels — whose
+        // normals point at the touchlines — came out a dark grey mesh against
+        // the grass, and a goal net is white from wherever you stand. The
+        // stadium is lit from four corners (`Pitch::SUN` and the fills), so
+        // there is no shadow here for the diffuse term to be earning either.
+        let cords = Textures::netting(images);
         let netting = materials.add(StandardMaterial {
-            base_color: Color::srgba(1.0, 1.0, 1.0, 0.11),
+            base_color: Color::srgb(0.88, 0.90, 0.92),
+            base_color_texture: Some(cords),
             alpha_mode: AlphaMode::Blend,
             cull_mode: None,
             double_sided: true,
-            perceptual_roughness: 1.0,
+            unlit: true,
             ..default()
         });
 
-        let post = meshes.add(Cylinder::new(Self::POST_RADIUS, Field::GOAL_HEIGHT));
+        // **The frame is built on the INNER faces, which is where the Laws
+        // measure a goal and where the physics keeps its posts.** Each
+        // member's axis therefore sits one radius OUTSIDE the nominal
+        // dimension: the posts wide of the mouth and the bar above it. Put
+        // the axes on the nominal lines instead — which is what this used to
+        // do — and half of every member hangs inside the goal, so a shot the
+        // engine scores is drawn passing through the woodwork and a shot the
+        // engine rebounds is drawn missing it.
+        let half_goal = Field::PHYSICS_GOAL_HALF_WIDTH;
+        let post_axis = half_goal + Self::POST_RADIUS;
+        let bar_axis = Field::PHYSICS_GOAL_HEIGHT + Self::POST_RADIUS;
+        // The upright runs from the grass to the underside of the bar.
+        let post = meshes.add(Cylinder::new(Self::POST_RADIUS, bar_axis));
         let bar = meshes.add(Cylinder::new(
             Self::POST_RADIUS,
-            Field::GOAL_WIDTH + Self::POST_RADIUS * 2.0,
+            (post_axis + Self::POST_RADIUS) * 2.0,
         ));
-        let half_goal = Field::GOAL_WIDTH * 0.5;
         let back_height = Field::NET_BACK_HEIGHT;
 
         for side in [-1.0f32, 1.0] {
@@ -279,14 +356,14 @@ impl Netting {
                 commands.spawn((
                     Mesh3d(post.clone()),
                     MeshMaterial3d(frame.clone()),
-                    Transform::from_xyz(goal_line, Field::GOAL_HEIGHT * 0.5, post_side * half_goal),
+                    Transform::from_xyz(goal_line, bar_axis * 0.5, post_side * post_axis),
                 ));
             }
 
             commands.spawn((
                 Mesh3d(bar.clone()),
                 MeshMaterial3d(frame.clone()),
-                Transform::from_xyz(goal_line, Field::GOAL_HEIGHT, 0.0)
+                Transform::from_xyz(goal_line, bar_axis, 0.0)
                     .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
             ));
 
@@ -321,7 +398,7 @@ impl Netting {
                     Vec3::Y,
                     Vec3::new(0.0, 0.0, post_side),
                     Field::NET_DEPTH * 0.5,
-                    Field::GOAL_HEIGHT,
+                    Field::PHYSICS_GOAL_HEIGHT,
                     back_height,
                     Self::SIDE_STEPS,
                 );
@@ -332,7 +409,7 @@ impl Netting {
             // perpendicular of that, tilted back over the goal.
             let slope = Vec3::new(
                 side * Field::NET_DEPTH,
-                back_height - Field::GOAL_HEIGHT,
+                back_height - Field::PHYSICS_GOAL_HEIGHT,
                 0.0,
             );
             let length = slope.length();
@@ -342,7 +419,7 @@ impl Netting {
                 commands,
                 meshes,
                 &netting,
-                Vec3::new(goal_line, Field::GOAL_HEIGHT, 0.0),
+                Vec3::new(goal_line, Field::PHYSICS_GOAL_HEIGHT, 0.0),
                 Vec3::Z,
                 along,
                 above,
@@ -388,6 +465,23 @@ impl Netting {
         ));
     }
 
+    /// The back panel of the right-hand goal, built exactly as `spawn`
+    /// builds it. Exists so the deformation can be interrogated without a
+    /// GPU — see the tests below.
+    #[cfg(test)]
+    fn back_panel() -> (NetPanel, Mesh) {
+        NetPanel::build(
+            Vec3::new(Field::HALF_LENGTH + Field::NET_DEPTH, 0.0, 0.0),
+            Vec3::Z,
+            Vec3::Y,
+            Vec3::X,
+            Field::PHYSICS_GOAL_HALF_WIDTH,
+            Field::NET_BACK_HEIGHT,
+            Field::NET_BACK_HEIGHT,
+            Self::BACK_STEPS,
+        )
+    }
+
     /// Push the netting around with the ball, once per frame.
     pub fn ripple(
         ball: Res<BallState>,
@@ -404,5 +498,182 @@ impl Netting {
                 panel.shape(&mut mesh);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Read the mesh's positions back out.
+    fn positions(mesh: &Mesh) -> Vec<Vec3> {
+        match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x3(values)) => {
+                values.iter().map(|p| Vec3::from(*p)).collect()
+            }
+            _ => panic!("the panel has no positions"),
+        }
+    }
+
+    /// Furthest any vertex has been pushed along the panel's outward normal.
+    fn deepest(panel: &NetPanel, mesh: &Mesh) -> f32 {
+        positions(mesh)
+            .iter()
+            .zip(panel.rest.iter())
+            .map(|(now, rest)| (*now - *rest).dot(panel.normal))
+            .fold(f32::MIN, f32::max)
+    }
+
+    /// A goal net's whole job. The engine bags the mesh — it settles the ball
+    /// inside the netting's give — and this end has to put the mesh THERE,
+    /// or the ball is drawn hanging in space behind a flat sheet.
+    #[test]
+    fn the_mesh_reaches_the_ball_that_is_lying_in_it() {
+        let (mut panel, mut mesh) = Netting::back_panel();
+        // Half a metre into the back netting, at the height it is slackest,
+        // dead centre of the goal.
+        let ball = Vec3::new(
+            Field::HALF_LENGTH + Field::NET_DEPTH + 0.5,
+            Field::NET_BACK_HEIGHT * 0.5,
+            0.0,
+        );
+        assert!(panel.absorb(ball, Actors::BALL_RADIUS, 1.0 / 60.0));
+        panel.shape(&mut mesh);
+        let reach = deepest(&panel, &mesh);
+        assert!(
+            reach > 0.45,
+            "the mesh has to follow the ball half a metre in, reached {reach:.3} m"
+        );
+        assert!(reach < 0.75, "…and not overshoot it, reached {reach:.3} m");
+    }
+
+    /// The commonest place for a ball to finish is wedged against a post,
+    /// and the Gaussian in `weight` is measured from the contact point — so
+    /// a contact left OUTSIDE the panel's own extent puts its peak where
+    /// there are no vertices and the bulge collapses. That is the netting
+    /// looking stationary for exactly the shot that most deserves it.
+    #[test]
+    fn a_ball_against_a_post_still_takes_the_netting_with_it() {
+        let (mut panel, mut mesh) = Netting::back_panel();
+        // Past the post, which the engine's side netting permits.
+        let ball = Vec3::new(
+            Field::HALF_LENGTH + Field::NET_DEPTH + 0.35,
+            0.25,
+            Field::PHYSICS_GOAL_HALF_WIDTH + 0.2,
+        );
+        assert!(panel.absorb(ball, Actors::BALL_RADIUS, 1.0 / 60.0));
+        panel.shape(&mut mesh);
+        let reach = deepest(&panel, &mesh);
+        assert!(
+            reach > 0.15,
+            "a ball in the corner of the goal must still bag the net, reached {reach:.3} m"
+        );
+    }
+
+    /// Nothing in the goal, nothing moving. The mesh is rewritten from
+    /// `rest` every frame rather than accumulated, so a paused or seeked
+    /// replay must not be able to leave it permanently dented.
+    #[test]
+    fn an_empty_goal_has_a_flat_net() {
+        let (mut panel, mut mesh) = Netting::back_panel();
+        let ball = Vec3::new(0.0, 0.3, 0.0); // centre spot
+        // First call reports nothing to do…
+        assert!(!panel.absorb(ball, Actors::BALL_RADIUS, 1.0 / 60.0));
+        // …and if something does write the mesh, it writes it flat.
+        panel.shape(&mut mesh);
+        assert!(deepest(&panel, &mesh).abs() < 1.0e-6);
+    }
+
+    /// The wobble has to die. A net that rings for the rest of the match is
+    /// worse than one that never moves.
+    #[test]
+    fn the_net_rings_and_then_settles() {
+        let (mut panel, mut mesh) = Netting::back_panel();
+        let ball = Vec3::new(
+            Field::HALF_LENGTH + Field::NET_DEPTH + 0.5,
+            Field::NET_BACK_HEIGHT * 0.5,
+            0.0,
+        );
+        panel.absorb(ball, Actors::BALL_RADIUS, 1.0 / 60.0);
+        panel.shape(&mut mesh);
+        assert!(deepest(&panel, &mesh) > 0.4, "it starts bagged");
+        // Ball gone. Four seconds of frames, sampling what the ring has left
+        // at one second — a net is visually dead well inside that, even
+        // though the buffer keeps being rewritten down to `NEGLIGIBLE`.
+        let away = Vec3::new(0.0, 0.3, 0.0);
+        let mut ringing = 0;
+        let mut after_a_second = f32::NAN;
+        for frame in 0..240 {
+            if panel.absorb(away, Actors::BALL_RADIUS, 1.0 / 60.0) {
+                ringing += 1;
+                panel.shape(&mut mesh);
+            }
+            if frame == 59 {
+                after_a_second = deepest(&panel, &mesh).abs();
+            }
+        }
+        assert!(ringing > 10, "it must actually ring, only {ringing} frames");
+        assert!(
+            after_a_second < 0.08,
+            "a net is dead inside a second; {after_a_second:.3} m still moving"
+        );
+        assert!(
+            ringing < 240,
+            "and it must stop rewriting the mesh, still going after {ringing} frames"
+        );
+        assert!(
+            deepest(&panel, &mesh).abs() < 1.0e-6,
+            "and finish exactly flat, left at {:.5} m",
+            deepest(&panel, &mesh)
+        );
+    }
+
+    /// The netting has to be netting. An untextured sheet is why the net
+    /// read as stationary in the first place: there is nothing on a
+    /// featureless surface for the eye to track.
+    #[test]
+    fn the_netting_texture_is_cords_and_holes() {
+        let mut images = Assets::<Image>::default();
+        let handle = Textures::netting(&mut images);
+        let image = images.get(&handle).expect("texture was added");
+        let data = image.data.as_ref().expect("texture has pixels");
+        // A repeating net texture MUST carry a mip chain — see
+        // `Textures::mipped_netting`. Without one the cords sample to dotted
+        // lines at any distance, which was the state the net was screenshotted
+        // in.
+        let levels = image.texture_descriptor.mip_level_count;
+        assert!(
+            levels > 1,
+            "the netting has to be pre-filtered, got {levels} mip level(s)"
+        );
+        let size = image.texture_descriptor.size.width as usize;
+        assert_eq!(
+            1 << (levels - 1),
+            size,
+            "the chain has to halve all the way to 1x1 from {size}"
+        );
+        // Level 0 only: the mips are averages and would dilute the counts.
+        let alphas: Vec<u8> = data[..size * size * 4].chunks(4).map(|px| px[3]).collect();
+        // A cord at full strength, not a uniform wash. The ceiling is
+        // `OPACITY`, deliberately short of 1 so the ball stays visible
+        // through the back of the net.
+        let cord = alphas.iter().filter(|a| **a > 150).count();
+        let hole = alphas.iter().filter(|a| **a < 40).count();
+        assert!(
+            cord > 0 && hole > 0,
+            "a net is cord AND hole: {cord} cord texels, {hole} clear ones out of {}",
+            alphas.len()
+        );
+        // Mostly hole, or it is a grille rather than netting — and at range
+        // the whole panel would integrate to a solid sheet. But not so sparse
+        // that the mip-flattened haze is invisible, which is the state the
+        // untextured sheet was in: the density the eye gets at broadcast
+        // distance is this coverage times the cord's own opacity.
+        let covered = cord as f32 / alphas.len() as f32;
+        assert!(
+            (0.15..0.35).contains(&covered),
+            "cord should cover about a quarter of the panel, covers {:.0}%",
+            covered * 100.0
+        );
     }
 }

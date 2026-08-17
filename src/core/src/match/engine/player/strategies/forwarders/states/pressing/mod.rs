@@ -58,24 +58,36 @@ impl StateProcessingHandler for ForwardPressingState {
             ));
         }
 
-        // Ball moved away — stop pressing and return to position
-        if ctx.ball().distance() > MAX_PRESS_BALL_DISTANCE {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Returning,
-            ));
-        }
+        // ── The nominated presser does not give himself up ────────────
+        //
+        // The three exits below are all tighter than the reach the plan
+        // nominates over (`DutyAssigner::PRESS_REACH`, 200u ≈ 25 m), so a
+        // forward sent here from 20 m out satisfied his own give-up
+        // condition on the tick he arrived — the `COMMIT < DISENGAGE`
+        // violation `TackleEngagement` was written to remove, restated in
+        // the press. He holds the duty until the plan takes it off him,
+        // which is at most one tactical refresh (250 ms) away.
+        let nominated = TackleEngagement::is_nominated_presser(ctx);
+        if !nominated {
+            // Ball moved away — stop pressing and return to position
+            if ctx.ball().distance() > MAX_PRESS_BALL_DISTANCE {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Returning,
+                ));
+            }
 
-        // Too far from start position — don't chase forever, return
-        if ctx.player().distance_from_start_position() > MAX_PRESS_DISTANCE_FROM_START {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Returning,
-            ));
-        }
+            // Too far from start position — don't chase forever, return
+            if ctx.player().distance_from_start_position() > MAX_PRESS_DISTANCE_FROM_START {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Returning,
+                ));
+            }
 
-        if ctx.ball().on_own_side() {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Returning,
-            ));
+            if ctx.ball().on_own_side() {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Returning,
+                ));
+            }
         }
 
         None
@@ -83,10 +95,21 @@ impl StateProcessingHandler for ForwardPressingState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_distance = ctx.ball().distance();
+        // The man the plan sent runs at the ball from wherever he is,
+        // instead of drifting home from inside his own duty — the plan
+        // nominates over `DutyAssigner::PRESS_REACH` (200u), well outside
+        // both radii below. See the note in `process`.
+        let nominated = TackleEngagement::is_nominated_presser(ctx);
+        let carrier_reach = if nominated {
+            f32::INFINITY
+        } else {
+            MAX_PRESS_BALL_DISTANCE
+        };
+        let loose_reach = if nominated { f32::INFINITY } else { 80.0 };
 
         // Only pursue if opponent has the ball and it's within pressing range
         if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
-            if ball_distance < MAX_PRESS_BALL_DISTANCE {
+            if ball_distance < carrier_reach {
                 return Some(
                     SteeringBehavior::Pursuit {
                         target: ctx.tick_context.positions.ball.position,
@@ -97,8 +120,9 @@ impl StateProcessingHandler for ForwardPressingState {
                         + ctx.player().separation_velocity(),
                 );
             }
-        } else if !ctx.ball().is_owned() && ball_distance < 80.0 {
-            // Loose ball nearby — pursue it
+        } else if !ctx.ball().is_owned() && ball_distance < loose_reach {
+            // Loose ball or a pass in flight — go with it. A press is
+            // made ON the pass, not after it lands.
             return Some(
                 SteeringBehavior::Pursuit {
                     target: ctx.tick_context.positions.ball.position,

@@ -1,4 +1,5 @@
 use crate::actors::BallState;
+use crate::config::ViewerConfig;
 use crate::field::Field;
 use crate::playback::Playback;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
@@ -7,7 +8,31 @@ use bevy::prelude::*;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
-use web_sys::{AddEventListenerOptions, KeyboardEvent, MouseEvent, WheelEvent};
+use web_sys::{
+    AddEventListenerOptions, Element, FocusOptions, HtmlElement, KeyboardEvent, MouseEvent,
+    WheelEvent,
+};
+
+/// The canvas the page handed the viewer, found by the CSS selector it named
+/// in [`ViewerConfig`].
+///
+/// Three things below reach for it — the pointer claims, the key claims and
+/// the focus call — and all three have to survive not finding it: a replay
+/// with no camera controls is still a replay, where a panic here is a blank
+/// page.
+struct ViewerCanvas;
+
+impl ViewerCanvas {
+    fn find(selector: &str) -> Option<Element> {
+        let found = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|document| document.query_selector(selector).ok().flatten());
+        if found.is_none() {
+            web_sys::console::warn_1(&format!("match viewer: no canvas at {selector}").into());
+        }
+        found
+    }
+}
 
 /// How far the lens is pulled in, as a multiple of the default framing.
 ///
@@ -175,11 +200,7 @@ impl CameraOrbit {
     /// [`crate::MatchViewer::start`]) — so the listeners go on by hand
     /// instead.
     pub fn claim_pointer_buttons(canvas: &str) {
-        let Some(element) = web_sys::window()
-            .and_then(|window| window.document())
-            .and_then(|document| document.query_selector(canvas).ok().flatten())
-        else {
-            web_sys::console::warn_1(&format!("match viewer: no canvas at {canvas}").into());
+        let Some(element) = ViewerCanvas::find(canvas) else {
             return;
         };
 
@@ -411,11 +432,7 @@ impl CameraFlight {
     /// it while it has focus, so the rest of the page keeps its scrolling.
     /// WASD needs no such treatment — those keys have no default action.
     pub fn claim_flight_keys(canvas: &str) {
-        let Some(element) = web_sys::window()
-            .and_then(|window| window.document())
-            .and_then(|document| document.query_selector(canvas).ok().flatten())
-        else {
-            web_sys::console::warn_1(&format!("match viewer: no canvas at {canvas}").into());
+        let Some(element) = ViewerCanvas::find(canvas) else {
             return;
         };
 
@@ -435,6 +452,41 @@ impl CameraFlight {
         }
         // Lives as long as the page, like the pointer listeners above.
         press.forget();
+    }
+
+    /// Puts the keyboard on the canvas as the replay opens, so the flight keys
+    /// answer the first press.
+    ///
+    /// The counterpart to the note on [`CameraFlight::claim_flight_keys`]: a
+    /// keydown only reaches the canvas while it has focus, which meant the
+    /// arrow keys did nothing at all until the viewer had been clicked — and a
+    /// control you have to discover by clicking first is one the legend above
+    /// the stage promises and the page does not keep.
+    ///
+    /// A canvas is not focusable on its own, so `tabindex` comes first; it is
+    /// set here rather than in the page's markup to keep it with the reason it
+    /// exists. `preventScroll` because focus otherwise scrolls its element into
+    /// view, and the stage is already exactly where the page put it.
+    ///
+    /// Runs at `Startup` rather than beside the claims in
+    /// [`crate::MatchViewer::start`]: those only add listeners, but focus is
+    /// state winit is free to move when it adopts the canvas, so this has to
+    /// come after it has.
+    pub fn focus_canvas(config: Res<ViewerConfig>) {
+        let Some(element) = ViewerCanvas::find(&config.canvas) else {
+            return;
+        };
+        let Some(element) = element.dyn_ref::<HtmlElement>() else {
+            web_sys::console::warn_1(&"match viewer: canvas is not an HTML element".into());
+            return;
+        };
+
+        element.set_tab_index(0);
+        let options = FocusOptions::new();
+        options.set_prevent_scroll(true);
+        if element.focus_with_options(&options).is_err() {
+            web_sys::console::warn_1(&"match viewer: canvas refused focus".into());
+        }
     }
 }
 
@@ -541,7 +593,15 @@ impl TvCamera {
     /// Then pulled 10% back in (0.42 → 0.382): the 1.5× was a shade far, and
     /// this is the fine adjustment on top of it. Net against the original
     /// 0.28 it is 1.36× wider.
-    const FOV: f32 = 0.382;
+    ///
+    /// Then 20% tighter again (0.382 → 0.318), which is where it stands: 1.14×
+    /// wider than the original. Done here rather than by resting the wheel at
+    /// 1.2×, so that 1.00x keeps meaning "the shot the replay opens on" — the
+    /// reset chip, the zoom readout and `CameraRig::moved` all read that
+    /// number. The cost is 20% off the widest shot the wheel can reach, which
+    /// is nothing: the pitch subtends ~0.21 rad from a rig this low, so the
+    /// far end of the range was already spending itself on sky and stand.
+    const FOV: f32 = 0.318;
     /// How far the aim point follows the ball across the pitch. Low down the
     /// whole width is in shot anyway, so this is back to a gentle lead rather
     /// than a chase — and it has to stay gentle, because tilting up from here

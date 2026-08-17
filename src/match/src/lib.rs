@@ -7,6 +7,7 @@
 //! half that have to agree with each other.
 
 mod actors;
+mod aftermath;
 mod body;
 mod camera;
 mod config;
@@ -21,12 +22,13 @@ mod textures;
 mod timeline;
 
 use crate::actors::{Actors, BallState};
+use crate::aftermath::Aftermath;
 use crate::camera::{CameraFlight, CameraOrbit, CameraZoom, TvCamera};
 use crate::config::ViewerConfig;
 use crate::loader::ChunkLoader;
 use crate::net::Netting;
 use crate::pitch::{Bank, Pitch};
-use crate::playback::{EventLog, Playback};
+use crate::playback::{EventLog, Playback, RecordedSpans};
 use crate::replay::ReplayTracks;
 use crate::timeline::{DebugOverlay, Timeline};
 use bevy::asset::AssetMetaCheck;
@@ -101,7 +103,9 @@ impl MatchViewer {
             .insert_resource(Playback::new(duration_ms))
             .init_resource::<ReplayTracks>()
             .init_resource::<ChunkLoader>()
+            .init_resource::<RecordedSpans>()
             .init_resource::<BallState>()
+            .init_resource::<Aftermath>()
             .init_resource::<DebugOverlay>()
             .init_resource::<CameraZoom>()
             // `TvCamera::follow_play` takes `Res<CameraOrbit>` and
@@ -121,6 +125,9 @@ impl MatchViewer {
                     Actors::spawn,
                     Timeline::spawn,
                     ChunkLoader::bootstrap,
+                    // After winit has adopted the canvas, or the focus it
+                    // takes is the focus this just set.
+                    CameraFlight::focus_canvas,
                 ),
             )
             .add_systems(
@@ -147,6 +154,11 @@ impl MatchViewer {
                         Playback::handle_keyboard,
                         Playback::advance,
                         Actors::follow_playhead,
+                        // Between the playhead moving and the bodies being
+                        // posed off it: `animate` reads the mood, and reading
+                        // last frame's would leave every reaction a frame
+                        // behind a scrub.
+                        Aftermath::follow_playhead,
                         Actors::animate,
                         // Straight after, so the dive `animate` has just read
                         // out of the recording is on the body the same frame.
@@ -182,8 +194,17 @@ impl MatchViewer {
                         Actors::place_labels,
                         EventLog::follow_playhead,
                         Timeline::refresh,
+                        // After `ChunkLoader::pump`, which is where the spans
+                        // arrive — the bar is drawn on the frame the recording
+                        // tells us where its holes are.
+                        Timeline::refresh_gaps,
                         Timeline::refresh_camera_reset,
                         Timeline::refresh_speed,
+                        // Last of the bar's systems: the two above decide
+                        // which buttons are lit, and these turn that plus the
+                        // pointer into the colours actually drawn.
+                        Timeline::paint_chips,
+                        Timeline::paint_play,
                         Playback::end_frame,
                     ),
                 )

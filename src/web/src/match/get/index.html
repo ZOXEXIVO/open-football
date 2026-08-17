@@ -39,6 +39,46 @@
             <div class="col-xl-8">
                 {% if match_recordings_enabled && match_viewer_available %}
                 <div id="match-play-area">
+                    {# The two camera controls the replay never says out loud — the
+                       transport bar shows the ones it has buttons for, and these
+                       have none. Each icon is the mouse itself with the part that
+                       does the work lit, so the picture names the control and the
+                       words only have to say what it does. Above the stage rather
+                       than below: it is what stands between the header and the
+                       replay, so the page needs no padding of its own. Hidden on
+                       touch, where there is neither a wheel nor a right button. #}
+                    <p class="match-hints">
+                        <span class="match-hint">
+                            <svg class="match-hint-icon" viewBox="0 0 14 20" aria-hidden="true" focusable="false">
+                                <rect class="mh-shell" x="1" y="1" width="12" height="18" rx="6"/>
+                                <path class="mh-shell" d="M1.1 8.6H12.9"/>
+                                <rect class="mh-live" x="5.9" y="2.6" width="2.2" height="4.2" rx="1.1"/>
+                            </svg>
+                            {{ i18n.t("match_hint_zoom") }}
+                        </span>
+                        <span class="match-hint">
+                            <svg class="match-hint-icon" viewBox="0 0 14 20" aria-hidden="true" focusable="false">
+                                <path class="mh-live" d="M8.6 1.22A6 6 0 0 1 13 7v1.6H8.6Z"/>
+                                <rect class="mh-shell" x="1" y="1" width="12" height="18" rx="6"/>
+                                <path class="mh-shell" d="M1.1 8.6H12.9"/>
+                                <rect class="mh-shell" x="5.9" y="2.6" width="2.2" height="4.2" rx="1.1"/>
+                            </svg>
+                            {{ i18n.t("match_hint_camera") }}
+                        </span>
+                        <span class="match-hint">
+                            <svg class="match-hint-icon match-hint-icon--keys" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                                <rect class="mh-shell" x="7.2" y="3.95" width="5.6" height="5.6" rx="1.2"/>
+                                <rect class="mh-shell" x="0.7" y="10.45" width="5.6" height="5.6" rx="1.2"/>
+                                <rect class="mh-shell" x="7.2" y="10.45" width="5.6" height="5.6" rx="1.2"/>
+                                <rect class="mh-shell" x="13.7" y="10.45" width="5.6" height="5.6" rx="1.2"/>
+                                <path class="mh-live" d="M10 5.75L11.25 7.75H8.75Z"/>
+                                <path class="mh-live" d="M10 14.25L8.75 12.25H11.25Z"/>
+                                <path class="mh-live" d="M2.5 13.25L4.5 12V14.5Z"/>
+                                <path class="mh-live" d="M17.5 13.25L15.5 12V14.5Z"/>
+                            </svg>
+                            {{ i18n.t("match_hint_fly") }}
+                        </span>
+                    </p>
                     <div class="match-stage" id="match-stage">
                         <div class="match-stage-placeholder">
                             <i class="fas fa-spinner fa-spin fa-2x"></i>
@@ -65,7 +105,7 @@
                     <i class="fa fa-video-slash"></i>
                     <p>{{ i18n.t("match_recording_disabled") }}</p>
                     <p>{{ i18n.t("match_recording_disabled_local") }}</p>
-                    <p class="fm-match-recording-note"><code>open_football --match-recording-enabled</code></p>
+                    <p class="fm-match-recording-note"><code>open_football</code></p>
                     <a href="https://github.com/ZOXEXIVO/open-football/releases" target="_blank" rel="noopener">{{ i18n.t("match_recording_disabled_link") }}</a>
                 </div>
                 {% endif %}

@@ -32,8 +32,32 @@ impl StateProcessingHandler for MidfielderPressingState {
             ));
         }
 
-        // Loose ball very close — take it regardless of speed
-        if Interception::is_available(ctx) && ctx.ball().distance() < 30.0 {
+        // Loose ball very close — take it regardless of speed, unless
+        // somebody nearer is already going for it.
+        //
+        // ⚠ The yield half of that is what stops a THREE-cycle. The
+        // dispatcher elects one chaser per side and pulls everybody else
+        // straight back out of `TakeBall` (`should_yield_takeball`), so a
+        // presser who grabbed the state without being the elected chaser
+        // was yielded to `Running` on the next tick, re-entered `Pressing`
+        // on his `DefensiveDuty::Press`, and arrived back here — every AI
+        // tick, with `in_state_time` reset by each hop. It shows up in
+        // the stall census as `Midfielder: Take Ball` holding a
+        // motionless ball with a dwell of 0-1 ticks, and it is the same
+        // guard the "loose ball nearby" branch further down already
+        // carries.
+        //
+        // It only became load-bearing when `teamplay::defence` started
+        // nominating a presser through the whole of a pass rather than
+        // only while an opponent carried the ball — that took the Press
+        // duty from 0.25 to 0.61 per refresh and, without this line,
+        // stalled-ball time from 9.2 to 38.0 s/match with
+        // `Midfielder: Take Ball` taking almost all of it. With it, 15.3
+        // vs 16.9 across the same A/B.
+        if Interception::is_available(ctx)
+            && ctx.ball().distance() < 30.0
+            && !Self::teammate_is_closer(ctx)
+        {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::TakeBall,
             ));
@@ -139,22 +163,14 @@ impl StateProcessingHandler for MidfielderPressingState {
 
         // Loose ball nearby — go claim it directly instead of pressing thin air
         // But only if no teammate is closer (avoid chasing ball during teammate's pass)
-        if !ctx.ball().is_owned() && ball_distance < 50.0 && ctx.ball().speed() < 3.0 {
-            let ball_pos = ctx.tick_context.positions.ball.position;
-            let cutoff = ball_distance - 5.0;
-            let closer_teammate = cutoff > 0.0
-                && ctx
-                    .players()
-                    .teammates()
-                    .nearby_at(ball_pos, cutoff)
-                    .next()
-                    .is_some();
-
-            if !closer_teammate {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::TakeBall,
-                ));
-            }
+        if !ctx.ball().is_owned()
+            && ball_distance < 50.0
+            && ctx.ball().speed() < 3.0
+            && !Self::teammate_is_closer(ctx)
+        {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::TakeBall,
+            ));
         }
 
         // Only give up pressing if ball is truly far away
@@ -165,7 +181,16 @@ impl StateProcessingHandler for MidfielderPressingState {
         }
 
         // Check if the pressing is ineffective (opponent still has ball after some time)
-        if ctx.in_state_time > 30 && !self.is_making_progress(ctx) {
+        //
+        // …but not for the man the plan sent. `is_making_progress` gives
+        // up as soon as two team-mates are 20% nearer the ball, which in
+        // a block is a positional accident rather than a hand-over, and
+        // it is the same single-player-election reasoning `HANDOVER_MARGIN`
+        // above replaced.
+        if ctx.in_state_time > 30
+            && !TackleEngagement::is_nominated_presser(ctx)
+            && !self.is_making_progress(ctx)
+        {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));
@@ -252,12 +277,31 @@ impl StateProcessingHandler for MidfielderPressingState {
             };
 
             Some(pressing_velocity + separation)
-        } else if Interception::is_available(ctx) && ctx.ball().distance() < 100.0 {
-            // Loose ball — pursue it directly
-            let direction =
-                (ctx.tick_context.positions.ball.position - ctx.player.position).normalize();
-            let speed = ctx.player.skills.physical.pace;
-            Some(direction * speed)
+        } else if !ctx.ball().is_owned()
+            && (TackleEngagement::is_nominated_presser(ctx)
+                || (Interception::is_available(ctx) && ctx.ball().distance() < 100.0))
+        {
+            // Nobody has it — a pass in flight, a deflection, a loose
+            // ball. Go with it; that is what the press IS, and since the
+            // plan now nominates a presser through exactly this window
+            // (see `teamplay::defence`'s point of attack) it is no longer
+            // a rare branch.
+            //
+            // ⚠ This used to be `direction * pace` — the same units bug
+            // the carrier branch above documents having removed. `pace`
+            // is a 1-20 SKILL and the result was used as a velocity in
+            // u/tick against a ~0.63 u/tick top speed, so the engine-wide
+            // clamp kept whatever heading this tick's normalize produced
+            // and the presser could invert between consecutive ticks.
+            Some(
+                SteeringBehavior::Pursuit {
+                    target: ctx.tick_context.positions.ball.position,
+                    target_velocity: ctx.tick_context.positions.ball.velocity,
+                }
+                .calculate(ctx.player)
+                .velocity
+                    + ctx.player().separation_velocity() * 0.15,
+            )
         } else {
             // Teammate has ball — maintain position
             Some(Vector3::zeros())
@@ -271,6 +315,25 @@ impl StateProcessingHandler for MidfielderPressingState {
 }
 
 impl MidfielderPressingState {
+    /// Is a team-mate meaningfully nearer the ball than I am?
+    ///
+    /// The same 5u margin the loose-ball branch has always used, lifted
+    /// out so both routes into `TakeBall` ask it. Deliberately a MARGIN
+    /// rather than a tie-break: at exact equality two players each see
+    /// the other as closer and neither goes.
+    fn teammate_is_closer(ctx: &StateProcessingContext) -> bool {
+        let cutoff = ctx.ball().distance() - 5.0;
+        if cutoff <= 0.0 {
+            return false;
+        }
+        let ball_pos = ctx.tick_context.positions.ball.position;
+        ctx.players()
+            .teammates()
+            .nearby_at(ball_pos, cutoff)
+            .next()
+            .is_some()
+    }
+
     // New helper function to determine if pressing is making progress
     fn is_making_progress(&self, ctx: &StateProcessingContext) -> bool {
         let player_velocity = ctx.player.velocity;

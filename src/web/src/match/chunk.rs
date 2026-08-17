@@ -22,6 +22,12 @@ pub struct MatchMetadataResponse {
     pub chunk_count: usize,
     pub chunk_duration_ms: u64,
     pub total_duration_ms: u64,
+    /// The `[start, end]` ranges the recording covers, in match milliseconds.
+    /// Absent on a recording of a whole match — the viewer reads that as "all
+    /// of it", which is also what every recording made before goal clipping
+    /// existed is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub segments: Option<Vec<[u64; 2]>>,
 }
 
 pub async fn match_chunk_action(
@@ -89,6 +95,15 @@ pub async fn match_metadata_action(
             .as_u64()
             .unwrap_or(300_000),
         total_duration_ms: metadata_json["total_duration_ms"].as_u64().unwrap_or(0),
+        segments: metadata_json["segments"].as_array().map(|ranges| {
+            ranges
+                .iter()
+                .filter_map(|range| {
+                    let range = range.as_array()?;
+                    Some([range.first()?.as_u64()?, range.get(1)?.as_u64()?])
+                })
+                .collect()
+        }),
     };
 
     Ok(Json(metadata).into_response())

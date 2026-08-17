@@ -1,6 +1,9 @@
+use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::engine::ball::ball::interactions::SaveModel;
 use crate::r#match::events::Event;
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperShotDive, KeeperShotSave,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -74,8 +77,16 @@ impl StateProcessingHandler for GoalkeeperDivingState {
         // spends airborne alone. 22 AI ticks is 0.44 s (see the units note
         // above). Nothing below happens until then; the catch roll is the
         // one thing he can still do while extended.
+        //
+        // …AND HE DOES NOT GET UP BEFORE HE LANDS. The tick floor alone
+        // was enough while a dive could only START at the moment of
+        // contact; [`KeeperShotDive`] now launches him during the flight,
+        // so the floor can expire with the keeper still in the air and the
+        // ball still coming. `is_airborne` is the physical condition and
+        // needs no second clock — the engine has him on a real ballistic
+        // arc (see `MatchPlayer::height`).
         const MIN_GROUND_TICKS: u64 = 22;
-        if ctx.in_state_time < MIN_GROUND_TICKS {
+        if ctx.in_state_time < MIN_GROUND_TICKS || ctx.player.is_airborne() {
             if self.is_ball_caught(ctx) {
                 return Some(Self::gather_in_the_dive(ctx));
             }
@@ -102,9 +113,16 @@ impl StateProcessingHandler for GoalkeeperDivingState {
             return Some(Self::gather_in_the_dive(ctx));
         } else if self.is_ball_nearby(ctx) {
             let mut result = StateChangeResult::with_goalkeeper_state(GoalkeeperState::Catching);
-            result
-                .events
-                .add_player_event(PlayerEvent::ClaimBall(ctx.player.id));
+            // …but only a LOOSE one. A keeper picking himself up beside a
+            // striker who still has the ball does not reach out and take
+            // it off his foot: that is the "he does not tackle with his
+            // hands" rule `GoalkeeperCatchingState` documents, and the
+            // legitimate way to win it back from here is the smother.
+            if !ctx.ball().is_owned() {
+                result
+                    .events
+                    .add_player_event(PlayerEvent::ClaimBall(ctx.player.id));
+            }
             return Some(result);
         }
 
@@ -123,7 +141,53 @@ impl StateProcessingHandler for GoalkeeperDivingState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let dive_direction = self.calculate_dive_direction(ctx);
-        let dive_speed = self.calculate_dive_speed(ctx);
+        let mut dive_speed = self.calculate_dive_speed(ctx);
+
+        // **A DIVE STOPS AT THE BALL.**
+        //
+        // It has no `Arrive` and no braking — a body in the air cannot have
+        // either — so a keeper aimed at a point 1.5 m away and travelling at
+        // his own top speed for the 0.4 s the dive lasts goes THROUGH it and
+        // comes down two metres the wrong side. Measured when
+        // [`KeeperShotDive`] first launched him during the flight: shots
+        // arriving beyond his reach went 29% → 34% and saves/on-target fell
+        // two points, because he was now missing them on the far side
+        // instead of the near one.
+        //
+        // What a real keeper does is judge the dive: he leaves the ground
+        // with the pace the distance needs and no more. Recomputing the
+        // target every tick and capping the step at the distance left makes
+        // him decelerate into it — the same trick `SteeringBehavior::Arrive`
+        // and `GoalCelebration::steer` use.
+        //
+        // ⚠ THE CAP HAS TO BE AGAINST A REAL PER-TICK STEP. `calculate_dive_speed`
+        // returns a raw magnitude built out of 1-20 attributes — 8 to 50 — which
+        // the engine's own limiter clamps to `goalkeeper_max_speed` later on. So
+        // capping THAT against the distance did nothing at all until the last
+        // centimetre: 20 against a gap of 15 units is still 15, which is still
+        // twenty times his real step. It has to be brought onto the same scale
+        // first.
+        if let Some(target) = ctx
+            .tick_context
+            .ball
+            .cached_shot_target
+            .as_ref()
+            .filter(|t| Some(t.defending_side) == ctx.player.side)
+        {
+            let crossing = KeeperShotDive::crossing_at(
+                ctx.player.position.x,
+                target.struck_from,
+                ctx.ball().direction_to_own_goal().x,
+                target.goal_line_y,
+            );
+            let step = ctx.player.skills.goalkeeper_max_speed(
+                ctx.player.player_attributes.condition,
+                GoalkeeperSpeedContext::Dive,
+            );
+            dive_speed = dive_speed
+                .min(step)
+                .min((crossing - ctx.player.position).magnitude());
+        }
 
         Some(dive_direction * dive_speed)
     }
@@ -159,6 +223,32 @@ impl GoalkeeperDivingState {
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+
+        // A shot in flight: go where it is CROSSING HIS OWN DEPTH, not
+        // where it is now. A ball struck from eighteen metres is still
+        // fifteen away when he leaves the ground, so aiming at it puts him
+        // on a heading up the pitch instead of across his goal — and
+        // aiming at the goal line instead would send a keeper who had come
+        // out to narrow the angle diving backwards into his own net. Same
+        // crossing point the launch decision was made on, so the dive
+        // finishes where it was aimed.
+        if let Some(target) = ctx
+            .tick_context
+            .ball
+            .cached_shot_target
+            .as_ref()
+            .filter(|t| Some(t.defending_side) == ctx.player.side)
+        {
+            let crossing = KeeperShotDive::crossing_at(
+                ctx.player.position.x,
+                target.struck_from,
+                ctx.ball().direction_to_own_goal().x,
+                target.goal_line_y,
+            );
+            if let Some(across) = (crossing - ctx.player.position).try_normalize(1e-3) {
+                return across;
+            }
+        }
 
         // Prediction time scales with positioning + reaction quality.
         let prediction_time =
@@ -211,6 +301,26 @@ impl GoalkeeperDivingState {
     }
 
     fn is_ball_caught(&self, ctx: &StateProcessingContext) -> bool {
+        // A LIVE SHOT IS RESOLVED BY ONE MODEL, WHEREVER HE IS STANDING.
+        //
+        // `Catching` used to own the state-machine save roll and its
+        // per-tick conversion is calibrated against the keeper spending
+        // the whole flight in that state. Now that he can leave his feet
+        // part-way through it, running a second, differently-shaped model
+        // here would make the realised save rate a function of when he
+        // dived. See [`KeeperShotSave`].
+        if ctx.tick_context.ball.cached_shot_target.is_some() {
+            return KeeperShotSave::roll(ctx);
+        }
+
+        // He does not take a ball off a man's foot with his hands, on the
+        // floor or otherwise — the same rule `GoalkeeperCatchingState`
+        // carries. Winning it back from a carrier is [`KeeperSmother`],
+        // which is a contest; this is a gather.
+        if ctx.ball().is_owned() && !ctx.player.has_ball(ctx) {
+            return false;
+        }
+
         let ball_distance = ctx.ball().distance();
         // Must be flying toward the GK or very close.
         if ball_distance > 5.0 && !ctx.ball().is_towards_player_with_angle(0.6) {

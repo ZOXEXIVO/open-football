@@ -35,6 +35,7 @@ pub struct ViewerLabels {
     pub first_half: String,
     pub second_half: String,
     pub loading: String,
+    pub no_recording: String,
 }
 
 impl Default for ViewerLabels {
@@ -43,6 +44,7 @@ impl Default for ViewerLabels {
             first_half: "1st".to_string(),
             second_half: "2nd".to_string(),
             loading: "Loading match…".to_string(),
+            no_recording: "Nothing was recorded in this match".to_string(),
         }
     }
 }

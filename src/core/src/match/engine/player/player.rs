@@ -724,6 +724,24 @@ impl MatchPlayer {
         self.tackle_cooldown = 3000;
     }
 
+    /// Start the post-smother cooldown for a GOALKEEPER.
+    ///
+    /// Same field, deliberately different number. A defender's thirty
+    /// seconds is a rate limit on the whole team's challenge COUNT — ten
+    /// outfielders sharing one ball. A keeper's is not: there is one of him,
+    /// he only ever gets to a 1-v-1 a couple of times a match, and the only
+    /// thing that needs suppressing is the repeat — he goes down at a
+    /// striker's feet, is beaten, is back on his feet 0.44 s later with the
+    /// same striker still on the same ball, and commits again.
+    ///
+    /// 500 ticks = 5 s: long enough that the attack he was beaten in has
+    /// resolved, short enough that the next one still finds a keeper who
+    /// will come. See `KeeperSmother`.
+    #[inline]
+    pub fn start_keeper_cooldown(&mut self) {
+        self.tackle_cooldown = 500;
+    }
+
     pub fn rebuild_waypoint_cache(&mut self) {
         self.cached_waypoints = self
             .tactical_position

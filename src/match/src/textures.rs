@@ -1,5 +1,5 @@
 use bevy::asset::RenderAssetUsages;
-use bevy::image::{Image, ImageAddressMode, ImageSampler};
+use bevy::image::{Image, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use std::f32::consts::{PI, TAU};
@@ -74,6 +74,95 @@ impl Textures {
             // Dense under the player, gone by the edge of the quad.
             Self::smooth(((1.0 - distance) / 0.75).clamp(0.0, 1.0))
         }))
+    }
+
+    /// The play triangle, in the unit square the transport icons are drawn in.
+    ///
+    /// The left margin is wider than the right on purpose. A triangle centred
+    /// on its bounding box reads as though it has slipped left, because all
+    /// its mass is down that end and the eye weighs the shape rather than the
+    /// box; every media control in the world nudges it back toward the apex.
+    /// Slightly taller than it is wide (0.90 against 0.74) for the same
+    /// reason — a tapering shape needs the height to hold its own beside a
+    /// pair of rectangles.
+    const PLAY_LEFT: f32 = 0.16;
+    const PLAY_APEX: f32 = 0.90;
+    const PLAY_HALF: f32 = 0.45;
+
+    /// The pause bars: two uprights, each a shade narrower than the gap
+    /// between them, and shorter than the triangle is tall. Sized by weight
+    /// rather than by extent — two solid rectangles cover far more of the
+    /// square than a triangle does, and matching their bounding boxes would
+    /// make the button visibly thicken every time playback started.
+    const PAUSE_BAR: f32 = 0.24;
+    const PAUSE_GAP: f32 = 0.20;
+    const PAUSE_TOP: f32 = 0.08;
+
+    /// Resolution the transport icons are rasterised at.
+    ///
+    /// Small on purpose, for the reason [`Self::number`] gives at more length:
+    /// there are no mipmaps here, and these land about thirty device pixels
+    /// wide. Drawing them at 32 keeps the texture close to 1:1 with the pixels
+    /// it covers instead of asking the sampler to throw three quarters of it
+    /// away.
+    const ICON_SIZE: u32 = 32;
+
+    /// The play triangle, white on transparent.
+    ///
+    /// Drawn rather than typed. The only font shipped with the viewer is
+    /// Bevy's built-in one, which carries ASCII and nothing else — so the
+    /// nearest available glyph is `>`, a chevron, which means "next" on every
+    /// control surface ever built and is what the bar used to show. Sixteen
+    /// lines of coverage sampling buys the real thing.
+    pub fn play_icon(images: &mut Assets<Image>) -> Handle<Image> {
+        images.add(Self::mask(|x, y| {
+            if x < Self::PLAY_LEFT || x > Self::PLAY_APEX {
+                return false;
+            }
+            // How far across the triangle we are, and therefore how far the
+            // two sloping edges have closed on the centre line.
+            let across = (x - Self::PLAY_LEFT) / (Self::PLAY_APEX - Self::PLAY_LEFT);
+            (y - 0.5).abs() <= Self::PLAY_HALF * (1.0 - across)
+        }))
+    }
+
+    /// The pause bars, white on transparent.
+    pub fn pause_icon(images: &mut Assets<Image>) -> Handle<Image> {
+        let first = (1.0 - Self::PAUSE_BAR * 2.0 - Self::PAUSE_GAP) * 0.5;
+        let second = first + Self::PAUSE_BAR + Self::PAUSE_GAP;
+        images.add(Self::mask(|x, y| {
+            if y < Self::PAUSE_TOP || y > 1.0 - Self::PAUSE_TOP {
+                return false;
+            }
+            (x >= first && x <= first + Self::PAUSE_BAR)
+                || (x >= second && x <= second + Self::PAUSE_BAR)
+        }))
+    }
+
+    /// White throughout, with alpha from how much of each texel the shape
+    /// covers — sampled on a 4×4 grid, which is what gives a hard-edged glyph
+    /// a soft enough edge to sit still at this size. `inside` is asked about
+    /// points in the unit square, origin top-left.
+    fn mask(inside: impl Fn(f32, f32) -> bool) -> Image {
+        const SUB: u32 = 4;
+        let size = Self::ICON_SIZE;
+        let mut data = Vec::with_capacity((size * size * 4) as usize);
+        for row in 0..size {
+            for column in 0..size {
+                let mut covered = 0u32;
+                for sub_y in 0..SUB {
+                    for sub_x in 0..SUB {
+                        let x = (column as f32 + (sub_x as f32 + 0.5) / SUB as f32) / size as f32;
+                        let y = (row as f32 + (sub_y as f32 + 0.5) / SUB as f32) / size as f32;
+                        if inside(x, y) {
+                            covered += 1;
+                        }
+                    }
+                }
+                data.extend_from_slice(&[255, 255, 255, (covered * 255 / (SUB * SUB)) as u8]);
+            }
+        }
+        Self::image(size, size, data)
     }
 
     /// The ring drawn round a player's feet in their team's colour.
@@ -579,6 +668,165 @@ impl Textures {
             descriptor.address_mode_u = ImageAddressMode::Repeat;
         }
         images.add(image)
+    }
+
+    /// Goal netting: a grid of cords on a transparent ground.
+    ///
+    /// # Why the net looked stationary
+    ///
+    /// The netting used to be drawn as a flat `srgba(1, 1, 1, 0.11)` sheet
+    /// with no texture at all, and **an untextured surface has no visible
+    /// motion**. `net.rs` was already bagging the mesh half a metre behind a
+    /// goal — the deformation was there and correct — but an 11%-opaque
+    /// featureless plane offers the eye nothing to track it by, so what the
+    /// user saw was a net that did not move. Cords are not decoration here;
+    /// they are the whole of how a net reads as a net and how its movement
+    /// reads at all.
+    ///
+    /// # Sizing
+    ///
+    /// A goal net's mesh is about 12 cm across and its cord a few
+    /// millimetres. Drawn honestly at broadcast distance that is a cord
+    /// under a pixel wide, which sparkles and crawls as the camera pans —
+    /// the same problem [`Self::hoarding`] and [`Self::seats`] are sized
+    /// against, and there are no mipmaps in this scene. So the cord is
+    /// deliberately drawn FAT relative to life (about a fifth of the mesh
+    /// rather than a thirtieth) and softened at its edges: at range that
+    /// integrates to an even haze of the right density instead of a moiré,
+    /// and close up it reads as netting.
+    ///
+    /// Tiled by each panel's `uv_transform`, so one cell here is one mesh
+    /// square on the goal and the count is a property of the panel's real
+    /// size.
+    pub fn netting(images: &mut Assets<Image>) -> Handle<Image> {
+        /// Texels per mesh square, which is what sets how much of the panel is
+        /// cord: a cord cannot be drawn thinner than the two texels either
+        /// side of the line it runs along, so a bigger cell means a finer net.
+        ///
+        /// **Sized against how the net reads at RANGE, not up close.** The
+        /// broadcast rig sits a fixed distance from the centre spot, so a goal
+        /// is about two hundred pixels wide when one is scored — three pixels
+        /// to a mesh square, well past where the mip chain has flattened the
+        /// sheet into a haze. The density of that haze is the whole of what
+        /// the eye gets, and it is `OPACITY × coverage`. At 32 texels a cell
+        /// the coverage came to a sixth and the net screenshotted as faint as
+        /// the untextured sheet it replaced; a quarter is what reads as
+        /// netting from the halfway line while still being seen through.
+        /// Same trade the perimeter boards make in [`Self::hoarding`].
+        const CELL: u32 = 16;
+        /// Cells in the sheet — four, so the base is 64 and the mip chain
+        /// halves cleanly all the way to 1×1.
+        const CELLS: u32 = 4;
+        const SIZE: u32 = CELL * CELLS;
+        /// Half-width of a cord, in texels, and the width of its soft edge.
+        const CORD: f32 = 0.7;
+        const FEATHER: f32 = 1.0;
+        /// Opacity of a cord at its centre. Well short of 1: a goal net is
+        /// twine, it is lit from in front, and it has to stay possible to see
+        /// the ball through the back of it.
+        const OPACITY: f32 = 0.85;
+
+        // Nets are white or off-white; a faint warm grey keeps them from
+        // glowing brighter than the lines painted on the grass.
+        let cord = Vec3::new(0.93, 0.94, 0.95);
+
+        let mut data = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+        for y in 0..SIZE {
+            for x in 0..SIZE {
+                // Distance to the nearest cord centre on each axis. The cords
+                // run along the cell boundaries, so the centre of a cell is
+                // the middle of a hole.
+                let to_line = |v: u32| -> f32 {
+                    let within = (v as f32 + 0.5) % CELL as f32;
+                    within.min(CELL as f32 - within)
+                };
+                let coverage = |d: f32| -> f32 { 1.0 - Self::smooth((d - CORD) / FEATHER) };
+                // Either cord covers the texel — union, not sum, so the knots
+                // where two cross do not come out twice as bright.
+                let alpha = coverage(to_line(x)).max(coverage(to_line(y))) * OPACITY;
+                data.extend_from_slice(&[
+                    (cord.x * 255.0) as u8,
+                    (cord.y * 255.0) as u8,
+                    (cord.z * 255.0) as u8,
+                    (alpha * 255.0) as u8,
+                ]);
+            }
+        }
+
+        images.add(Self::mipped_netting(SIZE, data))
+    }
+
+    /// The netting sheet, with a mip chain.
+    ///
+    /// **This is the one texture in the crate that cannot do without
+    /// mipmaps.** Everything else here is stretched over a single quad or a
+    /// lathe and is sized so that one texel lands on about one pixel — which
+    /// is exactly why the other generators can be sharp and why the comments
+    /// on [`Self::hoarding`] and [`Self::seats`] warn against making them
+    /// sharper. A goal net is different in kind: the panel repeats the sheet
+    /// **sixty times across**, so at broadcast distance a single pixel covers
+    /// dozens of texels. Screenshotted without mipmaps the cords came out as
+    /// *dotted lines* — the sampler taking one texel per pixel and hitting
+    /// cord or hole more or less at random — which reads as a broken net
+    /// rather than a fine one, and would crawl the moment the camera panned.
+    /// No amount of tuning the cord width fixes that; it is undersampling,
+    /// and the answer to undersampling is to pre-filter.
+    ///
+    /// A box filter is right here because the sheet's RGB is uniform — only
+    /// the alpha varies — so averaging cannot bleed one colour into another,
+    /// and the chain converges to a flat haze of exactly the net's own
+    /// density. Which is what a goal net looks like from the far touchline.
+    fn mipped_netting(size: u32, base: Vec<u8>) -> Image {
+        let mut levels: Vec<(u32, Vec<u8>)> = vec![(size, base)];
+        while levels.last().map(|(w, _)| *w).unwrap_or(1) > 1 {
+            let (width, source) = levels.last().expect("seeded above");
+            let (width, half) = (*width, (*width / 2).max(1));
+            let mut next = Vec::with_capacity((half * half * 4) as usize);
+            for y in 0..half {
+                for x in 0..half {
+                    for channel in 0..4 {
+                        let mut sum = 0u32;
+                        for (dy, dx) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+                            let sy = (y * 2 + dy).min(width - 1);
+                            let sx = (x * 2 + dx).min(width - 1);
+                            sum += source[((sy * width + sx) * 4 + channel) as usize] as u32;
+                        }
+                        next.push((sum / 4) as u8);
+                    }
+                }
+            }
+            levels.push((half, next));
+        }
+
+        let mip_level_count = levels.len() as u32;
+        let mut data = Vec::new();
+        for (_, level) in &levels {
+            data.extend_from_slice(level);
+        }
+
+        // `Image::new` asserts that the buffer is exactly one mip level, so the
+        // chain goes on through `new_uninit`.
+        let mut image = Image::new_uninit(
+            Extent3d {
+                width: size,
+                height: size,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        // `TextureDataOrder` defaults to layer-major, which for one layer is
+        // simply mip 0 then mip 1 then mip 2 — the order built above.
+        image.texture_descriptor.mip_level_count = mip_level_count;
+        image.data = Some(data);
+        let mut sampler = ImageSamplerDescriptor::linear();
+        // Repeat on BOTH axes: a panel is many mesh squares across and many
+        // up, and the panel's own UVs say how many.
+        sampler.address_mode_u = ImageAddressMode::Repeat;
+        sampler.address_mode_v = ImageAddressMode::Repeat;
+        image.sampler = ImageSampler::Descriptor(sampler);
+        image
     }
 
     /// The classic black-and-white football, as an equirectangular map for a

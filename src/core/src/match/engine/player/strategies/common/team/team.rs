@@ -116,18 +116,33 @@ impl<'b> TeamOperationsImpl<'b> {
     /// every defender used to steer at — see `teamplay::defence`.
     pub fn my_duty_anchor(&self) -> Option<Vector3<f32>> {
         let own_goal = self.ctx.ball().direction_to_own_goal();
+        // The point of attack, in the same terms `DutyAssigner` nominated
+        // over: the man on the ball, or — while the ball is travelling
+        // and nobody has it — the ball. Without the second half a presser
+        // nominated onto a pass in flight had NO anchor at all (`?` on an
+        // empty `with_ball()`), and that is the half of the press that
+        // runs between one man releasing the ball and the next taking it.
+        let point_of_attack = || {
+            self.ctx
+                .players()
+                .opponents()
+                .with_ball()
+                .next()
+                .map(|c| c.position)
+                .or_else(|| {
+                    (!self.ctx.ball().is_owned())
+                        .then(|| self.ctx.tick_context.positions.ball.position)
+                })
+        };
         match self.my_duty() {
             DefensiveDuty::HoldZone => None,
-            DefensiveDuty::Press => {
-                let carrier = self.ctx.players().opponents().with_ball().next()?;
-                Some(carrier.position)
-            }
+            DefensiveDuty::Press => point_of_attack(),
             DefensiveDuty::Cover => {
-                let carrier = self.ctx.players().opponents().with_ball().next()?;
+                let point = point_of_attack()?;
                 // A stride and a half behind the presser's man, on the
                 // line he would run if he got past him.
-                let to_goal = (own_goal - carrier.position).try_normalize(0.01)?;
-                Some(carrier.position + to_goal * Self::COVER_DEPTH)
+                let to_goal = (own_goal - point).try_normalize(0.01)?;
+                Some(point + to_goal * Self::COVER_DEPTH)
             }
             DefensiveDuty::Mark(_) => {
                 let man = self.my_mark()?;

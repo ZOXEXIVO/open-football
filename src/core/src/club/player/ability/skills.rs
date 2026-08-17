@@ -22,7 +22,17 @@ pub struct PlayerSkills {
 /// for diving, catching, and shot-stopping. Agility and acceleration matter more.
 #[derive(Debug, Clone, Copy)]
 pub enum GoalkeeperSpeedContext {
-    /// Diving, preparing for save, jumping — explosive reactions
+    /// Off his feet, travelling on the line he pushed off along.
+    ///
+    /// Separate from `Explosive` because a dive is not a sprint that
+    /// happens to be sideways: it is one push, and the ground it covers is
+    /// bounded by how far a man can throw his own body. Measured on a real
+    /// recording, keepers on the `Explosive` band travelled a median
+    /// **4.1 m while airborne in 0.39 s** — 10.6 m/s, roughly double a real
+    /// full-length dive, and fast enough that walking to the ball was
+    /// always the better option, so he never dived at all.
+    Dive,
+    /// Preparing for save, jumping — explosive reactions
     Explosive,
     /// Catching, coming out, under pressure — active pursuit
     Active,
@@ -227,7 +237,8 @@ impl PlayerSkills {
     /// `max_speed` was bumped ~1.9× to match real-world sprint speed —
     /// the old multipliers compensated for an undersized base and would
     /// otherwise produce 25+ m/s GK lateral movement.
-    ///   Explosive: 1.0–2.0× → elite ~21 m/s peak dive (matches today's effective)
+    ///   Dive:      0.85–1.20× → one push, 4.5–6.5 m/s under the body
+    ///   Explosive: 0.95–1.25× → the set, the punch, the standing leap
     ///   Active:    0.85–1.5× → typical GK chase speed
     ///   Positioning: 0.75–1.0× → tracking play, reading the game
     ///   Casual:    0.65× → idle/recovery
@@ -242,6 +253,35 @@ impl PlayerSkills {
         let acceleration = self.physical.acceleration / 20.0;
 
         let boost = match speed_context {
+            // 1.00-1.45 × base → 5.3 m/s for a heavy-footed keeper and 8.1
+            // for an athletic one. Over the ~0.45 s a dive hangs that is
+            // 2.4-3.6 m of ground under the body: a full-length dive, and
+            // still well under the **4.1 m in 0.39 s** measured off a
+            // recording before this band existed, which is not a dive, it is
+            // a man being fired out of something.
+            //
+            // ⚠ Not lower. 0.85-1.20 was tried and cost ~4 points of
+            // saves/on-target on its own, because `SaveModel`'s reach was
+            // calibrated against a keeper who covered that 4.1 m — the dive
+            // travel and the reach are one budget split across two models,
+            // and cutting one without the other just shrinks the goal he
+            // defends.
+            GoalkeeperSpeedContext::Dive => 1.0 + agility * 0.25 + acceleration * 0.20,
+            // ⚠ **1.0-2.0 is 4.5-15.7 m/s and that is NOT a goalkeeper.**
+            // Measured on a recording, his p99 ground speed was 11 m/s —
+            // faster than any outfielder in the game, sideways — and
+            // `PreparingForSave` sits in this band, so that is what "setting
+            // himself" looked like.
+            //
+            // Cutting it to 0.95-1.25 was tried and REVERTED (2026-08-17):
+            // saves/on-target 56% → 50% and +0.4 goals a match, because this
+            // band is not doing the job its name says. It is not the save —
+            // `KeeperShotReaction` caps him to a set keeper's shuffle for the
+            // whole of any shot in flight — it is how he REPOSITIONS during
+            // the build-up, on a branch whose shot supply is still twice
+            // real. Fixing it properly means making `KeeperRestPosition` and
+            // `KeeperSetPosition` good enough that he does not need to
+            // sprint, which is a positioning problem, not a speed one.
             GoalkeeperSpeedContext::Explosive => 1.0 + agility * 0.5 + acceleration * 0.5,
             GoalkeeperSpeedContext::Active => 0.85 + agility * 0.4 + acceleration * 0.25,
             GoalkeeperSpeedContext::Positioning => 0.75 + agility * 0.25,

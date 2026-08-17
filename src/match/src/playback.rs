@@ -4,6 +4,97 @@ use crate::replay::ReplayTracks;
 use bevy::prelude::*;
 use wasm_bindgen::JsValue;
 
+/// Which parts of the match the recording actually covers.
+///
+/// The game keeps the goals and throws the rest away, so a replay is a handful
+/// of ten-second clips scattered across ninety minutes rather than a continuous
+/// film. Everything that has to know where the holes are reads them from here:
+/// the timeline greys them, playback jumps them, and the loader does not ask
+/// the server for chunks that were never written.
+///
+/// `partial == false` — the default until the metadata says otherwise — means
+/// the whole match is there and none of the above applies.
+#[derive(Resource, Default)]
+pub struct RecordedSpans {
+    spans: Vec<(f64, f64)>,
+    partial: bool,
+    /// Bumped whenever the spans change, so the timeline knows to redraw them
+    /// without diffing a vector every frame.
+    revision: u32,
+}
+
+impl RecordedSpans {
+    pub fn set(&mut self, spans: Vec<(f64, f64)>) {
+        self.spans = spans;
+        self.partial = true;
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub fn partial(&self) -> bool {
+        self.partial
+    }
+
+    pub fn revision(&self) -> u32 {
+        self.revision
+    }
+
+    pub fn spans(&self) -> &[(f64, f64)] {
+        &self.spans
+    }
+
+    /// True when the recording has nothing in it at all — a goalless match.
+    pub fn nothing_recorded(&self) -> bool {
+        self.partial && self.spans.is_empty()
+    }
+
+    /// Is there a recording at `time_ms`? Always yes when the whole match was
+    /// kept.
+    pub fn covers(&self, time_ms: f64) -> bool {
+        !self.partial
+            || self
+                .spans
+                .iter()
+                .any(|(start, end)| time_ms >= *start && time_ms <= *end)
+    }
+
+    /// Does any span fall inside `[start, end)`? Used to decide whether a
+    /// chunk is worth requesting.
+    pub fn intersects(&self, start: f64, end: f64) -> bool {
+        !self.partial
+            || self
+                .spans
+                .iter()
+                .any(|(from, to)| *from < end && *to >= start)
+    }
+
+    /// Start of the first clip that begins after `time_ms`.
+    pub fn next_start(&self, time_ms: f64) -> Option<f64> {
+        self.spans
+            .iter()
+            .map(|(start, _)| *start)
+            .find(|start| *start > time_ms)
+    }
+
+    /// The nearest instant that actually has a recording behind it. Scrubbing
+    /// into a hole lands on the edge of the clip either side of it rather than
+    /// on a blank pitch.
+    pub fn snap(&self, time_ms: f64) -> f64 {
+        if self.covers(time_ms) || self.spans.is_empty() {
+            return time_ms;
+        }
+        self.spans
+            .iter()
+            .flat_map(|(start, end)| [*start, *end])
+            .min_by(|a, b| {
+                (a - time_ms)
+                    .abs()
+                    .partial_cmp(&(b - time_ms).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(time_ms)
+    }
+}
+
 /// The playhead. Replay time is wall-clock time — one second of viewing is one
 /// second of the recording — so the only state here is where we are and whether
 /// we are moving.
@@ -97,11 +188,31 @@ impl Playback {
         format!("{}:{:02} ({})", seconds / 60, seconds % 60, half_label)
     }
 
-    pub fn advance(mut playback: ResMut<Playback>, loader: Res<ChunkLoader>, time: Res<Time>) {
+    pub fn advance(
+        mut playback: ResMut<Playback>,
+        loader: Res<ChunkLoader>,
+        spans: Res<RecordedSpans>,
+        time: Res<Time>,
+    ) {
         if !playback.playing || !loader.ready {
             return;
         }
         playback.time_ms += time.delta_secs_f64() * 1000.0 * playback.speed as f64;
+
+        // Run out of the end of a clip and there is nothing ahead but empty
+        // pitch, so cut to the next one. `seeked` because that is what it is —
+        // followers have to cut with it rather than glide across forty minutes
+        // of match in a frame.
+        if !spans.covers(playback.time_ms) {
+            match spans.next_start(playback.time_ms) {
+                Some(start) => {
+                    playback.time_ms = start;
+                    playback.seeked = true;
+                }
+                None => playback.time_ms = playback.duration_ms,
+            }
+        }
+
         if playback.time_ms >= playback.duration_ms {
             playback.time_ms = playback.duration_ms;
             playback.playing = false;

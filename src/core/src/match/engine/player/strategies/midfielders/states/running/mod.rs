@@ -1113,9 +1113,16 @@ impl StateProcessingHandler for MidfielderRunningState {
             // back four steps out to meet a carrier rather than chasing
             // him upfield, but pressing in the opposition half is exactly
             // what a midfield is for.
-            if matches!(ctx.team().my_duty(), DefensiveDuty::Press)
-                && ctx.ball().distance() < MARK_BREAK_DISTANCE
-            {
+            //
+            // …and no distance gate either. `MARK_BREAK_DISTANCE` (150u)
+            // is a MARKING boundary — how far a defender travels to pick
+            // a man up — and using it here made the branch narrower than
+            // the duty it acts on: the plan nominates over `PRESS_REACH`
+            // (200u), so a nominated presser between the two held the
+            // duty and had no way to act on it, which is the same
+            // COMMIT < DISENGAGE mismatch `TackleEngagement` exists to
+            // remove. The plan's own reach is the bound.
+            if matches!(ctx.team().my_duty(), DefensiveDuty::Press) {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,
                 ));

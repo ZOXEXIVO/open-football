@@ -5590,6 +5590,9 @@ a:active {
    MATCH PAGE
    ============================================ */
 
+/* The stage is the page: it starts directly under the header and takes the
+   full width of its column. What air the page has is spent below the canvas,
+   on the controls legend, rather than above it. */
 .fm-match-page {
     padding: 0 !important;
 }
@@ -6155,6 +6158,16 @@ a:active {
        costs the stage some width on a short window, where too small puts the
        far touchline under the fold. */
     --match-chrome: 100px;
+    /* And the one thing between the header and the stage: the controls legend,
+       a 20px line inside 5px of padding inside 5px of margin, top and bottom
+       — 40px of page the stage does not get. The
+       stage's height budget gives way to this as well as to the header, or
+       the far touchline goes under the fold by exactly this much. Unlike the
+       header it cannot change with the fixture, so it is a constant rather
+       than a measurement. Only binds on a window short enough for height to
+       decide the width — below xl the column is narrower than the height
+       allows, `min()` takes 100%, and the legend may wrap there for free. */
+    --match-hints: 40px;
 }
 
 /* The viewer's canvas resizes itself to this box, so the box is what pins the
@@ -6167,8 +6180,8 @@ a:active {
    height instead would letterbox the replay inside its own box. */
 .match-stage {
     position: relative;
-    width: min(100%, max(420px, (100vh - var(--match-chrome)) * 16 / 9));
-    width: min(100%, max(420px, (100dvh - var(--match-chrome)) * 16 / 9));
+    width: min(100%, max(420px, (100vh - var(--match-chrome) - var(--match-hints, 0px)) * 16 / 9));
+    width: min(100%, max(420px, (100dvh - var(--match-chrome) - var(--match-hints, 0px)) * 16 / 9));
     margin: 0 auto;
     aspect-ratio: 16 / 9;
     overflow: hidden;
@@ -6249,6 +6262,80 @@ a:active {
 @media (hover: none) {
     .match-fullscreen {
         opacity: 0.85;
+    }
+}
+
+/* --- Camera controls legend ---
+   Between the header and the stage, and drawn on the page rather than over the
+   canvas: an overlay would have to fade, and a control you have to wait for is
+   one you cannot look up. It is also what separates the scoreboard from the
+   replay, which is why `.fm-match-page` needs no padding of its own. Quiet
+   enough that the replay stays the loudest thing on the page — the only colour
+   in it is the part of the mouse that does the work. */
+
+.match-hints {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 6px 22px;
+    margin: 5px;
+    /* Even either side, so the line sits in the middle of the gap rather than
+       against the header or the top of the stage. */
+    padding: 5px 0;
+    color: #6f8199;
+    font-size: 11.5px;
+    line-height: 20px;
+}
+
+.match-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    white-space: nowrap;
+}
+
+/* Drawn at 1:1 with its viewBox, so every edge lands on a whole pixel. Smaller
+   than this and the two icons stop telling each other apart — the lit wheel and
+   the lit right button are only a few pixels each. */
+.match-hint-icon {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 20px;
+}
+
+/* The arrow cluster is three keys wide where a mouse is one body: same 20px
+   height as its neighbours, its own width. */
+.match-hint-icon--keys {
+    width: 20px;
+}
+
+/* The mouse body and its button seam, drawn in the caption's own colour so the
+   legend reads as one piece of text. */
+.mh-shell {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.1;
+    opacity: 0.75;
+}
+
+/* The live part: the wheel on one icon, the right button on the other. Same
+   blue the transport bar uses for the played part of the match, which is the
+   page's one "this is the thing that moves" colour. */
+.mh-live {
+    fill: #4aadfa;
+    stroke: none;
+}
+
+/* No wheel and no right button to describe. The stage takes the height back —
+   a phone is width-bound anyway, but a touch laptop in landscape is not. */
+@media (pointer: coarse) {
+    .match-hints {
+        display: none;
+    }
+
+    #match-play-area {
+        --match-hints: 0px;
     }
 }
 

@@ -158,11 +158,11 @@ impl ProcessingRun {
 
         let mut tasks = JoinSet::new();
 
+        // Friendlies are stored too — see `Match::play` for why the exclusion
+        // that used to sit here is gone. `MatchRuntime::recordings_mode()`,
+        // checked by the caller, is now the only thing that decides whether a
+        // match is written, and it decides it the same way for every match.
         for match_result in result.match_results {
-            if match_result.friendly {
-                continue;
-            }
-
             let permit = Arc::clone(&semaphore);
             tasks.spawn(async move {
                 let _permit = permit.acquire().await.unwrap();

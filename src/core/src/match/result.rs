@@ -2,7 +2,7 @@ use nalgebra::Vector3;
 use serde::Serialize;
 use serde::Serializer;
 use serde::ser::{SerializeMap, SerializeSeq};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,6 +106,54 @@ const DEDUP_TOLERANCE_SQ: f32 = 0.09; // 0.3 * 0.3
 /// of storage per idle player per minute — negligible.
 const HEARTBEAT_INTERVAL_MS: u64 = 750;
 
+/// How much of a match a recording keeps.
+///
+/// A full recording of one match is a few hundred kilobytes and ninety
+/// minutes of samples for twenty-three entities — fine for the one fixture
+/// the dev harness plays, ruinous for a world that plays thousands a season.
+/// The game therefore records [`RecordingScope::Goals`]: the moments anybody
+/// actually wants to watch, and nothing in between.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingScope {
+    /// Every sample, first whistle to last. What `.dev/match` needs — its
+    /// analyses read the whole match back off the recording.
+    Full,
+    /// Only the goals: [`GOAL_CLIP_PRE_ROLL_MS`] before the ball crosses the
+    /// line and [`GOAL_CLIP_POST_ROLL_MS`] after it.
+    Goals,
+}
+
+impl RecordingScope {
+    pub fn as_u8(self) -> u8 {
+        match self {
+            RecordingScope::Full => 0,
+            RecordingScope::Goals => 1,
+        }
+    }
+
+    /// Anything unrecognised is `Full` — the scope that loses no data.
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            1 => RecordingScope::Goals,
+            _ => RecordingScope::Full,
+        }
+    }
+}
+
+/// How long before a goal a clip starts.
+///
+/// Five seconds is the build-up you need for the goal to make sense: the pass
+/// that released the run, the cross, the save that fell to somebody. Less and
+/// the ball simply appears in the box.
+pub const GOAL_CLIP_PRE_ROLL_MS: u64 = 5_000;
+
+/// How long after a goal a clip runs.
+///
+/// The ball settling in the net and the first of the celebration — the engine
+/// plays that out rather than teleporting everyone back (see
+/// `handle_goal_reset`), so there is something there to keep.
+pub const GOAL_CLIP_POST_ROLL_MS: u64 = 5_000;
+
 /// Rounding applied to a recorded coordinate, once on the way into the buffer
 /// and again on the way out to JSON.
 ///
@@ -208,6 +256,24 @@ pub struct ResultMatchPositionData {
     last_state_ids: HashMap<u32, u16>,
     track_events: bool,
     track_positions: bool,
+    scope: RecordingScope,
+    /// The rolling pre-roll, under [`RecordingScope::Goals`].
+    ///
+    /// A goal cannot be seen coming, so the seconds before one have to be held
+    /// somewhere until it either happens — at which point they are promoted
+    /// into `ball` / `players` — or ages out of the window and is dropped. It
+    /// is always the TAIL of each stream, which is what lets the dedup below
+    /// keep working: the last sample recorded for an entity is the back of its
+    /// pending queue, or the end of its kept vector when that queue is empty.
+    pending_ball: VecDeque<ResultPositionDataItem>,
+    pending_players: HashMap<u32, VecDeque<ResultPositionDataItem>>,
+    /// Time ranges the recording actually covers, merged and in order. Only
+    /// meaningful under [`RecordingScope::Goals`]; a full recording covers
+    /// everything and reports `None` from [`Self::recorded_segments`].
+    segments: Vec<(u64, u64)>,
+    /// End of the goal clip currently being written, while there is one.
+    /// Samples at or before it go straight into the kept vectors.
+    capture_until: Option<u64>,
 }
 
 /// Compact top-level serialization.
@@ -239,43 +305,43 @@ impl Serialize for ResultMatchPositionData {
 }
 
 impl ResultMatchPositionData {
-    pub fn new() -> Self {
+    /// Shared shape. Every recording starts [`RecordingScope::Full`] — the
+    /// scope that keeps everything — and the game narrows it explicitly.
+    fn base(track_events: bool, track_positions: bool) -> Self {
+        let capacity = if track_positions { 44 } else { 0 };
         ResultMatchPositionData {
             ball: Vec::new(),
-            players: HashMap::with_capacity(44),
+            players: HashMap::with_capacity(capacity),
             passes: Vec::new(),
             events: Vec::new(),
-            player_states: HashMap::new(),
-            last_state_ids: HashMap::new(),
-            track_events: false,
-            track_positions: true,
+            player_states: HashMap::with_capacity(if track_events { capacity } else { 0 }),
+            last_state_ids: HashMap::with_capacity(if track_events { capacity } else { 0 }),
+            track_events,
+            track_positions,
+            scope: RecordingScope::Full,
+            pending_ball: VecDeque::new(),
+            pending_players: HashMap::new(),
+            segments: Vec::new(),
+            capture_until: None,
         }
+    }
+
+    pub fn new() -> Self {
+        Self::base(false, true)
     }
 
     pub fn new_with_tracking() -> Self {
-        ResultMatchPositionData {
-            ball: Vec::new(),
-            players: HashMap::with_capacity(44),
-            passes: Vec::new(),
-            events: Vec::new(),
-            player_states: HashMap::with_capacity(44),
-            last_state_ids: HashMap::with_capacity(44),
-            track_events: true,
-            track_positions: true,
-        }
+        Self::base(true, true)
     }
 
     pub fn empty() -> Self {
-        ResultMatchPositionData {
-            ball: Vec::new(),
-            players: HashMap::new(),
-            passes: Vec::new(),
-            events: Vec::new(),
-            player_states: HashMap::new(),
-            last_state_ids: HashMap::new(),
-            track_events: false,
-            track_positions: false,
-        }
+        Self::base(false, false)
+    }
+
+    /// Narrow what the recording keeps. See [`RecordingScope`].
+    pub fn with_scope(mut self, scope: RecordingScope) -> Self {
+        self.scope = scope;
+        self
     }
 
     /// Build a coarse heatmap (bucket-count grid) for a single player from
@@ -347,16 +413,7 @@ impl ResultMatchPositionData {
             let start_time = chunk_idx as u64 * chunk_duration_ms;
             let end_time = start_time + chunk_duration_ms;
 
-            let mut chunk = ResultMatchPositionData {
-                ball: Vec::new(),
-                players: HashMap::new(),
-                passes: Vec::new(),
-                events: Vec::new(),
-                player_states: HashMap::new(),
-                last_state_ids: HashMap::new(),
-                track_events: self.track_events,
-                track_positions: self.track_positions,
-            };
+            let mut chunk = Self::base(self.track_events, self.track_positions);
 
             // Filter ball positions for this time window
             chunk.ball = self
@@ -441,6 +498,54 @@ impl ResultMatchPositionData {
         self.track_positions
     }
 
+    /// Whether a sample taken at `timestamp` is being kept outright, rather
+    /// than parked in the pre-roll to see whether a goal claims it.
+    #[inline]
+    fn capturing(&self, timestamp: u64) -> bool {
+        match self.scope {
+            RecordingScope::Full => true,
+            RecordingScope::Goals => self.capture_until.is_some_and(|end| timestamp <= end),
+        }
+    }
+
+    /// Should this sample be written down at all, given the last one recorded
+    /// for the same entity?
+    ///
+    /// Tolerance dedup + heartbeat: skip tiny movements unless we're overdue
+    /// for a sample. Without the heartbeat, a GK planted in the six-yard box
+    /// gets no updates until a save, and replay viewers can't distinguish
+    /// "on-pitch, idle" from "subbed off"; an owned-and-stationary ball
+    /// freezes `max_timestamp` and the chunk split discards everything after
+    /// it.
+    ///
+    /// The height delta is weighted into game units before the comparison.
+    /// Unweighted, this is the test that lost every near-vertical ball in the
+    /// recording: a drop, the top of a lob, a bounce coming up under a boot
+    /// all sat inside the tolerance until they had travelled 30 cm.
+    #[inline]
+    fn worth_recording(
+        last: Option<&ResultPositionDataItem>,
+        timestamp: u64,
+        position: Vector3<f32>,
+    ) -> bool {
+        let Some(last) = last else {
+            return true;
+        };
+        let since_last = timestamp.saturating_sub(last.timestamp);
+        Quantize::separation_sq(position, last.position) >= DEDUP_TOLERANCE_SQ
+            || since_last >= HEARTBEAT_INTERVAL_MS
+    }
+
+    /// Drop everything at the front of a pre-roll queue that a goal happening
+    /// *now* would no longer want.
+    #[inline]
+    fn expire(pending: &mut VecDeque<ResultPositionDataItem>, timestamp: u64) {
+        let oldest = timestamp.saturating_sub(GOAL_CLIP_PRE_ROLL_MS);
+        while pending.front().is_some_and(|item| item.timestamp < oldest) {
+            pending.pop_front();
+        }
+    }
+
     /// Add player position with quantization and tolerance-based dedup.
     /// Skips recording if the player hasn't moved more than 0.3 units since last entry.
     pub fn add_player_positions(&mut self, player_id: u32, timestamp: u64, position: Vector3<f32>) {
@@ -451,26 +556,22 @@ impl ResultMatchPositionData {
         // Rounded per axis — reduces float noise and produces shorter JSON.
         let position = Quantize::position(position);
 
-        if let Some(player_data) = self.players.get_mut(&player_id) {
-            let last = player_data.last().unwrap();
-
-            // Tolerance dedup + heartbeat: skip tiny movements unless we're
-            // overdue for a sample. Without the heartbeat, a GK planted in
-            // the six-yard box gets no updates until a save, and replay
-            // viewers can't distinguish "on-pitch, idle" from "subbed off".
-            let distance_sq = Quantize::separation_sq(position, last.position);
-            let since_last = timestamp.saturating_sub(last.timestamp);
-            if distance_sq < DEDUP_TOLERANCE_SQ && since_last < HEARTBEAT_INTERVAL_MS {
-                return;
+        if self.capturing(timestamp) {
+            let kept = self.players.entry(player_id).or_default();
+            if Self::worth_recording(kept.last(), timestamp, position) {
+                kept.push(ResultPositionDataItem::new(timestamp, position));
             }
-
-            player_data.push(ResultPositionDataItem::new(timestamp, position));
-        } else {
-            self.players.insert(
-                player_id,
-                vec![ResultPositionDataItem::new(timestamp, position)],
-            );
+            return;
         }
+
+        let pending = self.pending_players.entry(player_id).or_default();
+        let last = pending
+            .back()
+            .or_else(|| self.players.get(&player_id).and_then(|kept| kept.last()));
+        if Self::worth_recording(last, timestamp, position) {
+            pending.push_back(ResultPositionDataItem::new(timestamp, position));
+        }
+        Self::expire(pending, timestamp);
     }
 
     /// Add ball position with quantization and tolerance-based dedup.
@@ -483,30 +584,109 @@ impl ResultMatchPositionData {
 
         let position = Quantize::position(position);
 
-        if let Some(last) = self.ball.last() {
-            // Tolerance dedup + heartbeat. Without the heartbeat, an
-            // owned-and-stationary ball (stuck with a player who isn't
-            // passing) gets no ball samples for the rest of the match
-            // — `max_timestamp` freezes at the last movement and the
-            // chunk split discards everything after that point, even
-            // though the sim is still running. Player positions use
-            // the same heartbeat for the same reason.
-            //
-            // The height delta is weighted into game units before the
-            // comparison. Unweighted, this is the test that lost every
-            // near-vertical ball in the recording: a drop, the top of a lob, a
-            // bounce coming up under a boot all sat inside the tolerance until
-            // they had travelled 30 cm.
-            let since_last = timestamp.saturating_sub(last.timestamp);
-            if Quantize::separation_sq(position, last.position) < DEDUP_TOLERANCE_SQ
-                && since_last < HEARTBEAT_INTERVAL_MS
-            {
-                return;
+        if self.capturing(timestamp) {
+            if Self::worth_recording(self.ball.last(), timestamp, position) {
+                self.ball
+                    .push(ResultPositionDataItem::new(timestamp, position));
             }
+            return;
         }
 
-        self.ball
-            .push(ResultPositionDataItem::new(timestamp, position));
+        let last = self.pending_ball.back().or_else(|| self.ball.last());
+        if Self::worth_recording(last, timestamp, position) {
+            self.pending_ball
+                .push_back(ResultPositionDataItem::new(timestamp, position));
+        }
+        Self::expire(&mut self.pending_ball, timestamp);
+    }
+
+    /// The ball has crossed the line: keep this goal.
+    ///
+    /// Promotes the pre-roll already in hand and opens the clip's post-roll,
+    /// after which sampling falls back to the rolling window. A second goal
+    /// inside an open clip simply extends it — the two ranges merge rather
+    /// than producing an overlapping pair the viewer would have to reconcile.
+    ///
+    /// A no-op under [`RecordingScope::Full`], where every sample is kept
+    /// anyway and the whole match is one segment.
+    pub fn mark_goal(&mut self, timestamp: u64) {
+        if !self.track_positions || self.scope != RecordingScope::Goals {
+            return;
+        }
+
+        let start = timestamp.saturating_sub(GOAL_CLIP_PRE_ROLL_MS);
+        let end = timestamp.saturating_add(GOAL_CLIP_POST_ROLL_MS);
+
+        match self.segments.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => self.segments.push((start, end)),
+        }
+        self.capture_until = Some(match self.capture_until {
+            Some(open) => open.max(end),
+            None => end,
+        });
+
+        while self
+            .pending_ball
+            .front()
+            .is_some_and(|item| item.timestamp < start)
+        {
+            self.pending_ball.pop_front();
+        }
+        self.ball.extend(self.pending_ball.drain(..));
+
+        for (player_id, pending) in self.pending_players.iter_mut() {
+            while pending.front().is_some_and(|item| item.timestamp < start) {
+                pending.pop_front();
+            }
+            if pending.is_empty() {
+                continue;
+            }
+            self.players
+                .entry(*player_id)
+                .or_default()
+                .extend(pending.drain(..));
+        }
+    }
+
+    /// Full time. Releases the pre-roll — whatever is left in it belongs to no
+    /// goal and never will — and trims the last clip back to the final whistle
+    /// so the viewer doesn't grey in five seconds of injury time that never
+    /// existed.
+    pub fn finish(&mut self, total_match_time: u64) {
+        self.pending_ball = VecDeque::new();
+        self.pending_players = HashMap::new();
+        self.capture_until = None;
+        for segment in &mut self.segments {
+            segment.1 = segment.1.min(total_match_time.max(segment.0));
+        }
+    }
+
+    /// The parts of the match this recording covers, or `None` when it covers
+    /// all of it.
+    ///
+    /// An empty slice is the answer that matters most, because the viewer
+    /// cannot work it out for itself: nothing was kept, so it should say so
+    /// rather than wait forever for a chunk that was never written. Two
+    /// different matches produce it — a goalless one under
+    /// [`RecordingScope::Goals`], and one that was never sampled at all
+    /// (`empty()`), which is what every match played on a remote worker looks
+    /// like once the wire has dropped its position track.
+    pub fn recorded_segments(&self) -> Option<&[(u64, u64)]> {
+        if !self.track_positions {
+            return Some(&[]);
+        }
+        match self.scope {
+            RecordingScope::Full => None,
+            RecordingScope::Goals => Some(&self.segments),
+        }
+    }
+
+    /// Nothing was kept here. A goals-only recording produces one of these for
+    /// every five-minute window without a goal in it, and there is no point
+    /// writing the file.
+    pub fn is_empty(&self) -> bool {
+        self.ball.is_empty() && self.players.is_empty()
     }
 
     /// Get the maximum timestamp in the recorded data
@@ -674,6 +854,179 @@ impl VectorExtensions for Vector3<f32> {
     fn distance_to(&self, other: &Vector3<f32>) -> f32 {
         let diff = self - other;
         diff.dot(&diff).sqrt()
+    }
+}
+
+/// What a goals-only recording keeps, and — just as load-bearing — what it
+/// throws away. A clip that loses the build-up is worthless to watch, and a
+/// recorder that quietly keeps the whole match is the cost this exists to
+/// avoid; neither failure shows up anywhere but here.
+#[cfg(test)]
+mod goal_clip_tests {
+    use super::*;
+
+    /// Plays `duration_ms` of ball and one player, moving both far enough
+    /// every sample that nothing is deduplicated, and scores at each time in
+    /// `goals`.
+    ///
+    /// The goal is marked BEFORE the sample at the same instant, which is the
+    /// order the engine does it in: the dispatch that awards the goal runs
+    /// inside the tick, and `write_match_positions` runs after it.
+    fn record(scope: RecordingScope, duration_ms: u64, goals: &[u64]) -> ResultMatchPositionData {
+        let mut data = ResultMatchPositionData::new().with_scope(scope);
+        let mut t = 30;
+        while t <= duration_ms {
+            if goals.contains(&t) {
+                data.mark_goal(t);
+            }
+            // An eighth of a metre of travel per sample — comfortably clear of
+            // the dedup tolerance, so sample count equals tick count.
+            let drift = (t / 30) as f32;
+            data.add_ball_positions(t, Vector3::new(drift, 272.0, 0.0));
+            data.add_player_positions(7, t, Vector3::new(drift, 200.0, 0.0));
+            t += 30;
+        }
+        data.finish(duration_ms);
+        data
+    }
+
+    fn stamps(samples: &[ResultPositionDataItem]) -> (u64, u64) {
+        (
+            samples.first().expect("a sample").timestamp,
+            samples.last().expect("a sample").timestamp,
+        )
+    }
+
+    #[test]
+    fn a_goal_keeps_five_seconds_either_side_and_nothing_else() {
+        let data = record(RecordingScope::Goals, 60_000, &[30_000]);
+
+        let (first, last) = stamps(&data.ball);
+        assert!(
+            first >= 25_000 && last <= 35_000,
+            "kept ball samples outside the clip: {first}..{last}"
+        );
+        // And the WHOLE clip, not just the half after the ball crossed the
+        // line — the pre-roll is the part that has to be held speculatively,
+        // so it is the part that goes missing.
+        assert!(
+            first <= 25_030,
+            "the build-up was dropped: starts at {first}"
+        );
+        assert!(
+            last >= 34_970,
+            "the celebration was dropped: ends at {last}"
+        );
+
+        let player = data.players.get(&7).expect("the player was recorded");
+        let (first, last) = stamps(player);
+        assert!(
+            first <= 25_030 && last >= 34_970,
+            "the player's clip does not match the ball's: {first}..{last}"
+        );
+
+        assert_eq!(data.recorded_segments(), Some(&[(25_000, 35_000)][..]));
+    }
+
+    #[test]
+    fn goals_inside_one_anothers_clips_merge_into_a_single_segment() {
+        // A goal three seconds after another one has an overlapping clip. Two
+        // overlapping ranges would double-record the shared seconds and leave
+        // the viewer to reconcile them.
+        let data = record(RecordingScope::Goals, 60_000, &[30_000, 33_000]);
+        assert_eq!(data.recorded_segments(), Some(&[(25_000, 38_000)][..]));
+
+        let stamps: Vec<u64> = data.ball.iter().map(|item| item.timestamp).collect();
+        let mut sorted = stamps.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            stamps, sorted,
+            "the merged clip repeats or reorders samples"
+        );
+    }
+
+    #[test]
+    fn goals_far_apart_are_separate_clips() {
+        let data = record(RecordingScope::Goals, 120_000, &[30_000, 90_000]);
+        assert_eq!(
+            data.recorded_segments(),
+            Some(&[(25_000, 35_000), (85_000, 95_000)][..])
+        );
+        assert!(
+            !data
+                .ball
+                .iter()
+                .any(|item| (35_000..85_000).contains(&item.timestamp)),
+            "the hole between two goals was recorded"
+        );
+    }
+
+    #[test]
+    fn a_goalless_match_records_nothing_and_says_so() {
+        let data = record(RecordingScope::Goals, 60_000, &[]);
+        assert!(data.is_empty(), "a goalless match kept samples");
+        // `Some(empty)`, never `None`: the viewer reads a missing segment list
+        // as "the whole match is here" and would wait forever for it.
+        assert_eq!(data.recorded_segments(), Some::<&[(u64, u64)]>(&[]));
+    }
+
+    /// A match played on a remote worker arrives at the coordinator through
+    /// `MatchResultRaw`'s `#[serde(skip)]` position track — that is, as an
+    /// `empty()` recorder, which still gets stored and still gets a metadata
+    /// file. It has to report the same "nothing here" a goalless match does,
+    /// or the viewer reads the absent segment list as "the whole match is
+    /// recorded" and spins on the loading notice waiting for chunks that were
+    /// never written.
+    #[test]
+    fn a_recording_that_was_never_sampled_reports_nothing_rather_than_everything() {
+        let data = ResultMatchPositionData::empty();
+        assert_eq!(data.recorded_segments(), Some::<&[(u64, u64)]>(&[]));
+        assert!(data.is_empty());
+    }
+
+    #[test]
+    fn a_full_recording_keeps_the_whole_match() {
+        let data = record(RecordingScope::Full, 60_000, &[30_000]);
+        assert_eq!(
+            data.recorded_segments(),
+            None,
+            "a full recording must not advertise segments — that is what the \
+             dev harness and every pre-clipping recording look like"
+        );
+        assert_eq!(data.ball.len(), 2_000, "samples went missing");
+    }
+
+    #[test]
+    fn a_goal_at_the_death_does_not_claim_time_that_never_happened() {
+        // Five seconds past a whistle that has already gone. Left alone, the
+        // timeline draws a clip running past full time.
+        let data = record(RecordingScope::Goals, 60_000, &[57_000]);
+        assert_eq!(data.recorded_segments(), Some(&[(52_000, 60_000)][..]));
+    }
+
+    #[test]
+    fn the_pre_roll_holds_a_window_rather_than_a_match() {
+        // The whole point of clipping is that an unrecorded match costs almost
+        // nothing to play. If the speculative buffer grew without bound it
+        // would cost MORE than recording everything did.
+        let mut data = ResultMatchPositionData::new().with_scope(RecordingScope::Goals);
+        let mut t = 30;
+        while t <= 600_000 {
+            let drift = (t / 30) as f32;
+            data.add_ball_positions(t, Vector3::new(drift, 272.0, 0.0));
+            t += 30;
+        }
+        assert!(
+            data.pending_ball.len() <= 200,
+            "the pre-roll is holding {} samples of a ten-minute goalless spell",
+            data.pending_ball.len()
+        );
+        let oldest = data.pending_ball.front().expect("a sample").timestamp;
+        assert!(
+            oldest >= 600_000 - GOAL_CLIP_PRE_ROLL_MS,
+            "the pre-roll is holding samples from {oldest}, older than its window"
+        );
     }
 }
 

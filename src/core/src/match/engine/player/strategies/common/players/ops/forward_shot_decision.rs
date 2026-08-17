@@ -913,8 +913,52 @@ pub mod mid_run_diag {
     /// mean duration), 8 total claim range in units×100 (÷3 for the mean),
     /// 9 shots that reached the save roll, 10 sum of their speed ×100
     /// (÷9 for the mean arriving shot speed — the anchor
-    /// `SaveModel::speed_penalty` is centred on).
-    pub static GK_ACTIONS: [AtomicU64; 11] = [const { AtomicU64::new(0) }; 11];
+    /// `SaveModel::speed_penalty` is centred on),
+    /// 11 SMOTHERS committed at a carrier's feet, 12 of those gathered,
+    /// 13 blocked away, 14 fouls given away going through the man,
+    /// 15 dives launched while the shot was still in FLIGHT (as opposed
+    /// to the ones the physics save hands him after it has already
+    /// stopped the ball — the difference between a keeper diving into
+    /// the corner and a keeper falling over next to a stopped ball).
+    pub static GK_ACTIONS: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
+
+    /// **Why the keeper stayed on his feet.** `KeeperShotDive::should_launch`
+    /// is a conjunction, and "he never dives" cannot say which term killed
+    /// it — the same lesson the sweep and overlap funnels above exist for.
+    ///
+    /// Counted per ASKED tick, not per shot, so read the ratios between
+    /// consecutive stages rather than the absolute numbers.
+    ///
+    /// 0 asked with a live shot at his goal, 1 on frame AND inside the
+    /// launch window, 2 he has reacted, 3 the wedge gave him a reach,
+    /// 4 more than a step to cover, 5 not hopeless, 6 LAUNCHED.
+    /// 8 sum of the gap in units ×10 over the ticks that reached 3,
+    /// 9 sum of the ground he could still cover ×10 over the same ticks.
+    pub static GK_DIVE_GATE: [AtomicU64; 10] = [const { AtomicU64::new(0) }; 10];
+
+    pub struct KeeperDiveDiag;
+
+    impl KeeperDiveDiag {
+        pub fn note(stage: usize) {
+            if stage < GK_DIVE_GATE.len() {
+                GK_DIVE_GATE[stage].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn add(slot: usize, n: u64) {
+            if slot < GK_DIVE_GATE.len() {
+                GK_DIVE_GATE[slot].fetch_add(n, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 10] {
+            let mut out = [0u64; 10];
+            for (slot, c) in out.iter_mut().zip(GK_DIVE_GATE.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
 
     pub struct KeeperActionDiag;
 
@@ -931,8 +975,8 @@ pub mod mid_run_diag {
             }
         }
 
-        pub fn snapshot() -> [u64; 11] {
-            let mut out = [0u64; 11];
+        pub fn snapshot() -> [u64; 16] {
+            let mut out = [0u64; 16];
             for (slot, c) in out.iter_mut().zip(GK_ACTIONS.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
@@ -1020,7 +1064,105 @@ pub mod mid_run_diag {
     /// population mean. Any keeper-quality term that multiplies a
     /// calibrated quantity has to be CENTRED on this or it silently
     /// re-levels the model instead of adding an axis to it.
-    pub static GK_GUARD: [AtomicU64; 22] = [const { AtomicU64::new(0) }; 22];
+    ///
+    /// 22-25 split the on-frame arrival by whether he was ALREADY OFF HIS
+    /// FEET when it got there — the question `KeeperShotDive` raises and
+    /// nothing else can answer. 22/23 are arrivals and Σ lateral error ×100
+    /// for a keeper mid-dive, 24/25 the same for one still on his feet.
+    /// A dive that puts him further from the ball than standing still would
+    /// have is a dive aimed at the wrong point, and the aggregate save rate
+    /// cannot tell that from a dive he simply lost.
+    pub static GK_GUARD: [AtomicU64; 26] = [const { AtomicU64::new(0) }; 26];
+
+    /// **Where the ball actually turns when a shot is resolved, and who was
+    /// there to turn it.**
+    ///
+    /// Every other keeper row measures whether the save HAPPENS. None of
+    /// them can see where it happens, and that is what a viewer watches: a
+    /// deflection is only readable if the man who made it is at the point
+    /// the ball changed direction. The save model prices the keeper's reach
+    /// as a WEDGE (`SaveModel::wedge`) — correctly, because a keeper off his
+    /// line covers more of the mouth — but the resolution then fires when
+    /// the BALL is at the goal line, so the contact can be booked metres
+    /// from the only body that could have made it.
+    ///
+    /// Slots, each a count plus a Σ×100 of the 3-D gap in game units
+    /// between the ball at resolution and the player credited with it:
+    /// 0/1 catch, 2/3 parry-for-a-corner, 4/5 spilled parry, 6/7 block.
+    /// 8/9 count and Σ×100 of the ball's HEIGHT (metres) at resolution,
+    /// over every save outcome — a save that slams a top-corner shot to
+    /// the grass is the same artefact on the vertical axis. 10 counts the
+    /// resolutions where the gap exceeded 20u (2.5 m), i.e. where nobody
+    /// was within diving distance of the point the ball turned.
+    ///
+    /// 11/12 split that gap into its two components — Σ×100 of |Δx| (along
+    /// the goal-to-goal axis) and Σ×100 of |Δy| (across). **The split is
+    /// what chooses the fix.** A gap that is mostly ALONG the axis means
+    /// the resolution simply fires too late: the keeper is in front of his
+    /// line, the ball reached him several ticks ago, and the contact is
+    /// booked once it gets to the line. A gap that is mostly ACROSS means
+    /// the reach model is letting him save balls he is nowhere near, which
+    /// is a different (and far more serious) claim.
+    pub static SAVE_CONTACT: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
+
+    /// Woodwork, by member: 0 left post, 1 right post, 2 crossbar. Real
+    /// football hits the frame about once every two matches; a count far
+    /// above that means the posts are intruding on the goal, and a zero
+    /// means the swept test never fires.
+    pub static FRAME_HITS: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+
+    pub struct FrameDiag;
+
+    impl FrameDiag {
+        pub fn note(part: crate::r#match::engine::ball::ball::frame::FramePart) {
+            use crate::r#match::engine::ball::ball::frame::FramePart as P;
+            let slot = match part {
+                P::LeftPost => 0,
+                P::RightPost => 1,
+                P::Crossbar => 2,
+            };
+            FRAME_HITS[slot].fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub fn snapshot() -> [u64; 3] {
+            [
+                FRAME_HITS[0].load(Ordering::Relaxed),
+                FRAME_HITS[1].load(Ordering::Relaxed),
+                FRAME_HITS[2].load(Ordering::Relaxed),
+            ]
+        }
+    }
+
+    pub struct SaveContactDiag;
+
+    impl SaveContactDiag {
+        /// `kind`: 0 catch, 1 corner-parry, 2 spill, 3 block. `gap` is the
+        /// 3-D distance in game units from the ball to the acting player,
+        /// `height` the ball's z in metres, `along`/`across` the two
+        /// horizontal components of the same gap.
+        pub fn note(kind: usize, gap: f32, height: f32, along: f32, across: f32) {
+            let slot = kind * 2;
+            if slot + 1 < SAVE_CONTACT.len() {
+                SAVE_CONTACT[slot].fetch_add(1, Ordering::Relaxed);
+                SAVE_CONTACT[slot + 1].fetch_add((gap.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+            }
+            SAVE_CONTACT[8].fetch_add(1, Ordering::Relaxed);
+            SAVE_CONTACT[9].fetch_add((height.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+            if gap > 20.0 {
+                SAVE_CONTACT[10].fetch_add(1, Ordering::Relaxed);
+            }
+            SAVE_CONTACT[11].fetch_add((along.abs() * 100.0) as u64, Ordering::Relaxed);
+            SAVE_CONTACT[12].fetch_add((across.abs() * 100.0) as u64, Ordering::Relaxed);
+        }
+
+        pub fn snapshot() -> [u64; 13] {
+            let mut out = [0u64; 13];
+            for (slot, c) in out.iter_mut().zip(SAVE_CONTACT.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
 
     pub struct KeeperGuardDiag;
 
@@ -1037,8 +1179,8 @@ pub mod mid_run_diag {
             }
         }
 
-        pub fn snapshot() -> [u64; 22] {
-            let mut out = [0u64; 22];
+        pub fn snapshot() -> [u64; 26] {
+            let mut out = [0u64; 26];
             for (slot, c) in out.iter_mut().zip(GK_GUARD.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
@@ -1481,6 +1623,78 @@ pub mod mid_run_diag {
                 .collect();
             rows.sort_by(|a, b| b.1.cmp(&a.1));
             rows
+        }
+    }
+
+    /// **Throw-ins and offsides**, the two restarts nothing measured.
+    ///
+    /// Both were reported from the viewer rather than from a number, and
+    /// neither could be seen in any existing table: a throw-in leaves no
+    /// stat, and an offside only ever incremented a per-player counter that
+    /// the harness does not print. So the two questions the report asks —
+    /// "is it given to the right team" and "does the taker walk there" —
+    /// had no answer at all.
+    ///
+    /// Slots: 0 throw-ins awarded, 1 of those where the last TOUCHER and
+    /// the last OWNER were on opposite sides — one of the two answers to
+    /// "who put it out" is wrong and the award is a coin flip, 2 re-awarded
+    /// within `PING_PONG_TICKS` of the last one (the ball going straight
+    /// back out from the restart spot), 3 Σ of the distance the taker had
+    /// to cover to reach the ball, 4 takers who were more than a stride
+    /// away, 5 offside snapshots built, 6 offsides actually given,
+    /// 7 throw-ins the taker still had to be teleported to, 8 Σ of the
+    /// ticks the ball spent lying on the line waiting for him, 9 restarts
+    /// he WALKED to rather than being placed at.
+    pub static RESTARTS: [AtomicU64; 10] = [const { AtomicU64::new(0) }; 10];
+
+    pub struct RestartCensus;
+
+    impl RestartCensus {
+        /// Two throw-ins closer together than this are the same ball going
+        /// straight back out of play. 300 ticks = 3 s.
+        pub const PING_PONG_TICKS: u64 = 300;
+
+        pub fn note_throw_in(toucher_and_owner_disagree: bool, since_last: u64, walk: f32) {
+            RESTARTS[0].fetch_add(1, Ordering::Relaxed);
+            if toucher_and_owner_disagree {
+                RESTARTS[1].fetch_add(1, Ordering::Relaxed);
+            }
+            if since_last <= Self::PING_PONG_TICKS {
+                RESTARTS[2].fetch_add(1, Ordering::Relaxed);
+            }
+            RESTARTS[3].fetch_add(walk.max(0.0) as u64, Ordering::Relaxed);
+            if walk > 8.0 {
+                RESTARTS[4].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn note_offside_snapshot() {
+            RESTARTS[5].fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub fn note_offside_given() {
+            RESTARTS[6].fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub fn note_throw_in_teleport() {
+            RESTARTS[7].fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// One restart resolved: how long the ball waited, and whether the
+        /// taker got there on his own feet.
+        pub fn note_restart_taken(waited_ticks: u64, walked: bool) {
+            RESTARTS[8].fetch_add(waited_ticks, Ordering::Relaxed);
+            if walked {
+                RESTARTS[9].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 10] {
+            let mut out = [0u64; 10];
+            for (slot, c) in out.iter_mut().zip(RESTARTS.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
         }
     }
 

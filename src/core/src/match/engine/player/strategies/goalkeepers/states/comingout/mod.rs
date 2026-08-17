@@ -1,6 +1,6 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperSweepLimit,
+    ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperSmother, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -91,6 +91,18 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
             return None;
         }
 
+        // He has come out and the man is on top of him: GO THROUGH THE
+        // BALL. This is the reason the state exists and it was the one
+        // thing it could not do — see [`KeeperSmother`]. It sits above
+        // `should_dive` because that gate is written for a ball that is
+        // TRAVELLING (its floor is 0.7 u/tick, and a dribbled ball moves at
+        // the dribbler's pace, ~0.5), so a carrier could never satisfy it.
+        if let Some(attempt) = KeeperSmother::assess(ctx) {
+            #[cfg(feature = "match-logs")]
+            KeeperSweepDiag::note_exit(11);
+            return Some(KeeperSmother::commit(ctx, &attempt));
+        }
+
         let ball_distance = ctx.ball().distance();
 
         if self.should_dive(ctx) {
@@ -168,9 +180,19 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
             let opponent_ball_distance =
                 (opponent.position - ctx.tick_context.positions.ball.position).magnitude();
 
-            // If opponent has control and is very close
+            // If opponent has control and is very close.
+            //
+            // ⚠ THIS USED TO BE THE 1-v-1. A keeper who had correctly
+            // sprinted twenty metres to meet a striker arrived, saw a man
+            // in control within 2.5 m, and was sent to `PreparingForSave`
+            // — which is to say he pulled up, stood still and set himself,
+            // at the exact moment the only thing left to do is go through
+            // the ball. Reported as "the keeper doesn't try to take the
+            // ball off him". The smother above now owns that moment; this
+            // branch is what is left of it, and it is the case where the
+            // ball is at a man's feet but still OUT of the keeper's spread,
+            // where setting yourself really is right.
             if opponent_ball_distance < 2.0 && opponent_distance < 20.0 {
-                // Close opponent with ball - prepare for save/1v1
                 #[cfg(feature = "match-logs")]
                 KeeperSweepDiag::note_exit(7);
                 return Some(StateChangeResult::with_goalkeeper_state(

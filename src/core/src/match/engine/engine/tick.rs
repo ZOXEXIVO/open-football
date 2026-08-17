@@ -119,6 +119,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         if events.has_events() {
             EventDispatcher::dispatch(events, field, context, match_data, true);
+            // Before `handle_goal_reset`, which is what clears the flag. A
+            // goals-only recording keeps the seconds either side of this
+            // instant and drops the rest of the match (`mark_goal`).
+            if Self::is_a_goal_worth_keeping(field) {
+                match_data.mark_goal(context.total_match_time);
+            }
             handle_goal_reset(field, context);
             // Dispatch is where free kicks, penalties and offsides are
             // awarded, and each stages a teleport — see the full tick.
@@ -196,6 +202,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let t = prof_on.then(Instant::now);
         EventDispatcher::dispatch(events, field, context, match_data, true);
+        // See the light tick: this has to read the flag before
+        // `handle_goal_reset` takes it down.
+        if Self::is_a_goal_worth_keeping(field) {
+            match_data.mark_goal(context.total_match_time);
+        }
         handle_goal_reset(field, context);
         // ⚠ DRAIN AFTER DISPATCH TOO, NOT ONLY AFTER `play_ball`.
         //
@@ -219,6 +230,25 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         if let Some(t) = t {
             PhaseProf::add(PhaseProf::P_DISPATCH, t.elapsed().as_nanos() as u64);
         }
+    }
+
+    /// Is there a goal here for the highlight recording to keep?
+    ///
+    /// `Ball::goal_scored` means the ball crossed the line and play must be
+    /// restarted — which is true of one case that is NOT a goal anybody can
+    /// watch: a ball that goes in off nobody, with no owner and no previous
+    /// owner to credit. `check_goal` emits no `Goal` event for it, so no
+    /// scorer reaches the scoreline, but it still raises the flag because
+    /// the restart is real.
+    ///
+    /// A goals-only recording keyed on the flag alone therefore cut a
+    /// ten-second clip around a goal the match does not have — caught by
+    /// `goal_clip_recording_tests` as two segments for one goal. `in_net` is
+    /// the honest discriminator: it is set by `enter_net` on exactly the
+    /// path that credits a scorer, and cleared by the `reset()` the
+    /// uncreditable case falls through to.
+    fn is_a_goal_worth_keeping(field: &MatchField) -> bool {
+        field.ball.goal_scored && field.ball.in_net.is_some()
     }
 
     /// Corner kicks and goal kicks rewrite ball ownership inside `ball.update`,
@@ -1184,29 +1214,47 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 // stopped.
                 GoalkeeperState::Punching
             };
-            #[cfg(feature = "match-logs")]
-            {
-                crate::mid_run_diag::KeeperSweepDiag::note_exit(match next {
-                    GoalkeeperState::Diving => 1,
-                    GoalkeeperState::Catching => 3,
-                    _ => 4,
-                });
-                // …and into the action census as well. This site does not
-                // go through `PlayerMatchState::process`, so the counters
-                // there never see it — leaving the physics save, which is
-                // where most of a keeper's dives come from, out of the one
-                // table that reports how often he dives.
-                crate::mid_run_diag::KeeperActionDiag::note(match next {
-                    GoalkeeperState::Diving => 0,
-                    GoalkeeperState::Punching => 2,
-                    _ => usize::MAX,
-                });
+            // …UNLESS HE IS ALREADY DOING IT.
+            //
+            // A keeper who left his feet during the flight (see
+            // `KeeperShotDive`) is ALREADY in `Diving` when the ball
+            // reaches him, and `transition_to` RESETS `in_state_time` — so
+            // re-issuing the same state here restarted his dive timer at
+            // the moment of contact and pinned him to the floor for another
+            // full dive on top of the one he had just made. It also
+            // double-counted him in the action census, which is how the
+            // dive count came out at more than twice the number of saves.
+            //
+            // This site exists to make an INVISIBLE save visible. When the
+            // save is already visible it has nothing to add, and the
+            // crediting below carries on exactly as before.
+            let already = field.players[keeper_idx].state == PlayerState::Goalkeeper(next);
+            if !already {
+                #[cfg(feature = "match-logs")]
+                {
+                    crate::mid_run_diag::KeeperSweepDiag::note_exit(match next {
+                        GoalkeeperState::Diving => 1,
+                        GoalkeeperState::Catching => 3,
+                        _ => 4,
+                    });
+                    // …and into the action census as well. This site does
+                    // not go through `PlayerMatchState::process`, so the
+                    // counters there never see it — leaving the physics
+                    // save, which is where most of a keeper's dives come
+                    // from, out of the one table that reports how often he
+                    // dives.
+                    crate::mid_run_diag::KeeperActionDiag::note(match next {
+                        GoalkeeperState::Diving => 0,
+                        GoalkeeperState::Punching => 2,
+                        _ => usize::MAX,
+                    });
+                }
+                let gk = &mut field.players[keeper_idx];
+                gk.transition_to(
+                    PlayerState::Goalkeeper(next),
+                    TransitionSource::EventHandler,
+                );
             }
-            let gk = &mut field.players[keeper_idx];
-            gk.transition_to(
-                PlayerState::Goalkeeper(next),
-                TransitionSource::EventHandler,
-            );
         }
         field.ball.pending_save_reach = 0.0;
         // Read the outcome BEFORE resetting it — the accounting block at the

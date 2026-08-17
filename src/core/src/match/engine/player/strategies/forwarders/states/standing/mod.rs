@@ -3,6 +3,7 @@ use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondi
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -10,7 +11,20 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const PRESS_DISTANCE: f32 = 20.0; // Distance within which to press opponents
+/// How near the carrier a standing forward has to be before he goes to
+/// him off his own bat (~7.5 m).
+///
+/// Was 20u — **2.5 metres** — with a "very close, anyone reacts" band at
+/// 10u, i.e. 1.25 m. Both are inside tackling range rather than pressing
+/// range, so this gate was structurally false: a forward standing five
+/// metres from an opponent receiving the ball had no route into
+/// `Pressing` at all unless he was also the single best chaser on the
+/// team. Same class of defect as the sub-metre defaults documented in
+/// `ops/pressure.rs`, and the same read of the units (1u = 12.5 cm).
+const PRESS_DISTANCE: f32 = 60.0;
+/// …and the range at which he simply reacts, without waiting to be the
+/// nominated man (~2.5 m). A ball that close is nobody's to delegate.
+const REACT_DISTANCE: f32 = 20.0;
 
 #[derive(Default, Clone)]
 pub struct ForwardStandingState {}
@@ -228,11 +242,17 @@ impl ForwardStandingState {
 
     /// Decides whether the forward should press the opponent.
     fn should_press(&self, ctx: &StateProcessingContext) -> bool {
+        // The team plan's nomination is authoritative — see the same
+        // acceptance in `ForwardRunningState::should_press` and in
+        // `TackleEngagement::should_commit`.
+        if TackleEngagement::is_nominated_presser(ctx) {
+            return true;
+        }
         // Only press if opponent has the ball AND is close AND we're best positioned
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             let dist = opponent.distance(ctx);
             // Very close — anyone reacts
-            if dist < 10.0 {
+            if dist < REACT_DISTANCE {
                 return true;
             }
             // Otherwise only the best chaser presses

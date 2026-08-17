@@ -8,10 +8,14 @@
 //! | [`ownership`]   | Pass-target claims, deadlock resolution, stall safety nets, ball-ownership claim flow |
 //! | [`interactions`]| Intercept / shot-block / shot-save resolution                |
 //! | [`goal`]        | Goal / over-the-bar / wide-of-goal handling                  |
+//! | [`frame`]       | The woodwork: posts and crossbar, and rebounds off them      |
 //! | [`net`]         | What the ball does after it crosses the line                 |
 //! | [`motion`]      | Velocity integration, owner tracking, boundary inset         |
 //! | [`stall`]       | Position-anchor stall detector + snapshot diagnostics        |
 
+// `pub` for `GoalFrame` / `FramePart` — the replay viewer draws the same
+// posts the physics rebounds off, and the two geometries must agree.
+pub mod frame;
 mod goal;
 pub mod interactions;
 // `pub` for `GoalNet` / `BallInNet` — the celebration choreography in the
@@ -89,6 +93,57 @@ impl PassOriginRestart {
     }
 }
 
+/// **A dead ball waiting for the man who has to take it.**
+///
+/// # Why this exists
+///
+/// Every restart in this engine used to place the ball and TELEPORT the
+/// taker onto it (`pending_set_piece_teleport`). For a corner or a goal
+/// kick that is a defensible shortcut — there is a real stoppage of thirty
+/// seconds there and the sim has nothing to fill it with. For a throw-in
+/// it is not, and it was the reported bug: measured over 60 matches, the
+/// taker was teleported on **100% of throw-ins, a mean of 21.5 m**, so a
+/// player materialised on the touchline roughly every forty seconds of
+/// watched football.
+///
+/// The ball instead lies where it went out, out of play and untouchable,
+/// while the taker runs to it. He is a normal player under normal AI while
+/// he does it, so the run costs him the stamina it should and the picture
+/// is a man jogging to the line rather than one appearing there.
+///
+/// The teleport survives as the TIMEOUT (see [`Self::PATIENCE_TICKS`]):
+/// a restart that never happens would stall the match, and no visual is
+/// worth that.
+#[derive(Debug, Clone, Copy)]
+pub struct AwaitedRestart {
+    /// Who is taking it.
+    pub taker_id: u32,
+    /// Where the ball is and where he has to get to.
+    pub spot: Vector3<f32>,
+    /// Which restart this is, re-applied when he arrives — the origin
+    /// decides offside exemption and how the delivery is scored.
+    pub origin: PassOriginRestart,
+    /// The tick it was awarded on, for the patience bound.
+    pub awarded_tick: u64,
+}
+
+impl AwaitedRestart {
+    /// Close enough to pick the ball up, in game units. 12u = 1.5 m.
+    ///
+    /// Deliberately generous: the taker is steered by the ordinary chase
+    /// behaviour, which slows and settles rather than landing on a point,
+    /// and a tolerance tighter than his own settling distance leaves him
+    /// jogging beside the ball until the patience bound fires. At 8u a
+    /// quarter of all throw-ins still timed out and were teleported.
+    pub const REACH: f32 = 12.0;
+
+    /// How long the ball is allowed to wait, in engine ticks. 500 = 5 s —
+    /// longer than the 21.5 m the taker used to be teleported takes to
+    /// run, and short enough that a taker who gets stuck (blocked, or
+    /// pulled into another state) cannot hold the match up.
+    pub const PATIENCE_TICKS: u64 = 500;
+}
+
 /// Snapshot of the offside-relevant geometry at the moment a pass is
 /// kicked. Stored on the ball for the duration of an in-flight pass so
 /// the offside check can fire on receiver involvement (touch / claim /
@@ -108,21 +163,72 @@ pub struct OffsideSnapshot {
 
 impl OffsideSnapshot {
     /// Decide whether the snapshot represents an offside position.
-    /// Tolerance 1.5u absorbs foot-vs-shoulder ambiguity.
     pub fn is_offside(&self) -> bool {
-        const TOLERANCE: f32 = 1.5;
-        match self.passer_side {
+        OffsideLine::is_beyond(
+            self.passer_side,
+            self.receiver_x_at_kick,
+            self.ball_x_at_kick,
+            self.second_last_defender_x,
+        )
+    }
+}
+
+/// **The offside line, and the one rule for being beyond it.**
+///
+/// # Why it is shared
+///
+/// The referee had this rule and nobody else did. `build_offside_snapshot`
+/// worked the line out at the moment of the pass and flagged the receiver
+/// afterwards, while the pass evaluator — which chooses that receiver —
+/// had no offside term at all: measured over 60 matches, **25.4 offsides a
+/// match against a real 4-6**, because a passer would cheerfully play a
+/// ball to a man standing two metres beyond the last defender.
+///
+/// Real football's offside rate is low not because the flag is rare but
+/// because nobody deliberately plays one. That only holds if the passer
+/// reads the SAME line the referee does — a passer avoiding a line one
+/// unit away from the official one would still concede them, and would
+/// look like it was avoiding nothing.
+pub struct OffsideLine;
+
+impl OffsideLine {
+    /// Absorbs foot-vs-shoulder ambiguity, in game units.
+    pub const TOLERANCE: f32 = 1.5;
+
+    /// The second-last opponent's `x` — the line itself — for a side
+    /// attacking in `attacking`'s direction.
+    ///
+    /// One pass and no allocation, because the pass evaluator asks this
+    /// on every tick a player is on the ball. `None` when fewer than two
+    /// opponents are on the pitch, where there is no line to speak of.
+    pub fn second_last(xs: impl Iterator<Item = f32>, attacking: PlayerSide) -> Option<f32> {
+        // "Deepest" means nearest the goal being attacked, so the two are
+        // tracked in the direction that side plays.
+        let (mut deepest, mut second) = (None::<f32>, None::<f32>);
+        let beyond = |a: f32, b: f32| match attacking {
+            PlayerSide::Left => a > b,
+            PlayerSide::Right => a < b,
+        };
+        for x in xs {
+            if deepest.is_none_or(|d| beyond(x, d)) {
+                second = deepest;
+                deepest = Some(x);
+            } else if second.is_none_or(|s| beyond(x, s)) {
+                second = Some(x);
+            }
+        }
+        second
+    }
+
+    /// Is a receiver at `receiver_x` in an offside position — beyond both
+    /// the ball and the line?
+    pub fn is_beyond(attacking: PlayerSide, receiver_x: f32, ball_x: f32, line_x: f32) -> bool {
+        match attacking {
             PlayerSide::Left => {
-                if self.receiver_x_at_kick <= self.ball_x_at_kick + TOLERANCE {
-                    return false;
-                }
-                self.receiver_x_at_kick > self.second_last_defender_x + TOLERANCE
+                receiver_x > ball_x + Self::TOLERANCE && receiver_x > line_x + Self::TOLERANCE
             }
             PlayerSide::Right => {
-                if self.receiver_x_at_kick >= self.ball_x_at_kick - TOLERANCE {
-                    return false;
-                }
-                self.receiver_x_at_kick < self.second_last_defender_x - TOLERANCE
+                receiver_x < ball_x - Self::TOLERANCE && receiver_x < line_x - Self::TOLERANCE
             }
         }
     }
@@ -886,6 +992,9 @@ pub struct Ball {
     /// after `ball.update` returns, so the owner is on the ball before
     /// the next `move_to` distance check can null their ownership.
     pub pending_set_piece_teleport: Option<(u32, Vector3<f32>)>,
+    /// A dead ball lying on the touchline waiting for its taker to WALK to
+    /// it. See [`AwaitedRestart`].
+    pub awaiting_restart: Option<AwaitedRestart>,
     /// Attacking centre-backs to teleport into the box when a corner is
     /// awarded — the dead-ball set-up (in real football the big men walk
     /// up during the stoppage). Populated in the corner branch of
@@ -1255,6 +1364,26 @@ pub struct ShotTarget {
     /// defender stays in the lane, so the block rate becomes a function
     /// of flight timing rather than of the model.
     pub block_rolled: bool,
+    /// A defender who has WON the block but whom the ball has not reached
+    /// yet, with the outcome roll already drawn for him.
+    ///
+    /// The block window reaches 90u (11 m) ahead of the ball, because that
+    /// is the range over which a defender can still get across to a shot.
+    /// The deflection used to fire on the tick the roll succeeded, so the
+    /// ball turned up to eleven metres before it got to the man who turned
+    /// it — the same defect the save had, and between them they were the
+    /// only rebounds near a goal a viewer ever saw. Committing here and
+    /// resolving when the ball arrives keeps the block RATE exactly where
+    /// it was calibrated (one roll, at the same moment, off the same
+    /// candidate) while putting the contact on the body.
+    ///
+    /// The outcome roll — which of controlled / corner / safe / loose /
+    /// unlucky the deflection is — is drawn when the block is WON and
+    /// carried here, so that the branch a block takes is decided at the same
+    /// point in the shared RNG stream as before. Only the deflection's
+    /// direction spread is drawn on arrival, and that picks an angle rather
+    /// than an outcome.
+    pub blocked_by: Option<(u32, f32)>,
     /// Set when the shot took a deflection off a body in the lane.
     /// Catching/Diving states damp the save probability — the keeper
     /// was set for the original trajectory and the redirected ball is
@@ -1337,6 +1466,7 @@ impl Ball {
             kickoff_team_side: None,
             cached_landing_position: Vector3::new(x, y, 0.0),
             pending_set_piece_teleport: None,
+            awaiting_restart: None,
             pending_corner_teleports: Vec::new(),
             corner_contest_resolved: true,
             pending_corner_routine: None,
@@ -2082,6 +2212,28 @@ impl Ball {
         #[cfg(feature = "match-logs")]
         let mut probe = flight_diag::StageProbe::new(self.position);
 
+        // ── A ball that is OUT OF PLAY ────────────────────────────────
+        //
+        // Everything below this point is the machinery of a live ball:
+        // interception, blocks, saves, the loose-ball chase signals, the
+        // stall detectors and the ownership scan. None of it applies to a
+        // ball lying on the touchline waiting to be thrown in, and every
+        // one of them would fight the restart — the chase signals would
+        // send an OPPONENT to fetch it, and `check_ball_ownership` would
+        // simply give it to whoever was nearest. So the restart is ticked
+        // here and the rest of the update is skipped outright.
+        //
+        // The physics below is skipped too, deliberately: the ball is
+        // pinned on the line by `tick_awaited_restart` and a dead ball
+        // does not roll. See [`AwaitedRestart`].
+        if self.awaiting_restart.is_some() {
+            self.tick_awaited_restart(context, players, events);
+            if self.awaiting_restart.is_some() {
+                self.update_landing_cache();
+                return;
+            }
+        }
+
         self.update_velocity();
 
         self.try_intercept(context, players, events);
@@ -2147,6 +2299,10 @@ impl Ball {
             self.velocity,
             move_allowance,
         );
+        // The woodwork, ahead of every out-of-play resolver: a ball that has
+        // hit the frame has not crossed the line, gone over the bar or gone
+        // out, and each of those would otherwise claim it.
+        self.check_frame_rebound(context, events);
         self.check_goal(context, events);
         #[cfg(feature = "match-logs")]
         probe.note(flight_diag::STAGE_GOAL, self.position, self.velocity, 0.0);
@@ -2391,6 +2547,17 @@ impl Ball {
             flight_diag::FlightDiag::note_launch(self.velocity.z, self.position.z, striker);
         }
 
+        // Out of play — same skip as the full update above, and it has to
+        // be here too or the ball waits for its taker on alternate ticks
+        // and is fought over on the others.
+        if self.awaiting_restart.is_some() {
+            self.tick_awaited_restart(context, players, events);
+            if self.awaiting_restart.is_some() {
+                self.update_landing_cache();
+                return;
+            }
+        }
+
         self.update_velocity();
         self.try_intercept(context, players, events);
         self.try_block_shot(context, players, events);
@@ -2400,6 +2567,7 @@ impl Ball {
 
         // Move ball: find owner position from players slice directly
         self.move_to_with_players(players);
+        self.check_frame_rebound(context, events);
         self.check_goal(context, events);
         self.check_over_goal(context, players, events);
         self.check_wide_of_goal(context, players, events);
@@ -2527,6 +2695,7 @@ impl Ball {
         self.unowned_ticks = 0;
         self.cached_landing_position = self.position;
         self.pending_set_piece_teleport = None;
+        self.awaiting_restart = None;
         self.pending_corner_teleports.clear();
         self.owned_stuck_ticks = 0;
         self.owned_stuck_logged = false;

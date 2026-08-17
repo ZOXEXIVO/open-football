@@ -1,5 +1,5 @@
 use crate::config::ViewerConfig;
-use crate::playback::Playback;
+use crate::playback::{Playback, RecordedSpans};
 use crate::replay::{ChunkPayload, RecordingMetadata, ReplayTracks};
 use bevy::prelude::*;
 use std::collections::HashSet;
@@ -70,6 +70,7 @@ impl ChunkLoader {
         mut loader: ResMut<ChunkLoader>,
         mut tracks: ResMut<ReplayTracks>,
         mut playback: ResMut<Playback>,
+        mut spans: ResMut<RecordedSpans>,
         config: Res<ViewerConfig>,
         time: Res<Time>,
     ) {
@@ -86,6 +87,28 @@ impl ChunkLoader {
                     loader.chunk_duration_ms = metadata.chunk_duration_ms.max(1) as f64;
                     if playback.duration_ms <= 0.0 && metadata.total_duration_ms > 0 {
                         playback.duration_ms = metadata.total_duration_ms as f64;
+                    }
+                    if let Some(ranges) = metadata.segments {
+                        spans.set(
+                            ranges
+                                .into_iter()
+                                .map(|[start, end]| (start as f64, end as f64))
+                                .collect(),
+                        );
+                        // A goalless match kept nothing. Nothing will ever
+                        // arrive, so stop waiting for it — the timeline is
+                        // grey end to end and that is the whole story.
+                        if spans.nothing_recorded() {
+                            loader.ready = true;
+                        }
+                        // Open on the first goal rather than on kickoff, which
+                        // is now a part of the match nobody recorded.
+                        if let Some(start) = spans.next_start(playback.time_ms) {
+                            if !spans.covers(playback.time_ms) {
+                                playback.time_ms = start;
+                                playback.seeked = true;
+                            }
+                        }
                     }
                 }
                 Delivery::MetadataMissing => {
@@ -124,10 +147,26 @@ impl ChunkLoader {
         // harness plays back at up to 16x and a backgrounded tab can jump a
         // chunk boundary in a single frame.
         let current = loader.chunk_index(playback.time_ms);
-        for index in current..=current + 2 {
-            if index < loader.chunk_count {
-                loader.request_chunk(&config, index);
+        // Plus whichever chunk holds the next clip. On a goals-only recording
+        // the playhead crosses the gap in one frame (`Playback::advance`), and
+        // the clip it lands in can be twenty chunks away — read-ahead measured
+        // in adjacent chunks would never reach it, and the replay would sit on
+        // the last frame of the previous goal waiting.
+        let upcoming = spans
+            .next_start(playback.time_ms)
+            .map(|start| loader.chunk_index(start));
+
+        for index in (current..=current + 2).chain(upcoming) {
+            if index >= loader.chunk_count {
+                continue;
             }
+            // Windows with no clip in them have no file behind them — asking
+            // costs a round trip and a 404.
+            let from = index as f64 * loader.chunk_duration_ms;
+            if !spans.intersects(from, from + loader.chunk_duration_ms) {
+                continue;
+            }
+            loader.request_chunk(&config, index);
         }
     }
 

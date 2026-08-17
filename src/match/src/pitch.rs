@@ -231,7 +231,7 @@ impl Pitch {
         Self::spawn_markings(&mut commands, &mut meshes, &mut materials);
         // Frame and netting both. The netting is no longer scenery — it is
         // deformable, and `Netting::ripple` drives it from the ball.
-        Netting::spawn(&mut commands, &mut meshes, &mut materials);
+        Netting::spawn(&mut commands, &mut meshes, &mut materials, &mut images);
         Self::spawn_ground(&mut commands, &mut meshes, &mut materials, &mut images);
 
         // A stadium is lit from four corners at once, so almost nothing on the

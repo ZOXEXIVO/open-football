@@ -309,6 +309,9 @@ impl PlayerMatchState {
         if state_change_result.start_tackle_cooldown {
             player.start_tackle_cooldown();
         }
+        if state_change_result.start_keeper_cooldown {
+            player.start_keeper_cooldown();
+        }
 
         // Decision commitment: a transition that merely undoes the last
         // one is held until the player has had time to actually re-read
@@ -387,7 +390,25 @@ impl PlayerMatchState {
             // and outside everything below — see `MatchPlayer::vertical_speed`
             // for why a metric axis cannot travel inside a vector the
             // horizontal speed limits are going to normalise.
-            let apex = Self::leap_apex(player, state, tick_context.positions.ball.position.z);
+            // How high the ball will be when he MEETS it. For everybody
+            // else that is where it is now; for a keeper leaving his feet
+            // at a shot in flight it is the projected crossing height,
+            // because that is the whole difference between a dive along
+            // the floor and one into the top corner — and the ball is
+            // typically fifteen metres away and still climbing at the
+            // moment he commits (see `KeeperShotDive`).
+            let mut aerial_height = tick_context.positions.ball.position.z;
+            if state == PlayerState::Goalkeeper(GoalkeeperState::Diving) {
+                if let Some(target) = tick_context
+                    .ball
+                    .cached_shot_target
+                    .as_ref()
+                    .filter(|t| Some(t.defending_side) == player.side)
+                {
+                    aerial_height = target.goal_line_z;
+                }
+            }
+            let apex = Self::leap_apex(player, state, aerial_height);
             #[cfg(feature = "match-logs")]
             if matches!(
                 state,
@@ -644,9 +665,12 @@ impl PlayerMatchState {
     /// inheriting the idle cap.
     fn goalkeeper_speed_context(state: GoalkeeperState) -> GoalkeeperSpeedContext {
         match state {
-            // Reflex actions — the dive, the punch, the jump, the set.
-            GoalkeeperState::Diving
-            | GoalkeeperState::PreparingForSave
+            // Off his feet: one push, and then he goes where he threw
+            // himself. Its own band because a dive that travels at sprint
+            // speed makes diving pointless — see `GoalkeeperSpeedContext`.
+            GoalkeeperState::Diving => GoalkeeperSpeedContext::Dive,
+            // Reflex actions — the punch, the jump, the set.
+            GoalkeeperState::PreparingForSave
             | GoalkeeperState::Jumping
             | GoalkeeperState::Punching => GoalkeeperSpeedContext::Explosive,
             // Actively covering ground: rushing off the line, closing on a

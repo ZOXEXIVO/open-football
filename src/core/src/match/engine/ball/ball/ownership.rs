@@ -578,6 +578,8 @@ impl Ball {
                             self.flags.in_flight_state = 0;
                             self.cached_shot_target = None;
                             self.pass_origin_restart = PassOriginRestart::FreeKick;
+                            #[cfg(feature = "match-logs")]
+                            crate::mid_run_diag::RestartCensus::note_offside_given();
                             events.add_ball_event(BallEvent::Offside(target_id, restart_pos));
                             return;
                         }

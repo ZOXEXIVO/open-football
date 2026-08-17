@@ -249,6 +249,7 @@ fn clear_open_play_metadata_makes_invariants_hold_after_set_piece_restart() {
         deflected: false,
         save_rolled: false,
         block_rolled: false,
+        blocked_by: None,
         shooter_threat: SaveModel::NEUTRAL_THREAT,
         struck_from: Vector3::new(700.0, 270.0, 0.0),
     });
@@ -293,6 +294,7 @@ fn shot_without_previous_owner_fails_invariant() {
         deflected: false,
         save_rolled: false,
         block_rolled: false,
+        blocked_by: None,
         shooter_threat: SaveModel::NEUTRAL_THREAT,
         struck_from: Vector3::new(700.0, 270.0, 0.0),
     });
@@ -343,6 +345,7 @@ fn dead_ball_corner_with_leftover_shot_metadata_fails_invariant() {
         deflected: false,
         save_rolled: false,
         block_rolled: false,
+        blocked_by: None,
         shooter_threat: SaveModel::NEUTRAL_THREAT,
         struck_from: Vector3::new(700.0, 270.0, 0.0),
     });

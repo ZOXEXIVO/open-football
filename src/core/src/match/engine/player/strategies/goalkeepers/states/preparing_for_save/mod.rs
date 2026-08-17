@@ -1,6 +1,6 @@
 use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperBallClaim, KeeperSetPosition,
-    KeeperSweepLimit,
+    KeeperShotDive, KeeperShotReaction, KeeperSmother, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -23,6 +23,27 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Passing,
+            ));
+        }
+
+        // A man has arrived on top of him with the ball at his feet. Set
+        // is no longer a position — go and take it. Above everything else
+        // here because it is the most immediate thing on the pitch, and
+        // because the alternative is what the engine used to do: stand
+        // still and wait to be dribbled round. See [`KeeperSmother`].
+        if let Some(attempt) = KeeperSmother::assess(ctx) {
+            return Some(KeeperSmother::commit(ctx, &attempt));
+        }
+
+        // A shot he cannot get to on his feet — leave them, now, so the
+        // dive and the ball arrive together. `should_dive` below is a
+        // proximity test (`DIVE_DISTANCE` is 40u, about a seventh of a
+        // second of flight) and cannot see a shot into the corner coming;
+        // this reads the projected crossing point and the time left. See
+        // [`KeeperShotDive`].
+        if KeeperShotDive::should_launch(ctx) {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Diving,
             ));
         }
 
@@ -171,12 +192,19 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
             // after every catch. Z ignored: we move on the ground.
             let intercept_point = KeeperSetPosition::set_point(
                 goal_pos,
-                target.goal_line_y,
+                // His read of it, which lags the truth and converges on it
+                // — see [`KeeperShotReaction::crossing_y`].
+                KeeperShotReaction::crossing_y(ctx, &prof, goal_pos, target),
                 (ball_position - goal_pos).magnitude(),
                 ctx.context.field_size.width as f32,
                 prof.positioning,
             );
-            return Some(
+            // …but only as fast as a set keeper moves. Everything past a
+            // side-step has to come out of the dive; see
+            // [`KeeperShotReaction`].
+            return Some(KeeperShotReaction::on_foot(
+                ctx,
+                &prof,
                 SteeringBehavior::Arrive {
                     target: intercept_point,
                     slowing_distance: 3.0,
@@ -184,7 +212,7 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
                 .calculate(ctx.player)
                 .velocity
                     * speed_boost,
-            );
+            ));
         }
 
         // No shot cached — slow ball / through ball / loose ball: fall
@@ -223,8 +251,25 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
 }
 
 impl GoalkeeperPreparingForSaveState {
-    /// Determine if goalkeeper should dive for the ball
+    /// Determine if goalkeeper should dive for a ball that is NOT a shot.
+    ///
+    /// ⚠ **A live shot is [`KeeperShotDive`]'s, and only its.** This gate is
+    /// a proximity test — `DIVE_DISTANCE` is 40u, five metres, a seventh of
+    /// a second of flight — so for a shot it can only ever fire once the
+    /// ball is already on top of him. Measured on a recording, that is
+    /// exactly what it did: dives beginning with the ball 0.7 to 2.7 m away
+    /// at 35 m/s, which the viewer draws as the ball stopping dead at a
+    /// standing man who then falls over. Two gates for one decision also
+    /// means the worse one wins whenever it is cheaper to satisfy.
+    ///
+    /// What is left to it is everything that is not a shot and has no
+    /// projected crossing point to reason about: a deflection, a rebound
+    /// off a defender, a cross that dips.
     fn should_dive(&self, ctx: &StateProcessingContext) -> bool {
+        if ctx.tick_context.ball.cached_shot_target.is_some() {
+            return false;
+        }
+
         let ball_distance = ctx.ball().distance();
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let ball_speed = ball_velocity.norm();

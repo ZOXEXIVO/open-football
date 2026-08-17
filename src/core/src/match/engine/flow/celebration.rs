@@ -62,6 +62,37 @@ enum Role {
     Dejected,
 }
 
+impl Role {
+    /// How long this man is simply NOT MOVING after the ball goes in.
+    ///
+    /// Nobody's first reaction to a goal is to set off somewhere. A
+    /// conceding side stands still — hands on hips, hands on head, staring
+    /// at the net or at each other — for several seconds before anybody
+    /// walks anywhere, and the man who has just been beaten stands there
+    /// longest of all, because he is usually on the floor when it happens
+    /// and has to get up first.
+    ///
+    /// This was missing entirely and it is the whole of the reported bug:
+    /// the beaten keeper set off for the ball, or trudged toward his
+    /// formation spot, on the very tick the ball crossed the line. There
+    /// was no reaction to draw because there was no reaction.
+    fn stillness_ms(self, beaten: bool) -> u64 {
+        if beaten {
+            // On the floor. He rolls over, gets to his knees, and looks at
+            // it — and only then does he go anywhere, whether that is back
+            // into his goal for the ball or out of it.
+            return 4_200;
+        }
+        match self {
+            Role::Dejected => 1_600,
+            // The retriever's own pause is `FETCH_AFTER_MS`, which already
+            // knows whether his side can afford one. Adding a second one on
+            // top would hold up a team that is chasing the game.
+            _ => 0,
+        }
+    }
+}
+
 /// One player's part in the celebration, fixed at the moment of the goal.
 ///
 /// `anchor` is where he was standing when the ball went in, and it is the
@@ -106,6 +137,13 @@ pub struct GoalCelebration {
     retriever_id: Option<u32>,
     fetch_at_ms: u64,
     collected: bool,
+    /// The goalkeeper who has just been beaten.
+    ///
+    /// Held separately from [`Role`] because being beaten is not a job —
+    /// he may or may not also be the man who fetches the ball, and either
+    /// way he is the one player on the pitch whose reaction to the goal is
+    /// worth drawing. See [`Role::stillness_ms`].
+    beaten_id: Option<u32>,
     /// The conceding side is now behind. Decides whether the ball is walked
     /// back or sprinted back.
     chasing: bool,
@@ -131,7 +169,17 @@ impl GoalCelebration {
     const SPRINT: f32 = 0.70; // 8.75 m/s — a celebration is a sprint
     const RUN: f32 = 0.48; // 6 m/s
     const JOG: f32 = 0.26; // 3.25 m/s
-    const TRUDGE: f32 = 0.09; // 1.1 m/s — you have just conceded
+    /// 0.875 m/s. You have just conceded, and you are not in a hurry.
+    ///
+    /// ⚠ Was 0.09 — **1.125 m/s**, which is within a fiftieth of the
+    /// replay viewer's own walk/run threshold (`Actors::MOVING`, 1.1 m/s).
+    /// That threshold is what decides whether a figure is drawn facing the
+    /// way he is going or facing the ball, so an entire conceding eleven
+    /// walked back oscillating across it and pivoted between the two —
+    /// reported as players "spinning round". A speed that sits on a
+    /// consumer's threshold is a bug even when the number itself is
+    /// defensible.
+    const TRUDGE: f32 = 0.07;
 
     /// Close enough to the ball to pick it up (75 cm).
     const COLLECT_DISTANCE: f32 = 6.0;
@@ -180,6 +228,17 @@ impl GoalCelebration {
         let retriever_id = Self::pick_retriever(field, conceding_side, chasing);
         let focus = Self::party_spot(field, conceding_side);
 
+        let beaten_id = field
+            .players
+            .iter()
+            .find(|p| {
+                p.side == Some(conceding_side)
+                    && !p.is_sent_off
+                    && p.tactical_position.current_position.position_group()
+                        == PlayerFieldPositionGroup::Goalkeeper
+            })
+            .map(|p| p.id);
+
         let mut cast = Vec::with_capacity(field.players.len());
         for player in field.players.iter().filter(|p| !p.is_sent_off) {
             let is_keeper = player.tactical_position.current_position.position_group()
@@ -218,6 +277,7 @@ impl GoalCelebration {
                 Self::FETCH_AFTER_MS
             },
             collected: false,
+            beaten_id,
             chasing,
         }
     }
@@ -366,6 +426,17 @@ impl GoalCelebration {
             // RNG — see the module note on the shared stream.
             let spread = Self::spread(player.id, index);
 
+            // Nobody's first reaction to a goal is to walk somewhere, and
+            // the beaten keeper's is to stay exactly where the ball left
+            // him. Ahead of the role match because it is true whatever his
+            // job in the restart turns out to be — see
+            // [`Role::stillness_ms`].
+            let beaten = Some(player.id) == self.beaten_id;
+            if elapsed < role.stillness_ms(beaten) {
+                Self::steer(player, player.position, 0.0, field_width, field_height);
+                continue;
+            }
+
             let (target, speed) = match role {
                 // The man with the ball keeps going whatever the clock says:
                 // the restart needs it back on the centre spot. A side that
@@ -436,7 +507,15 @@ impl GoalCelebration {
                 .retriever_id
                 .and_then(|id| field.players.iter().find(|p| p.id == id))
             {
-                // Under the arm, at chest height.
+                // In his hands, at chest height — parked on his own
+                // coordinate, which is also the signal the replay reads it
+                // by. There is no body model here to hang it off, and the
+                // viewer has one: a ball sitting still on a man's own
+                // centreline at chest height is in his hands and cannot be
+                // anything else, so it draws the cradle and puts the ball
+                // where the cradle puts it (`Actors::CARRIED_REACH`). Move
+                // this off his centreline and the man carrying it goes back
+                // to trudging along with his hands on his head.
                 let carry = carrier.position;
                 field.ball.position = Vector3::new(carry.x, carry.y, 1.05);
                 field.ball.velocity = Vector3::zeros();

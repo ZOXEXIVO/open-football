@@ -204,6 +204,44 @@ impl Complexion {
         Self::hash(id ^ salt) % 100
     }
 
+    /// **How long a stride he takes**, as a multiplier on the distance the
+    /// run cycle covers per step.
+    ///
+    /// The single biggest reason a squad reads as one animation played
+    /// twenty-two times: `Actors::STRIDE` was a global, so every player on
+    /// the pitch had the same cadence at the same speed — and cadence is
+    /// what the eye actually picks a runner out by, far more than his
+    /// height or his colour. A loping centre-half and a scurrying winger
+    /// covering the same ground at the same pace were drawn taking the same
+    /// number of steps to do it.
+    ///
+    /// Blended with `height`, because leg length really does set most of
+    /// it, plus an independent salt for the rest — two men of a height do
+    /// not run alike. Roughly 0.86 to 1.16.
+    pub fn stride(id: u32) -> f32 {
+        let legs = (Self::height(id) - 1.008) * 1.30;
+        let own = Self::trait_of(id, 0x7F4A) as f32 / 100.0 - 0.5;
+        (1.0 + legs + own * 0.16).clamp(0.84, 1.20)
+    }
+
+    /// How much he BOUNCES doing it — the amplitude of the whole run cycle,
+    /// hips, knees and arms together.
+    ///
+    /// Some players run low and economical, some pick their knees up. It is
+    /// deliberately a separate hash from [`Self::stride`]: a short choppy
+    /// stride with a high knee is a real runner and so is its opposite, and
+    /// cutting both from the same bits would only ever produce two kinds of
+    /// player instead of four.
+    pub fn spring(id: u32) -> f32 {
+        0.86 + Self::trait_of(id, 0xC13B) as f32 / 360.0
+    }
+
+    /// …and how fast he ticks over standing still — breathing, shifting his
+    /// weight. Twenty-two men breathing in unison is its own kind of robot.
+    pub fn tempo(id: u32) -> f32 {
+        0.80 + Self::trait_of(id, 0x3D9E) as f32 / 250.0
+    }
+
     /// Multiplier on the model's height. Spans roughly 1.70 m to 1.92 m
     /// against the 1.79 m base — the real range of a senior squad, from a
     /// pocket winger to a centre-half.

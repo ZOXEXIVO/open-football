@@ -85,9 +85,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut match_position_data = if !config.match_recordings {
             ResultMatchPositionData::empty()
         } else if MatchRuntime::events_mode() {
-            ResultMatchPositionData::new_with_tracking()
+            ResultMatchPositionData::new_with_tracking().with_scope(MatchRuntime::recording_scope())
         } else {
-            ResultMatchPositionData::new()
+            ResultMatchPositionData::new().with_scope(MatchRuntime::recording_scope())
         };
 
         let mut field = MatchField::new(W, H, left_squad, right_squad);
@@ -225,7 +225,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub(super) fn build_result(
         field: MatchField,
         mut context: MatchContext,
-        match_position_data: ResultMatchPositionData,
+        mut match_position_data: ResultMatchPositionData,
     ) -> MatchResultRaw {
         let mut result = MatchResultRaw::with_match_time(context.total_match_time);
 
@@ -284,6 +284,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             });
         }
 
+        // Full time: release the goal-clip pre-roll (nothing will ever claim
+        // it now) and trim the clips back to the final whistle.
+        match_position_data.finish(context.total_match_time);
         result.position_data = match_position_data;
 
         // Extract per-player stats and calculate match ratings.

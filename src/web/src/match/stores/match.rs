@@ -127,6 +127,14 @@ impl MatchStore {
 
         // Store each chunk
         for (idx, chunk) in chunks.iter().enumerate() {
+            // A goals-only recording leaves most five-minute windows with
+            // nothing in them. The index still has to line up with the clock,
+            // so the chunk keeps its number — there is just no file behind it,
+            // and the viewer knows from the metadata's segments not to ask.
+            if chunk.is_empty() {
+                continue;
+            }
+
             let chunk_file = PathBuf::from(MATCH_DIRECTORY)
                 .join(league_slug)
                 .join(format!("{}_chunk_{}.json.gz", match_id, idx));
@@ -165,11 +173,24 @@ impl MatchStore {
             .join(league_slug)
             .join(format!("{}_metadata.json", match_id));
 
-        let metadata = serde_json::json!({
+        let mut metadata = serde_json::json!({
             "chunk_count": chunk_count,
             "chunk_duration_ms": CHUNK_DURATION_MS,
             "total_duration_ms": data.max_timestamp()
         });
+
+        // Present only for a clipped recording, and then even when it is empty
+        // — a goalless match records nothing at all, and "no segments" has to
+        // read differently from "the field isn't there", which is what every
+        // recording made before clipping existed looks like.
+        if let Some(segments) = data.recorded_segments() {
+            metadata["segments"] = serde_json::Value::Array(
+                segments
+                    .iter()
+                    .map(|(start, end)| serde_json::json!([start, end]))
+                    .collect(),
+            );
+        }
 
         tokio::fs::write(
             &metadata_file,

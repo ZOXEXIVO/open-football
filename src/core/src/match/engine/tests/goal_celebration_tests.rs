@@ -49,7 +49,9 @@ const T442: [PlayerPositionType; 11] = [
     PlayerPositionType::ForwardRight,
 ];
 
-fn squad(team_id: u32, base_id: u32) -> MatchSquad {
+/// Shared with `goal_clip_recording_tests`, which needs the same two sides to
+/// play a whole match rather than a single goal.
+pub(super) fn squad(team_id: u32, base_id: u32) -> MatchSquad {
     let birth = NaiveDate::from_ymd_opt(1998, 5, 1).unwrap();
     let main_squad = T442
         .iter()
@@ -362,6 +364,79 @@ fn the_scorer_wheels_away_and_his_team_mates_chase_him() {
             player.position.x
         );
     }
+}
+
+/// **Nobody reacts to a goal by walking somewhere, and the man who has just
+/// been beaten least of all.**
+///
+/// The reported bug: the keeper "doesn't get upset, he just folds his arms
+/// and turns round". Half of that is the viewer's (it now poses a slump —
+/// see the `aftermath` module in `src/match`), but the other half is here:
+/// the conceding side set off for their formation spots on the very tick the
+/// ball crossed the line, so there was no reaction to draw. The beaten
+/// keeper in particular is on the floor when it happens and stays there.
+#[test]
+fn the_beaten_keeper_does_not_stroll_off_the_instant_it_goes_in() {
+    let (mut field, mut context) = kickoff();
+    score_at_the_home_end(&mut field, &mut context);
+    handle_goal_reset(&mut field, &mut context);
+
+    let keeper = field
+        .players
+        .iter()
+        .find(|p| {
+            p.side == Some(PlayerSide::Left) && p.tactical_position.current_position.is_goalkeeper()
+        })
+        .map(|p| (p.id, p.position))
+        .expect("the conceding side has a keeper");
+
+    // Three seconds. He has not gone anywhere.
+    for _ in 0..300 {
+        context.total_match_time += 10;
+        advance_goal_celebration(&mut field, &mut context);
+    }
+    let now = field.players.iter().find(|p| p.id == keeper.0).unwrap();
+    assert!(
+        (now.position - keeper.1).norm() < 1.0,
+        "the beaten keeper walked {:.1}u in the first three seconds — he is \
+         supposed to be on the floor",
+        (now.position - keeper.1).norm()
+    );
+
+    // By the restart he HAS moved: the reaction is a beat, not a freeze.
+    let restart_at = context.dead_ball_until_ms;
+    while context.total_match_time < restart_at - 10 {
+        context.total_match_time += 10;
+        advance_goal_celebration(&mut field, &mut context);
+    }
+    let later = field.players.iter().find(|p| p.id == keeper.0).unwrap();
+    assert!(
+        (later.position - keeper.1).norm() > 5.0,
+        "he never got up at all"
+    );
+}
+
+/// A trudge must not sit on the replay viewer's own walk/run threshold.
+///
+/// `Actors::MOVING` (1.1 m/s) is what decides whether a figure is drawn
+/// facing the way he is going or facing the BALL. The conceding side walks
+/// back with the ball behind them in their own net, so an eleven whose speed
+/// oscillates across that line pivots between the two on alternate frames —
+/// which is exactly the "players spinning round" in the report. Any speed a
+/// consumer thresholds on has to be clearly one side of it.
+#[test]
+fn a_trudge_is_unambiguously_a_walk() {
+    /// `crate::r#match::engine::flow::celebration` keeps this private, so
+    /// the number is restated here on purpose: this test exists to catch it
+    /// drifting back INTO the viewer's dead band, and a shared constant
+    /// would drift with it.
+    const VIEWER_WALK_RUN_THRESHOLD: f32 = 1.1;
+    // Units per tick → metres per second: 1u = 0.125 m, 1 tick = 10 ms.
+    let trudge_ms = 0.07 * 0.125 / 0.01;
+    assert!(
+        trudge_ms < VIEWER_WALK_RUN_THRESHOLD * 0.9,
+        "a trudge at {trudge_ms:.2} m/s is inside the viewer's threshold band"
+    );
 }
 
 /// The celebration shares the match RNG with every calibrated roll in the

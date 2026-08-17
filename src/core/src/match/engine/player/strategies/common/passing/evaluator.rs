@@ -3,7 +3,7 @@ use crate::club::player::behaviour_config::PassEvaluatorConfig;
 use crate::club::player::registry::has_risk_tolerant_passing_trait;
 use crate::club::player::traits::PlayerTrait;
 use crate::r#match::PassOriginRestart;
-use crate::r#match::engine::ball::ball::ThrowIn;
+use crate::r#match::engine::ball::ball::{OffsideLine, ThrowIn};
 use crate::r#match::engine::chemistry::chemistry_modifiers;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::set_pieces::{ThrowRoutine, pick_throw_routine};
@@ -1178,6 +1178,30 @@ impl PassEvaluator {
             < SkillCurve::new(dec_raw, 15.0, 0.6).probability()
                 * SkillCurve::new(pass_raw, 12.0, 0.6).probability();
 
+        // **THE OFFSIDE LINE.** Computed once for the whole scan rather
+        // than per candidate — it is a property of the defence, not of the
+        // man being considered. See [`OffsideLine`]: the passer reads the
+        // same line the referee will, which is the only way avoiding it
+        // can mean anything.
+        //
+        // `None` when the restart exempts the receiver (a throw-in, a
+        // corner, a goal kick) — there is nothing to avoid, and pretending
+        // otherwise would make a side refuse to throw the ball forward.
+        let attacking_side = ctx.player.side.unwrap_or(PlayerSide::Left);
+        let offside_line = if ctx
+            .tick_context
+            .ball
+            .pass_origin_restart
+            .is_offside_exempt()
+        {
+            None
+        } else {
+            OffsideLine::second_last(
+                ctx.players().opponents().all().map(|o| o.position.x),
+                attacking_side,
+            )
+        };
+
         // Calculate minimum pass distance based on pressure
         // NOTE: This filter prevents "too short" passes that don't progress the ball
         let is_under_pressure = ctx.player().pressure().is_under_immediate_pressure();
@@ -1586,6 +1610,34 @@ impl PassEvaluator {
             // Applied once, outside the personality branches, so no
             // archetype can quietly opt out of it.
             let score = score * retreat_penalty;
+
+            // **He can see the linesman.** A ball to a man standing beyond
+            // the last defender is not a pass, it is a free kick to the
+            // other side, and no personality above knew that: the engine
+            // gave 25.4 offsides a match against a real 4-6 purely because
+            // the evaluator had no term for it.
+            //
+            // A DISCOUNT and not a veto, deliberately. Real offsides are
+            // rare but they are not zero, and what produces the real ones
+            // is a runner and a passer disagreeing by a fraction of a
+            // second — which is exactly what survives a heavy discount and
+            // exactly what a veto would delete. Sized like the other hard
+            // discounts here (`goalkeeper_penalty` in open play is 0.0005,
+            // the huddle end of `congestion_penalty` is 0.02): enough that
+            // an offside man is only chosen when there is nothing else.
+            let score = match offside_line {
+                Some(line)
+                    if OffsideLine::is_beyond(
+                        attacking_side,
+                        teammate.position.x,
+                        ctx.player.position.x,
+                        line,
+                    ) =>
+                {
+                    score * 0.02
+                }
+                _ => score,
+            };
 
             // Hard reject: never pass through 2+ opponents unless
             // a playmaker rolls high vision. Vision gate smoothed

@@ -86,7 +86,8 @@ impl GoalNet {
     /// back, which is why a ball driven in under the bar dips as it goes.
     pub const BACK_HEIGHT: f32 = 1.15;
 
-    /// How far the netting lets the ball travel past its nominal panel.
+    /// How far the netting lets the ball travel past its nominal panel, at
+    /// the point where it is slackest.
     ///
     /// The back net is hung slack and BAGS — a rocket puts a metre of it
     /// into the stanchion, which is the shape everyone recognises as a goal.
@@ -95,6 +96,30 @@ impl GoalNet {
     pub const GIVE_BACK: f32 = 8.0;
     pub const GIVE_SIDE: f32 = 4.0;
     const GIVE_ROOF_METRES: f32 = Self::GIVE_SIDE * 0.125;
+
+    /// **The give is not the same everywhere on a panel, and that is what
+    /// decides where the ball comes to rest.**
+    ///
+    /// A net is a membrane tied along its edges: to the back bar at the top,
+    /// to the ground at the bottom. Pushed in the middle it bags; pushed at
+    /// an edge it barely moves. Treating the give as a constant meant a ball
+    /// that had rolled to a stop on the GRASS still had a metre of travel
+    /// available to it, so it settled a mean 21u — **2.63 m** — behind the
+    /// goal line, measured off a real recording. The replay draws the
+    /// netting at its nominal 1.9 m ([`Field::NET_DEPTH`] in the viewer), so
+    /// the ball finished three quarters of a metre BEHIND the net: the
+    /// reported "the ball flies off and stops outside the net".
+    ///
+    /// The first mode of a membrane pinned at two edges is `4t(1-t)` — zero
+    /// at both, one in the middle — and that is exactly the shape wanted
+    /// here. A ball driven in at chest height bags the mesh; a ball rolling
+    /// along the floor of the goal stops at the netting, which is where a
+    /// ball in a real goal lies.
+    #[inline]
+    fn slack_at(height: f32, panel_height: f32) -> f32 {
+        let t = (height / panel_height.max(1.0e-3)).clamp(0.0, 1.0);
+        4.0 * t * (1.0 - t)
+    }
 
     /// Speed the mesh takes out of the ball per tick, as a fraction, when
     /// the netting is barely stretched.
@@ -168,7 +193,12 @@ impl GoalNet {
         if depth > Self::DEPTH {
             let mut along = ball.velocity.x * self.inward;
             let mut over = depth - Self::DEPTH;
-            Self::press(&mut over, &mut along, Self::GIVE_BACK);
+            // Slack where the ball is meeting it — see `slack_at`. The back
+            // panel is tied to the ground below and the back bar above, so a
+            // ball on the deck stops at the netting and one at chest height
+            // bags it.
+            let give = Self::GIVE_BACK * Self::slack_at(ball.position.z, Self::BACK_HEIGHT);
+            Self::press(&mut over, &mut along, give);
             ball.position.x = self.line_x + (Self::DEPTH + over) * self.inward;
             ball.velocity.x = along * self.inward;
             touched = true;
@@ -190,7 +220,12 @@ impl GoalNet {
             let outward = across.signum();
             let mut lateral = ball.velocity.y * outward;
             let mut over = across.abs() - GOAL_WIDTH;
-            Self::press(&mut over, &mut lateral, Self::GIVE_SIDE);
+            // Same rule as the back panel, over this panel's own height:
+            // the side netting runs from the ground to the sloping roof, so
+            // the ball's height decides how much of the give it can use.
+            let panel_height = self.roof_at(depth.max(0.0));
+            let give = Self::GIVE_SIDE * Self::slack_at(ball.position.z, panel_height);
+            Self::press(&mut over, &mut lateral, give);
             ball.position.y = self.centre_y + (GOAL_WIDTH + over) * outward;
             ball.velocity.y = lateral * outward;
             touched = true;
@@ -239,6 +274,11 @@ impl GoalNet {
     /// physics puts it, across the whole contact, and leaves only a token
     /// push to roll the ball back down into the goalmouth.
     fn press(over: &mut f32, speed: &mut f32, give: f32) {
+        // `give` can legitimately be zero — that is a panel pinned at the
+        // point the ball met it — and the ratio below must not become a NaN
+        // when it is. A hair of travel keeps the arithmetic finite and
+        // resolves to the same thing: taut on the first tick, ball stopped.
+        let give = give.max(1.0e-3);
         let stretch = (*over / give).clamp(0.0, 1.0);
         let resistance =
             Self::DRAG_SLACK + (Self::DRAG_TAUT - Self::DRAG_SLACK) * stretch * stretch;
@@ -388,6 +428,64 @@ mod tests {
         assert!((net.roof_at(0.0) - GOAL_HEIGHT).abs() < 1.0e-6);
         assert!(net.roof_at(GoalNet::DEPTH) < GOAL_HEIGHT * 0.6);
         assert!(net.roof_at(GoalNet::DEPTH * 0.5) < net.roof_at(0.0));
+    }
+
+    /// **Where the ball ENDS UP is the whole of what a viewer sees**, and it
+    /// has to be inside the netting the replay draws.
+    ///
+    /// The viewer hangs the back panel at a fixed `Field::NET_DEPTH` = 1.9 m
+    /// = [`GoalNet::DEPTH`]. With a constant give the ball settled 5.8u
+    /// beyond that — measured at 21.0u on a real recording, three quarters
+    /// of a metre behind the drawn mesh, which is the reported "the ball
+    /// flies off and stops outside the net". A ball at rest is on the
+    /// GROUND, where the netting is pegged and has no give at all, so it
+    /// must finish at the panel.
+    #[test]
+    fn a_settled_ball_lies_inside_the_netting_the_viewer_draws() {
+        let net = goals();
+        for launch in [
+            Vector3::new(-2.5, 0.0, 0.0),
+            Vector3::new(-5.0, 0.0, 1.2),
+            Vector3::new(-8.0, 1.0, 0.0),
+            Vector3::new(-3.0, -0.6, 0.4),
+        ] {
+            let mut ball = ball_entering(launch, 0.4);
+            for _ in 0..1200 {
+                ball.tick_net(&net);
+            }
+            let depth = ball.net_depth(&net).expect("ball is in the net");
+            assert!(
+                depth > 1.0,
+                "launched at {launch:?} the ball must finish behind the line, ended {depth:.2}u"
+            );
+            // A hair of tolerance for the tick it settles on; anything more
+            // is the ball resting behind the mesh.
+            assert!(
+                depth <= GoalNet::DEPTH + 0.5,
+                "launched at {launch:?} the ball settled {depth:.2}u past the line, \
+                 outside the {:.2}u netting the replay draws",
+                GoalNet::DEPTH
+            );
+        }
+    }
+
+    /// The give is a property of WHERE on the panel the ball is. A ball
+    /// driven in at the height the net is slackest has to bag it; the same
+    /// ball rolling along the floor of the goal must not.
+    #[test]
+    fn the_netting_bags_at_chest_height_and_not_on_the_ground() {
+        let slack_mid = GoalNet::slack_at(GoalNet::BACK_HEIGHT * 0.5, GoalNet::BACK_HEIGHT);
+        let slack_floor = GoalNet::slack_at(0.0, GoalNet::BACK_HEIGHT);
+        let slack_top = GoalNet::slack_at(GoalNet::BACK_HEIGHT, GoalNet::BACK_HEIGHT);
+        assert!((slack_mid - 1.0).abs() < 1.0e-5, "slackest in the middle");
+        assert!(slack_floor < 1.0e-6, "pegged at the ground");
+        assert!(slack_top < 1.0e-6, "tied to the back bar");
+        // …and it is a curve, not a step.
+        let quarter = GoalNet::slack_at(GoalNet::BACK_HEIGHT * 0.25, GoalNet::BACK_HEIGHT);
+        assert!(
+            quarter > slack_floor && quarter < slack_mid,
+            "the taper has to be continuous, got {quarter} at a quarter height"
+        );
     }
 
     /// The mesh has to give, or there is nothing for the replay to ripple.

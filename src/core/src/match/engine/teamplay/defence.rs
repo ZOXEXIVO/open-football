@@ -39,12 +39,17 @@
 //! a defender who swaps his man every quarter-second is not marking
 //! anybody.
 
-use crate::r#match::{MatchField, MatchPlayer, PlayerSide};
+use crate::r#match::{MatchContext, MatchField, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
 
-/// Largest defensive unit we assign duties to — the back line plus the
-/// midfield, which is every outfielder bar the forwards.
-const MAX_UNIT: usize = 10;
+/// Largest set of players we assign duties to — every outfielder.
+///
+/// Only the back line and the midfield are eligible to be given a MAN
+/// (see `can_mark` in [`DutyAssigner::assign`]); the forwards are here
+/// because pressing is not marking. The presser is by definition whoever
+/// is nearest the ball, and when the opposition build from the back that
+/// is the centre-forward.
+const MAX_UNIT: usize = 11;
 /// Most opponents worth ranking as threats.
 const MAX_THREATS: usize = 10;
 
@@ -302,18 +307,40 @@ impl DutyAssigner<'_> {
         // Midfield is marked by midfielders. Including them is what lets
         // the ranking cover the whole attacking side instead of running
         // out of bodies after the front line.
-        let mut unit = [(0u32, Vector3::<f32>::zeros()); MAX_UNIT];
+        //
+        // ── …and the FORWARDS are here for the press only ─────────────
+        //
+        // `can_mark` is what keeps a striker out of his own box: he can
+        // never be given a man, ranked as cover, or told to hold a zone.
+        // He can be the presser, because that duty is not a marking
+        // assignment at all — it is "you are nearest the ball, go".
+        //
+        // Leaving the front line out of the pool entirely meant it had no
+        // defensive job in the model whatsoever. The only door left into
+        // `Forward: Pressing` was `is_best_player_to_chase_ball`, a
+        // single-player election run across the whole team, and the state
+        // measured **0.3% of all AI ticks — 2.2% of a forward's own
+        // match**. From the stands that is a front two watching the
+        // opposition play out from the back, which is how it was
+        // reported.
+        let mut unit = [(0u32, Vector3::<f32>::zeros(), false); MAX_UNIT];
         let mut unit_len = 0usize;
+        let mut markers = 0usize;
         for p in self.field.players.iter() {
             if p.team_id != self.team_id || unit_len == MAX_UNIT {
                 continue;
             }
             let pos = p.tactical_position.current_position;
-            if pos.is_goalkeeper() || !(pos.is_defender() || pos.is_midfielder()) {
+            if pos.is_goalkeeper() {
                 continue;
             }
-            unit[unit_len] = (p.id, p.position);
+            let can_mark = pos.is_defender() || pos.is_midfielder();
+            if !can_mark && MatchContext::press_off() {
+                continue; // A/B control — see `MatchContext::press_off`.
+            }
+            unit[unit_len] = (p.id, p.position, can_mark);
             unit_len += 1;
+            markers += can_mark as usize;
         }
         if unit_len == 0 {
             return;
@@ -326,7 +353,6 @@ impl DutyAssigner<'_> {
             .and_then(|_| self.field.ball.current_owner)
             .and_then(|id| self.field.players.iter().find(|p| p.id == id))
             .filter(|p| p.team_id != self.team_id);
-        plan.carrier = carrier.map(|c| c.id);
 
         // ── Press, then cover ────────────────────────────────────────
         // Somebody goes to the ball and somebody backs him up. These come
@@ -338,26 +364,107 @@ impl DutyAssigner<'_> {
         let mut n_unreachable = 0usize;
         let mut n_skipped_depth = 0usize;
 
-        if let Some(carrier) = carrier {
+        // ── Where the next touch is going to happen ──────────────────
+        //
+        // With an opponent on the ball this is simply the man. Without
+        // one it is the man the ball is on its way to — and that case is
+        // most of a match: measured over 24 fixtures the plan was live on
+        // 80% of refreshes but nominated a presser on only **25%**,
+        // because `carrier` is `None` for every pass in flight and every
+        // loose ball, and with ~1 700 passes a match at ~1.5 s of flight
+        // each nobody owns the ball for well over half the game. For all
+        // of that time the plan said press 0.00 / cover 0.00 and handed
+        // the whole side marks and zones, which is the model literally
+        // not pressing.
+        //
+        // A ball travelling to an opponent is the moment a press is FOR —
+        // you go with the pass, not after it lands.
+        //
+        // Two cases are deliberately NOT pressed:
+        //
+        //   * a ball on its way to one of our own players. That is a
+        //     reception, and the receiver's own states handle it.
+        //   * a ball that has come to REST. Nobody is about to receive
+        //     it; it is a race, and the engine already elects exactly one
+        //     chaser per side for a race (`should_force_takeball`, with
+        //     hysteresis). Nominating a presser on top of that election
+        //     puts a second and third body on the same square metre, and
+        //     the ownership contest between them is what produces the
+        //     standing knot this pass exists to remove.
+        //
+        // ⚠ THE TARGET IS THE BALL, NOT THE MAN ABOUT TO GET IT. Aiming
+        // the press at the receiver instead reads better on paper — you
+        // close the man down, somebody else races for the ball — and it
+        // measured worse on every axis, over 3×40 fixtures per arm:
+        // tackles/team 22.5 → 28.9 (real 18), fouls 19.7 → 21.6 (real
+        // 12), yellows 5.92 → 6.80, goals 5.30 → 6.36. Sending the
+        // presser THROUGH the receiver puts him touch-tight to a man who
+        // has not got the ball yet, and the engagement models
+        // (`ContactFoul`, `TackleDecision`) then roll once a second for
+        // as long as he stays there. Aiming at the ball makes him arrive
+        // WITH it, which is what pressing a pass looks like.
+        //
+        // Measured, off vs on over 3×40 fixtures: press duties per
+        // refresh 0.25 → 0.61, cover 0.21 → 0.53, unit holding a zone
+        // 2.9 → 2.3; the carrier's nearest opponent 3.67 → 3.53 m and the
+        // opponents within 10 m of him 1.87 → 2.00. Calibration-neutral:
+        // goals 5.89 → 5.76, fouls 19.5 → 18.6, yellows 5.85 → 5.86,
+        // penalties 0.33 → 0.23, tackles 22.7 → 24.4, stalled-ball time
+        // 15.3 → 16.9 s/match.
+        let ball = &self.field.ball;
+        let our_reception = ball
+            .pass_target_player_id
+            .and_then(|id| self.field.players.iter().find(|p| p.id == id))
+            .is_some_and(|p| p.team_id == self.team_id);
+        // 0.2 u/tick ≈ 2.5 m/s — quicker than a ball trundling to a stop
+        // and far slower than any pass. (NB the ball's speed is in
+        // u/tick, where a hard pass is ~1.2 and the fastest loose ball
+        // ever measured is 3.19; `force_claim_if_deadlock`'s own
+        // "stopped" threshold of 3.0 is therefore always true and cannot
+        // be borrowed for this.)
+        let travelling = ball.velocity.norm() > 0.2;
+        plan.carrier = carrier.map(|c| c.id);
+        let point_of_attack = match carrier {
+            Some(c) => Some(c.position),
+            // A/B control — see `MatchContext::press_off`.
+            None if travelling && !our_reception && !MatchContext::press_off() => {
+                Some(ball.position)
+            }
+            None => None,
+        };
+
+        if let Some(point_of_attack) = point_of_attack {
+            // No layer bias on either of these — see `nearest_free`. The
+            // bias exists to hand a MAN to the defender already standing
+            // in his layer; the presser is whoever can reach the ball
+            // first, and charging him for being behind it would pick the
+            // man facing the wrong way.
             if let Some(i) = self.nearest_free(
                 &unit[..unit_len],
                 &taken,
-                carrier.position,
+                point_of_attack,
                 Self::PRESS_REACH,
                 previous.presser(),
                 forward,
+                0.0,
+                false,
             ) {
                 taken[i] = true;
                 n_press += 1;
                 Self::push(plan, unit[i].0, DefensiveDuty::Press);
             }
+            // Cover is a back-line job — a forward sitting goal-side of
+            // the presser is not what the duty means — so it is markers
+            // only.
             if let Some(i) = self.nearest_free(
                 &unit[..unit_len],
                 &taken,
-                carrier.position,
+                point_of_attack,
                 Self::COVER_REACH,
                 None,
                 forward,
+                0.0,
+                true,
             ) {
                 taken[i] = true;
                 n_cover += 1;
@@ -424,6 +531,8 @@ impl DutyAssigner<'_> {
                 Self::MARK_REACH,
                 incumbent,
                 forward,
+                Self::LAYER_BIAS,
+                true,
             ) else {
                 n_unreachable += 1;
                 continue;
@@ -434,15 +543,20 @@ impl DutyAssigner<'_> {
         }
 
         // ── Everyone else holds the zone ─────────────────────────────
-        for (i, (id, _)) in unit[..unit_len].iter().enumerate() {
-            if !taken[i] {
+        //
+        // Markers only. A forward the press did not need is not "holding
+        // a zone" in any defensive sense — he is up the pitch waiting for
+        // the ball back, and giving him the duty would only make the
+        // zone-holding census lie.
+        for (i, (id, _, can_mark)) in unit[..unit_len].iter().enumerate() {
+            if !taken[i] && *can_mark {
                 Self::push(plan, *id, DefensiveDuty::HoldZone);
             }
         }
 
         #[cfg(feature = "match-logs")]
         crate::mid_run_diag::DefenceDiag::note_plan_shape(
-            unit_len,
+            markers,
             threat_len,
             n_skipped_depth,
             n_unreachable,
@@ -458,18 +572,25 @@ impl DutyAssigner<'_> {
     /// keeps the job while he is still a reasonable choice, and loses it
     /// when somebody is clearly better placed. A hard override would
     /// strand a defender chasing a man he can no longer reach.
+    ///
+    /// `layer_bias` is the surcharge on being dragged upfield (see
+    /// below); it belongs to MARKING and is passed as 0.0 for the press.
+    /// `markers_only` skips the forwards, who are in the pool for the
+    /// press and nothing else.
     fn nearest_free(
         &self,
-        unit: &[(u32, Vector3<f32>)],
+        unit: &[(u32, Vector3<f32>, bool)],
         taken: &[bool; MAX_UNIT],
         target: Vector3<f32>,
         reach: f32,
         incumbent: Option<u32>,
         forward: f32,
+        layer_bias: f32,
+        markers_only: bool,
     ) -> Option<usize> {
         let mut best: Option<(usize, f32)> = None;
-        for (i, (id, pos)) in unit.iter().enumerate() {
-            if taken[i] {
+        for (i, (id, pos, can_mark)) in unit.iter().enumerate() {
+            if taken[i] || (markers_only && !can_mark) {
                 continue;
             }
             let raw = (pos - target).magnitude();
@@ -500,7 +621,7 @@ impl DutyAssigner<'_> {
             // — a screener wins the midfielder because he is already
             // standing there, which is what being a screener means.
             let pulled_upfield = ((target.x - pos.x) * forward).max(0.0);
-            let raw = raw + pulled_upfield * Self::LAYER_BIAS;
+            let raw = raw + pulled_upfield * layer_bias;
             // ~4 m of stickiness.
             let effective = if incumbent == Some(*id) {
                 raw - 32.0

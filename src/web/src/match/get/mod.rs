@@ -138,6 +138,9 @@ struct ViewerLabelsJson {
     first_half: String,
     second_half: String,
     loading: String,
+    /// Shown in place of the loading notice when the recording turns out to
+    /// hold nothing — a match that finished goalless has no clips in it.
+    no_recording: String,
 }
 
 #[derive(Serialize)]
@@ -465,6 +468,7 @@ pub async fn match_get_action(
             first_half: i18n.t("first_half").to_string(),
             second_half: i18n.t("second_half").to_string(),
             loading: i18n.t("loading_match").to_string(),
+            no_recording: i18n.t("match_no_recording").to_string(),
         },
     };
 
@@ -593,8 +597,11 @@ pub async fn match_get_action(
         player_of_the_match_id: motm_id.unwrap_or(0),
         player_of_the_match_slug: motm_slug,
         player_of_the_match_name: motm_name,
-        match_recordings_enabled: MatchRuntime::recordings_mode()
-            && league.is_some_and(|l| !l.friendly),
+        // The same flag that decided whether to record decides whether to
+        // offer the replay — including for a friendly, which is a youth or
+        // reserve league fixture here (`League::friendly`). See `Match::play`
+        // for why those are no longer a special case.
+        match_recordings_enabled: MatchRuntime::recordings_mode(),
     })
 }
 

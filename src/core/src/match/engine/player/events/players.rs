@@ -37,7 +37,7 @@ use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::ops::xg::ShotType;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
-    GoalDetail, GoalPosition, MatchContext, MatchField, MatchPlayer, OffsideSnapshot,
+    GoalDetail, GoalPosition, MatchContext, MatchField, MatchPlayer, OffsideLine, OffsideSnapshot,
     PassOriginRestart, PlayerSide, ResultMatchPositionData, ShotTarget,
 };
 #[cfg(feature = "match-logs")]
@@ -4605,6 +4605,7 @@ impl PlayerEventDispatcher {
                     deflected,
                     save_rolled: false,
                     block_rolled: false,
+                    blocked_by: None,
                     shooter_threat,
                     struck_from: field.ball.position,
                 });
@@ -5371,37 +5372,24 @@ impl PlayerEventDispatcher {
             return None;
         }
 
-        let opponent_xs: Vec<f32> = match receiver_side {
-            PlayerSide::Left => field
-                .players
-                .iter()
-                .filter(|p| p.side == Some(PlayerSide::Right))
-                .map(|p| p.position.x)
-                .collect(),
-            PlayerSide::Right => field
-                .players
-                .iter()
-                .filter(|p| p.side == Some(PlayerSide::Left))
-                .map(|p| p.position.x)
-                .collect(),
+        // The line, through the one helper the PASSER also reads — see
+        // [`OffsideLine`]. A referee and a player working from two
+        // different lines is worse than either alone.
+        let defending = match receiver_side {
+            PlayerSide::Left => PlayerSide::Right,
+            PlayerSide::Right => PlayerSide::Left,
         };
-        let mut sorted_xs = opponent_xs;
-        // For Left attackers, defenders' goal is at x=field_width — so
-        // sort DESCENDING (closest to their goal first). For Right
-        // attackers, ASCENDING.
-        match receiver_side {
-            PlayerSide::Left => {
-                sorted_xs.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal))
-            }
-            PlayerSide::Right => {
-                sorted_xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            }
-        }
-        if sorted_xs.len() < 2 {
-            return None;
-        }
-        let second_last = sorted_xs[1];
+        let second_last = OffsideLine::second_last(
+            field
+                .players
+                .iter()
+                .filter(|p| p.side == Some(defending) && !p.is_sent_off)
+                .map(|p| p.position.x),
+            receiver_side,
+        )?;
 
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::RestartCensus::note_offside_snapshot();
         Some(OffsideSnapshot {
             origin,
             passer_id,

@@ -178,6 +178,15 @@ pub struct RecordingMetadata {
     pub chunk_duration_ms: u64,
     #[serde(default)]
     pub total_duration_ms: u64,
+    /// The `[start, end]` ranges the recording covers. The game records the
+    /// goals and nothing else, so most of a match is a hole; the timeline
+    /// greys those out and playback jumps them.
+    ///
+    /// Absent means the whole match is there — a full recording, or one made
+    /// before clipping existed. An empty list is NOT the same thing: it is a
+    /// goalless match, where there was nothing to keep.
+    #[serde(default)]
+    pub segments: Option<Vec<[u64; 2]>>,
 }
 
 /// A single entity's samples over the whole match, plus the cursor from the

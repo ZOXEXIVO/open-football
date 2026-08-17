@@ -730,6 +730,9 @@ pub struct StateProcessingResult {
     /// Propagated up from the per-state `StateChangeResult`. Consumed by
     /// `state.rs` to bump `player.tackle_cooldown`.
     pub start_tackle_cooldown: bool,
+    /// …and the goalkeeper's much shorter one. See
+    /// [`StateChangeResult::start_keeper_cooldown`].
+    pub start_keeper_cooldown: bool,
     /// Tagged reason to attach to the next Shoot event fired by this
     /// player. Matches the pass-reason pattern. Written to
     /// `player.pending_shot_reason` by `state.rs` so the Shooting state
@@ -763,6 +766,7 @@ impl StateProcessingResult {
             velocity: None,
             events: EventCollection::new(),
             start_tackle_cooldown: false,
+            start_keeper_cooldown: false,
             shot_reason: None,
             shape_recall_pull: 0.0,
         }
@@ -791,6 +795,7 @@ impl StateProcessingResult {
     /// rather than a silently vanishing event.
     pub fn merge_state_change(&mut self, change: StateChangeResult) {
         self.start_tackle_cooldown = change.start_tackle_cooldown;
+        self.start_keeper_cooldown = change.start_keeper_cooldown;
         self.shot_reason = change.shot_reason;
         if change.state.is_some() {
             self.state = change.state;
@@ -811,6 +816,16 @@ pub struct StateChangeResult {
     /// applied directly in the state) because `ctx.player` is an
     /// immutable borrow inside the state processor.
     pub start_tackle_cooldown: bool,
+    /// Same signal for a GOALKEEPER who has just gone to ground at a
+    /// carrier's feet. Its own flag because the two cooldowns are wildly
+    /// different lengths and for different reasons: a defender's is thirty
+    /// seconds and exists to hold the whole team's tackle COUNT down to a
+    /// realistic one, while a keeper's is a few seconds and exists only so
+    /// that a smother he loses does not repeat on the tick he gets up. Sharing
+    /// the defender's constant would leave a beaten keeper standing and
+    /// watching the next man through for half a minute.
+    /// See `MatchPlayer::start_keeper_cooldown`.
+    pub start_keeper_cooldown: bool,
     /// Tag the NEXT Shoot event fired by this player with this reason.
     /// Set by transitions to the Shooting state so the resulting
     /// Shoot event carries the decision-path context. Mirrors how
@@ -831,6 +846,7 @@ impl StateChangeResult {
             state: None,
             events: EventCollection::new(),
             start_tackle_cooldown: false,
+            start_keeper_cooldown: false,
             shot_reason: None,
         }
     }

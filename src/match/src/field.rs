@@ -30,8 +30,27 @@ impl Field {
     pub const PENALTY_SPOT_DISTANCE: f32 = 11.0;
     pub const CENTRE_CIRCLE_RADIUS: f32 = 9.15;
     pub const CORNER_ARC_RADIUS: f32 = 1.0;
-    pub const GOAL_WIDTH: f32 = 7.32;
-    pub const GOAL_HEIGHT: f32 = 2.44;
+    /// The goal, as the PHYSICS keeps it — which is what the frame has to be
+    /// drawn on, and the only goal dimension in this crate.
+    ///
+    /// The engine's `GOAL_WIDTH` is 29 game units, i.e. 3.625 m to a post:
+    /// the 0.125 m grid's nearest step to the regulation 3.66, so its goal is
+    /// 7 cm narrower than a real one. `GOAL_HEIGHT` is the metric 2.44 and is
+    /// exact. Since `ball/frame.rs` now rebounds the ball off real posts and
+    /// a real crossbar, drawing the regulation figures instead would put
+    /// every post 3.5 cm wide of where the physics keeps one — a ball seen
+    /// bouncing off thin air beside the woodwork, which is the class of
+    /// artefact the frame exists to remove. One source of truth wins over
+    /// one per cent of accuracy.
+    ///
+    /// Both are restated here rather than shared, for the same reason
+    /// [`Self::NET_DEPTH`] is: this crate cannot depend on `core`. If either
+    /// moves there, it moves here.
+    pub const PHYSICS_GOAL_HALF_WIDTH: f32 = 29.0 * Self::METERS_PER_UNIT;
+    pub const PHYSICS_GOAL_HEIGHT: f32 = 2.44;
+    /// Radius of a post or the bar, matching `GoalFrame::POST_RADIUS`. The
+    /// Laws cap the thickness at 12 cm.
+    pub const POST_RADIUS: f32 = 0.06;
 
     /// Goal-line to the back of the net, and the height of the netting where
     /// it gets there.

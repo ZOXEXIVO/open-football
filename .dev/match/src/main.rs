@@ -6295,6 +6295,19 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                  (any quality term multiplying a calibrated quantity must be centred here)",
                 g[21] as f64 / 1000.0 / ticks
             );
+            // Was diving into the corner worth it? The dive is supposed to
+            // put him NEARER the crossing point than shuffling would; if
+            // this row is worse than the one beside it, it is aimed wrong.
+            if g[22] > 0 && g[24] > 0 {
+                println!(
+                    "  lateral error AT THE SAVE, already DIVING {:.2} m ({} shots)   \
+                     vs still on his feet {:.2} m ({} shots)",
+                    g[23] as f64 / 100.0 / g[22] as f64 * 0.125,
+                    g[22],
+                    g[25] as f64 / 100.0 / g[24] as f64 * 0.125,
+                    g[24]
+                );
+            }
             // The one that matters: how far off the shot was he WHEN IT
             // ARRIVED. If these two are equal then position selection is a
             // decorative attribute and all keeper quality lives in the
@@ -6337,6 +6350,60 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     }
                 );
             }
+        }
+    }
+
+    // ── SAVE CONTACT CENSUS ────────────────────────────────────────────
+    // WHERE the ball turns when a shot is resolved, and how far that is
+    // from the man credited with turning it. A save the viewer can read
+    // is one where the two coincide; a save booked five metres from the
+    // keeper draws as a ball bouncing off nothing.
+    {
+        use core::mid_run_diag::SaveContactDiag;
+        let s = SaveContactDiag::snapshot();
+        if s[8] > 0 {
+            let row = |name: &str, n: u64, sum: u64| {
+                if n > 0 {
+                    println!(
+                        "  {name:<22} {:>6.2}/match   gap ball→player {:>5.2} m",
+                        n as f64 / n_matches as f64,
+                        sum as f64 / 100.0 / n as f64 * 0.125
+                    );
+                }
+            };
+            println!();
+            println!("--- SAVE CONTACT CENSUS (how far the deflection is from the deflector) ---");
+            row("catch", s[0], s[1]);
+            row("parry for a corner", s[2], s[3]);
+            row("spilled parry", s[4], s[5]);
+            row("outfield block", s[6], s[7]);
+            println!(
+                "  ball HEIGHT at resolution {:.2} m over {} resolutions; \
+                 {:.1}% happened with nobody inside 2.5 m",
+                s[9] as f64 / 100.0 / s[8] as f64,
+                s[8],
+                s[10] as f64 * 100.0 / s[8] as f64
+            );
+            // Which axis the gap lives on decides the fix — see
+            // `SAVE_CONTACT`'s doc comment.
+            println!(
+                "  that gap splits {:.2} m ALONG the goal axis / {:.2} m ACROSS it",
+                s[11] as f64 / 100.0 / s[8] as f64 * 0.125,
+                s[12] as f64 / 100.0 / s[8] as f64 * 0.125
+            );
+        }
+        // The woodwork. Real football strikes the frame about 0.5 times a
+        // match; a count far above that means the posts are protruding into
+        // the goal, and a zero means the swept test never fires.
+        let f = core::mid_run_diag::FrameDiag::snapshot();
+        let frame_hits = f[0] + f[1] + f[2];
+        if frame_hits > 0 {
+            println!(
+                "  WOODWORK {:.2}/match  (posts {:.2}, bar {:.2})   real ref ~0.5/match",
+                frame_hits as f64 / n_matches as f64,
+                (f[0] + f[1]) as f64 / n_matches as f64,
+                f[2] as f64 / n_matches as f64
+            );
         }
     }
 
@@ -6427,6 +6494,29 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     0.0
                 }
             );
+            // The 1-v-1 and the anticipatory dive — the two things a
+            // keeper does that the engine had no mechanism for at all
+            // until Aug 2026. A smother that is never attempted and a
+            // dive that only ever starts after the ball has stopped are
+            // both invisible in `SAVE ACCOUNTING`, which is why they went
+            // unnoticed for so long.
+            println!(
+                "  smothers at a carrier's feet {:.2}   gathered {:.2}  knocked away {:.2}  fouled {:.2}",
+                per(11),
+                per(12),
+                per(13),
+                per(14)
+            );
+            println!(
+                "  dives launched IN FLIGHT {:.2} of {:.2} total ({:.0}%)",
+                per(15),
+                per(0),
+                if a[0] > 0 {
+                    a[15] as f64 * 100.0 / a[0] as f64
+                } else {
+                    0.0
+                }
+            );
             // The anchor `SaveModel::ORDINARY_PACE` is derived from — a
             // pace term centred anywhere else silently moves the whole
             // population save rate.
@@ -6435,6 +6525,44 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     "  mean speed of shots reaching the save roll {:.2} u/tick ({} shots)",
                     a[10] as f64 / 100.0 / a[9] as f64,
                     a[9]
+                );
+            }
+        }
+    }
+
+    // ── KEEPER DIVE GATE ───────────────────────────────────────────────
+    // `should_launch` is a conjunction and "he never dives" cannot say
+    // which term killed it. Read the ratios between consecutive stages.
+    {
+        use core::mid_run_diag::KeeperDiveDiag;
+        let d = KeeperDiveDiag::snapshot();
+        if d[0] > 0 {
+            let pct = |i: usize| {
+                if d[0] > 0 {
+                    d[i] as f64 * 100.0 / d[0] as f64
+                } else {
+                    0.0
+                }
+            };
+            println!();
+            println!("--- KEEPER DIVE GATE (ticks with a live shot at his goal) ---");
+            println!(
+                "  asked {}  →  inside the launch window {:.1}%  →  reacted {:.1}%  →  \
+                 wedge {:.1}%  →  more than a step {:.1}%  →  not hopeless {:.1}%  →  \
+                 LAUNCHED {:.1}%",
+                d[0],
+                pct(1),
+                pct(2),
+                pct(3),
+                pct(4),
+                pct(5),
+                pct(6)
+            );
+            if d[3] > 0 {
+                println!(
+                    "  mean gap to cover {:.2} m   mean ground he could still walk {:.2} m",
+                    d[8] as f64 / 10.0 / d[3] as f64 * 0.125,
+                    d[9] as f64 / 10.0 / d[3] as f64 * 0.125
                 );
             }
         }
@@ -6490,6 +6618,57 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     to_target * 100.0
                 );
             }
+        }
+    }
+
+    // ── TOUCHLINE / OFFSIDE CENSUS ─────────────────────────────────────
+    // The two restarts nothing measured. A throw-in leaves no statistic
+    // and an offside only bumps a per-player counter nobody prints, so
+    // "is it given to the right team" and "does the taker walk there"
+    // were both unanswerable.
+    {
+        use core::mid_run_diag::RestartCensus;
+        let r = RestartCensus::snapshot();
+        let per = |n: u64| n as f64 / n_matches as f64;
+        if r[0] > 0 {
+            println!();
+            println!(
+                "--- TOUCHLINE CENSUS --- {:.1} throw-ins/match   (real ~40-50)",
+                per(r[0])
+            );
+            println!(
+                "  awarded on a DISPUTED last touch (toucher and owner on opposite sides): \
+                 {} ({:.0}%)   must be ~0 — either answer is a coin flip",
+                r[1],
+                r[1] as f64 * 100.0 / r[0] as f64
+            );
+            println!(
+                "  the ball straight back out within {} ticks: {:.1}/match ({:.0}%)",
+                RestartCensus::PING_PONG_TICKS,
+                per(r[2]),
+                r[2] as f64 * 100.0 / r[0] as f64
+            );
+            println!(
+                "  taker had to cover {:.1} m to the spot on average, {:.0}% of them more than \
+                 a stride",
+                r[3] as f64 / r[0] as f64 * 0.125,
+                r[4] as f64 * 100.0 / r[0] as f64
+            );
+            println!(
+                "  he WALKED there {:.0}% of the time (teleported {:.1}/match), ball waiting \
+                 {:.1} s each   →   {:.0} s/match with the ball on the line",
+                r[9] as f64 * 100.0 / r[0].max(1) as f64,
+                per(r[7]),
+                r[8] as f64 / r[0].max(1) as f64 / 100.0,
+                r[8] as f64 / n_matches as f64 / 100.0
+            );
+        }
+        if r[5] > 0 {
+            println!(
+                "  offside: {:.1} snapshots/match → {:.2} GIVEN   (real ~4-6 given)",
+                per(r[5]),
+                per(r[6])
+            );
         }
     }
 
@@ -6720,7 +6899,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     still * 100.0
                 );
                 shown += 1;
-                if shown >= 26 {
+                if shown >= 40 {
                     break;
                 }
             }
@@ -7979,6 +8158,45 @@ fn run_paths(matches: usize, level: u8) {
     let mut team_width = 0.0_f64;
     let mut team_samples = 0_u64;
 
+    // ── BALL CROWD ────────────────────────────────────────────────────
+    //
+    // "Too many players in one group" is a claim about how many bodies
+    // share the same square of grass, and no existing counter measures
+    // it: `nearest mate` is a per-player minimum, so a four-man pile and
+    // a pair of pairs read identically. These count the population
+    // around the BALL (which is where the pile forms) and the population
+    // around each PLAYER, both per sampled tick.
+    let mut crowd_hist = [0_u64; 12]; // players within 5 m of the ball
+    let mut crowd_samples = 0_u64;
+    let mut crowd_r5 = 0.0_f64;
+    let mut crowd_r10 = 0.0_f64;
+    let mut stacked_mate = 0_u64; // player with a TEAM-MATE inside 2 m
+    let mut stacked_any = 0_u64; // …with anybody inside 2 m
+    let mut stack_samples = 0_u64;
+
+    // ── FROZEN TABLEAU ────────────────────────────────────────────────
+    //
+    // The per-tick `still` column cannot see this: the replay track is
+    // deduplicated at 0.3u, so anybody moving slower than ~1.2 m/s reads
+    // as still on some samples and a walking player scores 60%. Net
+    // displacement over a FULL SECOND cannot be faked that way — the
+    // recorder emits a heartbeat every 750 ms whether the player moved
+    // or not — so this is the honest count of players who genuinely went
+    // nowhere, and of the moments where most of the pitch did it at once.
+    // That is the thing you see in a paused viewer: a still photograph of
+    // twenty-two people standing on grass.
+    const FROZEN_UNITS: f32 = 2.0; // 25 cm in a second
+    let mut frozen_players = 0.0_f64;
+    let mut tableau_ticks = 0_u64; // ≥8 of them at once
+    let mut tableau_samples = 0_u64;
+    let mut tableau_runs = 0_u64;
+    let mut tableau_longest = 0_u64;
+    // …and the specific thing a paused viewer shows: four or more bodies
+    // inside three metres of one another, none of them going anywhere.
+    let mut knot_ticks = 0_u64;
+    let mut knot_size = 0.0_f64;
+    let mut knot_ball = 0.0_f64;
+
     for m in 0..matches {
         MatchRuntime::set_events_mode(true);
         let (home, _) = make_squad_viewer(1, HOME_TEAM_NAME, level, 0);
@@ -7996,10 +8214,34 @@ fn run_paths(matches: usize, level: u8) {
         let mut prev: HashMap<u32, (f32, f32)> = HashMap::new();
         let mut window_start: HashMap<u32, (f32, f32)> = HashMap::new();
         let mut window_path: HashMap<u32, f64> = HashMap::new();
+        // Rolling one-second history, one slot per sample.
+        const FROZEN_LAG: usize = (1000 / SAMPLE_MS) as usize;
+        let mut lag_ring: Vec<HashMap<u32, (f32, f32)>> = Vec::new();
+        let mut tableau_run = 0_u64;
 
         for id in &ids {
             lines[line_of(*id)].players += 1;
         }
+
+        // Who ever moved. Unused substitutes are in `ids` with a single
+        // recorded position, and `get_player_position_at` is a
+        // nearest-neighbour read, so they would otherwise read as
+        // perfectly frozen for ninety minutes.
+        let on_pitch: std::collections::HashSet<u32> = ids
+            .iter()
+            .copied()
+            .filter(|id| {
+                let a = data.get_player_position_at(*id, last / 4);
+                let b = data.get_player_position_at(*id, last / 2);
+                let c = data.get_player_position_at(*id, last * 3 / 4);
+                match (a, b, c) {
+                    (Some(a), Some(b), Some(c)) => {
+                        (a - b).magnitude() > 1.0 || (b - c).magnitude() > 1.0
+                    }
+                    _ => false,
+                }
+            })
+            .collect();
 
         let mut t = 0_u64;
         while t <= last {
@@ -8034,6 +8276,126 @@ fn run_paths(matches: usize, level: u8) {
                     (0.0, 272.5)
                 }
             };
+
+            // Who has gone nowhere in the last full second, and are most
+            // of them doing it at the same time?
+            if lag_ring.len() >= FROZEN_LAG {
+                let then = &lag_ring[lag_ring.len() - FROZEN_LAG];
+                let mut frozen = 0_usize;
+                // Only players who are actually PLAYING. An unused
+                // substitute sits on one recorded position all match and
+                // is frozen by construction, and there are as many of
+                // them as there are starters.
+                for (id, pos) in snap.iter().filter(|(id, _)| on_pitch.contains(id)) {
+                    if let Some(p0) = then.get(id) {
+                        let net = ((pos.0 - p0.0).powi(2) + (pos.1 - p0.1).powi(2)).sqrt();
+                        if net < FROZEN_UNITS {
+                            frozen += 1;
+                        }
+                    }
+                }
+                // The knot: the biggest set of players inside 3 m of one
+                // of them, counted only when NONE of them is moving.
+                let mut best = 0_usize;
+                for (id, pos) in snap.iter().filter(|(id, _)| on_pitch.contains(id)) {
+                    let mut n = 0_usize;
+                    let mut all_frozen = true;
+                    for (oid, opos) in snap.iter().filter(|(id, _)| on_pitch.contains(id)) {
+                        if ((pos.0 - opos.0).powi(2) + (pos.1 - opos.1).powi(2)).sqrt() >= 24.0 {
+                            continue;
+                        }
+                        n += 1;
+                        let moved = then
+                            .get(oid)
+                            .map(|p0| {
+                                ((opos.0 - p0.0).powi(2) + (opos.1 - p0.1).powi(2)).sqrt()
+                                    >= FROZEN_UNITS
+                            })
+                            .unwrap_or(true);
+                        if moved {
+                            all_frozen = false;
+                            break;
+                        }
+                    }
+                    let _ = id;
+                    if all_frozen && n > best {
+                        best = n;
+                    }
+                }
+                if best >= 4 {
+                    knot_ticks += 1;
+                    knot_size += best as f64;
+                    if let Some(b) = data.get_ball_position_at(t) {
+                        let near = snap
+                            .iter()
+                            .filter(|(id, _)| on_pitch.contains(id))
+                            .map(|(_, p)| ((p.0 - b.x).powi(2) + (p.1 - b.y).powi(2)).sqrt())
+                            .fold(f32::MAX, f32::min);
+                        knot_ball += near as f64;
+                    }
+                }
+
+                frozen_players += frozen as f64;
+                tableau_samples += 1;
+                if frozen >= 8 {
+                    tableau_ticks += 1;
+                    tableau_run += 1;
+                } else {
+                    if tableau_run > 0 {
+                        tableau_runs += 1;
+                        tableau_longest = tableau_longest.max(tableau_run);
+                    }
+                    tableau_run = 0;
+                }
+            }
+            lag_ring.push(snap.iter().copied().collect());
+            if lag_ring.len() > FROZEN_LAG + 1 {
+                lag_ring.remove(0);
+            }
+
+            // How many bodies are inside 5 m / 10 m of the ball, and how
+            // many players have somebody standing on top of them. 40u =
+            // 5 m, 80u = 10 m, 16u = 2 m.
+            if let Some(b) = data.get_ball_position_at(t) {
+                let mut n5 = 0_usize;
+                let mut n10 = 0_usize;
+                for (_, p) in &snap {
+                    let d = ((p.0 - b.x).powi(2) + (p.1 - b.y).powi(2)).sqrt();
+                    if d < 40.0 {
+                        n5 += 1;
+                    }
+                    if d < 80.0 {
+                        n10 += 1;
+                    }
+                }
+                crowd_hist[n5.min(11)] += 1;
+                crowd_r5 += n5 as f64;
+                crowd_r10 += n10 as f64;
+                crowd_samples += 1;
+            }
+            for (id, pos) in &snap {
+                let mut mate = false;
+                let mut any = false;
+                for (oid, opos) in &snap {
+                    if oid == id {
+                        continue;
+                    }
+                    let d = ((pos.0 - opos.0).powi(2) + (pos.1 - opos.1).powi(2)).sqrt();
+                    if d < 16.0 {
+                        any = true;
+                        if (*id < 200) == (*oid < 200) {
+                            mate = true;
+                        }
+                    }
+                }
+                stack_samples += 1;
+                if mate {
+                    stacked_mate += 1;
+                }
+                if any {
+                    stacked_any += 1;
+                }
+            }
 
             // Team shape (home outfielders only — one team is enough).
             let outfield: Vec<&(u32, (f32, f32))> = snap
@@ -8162,6 +8524,48 @@ fn run_paths(matches: usize, level: u8) {
             team_length / team_samples as f64 * M_PER_UNIT,
             team_width / team_samples as f64 * M_PER_UNIT,
         );
+    }
+    if crowd_samples > 0 {
+        println!();
+        println!("--- BALL CROWD (how many bodies share the ball's square of grass) ---");
+        println!(
+            "  within 5m: {:.2} players   within 10m: {:.2}   (real ~1.5-2.5 / ~4-5)",
+            crowd_r5 / crowd_samples as f64,
+            crowd_r10 / crowd_samples as f64,
+        );
+        print!("  distribution inside 5m:");
+        for (n, count) in crowd_hist.iter().enumerate() {
+            if *count == 0 {
+                continue;
+            }
+            print!(" {}:{:.0}%", n, *count as f64 / crowd_samples as f64 * 100.0);
+        }
+        println!();
+        println!(
+            "  a player has a TEAM-MATE inside 2m on {:.1}% of his ticks, anybody on {:.1}%",
+            stacked_mate as f64 / stack_samples.max(1) as f64 * 100.0,
+            stacked_any as f64 / stack_samples.max(1) as f64 * 100.0,
+        );
+    }
+    if tableau_samples > 0 {
+        let n = tableau_samples as f64;
+        println!(
+            "  genuinely FROZEN (net <25cm over a full second): {:.1} of 22 players on average; \
+             8+ at once on {:.1}% of ticks ({:.1}s/match over {} spells, longest {:.1}s)",
+            frozen_players / n,
+            tableau_ticks as f64 / n * 100.0,
+            tableau_ticks as f64 * SAMPLE_MS as f64 / 1000.0 / matches as f64,
+            tableau_runs,
+            tableau_longest as f64 * SAMPLE_MS as f64 / 1000.0,
+        );
+        println!(
+            "  a STANDING KNOT (4+ bodies inside 3m, none of them moving): {:.1}% of ticks, \
+             {:.1}s/match, mean {:.1} players",
+            knot_ticks as f64 / n * 100.0,
+            knot_ticks as f64 * SAMPLE_MS as f64 / 1000.0 / matches as f64,
+            knot_size / knot_ticks.max(1) as f64,
+        );
+        let _ = knot_ball;
     }
     println!();
     println!("  reference: nearest team-mate ~15-20m, nearest opponent ~5-12m,");

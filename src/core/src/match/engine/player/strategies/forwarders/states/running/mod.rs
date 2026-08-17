@@ -9,6 +9,7 @@ use crate::r#match::player::strategies::common::players::ops::forward_shot_decis
     BallCarry, ShotDecision, evaluate_forward_shot_decision,
 };
 use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
+use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
@@ -1665,8 +1666,27 @@ impl ForwardRunningState {
             return false;
         }
 
+        // The team plan's answer wins. `DefensivePlan` nominates exactly
+        // one presser per side, by distance to the point of attack and
+        // with no positional thumb on the scale, and every other part of
+        // the defensive model treats that nomination as authoritative —
+        // `TackleEngagement::should_commit` and both midfield press gates
+        // already accept it. The front line was the last place that did
+        // not, and it is the place it mattered most.
+        if TackleEngagement::is_nominated_presser(ctx) {
+            return true;
+        }
+
         // Only the closest player should initiate the press — prevents swarming
         // Exception: very close range (<30) anyone can press reactively
+        //
+        // ⚠ `is_best_player_to_chase_ball` is a SINGLE-PLAYER election run
+        // across the whole team, so as the only door into the state it
+        // capped the front line's pressing at "the one man in eleven who
+        // happens to be nearest the ball, and only when he is also nearer
+        // than every defender and midfielder". Measured before the
+        // nomination above was accepted: `Forward: Pressing` took 0.3% of
+        // all AI ticks — 2.2% of a forward's own match.
         let ball_distance = ctx.ball().distance();
         if ball_distance > 30.0 && !ctx.team().is_best_player_to_chase_ball() {
             return false;

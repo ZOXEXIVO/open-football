@@ -591,6 +591,29 @@ impl MatchContext {
         *OFF.get_or_init(|| std::env::var("OF_SHAPE_OFF").is_ok())
     }
 
+    /// Diagnostic switch: with `OF_PRESS_OFF` set, [`DefensivePlan`]
+    /// nominates a presser only when an opponent is actually CARRYING
+    /// the ball, and only from the back line and midfield — the model as
+    /// it stood before 2026-08-17.
+    ///
+    /// The two halves of that are what the switch exists to A/B, because
+    /// between them they decide whether anybody closes the ball down at
+    /// all: `carrier` is `None` for every pass in flight and every loose
+    /// ball, which is most of a match, and the front line was not in the
+    /// pool. Measured with this on: press 0.25 duties per refresh,
+    /// `Forward: Pressing` 0.3% of AI ticks, ball stuck 18.0 s/match.
+    ///
+    /// Same pattern and same purpose as [`shape_off`](Self::shape_off) —
+    /// the effect reaches every defensive tick, so the question "did the
+    /// press work cause this?" cannot be answered from the diff, and must
+    /// not be answered by checking out an older revision either.
+    /// Debug infrastructure — do not remove.
+    pub fn press_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_PRESS_OFF").is_ok())
+    }
+
     /// Match minute before which BEHAVIORAL score reactions stay off —
     /// teams play their football regardless of the scoreline until the
     /// final quarter, exactly like real sides do (managers don't park
