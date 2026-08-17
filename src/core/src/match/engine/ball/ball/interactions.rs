@@ -317,7 +317,38 @@ impl SaveModel {
     /// twenty-five does not.
     const FULL_STRETCH_TICKS: f32 = 45.0;
     /// Floor on that: even a point-blank strike can hit a raised hand.
-    const REFLEX_FLOOR: f32 = 0.42;
+    ///
+    /// **This is where the close-range population save rate lives**, and it
+    /// is the only term that binds there: a shot struck from inside 11 m is
+    /// in the air about 14 ticks, so `flight / FULL_STRETCH_TICKS` is well
+    /// under the floor and every one of them is priced at exactly this
+    /// fraction of his reach. `FULL_STRETCH_TICKS` never enters. Measured,
+    /// 71-73% of on-frame shots from that band arrive beyond his reach, so
+    /// this constant sets the largest single block of goals in the model.
+    ///
+    /// ⚠ **RE-DERIVED 0.42 → 0.46, Aug 2026, and the reason is the whole
+    /// point.** 0.42 was measured while the universal loose-ball override
+    /// was dragging the keeper out of `PreparingForSave` and into
+    /// `TakeBall` for any unowned ball within 60 u — which a struck shot
+    /// is. So through the last **0.22 s** of every close-range flight he
+    /// was *sprinting at the ball* on the `Active` band with none of
+    /// `KeeperShotReaction`'s set-keeper cap and no plant cost, and this
+    /// floor was calibrated on top of that. `should_force_takeball` now
+    /// declines live shots at his own goal — correctly; he sets himself for
+    /// them — and the same floor then under-priced him by exactly the
+    /// closing that chase used to do: measured at **0.24 m of mean lateral
+    /// miss** (3.91 → 4.15 m inside 11 m), which is 9.7% of the 2.48 m his
+    /// reach is worth there. 0.42 × 1.097 = 0.46.
+    ///
+    /// It is pinned by the population save rate rather than by physics —
+    /// 0.42 and 0.46 of a 2.5-4.0 m reach are both plausible for a hand at
+    /// a point-blank strike — which is the sanctioned place to carry it.
+    /// See the note on `SKILL_FLOOR` for why it must NEVER go there
+    /// instead. Re-derive from `KEEPER GUARD CENSUS`
+    /// (`shots arriving on frame … BEYOND HIS REACH`) and the `< 11 m` row
+    /// of `KEEPER BY SHOT RANGE` if the keeper's behaviour during a flight
+    /// changes again.
+    const REFLEX_FLOOR: f32 = 0.46;
     /// Ceiling on the angle projection. Physically it runs away as the
     /// keeper closes on the ball, and past a certain point the model stops
     /// describing a save and starts describing a block.
@@ -1738,6 +1769,23 @@ impl Ball {
             let (arrivals, error) = if diving { (22, 23) } else { (24, 25) };
             crate::mid_run_diag::KeeperGuardDiag::note(arrivals);
             crate::mid_run_diag::KeeperGuardDiag::add(error, (lateral_error * 100.0) as u64);
+            // …and the same arrival split by the KEEPER, so quality is
+            // visible in whether he goes for it as well as in whether he
+            // stops it. See `KeeperQualityDiag`; needs `SQUAD_SPREAD` set or
+            // every keeper in the run is the same player.
+            {
+                use crate::mid_run_diag::KeeperQualityDiag as Q;
+                let skill = sc::gk_shot_stopping(keeper, minute_for_effective);
+                let band = Q::band(skill);
+                Q::note(band, 0);
+                if lateral_error > reach {
+                    Q::note(band, 1);
+                }
+                if diving {
+                    Q::note(band, 2);
+                }
+                Q::add(band, 4, (skill * 1000.0).max(0.0) as u64);
+            }
             // …and the same arrival split by HOW FAR IT WAS STRUCK FROM.
             // "Beyond his reach" means one thing at six yards and the
             // opposite at twenty-five. See `KeeperRangeDiag`.
@@ -1854,11 +1902,12 @@ impl Ball {
         save_accounting_stats::SAVE_PHYSICS_PASSED.fetch_add(1, Ordering::Relaxed);
         #[cfg(feature = "match-logs")]
         {
-            use crate::mid_run_diag::KeeperRangeDiag as R;
+            use crate::mid_run_diag::{KeeperQualityDiag as Q, KeeperRangeDiag as R};
             let strike = (shot_target.struck_from
                 - Vector3::new(goal_x, goal_y, shot_target.struck_from.z))
             .magnitude();
             R::note(R::band(strike), 4);
+            Q::note(Q::band(skill), 3);
         }
 
         // Save outcome distribution. Catch / safe parry / dangerous
@@ -2131,6 +2180,38 @@ impl Ball {
 mod tests {
     use super::SaveModel;
     use nalgebra::Vector3;
+
+    /// **The close-range save rate lives in `REFLEX_FLOOR`, and nothing
+    /// else can move it.**
+    ///
+    /// A shot from inside 11 m is in the air about 14 ticks, so the ramp is
+    /// far below the floor and every one of those shots is priced at exactly
+    /// `REFLEX_FLOOR × base_reach × projection`. That band is 70-73% of
+    /// on-frame shots arriving beyond his reach and the largest single block
+    /// of goals in the model, so it is worth a test saying out loud which
+    /// constant owns it — `FULL_STRETCH_TICKS` looks like it does and never
+    /// enters at all. Both were "corrected" once already because of that
+    /// (see the notes on each).
+    #[test]
+    fn a_point_blank_strike_is_priced_by_the_reflex_floor_alone() {
+        // Six metres out, keeper on his line: 48 u at 2.6 u/tick is ~18
+        // ticks of flight.
+        let struck_from = Vector3::new(48.0, 270.0, 0.0);
+        let keeper = Vector3::new(0.0, 270.0, 0.0);
+        let (_, reach) = SaveModel::wedge(struck_from, 2.6, keeper, 26.0, 0.0, 270.0);
+        let floored = 26.0 * SaveModel::REFLEX_FLOOR;
+        assert!(
+            (reach - floored).abs() < 0.01,
+            "a point-blank strike must be priced at the floor, got {reach:.2} against \
+             {floored:.2} — if the ramp is binding here, FULL_STRETCH_TICKS is silently \
+             carrying the close-range save rate"
+        );
+        // …and the floor has to leave him a real hand, not a token one: at
+        // the bottom of the reach band (20 u) this is what he covers against
+        // a shot from six yards, and it is the whole of why that band is
+        // survivable at all.
+        assert!(SaveModel::REFLEX_FLOOR > 0.35 && SaveModel::REFLEX_FLOOR < 0.60);
+    }
 
     /// A keeper standing ON his line must get exactly the treatment he got
     /// before the wedge existed. Everything about the population save rate

@@ -391,30 +391,37 @@ impl PlayerFieldPositionGroup {
         // transition to TakeBall via their own Standing/Walking guard
         // when the ball actually threatens their area.
         if group == PlayerFieldPositionGroup::Goalkeeper {
-            // ⚠ **A SHOT AT HIS OWN GOAL REACHES THIS AND IS TREATED AS A
-            // LOOSE BALL.** A struck shot is unowned and carries no
-            // `pass_target`, so every guard above waves it through, and it
-            // lands inside the 60 u radius below by definition — it is aimed
-            // at his goal. So the override pulls the keeper out of
-            // `PreparingForSave` and into `TakeBall` on the tick a shot comes
-            // within 7.5 m, and `TakeBall` does not set him: he runs AT the
-            // ball like an outfielder going for a loose one. (`Catching` and
-            // `Diving` are safe by being committed actions; the set stance
-            // deliberately is not, and that is the hole.)
+            // **A SHOT AT HIS OWN GOAL IS NOT A LOOSE BALL TO CHASE.**
             //
-            // **Excluding live shots here was measured and NOT taken: it
-            // costs 0.25 goals/match** (3 arms of `stats 200 14 14`, 5.38 →
-            // 5.64) and a point of saves/on-target. The chase is an
-            // accidental save mechanism — it moves him at the `Active` band
-            // straight at the ball while `KeeperShotReaction::on_foot`
-            // correctly caps a set keeper to a shuffle — and the population
-            // save rate is calibrated with it in. Removing it is right and
-            // has to be done together with re-deriving the save reach; see
-            // the same open item on `GoalkeeperSpeedContext::Explosive`.
+            // A struck shot is unowned and carries no `pass_target`, so
+            // every guard above waves it through, and it lands inside the
+            // 60 u radius below by definition — it is aimed at his goal. So
+            // the override pulled the keeper out of `PreparingForSave` and
+            // into `TakeBall` on the tick a shot came within 7.5 m, and
+            // `TakeBall` does not set him: he ran AT the ball like an
+            // outfielder going for a loose one, at the `Active` band, with
+            // none of `KeeperShotReaction::on_foot`'s set-keeper cap on him.
+            // (`Catching` and `Diving` were safe by being committed actions;
+            // the set stance deliberately is not, and that was the hole.)
             //
-            // What IS fixed is that `TakeBall` now asks `KeeperShotDive`
-            // whether to leave his feet, so he no longer runs past a shot he
-            // should be diving at.
+            // ⚠ **This chase was carrying part of the population save
+            // rate.** Removing it costs 0.25 goals/match on its own, because
+            // the ground it covered in the last 7.5 m of a flight is ground
+            // the geometry never credited him with. That is re-derived where
+            // it belongs — in `SaveModel::FULL_STRETCH_TICKS`, see the note
+            // there — and NOT bought back by letting him sprint at shots.
+            //
+            // What he does about a shot belongs to the save states, all of
+            // it: `KeeperShotReaction` for the set and the read,
+            // `KeeperShotDive` for the dive, `KeeperShotSave` for the roll.
+            if tick_context
+                .ball
+                .cached_shot_target
+                .as_ref()
+                .is_some_and(|t| Some(t.defending_side) == player.side)
+            {
+                return false;
+            }
             let gk_dist_sq = (ball_pos - player.position).norm_squared();
             if gk_dist_sq > 60.0 * 60.0 {
                 return false;

@@ -6740,6 +6740,50 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         }
     }
 
+    // ── KEEPER BY HIS OWN QUALITY ──────────────────────────────────────
+    // Does a better keeper GO FOR more of them, as well as stopping more?
+    // Needs `SQUAD_SPREAD` set — without it every keeper in the run is
+    // retargeted to the same mean and one band swallows the population.
+    {
+        use core::mid_run_diag::KeeperQualityDiag;
+        let q = KeeperQualityDiag::snapshot();
+        if q.iter().any(|&n| n > 0) {
+            println!();
+            println!(
+                "--- KEEPER BY HIS OWN QUALITY (gk_shot_stopping; set SQUAD_SPREAD or one \
+                 band holds everything) ---"
+            );
+            println!(
+                "  {:<12} {:>8} {:>7} {:>9} {:>9} {:>8} {:>10}",
+                "band", "arrived", "mean", "beyond", "diving", "saved", "dives/1k"
+            );
+            for (label, band) in ["< 0.40", "0.40-0.50", "0.50-0.60", "≥ 0.60"]
+                .iter()
+                .zip(0..4usize)
+            {
+                let s = |i: usize| q[band * 6 + i];
+                let n = s(0);
+                if n == 0 {
+                    continue;
+                }
+                let per = |v: u64| v as f64 * 100.0 / n as f64;
+                println!(
+                    "  {:<12} {:>8} {:>7.3} {:>8.0}% {:>8.0}% {:>7.0}% {:>10.0}",
+                    label,
+                    n,
+                    s(4) as f64 / 1000.0 / n as f64,
+                    per(s(1)),
+                    per(s(2)),
+                    per(s(3)),
+                    // In-flight dive launches per 1000 arrivals — the
+                    // attempt rate, normalised so the bands are comparable
+                    // whatever share of the population each holds.
+                    s(5) as f64 * 1000.0 / n as f64,
+                );
+            }
+        }
+    }
+
     // ── SHOT ARRIVAL HEIGHT: PREDICTED vs REAL ─────────────────────────
     {
         use core::mid_run_diag::ShotHeightDiag;

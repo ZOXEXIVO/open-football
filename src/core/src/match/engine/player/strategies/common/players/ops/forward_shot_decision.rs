@@ -1152,6 +1152,63 @@ pub mod mid_run_diag {
         }
     }
 
+    /// **Does keeper QUALITY separate — not just in whether he saves it, but
+    /// in whether he goes for it at all?**
+    ///
+    /// Every other keeper row pools the two keepers in a match, and with
+    /// `SQUAD_SPREAD` unset every keeper in a run is the same player, so the
+    /// quality axis is invisible by construction. This bands the outcome AND
+    /// the attempt by the keeper's own `sc::gk_shot_stopping` — the same
+    /// composite `SaveModel`'s contest scores against, so a band here means
+    /// the same thing it means there.
+    ///
+    /// ⚠ Banded on `sc::gk_shot_stopping` at BOTH sites, deliberately.
+    /// `GoalkeeperSkillProfile::shot_stopping` is a different composite with
+    /// different weights and curves, so mixing the two would put the same
+    /// keeper in different bands depending on which site counted him.
+    ///
+    /// Four bands (<0.40 / 0.40-0.50 / 0.50-0.60 / ≥0.60) × 6 slots:
+    /// +0 on-frame arrivals, +1 of those beyond his reach, +2 arrivals with
+    /// him already off his feet, +3 saves the roll passed, +4 Σ the
+    /// composite ×1000 (so the band's real mean is printed rather than
+    /// assumed), +5 in-flight dive launches.
+    pub static GK_QUALITY: [AtomicU64; 24] = [const { AtomicU64::new(0) }; 24];
+
+    pub struct KeeperQualityDiag;
+
+    impl KeeperQualityDiag {
+        pub fn band(shot_stopping: f32) -> usize {
+            if shot_stopping < 0.40 {
+                0
+            } else if shot_stopping < 0.50 {
+                1
+            } else if shot_stopping < 0.60 {
+                2
+            } else {
+                3
+            }
+        }
+
+        pub fn note(band: usize, slot: usize) {
+            Self::add(band, slot, 1);
+        }
+
+        pub fn add(band: usize, slot: usize, n: u64) {
+            let i = band * 6 + slot;
+            if i < GK_QUALITY.len() {
+                GK_QUALITY[i].fetch_add(n, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 24] {
+            let mut out = [0u64; 24];
+            for (slot, c) in out.iter_mut().zip(GK_QUALITY.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
     pub struct KeeperRangeDiag;
 
     impl KeeperRangeDiag {

@@ -1,7 +1,5 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
-use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperShotDive,
-};
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::common::states::LooseBallChase;
 use crate::r#match::{
@@ -21,28 +19,35 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
             ));
         }
 
-        // **A shot he cannot reach on his feet — leave them, from here too.**
+        // **A shot has been struck at his goal — stop chasing and go and
+        // defend it.**
         //
-        // This state is not only entered deliberately: the universal
-        // loose-ball override in `PlayerFieldPositionGroup::process` forces
-        // a keeper into it for any unowned ball within 7.5 m of him, and a
-        // shot at his own goal is exactly that (see the note there). So he
-        // spent whole flights here — measured on recordings, long-range
-        // goals whose entire keeper state track reads `Take Ball` — and this
-        // state asked nothing about the shot at all: no set, no read, no
-        // dive, just a sprint at the ball's current position. A shot he
-        // should be full-stretch for went past a man still running.
+        // Every sibling state that can leave him off his line carries this
+        // branch — `Standing`, `Walking`, `ComingOut`, `ReturningToGoal` —
+        // and this one did not, so a keeper who had committed to a loose
+        // ball kept sprinting at the ball's current position for the whole
+        // flight: no set, no read, no dive. Measured on recordings,
+        // long-range goals whose entire keeper state track reads
+        // `Take Ball`.
         //
-        // Exiting to `PreparingForSave` instead was tried and is WRONG: the
-        // override re-forces `TakeBall` on the very next tick, so the pair
-        // is a two-cycle — the same `COMMIT < DISENGAGE` failure this engine
-        // has broken six times. The dive is a real commitment (`Diving` is
-        // an `is_committed_action`, which the override respects), so asking
-        // the dive question is the one thing that can be settled from here.
-        if KeeperShotDive::should_launch(ctx) {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Diving,
-            ));
+        // He got here far more often than the state name suggests, too. The
+        // universal loose-ball override in
+        // `PlayerFieldPositionGroup::process` forced a keeper into `TakeBall`
+        // for any unowned ball inside 60 u, and a struck shot is unowned —
+        // so this branch on its own used to be a two-cycle against it, in
+        // and straight back out. That override now declines live shots at his
+        // own goal, which is what makes the hand-off here stick.
+        //
+        // `PreparingForSave` rather than `Catching` or `Diving`: he may be a
+        // long way from his line, and that state owns the whole question —
+        // the smother, `KeeperShotDive`, the aerial claim, and the hand-off
+        // to `Catching` once he is inside the space he defends. One owner.
+        if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
+            if Some(target.defending_side) == ctx.player.side {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::PreparingForSave,
+                ));
+            }
         }
 
         // Transition to Catching when ball is very close and not owned

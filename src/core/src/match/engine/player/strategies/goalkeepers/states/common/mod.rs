@@ -1925,12 +1925,23 @@ impl KeeperShotDive {
         {
             KeeperDiveDiag::note(6);
             KeeperActionDiag::note(15);
-            use crate::mid_run_diag::KeeperRangeDiag as R;
+            use crate::mid_run_diag::{KeeperQualityDiag as Q, KeeperRangeDiag as R};
             R::note(range_band, 5);
             R::note(range_band, 13);
             if climb > 0.0 {
                 R::note(range_band, 17);
             }
+            // …and by the keeper, on the same composite `try_save_shot`
+            // bands the ARRIVAL by, so "did quality decide whether he went
+            // for it" and "did quality decide whether he stopped it" are
+            // answered on one axis. See `KeeperQualityDiag`.
+            Q::note(
+                Q::band(sc::gk_shot_stopping(
+                    ctx.player,
+                    sc::minute_from_ms(ctx.context.total_match_time),
+                )),
+                5,
+            );
         }
         true
     }
