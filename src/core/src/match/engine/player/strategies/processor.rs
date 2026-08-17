@@ -391,6 +391,30 @@ impl PlayerFieldPositionGroup {
         // transition to TakeBall via their own Standing/Walking guard
         // when the ball actually threatens their area.
         if group == PlayerFieldPositionGroup::Goalkeeper {
+            // ⚠ **A SHOT AT HIS OWN GOAL REACHES THIS AND IS TREATED AS A
+            // LOOSE BALL.** A struck shot is unowned and carries no
+            // `pass_target`, so every guard above waves it through, and it
+            // lands inside the 60 u radius below by definition — it is aimed
+            // at his goal. So the override pulls the keeper out of
+            // `PreparingForSave` and into `TakeBall` on the tick a shot comes
+            // within 7.5 m, and `TakeBall` does not set him: he runs AT the
+            // ball like an outfielder going for a loose one. (`Catching` and
+            // `Diving` are safe by being committed actions; the set stance
+            // deliberately is not, and that is the hole.)
+            //
+            // **Excluding live shots here was measured and NOT taken: it
+            // costs 0.25 goals/match** (3 arms of `stats 200 14 14`, 5.38 →
+            // 5.64) and a point of saves/on-target. The chase is an
+            // accidental save mechanism — it moves him at the `Active` band
+            // straight at the ball while `KeeperShotReaction::on_foot`
+            // correctly caps a set keeper to a shuffle — and the population
+            // save rate is calibrated with it in. Removing it is right and
+            // has to be done together with re-deriving the save reach; see
+            // the same open item on `GoalkeeperSpeedContext::Explosive`.
+            //
+            // What IS fixed is that `TakeBall` now asks `KeeperShotDive`
+            // whether to leave his feet, so he no longer runs past a shot he
+            // should be diving at.
             let gk_dist_sq = (ball_pos - player.position).norm_squared();
             if gk_dist_sq > 60.0 * 60.0 {
                 return false;

@@ -4,12 +4,15 @@ use crate::common::default_handler::{
     COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION, MATCH_VIEWER_AVAILABLE, MATCH_VIEWER_VERSION,
 };
 use crate::common::slug::player_history_slug;
+use crate::face::skin::CountrySkin;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
+use appearance::Appearance;
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::MatchRuntime;
+use core::Player;
 use core::SimulatorData;
 use core::r#match::MatchResultRaw;
 use core::r#match::player::statistics::MatchStatisticType;
@@ -157,6 +160,57 @@ struct PlayerJson {
     last_name: String,
     position: String,
     is_home: bool,
+    /// What he looks like, as indices into the shared `appearance::Palette`
+    /// tables. Resolved here rather than in the viewer for the same reason
+    /// the labels above are: the answer needs the country table, which lives
+    /// on this side of the WebAssembly boundary — and the portrait on his
+    /// profile page is drawn from the very same numbers, so a player is one
+    /// man in both places instead of two.
+    skin: u8,
+    hair: u8,
+    eyes: u8,
+}
+
+impl PlayerJson {
+    /// Everyone in one squad, in team-sheet order.
+    ///
+    /// `number` carries on across the two calls a side makes (starters, then
+    /// bench), so a squad with no registered shirt numbers still hands out
+    /// 1..18 rather than 1..11 twice.
+    fn append(
+        into: &mut Vec<PlayerJson>,
+        data: &SimulatorData,
+        player_ids: &[u32],
+        is_home: bool,
+        number: &mut u8,
+    ) {
+        for player_id in player_ids {
+            let Some(player) = data.player(*player_id) else {
+                continue;
+            };
+            into.push(PlayerJson::of(data, player, is_home, *number));
+            *number += 1;
+        }
+    }
+
+    fn of(data: &SimulatorData, player: &Player, is_home: bool, squad_number: u8) -> PlayerJson {
+        let shirt_number = player.shirt_number();
+        let look = Appearance::of(player.id, CountrySkin::for_country(data, player.country_id));
+        PlayerJson {
+            id: player.id,
+            shirt_number: if shirt_number == 0 {
+                squad_number
+            } else {
+                shirt_number
+            },
+            last_name: player.full_name.display_last_name().to_string(),
+            position: player.position().get_short_name().to_string(),
+            is_home,
+            skin: look.skin as u8,
+            hair: look.hair as u8,
+            eyes: look.eyes as u8,
+        }
+    }
 }
 
 pub async fn match_get_action(
@@ -265,64 +319,36 @@ pub async fn match_get_action(
 
     // Assign squad numbers (1-based) per team when shirt_number is not set
     let mut home_number: u8 = 1;
-    for player_id in &result_details.left_team_players.main {
-        if let Some(p) = simulator_data.player(*player_id) {
-            let sn = p.shirt_number();
-            let number = if sn == 0 { home_number } else { sn };
-            viewer_players.push(PlayerJson {
-                id: p.id,
-                shirt_number: number,
-                last_name: p.full_name.display_last_name().to_string(),
-                position: p.position().get_short_name().to_string(),
-                is_home: true,
-            });
-            home_number += 1;
-        }
-    }
-    for player_id in &result_details.left_team_players.substitutes {
-        if let Some(p) = simulator_data.player(*player_id) {
-            let sn = p.shirt_number();
-            let number = if sn == 0 { home_number } else { sn };
-            viewer_players.push(PlayerJson {
-                id: p.id,
-                shirt_number: number,
-                last_name: p.full_name.display_last_name().to_string(),
-                position: p.position().get_short_name().to_string(),
-                is_home: true,
-            });
-            home_number += 1;
-        }
-    }
+    PlayerJson::append(
+        &mut viewer_players,
+        simulator_data,
+        &result_details.left_team_players.main,
+        true,
+        &mut home_number,
+    );
+    PlayerJson::append(
+        &mut viewer_players,
+        simulator_data,
+        &result_details.left_team_players.substitutes,
+        true,
+        &mut home_number,
+    );
 
     let mut away_number: u8 = 1;
-    for player_id in &result_details.right_team_players.main {
-        if let Some(p) = simulator_data.player(*player_id) {
-            let sn = p.shirt_number();
-            let number = if sn == 0 { away_number } else { sn };
-            viewer_players.push(PlayerJson {
-                id: p.id,
-                shirt_number: number,
-                last_name: p.full_name.display_last_name().to_string(),
-                position: p.position().get_short_name().to_string(),
-                is_home: false,
-            });
-            away_number += 1;
-        }
-    }
-    for player_id in &result_details.right_team_players.substitutes {
-        if let Some(p) = simulator_data.player(*player_id) {
-            let sn = p.shirt_number();
-            let number = if sn == 0 { away_number } else { sn };
-            viewer_players.push(PlayerJson {
-                id: p.id,
-                shirt_number: number,
-                last_name: p.full_name.display_last_name().to_string(),
-                position: p.position().get_short_name().to_string(),
-                is_home: false,
-            });
-            away_number += 1;
-        }
-    }
+    PlayerJson::append(
+        &mut viewer_players,
+        simulator_data,
+        &result_details.right_team_players.main,
+        false,
+        &mut away_number,
+    );
+    PlayerJson::append(
+        &mut viewer_players,
+        simulator_data,
+        &result_details.right_team_players.substitutes,
+        false,
+        &mut away_number,
+    );
 
     let home_goals = score.home_team.get();
     let away_goals = score.away_team.get();

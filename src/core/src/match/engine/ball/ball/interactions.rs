@@ -1640,6 +1640,11 @@ impl Ball {
         // the save roll, which is not a change to when a save happens but
         // a change to what counts as a shot on target.
         let (frame_y, frame_z) = self.projected_crossing(goal_x);
+        // Does the keeper's own idea of the arrival height — the strike-time
+        // arc every one of his height decisions reads — agree with the ball?
+        // See `ShotHeightDiag`.
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::ShotHeightDiag::note(shot_target.goal_line_z, frame_z, GOAL_HEIGHT);
         let off_frame_high = frame_z > 2.8;
         let off_frame_wide = (frame_y - goal_y).abs() > GOAL_WIDTH + 1.0;
         if off_frame_high || off_frame_wide {
@@ -1733,6 +1738,33 @@ impl Ball {
             let (arrivals, error) = if diving { (22, 23) } else { (24, 25) };
             crate::mid_run_diag::KeeperGuardDiag::note(arrivals);
             crate::mid_run_diag::KeeperGuardDiag::add(error, (lateral_error * 100.0) as u64);
+            // …and the same arrival split by HOW FAR IT WAS STRUCK FROM.
+            // "Beyond his reach" means one thing at six yards and the
+            // opposite at twenty-five. See `KeeperRangeDiag`.
+            {
+                use crate::mid_run_diag::KeeperRangeDiag as R;
+                let strike = (shot_target.struck_from
+                    - Vector3::new(goal_x, goal_y, shot_target.struck_from.z))
+                .magnitude();
+                let band = R::band(strike);
+                R::note(band, 0);
+                if lateral_error > reach {
+                    R::note(band, 1);
+                }
+                R::add(band, 2, (lateral_error * 100.0).max(0.0) as u64);
+                R::add(band, 3, (reach * 100.0).max(0.0) as u64);
+                if diving {
+                    R::note(band, 6);
+                }
+                R::add(
+                    band,
+                    7,
+                    ((shot_target.struck_from - self.position).magnitude()
+                        / self.velocity.norm().max(0.05)
+                        * 10.0)
+                        .max(0.0) as u64,
+                );
+            }
         }
         if lateral_error > reach {
             // He was not there to be beaten. Counted separately from the
@@ -1820,6 +1852,14 @@ impl Ball {
         }
         #[cfg(feature = "match-logs")]
         save_accounting_stats::SAVE_PHYSICS_PASSED.fetch_add(1, Ordering::Relaxed);
+        #[cfg(feature = "match-logs")]
+        {
+            use crate::mid_run_diag::KeeperRangeDiag as R;
+            let strike = (shot_target.struck_from
+                - Vector3::new(goal_x, goal_y, shot_target.struck_from.z))
+            .magnitude();
+            R::note(R::band(strike), 4);
+        }
 
         // Save outcome distribution. Catch / safe parry / dangerous
         // parry / corner — the previous code always caught.

@@ -37,6 +37,18 @@ impl MatchViewer {
             "cargo:rerun-if-changed={}",
             crate_dir.join("Cargo.toml").display()
         );
+        // The viewer's one path dependency, and the only source outside its
+        // own directory that ends up inside the wasm. Left off this list it
+        // would go stale in exactly the way it exists to prevent: the server
+        // would rebuild against a new palette and the viewer would keep
+        // shipping the old one, and every player would change colour on the
+        // way to the pitch.
+        if let Some(workspace) = crate_dir.parent() {
+            println!(
+                "cargo:rerun-if-changed={}",
+                workspace.join("appearance").join("src").display()
+            );
+        }
         println!(
             "cargo:rerun-if-changed={}",
             crate_dir.join(".cargo").join("config.toml").display()

@@ -1342,6 +1342,8 @@ impl Painter<'_> {
 mod tests {
     use super::*;
     use crate::body::BodyParts;
+    use crate::config::PlayerInfo;
+    use crate::kit::Complexion;
 
     fn look(beard: Beard, shaved: bool) -> FaceLook {
         FaceLook {
@@ -1584,8 +1586,6 @@ mod tests {
     #[test]
     #[ignore = "writes a file; run by hand when the face generator changes"]
     fn dump_faces() {
-        use crate::kit::Complexion;
-
         const WIDTH: u32 = 128;
         const HEIGHT: u32 = 96;
 
@@ -1593,10 +1593,22 @@ mod tests {
             panic!("set MATCH_FACE_DUMP to a directory");
         };
         let layout = BodyParts::face_layout();
-        // Real player ids off a real team sheet's worth of consecutive
-        // numbers, which is the case the hash has to break up.
+        // One face per entry of the shared skin ramp, over consecutive ids —
+        // the whole span the server can ask for, and the case the hash behind
+        // the other features has to break up.
         let looks: Vec<FaceLook> = (0..12)
-            .map(|index| Complexion::face(1000 + index))
+            .map(|index| {
+                Complexion::face(&PlayerInfo {
+                    id: 1000 + index as u32,
+                    shirt_number: 1 + index as u8,
+                    last_name: String::new(),
+                    position: "ST".to_string(),
+                    is_home: true,
+                    skin: index as u8,
+                    hair: (index as u8 * 3) % 10,
+                    eyes: (index as u8 * 5) % 8,
+                })
+            })
             .collect();
 
         let across = WIDTH as usize * looks.len();

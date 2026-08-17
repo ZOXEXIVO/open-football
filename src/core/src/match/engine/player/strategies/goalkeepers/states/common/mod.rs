@@ -1616,6 +1616,118 @@ impl KeeperShotDive {
     /// that he cannot step to.* Which is what a goalkeeper does.
     const DESPAIR_REACH: f32 = 3.5;
 
+    /// **How high a keeper can play a shot with his feet on the floor.**
+    ///
+    /// Deliberately head height rather than `AerialReach::STANDING` (2.2 m)
+    /// or `KeeperAerialClaim::standing_ceiling` (2.65 m). Those describe a
+    /// keeper who has *come* for a ball with his arms already above his
+    /// head — a cross he has read for a second and a half. A keeper set for
+    /// a shot has his hands at chest height and a tenth of a second: what
+    /// he can take without leaving the floor is what he can get a hand to
+    /// in front of his own body.
+    pub const SET_CEILING: f32 = AerialReach::HEAD;
+
+    /// The bottom of the same envelope: below this he is not bending down
+    /// for it, he is going down with it. Mid-shin — a ball at hip or knee
+    /// height in front of him is a standing gather, one skidding along the
+    /// floor to his side is the most ordinary diving save in football.
+    const GATHER_FLOOR: f32 = 0.45;
+
+    /// What a metre of climb, and a metre of stoop, are worth in units of
+    /// lateral gap.
+    ///
+    /// ⚠ **DERIVED EXCHANGE RATES, not taste calls.** A dive buys a keeper
+    /// 2.5-3.5 m sideways (`KeeperShotSave::base_reach` × the wedge
+    /// projection) and 0.6-0.8 m upward (`PlayerMatchState::leap_apex` on
+    /// `Diving`, plus his arms). His reach is therefore an ELLIPSE about
+    /// four times wider than it is tall, and comparing a point against an
+    /// ellipse means scaling the short axis before taking the distance.
+    /// Re-derive from those two if either moves.
+    ///
+    /// Going DOWN is cheaper than going up — gravity is on his side and he
+    /// has his whole body length to lay out — so the floor side of the
+    /// envelope is half the price. Asymmetric on purpose: a keeper reaches
+    /// a low ball to his side far more easily than a high one.
+    const CLIMB_COST: f32 = 4.0;
+    const STOOP_COST: f32 = 2.0;
+
+    /// Units to the metre on the horizontal grid. The vertical axis is
+    /// metric and the horizontal one is not — see `MatchPlayer::height`.
+    const UNITS_PER_METRE: f32 = 8.0;
+
+    /// The lateral gap a ball at `ball_z` is WORTH, on top of however far
+    /// across him it is going.
+    ///
+    /// # Why the dive decision needs a vertical axis at all
+    ///
+    /// It had none, and neither does `SaveModel::wedge`: both measure how
+    /// far the keeper's `y` is from the crossing `y` and nothing else. So a
+    /// shot from twenty-five yards into the top corner, struck dead in line
+    /// with him, produced `gap ≈ 0` → *"he can step to this one"* → he
+    /// stayed on his feet, arms down, and the ball went over his head. A
+    /// shot skidding into the bottom corner produced the same answer for
+    /// the same reason.
+    ///
+    /// **That is the whole of the report and it is not a rare case.**
+    /// Measured off twelve recorded matches, of the twenty-nine on-frame
+    /// goals struck from 18 m+ four crossed him at **1.95-2.55 m** and
+    /// eleven at **under 0.4 m**, with lateral gaps as small as **6 cm** —
+    /// and in every one of those his recorded height stayed at exactly
+    /// 0.00 m for the whole flight. From the stands that is a goalkeeper
+    /// watching a long shot go past him without moving, which is what was
+    /// reported.
+    ///
+    /// A ball inside the band he can take standing costs nothing, so an
+    /// ordinary chest-height shot — where the population save rate is
+    /// calibrated — is priced exactly as it was before. This only ever ADDS
+    /// gap, and only outside his own stance.
+    pub fn climb_gap(ball_z: f32, set_ceiling: f32) -> f32 {
+        let over = (ball_z - set_ceiling).max(0.0) * Self::CLIMB_COST;
+        let under = (Self::GATHER_FLOOR - ball_z.max(0.0)).max(0.0) * Self::STOOP_COST;
+        (over + under) * Self::UNITS_PER_METRE
+    }
+
+    /// His own ceiling: 1.68 m for a keeper who waits for the ball to come
+    /// down to him, 1.92 m for one who plays it above his own head. That
+    /// is `aerial_reach` / `jumping` / `command_of_area`, which is what
+    /// `aerial_command` already blends.
+    ///
+    /// ⚠ Written as a BAND rather than as `SET_CEILING × quality` on
+    /// purpose. `aerial_command` is a `keeper_curve`d composite and does
+    /// not centre on 0.5 — the same reason
+    /// `GoalkeeperSkillProfile::POPULATION_READ` exists at 0.479 for the
+    /// positioning composite — so a multiplicative term here would have to
+    /// be centred on a measured mean of *this* composite, and would go
+    /// stale the moment its weights moved. A band needs no such constant:
+    /// both ends are physical statements about how high a man plays a ball
+    /// standing up, and the worst a population-mean error can do is shift
+    /// the middle of it by a centimetre.
+    fn set_ceiling(prof: &GoalkeeperSkillProfile) -> f32 {
+        const SPAN: f32 = 0.24;
+        Self::SET_CEILING - SPAN * 0.5 + prof.aerial_command.clamp(0.0, 1.0) * SPAN
+    }
+
+    /// **How far over the bar a shot has to be before the keeper writes it
+    /// off entirely.**
+    ///
+    /// The width gate below already carries `SHOULDER` — "the ball that
+    /// clips the outside of the post is one he still has to be seen to go
+    /// for" — and the height gate carried nothing at all, which is an
+    /// asymmetry with no argument behind it. Worse, it disagreed with the
+    /// save: `Ball::try_save_shot` retires a shot as off-frame at **2.8 m**,
+    /// so between the bar and 2.8 the physics save would still resolve a
+    /// shot the keeper had already decided not to move for. Two models for
+    /// one question, and the stricter one owned the behaviour while the
+    /// looser one owned the outcome.
+    ///
+    /// Measured, that gate wrote off **32% of every live-shot tick from
+    /// 18-28 m**, and the recordings show why it matters: those shots cross
+    /// the line at 2.1-2.4 m, i.e. UNDER the bar. `goal_line_z` is a clean
+    /// arc taken at the moment of the strike and the real ball carries
+    /// drag, so it over-predicts — and the keeper was writing off savable
+    /// shots on a prediction the save itself did not believe.
+    const CROSSBAR_MARGIN: f32 = 0.36;
+
     /// Does he have to leave his feet for the shot in flight, right now?
     ///
     /// A predicate rather than a description: the two callers only need to
@@ -1632,14 +1744,28 @@ impl KeeperShotDive {
         }
         #[cfg(feature = "match-logs")]
         KeeperDiveDiag::note(0);
-        // Over the bar. Nothing to dive at, and going anyway is how a
-        // keeper ends up on the floor for the follow-up.
-        if target.goal_line_z > GOAL_HEIGHT {
-            return false;
-        }
 
         let ball = &ctx.tick_context.positions.ball;
         let goal: Vector3<f32> = ctx.ball().direction_to_own_goal();
+        #[cfg(feature = "match-logs")]
+        let early_band = {
+            use crate::mid_run_diag::KeeperRangeDiag as R;
+            let strike = (target.struck_from - Vector3::new(goal.x, goal.y, target.struck_from.z))
+                .magnitude();
+            let band = R::band(strike);
+            R::note(band, 20);
+            band
+        };
+        // Over the bar, and clear of it. Nothing to dive at, and going
+        // anyway is how a keeper ends up on the floor for the follow-up —
+        // but the margin matters and it has to be the SAME margin the save
+        // uses, or he declines to move for shots the physics still resolves.
+        // See [`Self::CROSSBAR_MARGIN`].
+        if target.goal_line_z > GOAL_HEIGHT + Self::CROSSBAR_MARGIN {
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperRangeDiag::note(early_band, 21);
+            return false;
+        }
         // …and PAST THE POST is the same answer, which this had no test
         // for at all. `goal_line_y` is documented as falling outside the
         // frame when the shot is going wide, and it does: measured, the
@@ -1652,6 +1778,8 @@ impl KeeperShotDive {
         // still has to be seen to go for.
         const SHOULDER: f32 = 12.0;
         if (target.goal_line_y - goal.y).abs() > GOAL_WIDTH + SHOULDER {
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperRangeDiag::note(early_band, 22);
             return false;
         }
         // Ticks until it reaches HIM — see `KeeperShotReaction::ticks_left`
@@ -1674,6 +1802,19 @@ impl KeeperShotDive {
         }
         #[cfg(feature = "match-logs")]
         KeeperDiveDiag::note(1);
+        // …and the same funnel split by how far the shot was struck from.
+        // The aggregate cannot say whether "he never dives" is a
+        // reaction-time answer or a he-already-walked-there answer, and
+        // those have opposite fixes. See `KeeperRangeDiag`.
+        #[cfg(feature = "match-logs")]
+        let range_band = {
+            use crate::mid_run_diag::KeeperRangeDiag as R;
+            let strike = (target.struck_from - Vector3::new(goal.x, goal.y, target.struck_from.z))
+                .magnitude();
+            let band = R::band(strike);
+            R::note(band, 8);
+            band
+        };
 
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
         // He has not seen it yet. A keeper who leaves his feet inside his
@@ -1681,6 +1822,8 @@ impl KeeperShotDive {
         // that is where a well-placed strike gets its value — see
         // [`KeeperShotReaction`].
         if !KeeperShotReaction::has_reacted(ctx, &prof) {
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperRangeDiag::note(range_band, 9);
             return false;
         }
         #[cfg(feature = "match-logs")]
@@ -1713,19 +1856,59 @@ impl KeeperShotDive {
         // `stretch` is: past full stretch is exactly the shot he has to go
         // for and will not get, and clamping it there is what made the
         // corner the one place he never dived. See `DESPAIR_REACH`.
-        let gap = lateral_error * base_reach / reach;
+        let across = lateral_error * base_reach / reach;
+        // …and HOW HIGH it is going, which nothing here could see. A ball
+        // over his head is a ball he has to leave his feet for however
+        // straight at him it is — see [`Self::climb_gap`], which is the
+        // whole of why a top-corner shot from range used to be the one he
+        // never moved for. Pythagoras because his gloves have to get to a
+        // point that is both across him and above him.
+        //
+        // ⚠ Read off `ShotTarget::goal_line_z` and NOT re-projected from
+        // the ball's live vertical state. Re-projecting was tried first and
+        // reported the mean long shot arriving **15 cm off the deck**: the
+        // gravity term over a 45-tick window is a whole metre, and a shot
+        // that has already flattened out clamps straight to zero. The
+        // strike-time arc is the height every other part of the keeper
+        // model uses — the over-bar gate above, and
+        // `PlayerMatchState::leap_apex`, which decides how high the dive
+        // this returns will actually climb — so using it here is what keeps
+        // the decision and the leap talking about the same ball.
+        let climb = Self::climb_gap(target.goal_line_z, Self::set_ceiling(&prof));
+        let gap = (across * across + climb * climb).sqrt();
+        #[cfg(feature = "match-logs")]
+        {
+            use crate::mid_run_diag::KeeperRangeDiag as R;
+            R::add(range_band, 23, (target.goal_line_z * 100.0).max(0.0) as u64);
+            if climb > 0.0 {
+                R::note(range_band, 16);
+                R::add(range_band, 19, (climb * 10.0) as u64);
+            }
+        }
         let walkable = KeeperShotReaction::ground_left(ctx, &prof, ticks);
         #[cfg(feature = "match-logs")]
         {
+            use crate::mid_run_diag::KeeperRangeDiag as R;
             KeeperDiveDiag::add(8, (gap.max(0.0) * 10.0) as u64);
             KeeperDiveDiag::add(9, (walkable.max(0.0) * 10.0) as u64);
+            R::add(range_band, 14, (gap.max(0.0) * 10.0) as u64);
+            R::add(range_band, 15, (walkable.max(0.0) * 10.0) as u64);
         }
         if gap < Self::STANDING_GAP {
+            #[cfg(feature = "match-logs")]
+            {
+                crate::mid_run_diag::KeeperRangeDiag::note(range_band, 10);
+                if climb > 0.0 {
+                    crate::mid_run_diag::KeeperRangeDiag::note(range_band, 18);
+                }
+            }
             return false;
         }
         #[cfg(feature = "match-logs")]
         KeeperDiveDiag::note(4);
         if gap > base_reach * Self::DESPAIR_REACH {
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperRangeDiag::note(range_band, 11);
             return false;
         }
         #[cfg(feature = "match-logs")]
@@ -1734,12 +1917,20 @@ impl KeeperShotDive {
         if gap <= walkable * Self::ON_FOOT_SHARE {
             // He can step to this one. Staying on his feet is the better
             // save and the more common picture.
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperRangeDiag::note(range_band, 12);
             return false;
         }
         #[cfg(feature = "match-logs")]
         {
             KeeperDiveDiag::note(6);
             KeeperActionDiag::note(15);
+            use crate::mid_run_diag::KeeperRangeDiag as R;
+            R::note(range_band, 5);
+            R::note(range_band, 13);
+            if climb > 0.0 {
+                R::note(range_band, 17);
+            }
         }
         true
     }
@@ -2095,6 +2286,52 @@ mod tests {
             walkable > KeeperShotDive::STANDING_GAP,
             "…but a step has to be worth something, or he dives at balls coming straight at him"
         );
+    }
+
+    /// **A ball he cannot reach standing is one he has to leave his feet
+    /// for, however straight at him it is.**
+    ///
+    /// The gap `should_launch` weighs was purely lateral, so a shot into
+    /// the top corner from twenty-five yards — dead in line with him and
+    /// two and a half metres up — read as "less than a step" and he stood
+    /// and watched it go in with his arms by his sides. Measured off
+    /// recordings, that was four of the twenty-three on-frame goals from
+    /// 18 m+ in twelve matches, at heights of 1.95-2.55 m and lateral gaps
+    /// of **7 to 26 centimetres**. See [`KeeperShotDive::climb_gap`].
+    #[test]
+    fn a_ball_over_his_head_is_a_dive_however_straight_at_him_it_is() {
+        let ceiling = KeeperShotDive::SET_CEILING;
+        // Chest height, dead at him: he takes it standing, and the whole
+        // calibrated population of ordinary shots must be untouched.
+        assert_eq!(KeeperShotDive::climb_gap(1.2, ceiling), 0.0);
+        assert_eq!(KeeperShotDive::climb_gap(ceiling, ceiling), 0.0);
+        assert_eq!(KeeperShotDive::climb_gap(0.9, ceiling), 0.0);
+        // …and a ball skidding along the floor is a dive too, which is the
+        // more common half of the same defect: eleven of the twenty-nine
+        // long-range goals measured arrived under 0.4 m.
+        let low = KeeperShotDive::climb_gap(0.0, ceiling);
+        assert!(
+            low > KeeperShotDive::STANDING_GAP,
+            "a shot along the floor reads as {low:.0}u and a step is {:.0}u — he stands up \
+             straight while it goes in",
+            KeeperShotDive::STANDING_GAP
+        );
+        // …but going down is cheaper than going up.
+        assert!(low < KeeperShotDive::climb_gap(ceiling + 0.45, ceiling));
+        // …under the bar is not.
+        let top = KeeperShotDive::climb_gap(GOAL_HEIGHT, ceiling);
+        assert!(
+            top > KeeperShotDive::STANDING_GAP,
+            "a shot under his own bar reads as {top:.0}u of gap and a step is \
+             {:.0}u — he will stand and watch it",
+            KeeperShotDive::STANDING_GAP
+        );
+        // …and it must not be so expensive that it reads as hopeless: he
+        // goes for the top corner, he does not give up on it.
+        assert!(top < 20.0 * KeeperShotDive::DESPAIR_REACH);
+        // Monotone in height, or a keeper is more willing to go for a ball
+        // at head height than one under the bar.
+        assert!(KeeperShotDive::climb_gap(2.44, ceiling) > KeeperShotDive::climb_gap(2.0, ceiling));
     }
 
     /// The last of a flight is not walkable at all, so a gap that opens up

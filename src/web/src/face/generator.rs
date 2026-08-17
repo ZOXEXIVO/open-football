@@ -1,346 +1,4 @@
-use database::CountryLoader;
-use std::sync::OnceLock;
-
-// ── Skin color distribution ───────────────────────────────────
-
-/// Geographic region of a country — combined with the DB skin buckets it
-/// selects one of the phenotype classes below. The DB percentages do the
-/// ancestry mixing; the region says what each bucket looks like there.
-#[derive(Clone, Copy, PartialEq)]
-pub enum Region {
-    NorthEurope,
-    BritIsles,
-    WestEurope,
-    EastEurope,
-    SouthEurope,
-    Mena,
-    SubSaharan,
-    HornAfrica,
-    SouthAsia,
-    EastAsia,
-    SoutheastAsia,
-    CentralAsia,
-    LatinAmerica,
-    Andes,
-    Caribbean,
-    NorthAmerica,
-    Pacific,
-}
-
-fn region_for_code(code: &str) -> Region {
-    use Region::*;
-    match code.to_ascii_lowercase().as_str() {
-        "se" | "no" | "dk" | "fi" | "is" | "fo" | "ee" | "lv" | "lt" => NorthEurope,
-        "gb" | "ie" => BritIsles,
-        "fr" | "be" | "nl" | "lu" | "de" | "at" | "ch" | "li" | "ad" | "mc" | "gi" => WestEurope,
-        "ru" | "ua" | "by" | "pl" | "cz" | "sk" | "hu" | "md" | "ro" | "bg" => EastEurope,
-        "es" | "pt" | "it" | "gr" | "mt" | "cy" | "sm" | "hr" | "si" | "ba" | "rs" | "me"
-        | "mk" | "al" => SouthEurope,
-        "ma" | "dz" | "tn" | "ly" | "eg" | "tr" | "ir" | "iq" | "sy" | "jo" | "lb" | "il"
-        | "ps" | "sa" | "kw" | "bh" | "qa" | "ae" | "om" | "ye" | "ge" | "am" | "az" | "af"
-        | "mr" => Mena,
-        "et" | "er" | "dj" | "so" | "sd" => HornAfrica,
-        "in" | "pk" | "bd" | "lk" | "np" | "bt" | "mv" => SouthAsia,
-        "cn" | "jp" | "kp" | "kr" | "tw" | "hk" | "mo" | "mn" => EastAsia,
-        "th" | "vn" | "la" | "kh" | "mm" | "my" | "sg" | "id" | "ph" | "bn" | "tl" => SoutheastAsia,
-        "kz" | "kg" | "uz" | "tm" | "tj" => CentralAsia,
-        "mx" | "hn" | "sv" | "ni" | "cr" | "pa" | "co" | "ve" | "br" | "ar" | "uy" | "cl" => {
-            LatinAmerica
-        }
-        "ec" | "pe" | "bo" | "py" | "gt" => Andes,
-        "jm" | "tt" | "bb" | "ht" | "cu" | "do" | "pr" | "bs" | "ag" | "ai" | "aw" | "bm"
-        | "vg" | "ky" | "dm" | "gd" | "kn" | "lc" | "vc" | "ms" | "tc" | "vi" | "mf" | "gp"
-        | "mq" | "gf" | "sr" | "gy" | "bz" => Caribbean,
-        "au" | "nz" | "fj" | "pg" | "sb" | "vu" | "nc" | "ws" | "to" | "ck" | "as" | "gu"
-        | "mp" | "fm" | "ki" | "tv" | "wf" => Pacific,
-        // Sub-Saharan Africa and everything unlisted with an African
-        // majority resolves through the DB buckets anyway
-        "ng" | "gh" | "sn" | "ci" | "cm" | "cg" | "cd" | "ao" | "mz" | "zm" | "zw" | "mw"
-        | "tz" | "ug" | "rw" | "bi" | "ke" | "bw" | "na" | "sz" | "ls" | "za" | "mg" | "ml"
-        | "bf" | "ne" | "td" | "cf" | "ga" | "gq" | "gw" | "gm" | "sl" | "lr" | "tg" | "bj"
-        | "st" | "cv" | "km" | "re" | "yt" | "sc" | "mu" => SubSaharan,
-        // Unknown codes: the mixed-society mapping (white→European,
-        // metis→Mestizo, black→West African) is the safest universal read
-        _ => NorthAmerica,
-    }
-}
-
-/// Coherent appearance package: every weight table below belongs to one
-/// class so features never contradict (no blond monolid with an afro).
-#[derive(Clone, Copy, PartialEq)]
-enum Phenotype {
-    NorthEuropean,
-    WestEuropean,
-    Slavic,
-    Mediterranean,
-    Mena,
-    SouthAsian,
-    EastAsian,
-    SoutheastAsian,
-    WestAfrican,
-    EastAfrican,
-    Mestizo,
-    Andean,
-    Oceanian,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum SkinBucket {
-    White,
-    Black,
-    Metis,
-}
-
-fn classify(region: Region, bucket: SkinBucket) -> Phenotype {
-    use Phenotype::*;
-    use Region::*;
-    use SkinBucket as B;
-    match (region, bucket) {
-        (HornAfrica, _) => EastAfrican,
-        (Pacific, B::White) => WestEuropean,
-        (Pacific, _) => Oceanian,
-        (_, B::Black) => WestAfrican,
-        (NorthEurope, B::White) => NorthEuropean,
-        (NorthEurope, B::Metis) => Phenotype::Mena,
-        (BritIsles, B::White) => WestEuropean,
-        (BritIsles, B::Metis) => SouthAsian,
-        (WestEurope, B::White) => WestEuropean,
-        (WestEurope, B::Metis) => Phenotype::Mena,
-        (EastEurope, B::White) => Slavic,
-        (EastEurope, B::Metis) => Phenotype::Mena,
-        (SouthEurope, B::White) => Mediterranean,
-        (SouthEurope, B::Metis) => Phenotype::Mena,
-        (Region::Mena, B::White) => Mediterranean,
-        (Region::Mena, B::Metis) => Phenotype::Mena,
-        (SubSaharan, B::White) => WestEuropean,
-        (SubSaharan, B::Metis) => Mestizo,
-        (SouthAsia, _) => SouthAsian,
-        (EastAsia, _) => EastAsian,
-        (SoutheastAsia, _) => SoutheastAsian,
-        (CentralAsia, B::White) => Slavic,
-        (CentralAsia, B::Metis) => EastAsian,
-        (LatinAmerica | Caribbean | Andes, B::White) => Mediterranean,
-        (LatinAmerica | Caribbean, B::Metis) => Mestizo,
-        (Andes, B::Metis) => Andean,
-        (NorthAmerica, B::White) => WestEuropean,
-        (NorthAmerica, B::Metis) => Mestizo,
-    }
-}
-
-impl Phenotype {
-    /// Inclusive SKIN index band
-    fn skin_band(self) -> (usize, usize) {
-        use Phenotype::*;
-        match self {
-            NorthEuropean => (0, 1),
-            WestEuropean | Slavic => (0, 2),
-            Mediterranean => (1, 4),
-            Mena => (2, 5),
-            SouthAsian => (4, 7),
-            EastAsian => (1, 3),
-            SoutheastAsian => (3, 5),
-            Mestizo => (3, 6),
-            Andean => (4, 6),
-            WestAfrican => (8, 11),
-            EastAfrican => (7, 10),
-            Oceanian => (6, 9),
-        }
-    }
-
-    /// HAIR index weights (repetition = weight)
-    fn hair_tbl(self) -> &'static [usize] {
-        use Phenotype::*;
-        match self {
-            NorthEuropean => &[3, 4, 5, 6, 7, 7, 8, 8, 8, 2],
-            WestEuropean => &[0, 1, 2, 3, 3, 4, 5, 6, 7, 9],
-            Slavic => &[1, 2, 3, 3, 4, 5, 6, 7, 8, 2],
-            Mediterranean => &[0, 0, 1, 1, 2, 2, 3, 3, 4, 2],
-            Mena | SouthAsian => &[0, 0, 0, 1, 1, 1, 2, 2, 0, 1],
-            EastAsian | SoutheastAsian | Andean => &[0, 0, 0, 0, 1, 1, 0, 0, 1, 0],
-            WestAfrican | EastAfrican => &[0, 0, 0, 1, 1, 2, 0, 0, 1, 0],
-            Oceanian => &[0, 0, 1, 1, 2, 0, 0, 1, 0, 0],
-            Mestizo => &[0, 0, 1, 1, 2, 2, 3, 0, 1, 0],
-        }
-    }
-
-    /// EYES index weights
-    fn eye_tbl(self) -> &'static [usize] {
-        use Phenotype::*;
-        match self {
-            NorthEuropean => &[0, 3, 3, 6, 6, 7, 7, 5],
-            WestEuropean => &[0, 1, 3, 4, 5, 6, 7, 2],
-            Slavic => &[0, 1, 3, 3, 6, 6, 7, 5],
-            Mediterranean => &[0, 0, 1, 1, 2, 2, 4, 3],
-            Mestizo => &[0, 0, 1, 1, 2, 2, 4, 5],
-            EastAsian => &[0, 0, 0, 0, 1, 1, 0, 1],
-            _ => &[0, 0, 0, 1, 1, 1, 2, 2],
-        }
-    }
-
-    /// nose_st weights
-    fn nose_tbl(self) -> &'static [usize] {
-        use Phenotype::*;
-        match self {
-            WestAfrican | Oceanian => &[1, 1, 4, 4, 2, 5],
-            EastAfrican => &[0, 3, 3, 5, 2, 0],
-            Mena => &[1, 4, 4, 2, 5, 3],
-            SouthAsian => &[2, 4, 5, 1, 3, 0],
-            EastAsian | SoutheastAsian | Andean => &[0, 2, 2, 5, 5, 3],
-            Mestizo => &[2, 4, 5, 0, 1, 3],
-            _ => &[0, 1, 2, 3, 4, 5],
-        }
-    }
-
-    /// mouth_st weights — fuller lips for African/Oceanian ancestry
-    fn mouth_tbl(self) -> &'static [usize] {
-        use Phenotype::*;
-        match self {
-            WestAfrican | Oceanian => &[3, 3, 1, 0, 3],
-            EastAfrican => &[3, 0, 1, 2, 3],
-            EastAsian | SoutheastAsian => &[0, 2, 4, 2, 0],
-            _ => &[0, 1, 2, 3, 4],
-        }
-    }
-
-    /// brow_st weights — MENA/South Asia carry the densest brows
-    fn brow_tbl(self) -> &'static [usize] {
-        use Phenotype::*;
-        match self {
-            Mena | SouthAsian => &[4, 4, 2, 0, 3, 1],
-            _ => &[0, 1, 2, 3, 4, 5],
-        }
-    }
-
-    /// Beard chance multiplier (numerator, denominator)
-    fn beard_mul(self) -> (u16, u16) {
-        use Phenotype::*;
-        match self {
-            Mena => (3, 2),
-            SouthAsian => (7, 5),
-            EastAsian | SoutheastAsian => (1, 3),
-            Andean => (1, 2),
-            _ => (1, 1),
-        }
-    }
-
-    /// Epicanthic eye family (monolid/thin dominate)
-    fn epicanthic(self) -> bool {
-        matches!(self, Phenotype::EastAsian | Phenotype::SoutheastAsian)
-    }
-
-    /// Afro-textured hair: afro/cornrows plausible, straight long hair rare
-    fn afro_hair(self) -> bool {
-        matches!(
-            self,
-            Phenotype::WestAfrican | Phenotype::EastAfrican | Phenotype::Oceanian
-        )
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct SkinDist {
-    pub white: u8,
-    pub black: u8,
-    pub _metis: u8,
-    pub region: Region,
-}
-
-impl Default for SkinDist {
-    fn default() -> Self {
-        SkinDist {
-            white: 50,
-            black: 20,
-            _metis: 30,
-            region: Region::NorthAmerica,
-        }
-    }
-}
-
-static SKIN_MAP: OnceLock<Vec<(String, SkinDist)>> = OnceLock::new();
-
-fn load_skin_map() -> Vec<(String, SkinDist)> {
-    CountryLoader::load()
-        .into_iter()
-        .map(|c| {
-            let d = SkinDist {
-                white: c.skin_colors.white,
-                black: c.skin_colors.black,
-                _metis: c.skin_colors.metis,
-                region: region_for_code(&c.code),
-            };
-            (c.code, d)
-        })
-        .collect()
-}
-
-pub fn skin_distribution_for_country(code: &str) -> SkinDist {
-    if code.is_empty() {
-        return SkinDist::default();
-    }
-    let map = SKIN_MAP.get_or_init(load_skin_map);
-    map.iter()
-        .find(|(c, _)| c == code)
-        .map(|(_, d)| *d)
-        .unwrap_or_default()
-}
-
-// ── RNG ───────────────────────────────────────────────────────
-
-struct FaceRng {
-    state: u64,
-}
-
-impl FaceRng {
-    fn new(player_id: u32) -> Self {
-        let mut s = player_id as u64;
-        s = s.wrapping_add(0x9E3779B97F4A7C15);
-        s = (s ^ (s >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-        s = (s ^ (s >> 27)).wrapping_mul(0x94D049BB133111EB);
-        s ^= s >> 31;
-        if s == 0 {
-            s = 1;
-        }
-        FaceRng { state: s }
-    }
-
-    fn next(&mut self) -> u64 {
-        let mut x = self.state;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.state = x;
-        x
-    }
-
-    fn range(&mut self, max: usize) -> usize {
-        (self.next() % max as u64) as usize
-    }
-
-    fn chance(&mut self, pct: u8) -> bool {
-        (self.next() % 100) < pct as u64
-    }
-
-    fn frange(&mut self, min: f32, max: f32) -> f32 {
-        let t = (self.next() % 10000) as f32 / 10000.0;
-        min + t * (max - min)
-    }
-}
-
-// ── Color palettes ──────────────────────────────────────────
-
-const SKIN: [&str; 12] = [
-    "#F5E0CB", "#EACFB0", "#DDBF98", "#CDA97A", "#C09368", "#A87D58", "#926845", "#7D5535",
-    "#694530", "#503322", "#3D2518", "#2E1B11",
-];
-
-const HAIR: [&str; 10] = [
-    "#0E0E0E", "#1C150C", "#2F1F11", "#4D3A2B", "#6A5038", "#7E644A", "#96795A", "#B0946C",
-    "#C4A882", "#6B2010",
-];
-
-const EYES: [&str; 8] = [
-    "#33251A", "#4A3828", "#5C4E3A", "#384F62", "#3D5844", "#4E6356", "#686D72", "#3F5A72",
-];
+use appearance::{Appearance, AppearanceRng, Palette, Phenotype, SkinDist};
 
 // ── Color math ──────────────────────────────────────────────
 
@@ -482,25 +140,6 @@ fn face_shape(variant: usize, fw: f32) -> FaceShape {
     }
 }
 
-// ── Phenotype picker ────────────────────────────────────────
-// The DB skin buckets carry the ancestry shares; the country's region
-// says what each bucket looks like there. Skin tone then comes from the
-// class band, so tone and features always agree.
-
-fn pick_phenotype(r: &mut FaceRng, dist: SkinDist) -> (Phenotype, usize) {
-    let roll = r.range(100) as u8;
-    let bucket = if roll < dist.white {
-        SkinBucket::White
-    } else if roll < dist.white.saturating_add(dist.black) {
-        SkinBucket::Black
-    } else {
-        SkinBucket::Metis
-    };
-    let ph = classify(dist.region, bucket);
-    let (lo, hi) = ph.skin_band();
-    (ph, lo + r.range(hi - lo + 1))
-}
-
 // ── Main generator ──────────────────────────────────────────
 
 /// viewBox = "0 0 200 250" — portrait rectangle, head centered at x=100.
@@ -528,18 +167,19 @@ pub fn generate_face_svg(
 ) -> String {
     let heft = heft.clamp(-2.0, 2.5);
     let aggr = aggression.clamp(0.0, 1.0);
-    let mut r = FaceRng::new(player_id);
+    let mut r = AppearanceRng::new(player_id);
 
     // Nation-driven phenotype class: skin band, hair/eye palettes, eye
-    // shape family, nose/lip/brow weights and beard density all follow it
-    let (ph, skin_idx) = pick_phenotype(&mut r, skin_dist);
-    let skin = SKIN[skin_idx];
-    let hair_roll = r.range(HAIR.len());
-    let h_tbl = ph.hair_tbl();
-    let hair = HAIR[h_tbl[hair_roll % h_tbl.len()]];
-    let eye_roll = r.range(EYES.len());
-    let e_tbl = ph.eye_tbl();
-    let eye_col = EYES[e_tbl[eye_roll % e_tbl.len()]];
+    // shape family, nose/lip/brow weights and beard density all follow it.
+    //
+    // Drawn FIRST off the stream, and by the shared crate rather than here,
+    // because the match viewer asks the same question about the same player
+    // and has to get the same answer — see `appearance::Appearance`.
+    let look = Appearance::draw(&mut r, skin_dist);
+    let ph = look.phenotype;
+    let skin = Palette::SKIN[look.skin];
+    let hair = Palette::HAIR[look.hair];
+    let eye_col = Palette::EYES[look.eyes];
 
     let face_var = r.range(6);
     // Weighted style roll — everyday cuts dominate; statement styles
@@ -2217,6 +1857,34 @@ pub fn generate_face_svg(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use appearance::{Region, SkinBucket};
+
+    /// The tone this paints and the tone the match page sends to the replay
+    /// viewer are meant to be one draw off one stream. The only thing holding
+    /// them together is that `Appearance::draw` is the FIRST call made on the
+    /// rng below: slip anything in front of it and the two quietly diverge —
+    /// the portrait stays as it was and the man on the pitch changes colour.
+    #[test]
+    fn the_portrait_paints_the_tone_the_viewer_is_told_about() {
+        let nations = [
+            SkinDist::pure(SkinBucket::Black, Region::SubSaharan),
+            SkinDist::pure(SkinBucket::White, Region::NorthEurope),
+            SkinDist::pure(SkinBucket::Metis, Region::EastAsia),
+            SkinDist::pure(SkinBucket::Metis, Region::Andes),
+            // The mixed default a player of unknown nationality falls back to
+            SkinDist::default(),
+        ];
+        for dist in nations {
+            for player_id in [1u32, 7, 91, 4242, 900_001] {
+                let told = Palette::SKIN[Appearance::of(player_id, dist).skin];
+                let svg = generate_face_svg(player_id, 26, dist, 0.0, 0.3, None);
+                assert!(
+                    svg.contains(&format!("stop-color=\"{told}\"")),
+                    "player {player_id} is painted a tone the viewer was never given ({told})"
+                );
+            }
+        }
+    }
 
     /// Dev-only contact sheet: writes one SVG file per face (inline SVGs in a
     /// single HTML document would collide on gradient/filter ids) plus a
@@ -2232,62 +1900,26 @@ mod tests {
         let root = std::path::Path::new(&dir);
 
         // One section per phenotype showcase: pure-bucket dists route each
-        // section straight into a single class via classify()
+        // section straight into a single class via Phenotype::classify
         let dists = [
             (
                 "west_european",
-                SkinDist {
-                    white: 100,
-                    black: 0,
-                    _metis: 0,
-                    region: Region::WestEurope,
-                },
+                SkinDist::pure(SkinBucket::White, Region::WestEurope),
             ),
             (
                 "nordic",
-                SkinDist {
-                    white: 100,
-                    black: 0,
-                    _metis: 0,
-                    region: Region::NorthEurope,
-                },
+                SkinDist::pure(SkinBucket::White, Region::NorthEurope),
             ),
-            (
-                "mena",
-                SkinDist {
-                    white: 0,
-                    black: 0,
-                    _metis: 100,
-                    region: Region::Mena,
-                },
-            ),
+            ("mena", SkinDist::pure(SkinBucket::Metis, Region::Mena)),
             (
                 "west_african",
-                SkinDist {
-                    white: 0,
-                    black: 100,
-                    _metis: 0,
-                    region: Region::SubSaharan,
-                },
+                SkinDist::pure(SkinBucket::Black, Region::SubSaharan),
             ),
             (
                 "east_asian",
-                SkinDist {
-                    white: 0,
-                    black: 0,
-                    _metis: 100,
-                    region: Region::EastAsia,
-                },
+                SkinDist::pure(SkinBucket::Metis, Region::EastAsia),
             ),
-            (
-                "andean",
-                SkinDist {
-                    white: 0,
-                    black: 0,
-                    _metis: 100,
-                    region: Region::Andes,
-                },
-            ),
+            ("andean", SkinDist::pure(SkinBucket::Metis, Region::Andes)),
         ];
         let ages: [u8; 5] = [17, 21, 26, 31, 36];
 

@@ -1,5 +1,6 @@
 mod generator;
 pub mod routes;
+pub mod skin;
 
 /// Cache-busting version for /face.svg URLs. Responses are served
 /// `immutable`, so bump this whenever generator output changes — every
@@ -13,6 +14,7 @@ use serde::Deserialize;
 
 use core::utils::DateUtils;
 use generator::generate_face_svg;
+use skin::CountrySkin;
 
 use crate::GameAppData;
 use axum::Router;
@@ -41,18 +43,7 @@ async fn face_action(
 
     let age = DateUtils::age(player.birth_date, simulator_data.date.date());
 
-    let country_code = simulator_data
-        .country(player.country_id)
-        .map(|c| c.code.clone())
-        .or_else(|| {
-            simulator_data
-                .country_info
-                .get(&player.country_id)
-                .map(|i| i.code.clone())
-        })
-        .unwrap_or_default();
-
-    let skin_dist = generator::skin_distribution_for_country(&country_code);
+    let skin_dist = CountrySkin::for_country(simulator_data, player.country_id);
 
     // Weight-for-height drives facial fullness; fall back to an average
     // build when the record carries no plausible body data

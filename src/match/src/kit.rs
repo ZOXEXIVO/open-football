@@ -1,5 +1,6 @@
 use crate::config::{PlayerInfo, TeamColors, ViewerConfig};
 use crate::textures::{Beard, FaceLayout, FaceLook, Textures};
+use appearance::Palette;
 use bevy::image::Image;
 use bevy::prelude::*;
 
@@ -114,33 +115,19 @@ impl HairStyle {
 /// The parts of a footballer's appearance that have nothing to do with the
 /// club: height, skin, hair, face and boots.
 ///
-/// Picked from the player's id rather than at random, so a squad reads as
+/// The ones that carry no meaning — how he is built, how he runs, what
+/// colour his boots are — are cut from the player's id, so a squad reads as
 /// eleven individuals and looks the same every time the match is replayed.
+///
+/// COLOURING is not one of those. Skin, hair and eyes arrive already decided
+/// on [`PlayerInfo`], because they mean something: they follow the man's
+/// nationality, and the country table that says so lives on the server. A
+/// hash was picking them here, which is why a Nigerian back four used to take
+/// the field in four unrelated complexions, none of them the one on the
+/// player's own profile page.
 pub struct Complexion;
 
 impl Complexion {
-    const SKIN: [Color; 5] = [
-        Color::srgb(0.93, 0.77, 0.65),
-        Color::srgb(0.85, 0.66, 0.51),
-        Color::srgb(0.71, 0.51, 0.37),
-        Color::srgb(0.51, 0.34, 0.23),
-        Color::srgb(0.35, 0.22, 0.15),
-    ];
-    const HAIR: [Color; 5] = [
-        Color::srgb(0.07, 0.06, 0.06),
-        Color::srgb(0.20, 0.13, 0.09),
-        Color::srgb(0.33, 0.21, 0.12),
-        Color::srgb(0.70, 0.56, 0.30),
-        Color::srgb(0.46, 0.44, 0.42),
-    ];
-    /// Irises, darkest first. Weighted toward brown below, which is what most
-    /// of the world's eyes are.
-    const EYES: [Color; 4] = [
-        Color::srgb(0.20, 0.13, 0.08),
-        Color::srgb(0.38, 0.25, 0.13),
-        Color::srgb(0.36, 0.44, 0.30),
-        Color::srgb(0.38, 0.50, 0.58),
-    ];
     const BOOTS: [Color; 4] = [
         Color::srgb(0.06, 0.06, 0.07),
         Color::srgb(0.92, 0.93, 0.95),
@@ -148,34 +135,51 @@ impl Complexion {
         Color::srgb(0.55, 0.90, 0.24),
     ];
 
-    fn skin(id: u32) -> usize {
-        (Self::hash(id) % Self::SKIN.len() as u32) as usize
-    }
-
-    fn hair(id: u32) -> usize {
-        ((Self::hash(id) >> 8) % Self::HAIR.len() as u32) as usize
-    }
-
     fn boots(id: u32) -> usize {
         ((Self::hash(id) >> 16) % Self::BOOTS.len() as u32) as usize
     }
 
+    /// Where this player sits on each of the shared ramps.
+    ///
+    /// Clamped rather than trusted. The number came over the wire, and an
+    /// index past the end of the table would take the whole match down on the
+    /// frame the wardrobe was built.
+    pub fn skin(player: &PlayerInfo) -> usize {
+        (player.skin as usize).min(Palette::SKIN.len() - 1)
+    }
+
+    pub fn hair(player: &PlayerInfo) -> usize {
+        (player.hair as usize).min(Palette::HAIR.len() - 1)
+    }
+
+    pub fn eyes(player: &PlayerInfo) -> usize {
+        (player.eyes as usize).min(Palette::EYES.len() - 1)
+    }
+
+    /// One entry of a shared table as a colour. They are written as `#rrggbb`
+    /// because the other renderer puts them straight into an SVG attribute;
+    /// this side parses each of them once, when the wardrobe is built.
+    fn tone(hex: &str) -> Color {
+        Srgba::hex(hex)
+            .map(Color::from)
+            // Unreachable with a table that parses, which the test at the
+            // bottom of this file is there to keep true.
+            .unwrap_or(Color::srgb(0.85, 0.66, 0.51))
+    }
+
     /// Everything about a player's face that is his and not his club's.
     ///
-    /// Drawn off SALTED hashes rather than off further bits of the one above:
-    /// that hash has thirty-two bits and six traits already spoken for, and
-    /// two features cut from overlapping bits are correlated — every blond
-    /// would end up with the same beard.
-    pub fn face(id: u32) -> FaceLook {
+    /// The colours come off the team sheet; the rest is drawn off SALTED
+    /// hashes rather than off further bits of one hash: it has thirty-two
+    /// bits and several traits already spoken for, and two features cut from
+    /// overlapping bits are correlated — every blond would end up with the
+    /// same beard.
+    pub fn face(player: &PlayerInfo) -> FaceLook {
+        let id = player.id;
         FaceLook {
-            skin: Self::SKIN[Self::skin(id)],
-            hair: Self::HAIR[Self::hair(id)],
-            eyes: Self::EYES[match Self::trait_of(id, 0x51ED) {
-                0..45 => 0,
-                45..75 => 1,
-                75..90 => 2,
-                _ => 3,
-            }],
+            skin: Self::tone(Palette::SKIN[Self::skin(player)]),
+            hair: Self::tone(Palette::HAIR[Self::hair(player)]),
+            eyes: Self::tone(Palette::EYES[Self::eyes(player)]),
             // Brows carry as much of a face's expression as the eyes under
             // them, and they are the feature that survives longest as the head
             // minifies — so this is the one that most needs to vary.
@@ -382,13 +386,16 @@ impl Wardrobe {
         config: &ViewerConfig,
         face: &FaceLayout,
     ) -> Self {
-        let skin: Vec<Handle<StandardMaterial>> = Complexion::SKIN
+        // One material per entry of the shared ramps rather than per player:
+        // twelve tones and ten hair colours cover any twenty-two men who
+        // could take the field, and the renderer batches by material.
+        let skin: Vec<Handle<StandardMaterial>> = Palette::SKIN
             .iter()
-            .map(|color| Self::flesh(materials, *color))
+            .map(|hex| Self::flesh(materials, Complexion::tone(hex)))
             .collect();
-        let hair: Vec<Handle<StandardMaterial>> = Complexion::HAIR
+        let hair: Vec<Handle<StandardMaterial>> = Palette::HAIR
             .iter()
-            .map(|color| Self::cloth(materials, *color, 0.95))
+            .map(|hex| Self::cloth(materials, Complexion::tone(hex), 0.95))
             .collect();
         let boots: Vec<Handle<StandardMaterial>> = Complexion::BOOTS
             .iter()
@@ -438,7 +445,7 @@ impl Wardrobe {
             .players
             .iter()
             .map(|player| {
-                let texture = Textures::face(images, face, &Complexion::face(player.id));
+                let texture = Textures::face(images, face, &Complexion::face(player));
                 (player.id, Self::flesh_texture(materials, texture))
             })
             .collect();
@@ -489,7 +496,7 @@ impl Wardrobe {
     /// rest from who they are.
     pub fn outfit(&self, player: &PlayerInfo) -> Outfit {
         let kit = &self.kits[Self::strip_index(player)];
-        let skin = self.skin[Complexion::skin(player.id)].clone();
+        let skin = self.skin[Complexion::skin(player)].clone();
         let own = |table: &Vec<(u32, Handle<StandardMaterial>)>| {
             table
                 .iter()
@@ -512,7 +519,7 @@ impl Wardrobe {
             // face this could draw.
             face: own(&self.faces).unwrap_or_else(|| skin.clone()),
             skin,
-            hair: self.hair[Complexion::hair(player.id)].clone(),
+            hair: self.hair[Complexion::hair(player)].clone(),
             hair_style: Complexion::hair_style(player.id),
             number: own(&self.numbers),
             name: own(&self.names),
@@ -601,5 +608,75 @@ impl Wardrobe {
             unlit: true,
             ..default()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn player(skin: u8, hair: u8, eyes: u8) -> PlayerInfo {
+        PlayerInfo {
+            id: 1,
+            shirt_number: 9,
+            last_name: "Okocha".to_string(),
+            position: "ST".to_string(),
+            is_home: true,
+            skin,
+            hair,
+            eyes,
+        }
+    }
+
+    /// Every entry of the shared tables has to survive the trip through
+    /// `Srgba::hex`, because the fallback in [`Complexion::tone`] would put a
+    /// whole ramp of complexions on one colour without saying so.
+    #[test]
+    fn every_shared_colour_parses() {
+        for hex in Palette::SKIN
+            .iter()
+            .chain(Palette::HAIR.iter())
+            .chain(Palette::EYES.iter())
+        {
+            assert!(Srgba::hex(hex).is_ok(), "{hex} is not a colour");
+        }
+    }
+
+    /// The indices arrive over the wire from a page this crate does not
+    /// compile with, so a bad one has to land somewhere rather than index
+    /// past the end of a table.
+    #[test]
+    fn an_index_off_the_end_of_a_ramp_lands_on_the_last_entry() {
+        let stray = player(200, 200, 200);
+        assert_eq!(Complexion::skin(&stray), Palette::SKIN.len() - 1);
+        assert_eq!(Complexion::hair(&stray), Palette::HAIR.len() - 1);
+        assert_eq!(Complexion::eyes(&stray), Palette::EYES.len() - 1);
+        // And the face built off them is still a face.
+        let look = Complexion::face(&stray);
+        assert_eq!(look.skin, Complexion::tone(Palette::SKIN[11]));
+    }
+
+    /// Two players from opposite ends of the world are not the same colour,
+    /// and two players with the same nationality-derived indices ARE — which
+    /// is exactly what the id hash this replaced could not do.
+    #[test]
+    fn colouring_follows_the_team_sheet_not_the_id() {
+        let nigerian = player(9, 0, 0);
+        let norwegian = player(0, 8, 3);
+        assert_ne!(
+            Complexion::face(&nigerian).skin,
+            Complexion::face(&norwegian).skin
+        );
+
+        let mut same = player(9, 0, 0);
+        same.id = 4_000_001;
+        assert_eq!(
+            Complexion::face(&nigerian).skin,
+            Complexion::face(&same).skin
+        );
+        assert_eq!(
+            Complexion::face(&nigerian).hair,
+            Complexion::face(&same).hair
+        );
     }
 }

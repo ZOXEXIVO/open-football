@@ -1,5 +1,7 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperShotDive,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::common::states::LooseBallChase;
 use crate::r#match::{
@@ -16,6 +18,30 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
+            ));
+        }
+
+        // **A shot he cannot reach on his feet — leave them, from here too.**
+        //
+        // This state is not only entered deliberately: the universal
+        // loose-ball override in `PlayerFieldPositionGroup::process` forces
+        // a keeper into it for any unowned ball within 7.5 m of him, and a
+        // shot at his own goal is exactly that (see the note there). So he
+        // spent whole flights here — measured on recordings, long-range
+        // goals whose entire keeper state track reads `Take Ball` — and this
+        // state asked nothing about the shot at all: no set, no read, no
+        // dive, just a sprint at the ball's current position. A shot he
+        // should be full-stretch for went past a man still running.
+        //
+        // Exiting to `PreparingForSave` instead was tried and is WRONG: the
+        // override re-forces `TakeBall` on the very next tick, so the pair
+        // is a two-cycle — the same `COMMIT < DISENGAGE` failure this engine
+        // has broken six times. The dive is a real commitment (`Diving` is
+        // an `is_committed_action`, which the override respects), so asking
+        // the dive question is the one thing that can be settled from here.
+        if KeeperShotDive::should_launch(ctx) {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Diving,
             ));
         }
 

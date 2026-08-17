@@ -128,6 +128,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "appearance"
+version = "0.1.0"
+
+[[package]]
 name = "approx"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2843,6 +2847,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 name = "match_viewer"
 version = "0.1.0"
 dependencies = [
+ "appearance",
  "bevy",
  "console_error_panic_hook",
  "js-sys",

@@ -1,3 +1,4 @@
+use appearance::{Appearance, Region, SkinBucket, SkinDist};
 use axum::response::IntoResponse;
 use core::PlayerFieldPositionGroup;
 use core::block_diag::BlockDiag;
@@ -230,6 +231,40 @@ const LAST_NAMES: &[&str] = &[
     "Schmidt",
 ];
 
+/// Where the twenty-two invented footballers above are from, one each and in
+/// the same order — a surname and a complexion that disagree read as a bug in
+/// the thing being reviewed.
+///
+/// Pure buckets rather than real census percentages: this is a fixture, and
+/// what it wants on the pitch is one of every phenotype at once rather than a
+/// demographically accurate Brazil. The mixing the game does is
+/// `CountrySkin`'s job, and it needs the country table this harness has no
+/// copy of.
+const HOMELANDS: [SkinDist; 22] = [
+    SkinDist::pure(SkinBucket::Metis, Region::LatinAmerica), // Silva
+    SkinDist::pure(SkinBucket::White, Region::LatinAmerica), // Martinez
+    SkinDist::pure(SkinBucket::White, Region::WestEurope),   // Müller
+    SkinDist::pure(SkinBucket::White, Region::SouthEurope),  // Rossi
+    SkinDist::pure(SkinBucket::White, Region::WestEurope),   // Dupont
+    SkinDist::pure(SkinBucket::White, Region::BritIsles),    // Smith
+    SkinDist::pure(SkinBucket::Black, Region::Caribbean),    // Johnson
+    SkinDist::pure(SkinBucket::White, Region::SouthEurope),  // Garcia
+    SkinDist::pure(SkinBucket::White, Region::LatinAmerica), // Fernandez
+    SkinDist::pure(SkinBucket::White, Region::EastEurope),   // Novak
+    SkinDist::pure(SkinBucket::White, Region::EastEurope),   // Petrov
+    SkinDist::pure(SkinBucket::White, Region::NorthEurope),  // Andersson
+    SkinDist::pure(SkinBucket::Metis, Region::EastAsia),     // Tanaka
+    SkinDist::pure(SkinBucket::Metis, Region::EastAsia),     // Kim
+    SkinDist::pure(SkinBucket::Black, Region::LatinAmerica), // Santos
+    SkinDist::pure(SkinBucket::White, Region::SouthEurope),  // Costa
+    SkinDist::pure(SkinBucket::White, Region::WestEurope),   // Richter
+    SkinDist::pure(SkinBucket::Black, Region::SubSaharan),   // Bernard
+    SkinDist::pure(SkinBucket::White, Region::SouthEurope),  // Moretti
+    SkinDist::pure(SkinBucket::White, Region::EastEurope),   // Kowalski
+    SkinDist::pure(SkinBucket::White, Region::EastEurope),   // Ivanov
+    SkinDist::pure(SkinBucket::White, Region::NorthEurope),  // Schmidt
+];
+
 #[derive(Serialize)]
 struct PlayerJson {
     id: u32,
@@ -237,6 +272,28 @@ struct PlayerJson {
     last_name: String,
     position: String,
     is_home: bool,
+    skin: u8,
+    hair: u8,
+    eyes: u8,
+}
+
+impl PlayerJson {
+    /// `name` indexes both tables above, so the man's name and his colouring
+    /// come from the same country.
+    fn new(id: u32, shirt_number: u8, name: usize, position: &str, is_home: bool) -> PlayerJson {
+        let name = name % LAST_NAMES.len();
+        let look = Appearance::of(id, HOMELANDS[name]);
+        PlayerJson {
+            id,
+            shirt_number,
+            last_name: LAST_NAMES[name].to_string(),
+            position: position.to_string(),
+            is_home,
+            skin: look.skin as u8,
+            hair: look.hair as u8,
+            eyes: look.eyes as u8,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -848,13 +905,13 @@ fn make_squad_viewer(
         .map(|(i, &pos)| {
             let player = generate_player(base_id + i as u32, pos, level);
             let mp = MatchPlayer::from_player(team_id, &player, pos, false, None);
-            players_json.push(PlayerJson {
-                id: mp.id,
-                shirt_number: (i + 1) as u8,
-                last_name: LAST_NAMES[(name_offset + i) % LAST_NAMES.len()].to_string(),
-                position: pos.get_short_name().to_string(),
-                is_home: team_id == 1,
-            });
+            players_json.push(PlayerJson::new(
+                mp.id,
+                (i + 1) as u8,
+                name_offset + i,
+                pos.get_short_name(),
+                team_id == 1,
+            ));
             mp
         })
         .collect();
@@ -883,13 +940,13 @@ fn make_squad_viewer(
             // Register the sub in PLAYERS_DATA too — that's the lookup the
             // viewer uses to build a sprite when a new id appears in
             // position chunks mid-match.
-            players_json.push(PlayerJson {
-                id: mp.id,
-                shirt_number: (12 + i) as u8,
-                last_name: LAST_NAMES[(name_offset + 11 + i) % LAST_NAMES.len()].to_string(),
-                position: pos.get_short_name().to_string(),
-                is_home: team_id == 1,
-            });
+            players_json.push(PlayerJson::new(
+                mp.id,
+                (12 + i) as u8,
+                name_offset + 11 + i,
+                pos.get_short_name(),
+                team_id == 1,
+            ));
             mp
         })
         .collect();
@@ -6565,6 +6622,140 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     d[9] as f64 / 10.0 / d[3] as f64 * 0.125
                 );
             }
+        }
+    }
+
+    // ── KEEPER BY SHOT RANGE ───────────────────────────────────────────
+    // The aggregate "beyond his reach" row cannot tell a tap-in he had no
+    // time for from a drive he never moved for. This splits it.
+    {
+        use core::mid_run_diag::KeeperRangeDiag;
+        let r = KeeperRangeDiag::snapshot();
+        if r.iter().any(|&n| n > 0) {
+            println!();
+            println!("--- KEEPER BY SHOT RANGE (on-frame shots that reached his plane) ---");
+            println!(
+                "  {:<12} {:>8} {:>10} {:>10} {:>9} {:>8} {:>9} {:>9}",
+                "struck from",
+                "arrived",
+                "beyond",
+                "miss",
+                "reach",
+                "saved",
+                "diving",
+                "flight"
+            );
+            let bands = ["< 11 m", "11-18 m", "18-28 m", "28 m +"];
+            for (label, band) in bands.iter().zip(0..4usize) {
+                let s = |i: usize| r[band * 24 + i];
+                let n = s(0);
+                if n == 0 {
+                    continue;
+                }
+                let per = |v: u64| v as f64 * 100.0 / n as f64;
+                println!(
+                    "  {:<12} {:>8} {:>9.0}% {:>9.2}m {:>8.2}m {:>7.0}% {:>8.0}% {:>8.0}ms",
+                    label,
+                    n,
+                    per(s(1)),
+                    s(2) as f64 / 100.0 / n as f64 * 0.125,
+                    s(3) as f64 / 100.0 / n as f64 * 0.125,
+                    per(s(4)),
+                    per(s(6)),
+                    s(7) as f64 / 10.0 / n as f64 * 10.0,
+                );
+            }
+            // …and why he stayed on his feet, per band. The ratio that
+            // matters is `stepped to it` against `LAUNCHED`: a keeper who
+            // refuses the dive because he has already walked to the ball
+            // is a different animal from one who never saw it.
+            println!(
+                "  {:<12} {:>8} {:>10} {:>10} {:>9} {:>8} {:>9} {:>9}",
+                "in-window", "ticks", "no react", "< a step", "hopeless", "stepped", "LAUNCHED",
+                "gap/walk"
+            );
+            for (label, band) in bands.iter().zip(0..4usize) {
+                let s = |i: usize| r[band * 24 + i];
+                let n = s(8);
+                if n == 0 {
+                    continue;
+                }
+                let per = |v: u64| v as f64 * 100.0 / n as f64;
+                println!(
+                    "  {:<12} {:>8} {:>9.0}% {:>9.0}% {:>8.0}% {:>7.0}% {:>8.0}% {:>6.2}/{:.2}m",
+                    label,
+                    n,
+                    per(s(9)),
+                    per(s(10)),
+                    per(s(11)),
+                    per(s(12)),
+                    per(s(13)),
+                    s(14) as f64 / 10.0 / n as f64 * 0.125,
+                    s(15) as f64 / 10.0 / n as f64 * 0.125,
+                );
+            }
+            // …and the ball-over-his-head case on its own. A shot arriving
+            // above his standing ceiling is one he has to leave his feet
+            // for however straight at him it is; if this row is not
+            // launching, the vertical term is not reaching the decision.
+            for (label, band) in bands.iter().zip(0..4usize) {
+                let s = |i: usize| r[band * 24 + i];
+                let n = s(16);
+                if n == 0 {
+                    continue;
+                }
+                println!(
+                    "  {:<12} {:>8} over his head, mean climb {:.1}u  →  LAUNCHED {:.0}%  \
+                     still under a step {:.0}%",
+                    label,
+                    n,
+                    s(19) as f64 / 10.0 / n as f64,
+                    s(17) as f64 * 100.0 / n as f64,
+                    s(18) as f64 * 100.0 / n as f64,
+                );
+            }
+            // …and the two write-offs that happen ABOVE the launch window.
+            // A shot the strike-time arc says is going over the bar is one
+            // the keeper never considers at all.
+            for (label, band) in bands.iter().zip(0..4usize) {
+                let s = |i: usize| r[band * 24 + i];
+                let n = s(20);
+                if n == 0 {
+                    continue;
+                }
+                println!(
+                    "  {:<12} {:>8} live-shot ticks  →  written off OVER THE BAR {:.0}%  \
+                     PAST THE POST {:.0}%   mean arrival height {:.2} m",
+                    label,
+                    n,
+                    s(21) as f64 * 100.0 / n as f64,
+                    s(22) as f64 * 100.0 / n as f64,
+                    if s(8) > 0 {
+                        s(23) as f64 / 100.0 / s(8) as f64
+                    } else {
+                        0.0
+                    },
+                );
+            }
+        }
+    }
+
+    // ── SHOT ARRIVAL HEIGHT: PREDICTED vs REAL ─────────────────────────
+    {
+        use core::mid_run_diag::ShotHeightDiag;
+        let h = ShotHeightDiag::snapshot();
+        if h[0] > 0 {
+            println!();
+            println!(
+                "--- SHOT ARRIVAL HEIGHT --- {} arrivals: keeper's projection {:.2} m vs the \
+                 ball's own {:.2} m; predicted OVER the bar but arrived under it {:.1}%, \
+                 the converse {:.1}%",
+                h[0],
+                h[1] as f64 / 100.0 / h[0] as f64,
+                h[2] as f64 / 100.0 / h[0] as f64,
+                h[3] as f64 * 100.0 / h[0] as f64,
+                h[4] as f64 * 100.0 / h[0] as f64,
+            );
         }
     }
 

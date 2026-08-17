@@ -1074,6 +1074,121 @@ pub mod mid_run_diag {
     /// cannot tell that from a dive he simply lost.
     pub static GK_GUARD: [AtomicU64; 26] = [const { AtomicU64::new(0) }; 26];
 
+    /// **The same save outcome, split by HOW FAR THE SHOT WAS STRUCK FROM.**
+    ///
+    /// `KEEPER GUARD CENSUS` says how often a shot arrives beyond the
+    /// keeper's reach; it cannot say whether that is a six-yard tap-in he
+    /// had no time for or a twenty-five-yard drive he never moved for.
+    /// Those are opposite defects with opposite fixes, and the aggregate
+    /// hides the difference completely — which is why "he doesn't try for
+    /// long shots" could be reported against a save rate that looked like
+    /// a reaction-time problem.
+    ///
+    /// Four bands of strike distance from the centre of the goal, ×8 slots:
+    /// +0 shots that reached the wedge (on frame, arrived at his plane),
+    /// +1 of those beyond his reach, +2 Σ lateral error ×100, +3 Σ the
+    /// reach he had ×100, +4 saves the roll passed, +5 in-flight dive
+    /// launches, +6 arrivals with him already off his feet, +7 Σ ticks of
+    /// flight ×10 (the time he had).
+    ///
+    /// +8..+14 are the `should_launch` refusal split for the same bands,
+    /// which is what says whether "he never dives at long shots" is a
+    /// reaction problem, a despair-gate problem, or — the answer — a
+    /// keeper who has walked to the ball before the question is asked:
+    /// +8 ticks inside the launch window, +9 refused before he reacted,
+    /// +10 refused with less than a step to cover, +11 refused as
+    /// hopeless, +12 refused because he could step to it, +13 launched,
+    /// +14 Σ gap ×10 and +15 Σ walkable ×10 over the ticks at +8.
+    /// +16..+19 isolate the ball-over-his-head case the vertical term was
+    /// added for: in-window ticks with the shot arriving above his own
+    /// standing ceiling, and of those how many launched, how many were
+    /// still refused as less than a step, and the mean climb ×10.
+    /// +20..+23 sit ABOVE the launch window: every tick with a live shot
+    /// at his goal, and the two write-offs that happen before the dive is
+    /// even considered — "over the bar" and "past the post", both judged
+    /// off the strike-time arc. +23 is Σ the projected crossing height
+    /// ×100 over the in-window ticks.
+    pub static GK_RANGE: [AtomicU64; 96] = [const { AtomicU64::new(0) }; 96];
+
+    /// **Does `ShotTarget::goal_line_z` agree with where the ball actually
+    /// crosses the line?**
+    ///
+    /// It is a drag-free arc taken at the instant of the strike, and every
+    /// keeper decision about HEIGHT reads it: the over-the-bar write-off in
+    /// `KeeperShotDive::should_launch`, the same early-out in
+    /// `KeeperShotSave::roll`, `height_factor` in the save difficulty, and
+    /// `PlayerMatchState::leap_apex`, which decides how high a dive climbs.
+    /// `Ball::try_save_shot` alone uses the live ballistics instead. If the
+    /// two disagree, the keeper is writing off shots the physics goes on to
+    /// resolve — and he does it by standing still, which is invisible in
+    /// every save counter there is.
+    ///
+    /// Slots: 0 arrivals, 1 Σ predicted z ×100, 2 Σ live crossing z ×100,
+    /// 3 arrivals the prediction put over the bar while the ball came in
+    /// UNDER it, 4 the converse.
+    pub static SHOT_HEIGHT: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+
+    pub struct ShotHeightDiag;
+
+    impl ShotHeightDiag {
+        pub fn note(predicted: f32, actual: f32, bar: f32) {
+            SHOT_HEIGHT[0].fetch_add(1, Ordering::Relaxed);
+            SHOT_HEIGHT[1].fetch_add((predicted.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+            SHOT_HEIGHT[2].fetch_add((actual.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+            if predicted > bar && actual <= bar {
+                SHOT_HEIGHT[3].fetch_add(1, Ordering::Relaxed);
+            }
+            if predicted <= bar && actual > bar {
+                SHOT_HEIGHT[4].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 5] {
+            let mut out = [0u64; 5];
+            for (slot, c) in out.iter_mut().zip(SHOT_HEIGHT.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
+    pub struct KeeperRangeDiag;
+
+    impl KeeperRangeDiag {
+        /// Strike-distance band, in game units from the centre of the goal
+        /// (8 u = 1 m): inside 11 m, 11-18 m, 18-28 m, and beyond.
+        pub fn band(distance: f32) -> usize {
+            if distance < 88.0 {
+                0
+            } else if distance < 144.0 {
+                1
+            } else if distance < 224.0 {
+                2
+            } else {
+                3
+            }
+        }
+
+        pub fn note(band: usize, slot: usize) {
+            Self::add(band, slot, 1);
+        }
+
+        pub fn add(band: usize, slot: usize, n: u64) {
+            let i = band * 24 + slot;
+            if i < GK_RANGE.len() {
+                GK_RANGE[i].fetch_add(n, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 96] {
+            let mut out = [0u64; 96];
+            for (slot, c) in out.iter_mut().zip(GK_RANGE.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
     /// **Where the ball actually turns when a shot is resolved, and who was
     /// there to turn it.**
     ///

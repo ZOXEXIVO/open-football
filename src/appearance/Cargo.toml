@@ -1,0 +1,16 @@
+[package]
+name = "appearance"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# What a player looks like, decided in one place. Two renderers ask the same
+# question — the SVG portrait generator in `src/web` and the 3D replay viewer
+# in `src/match` — and a footballer who is Nigerian in his profile picture and
+# Norwegian on the pitch is the bug this crate exists to make impossible.
+#
+# Deliberately DEPENDENCY-FREE. The viewer is compiled to WebAssembly and
+# shipped to the browser inside the server binary, so anything linked here is
+# paid for twice: once in the download and once in every page load.
+
+[dependencies]

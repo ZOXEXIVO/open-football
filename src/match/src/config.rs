@@ -97,6 +97,21 @@ pub struct PlayerInfo {
     pub last_name: String,
     pub position: String,
     pub is_home: bool,
+    /// What he looks like: indices into `appearance::Palette`'s three tables,
+    /// decided from his nationality by the page that served this document.
+    ///
+    /// The viewer used to cut a complexion out of a hash of the player id,
+    /// which put five tones through every squad in the world regardless of
+    /// where its players were from — and gave the same man a different face
+    /// here and on his profile page. It is not something this side can work
+    /// out: it needs the country table, which never crosses into the browser.
+    /// Defaulted only so a malformed document still fields a team.
+    #[serde(default)]
+    pub skin: u8,
+    #[serde(default)]
+    pub hair: u8,
+    #[serde(default)]
+    pub eyes: u8,
 }
 
 impl PlayerInfo {

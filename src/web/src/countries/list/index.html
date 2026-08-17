@@ -291,6 +291,7 @@
                     label: '{{ i18n.t("duration") }}',
                     type: 'select',
                     options: [
+                        { value: '7', text: '{{ i18n.t("1_week") }}' },
                         { value: '30', text: '{{ i18n.t("1_month") }}' },
                         { value: '90', text: '{{ i18n.t("3_months") }}' },
                         { value: '180', text: '{{ i18n.t("6_months") }}' },
@@ -308,7 +309,7 @@
             confirmText: '{{ i18n.t("go") }}',
             cancelText: '{{ i18n.t("cancel") }}',
             onConfirm: function(data) {
-                window.startHoliday(data.duration || '30');
+                window.startHoliday(data.duration || '7');
             }
         });
     }

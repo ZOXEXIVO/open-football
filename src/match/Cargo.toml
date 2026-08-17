@@ -13,6 +13,11 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+# Shared with the server, which is the whole point of it: the colour tables a
+# player's complexion is drawn from have to be the same ones his portrait was
+# drawn from, and an index that means "tone 8" here has to mean "tone 8"
+# there. Carries no dependencies of its own — see its manifest.
+appearance = { path = "../appearance" }
 # Hand-picked rather than a feature collection: the collections drag in audio,
 # glTF, sprites, gamepads and the desktop windowing backends, none of which a
 # replay viewer in a browser tab has any use for.
