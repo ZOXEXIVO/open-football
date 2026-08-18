@@ -1074,6 +1074,32 @@ pub mod mid_run_diag {
     /// cannot tell that from a dive he simply lost.
     pub static GK_GUARD: [AtomicU64; 26] = [const { AtomicU64::new(0) }; 26];
 
+    /// **What the keeper does with the other eighty minutes.**
+    ///
+    /// Every other keeper block is conditioned on his goal being under
+    /// threat, and that is 20-35% of a match. The reported complaint —
+    /// *"he runs around the box chasing the ball between players instead
+    /// of goalkeeping"* — is about the REST of it, and none of the
+    /// existing counters sample there at all.
+    ///
+    /// One sample per keeper per AI tick, unconditionally, bucketed by how
+    /// far the ball is from his goal, because that is what decides whether
+    /// moving is goalkeeping or fidgeting. Per band `b` (0: ball inside
+    /// 12 m, 1: 12-25 m, 2: 25-40 m, 3: beyond 40 m) at `b * 4`:
+    ///   +0 ticks, +1 Σ distance travelled ×1000 (engine units),
+    ///   +2 ticks he was STILL, +3 Σ distance off his own goal line ×100.
+    ///
+    /// 16 is state transitions, 17 those that reversed within 300 ms (a
+    /// two-cycle, not a decision), 18 Σ of his heading change ×100 over
+    /// ticks where he was moving, 19 the ticks that sum covers, 20 the
+    /// subset of those that were REVERSALS of more than 90 degrees.
+    ///
+    /// A real keeper covers ~5 km in a match and is stationary for most
+    /// of it; the mileage he does cover is concentrated in the bands where
+    /// the ball is near. Distance in band 3 is, almost by definition,
+    /// wasted motion.
+    pub static GK_MOTION: [AtomicU64; 21] = [const { AtomicU64::new(0) }; 21];
+
     /// **The same save outcome, split by HOW FAR THE SHOT WAS STRUCK FROM.**
     ///
     /// `KEEPER GUARD CENSUS` says how often a shot arrives beyond the
@@ -1354,6 +1380,56 @@ pub mod mid_run_diag {
         pub fn snapshot() -> [u64; 26] {
             let mut out = [0u64; 26];
             for (slot, c) in out.iter_mut().zip(GK_GUARD.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
+    pub struct KeeperMotionDiag;
+
+    impl KeeperMotionDiag {
+        /// Which of the four ball-distance bands this tick belongs to.
+        pub fn band(ball_to_goal: f32) -> usize {
+            if ball_to_goal < 96.0 {
+                0
+            } else if ball_to_goal < 200.0 {
+                1
+            } else if ball_to_goal < 320.0 {
+                2
+            } else {
+                3
+            }
+        }
+
+        pub fn note_tick(band: usize, travelled: f32, still: bool, off_line: f32) {
+            let base = band.min(3) * 4;
+            GK_MOTION[base].fetch_add(1, Ordering::Relaxed);
+            GK_MOTION[base + 1].fetch_add((travelled.max(0.0) * 1000.0) as u64, Ordering::Relaxed);
+            if still {
+                GK_MOTION[base + 2].fetch_add(1, Ordering::Relaxed);
+            }
+            GK_MOTION[base + 3].fetch_add((off_line.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+        }
+
+        pub fn note_transition(reversed_quickly: bool) {
+            GK_MOTION[16].fetch_add(1, Ordering::Relaxed);
+            if reversed_quickly {
+                GK_MOTION[17].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn note_heading(change_rad: f32) {
+            GK_MOTION[18].fetch_add((change_rad.abs() * 100.0) as u64, Ordering::Relaxed);
+            GK_MOTION[19].fetch_add(1, Ordering::Relaxed);
+            if change_rad.abs() > std::f32::consts::FRAC_PI_2 {
+                GK_MOTION[20].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 21] {
+            let mut out = [0u64; 21];
+            for (slot, c) in out.iter_mut().zip(GK_MOTION.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
             out

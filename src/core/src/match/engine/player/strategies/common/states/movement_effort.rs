@@ -1,4 +1,6 @@
 use super::activity_intensity::ActivityIntensity;
+use crate::r#match::MatchPlayer;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 
 /// Translates a player's current exertion level — the same
 /// [`ActivityIntensity`] the fatigue model reads each tick — into a
@@ -46,6 +48,71 @@ impl MovementEffort {
             ActivityIntensity::VeryHigh => 0.95,
         };
         base * Self::self_pacing(intensity, condition_pct)
+    }
+
+    /// The speed ceiling for the man ON the ball, as a fraction of his
+    /// conditioned max speed.
+    ///
+    /// Kept here, next to [`Self::speed_fraction`], rather than inline at
+    /// the integration point, because the two are one decision: a chase
+    /// is a comparison of these two numbers and they used to be set by
+    /// unrelated code that never met. The diagnostic that measures the
+    /// comparison (`dead_ball_diag::CHASE_SAMPLES`) reads this same
+    /// function, so it cannot drift away from the live path — the first
+    /// version of it re-derived the formula and immediately went stale.
+    ///
+    /// Two factors. The carrier is sprinting, so he gets the same
+    /// flat-out ceiling anybody sprinting off the ball gets; and carrying
+    /// costs him something on top, scaled by how good a carrier he is.
+    /// An elite carrier therefore matches a defender running flat out,
+    /// and everybody else is a little slower — which is the real
+    /// relationship, and the inverse of what the engine used to do.
+    ///
+    /// The carry band is `0.80 + composite * 0.20`. The previous
+    /// `0.78 + composite * 0.42` reached its 1.00 clamp at composite
+    /// 0.524, below the population mean, so every professional resolved
+    /// to the same number and none of the six attributes behind
+    /// `movement_speed_with_ball` reached anything.
+    pub fn carrier_ceiling(player: &MatchPlayer, minute: u32, condition_pct: u32) -> f32 {
+        let composite = sc::movement_speed_with_ball(player, minute);
+        if Self::chase_legacy() {
+            return (0.78 + composite * 0.42).clamp(0.75, 1.00);
+        }
+        let carry = (0.80 + composite * 0.20).clamp(0.75, 1.00);
+        Self::speed_fraction(ActivityIntensity::VeryHigh, condition_pct) * carry
+    }
+
+    /// Diagnostic switch: with `OF_CHASE_LEGACY` set, the chase model
+    /// reverts to what it was before 2026-08-18 — the man on the ball is
+    /// exempt from every ceiling except his own carry band, and the
+    /// states in which a player runs AT the ball declare `High` (0.78 of
+    /// top speed) rather than a sprint.
+    ///
+    /// This is the A/B control for the defender-engagement work. Its
+    /// effect reaches every player on every tick, so "did the chase model
+    /// cause this?" cannot be answered from the diff — and it must not be
+    /// answered by checking out an older revision either, because the
+    /// working tree moves under you. Same pattern and same purpose as
+    /// `MatchContext::shape_off` and `press_off`; read once per process.
+    /// Debug infrastructure — do not remove.
+    ///
+    /// Measured across it (both arms otherwise identical, 120 fixtures at
+    /// squad level 14): carrier speed ceiling 0.525 → 0.470 u/tick and his
+    /// nearest chaser's 0.447 → 0.482, so the chaser goes from being the
+    /// slower man on **90% of ticks to 31%**; the carrier's nearest
+    /// opponent inside 2 m 37% → 55% of ticks; goals 4.74 → 3.11 and
+    /// shots per team 18.2 → 12.3, against a real ~2.5 and ~13.
+    ///
+    /// ⚠ The legacy arm is NOT the pre-2026-08-18 engine. It reverts the
+    /// chase model alone, while `TackleDecision::BASE` and the tackle
+    /// ladder stay calibrated for the chase model being ON — so the
+    /// legacy arm under-produces challenges (12.3 tackles per team
+    /// against the live 17.7 and a real ~18). Read it as "what does the
+    /// chase model do", not as "what did the engine used to score".
+    pub fn chase_legacy() -> bool {
+        use std::sync::OnceLock;
+        static LEGACY: OnceLock<bool> = OnceLock::new();
+        *LEGACY.get_or_init(|| std::env::var("OF_CHASE_LEGACY").is_ok())
     }
 
     /// Self-pacing: a tired player can't keep flinging themselves into

@@ -56,11 +56,14 @@ pub struct FaceLook {
     pub shaved: bool,
 }
 
-/// The two round textures the viewer draws on the turf, generated rather than
-/// shipped: a contact shadow and the team ring under a player's boots.
+/// The round texture the viewer draws on the turf, generated rather than
+/// shipped: the contact shadow under a player and under the ball.
 ///
-/// Both are white with a shaped alpha channel, so the material's base colour
-/// decides what they end up looking like and one image serves every player.
+/// White with a shaped alpha channel, so the material's base colour decides
+/// what it ends up looking like and one image serves every player. It had a
+/// team-coloured ring beside it, drawn round each player's boots; that went
+/// once the footballers themselves were legible enough to tell apart by their
+/// kit, which is how you tell them apart in a broadcast.
 pub struct Textures;
 
 impl Textures {
@@ -163,15 +166,6 @@ impl Textures {
             }
         }
         Self::image(size, size, data)
-    }
-
-    /// The ring drawn round a player's feet in their team's colour.
-    pub fn ring(images: &mut Assets<Image>) -> Handle<Image> {
-        images.add(Self::radial(|distance| {
-            const RADIUS: f32 = 0.80;
-            const WIDTH: f32 = 0.17;
-            Self::smooth(1.0 - ((distance - RADIUS) / WIDTH).abs().min(1.0))
-        }))
     }
 
     /// A shirt number, white on transparent, for the panel across a player's
@@ -959,6 +953,75 @@ impl Textures {
                     (colour.z * 255.0) as u8,
                     255,
                 ]);
+            }
+        }
+
+        images.add(Self::image(WIDTH, HEIGHT, data))
+    }
+
+    /// The gradient the sky dome is skinned with, read top to bottom: zenith at
+    /// v = 0, horizon at v = 0.5, ground at v = 1.
+    ///
+    /// One column would do — nothing varies across it — but a handful keeps the
+    /// texture from being a degenerate strip on the way to the GPU.
+    ///
+    /// The horizon stop is exactly the camera's haze colour, and that is the
+    /// whole trick: distant geometry already tends toward the haze, so a sky
+    /// that meets the ground in the same value gives the far stands nothing to
+    /// stand out against. Above it the value falls away to a deep blue rather
+    /// than the flat black this scene used to end in; below it the gradient
+    /// keeps going down a little, so the far edge of the surround — which is
+    /// well inside the haze by then — does not sit on a seam.
+    pub fn sky(images: &mut Assets<Image>) -> Handle<Image> {
+        const WIDTH: u32 = 4;
+        const HEIGHT: u32 = 512;
+        /// `(v, colour)`, in order. Between two stops the mix is smoothstepped
+        /// rather than linear: a straight ramp puts a visible crease at every
+        /// stop, and on something that fills a third of the frame a crease
+        /// reads as a band of cloud that is not there.
+        /// The stops are not spread evenly over the dome because the shot is
+        /// not: a broadcast lens spends its life within about 25° of the
+        /// horizon, which is `v` 0.36 to 0.50 — an eighth of the sphere doing
+        /// nearly all the work. Spaced evenly, the visible band came out as one
+        /// flat grey and the gradient was only really there overhead, where
+        /// nothing ever looks.
+        ///
+        /// The blues are stronger than they look here. Everything on screen has
+        /// been through the tonemapper by the time it is seen, and it pulls a
+        /// dark saturated colour a long way toward grey — authored at the value
+        /// it should end up, the sky came out as slate.
+        const STOPS: [(f32, Vec3); 8] = [
+            (0.000, Vec3::new(0.020, 0.055, 0.190)),
+            (0.250, Vec3::new(0.035, 0.080, 0.230)),
+            (0.380, Vec3::new(0.060, 0.115, 0.265)),
+            (0.455, Vec3::new(0.110, 0.165, 0.295)),
+            (0.500, Vec3::new(0.200, 0.230, 0.280)),
+            (0.560, Vec3::new(0.150, 0.172, 0.205)),
+            (0.720, Vec3::new(0.098, 0.112, 0.132)),
+            (1.000, Vec3::new(0.072, 0.082, 0.096)),
+        ];
+
+        let mut data = Vec::with_capacity((WIDTH * HEIGHT * 4) as usize);
+        for row in 0..HEIGHT {
+            let down = row as f32 / (HEIGHT - 1) as f32;
+            let colour = STOPS
+                .windows(2)
+                .find(|pair| down <= pair[1].0)
+                .map(|pair| {
+                    let (from, below) = pair[0];
+                    let (to, above) = pair[1];
+                    let span = (to - from).max(f32::EPSILON);
+                    below.lerp(above, Self::smooth((down - from) / span))
+                })
+                .unwrap_or(STOPS[STOPS.len() - 1].1);
+            let texel = [
+                (colour.x * 255.0) as u8,
+                (colour.y * 255.0) as u8,
+                (colour.z * 255.0) as u8,
+                255,
+            ];
+            for _ in 0..WIDTH {
+                data.extend_from_slice(&texel);
             }
         }
 

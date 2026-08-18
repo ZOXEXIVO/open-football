@@ -21,6 +21,9 @@ appearance = { path = "../appearance" }
 # Hand-picked rather than a feature collection: the collections drag in audio,
 # glTF, sprites, gamepads and the desktop windowing backends, none of which a
 # replay viewer in a browser tab has any use for.
+# `default_font` is deliberately absent: it compiles in `FiraMono-subset.ttf`,
+# which cannot spell half the squad list. `Typeface` fills the same slot with the
+# faces the web UI uses — see `fonts/README.md`.
 bevy = { version = "0.19", default-features = false, features = [
     "async_executor",
     "bevy_asset",
@@ -42,7 +45,6 @@ bevy = { version = "0.19", default-features = false, features = [
     "bevy_ui_render",
     "bevy_window",
     "bevy_winit",
-    "default_font",
     "keyboard",
     "ktx2",
     "mouse",

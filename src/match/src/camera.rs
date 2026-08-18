@@ -665,9 +665,10 @@ impl TvCamera {
             // reads as floodlit air — and is still dark enough that the far
             // half of the turf does not wash out.
             //
-            // The SKY stays near-black (`ClearColor` in `lib.rs`), which is
-            // correct rather than inconsistent: a floodlit ground at night is
-            // exactly a pale structure against a black sky.
+            // The horizon stop of the sky gradient is this same colour, so the
+            // far stands do not fade to one value and then meet a background of
+            // another. See `Sky`, which used to be a near-black `ClearColor` and
+            // is now the dome that colour was standing in for.
             DistanceFog {
                 color: Color::srgb(0.200, 0.230, 0.280),
                 falloff: FogFalloff::Linear {

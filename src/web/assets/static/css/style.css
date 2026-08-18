@@ -5615,10 +5615,18 @@ a:active {
        to one scorer per line and hands the slack to the small caps. */
     display: flex;
     flex: 1;
+    /* Only ever used by the narrow layouts, where the two rails drop below
+       the result onto a second line. The row gap is theirs; the 16px column
+       gap is what separates the three rails on one line. */
+    flex-wrap: wrap;
     align-items: center;
-    gap: 16px;
+    gap: 4px 16px;
     min-width: 0;
     padding: 8px 16px 8px 0;
+    /* What every rule in the responsive section further down measures itself
+       against — see the note there for why the window is the wrong ruler. */
+    container-type: inline-size;
+    container-name: scoreboard;
 }
 
 /* Left rail: which competition, and that the match is over. Both lines are
@@ -5673,18 +5681,19 @@ a:active {
     /* Nudge right, so the score lands on the PAGE's centre line rather than
        the scoreboard's — the replay below it is page-centred, and the two
        reading straight down from one another is the point of putting the
-       result up here. The header actions sit to the right of the scoreboard,
-       and between equal rails this margin moves the middle by half of itself,
-       so a margin of exactly the actions' width lands it. That width is a
-       locale-dependent measurement the stylesheet cannot take, so the page
-       writes it into `--fm-actions-w`.
+       result up here. The scoreboard sits off-centre because the menu button
+       and the header actions take the ends of the header, and this margin
+       moves the middle by half of itself, so twice the offset lands it. That
+       offset is a measurement the stylesheet cannot take — it moves with the
+       locale, the sidebar and the date — so the page writes it into
+       `--fm-sb-shift` already doubled.
        Spent only out of width the result does not need: 64% is what is left
        of the header once the two 18% rails are taken, and 560px is the floor
        under the result itself, so the nudge can never ellipse the club names
        to "Arse…" to buy centring. Between the two it takes what there is, and
        the result glides onto the centre line as the window widens rather than
        jumping there. */
-    margin-left: min(var(--fm-actions-w, 0px), max(0px, 64% - 560px));
+    margin-left: min(var(--fm-sb-shift, 0px), max(0px, 64% - 560px));
 }
 
 /* Equal halves of what the score leaves, so four scorers on one side and none
@@ -5892,33 +5901,81 @@ a:active {
     background: rgba(245, 197, 24, 0.08) !important;
 }
 
-/* --- Scoreboard Responsive --- */
+/* --- Scoreboard Responsive ---
 
-/* No room for three modules across a phone header, so they stack — the rails
-   laying themselves out along the line, which keeps the header two rows
-   shallower than stacking every line would. */
+   The scoreboard answers to its OWN width rather than the window's. What it
+   gets is the header less the menu button and the header actions, and those
+   are worth 210px on a phone and 290px on a laptop — so a 1280 window with
+   the sidebar docked hands the scoreboard LESS room than a 1199 one without
+   it. A viewport breakpoint cannot see that, and picked the wrong layout at
+   both ends: club names read in full at 768px and came out as "Manch…" at
+   820px, the page getting worse as the window got wider. `container-type`
+   below lets these rules read the width the scoreboard actually got.
 
-@media (max-width: 768px) {
-    .fm-header-scoreboard {
-        flex-direction: column;
-        align-items: center;
-        gap: 4px;
-        padding: 8px 10px;
+   What gives up the line does so in the order it matters: the man of the
+   match and the competition go first, the result keeps it to the last. The
+   old fixed 18% rails had that backwards — they held width for the two
+   smallest items on the header while the club names ellipsed to pay. */
+
+/* One line costs about 900px: 560px of result between two rails wide enough
+   to spell out a competition and "player of the match". Under that the rails
+   stop competing with the result and drop below it as a caption — the result
+   is what a match header is for, so on a narrow header it reads first and
+   takes the whole line, and the small type reads as its caption. Two rows,
+   not three: the competition and the award share the second one. */
+
+@container scoreboard (max-width: 899px) {
+    .fm-sb-main {
+        order: 1;
+        flex: 1 1 100%;
+        /* Same page-centring nudge as the wide layout, and spent out of the
+           same 560px floor under the result — the whole line here, rather
+           than the 64% the rails leave there. Anything less and the nudge
+           starts buying centring with the club names: at a 669px scoreboard
+           a 440px floor left "Borussia Moncheng…" against a score that was
+           still 60px short of the centre line. */
+        margin-left: min(var(--fm-sb-shift, 0px), max(0px, 100% - 560px));
+    }
+
+    /* Wrap rather than ellipse. Which club it is, is the one thing on this
+       page nothing else can tell you — "Borussia Moncheng…" against
+       "Borussia Monchengla…" is not a distinction a reader can make — so a
+       long name takes a second line and the header grows by 20px, which on
+       every window that is not also short costs the replay nothing. Names
+       that fit still sit on one line, so this is paid for only where it is
+       needed. */
+    .fm-sb-team-name {
+        white-space: normal;
     }
 
     .fm-sb-meta,
     .fm-sb-motm {
-        flex: 0 0 auto;
+        flex: 0 1 auto;
         flex-direction: row;
         align-items: baseline;
-        justify-content: center;
         gap: 8px;
         max-width: 100%;
-        text-align: center;
+        text-align: left;
     }
 
-    .fm-sb-main {
-        align-self: stretch;
+    /* Competition to the outside edge, award to the other, so the caption
+       brackets the result rather than huddling under one half of it. */
+    .fm-sb-meta {
+        order: 2;
+        margin-right: auto;
+    }
+
+    .fm-sb-motm {
+        order: 3;
+    }
+}
+
+/* Under ~440px a club name is on two lines more often than not, so the type
+   steps down to keep those two lines from being three. */
+
+@container scoreboard (max-width: 439px) {
+    .fm-sb-team-name {
+        font-size: 14px;
     }
 
     .fm-sb-team-home {
@@ -5929,31 +5986,81 @@ a:active {
         padding-left: 10px;
     }
 
-    /* Club names wrap here rather than ellipsing: the column is too narrow to
-       tell "Manchester City" from "Manchester United" on one clipped line. */
-    .fm-sb-team-name {
-        font-size: 14px;
-        white-space: normal;
+    .fm-sb-digit {
+        font-size: 24px;
+        min-width: 20px;
     }
 
-    .fm-sb-digit {
-        font-size: 26px;
-        min-width: 20px;
+    /* Nothing spare to spend on centring at this width. */
+    .fm-sb-main {
+        margin-left: 0;
     }
 }
 
-@media (max-width: 480px) {
+/* The narrowest phones still in use. Everything between the two club names is
+   pulled in as tight as it reads, because the width they leave has to hold
+   the longest single word a club name can be — nothing wraps "Monchengladbach"
+   and the alternative to the room is clipping it. */
+
+@container scoreboard (max-width: 359px) {
     .fm-sb-team-name {
         font-size: 13px;
     }
 
+    .fm-sb-team-home {
+        padding-right: 4px;
+    }
+
+    .fm-sb-team-away {
+        padding-left: 4px;
+    }
+
+    .fm-sb-score {
+        gap: 5px;
+        padding: 0;
+    }
+
     .fm-sb-digit {
-        font-size: 22px;
-        min-width: 18px;
+        font-size: 21px;
+        min-width: 15px;
     }
 
     .fm-sb-league {
         letter-spacing: 1px;
+    }
+}
+
+/* Below xl: the scoreboard takes a line of its own.
+
+   The same breakpoint the sidebar undocks at, and for the same reason — this
+   is where the window stops having room for the app's chrome and its content
+   side by side. Sharing the line costs the scoreboard the 210px of actions a
+   phone header carries and the 290px a laptop one does, and it was paying in
+   both of the things the header is for: at 414px the clubs read "M… U…", and
+   at 900px the score sat 129px to the left of the stage it is supposed to
+   read straight down into.
+
+   A row of its own costs the header ~40px, which is free on all but a short
+   window: below xl the replay stage is bounded by the column width rather
+   than by what the header leaves of the viewport, so a deeper header takes
+   nothing off it. It also lands the score on the page's centre line without
+   any nudge at all, the scoreboard now being centred itself.
+
+   Scoped to the match page, which is the only header whose title is a
+   layout — everywhere else the title is one line that fits beside the
+   actions. */
+
+@media (max-width: 1199.98px) {
+    .fm-header:has(.fm-header-scoreboard) {
+        flex-wrap: wrap;
+    }
+
+    .fm-header:has(.fm-header-scoreboard) .fm-header-scoreboard {
+        /* After the menu button and the actions, which keep the first row. */
+        order: 2;
+        flex: 1 0 100%;
+        padding: 8px 16px 10px;
+        border-top: 1px solid #eef0f2;
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperRestPosition,
+    ActivityIntensity, GoalkeeperCondition, KeeperOneOnOne, KeeperRestPosition, KeeperSmother,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -23,6 +23,26 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
                     GoalkeeperState::PreparingForSave,
                 ));
             }
+        }
+
+        // **The ball is at a man's feet inside his own spread — take it.**
+        //
+        // Wired here, and into every other state he can be standing in,
+        // because measured over 73 strict 1-v-1s in a recorded match he was
+        // in `Walking`, `Standing`, `ReturningToGoal` or `TakeBall` for
+        // **37 of them** — states with no route to [`KeeperSmother`] at all,
+        // so half of every one-on-one in the game was decided by which state
+        // the keeper happened to be in when it started. Every gate lives in
+        // `assess`; the wiring is what was missing.
+        if let Some(attempt) = KeeperSmother::assess(ctx) {
+            return Some(KeeperSmother::commit(ctx, &attempt));
+        }
+
+        // …and if he is still too far out for that, go and meet him.
+        if KeeperOneOnOne::duel(ctx).is_some() {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::PreparingForSave,
+            ));
         }
 
         // Direct catch for very close SLOW balls.
@@ -137,6 +157,8 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
             ctx.player.position,
             optimal_position,
             GoalkeeperSkillProfile::from_ctx(ctx).concentration,
+            ctx.ball().distance(),
+            ctx.context.field_size.width as f32,
         ) {
             return Some(Vector3::zeros());
         }

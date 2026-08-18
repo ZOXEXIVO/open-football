@@ -86,8 +86,10 @@ impl StateProcessingHandler for MidfielderInterceptingState {
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
-        // Intercepting is high intensity - sustained running to catch the ball
-        MidfielderCondition::with_velocity(ActivityIntensity::High).process(ctx);
+        // Reading a pass and going to it is explosive, not a cruise —
+        // same tier as the back line's `Intercepting`, and for the same
+        // reason (the tier is a speed cap).
+        MidfielderCondition::with_velocity(ActivityIntensity::chase()).process(ctx);
     }
 }
 

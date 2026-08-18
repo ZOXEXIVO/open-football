@@ -103,9 +103,39 @@ impl TackleEngagement {
     /// authoritative. Accepting it here is what lets the nominated man
     /// actually go in.
     pub fn should_commit(ctx: &StateProcessingContext, distance: f32) -> bool {
-        distance < Self::COMMIT
-            && ctx.player.can_attempt_tackle()
-            && (ctx.team().is_best_player_to_chase_ball() || Self::is_nominated_presser(ctx))
+        distance < Self::COMMIT && ctx.player.can_attempt_tackle() && Self::may_engage_carrier(ctx)
+    }
+
+    /// Who is allowed to challenge the man on the ball.
+    ///
+    /// ⚠ THE TWO DOORS WERE OPEN AT ONCE, AND THAT IS WHY THE LADDER
+    /// STAYED UPSIDE DOWN.
+    ///
+    /// This read `is_best_player_to_chase_ball() || is_nominated_presser()`
+    /// — the plan's nomination was ADDED to the chase election rather than
+    /// preferred over it, so the election's `position_factor` (Forward
+    /// 1.2, Midfielder 1.1, **Defender 0.9**) still handed the duel to
+    /// whichever forward happened to be in the area. The note above says
+    /// exactly why that factor is wrong for this question and then leaves
+    /// it live.
+    ///
+    /// Measured over 120 fixtures with both doors open: **2.74 tackles per
+    /// forward per match against a real ~0.8**, with defenders on 1.37
+    /// against ~1.6 — a front line winning the ball more often than the
+    /// back four, in an engine that already documents that as the defect.
+    ///
+    /// The election is the right answer for a LOOSE ball — a forward does
+    /// gamble on those, and the plan nominates nobody for a ball at rest
+    /// by design (see `DutyAssigner::assign`). So it stays, as the
+    /// fallback for exactly the case the plan declines to answer: when
+    /// nobody has been nominated, whoever can get there first goes.
+    /// When somebody HAS been nominated, he is the man, and everybody
+    /// else covers.
+    pub fn may_engage_carrier(ctx: &StateProcessingContext) -> bool {
+        if Self::is_nominated_presser(ctx) {
+            return true;
+        }
+        ctx.team().defensive_plan().presser().is_none() && ctx.team().is_best_player_to_chase_ball()
     }
 
     /// True when the team plan has made this player the engager.
@@ -369,10 +399,26 @@ pub struct TackleDecision;
 impl TackleDecision {
     /// Per-DECISION commitment chance for an ordinary contain, before the
     /// situational terms. Containing is the default action in a duel, so
-    /// a typical decision lands near 0.25-0.30 once the multipliers are
+    /// a typical decision lands near 0.15-0.20 once the multipliers are
     /// applied — a defender who stands his man up for a second or two
     /// usually does not dive in.
-    const BASE: f32 = 0.16;
+    ///
+    /// ⚠ RE-ANCHORED 0.16 → 0.098, AND NOT BECAUSE THE DECISION CHANGED.
+    ///
+    /// This is a rate per second OF CONTACT, so its calibration depends
+    /// entirely on how much contact there is — and until the chase-speed
+    /// inversion was fixed (see `MovementEffort::carrier_ceiling`) there
+    /// was very little, because the man on the ball had a higher speed
+    /// ceiling than the man chasing him and defenders spent their duels
+    /// trailing at three metres rather than standing anybody up.
+    ///
+    /// Measured across that fix, same 120 fixtures: the carrier's nearest
+    /// opponent inside 2 m went from **37% of ticks to 54%**, and mean
+    /// engagement distance 3.5 m → 2.6 m. The same 0.16 then produced
+    /// 29.5 successful tackles per team per match against a real ~18, and
+    /// 22.4 fouls against ~12 — a foul being a failed challenge, the two
+    /// move together and both are a function of this number.
+    const BASE: f32 = 0.098;
 
     /// Commitment multiplier inside the defender's own penalty area when
     /// there is cover behind him — see [`Self::box_restraint`].
@@ -422,7 +468,34 @@ impl TackleDecision {
         // Temperament. An aggressive defender dives in; a good
         // decision-maker picks his moment, which means fewer challenges
         // but better ones. They pull in opposite directions on purpose.
-        let temperament = 0.55 + aggression * 0.90 - decisions * 0.30;
+        //
+        // …and how good a tackler he actually IS decides whether the
+        // moment looks like a moment at all. This model read no technical
+        // attribute whatever, so a striker with `tackling` 5 weighed a
+        // challenge exactly as a centre-half with 17 does — which is why
+        // the front line kept out-tackling the back four however the duel
+        // gate was arranged: **2.51 tackles per forward per match against
+        // a real ~0.8, with defenders on 1.23 against ~1.6**, measured
+        // over 120 fixtures with the plan already winning the gate.
+        //
+        // A striker presses to cut the pass and force the error; he
+        // rarely goes to ground, because he is not good at it and knows
+        // it. A centre-half's whole trade is the challenge. That is one
+        // continuous attribute, not a role switch, and it costs the
+        // calibration nothing: the term is centred on the MEASURED
+        // population mean (`dev_match audit_levels`: outfield `tackling`
+        // 14.03 at squad level 14, the harness's calibration level), so
+        // the average player's commitment rate is unchanged and only the
+        // spread is new. Centring it on a guessed 12/20 instead moved the
+        // whole population — total tackles 18.0 → 19.8 per team — which
+        // is a calibration change wearing a modelling change's clothes.
+        //
+        // `tackle_profile` already prices whether he WINS it. This prices
+        // whether he goes — the two are different questions and the
+        // second one had no answer.
+        let tackling = (skills.technical.tackling / 20.0).clamp(0.0, 1.0);
+        let temperament =
+            (0.55 + aggression * 0.90 - decisions * 0.30 + (tackling - 0.70) * 1.10).max(0.12);
 
         // Cover behind me. This is the single biggest real-world licence
         // to commit: with a spare man you can afford to miss, without one

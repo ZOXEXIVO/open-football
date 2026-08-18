@@ -18,8 +18,10 @@ mod net;
 mod pitch;
 mod playback;
 mod replay;
+mod sky;
 mod textures;
 mod timeline;
+mod typeface;
 
 use crate::actors::{Actors, BallState};
 use crate::aftermath::Aftermath;
@@ -30,7 +32,9 @@ use crate::net::Netting;
 use crate::pitch::{Bank, Pitch};
 use crate::playback::{EventLog, Playback, RecordedSpans};
 use crate::replay::ReplayTracks;
+use crate::sky::Sky;
 use crate::timeline::{DebugOverlay, Timeline};
+use crate::typeface::Typeface;
 use bevy::asset::AssetMetaCheck;
 use bevy::log::{Level, LogPlugin};
 use bevy::prelude::*;
@@ -87,8 +91,8 @@ impl MatchViewer {
                         ..default()
                     })
                     // Nothing is loaded over the network by the asset server —
-                    // the only asset is the embedded default font — so asking
-                    // for `.meta` sidecars would only produce 404s.
+                    // the only asset is the typeface `Typeface` compiles in —
+                    // so asking for `.meta` sidecars would only produce 404s.
                     .set(AssetPlugin {
                         meta_check: AssetMetaCheck::Never,
                         ..default()
@@ -98,7 +102,13 @@ impl MatchViewer {
                         ..default()
                     }),
             )
-            .insert_resource(ClearColor(Color::srgb(0.03, 0.05, 0.07)))
+            // After `DefaultPlugins`, which is what creates `Assets<Font>`, and
+            // before any of the spawns below put text on the screen.
+            .add_plugins(Typeface)
+            // Only ever seen if the dome somehow is not: `Sky` is carried by
+            // the lens and covers the frame. Held at the gradient's zenith so
+            // that if it ever does show, it shows as more sky.
+            .insert_resource(ClearColor(Color::srgb(0.030, 0.048, 0.098)))
             .insert_resource(config)
             .insert_resource(Playback::new(duration_ms))
             .init_resource::<ReplayTracks>()
@@ -121,6 +131,7 @@ impl MatchViewer {
                 Startup,
                 (
                     Pitch::spawn,
+                    Sky::spawn,
                     TvCamera::spawn,
                     Actors::spawn,
                     Timeline::spawn,
@@ -191,6 +202,10 @@ impl MatchViewer {
                         // rig has just walked into is gone on the same frame
                         // it entered rather than flashing for one.
                         Bank::cull,
+                        // Same frame, same reason: the dome is carried by the
+                        // lens, and a frame of lag would show as the horizon
+                        // sliding back into place after every pan.
+                        Sky::follow_lens,
                         Actors::place_labels,
                         EventLog::follow_playhead,
                         Timeline::refresh,

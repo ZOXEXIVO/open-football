@@ -1,6 +1,7 @@
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperBallClaim, KeeperSetPosition,
-    KeeperShotDive, KeeperShotReaction, KeeperSmother, KeeperSweepLimit,
+    ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperBallClaim, KeeperDebug,
+    KeeperOneOnOne, KeeperRestPosition, KeeperSetPosition, KeeperShotDive, KeeperShotReaction,
+    KeeperSmother, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -16,6 +17,21 @@ const PUNCH_DISTANCE: f32 = 18.0; // Distance to attempt punching
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperPreparingForSaveState {}
+
+impl GoalkeeperPreparingForSaveState {
+    /// He does not un-set himself the instant a team-mate gets a toe on
+    /// it. 25 AI ticks = half a second — long enough that a cleared ball
+    /// and a scramble look different, short enough to be invisible when
+    /// the danger really has gone. (AI ticks are 20 ms: the engine runs
+    /// at 10 ms and the AI every second tick.)
+    const MIN_SET_TICKS: u64 = 25;
+
+    /// …and the ball has to be further away than anything that would set
+    /// him again. `Standing` re-enters this state with an opponent
+    /// carrying inside 12.5 m (100u); 140u = 17.5 m clears that with room,
+    /// so the two gates cannot both be live.
+    const STAND_DOWN_DISTANCE: f32 = 140.0;
+}
 
 impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
@@ -140,10 +156,32 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
             ));
         }
 
-        // Our team now has the ball — drop back to Standing; no save
-        // is imminent. (Previously routed to Attentive, which was a
-        // no-op Standing.)
-        if ctx.team().is_control_ball() {
+        // The danger has passed — stand down.
+        //
+        // ⚠ THIS WAS A ONE-TICK POSSESSION FLAG (`team().is_control_ball()`
+        // alone), against a `Standing` entry condition that fires on an
+        // opponent carrying the ball within 12.5 m or any ball moving
+        // goalward inside 37.5 m. Those are not complements: through every
+        // scramble, every tackle and every loose touch in his own third
+        // BOTH were true in alternation, at tick resolution. Measured over
+        // a recorded match: **1174 `Standing` → `PreparingForSave` and 1161
+        // back, a mean dwell of 827 ms, and 667 of the returns inside
+        // 300 ms** — thirteen changes of mind a minute, each one re-aiming
+        // his steering at a different point. That oscillation IS the
+        // reported behaviour: a keeper visibly jinking around his area
+        // instead of setting himself.
+        //
+        // Being set is a POSTURE, held while the ball is somewhere it can
+        // hurt him, not a reaction to who touched it last. He comes out of
+        // it when the danger is actually gone: possession settled AND the
+        // ball far enough away that he would have time to reset. The
+        // release radius is deliberately wider than the entry radius —
+        // `COMMIT < DISENGAGE`, the invariant this engine keeps breaking.
+        if ctx.team().is_control_ball()
+            && (KeeperDebug::calm_off()
+                || (ctx.in_state_time > Self::MIN_SET_TICKS
+                    && ctx.ball().distance() > Self::STAND_DOWN_DISTANCE))
+        {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,
             ));
@@ -215,6 +253,25 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
             ));
         }
 
+        // **A man is running at him with the ball.** Then the point to
+        // stand on is measured off the BALL, not off his own line — see
+        // [`KeeperOneOnOne`]. The branch below holds a fixed 18-32u of
+        // depth whatever the carrier does, which measured as a keeper
+        // watching a striker dribble from 8.7 m out to 2.8 m from goal
+        // while he held station 5.22 m away: the smother wants the ball
+        // inside his own spread and it was never going to see it.
+        if KeeperOneOnOne::duel(ctx).is_some() {
+            return Some(
+                SteeringBehavior::Arrive {
+                    target: KeeperOneOnOne::point(ctx, &prof),
+                    slowing_distance: 8.0,
+                }
+                .calculate(ctx.player)
+                .velocity
+                    * speed_boost,
+            );
+        }
+
         // No shot cached — slow ball / through ball / loose ball: fall
         // back to the angle-narrowing behaviour.
         let ball_distance = ctx.ball().distance();
@@ -233,10 +290,51 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
             goal_pos
         };
 
-        Some(
-            SteeringBehavior::Pursuit {
+        // **Set is a place he STANDS, not a point he follows.**
+        //
+        // This branch had no deadzone of any kind: `Pursuit` re-aimed at a
+        // lead point every tick and `speed_boost` is above 2, so a keeper
+        // "preparing for a save" was permanently in transit. Measured over
+        // a recorded match it was the single largest consumer of his
+        // mileage — **1587 m at 132 m/min**, a sustained jog — while the
+        // state census had him moving in 42% of the ticks he spent here.
+        // That is the opposite of what the state is for, and it is the
+        // half of the reported behaviour that the two-cycle fixes do not
+        // reach: a keeper who is set should be planted, weight forward,
+        // adjusting in short steps.
+        //
+        // Same anisotropic tolerance the resting model uses, and the ball
+        // is by definition close here, so `distance_slack` is near 1 and
+        // the tolerance stays at its tight end — three quarters of a metre
+        // across the goal. `Arrive` rather than `Pursuit` for the same
+        // reason: he is going to a spot, not chasing a moving one.
+        if !KeeperDebug::calm_off()
+            && KeeperRestPosition::is_set_with(
+                ctx.player.position,
                 target,
-                target_velocity: ball_velocity * 0.3,
+                prof.concentration,
+                ball_distance,
+                ctx.context.field_size.width as f32,
+            )
+        {
+            return Some(Vector3::zeros());
+        }
+        if KeeperDebug::calm_off() {
+            return Some(
+                SteeringBehavior::Pursuit {
+                    target,
+                    target_velocity: ball_velocity * 0.3,
+                }
+                .calculate(ctx.player)
+                .velocity
+                    * speed_boost,
+            );
+        }
+
+        Some(
+            SteeringBehavior::Arrive {
+                target,
+                slowing_distance: 4.0,
             }
             .calculate(ctx.player)
             .velocity

@@ -80,8 +80,11 @@ impl StateProcessingHandler for DefenderInterceptingState {
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
-        // Intercepting involves high-intensity sprinting to reach the ball
-        DefenderCondition::with_velocity(ActivityIntensity::High).process(ctx);
+        // Reading a pass and going to it is explosive — the ball is
+        // travelling and the window is a stride wide. `High` (0.78 of
+        // top speed) is a cruise; see the note in
+        // `DefenderPressingState` for why the tier is a speed cap.
+        DefenderCondition::with_velocity(ActivityIntensity::chase()).process(ctx);
     }
 }
 

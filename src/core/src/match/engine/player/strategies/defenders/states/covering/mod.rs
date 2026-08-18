@@ -297,8 +297,10 @@ impl StateProcessingHandler for DefenderCoveringState {
 
     fn process_conditions(&self, ctx: ConditionContext) {
         // Covering a gap during a live attack is a hard recovery run —
-        // high intensity, not a jog.
-        DefenderCondition::with_velocity(ActivityIntensity::High).process(ctx);
+        // a sprint, not a jog. `High` (0.78 of top speed) put the cover
+        // man permanently behind an attack whose carrier runs at a
+        // flat-out ceiling; see the note in `DefenderPressingState`.
+        DefenderCondition::with_velocity(ActivityIntensity::chase()).process(ctx);
     }
 }
 

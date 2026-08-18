@@ -336,7 +336,7 @@ struct Kit {
     trim: Handle<StandardMaterial>,
 }
 
-/// Every material the twenty-two players and their markers need, built once.
+/// Every material the twenty-two players need, built once.
 ///
 /// Sharing them is what keeps a pitch full of footballers down to a couple of
 /// dozen draw calls: the renderer batches by mesh and material, and there are
@@ -347,7 +347,6 @@ pub struct Wardrobe {
     hair: Vec<Handle<StandardMaterial>>,
     boots: Vec<Handle<StandardMaterial>>,
     gloves: Handle<StandardMaterial>,
-    markers: [Handle<StandardMaterial>; 2],
     shadow: Handle<StandardMaterial>,
     /// The three materials that cannot be shared, because what makes them
     /// differ is baked into a texture: a printed number, a printed name and a
@@ -450,7 +449,6 @@ impl Wardrobe {
             })
             .collect();
 
-        let ring = Textures::ring(images);
         let blob = Textures::blob(images);
         Wardrobe {
             kits,
@@ -461,18 +459,6 @@ impl Wardrobe {
             hair,
             boots,
             gloves,
-            markers: [
-                Self::paint(
-                    materials,
-                    &ring,
-                    config.home.background_color(Self::HOME_FALLBACK),
-                ),
-                Self::paint(
-                    materials,
-                    &ring,
-                    config.away.background_color(Self::AWAY_FALLBACK),
-                ),
-            ],
             shadow: materials.add(StandardMaterial {
                 base_color: Color::srgba(0.0, 0.0, 0.0, 0.40),
                 base_color_texture: Some(blob),
@@ -524,13 +510,6 @@ impl Wardrobe {
             number: own(&self.numbers),
             name: own(&self.names),
         }
-    }
-
-    /// The team-coloured ring drawn round a player's boots — the one thing
-    /// carried over from the flat markers this replaced, and still the fastest
-    /// way to read a crowded penalty area.
-    pub fn marker(&self, is_home: bool) -> Handle<StandardMaterial> {
-        self.markers[usize::from(!is_home)].clone()
     }
 
     pub fn shadow(&self) -> Handle<StandardMaterial> {
@@ -591,21 +570,6 @@ impl Wardrobe {
             base_color_texture: Some(texture),
             alpha_mode: AlphaMode::Blend,
             perceptual_roughness: 0.85,
-            ..default()
-        })
-    }
-
-    fn paint(
-        materials: &mut Assets<StandardMaterial>,
-        texture: &Handle<Image>,
-        color: Color,
-    ) -> Handle<StandardMaterial> {
-        let color = color.to_srgba();
-        materials.add(StandardMaterial {
-            base_color: Color::srgba(color.red, color.green, color.blue, 0.55),
-            base_color_texture: Some(texture.clone()),
-            alpha_mode: AlphaMode::Blend,
-            unlit: true,
             ..default()
         })
     }

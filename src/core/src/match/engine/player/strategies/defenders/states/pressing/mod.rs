@@ -193,14 +193,36 @@ impl StateProcessingHandler for DefenderPressingState {
             // Bias predicted point toward the goal-side so we close the
             // shooting lane even on chase — the defender wants to be
             // BETWEEN the carrier and our goal, not just on top of them.
+            // When the carrier is inside shooting range, ramp the
+            // goal-side bias hard. This puts the defender squarely in the
+            // shot line, which gives him a real chance to block the strike
+            // via `try_block_shot`. Real football: a defender closing down
+            // shows the shooter his body and steps along the shot line —
+            // he doesn't just run at the ball.
             //
-            // When the carrier is inside shooting range (<80u from our
-            // goal), ramp the goalside bias HARD. This puts the defender
-            // squarely in the shot-line, which gives them a real chance
-            // to block the strike via `try_block_shot`. Real football:
-            // a defender closing down in the box shows the shooter
-            // his body and steps along the shot line — he doesn't just
-            // run at the ball.
+            // ⚠ WIDENING THIS TO REAL SHOOTING RANGE WAS TRIED AND
+            // MEASURED NULL — do not retry it without a different reason.
+            //
+            // 80u is TEN METRES, and shots are struck from 124u (15.5 m)
+            // on average (`block_diag::SHOT_RANGE_X100`, n=2 800 over 120
+            // fixtures), so for the shot that actually happens this step
+            // is off and the presser runs at the ball rather than across
+            // it. That reads like the whole of the blocking problem, and
+            // it is not: taking `SHOT_ZONE` to 240u (the 30 m
+            // `DefenderMarkingState` uses for the same question) moved the
+            // mean perpendicular distance of the defenders inside the
+            // block window by 72.0u → **73.3u**, and blocks by 16.6% →
+            // **16.5% of shots**. It cost 1.6 shots per team per match on
+            // the way past (12.5 → 10.9 against a real ~13), because a
+            // presser holding a containing position over the whole final
+            // third suppresses the shot instead of blocking it.
+            //
+            // The reason is that the presser is ONE man. 41% of the back
+            // line is `Marking` when a shot is struck and 14% `Pressing`,
+            // so the corridor statistic is owned by the markers, whose
+            // line is goal-side of their MAN and not of the ball. The
+            // block rate lives in the marking geometry (see
+            // `DefensiveLine::hold_shape_on_man`), not here.
             let own_goal = ctx.ball().direction_to_own_goal();
             let to_own_goal = (own_goal - predicted).normalize();
             let carrier_to_goal = (own_goal - predicted).magnitude();
@@ -254,8 +276,25 @@ impl StateProcessingHandler for DefenderPressingState {
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
-        // Pressing is very demanding - high intensity chasing and pressure
-        DefenderCondition::with_velocity(ActivityIntensity::High).process(ctx);
+        // ⚠ CLOSING DOWN THE MAN ON THE BALL IS A SPRINT, AND THIS IS A
+        // SPEED CAP.
+        //
+        // `High` is 0.78 of top speed (`MovementEffort::speed_fraction`).
+        // The man being pressed is on the ball, and a carrier's ceiling
+        // is a flat-out sprint scaled only by the carry cost — so the
+        // presser was forbidden, by the movement layer, from ever
+        // arriving. Measured before this: the carrier's ceiling 0.525
+        // u/tick against his nearest opponent's 0.450, with the chaser
+        // slower on 89% of ticks (`dead_ball_diag::CHASE_SAMPLES`), and
+        // defenders producing 25.2 pressures a match for 1.12 successes
+        // against a real ~11 for ~3.5. He was pressing constantly and
+        // winning nothing because he could not close the last two metres.
+        //
+        // Same defect and same fix as `DefenderMarkingState` — see the
+        // note there. The tier is a CEILING, so this does not make
+        // defenders sprint all match: a presser shepherding a carrier who
+        // is walking still walks.
+        DefenderCondition::with_velocity(ActivityIntensity::chase()).process(ctx);
     }
 }
 

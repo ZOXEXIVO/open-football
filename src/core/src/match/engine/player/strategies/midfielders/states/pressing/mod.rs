@@ -309,8 +309,12 @@ impl StateProcessingHandler for MidfielderPressingState {
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
-        // Pressing is high intensity - sustained running and pressure
-        MidfielderCondition::with_velocity(ActivityIntensity::High).process(ctx);
+        // Closing the man on the ball is a sprint — see the note in
+        // `DefenderPressingState`. `High` is 0.78 of top speed against a
+        // carrier running at a flat-out ceiling, so the presser could
+        // not arrive; midfielders measured 17.2 pressures a match for
+        // 0.87 successes against a real ~15 for ~4.5.
+        MidfielderCondition::with_velocity(ActivityIntensity::chase()).process(ctx);
     }
 }
 

@@ -96,10 +96,13 @@ impl StateProcessingHandler for DefenderTacklingState {
             // happens to be in the area. Measured, that inverted the
             // ladder completely: 0.47 tackles per defender per match
             // against 3.01 per forward. See `TackleEngagement`.
-            if ctx.in_state_time == 0
-                && !ctx.team().is_best_player_to_chase_ball()
-                && !TackleEngagement::is_nominated_presser(ctx)
-            {
+            // …and the duel gate is `TackleEngagement::may_engage_carrier`
+            // rather than the chase election on its own: the plan's
+            // nomination WINS, and the election only fills in when the
+            // plan has nobody. Reading the election here as an
+            // alternative is what let a forward take a defender's duel
+            // (Forward 1.2 against Defender 0.9 on `position_factor`).
+            if ctx.in_state_time == 0 && !TackleEngagement::may_engage_carrier(ctx) {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Pressing,
                 ));

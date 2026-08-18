@@ -1,6 +1,6 @@
 use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperBallClaim,
-    KeeperCarrierThreat, KeeperRestPosition,
+    KeeperCarrierThreat, KeeperDebug, KeeperOneOnOne, KeeperRestPosition, KeeperSmother,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -100,6 +100,17 @@ impl StateProcessingHandler for GoalkeeperStandingState {
             ));
         }
 
+        // **A man has arrived with the ball inside his own spread.** Above
+        // the aerial claim and the sweep, because there is nothing left to
+        // decide: the ball is at his feet and it is his. Wired here as well
+        // as in the three states that already had it — measured, at the
+        // moment a strict 1-v-1 starts he is in a state with no route to
+        // [`KeeperSmother`] at all half the time, and `Standing` is the
+        // largest of them. Every gate is inside `assess`.
+        if let Some(attempt) = KeeperSmother::assess(ctx) {
+            return Some(KeeperSmother::commit(ctx, &attempt));
+        }
+
         let ball_on_own_side = ctx.ball().on_own_side();
 
         // A ball in the air over my box is MINE. This is the single most
@@ -173,11 +184,42 @@ impl StateProcessingHandler for GoalkeeperStandingState {
                     GoalkeeperState::PreparingForSave,
                 ));
             }
+            // **A man is through on his goal and he is standing still.**
+            //
+            // `CLOSE_DANGER_DISTANCE` is 12.5 m, and a keeper who waits for
+            // a breakaway to get that close has already lost the decision.
+            // Measured over a recorded match, at the moment a strict 1-v-1
+            // begins he is in `Standing` or `Walking` a third of the time
+            // and stays there. `PreparingForSave` is the state that owns the
+            // whole question — the closing point, the smother, the dive —
+            // so hand it over. See [`KeeperOneOnOne`].
+            if KeeperOneOnOne::duel(ctx).is_some() {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::PreparingForSave,
+                ));
+            }
         }
 
         // Check if ball is coming toward goal — react faster to shots
         // Shot velocities are ~1.0-2.0/tick, thresholds must match
-        if ctx.ball().is_towards_player_with_angle(0.6) && ball_on_own_side {
+        //
+        // ⚠ …but only if it is not OURS. This branch fires on any ball
+        // moving roughly goalward inside 37.5 m, and a back-pass, a
+        // defender's controlled touch and a centre-half turning infield are
+        // all exactly that. `PreparingForSave` stands down when the team
+        // has settled control, so without the same condition here the two
+        // gates disagree by construction and the keeper re-arms on the tick
+        // he stood down: measured, 371 of 971 entries to
+        // `PreparingForSave` came within 300 ms of him leaving it.
+        //
+        // A keeper does not set himself for his own left-back's pass. The
+        // opponent-carrier branch above still covers everything genuinely
+        // dangerous, and a shot in flight is the very first branch in this
+        // state and is not conditioned on possession at all.
+        if ctx.ball().is_towards_player_with_angle(0.6)
+            && ball_on_own_side
+            && (KeeperDebug::calm_off() || !ctx.team().is_control_ball())
+        {
             let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
 
             if ball_speed > 0.5 {
@@ -264,6 +306,8 @@ impl StateProcessingHandler for GoalkeeperStandingState {
             ctx.player.position,
             optimal_position,
             GoalkeeperSkillProfile::from_ctx(ctx).concentration,
+            ctx.ball().distance(),
+            ctx.context.field_size.width as f32,
         ) {
             return Some(Vector3::zeros());
         }

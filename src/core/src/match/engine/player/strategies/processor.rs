@@ -574,6 +574,7 @@ impl<'p> StateProcessor<'p> {
                 moving,
             );
             Self::note_keeper_guard(&processing_ctx, moving);
+            Self::note_keeper_motion(&processing_ctx, result.velocity);
         }
 
         if let Some(change) = handler.process(&processing_ctx) {
@@ -584,6 +585,22 @@ impl<'p> StateProcessor<'p> {
                     debug!("Player, Id={}, State {:?}", player_id, state);
                 }
             }
+            // Keeper state churn. A transition out of a state he entered
+            // less than 300 ms ago is not a decision he made, it is two
+            // gates disagreeing — see [`KeeperMotionDiag`]. A self-return
+            // is not a transition at all (states use it to hold, so the
+            // event fires and `in_state_time` keeps running) and counting
+            // those would drown the signal.
+            #[cfg(feature = "match-logs")]
+            if matches!(processing_ctx.player.state, PlayerState::Goalkeeper(_))
+                && change
+                    .state
+                    .is_some_and(|s| s != processing_ctx.player.state)
+            {
+                crate::mid_run_diag::KeeperMotionDiag::note_transition(
+                    processing_ctx.in_state_time <= 15,
+                );
+            }
             // Fold the handler's result in. `merge_state_change` moves the
             // events across WHETHER OR NOT a transition occurred — an
             // event-only result (state == None) must still reach the
@@ -593,6 +610,40 @@ impl<'p> StateProcessor<'p> {
         }
 
         result
+    }
+
+    /// One MOTION sample per keeper per AI tick, unconditionally — see
+    /// [`KeeperMotionDiag`]. Deliberately not gated on the ball being in
+    /// his third the way [`Self::note_keeper_guard`] is: the question this
+    /// answers is what he does while it is NOT, which is most of a match.
+    #[cfg(feature = "match-logs")]
+    fn note_keeper_motion(ctx: &StateProcessingContext, velocity: Option<Vector3<f32>>) {
+        use crate::mid_run_diag::KeeperMotionDiag;
+
+        if !matches!(ctx.player.state, PlayerState::Goalkeeper(_)) {
+            return;
+        }
+        let goal = ctx.ball().direction_to_own_goal();
+        let ball = ctx.tick_context.positions.ball.position;
+        let v = velocity.unwrap_or_else(Vector3::zeros);
+        let speed = v.magnitude();
+        KeeperMotionDiag::note_tick(
+            KeeperMotionDiag::band((ball - goal).magnitude()),
+            speed,
+            speed <= 0.02,
+            (ctx.player.position.x - goal.x).abs(),
+        );
+        // How sharply he is changing direction. A keeper adjusting his
+        // angle turns gently; one being pulled between two targets by a
+        // state machine that cannot make its mind up reverses, and that
+        // is what reads from the stands as chasing the ball.
+        if speed > 0.02 {
+            let prev = ctx.tick_context.positions.players.velocity(ctx.player.id);
+            if prev.magnitude() > 0.02 {
+                let cos = (v.normalize().dot(&prev.normalize())).clamp(-1.0, 1.0);
+                KeeperMotionDiag::note_heading(cos.acos());
+            }
+        }
     }
 
     /// One position sample per keeper per AI tick, on ticks where the ball

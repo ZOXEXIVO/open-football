@@ -467,30 +467,63 @@ impl PlayerMatchState {
             // not of how hard they happen to be working this tick.
             let sprint_capability = max_speed;
 
-            // Ball-carrier speed multiplier. Real football: carrying
-            // the ball costs ~15-25% of top sprint for an average
-            // player — they keep the ball in stride, look up, protect
-            // it. Elite carriers (Mbappé/Messi) lose almost nothing.
+            // Ball-carrier speed ceiling. Real football: carrying the
+            // ball costs ~15-25% of top sprint for an average player —
+            // they keep the ball in stride, look up, protect it. Elite
+            // carriers (Mbappé/Messi) lose almost nothing.
             //
             // Routes through `movement_speed_with_ball` so dribbling +
             // technique + pace + acceleration + agility + balance all
             // contribute, and so fatigue/late-game effects propagate
-            // through `effective_skill`. Mapping per spec:
+            // through `effective_skill`.
             //
-            //   carry_mult = 0.78 + composite * 0.42
+            // ⚠ THE CARRIER IS SPRINTING TOO, AND NO SPRINT HERE IS
+            // UNCAPPED.
             //
-            // Composite floor 0.05 → 0.80 (worst carrier under fatigue);
-            // composite 1.00 → 1.20 (elite carrier — no realistic
-            // penalty). Capped to existing `[0.75, 1.00]` band so the
-            // model stays a CARRY COST: an elite carrier matches their
-            // off-ball speed but doesn't go faster than it.
+            // The carry multiplier used to be the carrier's ONLY ceiling,
+            // because the `MovementEffort` branch below deliberately skips
+            // him. So he was measured against his own raw top speed while
+            // every player chasing him was measured against a FRACTION of
+            // his — 0.95 flat out, 0.78 in a `High` state. The two
+            // ceilings are set by unrelated code and nothing compared
+            // them, so the race was decided before either man moved.
+            //
+            // Measured (`dead_ball_diag::CHASE_SAMPLES`, n=6.3M carrier
+            // ticks over 60 fixtures): the man on the ball had a ceiling
+            // of **0.525 u/tick against his nearest opponent's 0.450**,
+            // and the chaser was the slower of the pair on **89% of
+            // ticks**. That is the whole of "the defender just runs
+            // alongside him and never gets there" — he is not steering
+            // badly, he is forbidden to arrive. Downstream it is also why
+            // midfielders completed 18.1 dribbles and made 60.1
+            // progressive carries a match (real ~1 and ~2), and why
+            // defenders produced 25.2 pressures for 1.12 successes
+            // (real ~11 for ~3.5).
+            //
+            // So the carrier is capped at the same flat-out ceiling
+            // anybody sprinting off the ball gets, and the carry cost
+            // applies on top of it. An elite carrier then matches a
+            // defender running flat out and everybody else is a little
+            // slower, which is the real relationship.
+            //
+            // The band is also re-anchored. `0.78 + composite * 0.42`
+            // clamped at 1.00 reaches its ceiling at composite 0.524 —
+            // below the population mean — so for essentially every
+            // professional the whole of `movement_speed_with_ball`
+            // resolved to the same number and none of those six
+            // attributes reached anything. `0.80 + composite * 0.20`
+            // spans 0.81 (worst carrier under fatigue) to 1.00 (elite)
+            // with no clamp collapse, so the skill stays live across the
+            // range the game actually generates.
             if tick_context.ball.current_owner == Some(player.id)
                 && player_position_group != PlayerFieldPositionGroup::Goalkeeper
             {
                 let minute = sc::minute_from_ms(context.total_match_time);
-                let composite = sc::movement_speed_with_ball(player, minute);
-                let raw = 0.78 + composite * 0.42;
-                max_speed *= raw.clamp(0.75, 1.00);
+                max_speed *= MovementEffort::carrier_ceiling(
+                    player,
+                    minute,
+                    player.player_attributes.condition_percentage(),
+                );
             }
 
             // Off-ball effort: a player jogs to reposition and only

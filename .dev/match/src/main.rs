@@ -2990,6 +2990,48 @@ fn run_audit_levels(n: usize) {
             sum_agi / d,
         );
     }
+
+    // …and the same three defending attributes SPLIT BY LINE.
+    //
+    // The pooled row above cannot answer the question that decides
+    // whether a skill-driven defensive model can be calibrated here at
+    // all: does a generated STRIKER have a centre-back's `tackling`?
+    // `generate_player` takes the position shape from `PlayerGenerator`
+    // and then adds a single uniform delta to every skill
+    // (`LevelSkillCurve::retarget`), so the shape survives as an additive
+    // offset — but the size of that offset relative to the level target
+    // is what says whether the harness can see a role difference at all.
+    println!();
+    println!("defending attributes by line (level 14) — tck / mrk / pos");
+    let mut acc = [[0.0f32; 3]; 3];
+    let mut n_line = [0u32; 3];
+    for team_id in 0..n {
+        let squad = make_squad_simple((team_id + 1) as u32, 14);
+        for mp in &squad.main_squad {
+            let g = mp.tactical_position.current_position.position_group();
+            let idx = match g {
+                PlayerFieldPositionGroup::Defender => 0,
+                PlayerFieldPositionGroup::Midfielder => 1,
+                PlayerFieldPositionGroup::Forward => 2,
+                PlayerFieldPositionGroup::Goalkeeper => continue,
+            };
+            acc[idx][0] += mp.skills.technical.tackling;
+            acc[idx][1] += mp.skills.technical.marking;
+            acc[idx][2] += mp.skills.mental.positioning;
+            n_line[idx] += 1;
+        }
+    }
+    for (i, label) in ["DEF", "MID", "FWD"].iter().enumerate() {
+        let d = n_line[i].max(1) as f32;
+        println!(
+            "  {:<4} {:>5.2} {:>5.2} {:>5.2}   ({} players)",
+            label,
+            acc[i][0] / d,
+            acc[i][1] / d,
+            acc[i][2] / d,
+            n_line[i]
+        );
+    }
 }
 
 // ── audit_engine_gap: measure engine response to a real skill gap ──────
@@ -5735,6 +5777,34 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         }
                     }
                     {
+                        let (n, ccap, hcap, cspd, hspd, outpaced, tiers) =
+                            core::dead_ball_diag::chase_speed_snapshot();
+                        let tt: u64 = tiers.iter().sum::<u64>().max(1);
+                        let trow = tiers
+                            .iter()
+                            .enumerate()
+                            .map(|(i, v)| {
+                                format!(
+                                    "{} {:.0}%",
+                                    core::dead_ball_diag::CHASE_TIER_LABELS[i],
+                                    *v as f64 / tt as f64 * 100.0
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("  ");
+                        println!(
+                            "  CAN HE CATCH HIM? {} samples — speed CEILING carrier {:.3} vs nearest chaser {:.3} u/tick; chaser capped LOWER on {:.0}% of ticks",
+                            n,
+                            ccap,
+                            hcap,
+                            outpaced * 100.0
+                        );
+                        println!(
+                            "      actual speed   carrier {:.3}  chaser {:.3}   |   chaser's effort tier: {}",
+                            cspd, hspd, trow
+                        );
+                    }
+                    {
                         let (fo, yi, fl) = core::chase_diag::snapshot();
                         println!(
                             "      chase designation: {:.0} forces/match, {:.0} yields/match ({:.0}% of forces during a delivery in flight)",
@@ -6509,6 +6579,64 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     println!("  {:<26} {:>10}  ** NEVER ENTERED **", state.to_string(), 0);
                 }
             }
+        }
+    }
+
+    // ── KEEPER MOTION CENSUS ───────────────────────────────────────────
+    // What he does with the whole match rather than with the 20-35% of it
+    // his goal is under threat. Every other keeper block is conditioned on
+    // the threat and so cannot see the reported behaviour at all — a
+    // keeper who spends the hour play is at the other end jogging after
+    // the ball emits no event of any kind.
+    {
+        use core::mid_run_diag::KeeperMotionDiag;
+        let m = KeeperMotionDiag::snapshot();
+        let ticks: u64 = (0..4).map(|b| m[b * 4]).sum();
+        if ticks > 0 {
+            let keeper_matches = (n_matches * 2) as f64;
+            // Velocity is units per ENGINE tick and the AI samples every
+            // second one, so each sample stands for two ticks of travel.
+            let total_m: f64 =
+                (0..4).map(|b| m[b * 4 + 1] as f64).sum::<f64>() / 1000.0 * 0.125 * 2.0;
+            let still: u64 = (0..4).map(|b| m[b * 4 + 2]).sum();
+            println!();
+            println!("--- KEEPER MOTION CENSUS (every keeper tick, not just threat ticks) ---");
+            println!(
+                "  distance {:.0} m per keeper per match (real ~5000)   still {:.0}% of ticks   \
+                 mean depth off his line {:.1} m",
+                total_m / keeper_matches,
+                still as f64 * 100.0 / ticks as f64,
+                (0..4).map(|b| m[b * 4 + 3] as f64).sum::<f64>() / 100.0 / ticks as f64 * 0.125
+            );
+            println!("  ball from his goal      time%     m/match     still%    mean depth");
+            for (b, label) in ["< 12 m", "12-25 m", "25-40 m", "beyond 40 m"].iter().enumerate() {
+                let t = m[b * 4];
+                if t == 0 {
+                    continue;
+                }
+                println!(
+                    "  {:<20} {:>6.1}%  {:>10.0}  {:>9.0}%  {:>9.1} m",
+                    label,
+                    t as f64 * 100.0 / ticks as f64,
+                    m[b * 4 + 1] as f64 / 1000.0 * 0.125 * 2.0 / keeper_matches,
+                    m[b * 4 + 2] as f64 * 100.0 / t as f64,
+                    m[b * 4 + 3] as f64 / 100.0 / t as f64 * 0.125
+                );
+            }
+            // Churn. A transition out of a state entered under 300 ms ago
+            // is two gates disagreeing, and every one of them re-aims his
+            // steering — which is what the eye reads as chasing.
+            println!(
+                "  state transitions {:.0}/keeper/match, of which {:.0}% reversed within 300 ms   \
+                 reversals over 90deg {:.0}/min",
+                m[16] as f64 / keeper_matches,
+                if m[16] > 0 {
+                    m[17] as f64 * 100.0 / m[16] as f64
+                } else {
+                    0.0
+                },
+                m[20] as f64 / keeper_matches / 90.0
+            );
         }
     }
 

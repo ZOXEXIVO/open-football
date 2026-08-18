@@ -537,6 +537,14 @@ impl Physique {
     /// down three times does not stay agreed — see the note on
     /// `Physique::CRADLE`.
     pub const ANKLE: Vec3 = Vec3::new(0.0, -Self::SHIN + 0.005, 0.035);
+    /// Hip joint to the sole of the boot, straight-legged: the lever a
+    /// stride swings through.
+    ///
+    /// It is what turns ground covered into an angle at the hip and back
+    /// again, so it is the crossing between the stride model in
+    /// [`crate::actors::Actors::stride_of`] and the geometry here — and,
+    /// like [`Self::CRADLE`], a number that has to be one number.
+    pub const LEG: f32 = Self::THIGH + Self::SHIN - 0.005 + 0.038;
     /// Hip to the base of the neck.
     pub const TORSO: f32 = 0.58;
     /// Shoulder joints, in the torso's own space.
@@ -679,7 +687,26 @@ pub struct BodyParts {
     /// A keeper's glove. Its own mesh rather than a scaled hand: the whole
     /// point of the thing is that it is broad and flat, and the two of them
     /// splayed at the end of a dive are what says *catching* from the stand.
+    ///
+    /// The back of the hand only, as far as the knuckles — the fingers are
+    /// separate, because a mitt is a mitt however many rings you lathe it
+    /// out of, and four fingers and a thumb are the whole difference between
+    /// a glove and a bag on the end of an arm. They are the one part of a
+    /// keeper the eye tracks through a save, so they are the one part worth
+    /// the triangles.
     glove: Handle<Mesh>,
+    /// One finger of it, instanced four times across the knuckles, and the
+    /// thumb, which is shorter and set forward and in.
+    finger: Handle<Mesh>,
+    thumb: Handle<Mesh>,
+    /// A keeper wears long sleeves. Two parts, because the arm is two: this
+    /// one takes over from [`Self::sleeve`] on the upper arm and runs to the
+    /// elbow, and [`Self::sleeve_forearm`] carries on from there.
+    sleeve_long: Handle<Mesh>,
+    sleeve_forearm: Handle<Mesh>,
+    /// …and the trim band at the wrist end of it, which on a long sleeve is
+    /// where a cuff actually is.
+    cuff_forearm: Handle<Mesh>,
     shorts_leg: Handle<Mesh>,
     thigh: Handle<Mesh>,
     shin: Handle<Mesh>,
@@ -969,13 +996,72 @@ impl BodyParts {
             // as wide, which is what a keeper's glove is: at this range the
             // pair of them are the only part of him the eye actually tracks
             // through a save.
+            // The cuff strap, the padded back of the hand, and then the
+            // knuckle line the fingers hang off. Half again as wide as a bare
+            // hand and squared off at the end, which is what a keeper's glove
+            // is — a flat surface, deliberately, because the point of it is
+            // to be in the way.
             glove: meshes.add(Sculptor::part(&[
-                Ring::oval(0.055, 0.036, 0.030),
-                Ring::oval(0.020, 0.044, 0.034),
-                Ring::oval(-0.010, 0.056, 0.036),
-                Ring::oval(-0.060, 0.062, 0.034),
-                Ring::oval(-0.105, 0.060, 0.030),
-                Ring::oval(-0.135, 0.048, 0.024),
+                Ring::oval(0.062, 0.034, 0.030),
+                Ring::oval(0.038, 0.045, 0.036),
+                Ring::oval(0.014, 0.052, 0.038),
+                Ring::oval(-0.020, 0.060, 0.038),
+                Ring::oval(-0.058, 0.063, 0.036),
+                Ring::oval(-0.082, 0.062, 0.033),
+                Ring::oval(-0.092, 0.058, 0.029),
+            ])),
+            // One finger: padded at the base, rounded at the tip. Modelled
+            // about its own root so the splay below is a rotation and not a
+            // second set of numbers.
+            finger: meshes.add(Sculptor::part_at(
+                &[
+                    Ring::oval(0.006, 0.015, 0.013),
+                    Ring::oval(-0.014, 0.016, 0.014),
+                    Ring::oval(-0.044, 0.015, 0.013),
+                    Ring::oval(-0.064, 0.013, 0.011),
+                    Ring::oval(-0.074, 0.009, 0.008),
+                ],
+                Sculptor::BLOB_SIDES,
+            )),
+            // The thumb: shorter, thicker, and it comes off the side rather
+            // than the end.
+            thumb: meshes.add(Sculptor::part_at(
+                &[
+                    Ring::oval(0.010, 0.018, 0.016),
+                    Ring::oval(-0.014, 0.019, 0.017),
+                    Ring::oval(-0.040, 0.016, 0.014),
+                    Ring::oval(-0.052, 0.011, 0.010),
+                ],
+                Sculptor::BLOB_SIDES,
+            )),
+            // The long sleeve, in two parts for the two halves of the arm.
+            // Cut the same four millimetres looser than the limb inside it
+            // that the short one is — two nearly tangent surfaces crossing
+            // each other draw as a ragged sawtooth no depth buffer can fix.
+            sleeve_long: meshes.add(Sculptor::part(&[
+                Ring::oval(0.056, 0.026, 0.026),
+                Ring::oval(0.042, 0.050, 0.049),
+                Ring::oval(0.020, 0.068, 0.066),
+                Ring::oval(-0.015, 0.078, 0.075),
+                Ring::oval(-0.080, 0.062, 0.060),
+                Ring::oval(-0.150, 0.055, 0.053),
+                Ring::oval(-0.225, 0.050, 0.048),
+                Ring::oval(-0.290, 0.045, 0.044),
+            ])),
+            sleeve_forearm: meshes.add(Sculptor::part(&[
+                Ring::oval(0.050, 0.044, 0.043),
+                Ring::oval(0.010, 0.050, 0.049),
+                Ring::oval(-0.060, 0.052, 0.051),
+                Ring::oval(-0.150, 0.045, 0.044),
+                Ring::oval(-0.225, 0.038, 0.037),
+                Ring::oval(-0.252, 0.035, 0.034),
+                Ring::oval(-0.266, 0.029, 0.028),
+            ])),
+            cuff_forearm: meshes.add(Sculptor::part(&[
+                Ring::oval(-0.212, 0.0405, 0.0395),
+                Ring::oval(-0.240, 0.0375, 0.0365),
+                Ring::oval(-0.256, 0.0345, 0.0335),
+                Ring::oval(-0.266, 0.0290, 0.0282),
             ])),
             // The leg of the shorts: it belongs to the thigh, not to the hips.
             //
@@ -1165,6 +1251,44 @@ impl BodyParts {
     /// The only crossing between the mesh and the paint, and deliberately the
     /// only one: an eye drawn at a height the skull does not have there ends
     /// up on a cheekbone, and nothing downstream can tell.
+    /// Where the five digits of a keeper's glove sit, in the wrist's own
+    /// space: four across the knuckle line and a thumb off the inside edge,
+    /// each splayed a little so the hand reads as open rather than as a
+    /// paddle with grooves cut in it.
+    ///
+    /// One place, because [`Footballer::assemble`] and the software preview
+    /// both walk this hierarchy — a part added to one and not the other
+    /// simply does not appear in the pictures the tests draw.
+    ///
+    /// `true` means the thumb, which is the other mesh.
+    pub fn digits(side: f32) -> [(bool, Transform); 5] {
+        let knuckle = |across: f32| {
+            (
+                false,
+                Transform::from_translation(Vec3::new(across, Self::KNUCKLES, 0.004))
+                    .with_rotation(Quat::from_rotation_z(across * Self::SPLAY)),
+            )
+        };
+        [
+            knuckle(-0.042),
+            knuckle(-0.014),
+            knuckle(0.014),
+            knuckle(0.042),
+            (
+                true,
+                Transform::from_translation(Vec3::new(-side * 0.046, -0.026, 0.016)).with_rotation(
+                    Quat::from_rotation_z(-side * 0.95) * Quat::from_rotation_x(-0.30),
+                ),
+            ),
+        ]
+    }
+
+    /// The knuckle line, in the wrist's own space — where the glove ends and
+    /// the fingers start — and how far a finger splays per metre it sits off
+    /// the middle of the hand.
+    const KNUCKLES: f32 = -0.086;
+    const SPLAY: f32 = 3.4;
+
     pub fn face_layout() -> FaceLayout {
         let foot = Self::SKULL[0].y;
         let crown = Self::SKULL[Self::SKULL.len() - 1].y;
@@ -1428,6 +1552,99 @@ pub struct Gait {
     /// one — it is the picture of a beaten goalkeeper, and he is the man the
     /// camera is on.
     pub hands_to_head: f32,
+    /// **Which way he is going, in the frame his LEGS are in**: `x` across
+    /// his own body to his right, `y` out in front of him, together a unit
+    /// vector while he is moving and zero while he is not.
+    ///
+    /// ⚠ **In the frame of his legs, not of his chest** — the two differ by
+    /// [`Self::open`], and the whole of the lateral gait is what is left
+    /// over once his legs have turned onto his run. Everybody who is running
+    /// faces the way he is going, so for twenty-one players out of
+    /// twenty-two this is `(0, 1)` and every term it drives collapses to the
+    /// plain run cycle. The exception is the man the whole of this rig was
+    /// hardest on: measured over a recorded match, of the frames where a
+    /// keeper is moving with the ball inside forty metres, **47% are
+    /// BACKWARD and 19% SIDEWAYS** — he retreats onto his line and shuffles
+    /// across it facing the play, and he does the overwhelming majority of
+    /// it slowly. Drawn as a forward run cycle that is one third short of
+    /// the ground he covers, that is a man being slid across the grass,
+    /// which is exactly how it was reported.
+    pub course: Vec2,
+    /// **How far his legs have turned off his chest onto the way he is
+    /// going**, in radians, positive to his right.
+    ///
+    /// The single thing that separates a footballer from a goalkeeper in
+    /// lateral movement, and the rig had no representation of it at all.
+    /// A keeper covering his line is square to the play and MEANS to be: he
+    /// side-steps, feet never crossing, and every constant in
+    /// [`Joint::SHUFFLE_STANCE`] and below is about him. Nobody else on the
+    /// pitch is doing that. An outfielder is across his own body for one of
+    /// two reasons — he is jockeying, at walking pace, or his heading has
+    /// not finished coming round onto a run he is already on, which
+    /// [`crate::actors::Actors::PIVOT_RATE`] guarantees will happen every
+    /// time anyone changes direction at speed — and the second is the
+    /// overwhelming majority of it. **A man arcing round a turn is running,
+    /// not shuffling.** Drawn as a keeper's shuffle he crouched a foot and a
+    /// half with his feet a metre and a half apart at thirteen steps a
+    /// second, which is how it was reported: *"they move sideways like
+    /// invalids"*.
+    ///
+    /// So the legs turn onto the course and the chest does not, which is
+    /// what "opening the hips" means and what the hips are for. It is not a
+    /// second gait with a switch between them: the course is rotated by this
+    /// same angle before anything reads it (see
+    /// [`crate::actors::Actors::underfoot`]), so at a full opening the
+    /// lateral terms are all multiplied by a residual `course.x` of nearly
+    /// nothing and collapse on their own, and a jockeying defender at a walk
+    /// keeps every one of them.
+    pub open: f32,
+    /// **The hip amplitude the ground he is covering demands**, in radians.
+    ///
+    /// The stride phase advances by ground covered, so the CADENCE has
+    /// always been right; the amplitude did not know about it. A foot planted
+    /// on the turf has to travel backwards relative to the body at exactly
+    /// the speed the body is travelling forwards, and the sinusoid this rig
+    /// swings a leg through does that at mid-stance when its amplitude is
+    /// `stride / PI` of ground — which works out at 0.24 m at a walk and
+    /// 0.49 m at a sprint, against the 0.19 m and 0.60 m the run cycle
+    /// actually drew.
+    ///
+    /// So it is a FLOOR under the run cycle's own amplitude, not a
+    /// replacement: at three metres a second and above the tuned sprint
+    /// wins (and should, because a runner has a flight phase and his feet
+    /// genuinely do go back faster than the ground), and below it the
+    /// ground wins. See [`Joint::HIP_SWING`].
+    pub carry_ground: f32,
+    /// 0..1: he is playing a ball with his hands, on his feet.
+    ///
+    /// The save that is not a dive, and the one thing a goalkeeper does more
+    /// often than any other that this rig could not draw at all. Measured
+    /// over a recorded match, **84% of the balls that arrive at a keeper at
+    /// pace arrive at a keeper who is on his feet** — and with `dive` read
+    /// off recorded height and `carry` off the ball already being in the
+    /// hold band, both of those are zero until after it has stopped. What
+    /// was drawn was a ball hitting a man standing with his arms down.
+    pub save: f32,
+    /// Where he is reaching, in his own frame: `x` across his body, `y` up
+    /// and down, each −1..1 over the envelope a set keeper can cover
+    /// standing.
+    ///
+    /// The whole difference between a save low to his right and one up over
+    /// his left shoulder, and the reason the reach cannot be one pose: a
+    /// keeper's hands go to the ball, and the ball is somewhere different
+    /// every time.
+    pub save_aim: Vec2,
+    /// 0..1: he did not catch it. Fists rather than gloves, and the arms
+    /// snap through the ball instead of closing on it.
+    pub parry: f32,
+    /// 1 for the two goalkeepers, 0 for the other twenty.
+    ///
+    /// Most of what is keeper-only in this rig is already gated by a signal
+    /// only a keeper ever has — `dive`, `reach`, `claimed`, `set`. The
+    /// side-step is not: a defender drifting sideways at a walk takes one
+    /// too, and should. What he must not also do is put his hands up in a
+    /// goalkeeper's set, which is what [`Joint::armed`] would give him.
+    pub keeper: f32,
 }
 
 impl Joint {
@@ -1469,6 +1686,17 @@ impl Joint {
     const HIP_TWIST: f32 = 0.105;
     /// …and the chest against them, the other half of the same separation.
     const CHEST_TWIST: f32 = 0.22;
+    /// How much of the opening the CHEST takes, the rest being left to the
+    /// hips. See [`Gait::open`].
+    ///
+    /// Small on purpose. The hips lead a turn and the shoulders follow, and
+    /// the separation between them is most of what makes a crossover read as
+    /// one — but the chest is also where this rig hangs the head, and a
+    /// player's eyes stay on the ball. A fifth of it is the difference
+    /// between a plausible trunk and a man twisted square off his own legs;
+    /// it costs about fifteen degrees of gaze at the very hardest turn,
+    /// which is fifteen degrees a real player loses too.
+    const OPEN_CHEST: f32 = 0.22;
     /// How far a player leans into a turn at full tilt.
     const BANK: f32 = 0.30;
     /// The hold, as rotations about X in the shoulder's and the elbow's own
@@ -1585,6 +1813,169 @@ impl Joint {
     const SET_SPREAD: f32 = 0.40;
     const SET_ELBOW: f32 = -1.10;
     const SET_WRIST: f32 = -0.40;
+    /// **The side-shuffle.** How wide he sets his feet to move across, and
+    /// how far each one then travels.
+    ///
+    /// A goalkeeper covers his goal sideways, and he does it square to the
+    /// play with his feet never crossing — which is a different gait from a
+    /// run, not a run drawn at an angle. Measured over a recorded match,
+    /// 19% of the frames in which a keeper is moving with the ball inside
+    /// forty metres are travelling across his own body.
+    ///
+    /// The STEP is not a constant at all: it is the same hip amplitude the
+    /// stride uses, so the foot's excursion runs along the course he is
+    /// travelling on and carries exactly the ground he covers, whichever way
+    /// he is going. This is how much wider than that he plants his feet.
+    ///
+    /// ⚠ **A RATIO of the step, and it has to exceed 1, or his feet cross.**
+    /// The two legs are half a cycle apart, so their lateral offsets are
+    /// equal and opposite and the base between them is the only thing
+    /// keeping the swinging foot from passing through the planted one. A
+    /// fixed angle will not do it — the step grows with his pace and the
+    /// base has to grow with the step.
+    const SHUFFLE_STANCE: f32 = 1.08;
+    /// **How much of the cycle a side-stepping foot spends ON THE GROUND.**
+    ///
+    /// The number that decides whether he reads as a man or as a pair of
+    /// dividers. Rendered, the sinusoid this replaces was unmistakable: the
+    /// two legs splayed together and closed together, every frame a mirror
+    /// of itself, and — because a sinusoid is stationary at exactly one
+    /// INSTANT of its stance and moving everywhere else — **both feet skated
+    /// for the whole cycle**. Seen from the front, where a lateral gait is
+    /// nothing but the feet, that is the entire picture.
+    ///
+    /// Past a half there is double support: for `2·DUTY − 1` of the cycle
+    /// both feet are down, which is what makes a shuffle a shuffle rather
+    /// than a run.
+    pub(crate) const SHUFFLE_DUTY: f32 = 0.62;
+    /// …and what that costs in amplitude. A sinusoid matches the turf at
+    /// mid-stance when its excursion is `stride / PI`; a tread that is
+    /// LINEAR across the stance has to cover the same ground at a constant
+    /// rate over `DUTY` of the cycle, which takes `DUTY × stride`. The two
+    /// differ by exactly `DUTY × PI`, and `Gait::carry_ground` is quoted in
+    /// the first, so the lateral step is scaled into the second.
+    const TREAD_GAIN: f32 = Self::SHUFFLE_DUTY * PI;
+    /// How high the swinging foot picks up, in radians of knee and hip.
+    ///
+    /// It has to leave the grass. A foot that slides out and slides back is
+    /// the whole of what "not a human" looks like from the front, and it is
+    /// the one thing a stance/swing split makes drawable at all: with both
+    /// legs mirrored there was no swing to lift.
+    const SHUFFLE_PICKUP: f32 = 0.16;
+    const SHUFFLE_HIP_PICKUP: f32 = -0.13;
+    /// **How far a side-stepping player carries his knees bent**, in
+    /// radians, and it is a constant rather than a curve.
+    ///
+    /// The one thing a lateral gait genuinely does ask the knees for.
+    /// Everything else in this rig bends a knee through `tuck`, which is
+    /// keyed to where the leg is in a STRIDE — right for a run, where the
+    /// knee folds through the swing and straightens onto the plant, and
+    /// wrong for a side-step, where there is no swing through the sagittal
+    /// plane to fold into. Driven off `tuck` at the share of a run cycle a
+    /// side-step used to be given, the stance knee swung between 4° and 53°
+    /// on every step, which is a man's legs buckling under him. A man
+    /// shuffling holds them softly bent and keeps them there.
+    ///
+    /// Paid for in height by [`Joint::shuffle_drop`], like every other
+    /// bend in this rig that is a real loss rather than a pose.
+    const SHUFFLE_KNEE: f32 = 0.30;
+    /// The feet turn out toward the way he is going, and roll through the
+    /// push. Neither axis existed: the ankle only pitches, and its pitch is
+    /// signed by `course.y`, so travelling sideways every boot in the squad
+    /// held one angle for the whole cycle.
+    const TOE_OUT: f32 = 0.20;
+    const FOOT_ROLL: f32 = 0.13;
+    /// The pelvis lists over the foot that is carrying him and the chest
+    /// rides with it. A trunk that holds still while the legs work is a
+    /// mechanism with a body bolted on top.
+    const SHUFFLE_LIST: f32 = 0.085;
+    const SHUFFLE_TWIST: f32 = 0.16;
+    /// …and the arms come across with the step rather than being held out
+    /// at a constant width.
+    const SHUFFLE_ARM: f32 = 0.18;
+    /// **How much shorter a step is going sideways, and going backwards.**
+    ///
+    /// Nobody takes running strides across himself: a side-step is short and
+    /// quick, a backpedal somewhere between the two, so the same ground has
+    /// to be spent on more steps. Lives here rather than with the stride
+    /// model because both ends need it — the model, to advance the phase
+    /// faster, and the amplitude floor above, which is a claim about a
+    /// FORWARD run and has no business setting the size of a side-step.
+    const SIDE_STEP: f32 = 0.30;
+    const BACK_STEP: f32 = 0.78;
+    /// **A set goalkeeper is never still.** He dances: small alternating
+    /// steps on the spot, so that whichever way the ball goes he is already
+    /// moving. Every other standing pose in this rig is a statue plus a
+    /// breath, which is defensible for a centre-half waiting for a throw-in
+    /// and is exactly wrong for the one man on the pitch whose whole job is
+    /// to be about to move.
+    ///
+    /// Alternating, so one boot is always on the grass and the body does not
+    /// have to pay for it in height. Off the idle clock rather than the
+    /// stride, because he is covering no ground — the same reason the breath
+    /// and the weight shift are. `TOES_RATE` against `Actors::IDLE_RATE`
+    /// puts it at about 1.3 steps a second.
+    const TOES_RATE: f32 = 4.5;
+    const TOES_KNEE: f32 = 0.30;
+    const TOES_HIP: f32 = -0.16;
+    /// And he leans the way he is going, which is the whole reason a
+    /// side-step reads as urgent rather than as a man sliding.
+    const SHUFFLE_LEAN: f32 = 0.12;
+    /// **The backpedal.** Nearly half of a keeper's travel near his own
+    /// goal is AWAY from the ball — he is dropping onto his line while
+    /// watching the play, and no footballer does that by running backwards
+    /// with a forward run cycle.
+    ///
+    /// The stride reverses on its own (the hip swing is signed by
+    /// [`Gait::course`]); these are what a body does differently going the
+    /// other way — knees higher in front, weight back over the heels, and
+    /// up on the balls of the feet, because a man moving backwards never
+    /// puts a heel down.
+    const BACKPEDAL_KNEE: f32 = 0.42;
+    const BACKPEDAL_LEAN: f32 = -0.16;
+    const BACKPEDAL_ANKLE: f32 = 0.30;
+    /// **The save he makes on his feet**, which is most of them: measured,
+    /// 84% of the balls that arrive at a keeper at pace arrive at one who
+    /// never leaves the ground.
+    ///
+    /// The two ends of the arm's travel, from a ball at his boots to one
+    /// over his head, interpolated on [`Gait::save_aim`]`.y`. Both arms go,
+    /// because a keeper takes everything he can two-handed — the one-handed
+    /// save is what a dive is for.
+    const SAVE_LOW: f32 = -0.42;
+    const SAVE_HIGH: f32 = -2.52;
+    /// …and how far across his body they travel, as a YAW at the shoulder.
+    ///
+    /// ⚠ Not the Z-roll every other reach in this rig uses. A roll about the
+    /// body's forward axis only moves a hand that is UP: an arm held
+    /// straight out in front lies along the roll axis, so rolling it does
+    /// nothing at all — and chest height is exactly where a keeper's hands
+    /// are for most of the saves he makes. A yaw swings the arm sideways
+    /// from any elevation, which is what the pose needs.
+    const SAVE_ACROSS: f32 = 0.85;
+    /// The elbow through the save: soft at the chest, straight at full
+    /// stretch, and folded in as he takes the pace off it.
+    const SAVE_ELBOW: f32 = -0.30;
+    const SAVE_WRIST: f32 = -0.62;
+    /// Going down to one at his feet: he folds at the waist, drops his
+    /// knees under him and steps across. All three off the same aim, so a
+    /// ball at head height gets none of them.
+    const SAVE_STOOP: f32 = 0.72;
+    const SAVE_KNEE: f32 = 0.62;
+    /// …and the thigh comes forward under him with it.
+    const SAVE_HIP: f32 = -0.45;
+    const SAVE_DROP: f32 = 0.085;
+    const SAVE_STEP: f32 = 0.22;
+    const SAVE_LEAN: f32 = 0.34;
+    /// Reaching over his own head he arches BACK, and comes out of the set's
+    /// forward lean to do it — the two together are what puts his gloves above
+    /// the crossbar instead of in front of his face.
+    const SAVE_ARCH: f32 = -0.22;
+    /// A parry is not a catch. The gloves turn out into a flat surface, the
+    /// arms stay long, and the hands never come together — everything the
+    /// catch does is the other way round.
+    const PARRY_SPREAD: f32 = 0.30;
+    const PARRY_WRIST: f32 = 0.55;
     /// An outfielder in the air: knees folded under him, arms out from his
     /// sides for balance. A header, and nothing like a save.
     const JUMP_HIP: f32 = -0.22;
@@ -1783,6 +2174,21 @@ impl Joint {
     /// footballer rises as one.
     pub fn place(&self, gait: Gait) -> Vec3 {
         match self.limb {
+            // One hip can sit lower than the other, and has to: see
+            // [`Joint::hip_list`]. Only the leg joints take it — the pelvis
+            // and the chest take the ROTATION it amounts to instead, in
+            // `pose`, because they are drawn about their own axis rather
+            // than hung off a socket.
+            Limb::Hip => self.place_body(gait) + Vec3::Y * Self::hip_list(gait, self.side),
+            Limb::Pelvis | Limb::Torso => self.place_body(gait),
+            _ => self.origin,
+        }
+    }
+
+    /// Where the hips ride this frame, before anything that is about one leg
+    /// rather than about the body.
+    fn place_body(&self, gait: Gait) -> Vec3 {
+        match self.limb {
             Limb::Pelvis | Limb::Torso | Limb::Hip => {
                 let bob =
                     Self::BOB * gait.run * gait.spring * (0.5 + 0.5 * (gait.phase * 2.0).cos());
@@ -1792,12 +2198,28 @@ impl Joint {
                 // And the settle onto bent knees, which is a real loss of
                 // height rather than a pose: see [`Joint::SET_DROP`]. The man
                 // on the ball sinks over it the same way, by less.
-                self.origin
+                //
+                // **The sockets turn with the legs.** Hips are a pair of
+                // joints 176 mm apart, and once the legs have opened onto
+                // the run (see [`Gait::open`]) that line is no longer square
+                // across him — at a full crossover it is fore-and-aft along
+                // the way he is going, which is what stops two yawed legs
+                // swinging through each other. Identity for the pelvis and
+                // the torso, whose origins are on the centreline anyway.
+                Quat::from_rotation_y(Self::opened(gait)) * self.origin
                     + Vec3::Y
                         * (bob + breathe
                             - Self::SET_DROP * gait.set
                             - Self::CARRY_DROP * gait.carrying
                             - Self::SLUMP_DROP * gait.despair
+                            // A wide base is a low one, and a keeper going
+                            // down to a ball at his boots loses most of a
+                            // hand's width of height doing it. Both are real
+                            // losses rather than poses, so they are paid for
+                            // here — the same reason `SET_DROP` is.
+                            - Self::splay_drop(gait)
+                            - Self::shuffle_drop(gait)
+                            - Self::SAVE_DROP * gait.save * Self::stooping(gait)
                             - Self::KICK_DROP * gait.power * Self::taper(gait.swing))
             }
             _ => self.origin,
@@ -1897,8 +2319,23 @@ impl Joint {
                     * (gait.swing + Self::KICK_HIP_LEAD).clamp(-1.0, 1.0)
                     * kicking;
                 Quat::from_rotation_y(
-                    Self::HIP_TWIST * gait.run * gait.spring * gait.phase.sin() - opening,
-                ) * Quat::from_rotation_z(Self::WEIGHT_SHIFT * weight)
+                    Self::HIP_TWIST * gait.run * gait.spring * gait.phase.sin() * gait.course.y
+                        - opening
+                        // Opened toward the way he is going. A shuffle is not
+                        // square to the last millimetre — the hips lead.
+                        + Self::SHUFFLE_TWIST * gait.course.x * Self::sidling(gait)
+                        // …and the whole pelvis turns with the legs, because
+                        // it IS the legs: the seat of the shorts belongs to
+                        // the hip sockets, and [`Joint::place_body`] has
+                        // already swung those round. See [`Gait::open`].
+                        + Self::opened(gait),
+                ) * Quat::from_rotation_z(
+                    Self::WEIGHT_SHIFT * weight
+                        // …and listed exactly as far as the two hips are
+                        // apart in height, so the seat of the shorts sits on
+                        // the legs rather than across them.
+                        + Self::pelvic_roll(gait),
+                )
             }
             Limb::Torso => {
                 // Rock through the stride, a quarter cycle off the twist so
@@ -1923,10 +2360,24 @@ impl Joint {
                 // A diving keeper comes out of it for the same reason and one
                 // more: the lean is the forward pitch of a man driving off the
                 // ground, and there is no ground under him.
-                let settle = (1.0 - gait.carry) * (1.0 - gait.dive) * (1.0 - gait.set);
+                let settle =
+                    (1.0 - gait.carry) * (1.0 - gait.dive) * (1.0 - gait.set) * (1.0 - gait.save);
                 let running = Quat::from_rotation_x(lean * (1.0 + 0.16 * gait.signature) * settle)
                     * Quat::from_rotation_y(
-                        -Self::CHEST_TWIST * gait.run * gait.spring * gait.phase.sin() * settle,
+                        -Self::CHEST_TWIST
+                            * gait.run
+                            * gait.spring
+                            * gait.phase.sin()
+                            * gait.course.y
+                            * settle
+                            // …and a share of the opening, so that eighty
+                            // degrees between a man's hips and his shoulders
+                            // is not asked of his lumbar spine alone. The
+                            // hips still LEAD it — that is what opening up
+                            // is, and the order from where he was pointed to
+                            // where he is going runs chest, then hips, then
+                            // travel. See [`Gait::open`].
+                            + Self::OPEN_CHEST * Self::opened(gait),
                     )
                     * Quat::from_rotation_z(roll * settle);
                 // Then, in order: the set's forward lean over bent knees, the
@@ -1935,7 +2386,9 @@ impl Joint {
                 // for twenty-one players out of twenty-two every term after
                 // the first is identity.
                 running
-                    * Quat::from_rotation_x(Self::SET_LEAN * gait.set)
+                    * Quat::from_rotation_x(
+                        Self::SET_LEAN * gait.set * (1.0 - gait.save * gait.save_aim.y.max(0.0)),
+                    )
                     * Quat::from_rotation_x(
                         Self::DIVE_ARCH * gait.stretch * (1.0 - gait.grounded),
                     )
@@ -1953,6 +2406,37 @@ impl Joint {
                         Self::DRIVE_LEAN.0 * gait.drive.max(0.0)
                             + Self::DRIVE_LEAN.1 * (-gait.drive).max(0.0)
                             + Self::CARRY_LEAN * gait.carrying,
+                    )
+                    // Travelling ACROSS himself and travelling BACKWARDS —
+                    // the two thirds of a goalkeeper's movement that a
+                    // forward run cycle has nothing to say about. He leans
+                    // into a side-step the way anybody changing direction
+                    // does, and going backwards he keeps his chest up, where
+                    // the run's own forward lean would have him over his own
+                    // heels. Both are identity for a man running forwards,
+                    // which is everybody else on the pitch.
+                    * Quat::from_rotation_z(
+                        -Self::SHUFFLE_LEAN * Self::afoot(gait) * gait.course.x
+                            // The chest takes a QUARTER of the pelvis's list
+                            // — the spine absorbs the rest — and rides the
+                            // weight shift on top of it, a beat behind,
+                            // which is where the whole rocking quality of a
+                            // side-step comes from.
+                            + Self::pelvic_roll(gait) * Self::SPINE_ABSORBS
+                            - Self::SHUFFLE_LIST * Self::carried(gait) * Self::sidling(gait),
+                    )
+                    * Quat::from_rotation_y(
+                        -Self::SHUFFLE_TWIST * 0.6 * gait.course.x * Self::sidling(gait),
+                    )
+                    * Quat::from_rotation_x(Self::BACKPEDAL_LEAN * Self::backing(gait))
+                    // And the save he makes on his feet: down over a ball at
+                    // his boots, across at one beside him.
+                    * Quat::from_rotation_x(
+                        Self::SAVE_STOOP * gait.save * Self::stooping(gait),
+                    )
+                    * Quat::from_rotation_z(-Self::SAVE_LEAN * gait.save * gait.save_aim.x)
+                    * Quat::from_rotation_x(
+                        Self::SAVE_ARCH * gait.save * gait.save_aim.y.max(0.0),
                     )
                     // The chest coils further than the hips going back and
                     // arrives after them coming through — the separation
@@ -2030,7 +2514,16 @@ impl Joint {
                 let carriage = 0.15
                     + 0.07 * gait.run
                     + 0.055 * gait.signature
-                    + Self::CARRY_SPREAD * gait.carrying;
+                    + Self::CARRY_SPREAD * gait.carrying
+                    // Out from his sides across a side-step, which is a man
+                    // balancing rather than a man running — and ANSWERING the
+                    // step rather than held at a constant width, which is a
+                    // man holding a pose while his legs work.
+                    + 0.22 * Self::sidling(gait)
+                    + Self::SHUFFLE_ARM
+                        * Self::sidling(gait)
+                        * self.side
+                        * Self::carried(gait);
                 // Nobody's two arms do the same thing. Tied to the signature
                 // so it is this player's asymmetry, the same one every time.
                 let asymmetry = 1.0 + 0.11 * gait.signature * self.side;
@@ -2051,8 +2544,12 @@ impl Joint {
                     gait.swing,
                 ) * kicking
                     * striking.abs();
-                let arm =
-                    Self::strides(Self::ARM_SWING, gait) * swing * asymmetry + drift + counter;
+                // Signed with the stride, like the leg it answers: arms pump
+                // against a run and hang wide across a shuffle, where there
+                // is no stride for them to counter.
+                let arm = Self::strides(Self::ARM_SWING, gait) * swing * gait.course.y * asymmetry
+                    + drift
+                    + counter;
                 // And the counter-arm alone comes across his chest, which is
                 // the other half of paying for the turn.
                 let across = self.side * Self::KICK_ARM_SPREAD * kicking * (-striking).max(0.0);
@@ -2089,10 +2586,40 @@ impl Joint {
                     cheering,
                     Quat::from_rotation_z(self.side * Self::SET_SPREAD)
                         * Quat::from_rotation_x(Self::SET_SHOULDER),
-                    gait.set,
+                    Self::armed(gait),
+                );
+                // **The save he makes on his feet**, and the most repeated
+                // thing a goalkeeper does. Both arms go to the ball: the
+                // PITCH of the shoulder is how high it is and the YAW is how
+                // far across him, so one pair of numbers covers a ball at his
+                // boots, one at his chest and one over his shoulder.
+                //
+                // **The near arm leads and the far one barely goes.** Two arms
+                // travelling the same distance across him is the superman that
+                // [`Gait::lead`] exists to prevent in a dive, and it reads no
+                // better standing up — rendered, it is a man pointing at
+                // something. The far shoulder stays in front of his chest,
+                // which is both what a keeper does and where the second glove
+                // is any use.
+                //
+                // Above the set, because this is what the set turns into, and
+                // below the leap, the hold and the reach, all three of which
+                // are a keeper who is no longer on his feet.
+                let leading_hand = 0.55 + 0.45 * (self.side * gait.save_aim.x).clamp(-1.0, 1.0);
+                let saving = Self::held(
+                    ready,
+                    Quat::from_rotation_y(
+                        Self::SAVE_ACROSS * gait.save_aim.x * leading_hand
+                            + self.side * Self::PARRY_SPREAD * gait.parry,
+                    ) * Quat::from_rotation_x(
+                        Self::SAVE_LOW
+                            + (Self::SAVE_HIGH - Self::SAVE_LOW)
+                                * (gait.save_aim.y * 0.5 + 0.5).clamp(0.0, 1.0),
+                    ),
+                    gait.save,
                 );
                 let leaping = Self::held(
-                    ready,
+                    saving,
                     Quat::from_rotation_z(self.side * Self::JUMP_SPREAD)
                         * Quat::from_rotation_x(Self::JUMP_SHOULDER),
                     gait.jump,
@@ -2188,8 +2715,24 @@ impl Joint {
                     Quat::from_rotation_x(Self::CHEER_ELBOW),
                     gait.elation,
                 );
-                let ready = Self::held(running, Quat::from_rotation_x(Self::SET_ELBOW), gait.set);
-                let leaping = Self::held(ready, Quat::from_rotation_x(Self::JUMP_ELBOW), gait.jump);
+                let ready = Self::held(
+                    running,
+                    Quat::from_rotation_x(Self::SET_ELBOW),
+                    Self::armed(gait),
+                );
+                // Soft behind a catch, all but straight behind a parry: one
+                // takes the pace off the ball and the other puts pace into it.
+                let saving = Self::held(
+                    ready,
+                    Quat::from_rotation_x(
+                        Self::SAVE_ELBOW
+                            * (1.0 - 0.8 * gait.parry)
+                            * (1.0 - 0.7 * gait.save_aim.y.max(0.0)),
+                    ),
+                    gait.save,
+                );
+                let leaping =
+                    Self::held(saving, Quat::from_rotation_x(Self::JUMP_ELBOW), gait.jump);
                 let holding = Self::held(
                     leaping,
                     Quat::from_rotation_x(Self::CRADLE_ELBOW),
@@ -2229,10 +2772,18 @@ impl Joint {
                     slumped,
                     Quat::from_rotation_z(self.side * 0.28)
                         * Quat::from_rotation_x(Self::SET_WRIST),
-                    gait.set,
+                    Self::armed(gait),
+                );
+                // Behind the ball: the gloves break back off the forearms so
+                // the palms face it, and turn out flat for a parry, where the
+                // whole point is a surface rather than a pair of hands.
+                let saving = Self::held(
+                    ready,
+                    Quat::from_rotation_x(Self::SAVE_WRIST + Self::PARRY_WRIST * gait.parry),
+                    gait.save,
                 );
                 let holding = Self::held(
-                    ready,
+                    saving,
                     Quat::from_rotation_z(-self.side * 0.20)
                         * Quat::from_rotation_x(Self::CRADLE_WRIST),
                     gait.carry,
@@ -2249,13 +2800,67 @@ impl Joint {
                 Self::held(out, Quat::from_rotation_x(Self::CRADLE_WRIST), bracing)
             }
             Limb::Hip => {
+                // **The stride carries the ground he covers.** The amplitude
+                // is the larger of what he is working at and what the turf is
+                // asking for — see [`Joint::stepping`] — and it is SIGNED by
+                // the direction of travel, so a keeper dropping backwards
+                // onto his line runs the cycle the other way round instead of
+                // moonwalking down the pitch.
+                let amplitude = Self::HIP_SWING.0 + Self::HIP_SWING.1 * Self::stepping(gait);
+                // The lateral half of the same decomposition. A wide base
+                // (both legs out, so the feet stay on their own sides of him)
+                // and then each foot stepping across in turn — antiphase,
+                // exactly like the stride, because at any instant one foot is
+                // planted and sliding back under him while the other swings
+                // on ahead of him.
+                //
+                // The near leg alone steps into a save; the far one is what
+                // he is pushing off.
+                // Whether THIS foot is the one off the ground, and how far
+                // through its swing. The whole difference between a step and
+                // a scissor: with the legs mirrored there was no swing to
+                // pick up, and neither boot ever left the grass.
+                let picking = Self::tread(leg).1 * Self::sidling(gait);
+                let near_leg = (self.side * gait.save_aim.x).clamp(0.0, 1.0);
+                // ⚠ Composed onto the WHOLE branch below rather than into the
+                // run cycle. The base is a stance, not a stride: a keeper who
+                // is set, or reaching, still has his feet where his last
+                // side-step left them, and folding it into `running` lets the
+                // set layer slerp it away underneath him.
+                //
+                // …and the whole leg turns onto the run first. See
+                // [`Gait::open`]: a footballer travelling across himself
+                // opens his hips and RUNS, and only what is left over after
+                // that is a side-step. Outermost of the three, because it is
+                // the frame the other two are expressed in — the splay is
+                // across the line of the hips and the stride is along it,
+                // and yawing the pair of them is exactly what opening up
+                // does to a pair of legs.
+                let across = Quat::from_rotation_y(Self::opened(gait))
+                    * Quat::from_rotation_z(
+                        Self::abduct(gait, self.side)
+                            + Self::SAVE_STEP * gait.save * gait.save_aim.x * near_leg,
+                    );
                 // The run, plus what his legs do about a change of pace: feet
                 // driving out behind him off the mark, planted out in front
                 // under the brakes.
                 let running = Quat::from_rotation_x(
-                    -Self::strides(Self::HIP_SWING, gait) * swing + Self::DRIVE_HIP * gait.drive,
+                    -amplitude * swing * gait.course.y
+                        + Self::DRIVE_HIP * gait.drive
+                        + Self::SHUFFLE_HIP_PICKUP * picking,
                 );
-                let ready = Self::held(running, Quat::from_rotation_x(Self::SET_HIP), gait.set);
+                let ready = Self::held(
+                    running,
+                    Quat::from_rotation_x(
+                        Self::SET_HIP + Self::TOES_HIP * Self::on_his_toes(gait, self.side),
+                    ),
+                    gait.set,
+                );
+                let ready = Self::held(
+                    ready,
+                    Quat::from_rotation_x(Self::SET_HIP + Self::SAVE_HIP * Self::stooping(gait)),
+                    gait.save,
+                );
                 let leaping = Self::held(ready, Quat::from_rotation_x(Self::JUMP_HIP), gait.jump);
                 // In flight the legs trail — the near one straight behind
                 // him because it is the one he pushed off, the far one
@@ -2268,11 +2873,12 @@ impl Joint {
                 let down = Self::held(diving, Quat::from_rotation_x(Self::DOWN_HIP), gait.grounded);
                 // And the kick, on the striking leg only — the other one is
                 // planted and keeps its stride.
-                Self::held(
-                    down,
-                    Quat::from_rotation_x(Self::through(Self::KICK_HIP, gait.swing)),
-                    kicking * striking.max(0.0),
-                )
+                across
+                    * Self::held(
+                        down,
+                        Quat::from_rotation_x(Self::through(Self::KICK_HIP, gait.swing)),
+                        kicking * striking.max(0.0),
+                    )
             }
             // Deepest as the leg folds through underneath the player, and all
             // but straight again by the time it reaches out to land. Squaring
@@ -2280,10 +2886,29 @@ impl Joint {
             // cycle; a plain cosine leaves the leading leg bent on touchdown,
             // which reads as a stumble rather than a stride.
             Limb::Knee => {
+                let tuck = (0.5 + 0.5 * (leg - 0.5).cos()).powi(2);
                 let running = Quat::from_rotation_x(
                     0.07
-                        + Self::strides(Self::KNEE_FLEX, gait)
-                            * (0.5 + 0.5 * (leg - 0.5).cos()).powi(2)
+                        // Off the same amplitude the hip is using, so a leg
+                        // taking a full walking step folds through the middle
+                        // of it instead of goose-stepping.
+                        + (Self::KNEE_FLEX.0 + Self::KNEE_FLEX.1 * Self::stepping(gait)) * tuck
+                        // The swinging foot picks up out of a side-step, and
+                        // a backpedalling man's knees come up in front of him
+                        // — neither of which the sagittal cycle draws, since
+                        // for a pure shuffle it has nowhere to swing to.
+                        //
+                        // Off the SWING rather than off the stride's own
+                        // tuck: which foot is up is the thing a lateral gait
+                        // is made of, and the tuck does not know.
+                        + Self::SHUFFLE_PICKUP * Self::tread(leg).1 * Self::sidling(gait)
+                        // …and BOTH knees stay softly bent while he is
+                        // travelling across himself, whichever of them is
+                        // carrying him. A constant, not a curve — see
+                        // [`Joint::SHUFFLE_KNEE`], and `Joint::stepping` for
+                        // what a curve did.
+                        + Self::SHUFFLE_KNEE * Self::sidling(gait)
+                        + Self::BACKPEDAL_KNEE * Self::backing(gait) * tuck
                         // Sunk over the ball, the way a man carrying one runs.
                         + Self::CARRY_KNEE * gait.carrying,
                 );
@@ -2294,8 +2919,23 @@ impl Joint {
                     Quat::from_rotation_x(Self::SLUMP_KNEE),
                     gait.despair,
                 );
-                let ready = Self::held(running, Quat::from_rotation_x(Self::SET_KNEE), gait.set);
-                let leaping = Self::held(ready, Quat::from_rotation_x(Self::JUMP_KNEE), gait.jump);
+                let ready = Self::held(
+                    running,
+                    Quat::from_rotation_x(
+                        Self::SET_KNEE + Self::TOES_KNEE * Self::on_his_toes(gait, self.side),
+                    ),
+                    gait.set,
+                );
+                // Down under himself to a ball at his boots. Its own layer
+                // above the set rather than a term inside the run cycle,
+                // because a keeper making a save is nearly always set and the
+                // set would slerp it away — see the note at [`Limb::Hip`].
+                let saving = Self::held(
+                    ready,
+                    Quat::from_rotation_x(Self::SET_KNEE + Self::SAVE_KNEE * Self::stooping(gait)),
+                    gait.save,
+                );
+                let leaping = Self::held(saving, Quat::from_rotation_x(Self::JUMP_KNEE), gait.jump);
                 let diving = Self::held(
                     leaping,
                     Quat::from_rotation_x(Self::DIVE_KNEE + Self::DIVE_SCISSOR_KNEE * trailing),
@@ -2339,7 +2979,29 @@ impl Joint {
             Limb::Ankle => {
                 let middle = (Self::ANKLE_PLANTAR - Self::ANKLE_DORSI) * 0.5;
                 let reach = (Self::ANKLE_PLANTAR + Self::ANKLE_DORSI) * 0.5;
-                let rolling = Quat::from_rotation_x((middle - reach * swing) * gait.run);
+                // Off `stepping` rather than `run` for the same reason the
+                // hip is: the roll belongs to the step, and at a walk the
+                // step is bigger than the effort. Signed with the stride, so
+                // going backwards the foot rolls the other way — a man never
+                // puts a heel down travelling backwards, which is what the
+                // plantar term below is.
+                // **Sideways, the pitch above has nothing to drive it.** It
+                // is signed by `course.y`, so a boot travelling across the
+                // body held ONE angle for the whole cycle — the welded foot
+                // this joint exists to stop, back again on the other axis.
+                //
+                // A side-step turns the feet out toward the way he is going
+                // and rolls them through the push, and the swinging one
+                // points as it leaves the grass.
+                let across = Self::sidling(gait);
+                let (tread, lift) = Self::tread(leg);
+                let rolling = Quat::from_rotation_y(Self::TOE_OUT * gait.course.x * across)
+                    * Quat::from_rotation_z(Self::FOOT_ROLL * gait.course.x * across * tread)
+                    * Quat::from_rotation_x(
+                        (middle - reach * swing * gait.course.y) * Self::stepping(gait)
+                            + Self::BACKPEDAL_ANKLE * Self::backing(gait)
+                            + Self::ANKLE_PLANTAR * 0.5 * lift * across,
+                    );
                 // Off his feet there is nothing to push against and the
                 // toes fall into a point.
                 let flying = Self::held(
@@ -2369,6 +3031,26 @@ impl Joint {
         Actors::ease((1.0 - swing.abs()) / Self::KICK_BLEND)
     }
 
+    /// **The opening as the rig applies it**: [`Gait::open`], less whatever
+    /// a kick is taking off it.
+    ///
+    /// A footballer striking a ball plants and swings at the TARGET, not
+    /// along the run he arrived on — both feet turn onto it, which is
+    /// exactly what the follow-through facing (`Actors::facing`) already
+    /// draws for the rest of him. Left in, the one moment his hips are most
+    /// obviously open would be the one moment they are pointed somewhere
+    /// else: the course during a follow-through is measured against the ball
+    /// he has just played, so a man who strikes one across himself has a
+    /// large opening precisely while his boot is going through it.
+    ///
+    /// Read by every place the yaw is applied — the sockets, the legs, the
+    /// seat of the shorts and the chest that follows them — because they
+    /// have to agree. Legs swung from sockets that turned by a different
+    /// amount is not a pose, it is a hip out of its joint.
+    fn opened(gait: Gait) -> f32 {
+        gait.open * (1.0 - gait.power * Self::taper(gait.swing))
+    }
+
     fn blend(range: (f32, f32), run: f32) -> f32 {
         range.0 + range.1 * run
     }
@@ -2380,6 +3062,306 @@ impl Joint {
     /// alone: how a man carries himself at rest is `signature`.
     fn strides(range: (f32, f32), gait: Gait) -> f32 {
         range.0 + range.1 * gait.run * gait.spring
+    }
+
+    /// **How much of the run cycle his legs are actually drawing** — the
+    /// effort he is putting in, or the ground he is covering, whichever is
+    /// asking for more.
+    ///
+    /// The amplitude used to come off `run` alone (`speed / SPRINT`) while
+    /// the PHASE came off ground covered, and the two disagree badly at the
+    /// bottom of the range: at half a metre a second the cadence was right
+    /// and the legs moved a third of the distance the body did. That gap is
+    /// the reported "glides across the field without any obvious foot
+    /// movement", and it is worst in the band a goalkeeper spends 87% of a
+    /// match in. See [`Gait::carry_ground`].
+    fn stepping(gait: Gait) -> f32 {
+        let ground = (gait.carry_ground - Self::HIP_SWING.0) / Self::HIP_SWING.1;
+        // ⚠ The effort term is a claim about a FORWARD run, and only about
+        // one: it is the tuned sprint, where the feet genuinely go back
+        // faster than the ground because there is a flight phase to pay for
+        // it. There is no flight phase in a side-step and none in a
+        // backpedal, so out of the forward quadrant the ground is the whole
+        // of the answer — otherwise a keeper shuffling at four metres a
+        // second plants his feet a metre and a half apart.
+        let flight = gait.run * gait.spring * gait.course.y.max(0.0);
+        // ⚠ **And nothing at all for a side-step**, which is a claim about
+        // the SAGITTAL cycle and is the whole of what this answers. Measured,
+        // both terms above come out at 0.000 for a pure side-step at every
+        // speed against 0.35 for the same speed forwards — and the obvious
+        // repair, flooring it at some share of a run, is what put a running
+        // knee into a gait that has no stride to fold it into. The flex here
+        // reaches the knee through `tuck`, a curve keyed to where a leg is in
+        // a STRIDE, so at 0.45 of a cycle the stance knee swung between 4°
+        // and 53° every step: legs buckling under a man splayed across his
+        // own base, which is exactly how it was reported. A side-step does
+        // bend a knee, and it bends it by roughly a constant — see
+        // [`Joint::SHUFFLE_KNEE`], which is where that lives now.
+        flight.max(ground.clamp(0.0, 1.0))
+    }
+
+    /// How much of a running stride he is taking, given which way he is
+    /// going. See [`Joint::SIDE_STEP`].
+    pub fn shortening(course: Vec2) -> f32 {
+        // Squared on the lateral axis, so it only really bites once he is
+        // mostly travelling across himself. Linear, a man running diagonally
+        // at a jog was being given a four-and-a-half-a-second cadence.
+        (1.0 - (1.0 - Self::SIDE_STEP) * course.x * course.x
+            - (1.0 - Self::BACK_STEP) * (-course.y).max(0.0))
+        .clamp(Self::SIDE_STEP, 1.0)
+    }
+
+    /// How much of his travel is ACROSS his own body, 0..1 — the amount of
+    /// the shuffle, without its direction.
+    ///
+    /// ⚠ **Not scaled by `run`.** A shuffle happens at a fifth of a sprint,
+    /// so `speed / SPRINT` drew every side-step term at a fifth of its size:
+    /// the pick-up came out at eight degrees of knee and **the feet never
+    /// left the grass**, which was half of what made the first render read
+    /// as a linkage. What a side-step's own terms scale with is how sideways
+    /// he is going, not how fast — a man stepping across himself at a metre
+    /// a second is fully stepping across himself.
+    fn sidling(gait: Gait) -> f32 {
+        Self::afoot(gait) * gait.course.x.abs()
+    }
+
+    /// …and how much of it is BACKWARDS, which is the other half of the same
+    /// decomposition.
+    fn backing(gait: Gait) -> f32 {
+        Self::afoot(gait) * (-gait.course.y).max(0.0)
+    }
+
+    /// Whether he is going anywhere at all, 0..1 — the only thing the two
+    /// above still need from his pace, and it saturates as soon as he is
+    /// walking. `SIDLE_RAMP` of a sprint is 0.7 m/s.
+    fn afoot(gait: Gait) -> f32 {
+        Actors::ease(gait.run / Self::SIDLE_RAMP)
+    }
+    const SIDLE_RAMP: f32 = 0.12;
+
+    /// How far below his own chest the save is, 0..1. A ball at his boots
+    /// takes his whole body down with it; one at head height takes none of
+    /// it, which is why the stoop cannot simply ride the save itself.
+    fn stooping(gait: Gait) -> f32 {
+        (-gait.save_aim.y).clamp(0.0, 1.0)
+    }
+
+    /// **How far his RIGHT leg is abducted through a side-step**, at this
+    /// point in the cycle: the base he has planted, plus the step itself.
+    ///
+    /// The left leg is at exactly the opposite angle — the two are half a
+    /// cycle apart, so as one foot slides back under him the other swings on
+    /// ahead — which means one number describes the splay of both, and the
+    /// height it costs can be paid for exactly rather than averaged over.
+    /// **Where one foot is in its own step, and whether it is carrying him.**
+    ///
+    /// `.0` is −1..1: the foot's offset as a share of the step. It runs
+    /// LINEARLY back across the stance, because a planted foot is stationary
+    /// on the turf and therefore travels at exactly `−v` relative to a body
+    /// moving at `v` — not at the varying rate of a sinusoid, which is
+    /// stationary for one instant and skating either side of it. Then it
+    /// sweeps forward across the swing, eased at both ends so the foot
+    /// gathers and places rather than snapping.
+    ///
+    /// `.1` is 0..1 over the swing and zero through the stance: whether this
+    /// is the foot that is off the ground.
+    ///
+    /// This is what makes the two legs stop being mirrors of each other. The
+    /// stance is longer than the swing (see [`Joint::SHUFFLE_DUTY`]), so at
+    /// any instant one foot is planted and drifting slowly while the other
+    /// is up and travelling fast — which is what taking a step is, and what
+    /// a pair of legs moving in perfect antisymmetry is not.
+    fn tread(leg: f32) -> (f32, f32) {
+        // Phase 0 of a foot's own cycle is the moment it is planted furthest
+        // in the direction of travel, which is a quarter cycle ahead of the
+        // sine the rest of the rig runs on.
+        let step = ((leg - FRAC_PI_2) / TAU).rem_euclid(1.0);
+        if step < Self::SHUFFLE_DUTY {
+            (1.0 - 2.0 * step / Self::SHUFFLE_DUTY, 0.0)
+        } else {
+            let over = (step - Self::SHUFFLE_DUTY) / (1.0 - Self::SHUFFLE_DUTY);
+            (-1.0 + 2.0 * Actors::ease(over), (over * PI).sin())
+        }
+    }
+
+    /// How far his weight has shifted toward his right foot, −1..1: he is
+    /// over whichever one is not in the air.
+    ///
+    /// The terms that belong to the BODY rather than to one leg come off
+    /// this — the pelvis lists over the foot carrying him, the chest rides
+    /// with it, the arms answer it. Without them the trunk holds a single
+    /// pose for the whole cycle while the legs work underneath it, which is
+    /// a mechanism with a body bolted on top and is exactly what rendered.
+    fn carried(gait: Gait) -> f32 {
+        Self::tread(gait.phase + PI).1 - Self::tread(gait.phase).1
+    }
+
+    /// How far one leg is abducted, in radians: the base he has planted plus
+    /// where that foot is in its own step.
+    ///
+    /// ⚠ **Solved from the foot's POSITION, not written as an angle.** The
+    /// tread is linear because a planted foot travels at a constant rate,
+    /// and `L·sin θ` is not linear in `θ` — writing the tread straight into
+    /// the angle compressed the far end of every step by a fifth and put the
+    /// slip back that the whole thing exists to remove.
+    fn abduct(gait: Gait, side: f32) -> f32 {
+        let leg = if side < 0.0 {
+            gait.phase + PI
+        } else {
+            gait.phase
+        };
+        let across = side * Self::SHUFFLE_STANCE * Self::side_step(gait) * gait.course.x.abs()
+            + Self::side_step(gait) * gait.course.x * Self::tread(leg).0;
+        (Self::reachable(across) / Physique::LEG)
+            .clamp(-0.95, 0.95)
+            .asin()
+    }
+
+    /// **How far out to the side a foot will actually be planted**, in
+    /// metres from the centreline.
+    ///
+    /// The backstop, and the one number in the lateral gait that is not
+    /// derived from anything. Everything above it solves the side-step from
+    /// the ground the body covers, which is right and is what stops a
+    /// shuffle skating — but it is an equation, and an equation handed an
+    /// impossible demand returns an impossible answer. The demand really is
+    /// made: measured over a recording, 4.5% of the frames an outfielder is
+    /// running in have him more than 100° off his own facing, because
+    /// [`crate::actors::Actors::PIVOT_RATE`] will not let his heading come
+    /// round any faster than a body can turn. Solved honestly, a man
+    /// reversing at six and a half metres a second was drawn with his boots
+    /// 1.88 m apart and his crown 69 cm below standing.
+    ///
+    /// [`crate::body::Gait::open`] is what removes nearly all of that, by
+    /// turning his legs onto the run so there is no side-step left to solve.
+    /// This is what catches the rest. A step his legs cannot reach is not a
+    /// step, and what gives is the step rather than the man.
+    const SIDE_PLANT: f32 = 0.45;
+
+    /// …applied as a soft saturation rather than a clamp.
+    ///
+    /// Exact to within a percent below three-quarters of the reach, so every
+    /// step a footballer really takes is still carried honestly by the foot
+    /// that is on the grass — that property is the whole of `Joint::tread`
+    /// and is what a clamp would have quietly broken at ordinary speeds.
+    /// Above it the curve flattens onto the limit and stays there however
+    /// impossible the demand gets.
+    fn reachable(across: f32) -> f32 {
+        across / (1.0 + (across / Self::SIDE_PLANT).powi(4)).powf(0.25)
+    }
+
+    /// How far one foot travels across him in a step, in metres — half of
+    /// it either side of the base. The base is sized off this and off how
+    /// sideways he is going, not off how hard he is working: it is there to
+    /// keep his feet from crossing, and what they have to clear is each
+    /// other.
+    fn side_step(gait: Gait) -> f32 {
+        // ⚠ The GROUND demand alone, not `stepping`. That one folds in the
+        // forward run's flight allowance, which is a claim about a sprint —
+        // feet outrunning the turf because there is a moment when neither is
+        // on it — and a side-step has no flight phase to pay for it. Left in,
+        // a diagonal jog drew a lateral step half again too big.
+        Physique::LEG * gait.carry_ground.sin() * Self::TREAD_GAIN
+    }
+
+    /// …and the height that splay costs him, in metres.
+    ///
+    /// **A splayed leg is a SHORTER leg.** Both of them open and close
+    /// together through a shuffle, so without paying for it his feet leave
+    /// the grass at the wide point of every step and go through it at the
+    /// narrow one — a keeper bouncing across his own six-yard box. It comes
+    /// straight out of the triangle; there is nothing to tune.
+    fn splay_drop(gait: Gait) -> f32 {
+        // The mean of the two, and of the COSINES rather than of the angles,
+        // because it is the cosines the height is linear in — see
+        // [`Joint::hip_list`], which then puts each hip where its own leg
+        // needs it.
+        let reach = (Self::abduct(gait, 1.0).cos() + Self::abduct(gait, -1.0).cos()) * 0.5;
+        Physique::LEG * (1.0 - reach)
+    }
+
+    /// …and the height the soft knee of a side-step costs him, in metres.
+    ///
+    /// A bent knee is a shorter leg for the same reason a splayed one is,
+    /// and [`Joint::SHUFFLE_KNEE`] bends BOTH of them by the same constant
+    /// through the whole cycle — so unpaid for it lifts the whole figure a
+    /// centimetre off the turf for as long as he is travelling across
+    /// himself. Thigh and shin are the same length here, so the fold is
+    /// isosceles and the drop is exact.
+    fn shuffle_drop(gait: Gait) -> f32 {
+        let fold = Self::SHUFFLE_KNEE * Self::sidling(gait) * 0.5;
+        (Physique::THIGH + Physique::SHIN) * (1.0 - fold.cos())
+    }
+
+    /// **How much lower this hip sits than its partner, in metres.**
+    ///
+    /// Two legs of the same length, splayed by different angles, cannot both
+    /// stand on level ground from level hips: the more splayed one is
+    /// vertically shorter. Once the legs stopped being mirror images — which
+    /// is the whole of the fix — that stopped being a hypothetical, and an
+    /// averaged body height put the flatter foot four and a half centimetres
+    /// under the turf.
+    ///
+    /// A person solves it by dropping the hip on the splayed side, and so
+    /// does this. It is also, for free, the pelvic list that a side-step
+    /// visibly has and that the rig had no other way to produce: the legs
+    /// hang off the carriage rather than off the pelvis, so rotating
+    /// [`Limb::Pelvis`] moves the seat of the shorts and nothing else.
+    fn hip_list(gait: Gait, side: f32) -> f32 {
+        let mine = Self::abduct(gait, side).cos();
+        let other = Self::abduct(gait, -side).cos();
+        Physique::LEG * (mine - other) * 0.5
+    }
+
+    /// …and the angle that amounts to, for the parts of him that ride on top
+    /// of it.
+    ///
+    /// ⚠ **Sockets 176 mm apart turn four centimetres of list into thirteen
+    /// degrees, and a spine does not pass that on.** Rendered raw onto the
+    /// pelvis AND the chest it came to twenty-six degrees and read as a man
+    /// falling over sideways rather than one taking a step. The seat of the
+    /// shorts takes the geometry, because it sits ON the legs; the chest
+    /// takes a quarter of it, because the lumbar spine is what absorbs the
+    /// rest — which is also why a person's head and shoulders stay level
+    /// while his hips work underneath him.
+    fn pelvic_roll(gait: Gait) -> f32 {
+        (Self::hip_list(gait, 1.0) - Self::hip_list(gait, -1.0)) / (2.0 * Physique::HIP_SPREAD)
+    }
+    const SPINE_ABSORBS: f32 = 0.25;
+
+    /// How far this leg is through the little step a set keeper takes on the
+    /// spot, 0..1 — see [`Joint::TOES_RATE`]. Half a cycle apart, so one boot
+    /// is always down.
+    ///
+    /// Not while he is reaching for something: the save is what the dance is
+    /// FOR, and a keeper going down to a ball at his feet is no longer
+    /// deciding which way to go.
+    /// **How ready his arms are**, 0..1 — the set posture, elbows bent and
+    /// gloves up in front, rather than hanging at his sides.
+    ///
+    /// [`Gait::set`] alone was not enough: it is gated on the ball being
+    /// near his goal, so a keeper stepping across with play further out did
+    /// it with his arms swinging by his sides. **Straight, still arms beside
+    /// a working pair of legs is most of what reads as an impaired gait.** A
+    /// man who is moving sideways on purpose has his hands up, and nobody
+    /// else on this pitch travels sideways at all.
+    fn armed(gait: Gait) -> f32 {
+        gait.set
+            .max(Self::sidling(gait) * Self::SIDLE_READY * gait.keeper)
+    }
+    const SIDLE_READY: f32 = 0.60;
+
+    fn on_his_toes(gait: Gait, side: f32) -> f32 {
+        // ⚠ And not while he is TAKING steps. The dance runs on the idle
+        // clock and the stride runs on ground covered, so a keeper doing
+        // both at once has two step rhythms in the same pair of legs — which
+        // is not twice as alive, it is incoherent.
+        let alive = gait.set * (1.0 - gait.save) * (1.0 - Self::afoot(gait));
+        if alive <= 1e-3 {
+            return 0.0;
+        }
+        let offset = if side < 0.0 { PI } else { 0.0 };
+        alive * (gait.idle * Self::TOES_RATE + offset).sin().max(0.0)
     }
 
     /// The angle a kicking joint holds at this point in the swing, from its
@@ -2603,16 +3585,25 @@ impl Footballer {
                             Transform::from_translation(shoulder),
                         ))
                         .with_children(|arm| {
+                            // A keeper wears long sleeves, which is half of
+                            // what tells him apart from the twenty outfield
+                            // players at any distance the strip does not.
                             arm.spawn((
-                                Mesh3d(parts.sleeve.clone()),
+                                Mesh3d(if keeper {
+                                    parts.sleeve_long.clone()
+                                } else {
+                                    parts.sleeve.clone()
+                                }),
                                 MeshMaterial3d(outfit.shirt.clone()),
                                 Transform::default(),
                             ));
-                            arm.spawn((
-                                Mesh3d(parts.cuff.clone()),
-                                MeshMaterial3d(outfit.trim.clone()),
-                                Transform::default(),
-                            ));
+                            if !keeper {
+                                arm.spawn((
+                                    Mesh3d(parts.cuff.clone()),
+                                    MeshMaterial3d(outfit.trim.clone()),
+                                    Transform::default(),
+                                ));
+                            }
                             arm.spawn((
                                 Joint::new(root, Limb::Elbow, side, elbow),
                                 Mesh3d(parts.forearm.clone()),
@@ -2626,16 +3617,47 @@ impl Footballer {
                                 MeshMaterial3d(outfit.skin.clone()),
                                 Transform::default(),
                             ))
-                            .with_child((
-                                Joint::new(root, Limb::Wrist, side, wrist),
-                                Mesh3d(if keeper {
-                                    parts.glove.clone()
-                                } else {
-                                    parts.hand.clone()
-                                }),
-                                MeshMaterial3d(outfit.hands.clone()),
-                                Transform::from_translation(wrist),
-                            ));
+                            .with_children(|forearm| {
+                                if keeper {
+                                    forearm.spawn((
+                                        Mesh3d(parts.sleeve_forearm.clone()),
+                                        MeshMaterial3d(outfit.shirt.clone()),
+                                        Transform::default(),
+                                    ));
+                                    forearm.spawn((
+                                        Mesh3d(parts.cuff_forearm.clone()),
+                                        MeshMaterial3d(outfit.trim.clone()),
+                                        Transform::default(),
+                                    ));
+                                }
+                                forearm
+                                    .spawn((
+                                        Joint::new(root, Limb::Wrist, side, wrist),
+                                        Mesh3d(if keeper {
+                                            parts.glove.clone()
+                                        } else {
+                                            parts.hand.clone()
+                                        }),
+                                        MeshMaterial3d(outfit.hands.clone()),
+                                        Transform::from_translation(wrist),
+                                    ))
+                                    .with_children(|hand| {
+                                        if !keeper {
+                                            return;
+                                        }
+                                        for (thumb, at) in BodyParts::digits(side) {
+                                            hand.spawn((
+                                                Mesh3d(if thumb {
+                                                    parts.thumb.clone()
+                                                } else {
+                                                    parts.finger.clone()
+                                                }),
+                                                MeshMaterial3d(outfit.hands.clone()),
+                                                at,
+                                            ));
+                                        }
+                                    });
+                            });
                         });
                 }
             });
@@ -2732,7 +3754,41 @@ pub(crate) mod skeleton {
             despair: 0.0,
             elation: 0.0,
             hands_to_head: 0.0,
+            // Straight ahead, which is where everybody who is running is
+            // going: the decomposition only has anything to say about the
+            // man travelling one way and pointed another.
+            course: Vec2::Y,
+            // Legs square under him: nobody standing still is opening up.
+            open: 0.0,
+            carry_ground: 0.0,
+            save: 0.0,
+            save_aim: Vec2::ZERO,
+            parry: 0.0,
+            keeper: 1.0,
         }
+    }
+
+    /// A keeper travelling across himself (`across` −1 to his left, +1 to
+    /// his right) or backwards (`ahead` −1) at this much of a sprint, with
+    /// the legs asked to carry `carry_ground` radians of hip swing.
+    pub fn travelling(run: f32, across: f32, ahead: f32, carry_ground: f32) -> Gait {
+        let mut gait = still();
+        gait.run = run;
+        gait.phase = 1.1;
+        gait.course = Vec2::new(across, ahead).normalize_or(Vec2::Y);
+        gait.carry_ground = carry_ground;
+        gait
+    }
+
+    /// A save made on his feet, reaching `aim` (x across his body, y up and
+    /// down, each −1..1).
+    pub fn saving(aim: Vec2, parry: f32) -> Gait {
+        let mut gait = still();
+        gait.set = 1.0;
+        gait.save = 1.0;
+        gait.save_aim = aim;
+        gait.parry = parry;
+        gait
     }
 
     /// A man who has just conceded: `hands_to_head` 1 puts them on his
@@ -3054,17 +4110,35 @@ pub(crate) mod preview {
             let shoulder = Vec3::new(side * Physique::SHOULDER_SPREAD, Physique::SHOULDER, 0.0);
             let arm = torso * skeleton::step(Limb::Shoulder, side, shoulder, gait);
             draw(&parts.upper_arm, arm, SKIN);
-            draw(&parts.sleeve, arm, SHIRT);
-            draw(&parts.cuff, arm, TRIM);
+            if keeper {
+                draw(&parts.sleeve_long, arm, SHIRT);
+            } else {
+                draw(&parts.sleeve, arm, SHIRT);
+                draw(&parts.cuff, arm, TRIM);
+            }
 
             let fore = arm * skeleton::step(Limb::Elbow, side, elbow, gait);
             draw(&parts.forearm, fore, SKIN);
             draw(&parts.elbow, fore, SKIN);
+            if keeper {
+                draw(&parts.sleeve_forearm, fore, SHIRT);
+                draw(&parts.cuff_forearm, fore, TRIM);
+            }
+            let hand = fore * skeleton::step(Limb::Wrist, side, wrist, gait);
             draw(
                 if keeper { &parts.glove } else { &parts.hand },
-                fore * skeleton::step(Limb::Wrist, side, wrist, gait),
+                hand,
                 if keeper { TRIM } else { SKIN },
             );
+            if keeper {
+                for (thumb, at) in BodyParts::digits(side) {
+                    draw(
+                        if thumb { &parts.thumb } else { &parts.finger },
+                        hand * at,
+                        TRIM,
+                    );
+                }
+            }
 
             let hip = Vec3::new(side * Physique::HIP_SPREAD, Physique::HIP, 0.0);
             let leg = skeleton::step(Limb::Hip, side, hip, gait);
@@ -3389,6 +4463,143 @@ mod tests {
         );
         // And he really is lower: the crown comes down with the knees.
         assert!(crown(gait).y < crown(still()).y - 0.03);
+    }
+
+    /// **His hands go to the ball.**
+    ///
+    /// The save made on his feet is the one a keeper makes most often —
+    /// measured, 84% of the balls arriving at him at pace — and the rig drew
+    /// none of it: nothing moved until the ball was already in the hold band,
+    /// which is to say until after it had stopped. Asserted as POSITIONS,
+    /// like every other pose here: an angle at a shoulder is impossible to
+    /// argue about, and "his gloves are by his knees for a ball over his
+    /// head" is not.
+    #[test]
+    fn a_save_puts_his_gloves_on_the_ball() {
+        let hands = |aim: Vec2| {
+            let gait = saving(aim, 0.0);
+            (glove(-1.0, gait) + glove(1.0, gait)) * 0.5
+        };
+        let low = hands(Vec2::new(0.0, -1.0));
+        let chest = hands(Vec2::ZERO);
+        let high = hands(Vec2::new(0.0, 1.0));
+        assert!(
+            low.y < 0.60,
+            "he does not go down to one at his boots: gloves at {:.2} m",
+            low.y
+        );
+        assert!(
+            high.y > 1.85,
+            "he does not go up to one over his head: gloves at {:.2} m",
+            high.y
+        );
+        assert!(
+            low.y < chest.y && chest.y < high.y,
+            "the reach does not track the ball up: {:.2} / {:.2} / {:.2} m",
+            low.y,
+            chest.y,
+            high.y
+        );
+        // And out in front of him rather than tucked against his chest —
+        // a keeper meets the ball, he does not wait for it.
+        assert!(
+            chest.z > 0.25,
+            "his hands are at his own chest, not in front of it: {:.2} m",
+            chest.z
+        );
+
+        // Across him, and the NEAR arm leads: two arms travelling the same
+        // distance is the superman, and rendered it is a man pointing at
+        // something rather than a keeper saving anything.
+        for wing in [-1.0_f32, 1.0] {
+            let gait = saving(Vec2::new(wing, 0.0), 0.0);
+            let near = glove(wing, gait).x * wing;
+            let far = glove(-wing, gait).x * wing;
+            assert!(
+                near > 0.55,
+                "the near glove does not go across him: {near:.2} m"
+            );
+            assert!(
+                far < near - 0.30,
+                "both arms travel the same way: near {near:.2} m, far {far:.2} m"
+            );
+        }
+    }
+
+    /// A parry is not a catch: the hands stay apart and the arms stay long,
+    /// because the point of one is a surface and the point of the other is a
+    /// pair of hands.
+    #[test]
+    fn a_parry_does_not_close_his_hands() {
+        let spread = |parry: f32| {
+            let gait = saving(Vec2::new(0.3, 0.2), parry);
+            glove(1.0, gait).distance(glove(-1.0, gait))
+        };
+        assert!(
+            spread(1.0) > spread(0.0) + 0.10,
+            "a parry closes his hands as much as a catch does: {:.2} m against {:.2} m",
+            spread(1.0),
+            spread(0.0)
+        );
+    }
+
+    /// And whatever he is reaching for, his boots stay on the grass. Going
+    /// down to a ball at his feet costs real height — the knees bend and the
+    /// waist folds — and if the drop that pays for it and the pose that
+    /// spends it ever part company he sinks into the turf.
+    #[test]
+    fn a_save_keeps_his_boots_on_the_grass() {
+        let flat = boot(1.0, still()).y;
+        for aim in [
+            Vec2::new(0.0, -1.0),
+            Vec2::new(1.0, -0.6),
+            Vec2::new(-1.0, 0.0),
+            Vec2::new(0.0, 1.0),
+        ] {
+            for side in [-1.0_f32, 1.0] {
+                let sole = boot(side, saving(aim, 0.0)).y;
+                assert!(
+                    (sole - flat).abs() < 0.05,
+                    "his {} boot moves {:.3} m saving one at ({:.1}, {:.1})",
+                    if side < 0.0 { "left" } else { "right" },
+                    sole - flat,
+                    aim.x,
+                    aim.y
+                );
+            }
+        }
+    }
+
+    /// **A set keeper is never still, and he never has both feet in the
+    /// air.**
+    ///
+    /// The little step on the spot is what makes him read as a man about to
+    /// move rather than a man standing there — and because the two legs are
+    /// half a cycle apart, it costs no height and nothing has to be paid for
+    /// it. Both halves are asserted: that a foot really does come up, and
+    /// that the other one is always down.
+    #[test]
+    fn a_set_keeper_dances_on_his_toes() {
+        let flat = boot(1.0, still()).y;
+        let mut lifted = 0.0_f32;
+        for step in 0..64 {
+            let mut gait = still();
+            gait.set = 1.0;
+            gait.idle = step as f32 * TAU / 64.0;
+            let (left, right) = (boot(-1.0, gait).y, boot(1.0, gait).y);
+            lifted = lifted.max((left - flat).max(right - flat));
+            assert!(
+                (left - flat).min(right - flat) < 0.012,
+                "both boots are off the grass at idle {:.2}: {:.3} m and {:.3} m",
+                gait.idle,
+                left - flat,
+                right - flat
+            );
+        }
+        assert!(
+            lifted > 0.02,
+            "his feet never leave the grass — the set is a statue again ({lifted:.3} m)"
+        );
     }
 
     /// The extension is a ramp and not a switch: a keeper halfway through a
@@ -3793,6 +5004,53 @@ mod tests {
 
     /// The hips lead a kick and the shoulders follow, which is what makes it
     /// look like it came from the ground up rather than from the knee.
+
+    /// **The hips lead the opening and the chest follows it.**
+    ///
+    /// [`Gait::open`] is a rotation of the LOWER body: a footballer coming
+    /// round onto a run turns his legs onto it first and his shoulders after,
+    /// which is what the separation between the two reads as. Both have to
+    /// go the same way — a chest that counter-rotated would draw a man
+    /// wringing himself out — and the chest has to go less far, or there is
+    /// no separation and the opening is just a man turned round.
+    #[test]
+    fn the_chest_follows_the_hips_round() {
+        let turned = |limb: Limb, gait: Gait| {
+            let joint = Joint::new(Entity::from_raw_u32(0).unwrap(), limb, 0.0, Vec3::ZERO);
+            let point = joint.pose(gait) * Vec3::Z;
+            point.x.atan2(point.z)
+        };
+        let mut gait = running(0.8);
+        gait.open = 1.2;
+        let hips = turned(Limb::Pelvis, gait);
+        let chest = turned(Limb::Torso, gait);
+        assert!(
+            chest > 0.02 && chest < hips - 0.2,
+            "with his legs {:.0} deg round, his hips are at {:.0} and his chest at {:.0}",
+            gait.open.to_degrees(),
+            hips.to_degrees(),
+            chest.to_degrees()
+        );
+    }
+
+    /// …and a kick takes the whole opening back off him: he plants and swings
+    /// at the ball, not along the run he arrived on. See [`Joint::opened`].
+    #[test]
+    fn a_kick_squares_his_hips_onto_the_ball() {
+        let mut gait = kicking(0.0);
+        gait.open = 1.2;
+        let socket = step(
+            Limb::Hip,
+            1.0,
+            Vec3::new(Physique::HIP_SPREAD, Physique::HIP, 0.0),
+            gait,
+        );
+        assert!(
+            socket.translation.z.abs() < 0.01,
+            "his hip socket is {:.3} m off the line of his chest at contact",
+            socket.translation.z
+        );
+    }
     #[test]
     fn the_hips_lead_the_shoulders() {
         // Measured as how far each has turned by the moment of contact,
@@ -4125,13 +5383,27 @@ mod tests {
             gait
         };
         // Side on for the first four — a stride is a side-on picture.
-        let poses: [(f32, Gait); 6] = [
+        // …and a WALK, which the four columns above cannot show and which is
+        // where the stride model does its work: 37% of a recorded match is
+        // spent under 2.5 m/s, and until `carry_ground` existed the legs
+        // covered a third of the ground the body did there. See
+        // [`Gait::carry_ground`].
+        let walking = |phase: f32| {
+            let speed = 1.4;
+            let mut gait = running((speed / Actors::SPRINT).clamp(0.0, 1.0));
+            gait.phase = phase;
+            gait.carry_ground = Actors::stride_of(7, speed, Vec2::Y).1;
+            gait
+        };
+        let poses: [(f32, Gait); 8] = [
             (FRAC_PI_2, at(0.0, 1.0)),
             (FRAC_PI_2, at(FRAC_PI_2, 1.0)),
             (FRAC_PI_2, at(PI, 1.0)),
             (FRAC_PI_2, at(-FRAC_PI_2, 1.0)),
             (FRAC_PI_2, at(FRAC_PI_2, 0.86)),
             (FRAC_PI_2, at(FRAC_PI_2, 1.14)),
+            (FRAC_PI_2, walking(FRAC_PI_2)),
+            (FRAC_PI_2, walking(-FRAC_PI_2)),
         ];
         let mut sheet = vec![0u8; WIDE * poses.len() * TALL * 4];
         for (column, (bearing, gait)) in poses.into_iter().enumerate() {
@@ -4301,6 +5573,278 @@ mod tests {
         }
 
         let path = std::path::Path::new(&directory).join("dive.rgba");
+        std::fs::write(&path, &sheet).expect("wrote the sheet");
+        println!("{}x{} at {}", WIDE * poses.len(), TALL, path.display());
+    }
+
+    /// **The keeper on his feet**, which is where he spends the match: the
+    /// set stance, the three saves he makes standing, a parry, and the two
+    /// gaits nobody else on the pitch uses.
+    ///
+    /// A save is half a second and a dive is rarer than that; the poses in
+    /// here are the ones the camera actually holds on, and none of them had
+    /// ever been rendered. Front-on (`bearing: PI`) except the shuffle,
+    /// which only reads from the side — a man travelling across himself
+    /// looks like a man standing still from in front.
+    ///
+    /// ```text
+    /// MATCH_FIGURE_DUMP=<dir> cargo test --lib dump_keeper -- --ignored
+    /// ```
+    /// **One whole side-step, phase by phase.**
+    ///
+    /// A shuffle cannot be judged from one pose any more than a run can —
+    /// what makes it read as a person rather than a linkage is what happens
+    /// BETWEEN the poses, and the only way to see that is to lay the cycle
+    /// out. Front-on, because a lateral gait is a frontal-plane picture, then
+    /// the same cycle three-quarters on, which is the angle the broadcast
+    /// camera actually watches a keeper from.
+    ///
+    /// ```text
+    /// MATCH_FIGURE_DUMP=<dir> cargo test --lib dump_shuffle -- --ignored
+    /// ```
+    #[test]
+    #[ignore = "writes a file; run by hand when the shuffle changes"]
+    fn dump_shuffle() {
+        use super::preview::{Canvas, Lens, posed};
+
+        const WIDE: usize = 300;
+        const TALL: usize = 460;
+        const STEPS: usize = 8;
+
+        let Ok(directory) = std::env::var("MATCH_FIGURE_DUMP") else {
+            panic!("set MATCH_FIGURE_DUMP to a directory");
+        };
+        let mut meshes = Assets::<Mesh>::default();
+        let parts = BodyParts::new(&mut meshes);
+
+        // The course a keeper actually has at each speed, through the real
+        // opening band: dead abeam of the ball, so the whole of it is
+        // lateral until `Actors::SQUARE_UP` starts turning his hips into the
+        // run. Rendering a pure side-step at four metres a second — which
+        // the first version of this did — draws a gait no human has.
+        let at = |speed: f32, phase: f32| {
+            let opening = Actors::ease(
+                (speed - Actors::SQUARE_UP.0) / (Actors::SQUARE_UP.1 - Actors::SQUARE_UP.0),
+            );
+            let off = (1.0 - opening) * FRAC_PI_2;
+            let course = Vec2::new(off.sin(), off.cos());
+            let mut gait = travelling(
+                (speed / Actors::SPRINT).clamp(0.0, 1.0),
+                course.x,
+                course.y,
+                Actors::stride_of(7, speed, course).1,
+            );
+            gait.phase = phase;
+            gait.idle = phase * 0.5;
+            gait.set = 1.0;
+            gait
+        };
+        let mut sheet = vec![0u8; WIDE * STEPS * TALL * 2 * 4];
+        for row in 0..2 {
+            let (bearing, speed) = if row == 0 { (PI, 1.3) } else { (2.5, 1.9) };
+            for step in 0..STEPS {
+                let gait = at(speed, step as f32 * TAU / STEPS as f32);
+                let mut canvas = Canvas::new(WIDE, TALL);
+                let lens = Lens {
+                    bearing,
+                    bottom: -0.08,
+                    top: 2.05,
+                };
+                posed(
+                    &mut canvas,
+                    &lens,
+                    &meshes,
+                    &parts,
+                    gait,
+                    Transform::IDENTITY,
+                    true,
+                );
+                let pixels = canvas.pixels();
+                for line in 0..TALL {
+                    let from = line * WIDE * 4;
+                    let to = ((row * TALL + line) * WIDE * STEPS + step * WIDE) * 4;
+                    sheet[to..to + WIDE * 4].copy_from_slice(&pixels[from..from + WIDE * 4]);
+                }
+            }
+        }
+
+        let path = std::path::Path::new(&directory).join("shuffle.rgba");
+        std::fs::write(&path, &sheet).expect("wrote the sheet");
+        println!("{}x{} at {}", WIDE * STEPS, TALL * 2, path.display());
+    }
+
+    /// **An OUTFIELDER travelling across himself**, which is a different
+    /// question from [`dump_shuffle`] and a far more common one.
+    ///
+    /// A goalkeeper shuffles because he is square to the play and means to
+    /// be. An outfielder is across his own body for one of two reasons — he
+    /// is jockeying, at walking pace, or his heading has not finished coming
+    /// round onto a run he is already on (`Actors::PIVOT_RATE`) — and the
+    /// second is the overwhelming majority of it. Drawn as a keeper's
+    /// shuffle, a man arcing round at five metres a second crouched a foot
+    /// and a half with his feet a metre and a half apart at thirteen steps a
+    /// second, which is how it was reported: *"they move sideways like
+    /// invalids"*.
+    ///
+    /// Front-on, because a lateral gait is a frontal-plane picture, and then
+    /// three-quarters on, which is where the broadcast camera sits and the
+    /// only angle an opened hip shows from at all.
+    ///
+    /// ```text
+    /// MATCH_FIGURE_DUMP=<dir> cargo test --lib dump_lateral -- --ignored
+    /// ```
+    #[test]
+    #[ignore = "writes a file; run by hand when the lateral gait changes"]
+    fn dump_lateral() {
+        use super::preview::{Canvas, Lens, posed};
+
+        const WIDE: usize = 300;
+        const TALL: usize = 460;
+        const STEPS: usize = 8;
+
+        let Ok(directory) = std::env::var("MATCH_FIGURE_DUMP") else {
+            panic!("set MATCH_FIGURE_DUMP to a directory");
+        };
+        let mut meshes = Assets::<Mesh>::default();
+        let parts = BodyParts::new(&mut meshes);
+        // Speed, the way he is going in his own frame, and the angle to
+        // watch it from. The first pair is a man jockeying; the rest are the
+        // turn transient, which is what the camera actually spends its time
+        // looking at. Front-on, then three-quarters — a lateral gait is a
+        // frontal-plane picture, but three-quarters is where the broadcast
+        // camera sits and is the only angle that shows an opened hip at all.
+        let back = Vec2::new(120.0f32.to_radians().sin(), 120.0f32.to_radians().cos());
+        let rows: [(f32, Vec2, f32); 8] = [
+            (1.6, Vec2::X, PI),
+            (1.6, Vec2::X, 2.5),
+            (3.2, Vec2::X, PI),
+            (5.0, Vec2::X, PI),
+            (5.0, Vec2::X, 2.5),
+            (5.5, Vec2::new(0.6, 0.8), 2.5),
+            (5.5, back, PI),
+            (5.5, back, 2.5),
+        ];
+        let mut sheet = vec![0u8; WIDE * STEPS * TALL * rows.len() * 4];
+        for (row, (speed, course, bearing)) in rows.into_iter().enumerate() {
+            for step in 0..STEPS {
+                // Through the same two functions the renderer uses, so what
+                // this draws is what the pitch draws.
+                let open = Actors::opening(speed, course, false);
+                let under = Actors::underfoot(course, open);
+                let mut gait = travelling(
+                    (speed / Actors::SPRINT).clamp(0.0, 1.0),
+                    under.x,
+                    under.y,
+                    Actors::stride_of(7, speed, under).1,
+                );
+                gait.open = open;
+                gait.phase = step as f32 * TAU / STEPS as f32;
+                gait.idle = gait.phase * 0.5;
+                // An outfielder: no set, no gloves, none of the keeper-only
+                // pose. See [`Gait::keeper`].
+                gait.keeper = 0.0;
+                let mut canvas = Canvas::new(WIDE, TALL);
+                let lens = Lens {
+                    bearing,
+                    bottom: -0.08,
+                    top: 2.05,
+                };
+                posed(
+                    &mut canvas,
+                    &lens,
+                    &meshes,
+                    &parts,
+                    gait,
+                    Transform::IDENTITY,
+                    false,
+                );
+                let pixels = canvas.pixels();
+                for line in 0..TALL {
+                    let from = line * WIDE * 4;
+                    let to = ((row * TALL + line) * WIDE * STEPS + step * WIDE) * 4;
+                    sheet[to..to + WIDE * 4].copy_from_slice(&pixels[from..from + WIDE * 4]);
+                }
+            }
+        }
+
+        let path = std::path::Path::new(&directory).join("lateral.rgba");
+        std::fs::write(&path, &sheet).expect("wrote the sheet");
+        println!(
+            "{}x{} at {}",
+            WIDE * STEPS,
+            TALL * rows.len(),
+            path.display()
+        );
+    }
+
+    #[test]
+    #[ignore = "writes a file; run by hand when the keeper changes"]
+    fn dump_keeper() {
+        use super::preview::{Canvas, Lens, posed};
+
+        const WIDE: usize = 420;
+        const TALL: usize = 420;
+
+        let Ok(directory) = std::env::var("MATCH_FIGURE_DUMP") else {
+            panic!("set MATCH_FIGURE_DUMP to a directory");
+        };
+        let mut meshes = Assets::<Mesh>::default();
+        let parts = BodyParts::new(&mut meshes);
+
+        let mut set = still();
+        set.set = 1.0;
+        // Mid-cycle, so the legs are somewhere rather than square.
+        let travel = |across: f32, ahead: f32| {
+            let mut gait = travelling(
+                0.45,
+                across,
+                ahead,
+                Actors::stride_of(7, 2.6, Vec2::new(across, ahead)).1,
+            );
+            gait.phase = 1.9;
+            gait
+        };
+        let mut alive = set;
+        alive.idle = 0.35;
+        let poses: [(f32, Gait); 9] = [
+            (PI, set),
+            (PI / 2.0, set),
+            (PI, alive),
+            (PI, saving(Vec2::new(-0.85, -0.75), 0.0)),
+            (PI, saving(Vec2::new(0.1, 0.15), 0.0)),
+            (PI, saving(Vec2::new(0.9, 0.85), 0.0)),
+            (PI, saving(Vec2::new(0.9, 0.2), 1.0)),
+            // The shuffle is a lateral pose and only reads from the FRONT;
+            // the backpedal is a sagittal one and only reads from the side.
+            (PI, travel(1.0, 0.0)),
+            (PI / 2.0, travel(0.0, -1.0)),
+        ];
+        let mut sheet = vec![0u8; WIDE * poses.len() * TALL * 4];
+        for (column, (bearing, gait)) in poses.into_iter().enumerate() {
+            let mut canvas = Canvas::new(WIDE, TALL);
+            let lens = Lens {
+                bearing,
+                bottom: -0.10,
+                top: 2.30,
+            };
+            posed(
+                &mut canvas,
+                &lens,
+                &meshes,
+                &parts,
+                gait,
+                Transform::IDENTITY,
+                true,
+            );
+            let pixels = canvas.pixels();
+            for row in 0..TALL {
+                let from = row * WIDE * 4;
+                let to = (row * WIDE * poses.len() + column * WIDE) * 4;
+                sheet[to..to + WIDE * 4].copy_from_slice(&pixels[from..from + WIDE * 4]);
+            }
+        }
+
+        let path = std::path::Path::new(&directory).join("keeper.rgba");
         std::fs::write(&path, &sheet).expect("wrote the sheet");
         println!("{}x{} at {}", WIDE * poses.len(), TALL, path.display());
     }

@@ -106,6 +106,35 @@ impl ActivityIntensityConfig for GoalkeeperConfig {
 ///   * ball in midfield — 12-18 m;
 ///   * ball entering our final third — 6-10 m;
 ///   * ball in the box — 2-5 m, on the angle.
+/// Diagnostic switch: with `OF_KEEPER_CALM_OFF` set, the keeper goes back
+/// to tracking the ball continuously — the resting tolerance stops opening
+/// out with distance, `PreparingForSave` stands down on a one-tick
+/// possession flag again and holds no set position, and `Standing` re-arms
+/// the save posture on his own side's passes.
+///
+/// This is the A/B control for the "he runs around instead of goalkeeping"
+/// work. Those four sites decide how much a keeper moves on every tick of
+/// every match, so their effect on save rate and goals cannot be read off
+/// the diff — and it must not be answered by checking out an older
+/// revision either, because the working tree moves under you. Same pattern
+/// and purpose as `OF_SHAPE_OFF` and `OF_KEEPER_SERVO`; read once per
+/// process. Debug infrastructure — do not remove.
+///
+/// Deliberately does NOT gate the two-cycle repairs in `Catching` and
+/// `Clearing` that shipped alongside: a state entered and left inside
+/// 45 ms, a hundred and thirty times a match, is not a behaviour anyone
+/// chose, so both arms should have those. What this isolates is the
+/// judgement call — how still a keeper ought to be.
+pub struct KeeperDebug;
+
+impl KeeperDebug {
+    pub fn calm_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_KEEPER_CALM_OFF").is_ok())
+    }
+}
+
 pub struct KeeperRestPosition;
 
 impl KeeperRestPosition {
@@ -264,10 +293,62 @@ impl KeeperRestPosition {
                 + (GoalkeeperSkillProfile::POPULATION_READ - concentration.clamp(0.0, 1.0)) * 1.2)
     }
 
-    /// Is he set, for a keeper of this concentration?
-    pub fn is_set_with(keeper: Vector3<f32>, target: Vector3<f32>, concentration: f32) -> bool {
-        (keeper.y - target.y).abs() < Self::lateral_tolerance(concentration)
-            && (keeper.x - target.x).abs() < Self::SET_DEADZONE
+    /// How much slacker both tolerances get because the ball is a long way
+    /// away — the term that decides whether he is goalkeeping or fidgeting.
+    ///
+    /// # Why a fixed tolerance was wrong
+    ///
+    /// [`Self::LATERAL_DEADZONE`] is 0.75 m and it was applied at every
+    /// distance, so the keeper held his angle to within three quarters of a
+    /// metre **while the ball was sixty metres away in the other penalty
+    /// area**. Two things make that far more movement than it sounds:
+    /// the lateral term of the rest point is `depth × sin(angle to ball)`,
+    /// and `depth` is at its LARGEST when the ball is far (he has pushed up
+    /// to sweep) — so the target swings widest exactly when it matters
+    /// least. A ball passed across midfield moved his target six metres
+    /// sideways, and a 0.75 m deadzone made him track every metre of it.
+    ///
+    /// Measured over 60 matches: **71% of his ticks had the ball more than
+    /// 40 m away, and he covered 4778 m in them** — over half a match's
+    /// mileage, at a jog, with nothing to defend. Total 9405 m against a
+    /// real keeper's ~5000.
+    ///
+    /// # The model
+    ///
+    /// A keeper's positional precision requirement is set by how long a
+    /// shot would take to arrive, and that is distance. Inside the box a
+    /// metre is the difference between a save and a goal; from 60 m he has
+    /// well over a second to step across, and standing still is not
+    /// sloppiness, it is what keepers do. So the tolerance is anchored at
+    /// its tight value where the shot comes from and opens out with the
+    /// square of distance — the same shape (and the same reasoning about
+    /// which direction is urgent) as the depth curve in [`Self::point`].
+    ///
+    /// 1.0 at the goal line, 8.0 at the far end of the pitch: 0.75 m of
+    /// lateral tolerance in the six-yard box, 6 m with play at the other
+    /// end, and no threshold anywhere in between.
+    const REST_SLACK_MAX: f32 = 8.0;
+
+    pub fn distance_slack(ball_distance: f32, field_width: f32) -> f32 {
+        if KeeperDebug::calm_off() {
+            return 1.0;
+        }
+        let far = (ball_distance / field_width).clamp(0.0, 1.0);
+        1.0 + (Self::REST_SLACK_MAX - 1.0) * far * far
+    }
+
+    /// Is he set, for a keeper of this concentration, with the ball this
+    /// far from his goal?
+    pub fn is_set_with(
+        keeper: Vector3<f32>,
+        target: Vector3<f32>,
+        concentration: f32,
+        ball_distance: f32,
+        field_width: f32,
+    ) -> bool {
+        let slack = Self::distance_slack(ball_distance, field_width);
+        (keeper.y - target.y).abs() < Self::lateral_tolerance(concentration) * slack
+            && (keeper.x - target.x).abs() < Self::SET_DEADZONE * slack
     }
 
     /// How fast he travels to it — set by how near the BALL is, not by how
@@ -877,9 +958,9 @@ pub struct KeeperSmother;
 impl KeeperSmother {
     /// How far a keeper's spread reaches, before skill. 12u = 1.5 m —
     /// arms, chest and the ground he covers going down.
-    const SPREAD_BASE: f32 = 12.0;
+    pub const SPREAD_BASE: f32 = 12.0;
     /// …and what agility and one-on-one technique add, out to ~3 m.
-    const SPREAD_SKILL: f32 = 12.0;
+    pub const SPREAD_SKILL: f32 = 12.0;
     /// A ball higher than this is not at anybody's feet — that is a
     /// [`KeeperAerialClaim`], and diving under it achieves nothing. 1.1 m.
     const FEET_HEIGHT: f32 = 1.1;
@@ -903,7 +984,7 @@ impl KeeperSmother {
     /// has swept thirty metres upfield and finds himself alongside a man
     /// on the ball does not spread himself at his feet; he stays up,
     /// because going to ground out there leaves an empty net behind him.
-    const DANGER_DEPTH: f32 = 130.0;
+    pub const DANGER_DEPTH: f32 = 130.0;
     /// **The keeper's structural edge in this particular duel.**
     ///
     /// Not a population offset between two composites (that is what
@@ -1036,7 +1117,7 @@ impl KeeperSmother {
     }
 
     /// How far this keeper spreads himself, in game units.
-    fn reach(prof: &GoalkeeperSkillProfile) -> f32 {
+    pub fn reach(prof: &GoalkeeperSkillProfile) -> f32 {
         Self::SPREAD_BASE
             + (prof.dive_reach * 0.6 + prof.one_v_one * 0.4).clamp(0.0, 1.0) * Self::SPREAD_SKILL
     }
@@ -1224,6 +1305,162 @@ impl KeeperSmother {
 /// Everything else has to come out of the dive. That is the whole point:
 /// the dive is not decoration on top of a save the keeper was going to make
 /// anyway, it is the only way he covers ground once the ball is struck.
+/// **A man running at him with the ball, and nobody in the way.**
+///
+/// # Why this exists
+///
+/// [`KeeperSmother`] gave the engine a way to take the ball off a carrier's
+/// feet, and it fires far less often than the situation occurs, for a reason
+/// that has nothing to do with the smother itself: **the keeper never gets
+/// close enough to try.** Measured off a recording, over 73 strict 1-v-1s in
+/// one match — a central carrier inside the box, running at goal, with no
+/// defender nearer the ball than he is:
+///
+/// | | |
+/// |---|---|
+/// | keeper→ball at the start | median **13.6 m** |
+/// | closest he got in the next 2.5 s | median **9.7 m** |
+/// | inside 3 m, which is his own spread | 21 / 73 |
+/// | left the ground for it | **3 / 73** |
+///
+/// The mechanism is [`GoalkeeperPreparingForSaveState::velocity`]'s
+/// no-shot-cached branch: with nothing struck it steers to a point on the
+/// goal→ball line `18-32 u` out, i.e. **two to four metres off his line
+/// whatever the carrier does**. Traced through one episode, a striker
+/// dribbles from 8.7 m to 2.8 m from goal and the keeper holds station
+/// 5.22 m away for two full seconds, watching. `KeeperSmother::assess`
+/// wants the ball inside 1.5-3 m; it was never going to see it.
+///
+/// # The model
+///
+/// He stands off the BALL, not off his line. The gap is his own spread plus
+/// a stride — near enough that one step is a smother — and it is bounded by
+/// how far he is prepared to come at all, so a carrier still twenty-five
+/// metres out brings him to the edge of his area rather than out to meet
+/// him. As the striker closes, the gap closes with him, and the moment the
+/// ball is inside the spread the duel resolves.
+pub struct KeeperOneOnOne;
+
+impl KeeperOneOnOne {
+    /// How near his own goal the duel has to be before he plays it as one.
+    /// The same 130u the smother uses — the penalty area — and for the same
+    /// reason: a keeper who comes to meet a man at the halfway line has left
+    /// an empty net behind him.
+    pub const DANGER_DEPTH: f32 = KeeperSmother::DANGER_DEPTH;
+    /// How much further off the ball he stands than he can reach.
+    ///
+    /// **Zero, and that is the point.** The gap he holds and the spread he
+    /// can cover are ONE budget: stand further off than he can reach and
+    /// the duel he came out for can never resolve, which is exactly the
+    /// 5.22 m stand-off this replaces. He sets himself at the edge of his
+    /// own reach and the striker's next touch decides it — `assess` wants
+    /// the ball properly inside the spread (`COMMIT_SHARE`) before he goes,
+    /// so a keeper at the edge of it is one push away from a smother and no
+    /// closer.
+    const MARGIN: f32 = 0.0;
+    /// How far toward the ball he will come, as a share of its distance from
+    /// his own goal. Without it the stand-off alone sends him out to meet a
+    /// breakaway from the halfway line.
+    ///
+    /// The gap he holds is `max(spread, (1 − ADVANCE) × distance)`, so it
+    /// stops being the share and starts being the spread — the point at
+    /// which the duel becomes reachable at all — once the ball is inside
+    /// `spread / (1 − ADVANCE)`, about 5.9 m of goal. That is the six-yard
+    /// box, and it is where a keeper spreads himself.
+    ///
+    /// **Measured, `stats 200 14 14`, against the `OF_KEEPER_HOLD` control
+    /// on the same binary.** The share is the one number in this model with
+    /// a scoreline attached, so it was swept rather than chosen:
+    ///
+    /// | share | goals/match | saves/on-target | penalties | smothers/keeper |
+    /// |---|---|---|---|---|
+    /// | control | 5.32, 5.24 | 57.7, 57.1 | 0.31, 0.23 | 4.09, 4.26 |
+    /// | 0.50 | 4.66, 4.88 | 57.9, 58.3 | 0.32, 0.32 | 4.56, 4.75 |
+    /// | **0.62** | **4.55, 4.64** | **59.0, 58.4** | 0.25, 0.27 | 4.85 |
+    /// | 0.75 | 4.58 | 57.6 | 0.25 | — |
+    ///
+    /// It flattens at 0.62 and the save rate turns over past it, which is
+    /// the point at which coming further starts costing him more than it
+    /// buys. ⚠ The save rate is a DENOMINATOR here as much as a skill —
+    /// chances that end as a duel at his feet leave the shot sample
+    /// entirely — so read the goals column first.
+    pub const ADVANCE: f32 = 0.62;
+    /// And he never backs onto his own line to hold the gap. 8u = 1 m.
+    const MIN_DEPTH: f32 = 8.0;
+
+    /// The A/B control for the whole model, in the pattern
+    /// [`KeeperShotReaction::servo`] documents: coming out changes both the
+    /// chances he stops and the ones he lets in, so "was it worth it?" cannot
+    /// be read off the diff, and it must not be answered by checking out an
+    /// older revision — the working tree moves under you. Debug
+    /// infrastructure; do not remove.
+    pub fn held_back() -> bool {
+        use std::sync::OnceLock;
+        static HELD: OnceLock<bool> = OnceLock::new();
+        *HELD.get_or_init(|| std::env::var("OF_KEEPER_HOLD").is_ok())
+    }
+
+    /// The man he is in a duel with, if he is in one.
+    pub fn duel(ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        if Self::held_back() {
+            return None;
+        }
+        let carrier = ctx.players().opponents().with_ball().next()?;
+        let ball = ctx.tick_context.positions.ball.position;
+        let goal = ctx.ball().direction_to_own_goal();
+        if (ball.x - goal.x).abs() > Self::DANGER_DEPTH {
+            return None;
+        }
+        // Running AT the goal. A man knocking it square along the edge of
+        // the area is not a 1-v-1 and coming to meet him wins nothing.
+        let run = ctx.tick_context.positions.players.velocity(carrier.id);
+        let bearing_down = (goal - carrier.position)
+            .try_normalize(1e-3)
+            .zip(run.try_normalize(1e-3))
+            .is_none_or(|(lane, way)| lane.dot(&way) > 0.0);
+        if !bearing_down {
+            return None;
+        }
+        // …and nobody between the two of them. The same question the sweep
+        // asks, so a covered carrier stays the defence's problem.
+        KeeperCarrierThreat::is_through(ctx, &carrier).then_some(carrier)
+    }
+
+    /// How far off the ball he holds, in units.
+    pub fn standoff(prof: &GoalkeeperSkillProfile) -> f32 {
+        KeeperSmother::reach(prof) + Self::MARGIN
+    }
+
+    /// Where he stands: on the goal→ball line, a stand-off short of the ball.
+    pub fn point(ctx: &StateProcessingContext, prof: &GoalkeeperSkillProfile) -> Vector3<f32> {
+        Self::stand(
+            ctx.ball().direction_to_own_goal(),
+            ctx.tick_context.positions.ball.position,
+            Self::standoff(prof),
+            KeeperSweepLimit::off_line(prof.rushing_out_profile),
+        )
+    }
+
+    /// The geometry on its own, so the invariants it has to satisfy can be
+    /// pinned without a match around them.
+    pub fn stand(
+        goal: Vector3<f32>,
+        ball: Vector3<f32>,
+        standoff: f32,
+        sweep_limit: f32,
+    ) -> Vector3<f32> {
+        let out = ball - goal;
+        let Some(lane) = out.try_normalize(1e-3) else {
+            return goal;
+        };
+        let range = out.magnitude();
+        let depth = (range - standoff)
+            .min(range * Self::ADVANCE)
+            .clamp(Self::MIN_DEPTH, sweep_limit.max(Self::MIN_DEPTH));
+        goal + lane * depth
+    }
+}
+
 pub struct KeeperShotReaction;
 
 impl KeeperShotReaction {
@@ -2443,6 +2680,91 @@ mod tests {
             !claim(10.0, Vector3::new(140.0, 100.0, 0.0)).at_contact(here),
             "arriving, but 5 m away — jumping on the spot achieves nothing"
         );
+    }
+
+    /// **THE GAP HE HOLDS AND THE SPREAD HE CAN COVER ARE ONE BUDGET.**
+    ///
+    /// The same invariant as `COMMIT < DISENGAGE` and as
+    /// `a_set_keeper_cannot_walk_to_the_corner_of_his_own_goal`, in its
+    /// third form: a keeper who stands further off the ball than he can
+    /// reach has committed to a duel he cannot resolve. Measured before
+    /// [`KeeperOneOnOne`] existed, that is exactly what he did — 5.22 m off
+    /// the ball for two full seconds while a striker dribbled from 8.7 m
+    /// out to 2.8 m from goal, with `KeeperSmother` wanting it inside
+    /// 1.5-3 m the whole time.
+    #[test]
+    fn coming_out_brings_the_ball_inside_his_own_spread() {
+        let goal = Vector3::new(0.0, 272.5, 0.0);
+        // An ordinary keeper's spread, and the stand-off it earns.
+        let spread = KeeperSmother::SPREAD_BASE + KeeperSmother::SPREAD_SKILL * 0.5;
+        let standoff = spread + KeeperOneOnOne::MARGIN;
+        let limit = KeeperSweepLimit::off_line(0.5);
+        // The two bounds cross at `standoff / (1 - ADVANCE)`: inside that
+        // the gap IS the spread and the duel is one touch away, outside it
+        // the advance cap owns the gap, which is what stops a breakaway
+        // from the halfway line dragging him out to meet it.
+        let crossover = standoff / (1.0 - KeeperOneOnOne::ADVANCE);
+        assert!(
+            crossover < KeeperOneOnOne::DANGER_DEPTH * 0.5,
+            "he only reaches his own duel inside {crossover:.0}u — the far half of \
+             his own area, so the smother is decided by the striker's touch and \
+             never by him"
+        );
+        for out in [18.0_f32, 26.0, crossover] {
+            let ball = Vector3::new(out, 272.5, 0.0);
+            let gap = (ball - KeeperOneOnOne::stand(goal, ball, standoff, limit)).magnitude();
+            assert!(
+                gap <= spread + 1e-3,
+                "the ball is {out}u out and he is standing {gap:.1}u off it, \
+                 against a spread of {spread:.1}u — he cannot reach his own duel"
+            );
+        }
+        // …and it always closes. A gap that stays a fixed fraction of a
+        // shrinking distance still shrinks; a fixed DEPTH, which is what
+        // this replaces, does not.
+        let far = Vector3::new(90.0, 272.5, 0.0);
+        let near = Vector3::new(50.0, 272.5, 0.0);
+        let gap = |ball: Vector3<f32>| {
+            (ball - KeeperOneOnOne::stand(goal, ball, standoff, limit)).magnitude()
+        };
+        assert!(
+            gap(near) < gap(far) - 5.0,
+            "the gap does not close as the man comes on: {:.1}u at 90u, {:.1}u at 50u",
+            gap(far),
+            gap(near)
+        );
+    }
+
+    /// …and he neither backs into his own goal to hold that gap nor comes
+    /// out past the space he is prepared to defend. Both bounds bind, at
+    /// opposite ends of the same line.
+    #[test]
+    fn the_closing_point_stays_between_his_line_and_his_limit() {
+        let goal = Vector3::new(0.0, 272.5, 0.0);
+        let standoff = 24.0;
+        let limit = KeeperSweepLimit::off_line(0.0);
+        let mut previous = 0.0;
+        for out in [12.0_f32, 30.0, 60.0, 120.0, 240.0, 400.0] {
+            let ball = Vector3::new(out, 272.5, 0.0);
+            let depth = KeeperOneOnOne::stand(goal, ball, standoff, limit).x;
+            assert!(
+                depth >= KeeperOneOnOne::MIN_DEPTH - 1e-3,
+                "a ball {out}u out puts him {depth:.1}u off his line — inside his own goal"
+            );
+            assert!(
+                depth <= limit + 1e-3,
+                "a ball {out}u out draws him {depth:.1}u out, past his own limit of {limit:.1}u"
+            );
+            // And he only ever comes further as the ball comes further:
+            // a target that retreats while the man advances is the defect
+            // this replaces.
+            assert!(
+                depth >= previous - 1e-3,
+                "the closing point went BACKWARDS as the ball came on: \
+                 {previous:.1}u then {depth:.1}u"
+            );
+            previous = depth;
+        }
     }
 }
 

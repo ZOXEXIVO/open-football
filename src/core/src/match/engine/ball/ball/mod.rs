@@ -2407,6 +2407,61 @@ impl Ball {
                     dbd::CARRIER_NEAREST_X10.fetch_add((nearest * 10.0) as u64, Ordering::Relaxed);
                     dbd::CARRIER_ENGAGERS.fetch_add(engagers, Ordering::Relaxed);
                     dbd::CARRIER_SAMPLES.fetch_add(1, Ordering::Relaxed);
+                    // …and can he actually stay with him? See
+                    // `CHASE_SAMPLES` — the ceilings, not the positions.
+                    if let Some(chaser) = players
+                        .iter()
+                        .filter(|p| p.team_id != owner.team_id && !p.is_sent_off)
+                        .filter(|p| {
+                            p.tactical_position.current_position.position_group()
+                                != crate::PlayerFieldPositionGroup::Goalkeeper
+                        })
+                        .min_by(|a, b| {
+                            (a.position - owner.position)
+                                .magnitude()
+                                .total_cmp(&(b.position - owner.position).magnitude())
+                        })
+                    {
+                        use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+                        use crate::r#match::{ActivityIntensity, MovementEffort};
+                        let minute = sc::minute_from_ticks(self.current_tick_cached);
+                        // ⚠ THROUGH `carrier_ceiling`, NOT A COPY OF IT.
+                        // The first version of this sampler re-derived the
+                        // carry formula inline and went stale the moment
+                        // the live path changed, reporting the OLD ceiling
+                        // against the new chaser's.
+                        let carrier_cap = owner.max_speed_with_condition_cached()
+                            * MovementEffort::carrier_ceiling(
+                                owner,
+                                minute,
+                                owner.player_attributes.condition_percentage(),
+                            );
+                        let chaser_cap = chaser.max_speed_with_condition_cached()
+                            * MovementEffort::speed_fraction(
+                                chaser.last_activity_intensity,
+                                chaser.player_attributes.condition_percentage(),
+                            );
+                        dbd::CHASE_SAMPLES.fetch_add(1, Ordering::Relaxed);
+                        dbd::CHASE_CARRIER_CAP_X1000
+                            .fetch_add((carrier_cap * 1000.0) as u64, Ordering::Relaxed);
+                        dbd::CHASE_CHASER_CAP_X1000
+                            .fetch_add((chaser_cap * 1000.0) as u64, Ordering::Relaxed);
+                        dbd::CHASE_CARRIER_SPD_X1000
+                            .fetch_add((owner.velocity.norm() * 1000.0) as u64, Ordering::Relaxed);
+                        dbd::CHASE_CHASER_SPD_X1000
+                            .fetch_add((chaser.velocity.norm() * 1000.0) as u64, Ordering::Relaxed);
+                        if chaser_cap < carrier_cap {
+                            dbd::CHASE_OUTPACED.fetch_add(1, Ordering::Relaxed);
+                        }
+                        let tier = match chaser.last_activity_intensity {
+                            ActivityIntensity::VeryHigh => 0,
+                            ActivityIntensity::High => 1,
+                            ActivityIntensity::Moderate => 2,
+                            ActivityIntensity::Low => 3,
+                            ActivityIntensity::Recovery => 4,
+                        };
+                        dbd::CHASE_TIER[tier].fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             }
 

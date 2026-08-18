@@ -1,5 +1,7 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperSmother,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::common::states::LooseBallChase;
 use crate::r#match::{
@@ -48,6 +50,13 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
                     GoalkeeperState::PreparingForSave,
                 ));
             }
+        }
+
+        // He has chased it down and a man has got there first, with the
+        // ball inside his own spread: that is a smother, not a lost race.
+        // See [`KeeperSmother`] — the gates are all in `assess`.
+        if let Some(attempt) = KeeperSmother::assess(ctx) {
+            return Some(KeeperSmother::commit(ctx, &attempt));
         }
 
         // Transition to Catching when ball is very close and not owned

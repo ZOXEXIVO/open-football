@@ -97,6 +97,64 @@ pub mod dead_ball_diag {
     /// anyone come to him" number, not just the nearest.
     pub static CARRIER_ENGAGERS: AtomicU64 = AtomicU64::new(0);
 
+    /// **Can the nearest defender physically stay with the man on the
+    /// ball?**
+    ///
+    /// Every other counter here measures whether somebody is NEAR the
+    /// carrier. None of them can answer the question underneath the most
+    /// persistent report about this engine — "the defender just runs
+    /// alongside him and never gets there" — because a defender who is
+    /// permanently three metres behind looks identical, in every existing
+    /// statistic, to one who is closing.
+    ///
+    /// The speed a player is allowed this tick is not his top speed. It
+    /// is `max_speed * carry_mult` for the man on the ball (0.75-1.00,
+    /// from `movement_speed_with_ball`) and `max_speed *
+    /// MovementEffort::speed_fraction(intensity)` for everybody else
+    /// (0.12-0.95). Those two ceilings are set by completely different
+    /// code and nothing compares them, so a chase can be lost before
+    /// either player moves.
+    ///
+    /// Sampled on every full tick the ball is owned, for the carrier and
+    /// his nearest opponent: the two CEILINGS, the two actual speeds, and
+    /// how often the chaser's ceiling is the lower of the pair.
+    pub static CHASE_SAMPLES: AtomicU64 = AtomicU64::new(0);
+    /// Speed ceilings this tick, x1000 (u/tick), summed.
+    pub static CHASE_CARRIER_CAP_X1000: AtomicU64 = AtomicU64::new(0);
+    pub static CHASE_CHASER_CAP_X1000: AtomicU64 = AtomicU64::new(0);
+    /// Actual speeds, x1000 (u/tick), summed.
+    pub static CHASE_CARRIER_SPD_X1000: AtomicU64 = AtomicU64::new(0);
+    pub static CHASE_CHASER_SPD_X1000: AtomicU64 = AtomicU64::new(0);
+    /// Samples where the chaser's CEILING is below the carrier's — the
+    /// races that cannot be won however well he steers.
+    pub static CHASE_OUTPACED: AtomicU64 = AtomicU64::new(0);
+    /// The chaser's declared effort tier, indexed like
+    /// `ActivityIntensity` (0 VeryHigh … 4 Recovery). A chase run in a
+    /// `High` or `Moderate` state is a mislabelled state, not a slow
+    /// player.
+    pub static CHASE_TIER: [AtomicU64; 5] = [ZERO; 5];
+    pub const CHASE_TIER_LABELS: [&str; 5] = ["VeryHigh", "High", "Moderate", "Low", "Recovery"];
+
+    /// `(samples, mean carrier cap, mean chaser cap, mean carrier speed,
+    ///   mean chaser speed, share outpaced, tier counts)`
+    pub fn chase_speed_snapshot() -> (u64, f32, f32, f32, f32, f32, [u64; 5]) {
+        let n = CHASE_SAMPLES.load(Ordering::Relaxed);
+        let d = n.max(1) as f32 * 1000.0;
+        let mut tiers = [0u64; 5];
+        for (i, t) in tiers.iter_mut().enumerate() {
+            *t = CHASE_TIER[i].load(Ordering::Relaxed);
+        }
+        (
+            n,
+            CHASE_CARRIER_CAP_X1000.load(Ordering::Relaxed) as f32 / d,
+            CHASE_CHASER_CAP_X1000.load(Ordering::Relaxed) as f32 / d,
+            CHASE_CARRIER_SPD_X1000.load(Ordering::Relaxed) as f32 / d,
+            CHASE_CHASER_SPD_X1000.load(Ordering::Relaxed) as f32 / d,
+            CHASE_OUTPACED.load(Ordering::Relaxed) as f32 / n.max(1) as f32,
+            tiers,
+        )
+    }
+
     /// `(bucket counts, by-third counts, mean nearest in metres, mean
     /// engagers within 10 m)`.
     pub fn carrier_pressure_snapshot() -> ([u64; 5], [u64; 15], f32, f32) {
@@ -237,6 +295,7 @@ pub mod dead_ball_diag {
             .chain(STALL_ZONE.iter())
             .chain(CARRIER_PRESSURE.iter())
             .chain(CARRIER_PRESSURE_BY_THIRD.iter())
+            .chain(CHASE_TIER.iter())
         {
             c.store(0, Ordering::Relaxed);
         }
@@ -247,6 +306,12 @@ pub mod dead_ball_diag {
             &CARRIER_NEAREST_X10,
             &CARRIER_SAMPLES,
             &CARRIER_ENGAGERS,
+            &CHASE_SAMPLES,
+            &CHASE_CARRIER_CAP_X1000,
+            &CHASE_CHASER_CAP_X1000,
+            &CHASE_CARRIER_SPD_X1000,
+            &CHASE_CHASER_SPD_X1000,
+            &CHASE_OUTPACED,
             &STUCK_TICKS_UNOWNED,
             &STUCK_EPISODES_UNOWNED,
             &LONGEST_STUCK,

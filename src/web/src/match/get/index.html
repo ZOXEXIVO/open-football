@@ -215,12 +215,16 @@
     // Two measurements the stylesheet cannot take for itself, both explained
     // where they are used: `--match-chrome` (the stage is sized against what
     // the header leaves of the viewport, and this header grows with the number
-    // of scorers) and `--fm-actions-w` (the left rail carries the width of the
-    // header actions so the score lands on the page's centre line). Writing
-    // only on change keeps the observer from ringing itself.
+    // of scorers) and `--fm-sb-shift` (how far off the page's centre line the
+    // scoreboard sits, doubled, because the margin that corrects it moves the
+    // result by half of itself). The shift is measured off the SCOREBOARD's
+    // own box rather than the result inside it — the margin lands on the
+    // result, so measuring that instead would read back its own correction
+    // and oscillate. Writing only on change keeps the observer from ringing
+    // itself.
     (function () {
         var header = document.querySelector(".fm-header");
-        var actions = header && header.querySelector(".fm-header-actions");
+        var board = header && header.querySelector(".fm-header-scoreboard");
         var area = document.getElementById("match-play-area");
         if (!header || !area) {
             return;
@@ -234,8 +238,13 @@
 
         function apply() {
             set(area, "--match-chrome", header.getBoundingClientRect().height + "px");
-            if (actions) {
-                set(header, "--fm-actions-w", actions.getBoundingClientRect().width + "px");
+            if (board) {
+                var box = board.getBoundingClientRect();
+                var style = window.getComputedStyle(board);
+                var left = box.left + parseFloat(style.paddingLeft);
+                var right = box.right - parseFloat(style.paddingRight);
+                var shift = document.documentElement.clientWidth / 2 - (left + right) / 2;
+                set(header, "--fm-sb-shift", Math.max(0, Math.round(shift * 2)) + "px");
             }
         }
 
@@ -243,8 +252,8 @@
         if (window.ResizeObserver) {
             var observer = new ResizeObserver(apply);
             observer.observe(header);
-            if (actions) {
-                observer.observe(actions);
+            if (board) {
+                observer.observe(board);
             }
         } else {
             window.addEventListener("resize", apply);

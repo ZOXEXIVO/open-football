@@ -306,6 +306,17 @@ impl Track {
         position
     }
 
+    /// The window this track covers, in milliseconds. Only the measurement
+    /// harnesses ask — playback is driven by the playhead and never needs to
+    /// know — but they have to walk a whole recording rather than a minute of
+    /// one guessed at by hand.
+    #[cfg(test)]
+    pub fn span(&self) -> Option<(f64, f64)> {
+        let first = self.samples.first()?;
+        let last = self.samples.last()?;
+        Some((first.t as f64, last.t as f64))
+    }
+
     fn sample(&self, time_ms: f64, cursor: &mut usize) -> Option<[f32; 3]> {
         if self.samples.is_empty() {
             return None;

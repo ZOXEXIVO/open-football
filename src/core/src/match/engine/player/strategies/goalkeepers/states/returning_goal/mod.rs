@@ -1,5 +1,5 @@
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperRestPosition,
+    ActivityIntensity, GoalkeeperCondition, KeeperOneOnOne, KeeperRestPosition, KeeperSmother,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -27,6 +27,19 @@ impl StateProcessingHandler for GoalkeeperReturningGoalState {
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Distributing,
+            ));
+        }
+
+        // **A keeper does not jog home past a man running at his goal.**
+        // Traced on a recording: a carrier three metres away, eleven metres
+        // out, and the keeper retreating to his rest point the whole way.
+        // See [`KeeperSmother`] and [`KeeperOneOnOne`].
+        if let Some(attempt) = KeeperSmother::assess(ctx) {
+            return Some(KeeperSmother::commit(ctx, &attempt));
+        }
+        if KeeperOneOnOne::duel(ctx).is_some() {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::PreparingForSave,
             ));
         }
 

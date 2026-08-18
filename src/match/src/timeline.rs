@@ -4,8 +4,9 @@ use crate::config::ViewerConfig;
 use crate::loader::ChunkLoader;
 use crate::playback::{Playback, RecordedSpans};
 use crate::textures::Textures;
+use crate::typeface::Faces;
 use bevy::prelude::*;
-use bevy::text::LineBreak;
+use bevy::text::{FontSource, LineBreak};
 use bevy::ui::RelativeCursorPosition;
 
 /// The two faces of the play button, rasterised once at startup.
@@ -160,6 +161,7 @@ impl Timeline {
         mut commands: Commands,
         mut images: ResMut<Assets<Image>>,
         config: Res<ViewerConfig>,
+        faces: Res<Faces>,
     ) {
         let home = config.home.background_color(Color::srgb(0.0, 0.19, 0.49));
         let away = config.away.background_color(Color::srgb(0.70, 0.25, 0.0));
@@ -473,6 +475,14 @@ impl Timeline {
                         ClockLabel,
                         Text::new(""),
                         TextFont {
+                            // Chosen once from both half names rather than per
+                            // frame: the text under this label changes every
+                            // tick, and re-picking would rebuild the atlas with
+                            // the seconds.
+                            font: FontSource::Handle(faces.face_for_all([
+                                config.labels.first_half.as_str(),
+                                config.labels.second_half.as_str(),
+                            ])),
                             font_size: FontSize::Px(13.0),
                             ..default()
                         },
@@ -499,6 +509,10 @@ impl Timeline {
             LoadingNotice,
             Text::new(config.labels.loading.clone()),
             TextFont {
+                font: FontSource::Handle(faces.face_for_all([
+                    config.labels.loading.as_str(),
+                    config.labels.no_recording.as_str(),
+                ])),
                 font_size: FontSize::Px(15.0),
                 ..default()
             },
