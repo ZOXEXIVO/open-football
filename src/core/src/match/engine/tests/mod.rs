@@ -8,6 +8,7 @@ mod goal_celebration_tests;
 mod goal_clip_recording_tests;
 mod intelligence_tests;
 mod match_realism_tests;
+mod recording_globals;
 mod solid_engine_tests;
 mod state_reachability_tests;
 mod throw_in_tests;

@@ -16,6 +16,7 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
+use super::recording_globals::RecordingGlobals;
 use crate::MatchRuntime;
 use crate::r#match::MatchResultRaw;
 use crate::r#match::engine::context::MatchEngineConfig;
@@ -52,6 +53,12 @@ fn match_with_a_goal() -> MatchResultRaw {
 /// happened to have set.
 #[test]
 fn a_clipped_recording_holds_the_goals_and_nothing_else() {
+    // Held for as long as the scope is narrowed. `friendly_recording_tests`
+    // plays matches whose recordings it asserts run end to end, and the
+    // engine reads the scope at kickoff — without this it can kick off inside
+    // the window below and come back clipped. See `recording_globals`.
+    let _globals = RecordingGlobals::lock();
+
     // The default has to stay `Full`. The dev harness and every calibration
     // run read the whole match back off the recording and never touch the
     // scope; a default that clipped would gut them silently.

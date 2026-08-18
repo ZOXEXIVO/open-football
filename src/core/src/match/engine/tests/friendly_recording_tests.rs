@@ -18,8 +18,10 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
+use super::recording_globals::RecordingGlobals;
 use crate::MatchRuntime;
 use crate::r#match::Match;
+use crate::r#match::RecordingScope;
 use crate::r#match::engine::engine::MATCH_TIME_MS;
 
 /// Play one friendly and report whether the recording came out with anything
@@ -51,7 +53,22 @@ fn friendly_recording(id: &str, base: u32) -> (bool, u64) {
 /// flag off under the on-case mid-play.
 #[test]
 fn a_friendly_is_recorded_on_the_same_flag_as_a_league_match() {
-    let previous = MatchRuntime::recordings_mode();
+    // Same hazard one file over: `goal_clip_recording_tests` holds
+    // `RecordingScope::Goals` while it plays, and the engine reads the scope
+    // when it builds the recorder. A friendly kicking off inside that window
+    // comes back clipped to its goals — and a goalless friendly, clipped, is
+    // an empty track, which reads here exactly like the bug this file
+    // guards. See `recording_globals`.
+    let _globals = RecordingGlobals::lock();
+
+    let previous_mode = MatchRuntime::recordings_mode();
+    let previous_scope = MatchRuntime::recording_scope();
+
+    // What this test asserts about — a track that exists and runs to the
+    // final whistle — is the whole-match recording. How much a *clipped* one
+    // keeps is `goal_clip_recording_tests`' business, so pin the scope rather
+    // than inherit whatever the last test left in it.
+    MatchRuntime::set_recording_scope(RecordingScope::Full);
 
     // ── With recordings on, a youth-league match must produce one.
     //
@@ -87,5 +104,6 @@ fn a_friendly_is_recorded_on_the_same_flag_as_a_league_match() {
         "recordings are off, yet the friendly still wrote a track reaching {reach_ms} ms"
     );
 
-    MatchRuntime::set_recordings_mode(previous);
+    MatchRuntime::set_recordings_mode(previous_mode);
+    MatchRuntime::set_recording_scope(previous_scope);
 }
