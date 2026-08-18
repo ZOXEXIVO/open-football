@@ -46,7 +46,7 @@ impl MatchViewer {
         if let Some(workspace) = crate_dir.parent() {
             println!(
                 "cargo:rerun-if-changed={}",
-                workspace.join("appearance").join("src").display()
+                workspace.join("shared").join("src").display()
             );
         }
         println!(

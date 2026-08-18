@@ -7,7 +7,7 @@ use crate::common::slug::player_history_slug;
 use crate::face::skin::CountrySkin;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
-use appearance::Appearance;
+use shared::Appearance;
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
@@ -160,7 +160,7 @@ struct PlayerJson {
     last_name: String,
     position: String,
     is_home: bool,
-    /// What he looks like, as indices into the shared `appearance::Palette`
+    /// What he looks like, as indices into `shared::Palette`
     /// tables. Resolved here rather than in the viewer for the same reason
     /// the labels above are: the answer needs the country table, which lives
     /// on this side of the WebAssembly boundary — and the portrait on his
@@ -169,6 +169,18 @@ struct PlayerJson {
     skin: u8,
     hair: u8,
     eyes: u8,
+    /// His photograph, for a real footballer — `None` for a regen, who has
+    /// never been photographed by anybody.
+    photo: Option<String>,
+    /// …and the drawn portrait behind it, which every player has: the same
+    /// head his profile page shows, asked for as a cutout so the viewer gets
+    /// a head on transparent ground rather than one on a club-coloured card.
+    ///
+    /// Both are URLs rather than ids because the viewer has no business
+    /// knowing where this game keeps its pictures — it fetches what the page
+    /// hands it, in the order the page hands it, exactly as the profile page
+    /// falls back from one to the other.
+    face: String,
 }
 
 impl PlayerJson {
@@ -209,6 +221,13 @@ impl PlayerJson {
             skin: look.skin as u8,
             hair: look.hair as u8,
             eyes: look.eyes as u8,
+            photo: (!player.is_generated())
+                .then(|| format!("{}/{}.png", crate::face::PHOTO_LIBRARY, player.id)),
+            face: format!(
+                "/api/players/{}/face.svg?cutout=1&v={}",
+                player.id,
+                crate::face::FACE_VERSION
+            ),
         }
     }
 }

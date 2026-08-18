@@ -39,15 +39,22 @@
             <div class="col-xl-8">
                 {% if match_recordings_enabled && match_viewer_available %}
                 <div id="match-play-area">
-                    {# The two camera controls the replay never says out loud — the
+                    {# The camera controls the replay never says out loud — the
                        transport bar shows the ones it has buttons for, and these
-                       have none. Each icon is the mouse itself with the part that
+                       have none. Each icon is the input itself with the part that
                        does the work lit, so the picture names the control and the
                        words only have to say what it does. Above the stage rather
                        than below: it is what stands between the header and the
-                       replay, so the page needs no padding of its own. Hidden on
-                       touch, where there is neither a wheel nor a right button. #}
-                    <p class="match-hints">
+                       replay, so the page needs no padding of its own.
+
+                       Two legends rather than one, because there are two sets of
+                       controls: a wheel and a right button on a desktop, a pinch
+                       and a stick on a phone (see `src/match/src/touch.rs`). The
+                       stylesheet shows whichever belongs to the pointer in use —
+                       a phone was previously shown NEITHER, which left the one
+                       device whose controls have to be discovered by feel as the
+                       one device with nothing to read. #}
+                    <p class="match-hints match-hints--mouse">
                         <span class="match-hint">
                             <svg class="match-hint-icon" viewBox="0 0 14 20" aria-hidden="true" focusable="false">
                                 <rect class="mh-shell" x="1" y="1" width="12" height="18" rx="6"/>
@@ -77,6 +84,40 @@
                                 <path class="mh-live" d="M17.5 13.25L15.5 12V14.5Z"/>
                             </svg>
                             {{ i18n.t("match_hint_fly") }}
+                        </span>
+                    </p>
+                    {# And the same three controls as a finger finds them: one
+                       finger turns the camera, two work the lens, and the stick
+                       drawn over the bottom-left of the replay flies it. The
+                       third icon IS that stick, pushed off centre — the legend
+                       and the control are the same picture, so there is nothing
+                       to match up. #}
+                    <p class="match-hints match-hints--touch">
+                        <span class="match-hint">
+                            <svg class="match-hint-icon match-hint-icon--wide" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                                <circle class="mh-live" cx="6.4" cy="10" r="2.7"/>
+                                <path class="mh-shell" d="M10.4 10H16.6"/>
+                                <path class="mh-shell" d="M14.4 7.8L16.8 10l-2.4 2.2"/>
+                            </svg>
+                            {{ i18n.t("match_hint_touch_camera") }}
+                        </span>
+                        <span class="match-hint">
+                            <svg class="match-hint-icon match-hint-icon--wide" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                                <path class="mh-shell" d="M8.3 11.7L4.6 15.4"/>
+                                <path class="mh-shell" d="M4.6 11.8v3.6h3.6"/>
+                                <path class="mh-shell" d="M11.7 8.3L15.4 4.6"/>
+                                <path class="mh-shell" d="M15.4 8.2V4.6h-3.6"/>
+                                <circle class="mh-live" cx="12.2" cy="7.8" r="1.9"/>
+                                <circle class="mh-live" cx="7.8" cy="12.2" r="1.9"/>
+                            </svg>
+                            {{ i18n.t("match_hint_touch_zoom") }}
+                        </span>
+                        <span class="match-hint">
+                            <svg class="match-hint-icon match-hint-icon--wide" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                                <circle class="mh-shell" cx="10" cy="10" r="7.3"/>
+                                <circle class="mh-live" cx="12.5" cy="7.5" r="3.1"/>
+                            </svg>
+                            {{ i18n.t("match_hint_touch_fly") }}
                         </span>
                     </p>
                     <div class="match-stage" id="match-stage">

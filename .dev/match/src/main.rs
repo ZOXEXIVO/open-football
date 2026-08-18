@@ -1,4 +1,4 @@
-use appearance::{Appearance, Region, SkinBucket, SkinDist};
+use shared::{Appearance, Region, SkinBucket, SkinDist};
 use axum::response::IntoResponse;
 use core::PlayerFieldPositionGroup;
 use core::block_diag::BlockDiag;

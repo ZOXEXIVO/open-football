@@ -7,13 +7,22 @@ pub mod skin;
 /// template injects it via `{{ crate::face::FACE_VERSION }}`.
 pub const FACE_VERSION: u32 = 9;
 
-use axum::extract::{Path, State};
+/// Where the real head shots live: the picture library every `<img>` on the
+/// site already points at, and the first thing the match viewer tries for a
+/// player who is a real footballer rather than a regen.
+///
+/// Held here rather than spelled out at each use so the match page and the
+/// portrait route agree about what a player's picture is, and so moving the
+/// library is one edit.
+pub const PHOTO_LIBRARY: &str = "https://open-football.org/player";
+
+use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
 use core::utils::DateUtils;
-use generator::generate_face_svg;
+use generator::{FaceFrame, generate_face_svg};
 use skin::CountrySkin;
 
 use crate::GameAppData;
@@ -28,9 +37,19 @@ struct FacePathParams {
     player_id: u32,
 }
 
+/// `?cutout=1` asks for the head alone on transparent ground — see
+/// [`FaceFrame::Cutout`]. The match viewer is the only caller that wants it;
+/// every page on the site takes the portrait, which is what no query means.
+#[derive(Deserialize, Default)]
+struct FaceQuery {
+    #[serde(default)]
+    cutout: u8,
+}
+
 async fn face_action(
     State(state): State<GameAppData>,
     Path(path): Path<FacePathParams>,
+    Query(query): Query<FaceQuery>,
 ) -> Response {
     let guard = state.data.read().await;
     let Some(simulator_data) = guard.as_ref() else {
@@ -81,6 +100,11 @@ async fn face_action(
         heft,
         aggression,
         jersey.as_deref(),
+        if query.cutout == 1 {
+            FaceFrame::Cutout
+        } else {
+            FaceFrame::Portrait
+        },
     );
 
     (

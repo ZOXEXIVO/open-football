@@ -21,6 +21,9 @@
 use bevy::asset::AssetId;
 use bevy::prelude::*;
 use bevy::text::Font;
+use swash::FontRef;
+use swash::scale::{Render, ScaleContext, Source};
+use swash::zeno::{Format, Vector};
 
 include!("../fonts/coverage.rs");
 
@@ -31,8 +34,8 @@ impl Typeface {
     /// Compiled in rather than fetched: the viewer is one WASM artefact the
     /// page loads and runs, and a face arriving a round trip later would draw
     /// the first frames of the replay with no names on it.
-    const OUTFIT: &'static [u8] = include_bytes!("../fonts/Outfit-subset.ttf");
-    const MANROPE: &'static [u8] = include_bytes!("../fonts/Manrope-subset.ttf");
+    pub const OUTFIT: &'static [u8] = include_bytes!("../fonts/Outfit-subset.ttf");
+    pub const MANROPE: &'static [u8] = include_bytes!("../fonts/Manrope-subset.ttf");
 }
 
 impl Plugin for Typeface {
@@ -99,7 +102,7 @@ impl Faces {
         }
     }
 
-    fn in_outfit(character: char) -> bool {
+    pub fn in_outfit(character: char) -> bool {
         let code = character as u32;
         OUTFIT_COVERAGE
             .binary_search_by(|(first, last)| {
@@ -112,5 +115,179 @@ impl Faces {
                 }
             })
             .is_ok()
+    }
+}
+
+/// Lettering painted into a texture rather than laid out by the text engine.
+///
+/// The print on the back of a shirt is not a label: it is part of the kit,
+/// baked into the material a player wears (see [`crate::kit`]), and Bevy's text
+/// stack cannot draw into a texture. So it is rasterised here, out of the same
+/// two faces every label in the viewer is set in — which is the whole point.
+/// The lettering used to come from a hand-rolled 5×7 grid, and a shirt number
+/// drawn on graph paper next to a name set in Outfit read as two different
+/// games; one face for both is what makes the squad look like one squad.
+///
+/// `swash` does the outlines. It is not a new dependency in any meaningful
+/// sense — `bevy_text` already carries it, and it is what rasterises the labels
+/// too, so the glyph on the shirt is the same glyph by the same rasteriser.
+pub struct Stencil;
+
+impl Stencil {
+    /// Reference size the outlines are measured at before anything is fitted.
+    /// Any value works — everything below is a ratio of it — and a round
+    /// hundred keeps the intermediate numbers readable in a debugger.
+    const REFERENCE: f32 = 100.0;
+    /// Air between letters, as a share of the size. Shirt lettering is tracked
+    /// out well past a paragraph's, and without it a name at this size closes
+    /// up into a single dark bar at the distance the camera actually watches
+    /// from.
+    const TRACKING: f32 = 0.08;
+
+    /// Draws `text` into a `width` × `height` alpha mask, centred, as large as
+    /// the box allows.
+    ///
+    /// `margin` is the share of the width the letters may use and `cap` the
+    /// share of the height — which is what separates a shirt number, as tall as
+    /// the panel will take, from a name set smaller with air above and below.
+    ///
+    /// What is fitted is the INK: the tallest and deepest the actual outlines
+    /// in this line reach, measured rather than looked up. The face's own
+    /// ascent is far too tall — it leaves room for accents on every line
+    /// whether or not there are any, and printed the numbers visibly small —
+    /// while its cap height is too short the moment there IS one: MÜLLER put
+    /// the diaeresis a texel off the top edge of the panel, because a
+    /// diaeresis is by definition the part of the letter that is above the cap
+    /// height. Measuring means a name without accents is set exactly as large
+    /// as cap-height fitting made it, and only the ones that need the room give
+    /// any up.
+    ///
+    /// Comes back empty (all zero) if the face cannot be read at all, which the
+    /// caller sees as an unprinted shirt rather than as a panic.
+    pub fn mask(text: &str, width: u32, height: u32, margin: f32, cap: f32) -> Vec<u8> {
+        let mut coverage = vec![0u8; (width * height) as usize];
+        let Some(font) = FontRef::from_index(Self::face_for(text), 0) else {
+            return coverage;
+        };
+
+        let charmap = font.charmap();
+        let advances = font.glyph_metrics(&[]).scale(Self::REFERENCE);
+        let tracking = Self::REFERENCE * Self::TRACKING;
+
+        let mut context = ScaleContext::new();
+        // Unhinted on purpose, here and again below: the panel is stretched
+        // over a curved sheet of cloth and then drawn at whatever size the
+        // camera is standing at, so there is no pixel grid for hinting to snap
+        // to and its only effect would be to make the letters uneven.
+        let mut measure = context
+            .builder(font)
+            .size(Self::REFERENCE)
+            .hint(false)
+            .build();
+
+        // Where each glyph starts along the line, how long the line is, and how
+        // far the ink reaches above and below the baseline — all still at the
+        // reference size.
+        let mut pen = 0.0f32;
+        let mut rise = 0.0f32;
+        let mut drop = 0.0f32;
+        let mut run = Vec::with_capacity(text.chars().count());
+        for character in text.chars() {
+            let glyph = charmap.map(character);
+            // Glyph zero is `.notdef` — the box. It should not be reachable
+            // (the caller folds away anything the face cannot spell) but the
+            // face is picked for the whole line while the fold asks per
+            // character, so a name that pulls the line over to Manrope could in
+            // principle carry a letter Manrope has no glyph for. Dropping it is
+            // the same call the fold makes: a missing letter, never a box.
+            if glyph == 0 {
+                continue;
+            }
+            run.push((glyph, pen));
+            pen += advances.advance_width(glyph) + tracking;
+            // A space has no outline and no extent; it still takes its advance.
+            if let Some(outline) = measure.scale_outline(glyph) {
+                let bounds = outline.bounds();
+                rise = rise.max(bounds.max.y);
+                drop = drop.max(-bounds.min.y);
+            }
+        }
+        // The last letter's tracking is air off the end of the line, not part
+        // of it: left in, every line would sit that far left of centre.
+        let span = (pen - tracking).max(1.0);
+        let tall = rise + drop;
+        if run.is_empty() || tall <= 0.0 {
+            return coverage;
+        }
+
+        let scale = (width as f32 * margin / span).min(height as f32 * cap / tall);
+        let size = Self::REFERENCE * scale;
+        let left = (width as f32 - span * scale) * 0.5;
+        // The ink box is what is centred, and the baseline is not in the middle
+        // of it: it sits `drop` up from the bottom of that box.
+        let baseline = (height as f32 + (rise - drop) * scale) * 0.5;
+
+        let mut scaler = context.builder(font).size(size).hint(false).build();
+        let mut render = Render::new(&[Source::Outline]);
+        render.format(Format::Alpha);
+
+        for (glyph, offset) in run {
+            let x = left + offset * scale;
+            // The fractional part goes to the rasteriser rather than being
+            // rounded away, so letters land where the spacing put them instead
+            // of snapping to whole texels and printing unevenly.
+            let whole = x.floor();
+            render.offset(Vector::new(x - whole, 0.0));
+            let Some(image) = render.render(&mut scaler, glyph) else {
+                continue;
+            };
+            let origin_x = whole as i32 + image.placement.left;
+            let origin_y = baseline as i32 - image.placement.top;
+            for row in 0..image.placement.height as i32 {
+                let y = origin_y + row;
+                if y < 0 || y >= height as i32 {
+                    continue;
+                }
+                for column in 0..image.placement.width as i32 {
+                    let x = origin_x + column;
+                    if x < 0 || x >= width as i32 {
+                        continue;
+                    }
+                    let ink = image.data[(row * image.placement.width as i32 + column) as usize];
+                    let target = &mut coverage[(y as u32 * width + x as u32) as usize];
+                    // Letters can overlap at this tracking on a tight panel;
+                    // the darker of the two wins rather than the later one.
+                    *target = (*target).max(ink);
+                }
+            }
+        }
+
+        coverage
+    }
+
+    /// Whether the face this would be set in can draw every character of it.
+    ///
+    /// The caller uses it to decide what to fold: a letter the shirt can print
+    /// should be printed, and only the ones neither face has a glyph for get
+    /// flattened onto a Latin base.
+    pub fn can_print(character: char) -> bool {
+        let face = if Faces::in_outfit(character) {
+            Typeface::OUTFIT
+        } else {
+            Typeface::MANROPE
+        };
+        FontRef::from_index(face, 0).is_some_and(|font| font.charmap().map(character) != 0)
+    }
+
+    /// Outfit unless something in the string is outside it, in which case the
+    /// whole line goes to Manrope — the same rule [`Faces::face_for`] applies
+    /// to a label, so a name and the shirt under it never disagree about which
+    /// of the two faces it belongs in.
+    fn face_for(text: &str) -> &'static [u8] {
+        if text.chars().all(Faces::in_outfit) {
+            Typeface::OUTFIT
+        } else {
+            Typeface::MANROPE
+        }
     }
 }

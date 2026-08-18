@@ -17,10 +17,12 @@ mod loader;
 mod net;
 mod pitch;
 mod playback;
+mod portrait;
 mod replay;
 mod sky;
 mod textures;
 mod timeline;
+mod touch;
 mod typeface;
 
 use crate::actors::{Actors, BallState};
@@ -31,9 +33,11 @@ use crate::loader::ChunkLoader;
 use crate::net::Netting;
 use crate::pitch::{Bank, Pitch};
 use crate::playback::{EventLog, Playback, RecordedSpans};
+use crate::portrait::Portraits;
 use crate::replay::ReplayTracks;
 use crate::sky::Sky;
 use crate::timeline::{DebugOverlay, Timeline};
+use crate::touch::{FlightPad, TouchControls, TouchDevice, TouchDrive, TouchGesture};
 use crate::typeface::Typeface;
 use bevy::asset::AssetMetaCheck;
 use bevy::log::{Level, LogPlugin};
@@ -127,6 +131,15 @@ impl MatchViewer {
             // registration was missed here.
             .init_resource::<CameraOrbit>()
             .init_resource::<CameraFlight>()
+            // The touch half of the same controls. `TouchDrive` is read by
+            // `CameraFlight::steer` on every frame whether or not anything has
+            // ever been touched, so it is registered unconditionally — the
+            // orbit's own missing registration is the cautionary tale a few
+            // lines up.
+            .init_resource::<TouchDevice>()
+            .init_resource::<TouchDrive>()
+            .init_resource::<TouchGesture>()
+            .init_resource::<FlightPad>()
             .add_systems(
                 Startup,
                 (
@@ -136,6 +149,10 @@ impl MatchViewer {
                     Actors::spawn,
                     Timeline::spawn,
                     ChunkLoader::bootstrap,
+                    // Hidden until a finger arrives — see `FlightPad::refresh`.
+                    // Spawned here rather than then, because a control built on
+                    // the frame it is first grabbed misses that grab.
+                    FlightPad::spawn,
                     // After winit has adopted the canvas, or the focus it
                     // takes is the focus this just set.
                     CameraFlight::focus_canvas,
@@ -150,6 +167,12 @@ impl MatchViewer {
                 (
                     (
                         ChunkLoader::pump,
+                        // Beside the chunk loader because it is the same kind
+                        // of thing: a fetch that started when the page did,
+                        // landing whenever it lands. A face arriving in the
+                        // third minute changes nothing about the frame it
+                        // arrives on — see `portrait`.
+                        Portraits::attach,
                         Timeline::handle_toggle,
                         Timeline::handle_seek,
                         // Ahead of `Playback::advance`, so a change of speed
@@ -185,6 +208,15 @@ impl MatchViewer {
                         Netting::ripple,
                     ),
                     (
+                        // Ahead of the gestures that read it, so the frame a
+                        // touch device announces itself is the frame its
+                        // controls exist.
+                        TouchControls::watch,
+                        // Beside the mouse handlers below because they are the
+                        // same controls, and ahead of `follow_play` for the same
+                        // reason: a gesture has to land on the frame it happened.
+                        TouchControls::handle_gestures,
+                        FlightPad::handle_touch,
                         // Ahead of `follow_play`, which reads the orbit — so a
                         // drag lands on the same frame it happened rather than
                         // the next one. Never registered at all before, so the
@@ -215,6 +247,9 @@ impl MatchViewer {
                         Timeline::refresh_gaps,
                         Timeline::refresh_camera_reset,
                         Timeline::refresh_speed,
+                        // After `handle_touch`, so the knob is drawn where the
+                        // thumb has just put it rather than where it was.
+                        FlightPad::refresh,
                         // Last of the bar's systems: the two above decide
                         // which buttons are lit, and these turn that plus the
                         // pointer into the colours actually drawn.

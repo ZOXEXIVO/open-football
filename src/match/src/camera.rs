@@ -2,6 +2,7 @@ use crate::actors::BallState;
 use crate::config::ViewerConfig;
 use crate::field::Field;
 use crate::playback::Playback;
+use crate::touch::TouchDrive;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
@@ -65,7 +66,21 @@ impl CameraZoom {
     /// Zoom by a fractional number of notches, so a wheel that reports
     /// pixels moves the lens as smoothly as it is turned.
     fn turn(&mut self, notches: f32) {
-        self.factor = (self.factor * Self::STEP.powf(notches)).clamp(Self::RANGE.0, Self::RANGE.1);
+        self.scale(Self::STEP.powf(notches));
+    }
+
+    /// Multiply the lens by a ratio.
+    ///
+    /// What a PINCH hands over: the fingers were this far apart and are now
+    /// that far apart, and the lens should have changed by the same
+    /// proportion. The wheel goes through here too — a notch is a ratio of
+    /// [`Self::STEP`] — which is why a pinch and a wheel turn cannot drift
+    /// apart, and why either can undo the other exactly.
+    pub fn scale(&mut self, ratio: f32) {
+        if !ratio.is_finite() || ratio <= 0.0 {
+            return;
+        }
+        self.factor = (self.factor * ratio).clamp(Self::RANGE.0, Self::RANGE.1);
     }
 
     /// The wheel drives the lens.
@@ -132,11 +147,10 @@ impl CameraOrbit {
     /// Right button or wheel button held, and the ground turns under the
     /// pointer.
     ///
-    /// The same grip aims the free camera once the rig is airborne — see
-    /// [`Airborne::aim`]. One gesture, two frames of reference: from the
-    /// gantry it swings the ground round the centre spot, in flight it turns
-    /// the head. Nothing about the gantry behaviour changed when flight was
-    /// added; it is the branch below that is new.
+    /// The gesture itself lives in [`Self::drag`], because a finger performs
+    /// exactly the same one — see [`crate::touch`]. All this system decides is
+    /// when a mouse is doing it: a bare left button belongs to the transport
+    /// bar, so the camera takes the two buttons the bar has no use for.
     pub fn handle_drag(
         mouse: Res<ButtonInput<MouseButton>>,
         mut moved: MessageReader<CursorMoved>,
@@ -150,35 +164,60 @@ impl CameraOrbit {
             total + event.delta.unwrap_or(Vec2::ZERO)
         });
 
-        let held = mouse.pressed(MouseButton::Right) || mouse.pressed(MouseButton::Middle);
-        if held && drag != Vec2::ZERO {
-            if let Some(airborne) = flight.airborne.as_mut() {
-                airborne.aim(drag);
-            } else {
-                // The ground follows the pointer rather than the lens: drag
-                // right and the pitch turns right, which means the rig itself
-                // travels the other way round. That is the gesture of spinning
-                // a model on a turntable, and it is what a drag with the cursor
-                // still on screen reads as — the opposite convention belongs to
-                // a mouselook, which needs the pointer out of the way first.
-                orbit.bearing = Self::wrap(orbit.bearing + drag.x * Self::RADIANS_PER_PIXEL);
-                // Pulling the near side of the ground down toward you lifts the
-                // rig over it, which is the same way round.
-                orbit.elevation = (orbit.elevation + drag.y * Self::RADIANS_PER_PIXEL)
-                    .clamp(Self::ELEVATION.0, Self::ELEVATION.1);
-            }
+        if mouse.pressed(MouseButton::Right) || mouse.pressed(MouseButton::Middle) {
+            orbit.drag(drag, &mut flight);
         }
 
-        // The detent belongs to the orbit: in flight the rig is nowhere near
-        // the gantry and the way home is the reset button.
-        let let_go =
-            mouse.just_released(MouseButton::Right) || mouse.just_released(MouseButton::Middle);
-        if let_go
-            && !flight.airborne()
-            && orbit.bearing.abs() < Self::DETENT
-            && (orbit.elevation - TvCamera::rest_elevation()).abs() < Self::DETENT
+        if mouse.just_released(MouseButton::Right) || mouse.just_released(MouseButton::Middle) {
+            orbit.settle(&flight);
+        }
+    }
+
+    /// One frame's worth of drag, whatever was doing the dragging.
+    ///
+    /// The same grip aims the free camera once the rig is airborne — see
+    /// [`Airborne::aim`]. One gesture, two frames of reference: from the
+    /// gantry it swings the ground round the centre spot, in flight it turns
+    /// the head.
+    ///
+    /// Shared by the right-button drag above and the one-finger drag in
+    /// [`crate::touch`], on purpose and not merely for the saving: the two are
+    /// the same control, and the same sweep across the canvas has to leave the
+    /// rig in the same place whether it was made with a mouse or a thumb. A
+    /// second copy of these three lines is a second set of numbers waiting to
+    /// drift.
+    pub fn drag(&mut self, drag: Vec2, flight: &mut CameraFlight) {
+        if drag == Vec2::ZERO {
+            return;
+        }
+        if let Some(airborne) = flight.airborne.as_mut() {
+            airborne.aim(drag);
+            return;
+        }
+        // The ground follows the pointer rather than the lens: drag right and
+        // the pitch turns right, which means the rig itself travels the other
+        // way round. That is the gesture of spinning a model on a turntable,
+        // and it is what a drag with the cursor still on screen reads as — the
+        // opposite convention belongs to a mouselook, which needs the pointer
+        // out of the way first.
+        self.bearing = Self::wrap(self.bearing + drag.x * Self::RADIANS_PER_PIXEL);
+        // Pulling the near side of the ground down toward you lifts the rig
+        // over it, which is the same way round.
+        self.elevation = (self.elevation + drag.y * Self::RADIANS_PER_PIXEL)
+            .clamp(Self::ELEVATION.0, Self::ELEVATION.1);
+    }
+
+    /// The grip was let go. If it finished near enough to the gantry, the rig
+    /// settles back onto it exactly.
+    ///
+    /// The detent belongs to the orbit: in flight the rig is nowhere near the
+    /// gantry and the way home is the reset button.
+    pub fn settle(&mut self, flight: &CameraFlight) {
+        if !flight.airborne()
+            && self.bearing.abs() < Self::DETENT
+            && (self.elevation - TvCamera::rest_elevation()).abs() < Self::DETENT
         {
-            *orbit = CameraOrbit::default();
+            *self = CameraOrbit::default();
         }
     }
 
@@ -342,17 +381,23 @@ impl CameraFlight {
 
     /// WASD or the arrow keys fly the camera; Q and E take it down and up.
     ///
+    /// A thumb on the on-screen stick arrives here as well, through
+    /// [`TouchDrive`] — the keys and the stick are added together rather than
+    /// chosen between, so neither can lock the other out and a laptop with
+    /// both answers both.
+    ///
     /// Runs after [`TvCamera::follow_play`], so on the frame the rig takes off
     /// it seeds itself from the broadcast position that system has just
     /// written and there is no jump. On every frame after that it simply
     /// overwrites what `follow_play` skipped.
     pub fn steer(
         keys: Res<ButtonInput<KeyCode>>,
+        drive: Res<TouchDrive>,
         time: Res<Time>,
         mut flight: ResMut<CameraFlight>,
         mut camera: Single<&mut Transform, With<Camera3d>>,
     ) {
-        let push = Self::push(&keys);
+        let push = Self::push(&keys) + drive.push;
         // Nothing pressed and still on the gantry: the broadcast rig owns the
         // transform and this system must not touch it.
         if push == Vec3::ZERO && !flight.airborne() {
@@ -380,13 +425,24 @@ impl CameraFlight {
             // Shift is the only thing that changes the pace. The wheel is the
             // lens and nothing else — it was briefly scaling this too, on the
             // reasoning that a tight lens magnifies its own motion, and the
-            // result was one control quietly doing two jobs.
-            let boost = if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+            // result was one control quietly doing two jobs. The stick's own
+            // shift is its rim: pushed that far out it asks for the same
+            // multiplier, which is what keeps a thumb from being permanently
+            // slower than a hand on a keyboard.
+            let boost = if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) || drive.boost
+            {
                 Self::BOOST
             } else {
                 1.0
             };
-            airborne.position += step.normalize_or_zero() * Self::SPEED * boost * time.delta_secs();
+            // Clamped rather than normalised, which is what lets an ANALOGUE
+            // control through. A key is on or off, so its push is a unit
+            // vector and the two are the same thing — a diagonal comes out at
+            // one either way. A stick held half over is a push of half the
+            // length, and normalising it would have thrown that away and flown
+            // at full pelt from the first millimetre.
+            airborne.position +=
+                step.clamp_length_max(1.0) * Self::SPEED * boost * time.delta_secs();
 
             let along = Field::HALF_LENGTH + Self::RANGE;
             let across = Field::HALF_WIDTH + Self::RANGE;
@@ -594,14 +650,21 @@ impl TvCamera {
     /// this is the fine adjustment on top of it. Net against the original
     /// 0.28 it is 1.36× wider.
     ///
-    /// Then 20% tighter again (0.382 → 0.318), which is where it stands: 1.14×
-    /// wider than the original. Done here rather than by resting the wheel at
+    /// Then 20% tighter (0.382 → 0.318), and 20% tighter again (0.318 → 0.265),
+    /// which is where it stands: 1.06× TIGHTER than the original 0.28 rather
+    /// than wider, so the 1.5× has now been walked all the way back and a step
+    /// past. Each of these is done here rather than by resting the wheel at
     /// 1.2×, so that 1.00x keeps meaning "the shot the replay opens on" — the
     /// reset chip, the zoom readout and `CameraRig::moved` all read that
-    /// number. The cost is 20% off the widest shot the wheel can reach, which
-    /// is nothing: the pitch subtends ~0.21 rad from a rig this low, so the
-    /// far end of the range was already spending itself on sky and stand.
-    const FOV: f32 = 0.318;
+    /// number.
+    ///
+    /// What the tightening buys is turf. By the note above the pitch subtends
+    /// only ~0.21 rad from a rig this low, so a 0.318 frame was about two
+    /// thirds playing surface and one third stand and sky; at 0.265 it is about
+    /// four fifths. The cost is at the other end of the wheel — the widest shot
+    /// it can reach comes in by the same 20% — and that end was already
+    /// spending itself on sky.
+    const FOV: f32 = 0.265;
     /// How far the aim point follows the ball across the pitch. Low down the
     /// whole width is in shot anyway, so this is back to a gentle lead rather
     /// than a chase — and it has to stay gentle, because tilting up from here

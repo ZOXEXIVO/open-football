@@ -1,6 +1,6 @@
 use crate::config::{PlayerInfo, TeamColors, ViewerConfig};
 use crate::textures::{Beard, FaceLayout, FaceLook, Textures};
-use appearance::Palette;
+use shared::Palette;
 use bevy::image::Image;
 use bevy::prelude::*;
 
@@ -154,6 +154,35 @@ impl Complexion {
 
     pub fn eyes(player: &PlayerInfo) -> usize {
         (player.eyes as usize).min(Palette::EYES.len() - 1)
+    }
+
+    /// The entry of the shared skin ramp nearest a colour read off a real
+    /// picture of the player.
+    ///
+    /// The ramps are what his neck, his arms and the cap on his head are
+    /// painted in. When a photograph turns up, the nationality-drawn entry is
+    /// a guess and the picture is the answer — so the guess is replaced by
+    /// whichever entry of the same ramp sits closest to what the picture
+    /// says, which keeps every player on the shared materials the renderer
+    /// batches by. See [`crate::portrait::Portraits::attach`].
+    pub fn nearest_skin(tone: Vec3) -> usize {
+        Self::nearest(&Palette::SKIN, tone)
+    }
+
+    fn nearest(ramp: &[&str], tone: Vec3) -> usize {
+        ramp.iter()
+            .enumerate()
+            .min_by(|(_, left), (_, right)| {
+                let distance = |hex: &str| {
+                    let entry = Self::tone(hex).to_srgba();
+                    Vec3::new(entry.red, entry.green, entry.blue).distance_squared(tone)
+                };
+                distance(left)
+                    .partial_cmp(&distance(right))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(index, _)| index)
+            .unwrap_or(0)
     }
 
     /// One entry of a shared table as a colour. They are written as `#rrggbb`
@@ -469,6 +498,25 @@ impl Wardrobe {
         }
     }
 
+    /// The face materials, by player.
+    ///
+    /// The one thing in a wardrobe that is not final: a real picture of this
+    /// man's head may still turn up while the match is running, and when it
+    /// does his face material is handed a freshly painted sheet. See
+    /// [`crate::portrait::Portraits`], which is what holds these afterwards.
+    pub fn face_materials(&self) -> Vec<(u32, Handle<StandardMaterial>)> {
+        self.faces.clone()
+    }
+
+    /// The shared skin ramp itself, one material per entry. Handed over for
+    /// the same reason: a photograph moves a player from one entry to another,
+    /// and moving him means giving his parts a handle out of these — not
+    /// building him a material of his own, which would take him out of the
+    /// batch every other player on that tone is drawn in.
+    pub fn complexions(&self) -> Vec<Handle<StandardMaterial>> {
+        self.skin.clone()
+    }
+
     fn strip_index(player: &PlayerInfo) -> usize {
         match (player.is_goalkeeper(), player.is_home) {
             (false, true) => 0,
@@ -589,6 +637,8 @@ mod tests {
             skin,
             hair,
             eyes,
+            photo: None,
+            face: None,
         }
     }
 

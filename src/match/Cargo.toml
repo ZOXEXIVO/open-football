@@ -17,7 +17,7 @@ crate-type = ["cdylib", "rlib"]
 # player's complexion is drawn from have to be the same ones his portrait was
 # drawn from, and an index that means "tone 8" here has to mean "tone 8"
 # there. Carries no dependencies of its own — see its manifest.
-appearance = { path = "../appearance" }
+shared = { path = "../shared" }
 # Hand-picked rather than a feature collection: the collections drag in audio,
 # glTF, sprites, gamepads and the desktop windowing backends, none of which a
 # replay viewer in a browser tab has any use for.
@@ -50,9 +50,20 @@ bevy = { version = "0.19", default-features = false, features = [
     "mouse",
     "std",
     "tonemapping_luts",
+    # A finger is not a mouse: winit reports one through `WindowEvent::Touch`,
+    # and without this feature those messages have nowhere to land — every
+    # gesture over the canvas would simply never arrive. It is also what inserts
+    # `Touches`, which `bevy_ui`'s own focus system takes unconditionally, so it
+    # is what makes a TAP on the transport bar register at all.
+    "touch",
     "webgl2",
     "zstd_rust",
 ] }
+# The rasteriser behind Bevy's own text, taken as a direct dependency so the
+# print on the back of a shirt can be set in the SAME face as the label over
+# the player's head — see `typeface::Stencil`. Costs nothing in the artefact:
+# `bevy_text` already compiles it in, this only names it.
+swash = "0.2"
 wasm-bindgen = "=0.2.127"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
@@ -63,6 +74,16 @@ web-sys = { version = "0.3", features = [
     "RequestInit",
     "Response",
     "Window",
+    # Real faces: a player's photograph (or the drawn portrait behind it) is
+    # fetched as a blob, handed to the browser's own PNG/SVG decoder through an
+    # image element, and read back off a canvas — see `portrait.rs`, which
+    # explains why it goes the long way round rather than decoding in here.
+    "Blob",
+    "Url",
+    "HtmlImageElement",
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "ImageData",
     "MouseEvent",
     "WheelEvent",
     "KeyboardEvent",

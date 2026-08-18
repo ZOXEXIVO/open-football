@@ -1,14 +1,14 @@
 [workspace]
-members = ["src/appearance", "src/core", "src/database", "src/web"]
+members = ["src/shared", "src/core", "src/database", "src/web"]
 # `src/match` is the Bevy/WebAssembly replay viewer. It only ever builds for
 # `wasm32-unknown-unknown` under its own profile, driven by `src/web/build.rs`,
-# so it stays out of the host workspace. It shares `src/appearance` with the
+# so it stays out of the host workspace. It shares `src/shared` with the
 # server by path — one crate, two targets, so a player's complexion is decided
 # by the same code whether it ends up in an SVG or on the pitch.
 exclude = [".dev/match", ".dev/simulate", ".dev/transfers", "src/match"]
 
 [workspace.package]
-version = "1.7.100"
+version = "1.7.300"
 
 authors = ["Artemov Ivan (ZOXEXIVO) <zoxexivo@gmail.com>"]
 edition = "2024"

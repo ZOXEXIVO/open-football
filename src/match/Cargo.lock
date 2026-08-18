@@ -128,10 +128,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "appearance"
-version = "0.1.0"
-
-[[package]]
 name = "approx"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2847,12 +2843,13 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 name = "match_viewer"
 version = "0.1.0"
 dependencies = [
- "appearance",
  "bevy",
  "console_error_panic_hook",
  "js-sys",
  "serde",
  "serde_json",
+ "shared",
+ "swash",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -3823,6 +3820,10 @@ checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
 ]
+
+[[package]]
+name = "shared"
+version = "0.1.0"
 
 [[package]]
 name = "shlex"

@@ -666,10 +666,14 @@ pub struct BodyParts {
     collar: Handle<Mesh>,
     pelvis: Handle<Mesh>,
     head: Handle<Mesh>,
-    /// A nose and a pair of ears. Tiny, and between them most of what makes a
-    /// head read as a head from the side rather than as an egg with a face
-    /// painted on the front of it.
-    nose: Handle<Mesh>,
+    /// A pair of ears. Tiny, and most of what makes a head read as a head
+    /// from the side rather than as an egg with a face painted on the front.
+    ///
+    /// A NOSE used to hang here beside them, two centimetres of lathe on the
+    /// front of the face. It went when faces became pictures of real men: a
+    /// photograph has the man's own nose in it, lit and shaded, and a lathe
+    /// standing in front of that is a second nose in a slightly wrong colour.
+    /// The picture carries it now, as it carries his eyes and his mouth.
     ear: Handle<Mesh>,
     /// One cap per hair style; `None` for the shaved head, which is the scalp
     /// itself with the stubble drawn onto the face texture.
@@ -771,19 +775,28 @@ impl BodyParts {
     ///
     /// The face texture is laid out against these numbers (see
     /// [`BodyParts::face_layout`]), so the two move together.
+    ///
+    /// **The width is the measurement a photograph checks.** A real head is
+    /// about 150 mm across and 195 deep; this one used to be 180 across, and
+    /// nothing said so until faces became pictures of real men. Laid onto a
+    /// skull half again too wide, a face has two choices, and both of them
+    /// look wrong: stretch to fill it, or sit in the middle of it like a mask
+    /// on an egg. The rings between the jaw and the crown were brought in
+    /// about a sixth; the neck was left where it was, since it has a collar to
+    /// meet.
     const SKULL: [Ring; 13] = [
         Ring::set(-0.075, 0.052, 0.056, -0.004),
         Ring::set(-0.030, 0.050, 0.054, -0.006),
         Ring::set(0.005, 0.052, 0.058, -0.008),
-        Ring::set(0.028, 0.062, 0.070, 0.000),
-        Ring::set(0.048, 0.072, 0.082, 0.004),
-        Ring::set(0.072, 0.082, 0.090, 0.004),
-        Ring::set(0.100, 0.088, 0.096, 0.000),
-        Ring::set(0.130, 0.090, 0.099, -0.002),
-        Ring::set(0.158, 0.089, 0.098, -0.004),
-        Ring::set(0.185, 0.084, 0.094, -0.006),
-        Ring::set(0.212, 0.073, 0.083, -0.008),
-        Ring::set(0.238, 0.052, 0.060, -0.010),
+        Ring::set(0.028, 0.059, 0.070, 0.000),
+        Ring::set(0.048, 0.066, 0.082, 0.004),
+        Ring::set(0.072, 0.073, 0.090, 0.004),
+        Ring::set(0.100, 0.076, 0.096, 0.000),
+        Ring::set(0.130, 0.076, 0.099, -0.002),
+        Ring::set(0.158, 0.075, 0.098, -0.004),
+        Ring::set(0.185, 0.071, 0.094, -0.006),
+        Ring::set(0.212, 0.062, 0.083, -0.008),
+        Ring::set(0.238, 0.045, 0.060, -0.010),
         Ring::set(0.255, 0.000, 0.000, -0.012),
     ];
 
@@ -818,9 +831,8 @@ impl BodyParts {
     /// Where the hair caps below leave the forehead, so the texture can shade
     /// the line rather than letting a mesh edge sit on bare skin.
     const HAIRLINE: f32 = 0.198;
-    /// Where the nose is hung, and the ears.
-    const NOSE_AT: Vec3 = Vec3::new(0.0, 0.128, 0.078);
-    const EAR_AT: Vec3 = Vec3::new(0.086, 0.106, -0.012);
+    /// Where the ears are hung.
+    const EAR_AT: Vec3 = Vec3::new(0.072, 0.106, -0.012);
 
     /// Where the print goes on the back of the shirt: the name across the
     /// shoulders and the number under it, both in the torso's own space.
@@ -882,21 +894,6 @@ impl BodyParts {
                 Ring::set(-0.152, 0.163, 0.104, -0.004),
             ])),
             head: meshes.add(Sculptor::part_at(&Self::SKULL, Sculptor::HEAD_SIDES)),
-            // Bridge, ball, nostrils. Two centimetres of geometry, and the
-            // difference between a face and a mask: a nose is the one feature
-            // that survives being seen from the side, which is where a
-            // footballer spends most of a match relative to the camera.
-            nose: meshes.add(Sculptor::part_at(
-                &[
-                    Ring::set(0.030, 0.009, 0.011, 0.000),
-                    Ring::set(0.012, 0.012, 0.014, 0.006),
-                    Ring::set(-0.008, 0.016, 0.018, 0.013),
-                    Ring::set(-0.022, 0.019, 0.019, 0.015),
-                    Ring::set(-0.033, 0.020, 0.015, 0.010),
-                    Ring::set(-0.040, 0.015, 0.008, 0.002),
-                ],
-                12,
-            )),
             ear: meshes.add(Sculptor::ellipsoid(Vec3::new(0.009, 0.030, 0.020))),
             // Shaved, a crop, short back and sides, and a mop: the three caps
             // start lower at the temple, carry more volume and leave less
@@ -3403,6 +3400,26 @@ impl Joint {
 /// lets [`crate::actors::Actors::animate`] topple and lift the lot in one
 /// transform — while the contact shadow and the team ring, which stay
 /// children of the actor, stay flat on the grass where they belong.
+/// A part of one player worn in his own COMPLEXION: an ear, a forearm, a
+/// thigh. Everything the shared skin ramp is picked for.
+///
+/// A marker rather than a lookup because these are repainted after the fact.
+/// A real photograph of the man turns up while the match is running, and the
+/// tone in it is the tone the rest of him should be — his neck has to be the
+/// colour of his face. [`crate::portrait::Portraits::attach`] is what asks.
+#[derive(Component)]
+pub struct Flesh {
+    pub actor: Entity,
+}
+
+/// …and the cap of hair over the top of his head, for the same reason and by
+/// the same route. A cap sits over the photograph, so a black one on a blond
+/// man is the single most visible way a real face can still come out wrong.
+#[derive(Component)]
+pub struct Thatch {
+    pub actor: Entity,
+}
+
 #[derive(Component)]
 pub struct Carriage {
     /// The actor this figure belongs to; the dive is kept there.
@@ -3555,18 +3572,15 @@ impl Footballer {
                             head.spawn((
                                 Mesh3d(hair),
                                 MeshMaterial3d(outfit.hair.clone()),
+                                Thatch { actor: root },
                                 Transform::default(),
                             ));
                         }
-                        head.spawn((
-                            Mesh3d(parts.nose.clone()),
-                            MeshMaterial3d(outfit.skin.clone()),
-                            Transform::from_translation(BodyParts::NOSE_AT),
-                        ));
                         for side in [-1.0f32, 1.0] {
                             head.spawn((
                                 Mesh3d(parts.ear.clone()),
                                 MeshMaterial3d(outfit.skin.clone()),
+                                Flesh { actor: root },
                                 Transform::from_translation(
                                     BodyParts::EAR_AT * Vec3::new(side, 1.0, 1.0),
                                 ),
@@ -3582,6 +3596,7 @@ impl Footballer {
                             Joint::new(root, Limb::Shoulder, side, shoulder),
                             Mesh3d(parts.upper_arm.clone()),
                             MeshMaterial3d(outfit.skin.clone()),
+                            Flesh { actor: root },
                             Transform::from_translation(shoulder),
                         ))
                         .with_children(|arm| {
@@ -3608,6 +3623,7 @@ impl Footballer {
                                 Joint::new(root, Limb::Elbow, side, elbow),
                                 Mesh3d(parts.forearm.clone()),
                                 MeshMaterial3d(outfit.skin.clone()),
+                                Flesh { actor: root },
                                 Transform::from_translation(elbow),
                             ))
                             .with_child((
@@ -3615,6 +3631,7 @@ impl Footballer {
                                 // tapers leave open when the arm bends.
                                 Mesh3d(parts.elbow.clone()),
                                 MeshMaterial3d(outfit.skin.clone()),
+                                Flesh { actor: root },
                                 Transform::default(),
                             ))
                             .with_children(|forearm| {
@@ -3630,33 +3647,39 @@ impl Footballer {
                                         Transform::default(),
                                     ));
                                 }
-                                forearm
-                                    .spawn((
-                                        Joint::new(root, Limb::Wrist, side, wrist),
-                                        Mesh3d(if keeper {
-                                            parts.glove.clone()
-                                        } else {
-                                            parts.hand.clone()
-                                        }),
-                                        MeshMaterial3d(outfit.hands.clone()),
-                                        Transform::from_translation(wrist),
-                                    ))
-                                    .with_children(|hand| {
-                                        if !keeper {
-                                            return;
-                                        }
-                                        for (thumb, at) in BodyParts::digits(side) {
-                                            hand.spawn((
-                                                Mesh3d(if thumb {
-                                                    parts.thumb.clone()
-                                                } else {
-                                                    parts.finger.clone()
-                                                }),
-                                                MeshMaterial3d(outfit.hands.clone()),
-                                                at,
-                                            ));
-                                        }
-                                    });
+                                let mut wearing = forearm.spawn((
+                                    Joint::new(root, Limb::Wrist, side, wrist),
+                                    Mesh3d(if keeper {
+                                        parts.glove.clone()
+                                    } else {
+                                        parts.hand.clone()
+                                    }),
+                                    MeshMaterial3d(outfit.hands.clone()),
+                                    Transform::from_translation(wrist),
+                                ));
+                                // A keeper's hands are GLOVES. Everything else
+                                // marked here is repainted the colour of the
+                                // man's own photograph, and a pair of gloves
+                                // repainted flesh is not a pair of gloves.
+                                if !keeper {
+                                    wearing.insert(Flesh { actor: root });
+                                }
+                                wearing.with_children(|hand| {
+                                    if !keeper {
+                                        return;
+                                    }
+                                    for (thumb, at) in BodyParts::digits(side) {
+                                        hand.spawn((
+                                            Mesh3d(if thumb {
+                                                parts.thumb.clone()
+                                            } else {
+                                                parts.finger.clone()
+                                            }),
+                                            MeshMaterial3d(outfit.hands.clone()),
+                                            at,
+                                        ));
+                                    }
+                                });
                             });
                         });
                 }
@@ -3668,6 +3691,7 @@ impl Footballer {
                     Joint::new(root, Limb::Hip, side, hip),
                     Mesh3d(parts.thigh.clone()),
                     MeshMaterial3d(outfit.skin.clone()),
+                    Flesh { actor: root },
                     Transform::from_translation(hip),
                 ))
                 .with_children(|leg| {
@@ -3940,9 +3964,40 @@ pub(crate) mod preview {
             }
         }
 
-        /// One triangle, already in screen space: `x`/`y` in pixels, `z` into
-        /// the screen, with a shade per corner.
+        /// One triangle in a single colour — the flat-tinted case, which is
+        /// every part of a footballer but his face.
         fn triangle(&mut self, corners: [Vec3; 3], shades: [f32; 3], tint: Vec3) {
+            self.shaded(corners, shades, [tint; 3]);
+        }
+
+        /// The same, with the colour coming out of a texture: three corner
+        /// `uv`s interpolated across the triangle and sampled per pixel.
+        fn textured(
+            &mut self,
+            corners: [Vec3; 3],
+            shades: [f32; 3],
+            uvs: [[f32; 2]; 3],
+            sample: &impl Fn([f32; 2]) -> Vec3,
+        ) {
+            self.scan(corners, shades, &|weights| {
+                sample([
+                    uvs[0][0] * weights.x + uvs[1][0] * weights.y + uvs[2][0] * weights.z,
+                    uvs[0][1] * weights.x + uvs[1][1] * weights.y + uvs[2][1] * weights.z,
+                ])
+            });
+        }
+
+        /// One triangle, already in screen space: `x`/`y` in pixels, `z` into
+        /// the screen, with a shade AND a colour per corner.
+        fn shaded(&mut self, corners: [Vec3; 3], shades: [f32; 3], tints: [Vec3; 3]) {
+            self.scan(corners, shades, &|weights: Vec3| {
+                tints[0] * weights.x + tints[1] * weights.y + tints[2] * weights.z
+            });
+        }
+
+        /// The scan itself, with whatever decides a pixel's colour handed in
+        /// as the barycentric weights it is decided from.
+        fn scan(&mut self, corners: [Vec3; 3], shades: [f32; 3], tint: &dyn Fn(Vec3) -> Vec3) {
             let area = (corners[1].x - corners[0].x) * (corners[2].y - corners[0].y)
                 - (corners[2].x - corners[0].x) * (corners[1].y - corners[0].y);
             // Back faces are not drawn, exactly as the renderer does not draw
@@ -3985,7 +4040,7 @@ pub(crate) mod preview {
                     let shade =
                         weights.x * shades[0] + weights.y * shades[1] + weights.z * shades[2];
                     self.depth[index] = depth;
-                    self.colour[index] = tint * shade;
+                    self.colour[index] = tint(weights) * shade;
                 }
             }
         }
@@ -4032,6 +4087,121 @@ pub(crate) mod preview {
     const SKIN: Vec3 = Vec3::new(0.78, 0.60, 0.46);
     const HAIR: Vec3 = Vec3::new(0.22, 0.15, 0.10);
     const BOOTS: Vec3 = Vec3::new(0.92, 0.93, 0.95);
+
+    /// One part with a PICTURE on it rather than a flat tint: the head
+    /// wearing the face sheet that goes onto it.
+    ///
+    /// The only part of a footballer that is textured at all, and the one
+    /// whose texture cannot be reviewed as a texture — a face sheet laid out
+    /// flat is a smear that says nothing about where the eyes end up on a
+    /// skull. See `portrait`'s dump, which is the caller.
+    pub fn wearing(
+        canvas: &mut Canvas,
+        lens: &Lens,
+        meshes: &Assets<Mesh>,
+        parts: &BodyParts,
+        at: Transform,
+        sheet: (u32, u32, &[u8]),
+        cap: bool,
+    ) {
+        // The ears first, in flat skin, which is what they are worn in.
+        for side in [-1.0f32, 1.0] {
+            part(
+                canvas,
+                lens,
+                meshes,
+                &parts.ear,
+                at * Transform::from_translation(BodyParts::EAR_AT * Vec3::new(side, 1.0, 1.0)),
+                SKIN,
+            );
+        }
+
+        // Then the skull itself, wearing the sheet…
+        sheeted(canvas, lens, meshes, &parts.head, at, sheet);
+        // …and the cap of hair over it, when he is wearing one. A player with
+        // a real picture is not: his own hair is in the picture, so
+        // `Portraits::attach` hides the cap and paints the crown instead.
+        if let Some(hair) = parts.hair[2].clone().filter(|_| cap) {
+            part(canvas, lens, meshes, &hair, at, HAIR);
+        }
+    }
+
+    /// One mesh, drawn with a texture on it.
+    fn sheeted(
+        canvas: &mut Canvas,
+        lens: &Lens,
+        meshes: &Assets<Mesh>,
+        handle: &Handle<Mesh>,
+        at: Transform,
+        sheet: (u32, u32, &[u8]),
+    ) {
+        let Some(mesh) = meshes.get(handle) else {
+            return;
+        };
+        let (
+            Some(VertexAttributeValues::Float32x3(positions)),
+            Some(VertexAttributeValues::Float32x3(normals)),
+            Some(VertexAttributeValues::Float32x2(uvs)),
+            Some(indices),
+        ) = (
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION),
+            mesh.attribute(Mesh::ATTRIBUTE_NORMAL),
+            mesh.attribute(Mesh::ATTRIBUTE_UV_0),
+            mesh.indices()
+                .map(|values| values.iter().collect::<Vec<_>>()),
+        )
+        else {
+            return;
+        };
+
+        let model = at.to_matrix();
+        let view = lens.view(canvas) * model;
+        let sun = -Pitch::SUN.normalize();
+        let screen: Vec<Vec3> = positions
+            .iter()
+            .map(|point| view.transform_point3(Vec3::from(*point)))
+            .collect();
+        let shade: Vec<f32> = normals
+            .iter()
+            .map(|normal| {
+                let world = model
+                    .transform_vector3(Vec3::from(*normal))
+                    .normalize_or_zero();
+                Canvas::AMBIENT + (1.0 - Canvas::AMBIENT) * world.dot(sun).max(0.0)
+            })
+            .collect();
+
+        let (width, height, pixels) = sheet;
+        let sample = |uv: [f32; 2]| {
+            let x = ((uv[0].rem_euclid(1.0)) * width as f32) as u32;
+            let y = ((uv[1].clamp(0.0, 1.0)) * height as f32).min(height as f32 - 1.0) as u32;
+            let at = ((y.min(height - 1) * width + x.min(width - 1)) * 4) as usize;
+            Vec3::new(
+                pixels[at] as f32,
+                pixels[at + 1] as f32,
+                pixels[at + 2] as f32,
+            ) / 255.0
+        };
+
+        for triangle in indices.chunks_exact(3) {
+            // Sampled per PIXEL rather than per corner. Sampling the three
+            // corners and interpolating between them was cheaper and it lied:
+            // it made the head as detailed as the mesh is dense, so a sheet
+            // with four times the texels came out of the preview looking
+            // exactly as soft as the one before it. What the renderer does is
+            // this.
+            canvas.textured(
+                [
+                    screen[triangle[0]],
+                    screen[triangle[1]],
+                    screen[triangle[2]],
+                ],
+                [shade[triangle[0]], shade[triangle[1]], shade[triangle[2]]],
+                [uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]],
+                &sample,
+            );
+        }
+    }
 
     /// Draws every part of one footballer, posed by `gait`.
     ///
@@ -4094,12 +4264,6 @@ pub(crate) mod preview {
         if let Some(hair) = parts.hair[2].clone() {
             draw(&hair, head, HAIR);
         }
-        draw(
-            &parts.nose,
-            head * Transform::from_translation(BodyParts::NOSE_AT),
-            SKIN,
-        );
-
         for side in [-1.0f32, 1.0] {
             draw(
                 &parts.ear,
@@ -6070,7 +6234,6 @@ mod tests {
             .iter()
             .map(|handle| count(handle))
             .sum::<usize>()
-            + count(&parts.nose)
             + count(&parts.number)
             + count(&parts.name)
             // The fullest cap, since a squad wears a spread of them.
@@ -6205,23 +6368,16 @@ mod tests {
         assert!(widest < deepest * 0.95, "{widest} across by {deepest} deep");
     }
 
-    /// The nose stands off the face and the ears off the sides, and neither of
-    /// them floats clear of the head it belongs to.
+    /// The ears stand off the sides of the head without floating clear of it.
+    ///
+    /// A nose used to be checked here beside them, on the same terms. There is
+    /// no nose on this model any more: a face is a picture of a real man now,
+    /// his own nose is in it, and a lathe standing in front of that was a
+    /// second one. What the picture cannot do is stick out — so the ears,
+    /// which are the rest of what makes a head read as a head from the side,
+    /// matter more than they did.
     #[test]
-    fn the_nose_and_ears_stand_proud() {
-        let tip = BodyParts::NOSE_AT + Vec3::new(0.0, -0.022, 0.015 + 0.019);
-        let face = Sculptor::section(&BodyParts::skull(), tip.y);
-        assert!(
-            tip.z - (face.offset + face.z) > 0.012,
-            "the nose is inside the face: {} vs {}",
-            tip.z,
-            face.offset + face.z
-        );
-        // Its root is buried, or there is a hole where it joins.
-        let root = BodyParts::NOSE_AT + Vec3::new(0.0, 0.030, -0.011);
-        let bridge = Sculptor::section(&BodyParts::skull(), root.y);
-        assert!(root.z < bridge.offset + bridge.z, "the nose floats off");
-
+    fn the_ears_stand_proud() {
         let ear = Sculptor::section(&BodyParts::skull(), BodyParts::EAR_AT.y);
         let out = BodyParts::EAR_AT.x + 0.009;
         assert!(out > ear.x + 0.004, "ears flush with the skull");

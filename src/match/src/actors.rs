@@ -6,6 +6,7 @@ use crate::kit::{Complexion, Wardrobe};
 use crate::loader::ChunkLoader;
 use crate::pitch::Pitch;
 use crate::playback::Playback;
+use crate::portrait::Portraits;
 use crate::replay::{ReplayTracks, Track};
 use crate::textures::Textures;
 use crate::timeline::DebugOverlay;
@@ -967,6 +968,12 @@ impl Actors {
             &config,
             &BodyParts::face_layout(),
         );
+        // Every player takes the field wearing the face this crate painted
+        // for him, and the real ones are sent for now: a photograph that
+        // arrives in the third minute is repainted onto the head he is
+        // already wearing. See [`crate::portrait`].
+        commands.insert_resource(Portraits::fetch(&config, &wardrobe));
+
         let patch = meshes.add(Plane3d::default().mesh().size(1.0, 1.0));
 
         for player in &config.players {

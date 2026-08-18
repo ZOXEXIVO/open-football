@@ -5,6 +5,7 @@ use crate::loader::ChunkLoader;
 use crate::playback::{Playback, RecordedSpans};
 use crate::textures::Textures;
 use crate::typeface::Faces;
+use bevy::input::touch::Touches;
 use bevy::prelude::*;
 use bevy::text::{FontSource, LineBreak};
 use bevy::ui::RelativeCursorPosition;
@@ -98,7 +99,10 @@ impl Default for DebugOverlay {
 pub struct Timeline;
 
 impl Timeline {
-    const BAR_HEIGHT: f32 = 48.0;
+    /// Read next door as well: [`crate::touch`] lays its controls out clear of
+    /// the bar, and cuts this band out of the canvas so that a finger reaching
+    /// for the scrub rail does not also swing the camera.
+    pub const BAR_HEIGHT: f32 = 48.0;
     const TRACK_HEIGHT: f32 = 8.0;
     /// Height of the invisible band around the rail that actually takes the
     /// clicks. Tall enough to hit without looking, and exactly as tall as a
@@ -594,13 +598,22 @@ impl Timeline {
 
     /// Click or drag anywhere on the track to scrub. Dragging works because the
     /// seek reads the held button rather than a press edge.
+    ///
+    /// A finger counts as the left button, and has to: `bevy_ui` writes
+    /// [`RelativeCursorPosition`] off the touch position when there is no
+    /// cursor to read (its own buttons work that way), so the rail was already
+    /// being told where a thumb was — and then ignoring it, because a
+    /// touchscreen never presses `MouseButton::Left`. That made the scrub the
+    /// one control on the bar a phone could not work.
     pub fn handle_seek(
         track: Single<&RelativeCursorPosition, With<SeekTrack>>,
         mouse: Res<ButtonInput<MouseButton>>,
+        touches: Res<Touches>,
         spans: Res<RecordedSpans>,
         mut playback: ResMut<Playback>,
     ) {
-        if !mouse.pressed(MouseButton::Left) || !track.cursor_over() {
+        let held = mouse.pressed(MouseButton::Left) || touches.iter().next().is_some();
+        if !held || !track.cursor_over() {
             return;
         }
         // `normalized` runs -0.5 .. 0.5 across the node.

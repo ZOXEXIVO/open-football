@@ -12,7 +12,7 @@ core = { path = "../../src/core", features = ["match-logs"] }
 # Same crate the server and the viewer share, so the harness's invented
 # footballers are coloured by the code the game uses rather than by a rule of
 # its own — the point of looking at them here is to see what the game draws.
-appearance = { path = "../../src/appearance" }
+shared = { path = "../../src/shared" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 flate2 = "1"

@@ -97,7 +97,7 @@ pub struct PlayerInfo {
     pub last_name: String,
     pub position: String,
     pub is_home: bool,
-    /// What he looks like: indices into `appearance::Palette`'s three tables,
+    /// What he looks like: indices into `shared::Palette`'s three tables,
     /// decided from his nationality by the page that served this document.
     ///
     /// The viewer used to cut a complexion out of a hash of the player id,
@@ -112,6 +112,23 @@ pub struct PlayerInfo {
     pub hair: u8,
     #[serde(default)]
     pub eyes: u8,
+    /// Where his PHOTOGRAPH is, for the players who have one — the same head
+    /// shot his profile page shows, which the viewer fetches once the match is
+    /// on screen and lays over the front of his skull (see
+    /// [`crate::portrait`]). Absent for a regen, who has never been
+    /// photographed by anybody.
+    #[serde(default)]
+    pub photo: Option<String>,
+    /// …and the DRAWN portrait, which every player has: the head his profile
+    /// page shows when there is no photograph of him, asked for as a cutout.
+    /// Tried when the photograph is missing or cannot be read.
+    ///
+    /// Whole URLs rather than ids to look up, so where this game keeps its
+    /// pictures stays a decision of the page that serves it. Both absent is a
+    /// legal document: the face this crate paints itself is what a player
+    /// wears until something better arrives, and it is a face already.
+    #[serde(default)]
+    pub face: Option<String>,
 }
 
 impl PlayerInfo {

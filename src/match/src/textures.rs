@@ -1,3 +1,4 @@
+use crate::typeface::Stencil;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{Image, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
@@ -56,6 +57,223 @@ pub struct FaceLook {
     pub shaved: bool,
 }
 
+/// A picture of one player's head, cut out and ready to go onto the front of
+/// his skull: his photograph where the game has one, and the drawn portrait
+/// off his profile page where it does not.
+///
+/// Pixels rather than a URL, because by the time one of these exists the
+/// browser has already decoded, cropped and scaled the picture for us — see
+/// [`crate::portrait`], which is the only thing that builds one.
+///
+/// Straight RGBA, row-major from the TOP, and the alpha is load-bearing: a
+/// photograph arrives with its studio background keyed out and a drawn
+/// portrait with nothing behind it at all, so the transparent parts are
+/// exactly where the head is NOT. Every one of those texels keeps the face
+/// this crate painted, which is what makes a picture that is too narrow, too
+/// short or simply missing degrade into a generated face rather than into a
+/// hole.
+pub struct Portrait {
+    pub width: u32,
+    pub height: u32,
+    /// Square pixels, in the sense that matters: a step across is the same
+    /// distance on the man as a step down. Everything below assumes it.
+    pub pixels: Vec<u8>,
+    /// Where his eyes are — the mid-line, the eye line, and how far apart the
+    /// pupils sit IN PIXELS.
+    ///
+    /// Three numbers and not one of them a guess: they are measured off each
+    /// picture as it arrives (see [`crate::portrait`]). The first cut of this
+    /// assumed the framing instead — one set of constants for the whole photo
+    /// library — and the library is not framed to one standard. A head shot
+    /// cropped closer than the rest came out of it stretched half as wide
+    /// again, because a face measured at 70 pixels was being told it was 50.
+    pub centre: f32,
+    pub eyes: f32,
+    pub pupils: f32,
+}
+
+impl Portrait {
+    /// The colour and coverage at a point on the skull: `height` metres up the
+    /// head in its own space, `angle` radians round from the front.
+    ///
+    /// This is the whole crossing between a flat picture and a round head, and
+    /// it is an orthographic projection — the picture is a slide and the head
+    /// is what it is being projected onto. So the horizontal is `sin(angle)`
+    /// and not the angle itself: a point 60° round the skull is `sin 60°` of
+    /// the way across the face as the camera saw it, not two thirds of the
+    /// way. Getting that wrong squeezes the eyes toward the nose and drags the
+    /// corners of the mouth round the cheeks.
+    ///
+    /// The vertical is fitted on two landmarks rather than scaled: eye line to
+    /// eye line, chin to chin. Which is what matters, because the head carries
+    /// a NOSE as geometry — a picture whose nose lands anywhere but on it is a
+    /// face with two noses.
+    fn at(&self, layout: &FaceLayout, height: f32, angle: f32) -> Option<(Vec3, f32)> {
+        let scale = self.scale();
+        // Sideways is the ORTHOGRAPHIC offset and not the angle: a point 60°
+        // round the skull is `sin 60°` of the way across the face as a camera
+        // saw it, not two thirds of the way. The other version squeezes the
+        // eyes toward the nose and drags the mouth round the cheeks.
+        let u = self.centre + (angle.sin() * layout.cheek) * scale / self.width as f32;
+        let v = self.eyes + (layout.eyes - height) * scale / self.height as f32;
+        self.sample(u, v)
+    }
+
+    /// Pixels of picture per metre of head — ONE number for both axes, which
+    /// is the whole point of it.
+    ///
+    /// Taken off the pupils, because the distance between a man's pupils is
+    /// the one measurement on a face that is the same on everybody: 63 mm,
+    /// give or take a couple. The head this is going onto has its own eyes
+    /// [`Painter::APART`] from the mid-line and 64 mm apart, so matching the
+    /// two puts a photographed eye exactly where a painted one would have
+    /// gone — and fixes the scale of everything else at the same time.
+    ///
+    /// It fixes the scale of BOTH axes deliberately. Fitting each axis to the
+    /// head separately is what stretches a face: this skull is nearly twice as
+    /// wide as it is deep from eye line to chin, where a real head is about
+    /// two thirds of that, so a picture told to fill it comes out a third too
+    /// wide. Filling the head is not worth distorting the man — the sides of
+    /// the skull, past where the picture reaches, are painted in the
+    /// complexion the picture itself was measured for.
+    fn scale(&self) -> f32 {
+        /// Interpupillary distance, in metres. `Painter::APART` doubled: the
+        /// two have to agree, or a photographed face and the painted face
+        /// under it would be different sizes.
+        const PUPILS: f32 = 0.064;
+
+        self.pupils / PUPILS
+    }
+
+    /// Bilinear, because the picture arrives at roughly the same resolution as
+    /// the face sheet and a nearest-neighbour lift at that ratio drops whole
+    /// rows of an eyelid. Outside the picture there is nothing to sample and
+    /// the generated face stands.
+    fn sample(&self, u: f32, v: f32) -> Option<(Vec3, f32)> {
+        if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
+            return None;
+        }
+        let x = (u * self.width as f32 - 0.5).max(0.0);
+        let y = (v * self.height as f32 - 0.5).max(0.0);
+        let (x0, y0) = (x.floor() as u32, y.floor() as u32);
+        let (x1, y1) = ((x0 + 1).min(self.width - 1), (y0 + 1).min(self.height - 1));
+        let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+
+        let mut colour = Vec3::ZERO;
+        let mut alpha = 0.0;
+        for (px, py, weight) in [
+            (x0, y0, (1.0 - fx) * (1.0 - fy)),
+            (x1, y0, fx * (1.0 - fy)),
+            (x0, y1, (1.0 - fx) * fy),
+            (x1, y1, fx * fy),
+        ] {
+            let at = ((py * self.width + px) * 4) as usize;
+            let texel = Vec3::new(
+                self.pixels[at] as f32,
+                self.pixels[at + 1] as f32,
+                self.pixels[at + 2] as f32,
+            ) / 255.0;
+            let opacity = self.pixels[at + 3] as f32 / 255.0;
+            // Weighted by opacity as well: a texel on the cut edge is half
+            // background, and averaging its colour in unweighted drags a
+            // rim of studio grey round the whole silhouette.
+            colour += texel * (weight * opacity);
+            alpha += weight * opacity;
+        }
+        if alpha <= 0.004 {
+            return None;
+        }
+        Some((colour / alpha, alpha))
+    }
+
+    /// The mean of the cheeks and the bridge of the nose: the widest patch of
+    /// plain lit skin a head shot has, taken between the eyes and the mouth
+    /// and inside the width of the nose so that hair, beard and background
+    /// stay out of it.
+    ///
+    /// Nothing is done to the picture with this. It is read so the REST of the
+    /// player can be moved onto it — his neck, his arms and his legs wear a
+    /// tone off the shared ramp, and the ramp entry nearest this one is the
+    /// one that makes the man on the pitch the man in the photograph. The
+    /// picture itself is laid down exactly as it arrived.
+    pub fn cheek_tone(&self) -> Option<Vec3> {
+        // In pupils: the cheeks run from half a pupil-width below the eyes to
+        // a pupil-width and a half below, and reach a pupil-width either side
+        // of the mid-line. Everything on a face scales with that distance, so
+        // the band lands on cheek whatever the picture's framing.
+        let (top, bottom) = self.band(0.5, 1.5);
+        let (left, right) = self.column(1.0);
+
+        let mut total = Vec3::ZERO;
+        let mut count = 0.0;
+        for row in 0..12 {
+            for column in 0..12 {
+                let v = top + (bottom - top) * (row as f32 + 0.5) / 12.0;
+                let u = left + (right - left) * (column as f32 + 0.5) / 12.0;
+                // Only the opaque ones: a narrow face leaves the outer
+                // columns on keyed-out background, and averaging those in
+                // would tell us the studio was the colour of his cheek.
+                if let Some((colour, alpha)) = self.sample(u, v)
+                    && alpha > 0.9
+                {
+                    total += colour;
+                    count += 1.0;
+                }
+            }
+        }
+        (count > 8.0).then(|| total / count)
+    }
+
+    /// A band across the picture, measured DOWN from the eye line in pupil
+    /// widths — the only ruler a face carries that means the same thing on
+    /// every picture of every man.
+    fn band(&self, from: f32, to: f32) -> (f32, f32) {
+        let pupil = self.pupils / self.height as f32;
+        (self.eyes + pupil * from, self.eyes + pupil * to)
+    }
+
+    /// …and the same measure across it, either side of the mid-line.
+    fn column(&self, reach: f32) -> (f32, f32) {
+        let pupil = self.pupils / self.width as f32;
+        (self.centre - pupil * reach, self.centre + pupil * reach)
+    }
+
+    /// …and the same for the top of his head.
+    ///
+    /// Read for the same reason and used the same way: the cap of hair on the
+    /// model is a MESH in a flat colour off the shared ramp, and it sits over
+    /// the top of the picture. Left as it was, a photograph of a blond man
+    /// gets a black cap and the head stops being his.
+    ///
+    /// The band is over the crown rather than at the hairline, and the crown
+    /// is where the cap actually is. A bald man's crown reads as skin, which
+    /// puts the nearest ramp entry on the palest hair there is — the right
+    /// answer for a cap he should not be wearing at all.
+    pub fn hair_tone(&self) -> Option<Vec3> {
+        // Just above the hairline, which on any face sits about a pupil width
+        // and a bit over the eyes. Higher than this and the band walks off
+        // the top of the picture and finds nothing at all.
+        let (top, bottom) = self.band(-1.55, -1.15);
+        let (left, right) = self.column(0.7);
+
+        let mut total = Vec3::ZERO;
+        let mut count = 0.0;
+        for row in 0..8 {
+            for column in 0..8 {
+                let v = top + (bottom - top) * (row as f32 + 0.5) / 8.0;
+                let u = left + (right - left) * (column as f32 + 0.5) / 8.0;
+                if let Some((colour, alpha)) = self.sample(u, v)
+                    && alpha > 0.9
+                {
+                    total += colour;
+                    count += 1.0;
+                }
+            }
+        }
+        (count > 6.0).then(|| total / count)
+    }
+}
+
 /// The round texture the viewer draws on the turf, generated rather than
 /// shipped: the contact shadow under a player and under the ball.
 ///
@@ -101,6 +319,16 @@ impl Textures {
     const PAUSE_GAP: f32 = 0.20;
     const PAUSE_TOP: f32 = 0.08;
 
+    /// The altitude arrows on the touch controls: the same triangle stood on
+    /// end. Centred rather than nudged toward its apex, which is the one place
+    /// the play button's optical correction (see [`Self::PLAY_LEFT`]) would do
+    /// harm — that shape sits alone in a wide box, where these two sit one
+    /// directly above the other and any nudge reads as them being out of line
+    /// with each other rather than as balance.
+    const LIFT_BASE: f32 = 0.22;
+    const LIFT_APEX: f32 = 0.78;
+    const LIFT_HALF: f32 = 0.34;
+
     /// Resolution the transport icons are rasterised at.
     ///
     /// Small on purpose, for the reason [`Self::number`] gives at more length:
@@ -142,6 +370,27 @@ impl Textures {
         }))
     }
 
+    /// The altitude arrows, white on transparent: up on one button, down on
+    /// the other.
+    ///
+    /// Drawn rather than typed for the reason [`Self::play_icon`] gives at
+    /// length — the only font here carries ASCII, where the nearest thing to an
+    /// arrow is a caret.
+    pub fn lift_icon(images: &mut Assets<Image>, up: bool) -> Handle<Image> {
+        images.add(Self::mask(move |x, y| {
+            // The axis the triangle tapers along, running from its base to its
+            // point. `y` runs DOWN the square, so an up arrow measures from the
+            // bottom.
+            let along = if up { 1.0 - y } else { y };
+            if along < Self::LIFT_BASE || along > Self::LIFT_APEX {
+                return false;
+            }
+            // How far the two sloping edges have closed on the centre line.
+            let across = (along - Self::LIFT_BASE) / (Self::LIFT_APEX - Self::LIFT_BASE);
+            (x - 0.5).abs() <= Self::LIFT_HALF * (1.0 - across)
+        }))
+    }
+
     /// White throughout, with alpha from how much of each texel the shape
     /// covers — sampled on a 4×4 grid, which is what gives a hard-edged glyph
     /// a soft enough edge to sit still at this size. `inside` is asked about
@@ -174,8 +423,7 @@ impl Textures {
     /// Deliberately small. The number lands twenty-odd pixels wide on screen,
     /// and there are no mipmaps here — a high-resolution glyph would crawl and
     /// sparkle as the player moved. At this size the texture is close to 1:1
-    /// with the pixels it covers, so it stays still. The glyphs come from a
-    /// 5×7 grid supersampled 4×4 per texel, which is what softens their edges.
+    /// with the pixels it covers, so it stays still.
     ///
     /// The shape is the panel's, not a free choice: the print goes on a curved
     /// sheet 23.3 cm round the shirt by 19 tall (`BodyParts::NUMBER_*`), and a
@@ -189,11 +437,14 @@ impl Textures {
 
     /// And the player's name, across the shoulders above it.
     ///
-    /// Folded to the plain ASCII capitals the 5×7 grid can draw, because that
-    /// is what a shirt carries: real kits print names unaccented for exactly
-    /// the same reason, which is that the lettering is a stencil. `None` when
-    /// nothing survives the fold, and the shirt then goes out with its number
-    /// alone rather than with a row of blanks.
+    /// Set in capitals, which is what a shirt carries, and otherwise printed as
+    /// spelled: the accents used to be flattened as well — CONCEICAO for
+    /// Conceição — because the 5×7 grid this was drawn on had no glyph for them.
+    /// The face does, and it is the same face the label over his head is set in,
+    /// so a letter that can be printed is printed. [`Self::fold`] is now only a
+    /// backstop for the characters neither face carries. `None` when nothing
+    /// survives it, and the shirt then goes out with its number alone rather
+    /// than with a row of blanks.
     pub fn name(images: &mut Assets<Image>, name: &str) -> Option<Handle<Image>> {
         /// Wide and short: the panel is 25 cm round the shoulders by 5.8 tall,
         /// and this is that shape.
@@ -219,6 +470,11 @@ impl Textures {
     /// the height, which is what separates a shirt number — as tall as the
     /// panel will take — from a name, which is set smaller with air above and
     /// below it.
+    ///
+    /// The outlines come from [`Stencil`], which is to say from the same face
+    /// the player's own label is set in. Everything on this player is now drawn
+    /// with one typeface; what is left of the 5×7 grid below belongs to the
+    /// hoardings, where a pixel letterform is the point rather than a limit.
     fn lettering(
         images: &mut Assets<Image>,
         text: &str,
@@ -227,50 +483,54 @@ impl Textures {
         margin: f32,
         cap: f32,
     ) -> Handle<Image> {
-        const SAMPLES: u32 = 4;
-
-        let glyphs = Self::glyphs(text);
-        let span = Self::span(&glyphs);
-        let cell = (width as f32 * margin / span.max(1.0)).min(height as f32 * cap / 7.4);
-        let left = (width as f32 - span * cell) * 0.5;
-        let top = (height as f32 - 7.0 * cell) * 0.5;
-
         let mut data = Vec::with_capacity((width * height * 4) as usize);
-        for y in 0..height {
-            for x in 0..width {
-                let ink = Self::ink(&glyphs, x, y, left, top, cell, SAMPLES);
-                data.extend_from_slice(&[255, 255, 255, (ink * 255.0) as u8]);
-            }
+        for ink in Stencil::mask(text, width, height, margin, cap) {
+            data.extend_from_slice(&[255, 255, 255, ink]);
         }
 
         images.add(Self::image(width, height, data))
     }
 
-    /// Everything the 5×7 grid can draw, and nothing else: capitals, digits
-    /// and the two marks that turn up inside surnames.
+    /// The name as the shirt will carry it: capitals, and every character the
+    /// face has a glyph for kept as it is.
     ///
-    /// The accented letters are folded onto their base rather than dropped —
+    /// What is left of the old behaviour is the backstop. Letters the face
+    /// cannot draw are folded onto their Latin base rather than dropped —
     /// losing the acute off an O is a shirt printer's compromise, losing the O
-    /// is a bug. Anything with no Latin base at all is dropped, and a name
-    /// made entirely of those comes back empty for the caller to notice.
+    /// is a bug. Anything with no Latin base at all is dropped, and a name made
+    /// entirely of those comes back empty for the caller to notice.
+    ///
+    /// Uppercasing runs through `to_uppercase` rather than `to_ascii_uppercase`,
+    /// now that there is more than ASCII to print — and it is taken WHOLE. A
+    /// capital is not always one character: `ß` has none of its own and upper
+    /// cases to `SS`, so taking the first character of the result prints
+    /// WEIS.
     fn fold(name: &str) -> String {
         let mut printed = String::with_capacity(name.len());
         for character in name.chars() {
+            // The separators are decided before anything else, because they are
+            // the ones that must NOT simply be copied through: no leading,
+            // doubled or trailing punctuation. A stencil cannot show what a
+            // dropped character was standing in for, so a name that folds to
+            // nothing between two hyphens must not print as a pair of hyphens.
+            if Self::SEPARATORS.contains(&character) {
+                if !printed.is_empty() && !printed.ends_with(Self::SEPARATORS) {
+                    printed.push(character);
+                }
+                continue;
+            }
+            // Then: set it in capitals, and if the face can draw every
+            // character of that, print it as it is spelled. Everything below
+            // this line is the fold, which only the characters the face has no
+            // glyph for ever reach.
+            let capital: String = character.to_uppercase().collect();
+            if capital.chars().all(Stencil::can_print) {
+                printed.push_str(&capital);
+                continue;
+            }
+            // Matched on the character as it was WRITTEN rather than on its
+            // capital, which is why the table below lists both cases.
             let folded: &str = match character {
-                'a'..='z' | 'A'..='Z' | '0'..='9' => {
-                    printed.push(character.to_ascii_uppercase());
-                    continue;
-                }
-                // No leading, doubled or trailing separators: a stencil cannot
-                // show what a dropped character was standing in for, so a name
-                // that folds to nothing between two hyphens must not print as
-                // a pair of hyphens.
-                ' ' | '-' | '\'' | '.' => {
-                    if !printed.is_empty() && !printed.ends_with(Self::SEPARATORS) {
-                        printed.push(character);
-                    }
-                    continue;
-                }
                 'à'..='å' | 'ā' | 'ă' | 'ą' | 'À'..='Å' | 'Ā' | 'Ă' | 'Ą' => "A",
                 'æ' | 'Æ' => "AE",
                 'ç' | 'ć' | 'č' | 'ĉ' | 'ċ' | 'Ç' | 'Ć' | 'Č' | 'Ĉ' | 'Ċ' => "C",
@@ -322,25 +582,67 @@ impl Textures {
     /// chin, so a feature laid out in `uv` is a different size at every height
     /// it could sit at. See [`FaceLayout`] for the crossing between the two.
     pub fn face(images: &mut Assets<Image>, layout: &FaceLayout, look: &FaceLook) -> Handle<Image> {
+        images.add(Self::face_sheet(layout, look, None))
+    }
+
+    /// The same head with a real picture of it laid over the front — his
+    /// photograph, or the portrait his profile page draws when there is none.
+    ///
+    /// Painted first and covered second, rather than replaced: the picture is
+    /// a flat frontal of a face and a head is a head all the way round, so
+    /// everything the camera never saw — the sides, the back, the underside of
+    /// the jaw — is still the generated face, and the two meet on a soft edge
+    /// rather than a cut.
+    pub fn photographed_face(layout: &FaceLayout, look: &FaceLook, portrait: &Portrait) -> Image {
+        Self::face_sheet(layout, look, Some(portrait))
+    }
+
+    fn face_sheet(layout: &FaceLayout, look: &FaceLook, portrait: Option<&Portrait>) -> Image {
         /// Wide enough that an eye — three centimetres of a fifty-six
         /// centimetre circumference — lands about nine texels across, which is
         /// the least an iris and a pupil can be told apart in.
         const WIDTH: u32 = 128;
         const HEIGHT: u32 = 96;
+        /// …and what a PICTURE gets, which is four times as many texels.
+        ///
+        /// The sheet above is sized to the rule the rest of this file works
+        /// to: one texel on about one pixel at the range a face is looked at
+        /// from. That rule is right for a painted face, whose features are
+        /// drawn to be legible at exactly that size — and wrong for a
+        /// photograph, which is not a diagram of a face but a picture of one.
+        /// Squeezed onto the painted sheet a man's own head shot comes out as
+        /// a tinted smudge: the fifty texels across the front of his face are
+        /// enough to say "a face" and nowhere near enough to say WHOSE.
+        ///
+        /// The cost of breaking the rule is minification crawl, and the answer
+        /// to that is the mip chain below rather than a smaller sheet.
+        const PICTURE: (u32, u32) = (256, 192);
 
-        images.add(Self::image(
-            WIDTH,
-            HEIGHT,
-            Self::face_pixels(layout, look, WIDTH, HEIGHT),
-        ))
+        let (width, height) = if portrait.is_some() {
+            PICTURE
+        } else {
+            (WIDTH, HEIGHT)
+        };
+        let pixels = Self::face_pixels(layout, look, width, height, portrait);
+        if portrait.is_some() {
+            Self::mipped(width, height, pixels)
+        } else {
+            Self::image(width, height, pixels)
+        }
     }
 
     /// The face's texels, apart from the image they end up in — so a whole
     /// squad's worth of them can be dumped and LOOKED at without a browser,
     /// which is the only way to review a generated face at all. See
     /// `textures::tests::dump_faces`.
-    fn face_pixels(layout: &FaceLayout, look: &FaceLook, width: u32, height: u32) -> Vec<u8> {
-        let painter = Painter::new(layout, look);
+    fn face_pixels(
+        layout: &FaceLayout,
+        look: &FaceLook,
+        width: u32,
+        height: u32,
+        portrait: Option<&Portrait>,
+    ) -> Vec<u8> {
+        let painter = Painter::new(layout, look, portrait);
         let mut data = Vec::with_capacity((width * height * 4) as usize);
         for row in 0..height {
             // Row 0 is the BOTTOM of the head — the base of the neck — and the
@@ -771,30 +1073,55 @@ impl Textures {
     /// and the chain converges to a flat haze of exactly the net's own
     /// density. Which is what a goal net looks like from the far touchline.
     fn mipped_netting(size: u32, base: Vec<u8>) -> Image {
-        let mut levels: Vec<(u32, Vec<u8>)> = vec![(size, base)];
-        while levels.last().map(|(w, _)| *w).unwrap_or(1) > 1 {
-            let (width, source) = levels.last().expect("seeded above");
-            let (width, half) = (*width, (*width / 2).max(1));
-            let mut next = Vec::with_capacity((half * half * 4) as usize);
-            for y in 0..half {
-                for x in 0..half {
+        let mut image = Self::mipped(size, size, base);
+        let mut sampler = ImageSamplerDescriptor::linear();
+        // Repeat on BOTH axes: a panel is many mesh squares across and many
+        // up, and the panel's own UVs say how many.
+        sampler.address_mode_u = ImageAddressMode::Repeat;
+        sampler.address_mode_v = ImageAddressMode::Repeat;
+        image.sampler = ImageSampler::Descriptor(sampler);
+        image
+    }
+
+    /// Any image, with a box-filtered mip chain down to a single texel.
+    ///
+    /// Two textures in the scene need one and they need it for the same
+    /// reason: more texels than the screen has pixels to put them on. The net
+    /// gets there by repeating sixty times across a panel; a photographed face
+    /// gets there by being a PHOTOGRAPH — see [`Self::face_sheet`], which
+    /// hands a head four times the sheet it draws for itself, because that is
+    /// what it takes for a picture of a man to still look like him. Neither
+    /// can be sampled at one texel per pixel, and undersampling is answered by
+    /// pre-filtering or not at all.
+    fn mipped(width: u32, height: u32, base: Vec<u8>) -> Image {
+        let mut levels: Vec<(u32, u32, Vec<u8>)> = vec![(width, height, base)];
+        while levels
+            .last()
+            .is_some_and(|(across, down, _)| *across > 1 || *down > 1)
+        {
+            let (across, down, source) = levels.last().expect("seeded above");
+            let (across, down) = (*across, *down);
+            let (half_across, half_down) = ((across / 2).max(1), (down / 2).max(1));
+            let mut next = Vec::with_capacity((half_across * half_down * 4) as usize);
+            for y in 0..half_down {
+                for x in 0..half_across {
                     for channel in 0..4 {
                         let mut sum = 0u32;
                         for (dy, dx) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
-                            let sy = (y * 2 + dy).min(width - 1);
-                            let sx = (x * 2 + dx).min(width - 1);
-                            sum += source[((sy * width + sx) * 4 + channel) as usize] as u32;
+                            let sy = (y * 2 + dy).min(down - 1);
+                            let sx = (x * 2 + dx).min(across - 1);
+                            sum += source[((sy * across + sx) * 4 + channel) as usize] as u32;
                         }
                         next.push((sum / 4) as u8);
                     }
                 }
             }
-            levels.push((half, next));
+            levels.push((half_across, half_down, next));
         }
 
         let mip_level_count = levels.len() as u32;
         let mut data = Vec::new();
-        for (_, level) in &levels {
+        for (_, _, level) in &levels {
             data.extend_from_slice(level);
         }
 
@@ -802,8 +1129,8 @@ impl Textures {
         // chain goes on through `new_uninit`.
         let mut image = Image::new_uninit(
             Extent3d {
-                width: size,
-                height: size,
+                width,
+                height,
                 depth_or_array_layers: 1,
             },
             TextureDimension::D2,
@@ -814,12 +1141,7 @@ impl Textures {
         // simply mip 0 then mip 1 then mip 2 — the order built above.
         image.texture_descriptor.mip_level_count = mip_level_count;
         image.data = Some(data);
-        let mut sampler = ImageSamplerDescriptor::linear();
-        // Repeat on BOTH axes: a panel is many mesh squares across and many
-        // up, and the panel's own UVs say how many.
-        sampler.address_mode_u = ImageAddressMode::Repeat;
-        sampler.address_mode_v = ImageAddressMode::Repeat;
-        image.sampler = ImageSampler::Descriptor(sampler);
+        image.sampler = ImageSampler::linear();
         image
     }
 
@@ -1097,6 +1419,8 @@ struct Painter<'a> {
     hair: Vec3,
     iris: Vec3,
     lip: Vec3,
+    /// The real picture of this man's head, once one has arrived.
+    portrait: Option<&'a Portrait>,
 }
 
 impl Painter<'_> {
@@ -1141,7 +1465,11 @@ impl Painter<'_> {
     const LASH: Vec3 = Vec3::new(0.10, 0.08, 0.07);
     const INK: Vec3 = Vec3::new(0.05, 0.04, 0.04);
 
-    fn new<'a>(layout: &'a FaceLayout, look: &'a FaceLook) -> Painter<'a> {
+    fn new<'a>(
+        layout: &'a FaceLayout,
+        look: &'a FaceLook,
+        portrait: Option<&'a Portrait>,
+    ) -> Painter<'a> {
         let skin = Textures::tone(look.skin);
         Painter {
             layout,
@@ -1153,6 +1481,7 @@ impl Painter<'_> {
             // and a good deal redder, and the same relation whatever the tone
             // underneath — which is why this is derived rather than picked.
             lip: (skin * 0.74 + Vec3::new(0.15, 0.02, 0.03)).min(Vec3::ONE),
+            portrait,
         }
     }
 
@@ -1163,7 +1492,77 @@ impl Painter<'_> {
             colour = self.nose(colour, height, across);
             colour = self.mouth(colour, height, across);
         }
-        self.scalp(self.whiskers(colour, height, across, angle), height, angle)
+        colour = self.whiskers(colour, height, across, angle);
+        // Between the whiskers and the scalp on purpose. A real beard on the
+        // picture replaces the painted one under it; the cap of hair, which
+        // is MESH, still has to lay its shadow over whatever ends up on the
+        // forehead, or it reads as a wig resting on a photograph.
+        colour = self.photographed(colour, height, angle);
+        self.scalp(colour, height, angle)
+    }
+
+    /// Past this angle a picture starts giving way to the painted head, and by
+    /// [`Self::FRONT`] it is gone. The surface has turned far enough by then
+    /// that a flat frontal is being seen edge-on and every pixel of it is
+    /// smeared along the side of the skull — the same reason the painted
+    /// features stop there, arrived at from the other direction.
+    const PICTURE_FRONT: f32 = 1.02;
+
+    /// The picture of this man's head, laid over the face just painted.
+    ///
+    /// Everything here is about the EDGES of it, because the middle takes care
+    /// of itself: what decides whether this reads as a footballer's face or as
+    /// a photograph stuck to a ball is how it stops. So it stops four ways —
+    /// round the sides as the head turns away, under the jaw, over the crown,
+    /// and wherever the picture itself is transparent, which after the studio
+    /// background has been keyed out is exactly the outline of his head.
+    fn photographed(&self, painted: Vec3, height: f32, angle: f32) -> Vec3 {
+        let Some(picture) = self.portrait else {
+            return painted;
+        };
+        let cover = self.pictured(height, angle);
+        if cover <= 0.0 {
+            return painted;
+        }
+        let Some((colour, alpha)) = picture.at(self.layout, height, angle) else {
+            return painted;
+        };
+
+        // Straight down, exactly as it arrived: the photograph's own colour,
+        // the photograph's own light. Nothing is re-toned to meet the palette
+        // and no modelled shading is laid over the top — the picture already
+        // has a face's worth of light and shadow in it, and both corrections
+        // together turned a recognisable man into a tinted approximation of
+        // one. What moves to meet the picture is the REST of him: his neck,
+        // his arms and the cap of hair on his head are all repainted from
+        // what this picture says he looks like (see `crate::portrait`).
+        Textures::over(painted, colour.min(Vec3::ONE), cover * alpha)
+    }
+
+    /// How much of this texel belongs to the picture rather than to the paint,
+    /// before the picture's own transparency is taken into account.
+    fn pictured(&self, height: f32, angle: f32) -> f32 {
+        let crown = self.layout.foot + self.layout.span;
+        // Round the sides.
+        let front = 1.0
+            - Textures::smooth(
+                (angle.abs() - Self::PICTURE_FRONT) / (Self::FRONT - Self::PICTURE_FRONT),
+            );
+        // Under the jaw, where a head shot has a throat, a collar and the top
+        // of a shirt, and this head has the top of a neck that belongs to the
+        // body's own skin.
+        //
+        // The picture is scaled off the man's pupils rather than stretched to
+        // fit, so his chin lands a little BELOW this model's — which put a
+        // sliver of club shirt across the jaw of every player who had a
+        // photograph. So the picture stops at the jaw itself and is gone a
+        // centimetre under it.
+        let above_jaw = Textures::smooth((height - (self.layout.chin - 0.004)) / 0.016);
+        // And over the crown, which is where a head shot runs out of head and
+        // the last thing anybody wants is the top of a picture frame painted
+        // across the top of a skull.
+        let below_crown = 1.0 - Textures::smooth((height - (crown - 0.030)) / 0.026);
+        front * above_jaw * below_crown
     }
 
     /// The shading a head carries before anything is drawn on it.
@@ -1173,16 +1572,24 @@ impl Painter<'_> {
     /// in its own shade, the brow ridge catching the light — has to be in the
     /// paint. Without it the features sit on a flat disc.
     fn modelled(&self, height: f32, angle: f32) -> Vec3 {
+        self.skin * self.shading(height, angle)
+    }
+
+    /// That relief on its own, as a multiplier — nothing here tints, it only
+    /// darkens and lightens, so the same numbers serve bare skin and a
+    /// photograph of it equally. Held apart from [`Self::modelled`] for the
+    /// second caller: see [`Self::photographed`].
+    fn shading(&self, height: f32, angle: f32) -> f32 {
         let turned = Textures::smooth((angle.abs() / 1.9).min(1.0));
-        let mut colour = self.skin * (1.0 - 0.16 * turned);
+        let mut shade = 1.0 - 0.16 * turned;
         // Under the jaw and down the neck, which is in the head's own shadow
         // for the whole match.
         let under = Textures::smooth(((self.layout.chin + 0.012 - height) / 0.055).clamp(0.0, 1.0));
-        colour *= 1.0 - 0.30 * under;
+        shade *= 1.0 - 0.30 * under;
         // And the brow ridge, which catches it.
         let ridge =
             Textures::smooth((1.0 - (height - self.layout.brow).abs() / 0.020).clamp(0.0, 1.0));
-        colour * (1.0 + 0.055 * ridge * (1.0 - turned))
+        shade * (1.0 + 0.055 * ridge * (1.0 - turned))
     }
 
     fn eyes(&self, base: Vec3, height: f32, across: f32) -> Vec3 {
@@ -1382,8 +1789,19 @@ impl Painter<'_> {
             // mannequin; what it should read as is the wash of colour a
             // number-one leaves, which is what most of the players who have
             // one actually look like.
+            //
+            // Except on a man wearing a PICTURE, where this is not stubble at
+            // all: he has no cap of hair on him — his own is in the picture —
+            // so above the hairline this wash is the only hair he has, and it
+            // is laid on as hair rather than as a shadow of it. The colour was
+            // read off the top of his own head; see `Portrait::hair_tone`.
+            let (ink, weight) = if self.portrait.is_some() {
+                (0.85, 0.95)
+            } else {
+                (0.55, 0.55)
+            };
             let mask = Textures::smooth((height - line) / 0.022);
-            return Textures::over(base, self.hair * 0.55, mask * 0.55);
+            return Textures::over(base, self.hair * ink, mask * weight);
         }
         // Under a cap of hair the skin goes into shadow as it disappears, so
         // the mesh's own edge lands on shade rather than on lit skin — which
@@ -1425,33 +1843,123 @@ mod tests {
         colour.x * 0.2126 + colour.y * 0.7152 + colour.z * 0.0722
     }
 
-    /// A shirt is printed with a stencil, and the stencil has capitals and
-    /// digits in it. Everything else either folds onto a base letter or is
-    /// dropped — losing the acute off an O is what a shirt printer does;
-    /// losing the O is a bug.
+    /// A shirt is printed in capitals, and in the same face the player's own
+    /// label is set in — so a letter that face can draw is printed as it is
+    /// spelled, accent and all. Only what it cannot draw folds onto a base
+    /// letter or is dropped: losing the acute off an O is what a shirt printer
+    /// does when he has no acute; losing the O is a bug.
     #[test]
-    fn a_name_is_folded_onto_the_stencil() {
-        assert_eq!(Textures::fold("Müller"), "MULLER");
-        assert_eq!(Textures::fold("Nuñez"), "NUNEZ");
-        assert_eq!(Textures::fold("Sørensen"), "SORENSEN");
-        assert_eq!(Textures::fold("Šeško"), "SESKO");
+    fn a_name_is_printed_in_the_face_that_can_spell_it() {
+        // Outfit carries the whole of Latin-1 and most of Extended-A, so these
+        // reach the shirt the way the squad list spells them. They all folded
+        // to bare ASCII when the lettering came off a 5×7 grid.
+        assert_eq!(Textures::fold("Müller"), "MÜLLER");
+        assert_eq!(Textures::fold("Nuñez"), "NUÑEZ");
+        assert_eq!(Textures::fold("Sørensen"), "SØRENSEN");
+        assert_eq!(Textures::fold("Šeško"), "ŠEŠKO");
+        assert_eq!(Textures::fold("Åkerman"), "ÅKERMAN");
+        // Uppercasing is what a shirt does, and it is done properly: the
+        // sharp S has no capital of its own and becomes a pair.
         assert_eq!(Textures::fold("Weiß"), "WEISS");
-        assert_eq!(Textures::fold("Łukasz"), "LUKASZ");
-        assert_eq!(Textures::fold("Åkerman"), "AKERMAN");
-        // Real surnames carry these, and they are in the 5×7 grid.
+        // And the contract that matters, which does not depend on which
+        // characters either subset happens to carry: whatever survives the fold
+        // can be drawn. A box on the back of a shirt is the one outcome there
+        // is no excuse for, and the fold is the only thing standing between the
+        // squad list and one.
+        for spelled in [
+            "Müller",
+            "Nuñez",
+            "Sørensen",
+            "Šeško",
+            "Weiß",
+            "Łukasz",
+            "Åkerman",
+            "Ǧorǧe",
+            "Đorđević",
+            "Håland",
+            "Ćaleta-Car",
+            "O'Shea",
+            "Ægir",
+            "Þórsson",
+        ] {
+            let printed = Textures::fold(spelled);
+            assert!(!printed.is_empty(), "{spelled} printed nothing");
+            assert!(
+                printed.chars().all(Stencil::can_print),
+                "{spelled} printed {printed}, which the face cannot draw"
+            );
+        }
+        // Real surnames carry these.
         assert_eq!(Textures::fold("O'Neill"), "O'NEILL");
         assert_eq!(Textures::fold("Van der Sar"), "VAN DER SAR");
         assert_eq!(Textures::fold("Alves-Silva"), "ALVES-SILVA");
         // Tidied rather than printed as found: no leading, trailing or
         // doubled punctuation, because a stencil cannot show what it is
-        // standing in for.
+        // standing in for. The face can draw all four marks, so this has to be
+        // decided ahead of "can the face draw it" rather than after.
         assert_eq!(Textures::fold("  de  Jong "), "DE JONG");
         assert_eq!(Textures::fold("-Smith-"), "SMITH");
-        // And a name with nothing Latin in it comes back empty for the caller
-        // to notice, rather than as a row of blanks on a shirt.
+        // And a name neither face can print comes back empty for the caller to
+        // notice, rather than as a row of blanks on a shirt.
         assert_eq!(Textures::fold("日本"), "");
         assert!(Textures::name(&mut Assets::default(), "日本").is_none());
         assert!(Textures::name(&mut Assets::default(), "Kane").is_some());
+    }
+
+    /// The print is the same shape the panel is, and it is actually inked.
+    ///
+    /// The mask is what ends up stretched over the curved sheet of cloth on a
+    /// player's back, so what matters is that the letters land inside it and
+    /// fill it: a stencil that misses its panel prints a blank shirt, and one
+    /// that overflows prints a clipped name.
+    #[test]
+    fn the_print_fills_its_panel() {
+        const WIDTH: u32 = 176;
+        const HEIGHT: u32 = 40;
+
+        let mask = Stencil::mask("RONALDO", WIDTH, HEIGHT, 0.94, 0.88);
+        assert_eq!(mask.len(), (WIDTH * HEIGHT) as usize);
+
+        let inked = |x: u32, y: u32| mask[(y * WIDTH + x) as usize] > 0;
+        let columns: Vec<u32> = (0..WIDTH)
+            .filter(|x| (0..HEIGHT).any(|y| inked(*x, y)))
+            .collect();
+        let rows: Vec<u32> = (0..HEIGHT)
+            .filter(|y| (0..WIDTH).any(|x| inked(x, *y)))
+            .collect();
+        let (first, last) = (columns[0], columns[columns.len() - 1]);
+        let (top, bottom) = (rows[0], rows[rows.len() - 1]);
+
+        // Inside the panel on every side...
+        assert!(
+            first > 0 && last < WIDTH - 1,
+            "{first}..{last} across {WIDTH}"
+        );
+        assert!(
+            top > 0 && bottom < HEIGHT - 1,
+            "{top}..{bottom} down {HEIGHT}"
+        );
+        // ...using most of the width it is allowed...
+        assert!(
+            last - first > WIDTH * 3 / 4,
+            "only {} of {WIDTH} used",
+            last - first
+        );
+        // ...and centred, which is what a shirt is.
+        let slack = WIDTH - 1 - last;
+        assert!(
+            first.abs_diff(slack) <= 2,
+            "left {first} against right {slack}"
+        );
+
+        // A number is set to the full height of its own panel, where a name is
+        // set smaller with air above and below — that is the whole difference
+        // between the two calls, and it has to survive.
+        let digits = Stencil::mask("9", 64, 52, 0.94, 1.0);
+        let tall = (0..52)
+            .filter(|y| (0..64).any(|x| digits[(y * 64 + x) as usize] > 0))
+            .count();
+        assert!(tall > 44, "a number filled only {tall} of 52 rows");
     }
 
     /// The face goes onto the head the right way up.
@@ -1471,7 +1979,8 @@ mod tests {
         const HEIGHT: u32 = 96;
 
         let layout = BodyParts::face_layout();
-        let pixels = Textures::face_pixels(&layout, &look(Beard::Clean, false), WIDTH, HEIGHT);
+        let pixels =
+            Textures::face_pixels(&layout, &look(Beard::Clean, false), WIDTH, HEIGHT, None);
         // Exactly the `v` the lathe writes for a ring at this height, as an
         // image row.
         let row_of = |height: f32| {
@@ -1521,12 +2030,155 @@ mod tests {
         );
     }
 
+    /// A picture the size of the patch the browser hands over, painted in
+    /// bands so that where each band ends up on the skull can be read off the
+    /// sheet: green across the eye line, blue across the chin, and a red
+    /// stripe down one cheek at a known angle round the head.
+    ///
+    /// Deliberately not a face. What is being tested is the crossing between
+    /// a flat picture and a round head, and a test that needs a face to see it
+    /// is a test that can only be read by eye.
+    fn banded_picture() -> Portrait {
+        const SIZE: u32 = 96;
+        // A picture measured as: eyes across the middle, pupils a quarter of
+        // the frame apart. Everything else is placed off those.
+        let (centre, eyes, pupils) = (0.5, 0.42, SIZE as f32 * 0.25);
+        // A metre of head is this many pixels of picture, which is what turns
+        // the bands below into distances on a skull.
+        let scale = pupils / 0.064;
+        // Green on the eye line, blue 90 mm under it — just above where the
+        // model's own jaw cuts the picture off — and a red stripe 40 mm out.
+        let chin = eyes + 0.090 * scale / SIZE as f32;
+        let stripe = centre + 0.040 * scale / SIZE as f32;
+
+        let mut pixels = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+        for row in 0..SIZE {
+            for column in 0..SIZE {
+                let v = (row as f32 + 0.5) / SIZE as f32;
+                let u = (column as f32 + 0.5) / SIZE as f32;
+                let band = if (v - eyes).abs() < 0.012 {
+                    [40, 220, 40]
+                } else if (v - chin).abs() < 0.012 {
+                    [40, 40, 220]
+                } else if (u - stripe).abs() < 0.008 {
+                    [220, 40, 40]
+                } else {
+                    [190, 150, 130]
+                };
+                pixels.extend_from_slice(&[band[0], band[1], band[2], 255]);
+            }
+        }
+        Portrait {
+            width: SIZE,
+            height: SIZE,
+            pixels,
+            centre,
+            eyes,
+            pupils,
+        }
+    }
+
+    /// A picture goes onto the head where the head's own landmarks are.
+    ///
+    /// The one thing that decides whether a photograph reads as this player's
+    /// face or as a poster of somebody stuck to a ball: the eye line has to
+    /// land on the eye line and the chin on the chin, because the skull under
+    /// it carries a nose as GEOMETRY and a picture hung a centimetre low is a
+    /// face with two of them. Sideways matters as much and is easier to get
+    /// wrong — the head is round and the picture is flat, so a point two
+    /// thirds of the way across the face belongs at `asin(2/3)` round the
+    /// skull and nowhere else.
+    #[test]
+    fn a_picture_lands_on_the_landmarks_of_the_head_it_goes_onto() {
+        const WIDTH: u32 = 128;
+        const HEIGHT: u32 = 96;
+
+        let layout = BodyParts::face_layout();
+        let picture = banded_picture();
+        let pixels = Textures::face_pixels(
+            &layout,
+            &look(Beard::Clean, false),
+            WIDTH,
+            HEIGHT,
+            Some(&picture),
+        );
+        let at = |column: u32, row: u32| {
+            let index = ((row * WIDTH + column) * 4) as usize;
+            Vec3::new(
+                pixels[index] as f32,
+                pixels[index + 1] as f32,
+                pixels[index + 2] as f32,
+            ) / 255.0
+        };
+        let row_of = |height: f32| {
+            ((((height - layout.foot) / layout.span) * HEIGHT as f32) as u32).min(HEIGHT - 1)
+        };
+        // The front of the head is a quarter of the way round the lathe.
+        let column_of = |angle: f32| (((angle / TAU + 0.25) * WIDTH as f32) as u32).min(WIDTH - 1);
+        let front = column_of(0.0);
+
+        // Green on the eye line and blue on the chin, both dead ahead. Read as
+        // "greener than the skin it replaced" rather than against a number:
+        // the picture is shaded by the head's own relief and pulled toward the
+        // complexion of the neck it sits on, and neither of those is a colour
+        // this test should have to know.
+        let eye_line = at(front, row_of(layout.eyes));
+        assert!(
+            eye_line.y > eye_line.x && eye_line.y > eye_line.z,
+            "the eye line of the picture is not on the eye line of the head: {eye_line:?}"
+        );
+        // The blue band is 90 mm under the picture's eye line, and that is a
+        // DISTANCE rather than a fraction of a frame. So it has to land 90 mm
+        // under the head's eye line: the picture keeps its own proportions
+        // and the head is whatever shape it is.
+        let low = at(front, row_of(layout.eyes - 0.090));
+        assert!(
+            low.z > low.x && low.z > low.y,
+            "the lower band of the picture is not 90 mm under its eyes: {low:?}"
+        );
+        // …and nothing green between them, which is what a picture hung at the
+        // wrong scale would leave: the eye line has to be at ONE height.
+        let midway = at(front, row_of(layout.eyes - 0.050));
+        assert!(
+            midway.x > midway.y,
+            "the eye line is smeared down the face: {midway:?}"
+        );
+
+        // Sideways, and by the same ruler: the stripe is 40 mm out from the
+        // mid-line, so it belongs where the skull is 40 mm across —
+        // `asin(40/90)`, 26° — and NOT at 40/90 of the way round to 90°, which
+        // is where mapping the angle straight across would put it.
+        let redness = |column: u32| {
+            let texel = at(column, row_of(layout.eyes - 0.020));
+            texel.x - (texel.y + texel.z) * 0.5
+        };
+        let projected = column_of((0.040f32 / layout.cheek).asin());
+        let flat = column_of(std::f32::consts::FRAC_PI_2 * 0.040 / layout.cheek);
+        assert!(
+            redness(projected) > 0.10,
+            "the stripe is not where the projection puts it: {}",
+            redness(projected)
+        );
+        assert!(
+            redness(projected) > redness(flat) + 0.05,
+            "the picture is wrapped round the head rather than projected onto it"
+        );
+
+        // And round the back there is no picture at all — a flat frontal seen
+        // edge-on is a smear, so it has to have given way to paint by then.
+        let behind = at(column_of(2.6), row_of(layout.eyes));
+        assert!(
+            behind.x > behind.y && behind.x > behind.z,
+            "the picture has been carried round the back of the head: {behind:?}"
+        );
+    }
+
     /// There is an eye where the layout says there is an eye — and only there.
     #[test]
     fn the_eyes_land_on_the_eye_line() {
         let layout = BodyParts::face_layout();
         let look = look(Beard::Clean, false);
-        let painter = Painter::new(&layout, &look);
+        let painter = Painter::new(&layout, &look, None);
         let at = |height: f32, across: f32| painter.texel(height, across, across / layout.cheek);
 
         let cheek = at(layout.eyes, 0.068);
@@ -1567,7 +2219,7 @@ mod tests {
     fn the_lower_face_is_modelled() {
         let layout = BodyParts::face_layout();
         let look = look(Beard::Clean, false);
-        let painter = Painter::new(&layout, &look);
+        let painter = Painter::new(&layout, &look, None);
         let at = |height: f32, across: f32| painter.texel(height, across, across / layout.cheek);
 
         let cheek = at(layout.eyes - 0.030, 0.062);
@@ -1607,9 +2259,9 @@ mod tests {
         let jaw = (layout.chin + 0.014, 0.030);
         let scalp = (layout.hairline + 0.020, 0.0);
 
-        let plain = Painter::new(&layout, &clean);
-        let whiskers = Painter::new(&layout, &bearded);
-        let bald = Painter::new(&layout, &shaved);
+        let plain = Painter::new(&layout, &clean, None);
+        let whiskers = Painter::new(&layout, &bearded, None);
+        let bald = Painter::new(&layout, &shaved, None);
         let at = |painter: &Painter, (height, across): (f32, f32)| {
             painter.texel(height, across, across / layout.cheek)
         };
@@ -1670,6 +2322,8 @@ mod tests {
                     skin: index as u8,
                     hair: (index as u8 * 3) % 10,
                     eyes: (index as u8 * 5) % 8,
+                    photo: None,
+                    face: None,
                 })
             })
             .collect();
@@ -1677,7 +2331,7 @@ mod tests {
         let across = WIDTH as usize * looks.len();
         let mut sheet = vec![0u8; across * HEIGHT as usize * 4];
         for (column, look) in looks.iter().enumerate() {
-            let face = Textures::face_pixels(&layout, look, WIDTH, HEIGHT);
+            let face = Textures::face_pixels(&layout, look, WIDTH, HEIGHT, None);
             for row in 0..HEIGHT as usize {
                 // Turned over on the way out. The texture is stored with the
                 // crown at the BOTTOM, because that is the end a lathe's `v`
@@ -1694,5 +2348,38 @@ mod tests {
         let path = std::path::Path::new(&directory).join("faces.rgba");
         std::fs::write(&path, &sheet).expect("wrote the sheet");
         println!("{}x{} at {}", across, HEIGHT, path.display());
+    }
+
+    /// The shirt print, straight out of the stencil and onto the terminal.
+    ///
+    /// The panels are 40 and 52 texels tall and end up stretched over a curved
+    /// sheet of cloth twenty metres from the lens, which is not a place you can
+    /// read a letterform. This is: run it when the face, the tracking or the
+    /// fitting changes and look at the shapes.
+    ///
+    ///     cargo test --lib dump_print -- --ignored --nocapture
+    #[test]
+    #[ignore = "prints to the terminal; run by hand when the lettering changes"]
+    fn dump_print() {
+        // Half the rows, because a terminal cell is about twice as tall as it
+        // is wide and the panel would otherwise come out stretched.
+        const RAMP: [char; 5] = [' ', '.', ':', '#', '@'];
+
+        for (text, width, height, margin, cap) in [
+            ("9", 64, 52, 0.94, 1.0),
+            ("70", 64, 52, 0.94, 1.0),
+            ("RONALDO", 176, 40, 0.94, 0.88),
+            ("MÜLLER", 176, 40, 0.94, 0.88),
+            ("ALVES-SILVA", 176, 40, 0.94, 0.88),
+        ] {
+            println!("\n{text}  ({width}x{height})");
+            let mask = Stencil::mask(text, width, height, margin, cap);
+            for y in (0..height).step_by(2) {
+                let row: String = (0..width)
+                    .map(|x| RAMP[(mask[(y * width + x) as usize] as usize * 4) / 255])
+                    .collect();
+                println!("|{row}|");
+            }
+        }
     }
 }

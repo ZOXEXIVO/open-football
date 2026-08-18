@@ -92,10 +92,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
-name = "appearance"
-version = "0.1.0"
-
-[[package]]
 name = "approx"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -445,7 +441,7 @@ checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
 name = "core"
-version = "1.7.100"
+version = "1.7.300"
 dependencies = [
  "chrono",
  "deunicode",
@@ -519,7 +515,7 @@ dependencies = [
 
 [[package]]
 name = "database"
-version = "1.7.100"
+version = "1.7.300"
 dependencies = [
  "chrono",
  "core",
@@ -1448,7 +1444,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "open_football"
-version = "1.7.100"
+version = "1.7.300"
 dependencies = [
  "color-eyre",
  "core",
@@ -1856,6 +1852,10 @@ checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
 ]
+
+[[package]]
+name = "shared"
+version = "0.1.0"
 
 [[package]]
 name = "shlex"
@@ -2447,9 +2447,8 @@ dependencies = [
 
 [[package]]
 name = "web"
-version = "1.7.100"
+version = "1.7.300"
 dependencies = [
- "appearance",
  "askama",
  "askama_web",
  "async-compression",
@@ -2468,6 +2467,7 @@ dependencies = [
  "rust-embed",
  "serde",
  "serde_json",
+ "shared",
  "sysinfo",
  "tokio",
  "toml",

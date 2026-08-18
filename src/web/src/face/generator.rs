@@ -1,4 +1,4 @@
-use appearance::{Appearance, AppearanceRng, Palette, Phenotype, SkinDist};
+use shared::{Appearance, AppearanceRng, Palette, Phenotype, SkinDist};
 
 // ── Color math ──────────────────────────────────────────────
 
@@ -142,6 +142,30 @@ fn face_shape(variant: usize, fw: f32) -> FaceShape {
 
 // ── Main generator ──────────────────────────────────────────
 
+/// What is drawn AROUND the head.
+///
+/// The head itself is identical either way — same rng stream, same features,
+/// same tone — because the two are the same man seen in two places.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FaceFrame {
+    /// The profile-page portrait: club-coloured backdrop, shoulders in a
+    /// jersey, and a vignette over the lot.
+    Portrait,
+    /// The head alone, on transparent ground.
+    ///
+    /// For the match viewer, which lays this over the front of a
+    /// footballer's skull: a backdrop there would be a rectangle of club
+    /// colour painted across his cheeks, and shoulders would be a second
+    /// pair under the ones he already has.
+    Cutout,
+}
+
+impl FaceFrame {
+    fn cutout(self) -> bool {
+        self == FaceFrame::Cutout
+    }
+}
+
 /// viewBox = "0 0 200 250" — portrait rectangle, head centered at x=100.
 ///
 /// Painterly layered rendering: one top-left key light drives every
@@ -164,6 +188,7 @@ pub fn generate_face_svg(
     heft: f32,
     aggression: f32,
     jersey: Option<&str>,
+    frame: FaceFrame,
 ) -> String {
     let heft = heft.clamp(-2.0, 2.5);
     let aggr = aggression.clamp(0.0, 1.0);
@@ -174,7 +199,7 @@ pub fn generate_face_svg(
     //
     // Drawn FIRST off the stream, and by the shared crate rather than here,
     // because the match viewer asks the same question about the same player
-    // and has to get the same answer — see `appearance::Appearance`.
+    // and has to get the same answer — see `shared::Appearance`.
     let look = Appearance::draw(&mut r, skin_dist);
     let ph = look.phenotype;
     let skin = Palette::SKIN[look.skin];
@@ -599,7 +624,9 @@ pub fn generate_face_svg(
     ));
 
     // ── Background ──────────────────────────────────────────
-    s.push_str(r#"<rect width="200" height="250" fill="url(#bgg)"/>"#);
+    if !frame.cutout() {
+        s.push_str(r#"<rect width="200" height="250" fill="url(#bgg)"/>"#);
+    }
 
     // ── Head group (slight photographic tilt) ───────────────
     s.push_str(&format!(r#"<g transform="rotate({tilt:.2} 100 205)">"#));
@@ -1798,6 +1825,13 @@ pub fn generate_face_svg(
     s.push_str("</g>");
 
     // ── Jersey / shoulders ──────────────────────────────────
+    // Everything from here down is the SETTING rather than the man, so a
+    // cutout stops at the closing tag: no shoulders, no collar, no vignette.
+    if frame.cutout() {
+        s.push_str("</svg>");
+        return s;
+    }
+
     // Shoulders sit a fixed distance below the chin: long faces push the
     // jersey down so a real stretch of neck always stays visible
     let jdy = (chy + 9.0 - 210.5).max(0.0);
@@ -1857,7 +1891,7 @@ pub fn generate_face_svg(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use appearance::{Region, SkinBucket};
+    use shared::{Region, SkinBucket};
 
     /// The tone this paints and the tone the match page sends to the replay
     /// viewer are meant to be one draw off one stream. The only thing holding
@@ -1877,13 +1911,103 @@ mod tests {
         for dist in nations {
             for player_id in [1u32, 7, 91, 4242, 900_001] {
                 let told = Palette::SKIN[Appearance::of(player_id, dist).skin];
-                let svg = generate_face_svg(player_id, 26, dist, 0.0, 0.3, None);
+                let svg =
+                    generate_face_svg(player_id, 26, dist, 0.0, 0.3, None, FaceFrame::Portrait);
                 assert!(
                     svg.contains(&format!("stop-color=\"{told}\"")),
                     "player {player_id} is painted a tone the viewer was never given ({told})"
                 );
             }
         }
+    }
+
+    /// A cutout is the same head with nothing round it.
+    ///
+    /// Both halves matter and both have been wrong at some point in a
+    /// generator this size: the backdrop, the shoulders and the vignette all
+    /// have to go (a rectangle of club colour projected onto a footballer's
+    /// cheek is not subtle), and the head itself has to be untouched — same
+    /// rng stream, same features, same tone as the portrait the profile page
+    /// draws, or the man on the pitch is a different man.
+    #[test]
+    fn a_cutout_is_the_portrait_with_the_setting_taken_away() {
+        let dist = SkinDist::pure(SkinBucket::White, Region::WestEurope);
+        for player_id in [7u32, 4242, 900_001] {
+            let portrait = generate_face_svg(
+                player_id,
+                26,
+                dist,
+                0.4,
+                0.3,
+                Some("#123456"),
+                FaceFrame::Portrait,
+            );
+            let cutout = generate_face_svg(
+                player_id,
+                26,
+                dist,
+                0.4,
+                0.3,
+                Some("#123456"),
+                FaceFrame::Cutout,
+            );
+
+            assert!(portrait.contains(r#"fill="url(#bgg)""#));
+            assert!(
+                !cutout.contains(r#"fill="url(#bgg)""#),
+                "the cutout is still painted on a backdrop"
+            );
+            assert!(
+                !cutout.contains(r#"fill="url(#vig)""#),
+                "the cutout still carries the portrait's vignette"
+            );
+            assert!(
+                !cutout.contains(r#"fill="url(#jg)""#),
+                "the cutout still has shoulders in it"
+            );
+            assert!(cutout.ends_with("</svg>"));
+
+            // The head is the head. Everything the portrait draws between the
+            // backdrop and the shoulders IS the cutout, byte for byte.
+            let backdrop = r#"<rect width="200" height="250" fill="url(#bgg)"/>"#;
+            let shoulders = portrait
+                .find(r#"<defs><clipPath id="jc">"#)
+                .expect("the portrait puts shoulders on");
+            let head = format!("{}</svg>", portrait[..shoulders].replace(backdrop, ""));
+            assert_eq!(
+                cutout, head,
+                "player {player_id} is a different man once the setting is taken away"
+            );
+        }
+    }
+
+    /// Dev-only: the same faces as cutouts, on a checkerboard so the
+    /// transparency can be seen, which is the only way to tell a head that
+    /// has had its backdrop removed from one that has had it painted white.
+    /// Run with:
+    ///   FACE_PREVIEW_DIR=<dir> cargo test -p web --lib preview_cutouts -- --ignored
+    #[test]
+    #[ignore]
+    fn preview_cutouts() {
+        let Ok(dir) = std::env::var("FACE_PREVIEW_DIR") else {
+            return;
+        };
+        let root = std::path::Path::new(&dir);
+        let dist = SkinDist::pure(SkinBucket::White, Region::WestEurope);
+        let mut html = String::from(
+            "<!doctype html><meta charset=\"utf-8\"><style>\
+             body{background:#2b2b2b;margin:12px}\
+             img{width:120px;background:\
+             repeating-conic-gradient(#666 0 25%,#999 0 50%) 0 0/16px 16px}\
+             </style>",
+        );
+        for (index, player_id) in [7u32, 4242, 900_001, 2_000_013_729].iter().enumerate() {
+            let svg = generate_face_svg(*player_id, 26, dist, 0.4, 0.3, None, FaceFrame::Cutout);
+            let name = format!("cutout_{index}.svg");
+            std::fs::write(root.join(&name), svg).expect("write cutout");
+            html.push_str(&format!("<img src=\"{name}\">"));
+        }
+        std::fs::write(root.join("cutouts.html"), html).expect("write cutout sheet");
     }
 
     /// Dev-only contact sheet: writes one SVG file per face (inline SVGs in a
@@ -1945,7 +2069,15 @@ mod tests {
                     // scrambled aggression sweep so it decorrelates from heft
                     let heft = -1.6 + i as f32 * 0.5;
                     let aggression = (i * 3 % 8) as f32 / 7.0;
-                    let svg = generate_face_svg(player_id, age, dist, heft, aggression, None);
+                    let svg = generate_face_svg(
+                        player_id,
+                        age,
+                        dist,
+                        heft,
+                        aggression,
+                        None,
+                        FaceFrame::Portrait,
+                    );
                     let fname = format!("face_{dist_name}_{age}_{i}.svg");
                     std::fs::write(root.join(&fname), svg).expect("write face svg");
                     html.push_str(&format!(

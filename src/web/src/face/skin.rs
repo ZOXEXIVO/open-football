@@ -1,4 +1,4 @@
-use appearance::{Region, SkinDist};
+use shared::{Region, SkinDist};
 use core::SimulatorData;
 use database::CountryLoader;
 use std::sync::OnceLock;
@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 /// The per-country ancestry percentages, read out of the database once.
 ///
 /// The DATA half of what a player looks like — the deciding is
-/// `appearance::Appearance`'s, and deliberately lives in a crate with no
+/// `shared::Appearance`'s, and deliberately lives in a crate with no
 /// database behind it so the WebAssembly viewer can run the same code. This
 /// side is the part that cannot: it needs the country table, so both the
 /// portrait route and the match page come through here for a [`SkinDist`]

@@ -13,7 +13,7 @@ match-logs = ["core/match-logs"]
 match-stub = ["core/match-stub"]
 
 [dependencies]
-appearance = { path = "../appearance" }
+shared = { path = "../shared" }
 core = { path = "../core" }
 database = { path = "../database" }
 axum = "0.8.9"
