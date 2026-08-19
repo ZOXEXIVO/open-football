@@ -2835,6 +2835,17 @@ fn main() {
             let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
             run_paths(n, lvl);
         }
+        // Woodwork trace: plays matches sequentially and dumps the ball's
+        // per-tick flight around every contact with a post or the bar —
+        // the run-up, the rebound, and the four seconds after it. The only
+        // mode that can answer "what does the ball DO once it comes off
+        // the frame", because that is a sequence and every other counter
+        // in the harness is a sum. See `core::frame_trace`.
+        "woodwork" => {
+            let n = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(40usize);
+            let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
+            run_woodwork(n, lvl);
+        }
         // Runtime per-player flicker / state-churn trace. Samples every
         // simulation tick inside the engine rather than reading the
         // deduped replay track, so on-the-spot jitter and per-tick state
@@ -8081,6 +8092,66 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
 ///     share of them that bounce straight back to the state just left.
 ///   * **inst%** — share of transitions that left a state after ≤1 AI
 ///     tick, i.e. the state was entered and abandoned immediately.
+/// Play `matches` matches and print the ball's flight around every contact
+/// with the woodwork.
+///
+/// Sequential on purpose. The trace store is process-global and a capture is
+/// a SEQUENCE of ticks; run two matches on two threads and the two balls
+/// interleave into one unreadable table.
+fn run_woodwork(matches: usize, level: u8) {
+    // `net` also opens a capture on every goal. The frame is struck under
+    // once a match, which is far too rare a trigger to measure the netting
+    // with, and what the ball does inside the goal is most of what a viewer
+    // sees after a shot off the woodwork goes in.
+    unsafe { std::env::set_var("OF_FRAME_TRACE", "net") };
+    core::frame_trace::FrameTrace::reset();
+
+    for m in 0..matches {
+        MatchRuntime::set_events_mode(true);
+        let (home, _) = make_squad_viewer(1, HOME_TEAM_NAME, level, 0);
+        let (away, _) = make_squad_viewer(2, AWAY_TEAM_NAME, level, 11);
+        let _ = FootballEngine::<840, 545>::play(home, away, true, false, false);
+        eprintln!("  woodwork: match {}/{} played", m + 1, matches);
+    }
+
+    let (hits, captures) = core::frame_trace::FrameTrace::report();
+    let s = core::frame_trace::FrameTrace::summary();
+    println!();
+    println!("=== WOODWORK TRACE ({matches} matches, level {level}) ===");
+    println!(
+        "  {hits} frame contacts, {:.2} per match; {} captured",
+        hits as f64 / matches.max(1) as f64,
+        captures.len()
+    );
+    println!(
+        "  a '*' row travelled further than its own velocity explains — somebody relocated the ball"
+    );
+    println!();
+    println!("  --- anomalies over the captured windows ---");
+    println!("  mesh jumps (netting PULLED the ball) : {}", s.mesh_jumps);
+    println!("  loose jumps (open play, unclaimed)   : {}", s.loose_jumps);
+    println!(
+        "  worst unexplained jump               : {} cm",
+        s.worst_jump_cm
+    );
+    println!(
+        "  ground snaps (z collapsed, no fall)  : {}",
+        s.ground_snaps
+    );
+    println!(
+        "  worst unexplained one-tick drop      : {} cm",
+        s.worst_drop_cm
+    );
+    println!(
+        "  windows that ended with the ball still in the goal: {}",
+        s.rested_in_net
+    );
+    for capture in &captures {
+        println!();
+        println!("{capture}");
+    }
+}
+
 fn run_trace(matches: usize, level: u8) {
     use core::motion_diag;
     use std::collections::HashMap;

@@ -99,6 +99,11 @@ impl Ball {
             RestartCensus::note_throw_in(disagree, since_last, walk);
         }
 
+        #[cfg(feature = "match-logs")]
+        super::frame_trace::FrameTrace::note(format!(
+            "check_throw_in: THROW-IN, ball ({:.1}, {:.1}, {:.2}) -> ({:.1}, {:.1}) taker {thrower_id}",
+            self.position.x, self.position.y, self.position.z, throw_pos.x, throw_pos.y
+        ));
         self.position = throw_pos;
         self.velocity = Vector3::zeros();
 

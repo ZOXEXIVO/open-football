@@ -129,6 +129,10 @@ impl Ball {
                         #[cfg(feature = "match-logs")]
                         super::ownership::reception_diag::GOAL_REJECTED
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        #[cfg(feature = "match-logs")]
+                        super::frame_trace::FrameTrace::note(
+                            "check_goal: crossed the line, REFUSED (no shot behind it)",
+                        );
                         // Not a shot — treat as ball out of play, not a goal.
                         return;
                     }
@@ -221,6 +225,10 @@ impl Ball {
                 // `net.rs` for why the ball used to appear to stop dead on
                 // the line. The restart puts it back on the centre spot
                 // once the celebration is over.
+                #[cfg(feature = "match-logs")]
+                super::frame_trace::FrameTrace::note(format!(
+                    "check_goal: GOAL ({goal_side:?}) credited to {final_scorer} -> enter_net"
+                ));
                 self.enter_net(goal_side, final_scorer, final_is_auto_goal);
             }
 
@@ -318,6 +326,11 @@ impl Ball {
                 GoalSide::Away => context.goal_positions.right.y,
             };
             let spot = self.goal_kick_spot(over_side, goal_center_y, self.position.y);
+            #[cfg(feature = "match-logs")]
+            super::frame_trace::FrameTrace::note(format!(
+                "check_over_goal: over the bar at ({:.1}, {:.1}, {:.2}) -> goal kick, ball to GK {} at ({:.1}, {:.1})",
+                self.position.x, self.position.y, self.position.z, gk.id, spot.x, spot.y
+            ));
             self.position = spot;
             self.velocity = Vector3::zeros();
 
@@ -528,6 +541,11 @@ impl Ball {
             if let Some(taker) = taker {
                 let taker_id = taker.id;
                 let taker_team = taker.team_id;
+                #[cfg(feature = "match-logs")]
+                super::frame_trace::FrameTrace::note(format!(
+                    "check_wide_of_goal: CORNER, ball ({:.1}, {:.1}, {:.2}) -> ({corner_x:.1}, {corner_y:.1}) taker {taker_id}",
+                    self.position.x, self.position.y, self.position.z
+                ));
                 self.position.x = corner_x;
                 self.position.y = corner_y;
                 self.position.z = 0.0;
@@ -679,6 +697,11 @@ impl Ball {
             let gk_team = gk.team_id;
 
             let spot = self.goal_kick_spot(side, goal_center_y, self.position.y);
+            #[cfg(feature = "match-logs")]
+            super::frame_trace::FrameTrace::note(format!(
+                "check_wide_of_goal: GOAL KICK, ball ({:.1}, {:.1}, {:.2}) -> ({:.1}, {:.1}) GK {gk_id}",
+                self.position.x, self.position.y, self.position.z, spot.x, spot.y
+            ));
             self.position = spot;
             self.velocity = Vector3::zeros();
 

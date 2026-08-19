@@ -181,6 +181,15 @@ pub fn advance_goal_celebration(field: &mut MatchField, context: &mut MatchConte
     if celebration.advance(field, context) {
         context.goal_celebration = Some(celebration);
     }
+    // The whole tick body is skipped in here, `Ball::update` included, so
+    // the celebration hands the woodwork trace its own sample. Without it
+    // every trace of a ball that ends up in the goal stops at the line and
+    // resumes at the centre spot — which is the single stretch the "it goes
+    // to the keeper and then teleports" report is about.
+    #[cfg(feature = "match-logs")]
+    field
+        .ball
+        .trace_tick(context.current_tick(), &field.players);
     true
 }
 

@@ -356,7 +356,23 @@ impl Ball {
             }
         }
 
-        if velocity_norm_sq > STOPPING_THRESHOLD * STOPPING_THRESHOLD {
+        // **A BALL OFF THE GROUND IS NEVER "NEARLY STOPPED".**
+        //
+        // The settle branch at the bottom zeroes the velocity and puts the
+        // ball on the deck, and it fired on total SPEED alone. A ball that
+        // is airborne and slow is a ball that has yet to fall — one lying
+        // against the goal netting, one at the top of a clipped lob — and
+        // for those the branch did two wrong things at once: it cancelled
+        // the velocity so gravity never reached it again, and it wrote
+        // `position.z = 0`, teleporting it to the floor from wherever it
+        // was. Measured off a real recording: a ball held under the roof
+        // netting hung at 2.24 m for a third of a second and then dropped
+        // 2.24 m in a single tick.
+        //
+        // Anything above the deck therefore takes the aerial branch however
+        // slowly it is moving, and gravity brings it down at gravity's pace.
+        let airborne = self.position.z > 0.1 || self.velocity.z > 0.0;
+        if velocity_norm_sq > STOPPING_THRESHOLD * STOPPING_THRESHOLD || airborne {
             let velocity_norm = velocity_norm_sq.sqrt();
             // A ball that has just bounced is on its way UP, so it is not
             // rolling however low it is.
@@ -408,8 +424,8 @@ impl Ball {
                 self.spin = SpinModel::decayed(self.spin);
             }
         } else {
-            // Ball has nearly stopped - bring to complete rest smoothly
-            // Use gradual decay instead of instant stop
+            // Ball has nearly stopped ON THE GROUND — see `airborne` above —
+            // so bring it to complete rest smoothly rather than instantly.
             self.velocity = self.velocity * 0.8; // Smooth final decay
 
             // Only fully stop when truly negligible
@@ -604,6 +620,18 @@ impl Ball {
                 super::ownership::reception_diag::ENDLINE_CLAMPED_IN_MOUTH
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
+        }
+
+        #[cfg(feature = "match-logs")]
+        if self.position.x <= 0.0
+            || self.position.x >= field_width
+            || self.position.y <= 0.0
+            || self.position.y >= field_height
+        {
+            super::frame_trace::FrameTrace::note(format!(
+                "check_boundary_collision: CLAMP from ({:.1}, {:.1}, {:.2}) owner {:?}",
+                self.position.x, self.position.y, self.position.z, self.current_owner
+            ));
         }
 
         if self.position.x <= 0.0 {
@@ -812,6 +840,45 @@ mod tests {
     /// run AFTER the roll/fly split, which zeroed the downward velocity
     /// first and left the branch unreachable for anything moving at a
     /// normal speed — lofted balls simply died where they landed.
+    #[test]
+    /// **A slow ball in the air must not be put on the floor.**
+    ///
+    /// The settle branch fired on total SPEED alone and wrote
+    /// `position.z = 0`, so a ball that was airborne and barely moving — one
+    /// lying against the goal netting, one at the top of a clipped lob — was
+    /// teleported to ground level from wherever it was, and had its velocity
+    /// zeroed so gravity never reached it again. Measured off a real
+    /// recording: a ball held under the roof netting dropped 2.24 m in a
+    /// single tick.
+    #[test]
+    fn a_slow_airborne_ball_falls_instead_of_being_dropped_to_the_deck() {
+        let mut ball = Ball::with_coord(840.0, 545.0);
+        ball.position = Vector3::new(100.0, 272.0, 2.2);
+        // Below the settle branch's speed threshold on every axis.
+        ball.velocity = Vector3::new(0.001, 0.0, 0.0);
+        ball.update_velocity();
+        assert!(
+            ball.position.z > 2.0,
+            "the ball was teleported from 2.2 m to {:.2} m",
+            ball.position.z
+        );
+        assert!(
+            ball.velocity.z < 0.0,
+            "and it has to be falling, got vz {}",
+            ball.velocity.z
+        );
+        // Over a second of it, the fall is gravity's and nothing else's.
+        for _ in 0..100 {
+            ball.update_velocity();
+            ball.position += ball.velocity;
+        }
+        assert!(
+            ball.position.z < 2.0,
+            "a second later the ball is still at {:.2} m — it is not falling at all",
+            ball.position.z
+        );
+    }
+
     #[test]
     fn a_descending_ball_bounces_instead_of_dying_on_contact() {
         let mut ball = Ball::with_coord(840.0, 545.0);

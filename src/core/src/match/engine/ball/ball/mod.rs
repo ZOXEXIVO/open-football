@@ -16,6 +16,10 @@
 // `pub` for `GoalFrame` / `FramePart` — the replay viewer draws the same
 // posts the physics rebounds off, and the two geometries must agree.
 pub mod frame;
+// The woodwork's own per-tick ball trace: diagnostic only, compiled under
+// `match-logs` and inert unless armed. See [`frame_trace`].
+#[cfg(feature = "match-logs")]
+pub mod frame_trace;
 mod goal;
 pub mod interactions;
 // `pub` for `GoalNet` / `BallInNet` — the celebration choreography in the
@@ -2175,6 +2179,45 @@ impl Ball {
         self.cached_landing_position = self.calculate_landing_position();
     }
 
+    /// Hand the woodwork trace the ball as tick `tick` left it.
+    ///
+    /// Sampled at the TOP of the update rather than the bottom because the
+    /// update has three exits — the netting, the awaited restart and the
+    /// ordinary one — and a ball that stops being sampled the moment it goes
+    /// in the goal is a ball whose trace ends exactly where the report says
+    /// it goes wrong. One call site covers all three, and any relocation
+    /// applied BETWEEN two updates (a set-piece teleport) shows up in the
+    /// gap. The post-goal celebration runs with the whole tick body skipped,
+    /// so it samples itself — see `advance_goal_celebration`.
+    #[cfg(feature = "match-logs")]
+    pub(crate) fn trace_tick(&self, tick: u64, players: &[MatchPlayer]) {
+        if !frame_trace::FrameTrace::armed() {
+            return;
+        }
+        let owner_role = self
+            .current_owner
+            .and_then(|id| players.iter().find(|p| p.id == id))
+            .map(
+                |p| match p.tactical_position.current_position.position_group() {
+                    crate::PlayerFieldPositionGroup::Goalkeeper => 'G',
+                    crate::PlayerFieldPositionGroup::Defender => 'D',
+                    crate::PlayerFieldPositionGroup::Midfielder => 'M',
+                    crate::PlayerFieldPositionGroup::Forward => 'F',
+                },
+            )
+            .unwrap_or('-');
+        frame_trace::FrameTrace::note_tick(frame_trace::Sample {
+            tick,
+            pos: self.position,
+            vel: self.velocity,
+            owner: self.current_owner,
+            owner_role,
+            in_net: self.in_net.is_some(),
+            awaiting_restart: self.awaiting_restart.is_some(),
+            held: self.held_in_hands,
+        });
+    }
+
     pub fn update(
         &mut self,
         context: &mut MatchContext,
@@ -2182,6 +2225,8 @@ impl Ball {
         tick_context: &GameTickContext,
         events: &mut EventCollection,
     ) {
+        #[cfg(feature = "match-logs")]
+        self.trace_tick(self.current_tick_cached, players);
         self.current_tick_cached = context.current_tick();
         #[cfg(feature = "match-logs")]
         let owner_at_entry = self.current_owner;
@@ -2726,6 +2771,8 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
+        #[cfg(feature = "match-logs")]
+        self.trace_tick(self.current_tick_cached, players);
         self.current_tick_cached = context.current_tick();
 
         // See `Ball::update` — the netting owns a ball that has gone in.

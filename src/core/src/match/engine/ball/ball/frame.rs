@@ -322,7 +322,6 @@ impl GoalFrame {
         // along the normal so `first_contact`'s already-overlapping guard
         // cannot latch on the rounding and grind the ball along the post.
         const CLEARANCE_METRES: f32 = 0.003;
-        ball.position = hit.position + hit.normal * CLEARANCE_METRES;
 
         let approach = Self::dot_metres(ball.velocity, hit.normal);
         if approach < 0.0 {
@@ -334,6 +333,24 @@ impl GoalFrame {
             ball.velocity = tangent * Self::TANGENTIAL - normal_part * Self::RESTITUTION;
         }
         ball.spin *= Self::SPIN_RETAINED;
+
+        // **The rest of the tick still has to be travelled.**
+        //
+        // Leaving the ball ON the contact point threw away the `1 - travel`
+        // of the step that had not been spent yet — and a contact resolves
+        // wherever in the step it happens, so a shot that clipped the post
+        // 13% of the way through its tick lost 87% of a tick's flight and
+        // hitched on the woodwork. Measured off a real recording: a ball
+        // arriving at 2.7 u/tick moved 0.34u on the tick it struck the post.
+        // At 100 ticks a second that hitch lands inside a single recorded
+        // replay frame, which is the "the ball stops on the post" picture.
+        //
+        // Carried along the NEW velocity, which points away from the member
+        // by construction, so the continuation cannot drive the ball back
+        // into what it has just come off.
+        ball.position = hit.position
+            + hit.normal * CLEARANCE_METRES
+            + ball.velocity * (1.0 - hit.travel).clamp(0.0, 1.0);
     }
 }
 
@@ -391,11 +408,30 @@ impl Ball {
         context: &crate::r#match::MatchContext,
         events: &mut crate::r#match::events::EventCollection,
     ) {
+        #[cfg(feature = "match-logs")]
+        let approach = self.velocity;
         let Some(hit) = self.check_goal_frame(&context.goal_positions) else {
             return;
         };
         #[cfg(feature = "match-logs")]
         crate::mid_run_diag::FrameDiag::note(hit.part);
+        #[cfg(feature = "match-logs")]
+        super::frame_trace::FrameTrace::note_hit();
+        #[cfg(feature = "match-logs")]
+        super::frame_trace::FrameTrace::open(format!(
+            "=== {:?} at ({:.2}, {:.2}, {:.2})  in ({:.2}, {:.2}, {:.2}) -> out ({:.2}, {:.2}, {:.2})  travel {:.2} ===",
+            hit.part,
+            hit.position.x,
+            hit.position.y,
+            hit.position.z,
+            approach.x,
+            approach.y,
+            approach.z,
+            self.velocity.x,
+            self.velocity.y,
+            self.velocity.z,
+            hit.travel,
+        ));
         self.cached_shot_target = None;
         self.last_rebound_tick = self.current_tick_cached;
         // Long enough that the rebound is genuinely in the air before
@@ -610,6 +646,44 @@ mod tests {
             (ball.position.x - 840.0).abs() > 1.0,
             "the ball is still on the post at x={}",
             ball.position.x
+        );
+    }
+
+    /// **A rebound must not cost the ball the rest of its tick.**
+    ///
+    /// The response left the ball ON the contact point, and a contact
+    /// resolves wherever in the step it happens — so a shot that clipped the
+    /// post a tenth of the way through its tick lost nine tenths of a tick's
+    /// flight and hitched on the woodwork. Measured off a real recording: a
+    /// ball arriving at 2.7 u/tick moved 0.34u on the tick it struck the
+    /// post, and at 100 ticks a second that hitch lands inside a single
+    /// recorded replay frame.
+    #[test]
+    fn a_rebound_keeps_travelling_for_the_rest_of_the_tick() {
+        let g = goals();
+        // Started a fifth of a step short of the contact, so the strike
+        // lands early in the tick and most of it is left to spend.
+        let mut ball = ball_at(
+            Vector3::new(838.1, right_post_axis() + 0.2, 0.5),
+            Vector3::new(2.8, 0.0, 0.0),
+        );
+        ball.position += ball.velocity;
+        let hit = ball.check_goal_frame(&g).expect("the post is in the way");
+        assert!(
+            hit.travel < 0.5,
+            "the test needs a contact with most of the step left to spend, got travel {}",
+            hit.travel
+        );
+        // Displacement is the wrong measure for a rebound — a head-on one
+        // comes back over its own path and barely moves. What the fix owes
+        // the ball is the unspent fraction of the step, carried along the
+        // velocity it left with, so measure it from the CONTACT.
+        let from_contact = (ball.position - hit.position).xy().magnitude();
+        let owed = ball.velocity.xy().magnitude() * (1.0 - hit.travel);
+        assert!(
+            from_contact > owed * 0.8,
+            "the ball finished {from_contact:.2}u from the post against {owed:.2}u of unspent \
+             step — the rebound is parking it on the woodwork"
         );
     }
 
