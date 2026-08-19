@@ -507,6 +507,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // area — among the players inside the box (≈135u of the goal).
         let mut best_att: Option<(usize, f32)> = None;
         let mut best_def_score = 0.40_f32;
+        // Who the defending header actually falls to, so the cleared-behind
+        // branch can hook it from where he is standing rather than from the
+        // corner flag the ball has not left yet.
+        let mut best_def: Option<usize> = None;
         let mut gk_command = 0.35_f32;
         for (i, p) in field.players.iter().enumerate() {
             if (p.position - attacked_goal).magnitude() > 135.0 {
@@ -529,6 +533,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 let s = sc::aerial_outfield_defender(p, minute);
                 if s > best_def_score {
                     best_def_score = s;
+                    best_def = Some(i);
                 }
             }
         }
@@ -668,9 +673,29 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // often a forward or a midfielder instead, and those two
             // paths are exactly the ones that need this flag.
             b.aerial_contest_winner = Some(winner_id);
+        } else if let Some(clearer) = best_def {
+            // **The repeat corner.** The defending side wins the header,
+            // and the man it falls to — standing in his own six-yard area
+            // with the ball already across him — hooks it over his own
+            // byline instead of trying to turn it upfield.
+            //
+            // This is the sibling of the same branch in
+            // `resolve_cross_contest`, on the same curve and the same
+            // window, and the corner contest was the one that never had
+            // it: a delivery the attackers did not win simply flew on to
+            // its aim point untouched, so **a corner in this engine could
+            // never produce another corner**. Real football does that
+            // constantly — it is why sides win three and four in a row —
+            // and the corner-source census had the whole "defender puts a
+            // delivery behind" family at 4% of supply against a real ~35%.
+            let from = field.players[clearer].position;
+            if Self::heads_it_behind(from, attacked_goal, field.size.width as f32, context) {
+                Self::hook_it_behind(field, from, attacked_goal);
+                field.ball.previous_owner = taker;
+            }
         }
         // Otherwise the cross plays out — the keeper claims or a defender
-        // clears (the realistic majority outcome).
+        // clears it upfield (the realistic majority outcome).
 
         // The contest IS the resolution of the delivery — clear the
         // stale cross-target so the original aim point (often the OTHER
@@ -1208,44 +1233,22 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             //
             // This branch is the majority outcome of every cross in the
             // engine and it could only ever clear away from goal, so
-            // **defenders never conceded corners**. Measured
-            // (`ENDLINE CENSUS`, corner sources): the only real supplier
-            // was the keeper parrying, at 3.4 a match, and corners ran at
-            // ~10.8 against a real ~21. Putting the ball behind is the
-            // single largest real corner source and it did not exist —
-            // note the endline split, 25% corners here against ~62% real.
+            // **defenders never conceded corners**: before it, the only
+            // real supplier was the keeper parrying, at 3.4 a match.
+            //
+            // ⚠ THE TARGET IT WAS SIZED AGAINST WAS TWICE THE REAL ONE.
+            // "corners ran at ~10.8 against a real ~21, and the endline
+            // split was 25% corners against ~62% real" — both of those
+            // reference figures came from reading the per-MATCH corner
+            // average (~10.4) as a per-TEAM one. A real match has ~10.4
+            // corners and ~16 goal kicks: ~40% corners, which is what the
+            // engine measures today. So this branch was aimed at roughly
+            // double the corners football actually produces, and its
+            // `BEHIND_AT_LINE` share should be read in that light before
+            // anybody raises it further.
             if Self::heads_it_behind(ball_pos, attacked_goal, field.size.width as f32, context) {
-                let field_height = field.size.height as f32;
-                // Wide of the post, on the side he is already on. Never
-                // across the face of goal — that is an own goal, not a
-                // clearance.
-                const CLEAR_OF_POST: f32 = 55.0;
-                let out_y = if ball_pos.y >= attacked_goal.y {
-                    (attacked_goal.y + CLEAR_OF_POST).min(field_height - 6.0)
-                } else {
-                    (attacked_goal.y - CLEAR_OF_POST).max(6.0)
-                };
-                // Just past the goal line, on the far side of it.
-                let goal_line_dir = (attacked_goal.x - ball_pos.x).signum();
-                let out_x = attacked_goal.x + goal_line_dir * 18.0;
-                let target = Vector3::new(out_x, out_y, 0.0);
-                let to_target = target - ball_pos;
-                let dist = to_target.magnitude().max(0.1);
-                // A hooked header is high and short — it only has to
-                // cross the line.
-                let vz = Ball::launch_speed_for_apex(5.0);
-                let hang = Ball::hang_ticks(vz).max(1.0);
-                let speed = ((dist / hang) * 1.5).clamp(0.30, 2.6);
-                let dir = to_target / dist;
-
-                let b = &mut field.ball;
-                b.position.z = 2.2;
-                b.velocity = Vector3::new(dir.x * speed, dir.y * speed, vz);
-                b.current_owner = None;
-                b.flags.in_flight_state = 1;
-                b.pass_target_player_id = None;
-                b.clear_pending_pass_metadata();
-                b.cross_contest_resolved = true;
+                Self::hook_it_behind(field, ball_pos, attacked_goal);
+                field.ball.cross_contest_resolved = true;
                 return;
             }
 
@@ -1298,6 +1301,45 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// go one way. The share rises steeply as the goal line approaches
     /// and is zero outside the area, so ordinary defensive headers in and
     /// around the box still play the ball out as they always did.
+    /// Put the ball over the defender's own byline, wide of the post.
+    ///
+    /// The other half of [`heads_it_behind`](Self::heads_it_behind) and of
+    /// the corner contest's cleared branch: once the decision is taken,
+    /// both need the same hooked, high, short trajectory, and both need it
+    /// to finish OUTSIDE the posts — a clearance across the face of goal
+    /// is an own goal, not a clearance.
+    fn hook_it_behind(field: &mut MatchField, from: Vector3<f32>, attacked_goal: Vector3<f32>) {
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::HEADED_BEHIND_FIRED.fetch_add(1, Ordering::Relaxed);
+        let field_height = field.size.height as f32;
+        // Wide of the post, on the side he is already on.
+        const CLEAR_OF_POST: f32 = 55.0;
+        let out_y = if from.y >= attacked_goal.y {
+            (attacked_goal.y + CLEAR_OF_POST).min(field_height - 6.0)
+        } else {
+            (attacked_goal.y - CLEAR_OF_POST).max(6.0)
+        };
+        // Just past the goal line, on the far side of it.
+        let goal_line_dir = (attacked_goal.x - from.x).signum();
+        let out_x = attacked_goal.x + goal_line_dir * 18.0;
+        let target = Vector3::new(out_x, out_y, 0.0);
+        let to_target = target - from;
+        let dist = to_target.magnitude().max(0.1);
+        // A hooked header is high and short — it only has to cross the line.
+        let vz = Ball::launch_speed_for_apex(5.0);
+        let hang = Ball::hang_ticks(vz).max(1.0);
+        let speed = ((dist / hang) * 1.5).clamp(0.30, 2.6);
+        let dir = to_target / dist;
+
+        let b = &mut field.ball;
+        b.position = Vector3::new(from.x, from.y, 2.2);
+        b.velocity = Vector3::new(dir.x * speed, dir.y * speed, vz);
+        b.current_owner = None;
+        b.flags.in_flight_state = 1;
+        b.pass_target_player_id = None;
+        b.clear_pending_pass_metadata();
+    }
+
     fn heads_it_behind(
         ball_pos: Vector3<f32>,
         attacked_goal: Vector3<f32>,

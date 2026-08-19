@@ -3849,9 +3849,18 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             "direct FKs/match    : {:.1}  (real ~20-24 total FKs)",
             dfks as f32 / n
         );
+        // ⚠ ~10-11 IS THE PER-MATCH FIGURE, NOT THE PER-TEAM ONE. This
+        // line printed a per-TEAM number against it for a long time, and
+        // the same doubling propagated into the endline census ("real ~21
+        // + ~13") and into the comments of the code that supplies corners
+        // — so the engine has been measured against a target twice the
+        // real one. A Premier League match has ~10.4 corners TOTAL (the
+        // standard betting line is 9.5-11.5); a team averages ~5.2, and
+        // no side in the league averages 10.
         println!(
-            "corners per team    : {:.1}  (real ~10-11)",
-            corners as f32 / (2.0 * n)
+            "corners per team    : {:.1}  (real ~5.2)      per match: {:.1}  (real ~10.4)",
+            corners as f32 / (2.0 * n),
+            corners as f32 / n
         );
     }
     println!();
@@ -6354,10 +6363,31 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         "  corner-contest seen={}  fired={}  attacker-won={}",
         mr[11], mr[12], mr[13]
     );
-    println!(
-        "  block→corner branch fired={}  save-parry→corner branch fired={}",
-        mr[14], mr[15]
-    );
+    // ── WHERE CORNERS COME FROM ────────────────────────────────────────
+    //
+    // Three tagged suppliers plus a remainder. Corner SUPPLY is the one
+    // number nothing else in this file can explain: it is not a rate you
+    // can read off shots or crosses, it is the sum of four independent
+    // mechanisms, and a shortfall in any one of them looks identical in
+    // the headline. Real per-match reference ≈ 10.4 corners.
+    {
+        let per = |v: u64| v as f64 / n as f64;
+        let total = mr[6].max(1);
+        let tagged = mr[14] + mr[15] + mr[16];
+        let share = |v: u64| v as f64 * 100.0 / total as f64;
+        println!(
+            "  corner sources /match: shot BLOCKED wide {:.2} ({:.0}%)   keeper PARRIED wide \
+             {:.2} ({:.0}%)   delivery HOOKED behind {:.2} ({:.0}%)   ordinary play {:.2} ({:.0}%)",
+            per(mr[14]),
+            share(mr[14]),
+            per(mr[15]),
+            share(mr[15]),
+            per(mr[16]),
+            share(mr[16]),
+            per(mr[6].saturating_sub(tagged)),
+            share(mr[6].saturating_sub(tagged)),
+        );
+    }
 
     // ── SET PIECES ─────────────────────────────────────────────────────
     //
@@ -7199,9 +7229,17 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         let crossings = corners + goal_kicks;
         if crossings > 0 {
             println!();
+            // Real reference, per MATCH: ~10.4 corners and ~16 goal
+            // kicks, so ~26 endline crossings of which ~40% are corners.
+            // (The "~21 + ~13 / 62% corners" this used to print came from
+            // reading the per-match corner figure as a per-team one — see
+            // the `corners per team` line in the aggregate block. Every
+            // conclusion drawn from the old 62% is suspect: the engine's
+            // corner SHARE has been about right all along, and it is the
+            // total endline traffic that is short.)
             println!(
                 "--- ENDLINE CENSUS --- {:.1} crossings/match: {:.1} corners ({:.0}%), \
-                 {:.1} goal kicks   (real ~21 + ~13)",
+                 {:.1} goal kicks   (real ~10.4 + ~16, so ~40% corners)",
                 crossings as f64 / n_matches as f64,
                 corners as f64 / n_matches as f64,
                 corners as f64 * 100.0 / crossings as f64,

@@ -1265,6 +1265,24 @@ impl Ball {
     /// body", which is the engine's own statement of a defender's reach.
     const BLOCK_REACH: f32 = 16.0;
 
+    // ⚠ "A DEFENDER STRETCHING TO CUT OUT A LOW BALL PUTS IT BEHIND" WAS
+    // IMPLEMENTED HERE AND REMOVED — MEASURED AT 0.04 A MATCH.
+    //
+    // It is correct football and the obvious hole in the corner-source
+    // census (the whole "defender puts a delivery behind" family is fed
+    // only by SHOTS and AIRBORNE deliveries; the low ball across the face
+    // of goal has no path). It fires on nothing because the situation
+    // does not arise: interceptions cluster AT the defensive line, which
+    // sits ~119u (14.9 m) from its own goal, and almost no live low ball
+    // reaches the last twelve metres to be cut out at all.
+    //
+    // Widening the depth gate to the edge of the area would make it fire
+    // — and would be wrong, because a defender sixteen metres out has the
+    // whole pitch behind him and no reason to concede a corner. The gate
+    // is right and the input is missing. Same shape of answer as the
+    // `Defender: Clearing` hook, which was also correct and also dead.
+    // See `corner_supply_root_cause`.
+
     /// Turn a won block into a deflection, at the blocker.
     ///
     /// `outcome_roll` was drawn when the block was won — see
@@ -1324,6 +1342,24 @@ impl Ball {
         let rev_y = -shot_dir_x * angle.sin() + (-shot_dir_y) * angle.cos();
         let tick = self.current_tick_cached;
 
+        // ⚠ THE CORNER SHARE HERE IS DELIBERATELY FLAT, and depth-scaling
+        // it is a mistake worth documenting because the idea is tempting.
+        //
+        // A defender who HOOKS a delivery behind is choosing to, and the
+        // closer to his own line he is the less choice he has — that is
+        // why `heads_it_behind` in the cross contest scales with depth. A
+        // BLOCKED SHOT is not a choice at all: the ball keeps most of its
+        // goalward momentum through a small deflection, so it carries over
+        // the byline from sixteen metres about as readily as from six. The
+        // thing that decides is the deflection angle, which the spread
+        // above already draws.
+        //
+        // Scaling it on depth was measured against this engine's own
+        // geometry and would have made it worse, not better: blocks land
+        // at ~119u from the blocker's line (`at the strike` in the shot
+        // census), so an `urgency²` curve over the penalty area puts
+        // almost every block on the floor of the curve and would have cut
+        // block-fed corners from 0.74 a match to near zero.
         let roll = outcome_roll;
         let p_controlled = controlled_block_prob;
         let p_corner = p_controlled + 0.23;
