@@ -1,4 +1,3 @@
-use shared::{Appearance, Region, SkinBucket, SkinDist};
 use axum::response::IntoResponse;
 use core::PlayerFieldPositionGroup;
 use core::block_diag::BlockDiag;
@@ -19,6 +18,7 @@ use flate2::write::GzEncoder;
 use rand::RngExt;
 use rayon::prelude::*;
 use serde::Serialize;
+use shared::{Appearance, Region, SkinBucket, SkinDist};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -303,6 +303,16 @@ struct GoalJson {
     is_auto_goal: bool,
 }
 
+/// The near misses the engine shortlisted — see `HighlightSelector`. The
+/// harness carries them for the same reason it carries the goals: they are what
+/// the timeline marks, and a match watched here should have the same reel on it
+/// as one watched in the game.
+#[derive(Serialize)]
+struct ChanceJson {
+    player_id: u32,
+    time: u64,
+}
+
 #[derive(Serialize)]
 struct MetadataJson {
     chunk_count: usize,
@@ -322,6 +332,7 @@ struct ViewerConfigJson<'a> {
     away: ViewerColorsJson,
     players: &'a [PlayerJson],
     goals: &'a [GoalJson],
+    chances: &'a [ChanceJson],
     debug: bool,
 }
 
@@ -343,6 +354,7 @@ impl ViewerPage {
         level_b: u8,
         match_time_ms: u64,
         goals: &[GoalJson],
+        chances: &[ChanceJson],
         players: &[PlayerJson],
     ) -> String {
         let config = ViewerConfigJson {
@@ -359,6 +371,7 @@ impl ViewerPage {
             },
             players,
             goals,
+            chances,
             debug: true,
         };
 
@@ -4566,6 +4579,96 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             );
         }
 
+        {
+            // Where the keeper's possession actually lives, and how it
+            // ends. See `reception_diag::KEEPER_BALL`.
+            let k = core::reception_diag::keeper_ball_snapshot();
+            let m = n_matches as f64;
+            let feet = k[0] as f64;
+            let hands = k[4] as f64;
+            println!();
+            println!("--- KEEPER POSSESSION (where the ball is while he has it) ---");
+            println!(
+                "  at his FEET {:.0} ticks/match ({:.0}% of his possession)   in his GLOVES {:.0} ({:.0}%)",
+                feet / m,
+                feet / (feet + hands).max(1.0) * 100.0,
+                hands / m,
+                hands / (feet + hands).max(1.0) * 100.0
+            );
+            println!(
+                "  at his feet: an opponent inside the claim radius on {:.0}% of ticks; he could LEGALLY have picked it up on {:.0}% (and on {:.0}% of the pressed ones)",
+                k[1] as f64 / feet.max(1.0) * 100.0,
+                k[2] as f64 / feet.max(1.0) * 100.0,
+                k[3] as f64 / k[1].max(1) as f64 * 100.0
+            );
+            println!(
+                "  in his gloves: {:.2} opponents inside his own area on average, at least one on {:.0}% of ticks, one within 5u on {:.0}%",
+                k[7] as f64 / hands.max(1.0),
+                k[5] as f64 / hands.max(1.0) * 100.0,
+                k[6] as f64 / hands.max(1.0) * 100.0
+            );
+            println!(
+                "    …over the hold: 0-1s {:.2} in the area   1-2s {:.2}   2s+ {:.2}   (they should be walking out)",
+                k[15] as f64 / k[14].max(1) as f64,
+                k[17] as f64 / k[16].max(1) as f64,
+                k[19] as f64 / k[18].max(1) as f64
+            );
+            println!(
+                "    steered out: {:.0} player-ticks/match at {:.3} u/tick mean",
+                k[20] as f64 / m,
+                k[21] as f64 / k[20].max(1) as f64 / 1000.0
+            );
+            println!(
+                "  ROBBED: off his feet {:.2}/match   out of his gloves {:.2}/match (MUST be 0)   foot spells {:.1}/match   gloves opened under him {:.2}/match (MUST be 0)",
+                k[8] as f64 / m,
+                k[9] as f64 / m,
+                k[10] as f64 / m,
+                k[12] as f64 / m
+            );
+            let by_state = core::reception_diag::keeper_feet_state_snapshot();
+            let mut rows: Vec<(String, u64)> = by_state
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| **n > 0)
+                .map(|(i, n)| (StateNames::of(100 + i as u16), *n))
+                .collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            let line: Vec<String> = rows
+                .iter()
+                .map(|(n, c)| format!("{} {:.0}", n, *c as f64 / m))
+                .collect();
+            println!("  ticks at his feet by state: {}", line.join("   "));
+            let robbed = core::reception_diag::keeper_robbed_state_snapshot();
+            let mut rrows: Vec<(String, u64)> = robbed
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| **n > 0)
+                .map(|(i, n)| (StateNames::of(100 + i as u16), *n))
+                .collect();
+            rrows.sort_by(|a, b| b.1.cmp(&a.1));
+            let rline: Vec<String> = rrows
+                .iter()
+                .map(|(n, c)| format!("{} {:.2}", n, *c as f64 / m))
+                .collect();
+            println!("  robbed off his feet in state: {}", rline.join("   "));
+            let starts = core::reception_diag::keeper_feet_start_snapshot();
+            let mut srows: Vec<(String, u64)> = starts
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| **n > 0)
+                .map(|(i, n)| (StateNames::of(100 + i as u16), *n))
+                .collect();
+            srows.sort_by(|a, b| b.1.cmp(&a.1));
+            let sline: Vec<String> = srows
+                .iter()
+                .map(|(n, c)| format!("{} {:.2}", n, *c as f64 / m))
+                .collect();
+            println!(
+                "  handed the ball AT HIS FEET while in: {}",
+                sline.join("   ")
+            );
+        }
+
         let ct = core::time_band_diag::close_tag_snapshot();
         let cttotal: u64 = ct.iter().sum();
         println!();
@@ -6311,6 +6414,58 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
              (tick-scale, not per set piece)",
             sp[9], sp[10], sp[11],
         );
+        // The corner BOX CENSUS: who is actually standing in the penalty
+        // area at the instant the delivery is struck — OUTFIELDERS ONLY,
+        // both keepers excluded, so the real-world comparison is 7-9 a
+        // side rather than the 8-10 you get counting the goalkeeper.
+        //
+        // This is the number the corner set-up (`CornerShape`) exists to
+        // move. Before it there was no set-up at all — the shape was
+        // whatever open play left behind — and reading it off a recorded
+        // match gave 3-6 defenders with a floor of NONE: a goalkeeper
+        // alone in his box while the cross came in, which is what a
+        // player reported after watching it in the 3D viewer. Read the
+        // MINIMUM as hard as the mean: the mean can look respectable
+        // while the tail is a deserted goalmouth.
+        println!(
+            "  corner box census AT THE SET-UP over {} corners: DEFENDERS {:.1} \
+             (real ~7-9, worst seen {})  ATTACKERS {:.1} (real ~5-7)",
+            sp[21],
+            sp[19] as f64 / 100.0,
+            sp[22],
+            sp[20] as f64 / 100.0,
+        );
+        // …and the same count when the delivery is airborne, which also
+        // says whether the shape SURVIVED the flight. Its worst-case is
+        // noisier than the set-up's on purpose: the resolver that samples
+        // it fires on the first airborne ownerless tick with a live
+        // `Corner` origin, and that origin outlives the set piece, so a
+        // ball hooked up two seconds later at the other end lands in this
+        // sample. Compare the two means; trust the set-up's minimum.
+        println!(
+            "  …and AT THE DELIVERY over {}: DEFENDERS {:.1} (worst seen {})  ATTACKERS {:.1}",
+            sp[14],
+            sp[12] as f64 / 100.0,
+            sp[15],
+            sp[13] as f64 / 100.0,
+        );
+        // How long the stations pin anyone, and which of the two exits
+        // let go. A deadline release lets go EARLY — before anybody has
+        // reached the ball — so it is the safe direction; a first-contact
+        // release means the football ended the set piece. Both are fine.
+        // What is NOT fine is the third case this replaced: releasing
+        // only on the restart origin, which needs a TOUCH, which the pin
+        // itself prevents — that deadlocked at ~7 s of frozen shape.
+        println!(
+            "  corner shape held {:.2} s per corner, {:.0}% of them released by the \
+             DEADLINE rather than by first contact   (real corner ~1-2 s)",
+            sp[16] as f64 / 100.0 / 100.0,
+            if sp[18] == 0 {
+                0.0
+            } else {
+                sp[17] as f64 * 100.0 / sp[18] as f64
+            },
+        );
     }
 
     // ── OVERLAPPING FULLBACK FUNNEL ────────────────────────────────────
@@ -6609,7 +6764,10 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 (0..4).map(|b| m[b * 4 + 3] as f64).sum::<f64>() / 100.0 / ticks as f64 * 0.125
             );
             println!("  ball from his goal      time%     m/match     still%    mean depth");
-            for (b, label) in ["< 12 m", "12-25 m", "25-40 m", "beyond 40 m"].iter().enumerate() {
+            for (b, label) in ["< 12 m", "12-25 m", "25-40 m", "beyond 40 m"]
+                .iter()
+                .enumerate()
+            {
                 let t = m[b * 4];
                 if t == 0 {
                     continue;
@@ -6764,14 +6922,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             println!("--- KEEPER BY SHOT RANGE (on-frame shots that reached his plane) ---");
             println!(
                 "  {:<12} {:>8} {:>10} {:>10} {:>9} {:>8} {:>9} {:>9}",
-                "struck from",
-                "arrived",
-                "beyond",
-                "miss",
-                "reach",
-                "saved",
-                "diving",
-                "flight"
+                "struck from", "arrived", "beyond", "miss", "reach", "saved", "diving", "flight"
             );
             let bands = ["< 11 m", "11-18 m", "18-28 m", "28 m +"];
             for (label, band) in bands.iter().zip(0..4usize) {
@@ -6799,7 +6950,13 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             // is a different animal from one who never saw it.
             println!(
                 "  {:<12} {:>8} {:>10} {:>10} {:>9} {:>8} {:>9} {:>9}",
-                "in-window", "ticks", "no react", "< a step", "hopeless", "stepped", "LAUNCHED",
+                "in-window",
+                "ticks",
+                "no react",
+                "< a step",
+                "hopeless",
+                "stepped",
+                "LAUNCHED",
                 "gap/walk"
             );
             for (label, band) in bands.iter().zip(0..4usize) {
@@ -8901,7 +9058,11 @@ fn run_paths(matches: usize, level: u8) {
             if *count == 0 {
                 continue;
             }
-            print!(" {}:{:.0}%", n, *count as f64 / crowd_samples as f64 * 100.0);
+            print!(
+                " {}:{:.0}%",
+                n,
+                *count as f64 / crowd_samples as f64 * 100.0
+            );
         }
         println!();
         println!(
@@ -9026,6 +9187,15 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
         })
         .collect();
 
+    let chances_json: Vec<ChanceJson> = result
+        .chances
+        .iter()
+        .map(|c| ChanceJson {
+            player_id: c.player_id,
+            time: c.time,
+        })
+        .collect();
+
     let out_dir = PathBuf::from("match_results").join(LEAGUE_SLUG);
     std::fs::create_dir_all(&out_dir).expect("failed to create output dir");
 
@@ -9080,6 +9250,7 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
         level_b,
         result.match_time_ms,
         &goals_json,
+        &chances_json,
         &players_json,
     ));
 

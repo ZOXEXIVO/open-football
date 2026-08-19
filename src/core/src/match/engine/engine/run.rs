@@ -4,6 +4,7 @@ use crate::r#match::engine::context::MatchEngineConfig;
 use crate::r#match::engine::rating::{
     EngineVolumeCalibration, RatingExpectationContext, TeamRatingSummary,
 };
+use crate::r#match::engine::result::HighlightSelector;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub fn new() -> Self {
@@ -235,6 +236,18 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         result.penalty_shootout = context.penalty_shootout_kicks.clone();
         result.score = Some(context.score.clone());
 
+        // The near misses worth keeping, and — the same answer, said to the
+        // recorder — which of its provisional chance clips to hold on to. One
+        // call decides both: a marker on the timeline with nothing recorded
+        // under it is a seek into a grey zone, and footage nobody is pointed at
+        // is bytes for their own sake. See `HighlightSelector`.
+        let kept_chances = HighlightSelector::select(
+            &mut context.chances,
+            context.score.detail(),
+            context.total_match_time,
+        );
+        result.chances = context.chances.clone();
+
         // Assign squads based on team IDs, not field positions
         let left_side_squad = field.left_side_players.expect("left team players");
         let right_side_squad = field.right_side_players.expect("right team players");
@@ -285,8 +298,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
 
         // Full time: release the goal-clip pre-roll (nothing will ever claim
-        // it now) and trim the clips back to the final whistle.
-        match_position_data.finish(context.total_match_time);
+        // it now), drop the chance clips the shortlist above passed over, and
+        // trim what is left back to the final whistle.
+        match_position_data.finish_retaining(context.total_match_time, &kept_chances);
         result.position_data = match_position_data;
 
         // Extract per-player stats and calculate match ratings.

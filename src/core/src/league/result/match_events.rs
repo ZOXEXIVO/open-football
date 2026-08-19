@@ -2796,6 +2796,7 @@ mod canonical_rating_tests {
                 additional_time_ms: 0,
                 player_stats: stats,
                 substitutions: Vec::new(),
+                chances: Vec::new(),
                 physical_snapshots: HashMap::new(),
                 penalty_shootout: Vec::new(),
                 player_of_the_match_id: None,

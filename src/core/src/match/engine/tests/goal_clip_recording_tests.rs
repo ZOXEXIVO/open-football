@@ -21,6 +21,7 @@ use crate::MatchRuntime;
 use crate::r#match::MatchResultRaw;
 use crate::r#match::engine::context::MatchEngineConfig;
 use crate::r#match::engine::engine::FootballEngine;
+use crate::r#match::engine::result::HighlightSelector;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::result::{GOAL_CLIP_POST_ROLL_MS, GOAL_CLIP_PRE_ROLL_MS, RecordingScope};
 
@@ -29,12 +30,25 @@ use crate::r#match::result::{GOAL_CLIP_POST_ROLL_MS, GOAL_CLIP_PRE_ROLL_MS, Reco
 /// Nothing is asserted about WHICH match: a goalless one is a legitimate
 /// result this file has nothing to say about, and pinning a seed would only
 /// make the test brittle — the engine's stream is perturbed by whatever else
-/// the suite is running (see the `core_suite_rng_flakiness` note). At two and
-/// a bit goals a match, five goalless in a row is a one-in-a-hundred-thousand
-/// event — and each retry is a whole ninety minutes, so the ceiling is low on
-/// purpose.
+/// the suite is running (see the `core_suite_rng_flakiness` note).
+///
+/// ⚠ THE RETRY BUDGET IS SIZED FOR A **DEBUG** MATCH, NOT A REAL ONE. The
+/// ceiling was 5, justified by "at two and a bit goals a match, five goalless
+/// in a row is a one-in-a-hundred-thousand event". That arithmetic is for
+/// ninety minutes, and this only ever runs under `cfg(debug_assertions)`,
+/// where [`MATCH_HALF_TIME_MS`](crate::r#match::engine::engine::MATCH_HALF_TIME_MS)
+/// makes a half FIVE minutes. Ten minutes of football at 2.6 goals per ninety
+/// is λ ≈ 0.29, so a single match is goalless about three quarters of the
+/// time and five in a row is a **one-in-four** event — the test was failing
+/// on the population goal rate itself, and any calibration change that moved
+/// goals at all could tip it either way.
+///
+/// The loop stops at the first scoring match, so a wider ceiling costs
+/// nothing in the ordinary case (~4 attempts either way) and only spends time
+/// in the tail it exists to survive. Twenty attempts leaves a 0.3% failure
+/// rate at the current rate and stays sane if goals drop further.
 fn match_with_a_goal() -> MatchResultRaw {
-    for seed in 0..5u64 {
+    for seed in 0..20u64 {
         let mut config = MatchEngineConfig::seeded(0x0F00_0000 + seed);
         config.match_recordings = true;
         let result =
@@ -44,7 +58,7 @@ fn match_with_a_goal() -> MatchResultRaw {
             return result;
         }
     }
-    panic!("five matches in a row finished goalless — the engine is not scoring at all");
+    panic!("twenty matches in a row finished goalless — the engine is not scoring at all");
 }
 
 /// One test rather than two, because the scope is process-global (like
@@ -83,6 +97,24 @@ fn a_clipped_recording_holds_the_goals_and_nothing_else() {
         .collect();
     assert!(!goals.is_empty(), "the harness returned a goalless match");
 
+    // The other half of the reel: the near misses the engine shortlisted. Each
+    // is marked speculatively as the ball is struck and kept only if it
+    // survives `HighlightSelector`, so a clip for one that did NOT survive —
+    // or a missing clip for one that did — is a leak in the same wiring the
+    // goals go through.
+    let chances = &result.chances;
+    for team in [
+        result.left_team_players.team_id,
+        result.right_team_players.team_id,
+    ] {
+        let kept = chances.iter().filter(|c| c.team_id == team).count();
+        assert!(
+            kept <= HighlightSelector::PER_TEAM,
+            "team {team} kept {kept} chances, past the {} the shortlist allows",
+            HighlightSelector::PER_TEAM
+        );
+    }
+
     let data = &result.position_data;
     let segments = data
         .recorded_segments()
@@ -95,9 +127,12 @@ fn a_clipped_recording_holds_the_goals_and_nothing_else() {
          recorder a goal had gone in",
         goals.len()
     );
+    let moments = goals.len() + chances.len();
     assert!(
-        segments.len() <= goals.len(),
-        "more clips than goals: {segments:?} for goals at {goals:?}"
+        segments.len() <= moments,
+        "more clips than moments: {segments:?} for {} goal(s) and {} chance(s)",
+        goals.len(),
+        chances.len()
     );
 
     // Every goal falls inside a clip. This is what catches a mark taken off
@@ -112,14 +147,30 @@ fn a_clipped_recording_holds_the_goals_and_nothing_else() {
         );
     }
 
-    // And a clip is the window it claims to be, not the whole match.
+    // And so does every chance that reached the match sheet — a marker on the
+    // timeline with no footage under it seeks into a grey zone.
+    for chance in chances {
+        assert!(
+            segments
+                .iter()
+                .any(|(start, end)| chance.time >= *start && chance.time <= *end),
+            "the chance at {} ms is on the match sheet with nothing recorded \
+             under it: {segments:?}",
+            chance.time
+        );
+    }
+
+    // And a clip is the window it claims to be, not the whole match. The
+    // budget covers the chances that were kept and NOT the ones that were
+    // marked and dropped — which is the assertion that catches a prune that
+    // forgot to take the samples with it.
     let recorded: u64 = segments.iter().map(|(start, end)| end - start).sum();
-    let budget = goals.len() as u64 * (GOAL_CLIP_PRE_ROLL_MS + GOAL_CLIP_POST_ROLL_MS);
+    let budget = moments as u64 * (GOAL_CLIP_PRE_ROLL_MS + GOAL_CLIP_POST_ROLL_MS);
     assert!(
         recorded <= budget,
-        "kept {recorded} ms for {} goal(s), more than the {budget} ms the clips \
-         are allowed: {segments:?}",
-        goals.len()
+        "kept {recorded} ms for {} moment(s), more than the {budget} ms the \
+         clips are allowed: {segments:?}",
+        moments
     );
     assert!(
         recorded < result.match_time_ms,

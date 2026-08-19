@@ -6,7 +6,7 @@ use crate::r#match::engine::player::events::players::FoulSeverity;
 use crate::r#match::engine::psychology::PsychologyState;
 use crate::r#match::engine::referee::RefereeProfile;
 use crate::r#match::engine::result::{
-    PenaltyShootoutKick, PlayerMatchEndStats, PlayerMatchPhysicalSnapshot,
+    ChanceDetail, PenaltyShootoutKick, PlayerMatchEndStats, PlayerMatchPhysicalSnapshot,
 };
 use crate::r#match::engine::set_pieces::SetPieceHistory;
 use crate::r#match::rules::MatchRules;
@@ -107,6 +107,12 @@ pub struct MatchContext {
     pub additional_time_ms: u64,
     pub period_stoppage_time_ms: u64,
     pub penalty_shootout_kicks: Vec<PenaltyShootoutKick>,
+
+    /// Every strike that was worth calling a chance, in the order they were
+    /// taken — candidates, not the shortlist. `HighlightSelector::select`
+    /// reduces this to the two or three per side that reach the match sheet,
+    /// at full time, when there is a whole match to rank them against.
+    pub chances: Vec<ChanceDetail>,
 
     // Global goal cooldown: tick when last goal was scored
     // Prevents immediate scoring after kickoff restart
@@ -382,6 +388,7 @@ impl MatchContext {
             additional_time_ms: 0,
             period_stoppage_time_ms: 0,
             penalty_shootout_kicks: Vec::new(),
+            chances: Vec::new(),
             last_goal_tick: 0,
             last_conceded_tick: [u64::MAX, u64::MAX],
             substituted_out_stats: Vec::new(),

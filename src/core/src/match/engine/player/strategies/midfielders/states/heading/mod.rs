@@ -157,6 +157,24 @@ impl MidfielderHeadingState {
         if ctx.memory().shots_taken > HEADER_SHOT_CAP {
             return false;
         }
+        // A corner the engine's own contest awarded to THIS player IS the
+        // chance. The xG bar below exists to stop a midfielder heading at
+        // goal from silly positions in open play, and it is set well above
+        // any header's xG — a corner header from the penalty spot is
+        // 0.10-0.14 — so applied to a set piece it means a midfielder who
+        // has just won the corner nods it sideways as a knock-down
+        // instead of attacking the goal, every time.
+        //
+        // That was invisible while the box was empty, because the contest
+        // almost always elected a pushed-up centre-back. `CornerShape`
+        // loads the box with the side's best heads, so the winner is now
+        // routinely a midfielder — and headed attempts from the six-yard
+        // band fell with it.
+        if ctx.ball().is_team_attacking_corner()
+            && ctx.tick_context.ball.aerial_contest_winner == Some(ctx.player.id)
+        {
+            return true;
+        }
         let profile = ctx.player().shooting().shot_profile();
         let distance = ctx.ball().distance_to_opponent_goal();
         profile.expected_xg(distance, true) >= HEADER_ON_GOAL_XG_BAR

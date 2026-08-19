@@ -273,6 +273,7 @@ fn synth_match_result(home_score: u8, away_score: u8, scorer_id: Option<u32>) ->
         additional_time_ms: 0,
         player_stats,
         substitutions: Vec::new(),
+        chances: Vec::new(),
         physical_snapshots: HashMap::new(),
         penalty_shootout: Vec::new(),
         player_of_the_match_id: None,

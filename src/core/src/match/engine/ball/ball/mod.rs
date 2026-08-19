@@ -35,6 +35,7 @@ pub mod stall;
 
 use crate::r#match::engine::ball::ball::net::BallInNet;
 use crate::r#match::engine::ball::events::BallEvent;
+use crate::r#match::engine::corner_shape::{CornerShapeHold, CornerStation};
 use crate::r#match::engine::set_pieces::CornerRoutine;
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::strategies::passing::CrossType;
@@ -995,14 +996,32 @@ pub struct Ball {
     /// A dead ball lying on the touchline waiting for its taker to WALK to
     /// it. See [`AwaitedRestart`].
     pub awaiting_restart: Option<AwaitedRestart>,
-    /// Attacking centre-backs to teleport into the box when a corner is
-    /// awarded — the dead-ball set-up (in real football the big men walk
-    /// up during the stoppage). Populated in the corner branch of
-    /// `check_wide_of_goal`, drained by the engine alongside the taker
-    /// teleport. Each entry is (player_id, box_target_position). Without
-    /// this the CBs cannot cover the length of the pitch before the cross
-    /// is delivered, so defenders never get to attack corners.
-    pub pending_corner_teleports: Vec<(u32, Vector3<f32>)>,
+    /// The corner set-up: where all twenty other players stand while the
+    /// corner is taken, as planned by `CornerShape::plan` in the corner
+    /// branch of `check_wide_of_goal` and drained by the engine alongside
+    /// the taker teleport.
+    ///
+    /// In real football both sides walk into this shape during the
+    /// stoppage. There is no stoppage here — the cross leaves the taker's
+    /// boot 50 ms after the corner is awarded — so nobody can cover the
+    /// ground, and without the plan the "corner shape" is just wherever
+    /// open play left everyone: measured at 3-6 defenders in the box
+    /// against a real 8-10, with a low of one (the goalkeeper).
+    pub pending_corner_teleports: Vec<CornerStation>,
+    /// The corner shape currently pinned on the players, if any — when it
+    /// went up and who is taking the kick. `None` on every tick that is
+    /// not a corner, which is nearly all of them, so the per-tick expiry
+    /// check (`clear_expired_corner_stations`) costs one `Option` read.
+    ///
+    /// ⚠ THE SHAPE NEEDS A DEADLINE AND NOT ONLY A CONDITION. The obvious
+    /// release — "hold until the restart stops being a corner" — is a
+    /// feedback loop, because the restart origin only decays when somebody
+    /// *touches* the ball and the pin is what stops anybody going to it. A
+    /// delivery cleared out of the box left twenty-two men standing in a
+    /// corner shape watching it: measured at **7 seconds of held shape per
+    /// corner** before the deadline landed, against a corner that is over
+    /// in one or two.
+    pub corner_shape: Option<CornerShapeHold>,
     /// Fire-once guard for the discrete corner aerial contest. A played-out
     /// lofted corner can't thread the congested box to a specific runner, so
     /// once the cross is struck the engine resolves a single skill-weighted
@@ -1468,6 +1487,7 @@ impl Ball {
             pending_set_piece_teleport: None,
             awaiting_restart: None,
             pending_corner_teleports: Vec::new(),
+            corner_shape: None,
             corner_contest_resolved: true,
             pending_corner_routine: None,
             pending_corner_delivery: 0.5,
@@ -2166,6 +2186,8 @@ impl Ball {
         #[cfg(feature = "match-logs")]
         let owner_at_entry = self.current_owner;
         #[cfg(feature = "match-logs")]
+        let held_at_entry = self.held_in_hands;
+        #[cfg(feature = "match-logs")]
         let spell_at_entry = self.ownership_duration;
         #[cfg(feature = "match-logs")]
         {
@@ -2511,7 +2533,131 @@ impl Ball {
             }
         }
         #[cfg(feature = "match-logs")]
+        self.census_keeper_possession(context, players, owner_at_entry, held_at_entry);
+        #[cfg(feature = "match-logs")]
         self.census_shot_fate(context, players);
+    }
+
+    /// One sample per tick of what the keeper is doing with the ball, and
+    /// how he stops doing it. See
+    /// [`ownership::reception_diag::KEEPER_BALL`] for why the hand/foot
+    /// split is the whole point.
+    #[cfg(feature = "match-logs")]
+    fn census_keeper_possession(
+        &self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        owner_at_entry: Option<u32>,
+        held_at_entry: bool,
+    ) {
+        use crate::PlayerFieldPositionGroup;
+        use ownership::reception_diag as d;
+
+        let keeper_of = |id: Option<u32>| {
+            id.and_then(|i| players.iter().find(|p| p.id == i))
+                .filter(|p| {
+                    p.tactical_position.current_position.position_group()
+                        == PlayerFieldPositionGroup::Goalkeeper
+                })
+        };
+
+        // How the possession ENDED. Read against the owner at entry so a
+        // hand-off resolved anywhere inside this tick is caught, whichever
+        // of the fifteen ownership-granting sites did it.
+        if owner_at_entry != self.current_owner {
+            if let (Some(was), Some(now_id)) = (keeper_of(owner_at_entry), self.current_owner) {
+                let stolen = players
+                    .iter()
+                    .find(|p| p.id == now_id)
+                    .is_some_and(|p| p.team_id != was.team_id);
+                if stolen {
+                    d::keeper_ball_note(if held_at_entry { 9 } else { 8 });
+                    if let crate::r#match::player::state::PlayerState::Goalkeeper(gk) = was.state {
+                        d::keeper_robbed_state(gk as usize);
+                    }
+                }
+            }
+        }
+
+        let Some(keeper) = keeper_of(self.current_owner) else {
+            return;
+        };
+
+        // Did his gloves come open under him? Same possession, same
+        // player, hands lowered — nobody touched the ball, so nothing in
+        // the Laws or the physics can explain it and something in the
+        // engine cleared the flag. Must read zero.
+        if held_at_entry && !self.held_in_hands && owner_at_entry == self.current_owner {
+            d::keeper_ball_note(12);
+        }
+        let area = context.penalty_area(keeper.side == Some(PlayerSide::Left));
+        let in_area = (area.min.x..=area.max.x).contains(&self.position.x)
+            && (area.min.y..=area.max.y).contains(&self.position.y);
+        // 5.0u is `BALL_DISTANCE_THRESHOLD` — the radius inside which
+        // `check_ball_ownership` will consider handing the ball over.
+        const CLAIM_RADIUS_SQ: f32 = 5.0 * 5.0;
+        let mut closest = false;
+        let mut opponents_in_area = 0u64;
+        for p in players.iter().filter(|p| p.team_id != keeper.team_id) {
+            if (p.position - self.position).norm_squared() < CLAIM_RADIUS_SQ {
+                closest = true;
+            }
+            if (area.min.x..=area.max.x).contains(&p.position.x)
+                && (area.min.y..=area.max.y).contains(&p.position.y)
+            {
+                opponents_in_area += 1;
+            }
+        }
+
+        if self.held_in_hands {
+            d::keeper_ball_note(4);
+            if opponents_in_area > 0 {
+                d::keeper_ball_note(5);
+            }
+            if closest {
+                d::keeper_ball_note(6);
+            }
+            d::keeper_ball_add(7, opponents_in_area);
+            // 50 engine ticks to the second.
+            let phase = if self.ownership_duration < 50 {
+                14
+            } else if self.ownership_duration < 100 {
+                16
+            } else {
+                18
+            };
+            d::keeper_ball_note(phase);
+            d::keeper_ball_add(phase + 1, opponents_in_area);
+            if !held_at_entry || owner_at_entry != self.current_owner {
+                d::keeper_ball_note(11);
+            }
+            return;
+        }
+
+        // At his feet. Would the Laws let him pick it up? Same three
+        // prohibitions `BallOperationsImpl::handling_verdict` asks about.
+        let legal = in_area
+            && !self.awaiting_touch_after_release_by(keeper.id)
+            && !self.is_backpass_to(keeper.id, keeper.team_id);
+        d::keeper_ball_note(0);
+        if let crate::r#match::player::state::PlayerState::Goalkeeper(gk) = keeper.state {
+            d::keeper_feet_state(gk as usize);
+        }
+        if closest {
+            d::keeper_ball_note(1);
+        }
+        if legal {
+            d::keeper_ball_note(2);
+            if closest {
+                d::keeper_ball_note(3);
+            }
+        }
+        if held_at_entry || owner_at_entry != self.current_owner {
+            d::keeper_ball_note(10);
+            if let crate::r#match::player::state::PlayerState::Goalkeeper(gk) = keeper.state {
+                d::keeper_feet_start_state(gk as usize);
+            }
+        }
     }
 
     /// Classify how the shot in flight ended, exactly once, at the end of

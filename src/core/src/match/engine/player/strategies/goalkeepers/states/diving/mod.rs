@@ -1,8 +1,9 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
+use crate::r#match::engine::ball::ball::HandlingVerdict;
 use crate::r#match::engine::ball::ball::interactions::SaveModel;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperShotDive, KeeperShotSave,
+    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision, KeeperShotDive, KeeperShotSave,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
@@ -50,6 +51,29 @@ impl StateProcessingHandler for GoalkeeperDivingState {
         // can abort it either.
         const MIN_DIVE_TICKS: u64 = 40;
         if ctx.player.has_ball(ctx) {
+            // …but only if he actually has it in his GLOVES. Ownership is
+            // not a gather, and this branch lies on the ball for the whole
+            // 0.8 s floor without ever asking which of the two it is.
+            //
+            // Measured: 1.3 times a match the keeper is handed the ball at
+            // his FEET while in this state — and **more than half of those
+            // possessions were then taken off him**, because a ball on the
+            // floor inside 5u goes to whichever player has the better
+            // `calculate_tackling_score`, and a prone goalkeeper has the
+            // worst in the match. It was the single largest remaining
+            // source of "a player takes it off the keeper and scores".
+            //
+            // Same rule as `GoalkeeperHoldingState`: a keeper on top of a
+            // loose ball in his own box picks it up, now, which is the
+            // whole point of a smother.
+            if !ctx.tick_context.ball.held_in_hands {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    match ctx.ball().handling_verdict() {
+                        HandlingVerdict::Legal => GoalkeeperState::PickingUpBall,
+                        _ => KeeperFeetDecision::without_hands(ctx),
+                    },
+                ));
+            }
             if ctx.in_state_time >= MIN_DIVE_TICKS {
                 #[cfg(feature = "match-logs")]
                 crate::mid_run_diag::KeeperActionDiag::note(1);

@@ -1,6 +1,6 @@
-use shared::{Region, SkinDist};
 use core::SimulatorData;
 use database::CountryLoader;
+use shared::{Region, SkinDist};
 use std::sync::OnceLock;
 
 /// The per-country ancestry percentages, read out of the database once.

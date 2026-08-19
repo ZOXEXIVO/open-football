@@ -128,14 +128,24 @@ impl StateProcessingHandler for MidfielderRunningState {
         // aerial ball bounce and the second ball always fell to whoever
         // reacted quickest after it landed.
         // Our own corner delivery is owned by the discrete corner
-        // contest (`resolve_corner_contest`) and the CB / forward it
-        // elects — a midfielder jumping at it would re-decide an aerial
-        // the resolver already resolved. Defensive corner headers are
-        // unaffected (the origin check reads the attacking side).
+        // contest (`resolve_corner_contest`) — a midfielder jumping at it
+        // uninvited would re-decide an aerial the resolver already
+        // resolved. Defensive corner headers are unaffected (the origin
+        // check reads the attacking side).
+        //
+        // ⚠ UNLESS THE CONTEST ELECTED HIM. It drops the ball on the
+        // winner's head expecting his state machine to strike it, and
+        // this was the door that machine had to come through — so a
+        // midfielder who won the corner was shut out of the header he had
+        // just been awarded, and the ball simply fell to the floor. Rare
+        // while the box was empty (the election nearly always fell to a
+        // pushed-up centre-back); routine once `CornerShape` loads the
+        // box with the side's best heads.
+        let contest_awarded = ctx.tick_context.ball.aerial_contest_winner == Some(ctx.player.id);
         if !ctx.player.has_ball(ctx)
             && ctx.tick_context.positions.ball.position.z > AERIAL_HEADING_HEIGHT
             && ctx.ball().distance() < AERIAL_HEADING_DISTANCE
-            && !ctx.ball().is_team_attacking_corner()
+            && (!ctx.ball().is_team_attacking_corner() || contest_awarded)
         {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Heading,

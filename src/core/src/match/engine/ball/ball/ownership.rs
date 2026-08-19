@@ -139,6 +139,106 @@ pub mod reception_diag {
         )
     }
 
+    /// ── KEEPER POSSESSION census ─────────────────────────
+    ///
+    /// A keeper's possession comes in two completely different flavours
+    /// and the counters above cannot tell them apart. In his GLOVES the
+    /// ball is out of play: `held_in_hands` bars every claim, tackle and
+    /// interception. At his FEET he is the worst tackler on the pitch
+    /// standing over the ball six yards from his own goal, and
+    /// `check_ball_ownership` hands it to whichever opponent inside 5u has
+    /// the better tackling score — which is all of them.
+    ///
+    /// So "the keeper gets robbed" is not one question but two, and only
+    /// this split can say which: a loss out of the HANDS is a rules breach
+    /// and must read zero, while a loss off the FEET is the engine
+    /// faithfully modelling a keeper who declined to pick the ball up.
+    ///
+    ///   0 foot ticks                     4 hand ticks
+    ///   1 …an opponent within 5u         5 …an opponent inside his area
+    ///   2 …hands would have been legal   6 …an opponent within 5u
+    ///   3 …both of the above             7 opponents-in-area, summed
+    ///   8 possession lost straight to an opponent OFF HIS FEET
+    ///   9 …OUT OF HIS GLOVES — must be 0
+    ///  10 foot spells started           11 hand spells started
+    ///  12 his gloves OPENED while he was still holding the ball and
+    ///     nobody had touched it — must be 0
+    ///  13 …and how many of those he was subsequently robbed on
+    ///  14/15, 16/17, 18/19 — (hand ticks, opponents-in-area summed) for
+    ///     the first second of the hold, the second, and everything after.
+    ///     A MEAN over the whole hold cannot tell "they never left" from
+    ///     "they left, and it took them three seconds"; the time course
+    ///     can, and only the second of those is what a retreat looks like.
+    ///  20 ticks a player spent being steered out of a keeper's area,
+    ///     21 the speed he was steered at, summed × 1000. See
+    ///     `KeeperReleaseSpace`.
+    pub static KEEPER_BALL: [AtomicU64; 22] = [ZERO2; 22];
+
+    #[inline]
+    pub fn keeper_ball_note(slot: usize) {
+        KEEPER_BALL[slot].fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn keeper_ball_add(slot: usize, n: u64) {
+        KEEPER_BALL[slot].fetch_add(n, Ordering::Relaxed);
+    }
+
+    pub fn keeper_ball_snapshot() -> [u64; 22] {
+        std::array::from_fn(|i| KEEPER_BALL[i].load(Ordering::Relaxed))
+    }
+
+    /// Foot-possession ticks split by the keeper state he was in, indexed
+    /// by the `GoalkeeperState` discriminant. Says WHERE to put the
+    /// decision: a state that holds the ball at his feet and has no
+    /// branch for an opponent arriving is the one that loses it.
+    pub static KEEPER_FEET_BY_STATE: [AtomicU64; 24] = [ZERO2; 24];
+
+    #[inline]
+    pub fn keeper_feet_state(slot: usize) {
+        if slot < 24 {
+            KEEPER_FEET_BY_STATE[slot].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn keeper_feet_state_snapshot() -> [u64; 24] {
+        std::array::from_fn(|i| KEEPER_FEET_BY_STATE[i].load(Ordering::Relaxed))
+    }
+
+    /// The keeper state he was in when an opponent took the ball off his
+    /// feet, same indexing. Answers "which state loses the ball", which is
+    /// a different question from "which state holds it longest".
+    pub static KEEPER_ROBBED_BY_STATE: [AtomicU64; 24] = [ZERO2; 24];
+
+    #[inline]
+    pub fn keeper_robbed_state(slot: usize) {
+        if slot < 24 {
+            KEEPER_ROBBED_BY_STATE[slot].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn keeper_robbed_state_snapshot() -> [u64; 24] {
+        std::array::from_fn(|i| KEEPER_ROBBED_BY_STATE[i].load(Ordering::Relaxed))
+    }
+
+    /// The keeper state he was in on the tick a FOOT possession began —
+    /// i.e. which state was running when some path handed him the ball
+    /// without putting it in his gloves. "Which state holds it" and
+    /// "which state was handed it" are different questions and the
+    /// second is the one that names the granting site.
+    pub static KEEPER_FEET_START_BY_STATE: [AtomicU64; 24] = [ZERO2; 24];
+
+    #[inline]
+    pub fn keeper_feet_start_state(slot: usize) {
+        if slot < 24 {
+            KEEPER_FEET_START_BY_STATE[slot].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn keeper_feet_start_snapshot() -> [u64; 24] {
+        std::array::from_fn(|i| KEEPER_FEET_START_BY_STATE[i].load(Ordering::Relaxed))
+    }
+
     // ── Shot fate ────────────────────────────────────────────────────
     // ~80% of shots are AIMED between the posts (`on_target` at emit),
     // yet only ~23% ever resolve as a save or a goal. These say where

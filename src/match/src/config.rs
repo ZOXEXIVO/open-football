@@ -17,6 +17,11 @@ pub struct ViewerConfig {
     pub players: Vec<PlayerInfo>,
     #[serde(default)]
     pub goals: Vec<GoalInfo>,
+    /// The near misses the match kept — two or three a side at most, each with
+    /// a clip behind it in the recording. Absent on a document written before
+    /// chances were recorded, which reads as a match of goals and grey.
+    #[serde(default)]
+    pub chances: Vec<ChanceInfo>,
     /// Display strings, already translated by the page. Keeping them on this
     /// side of the boundary is what lets the viewer stay free of i18n.
     #[serde(default)]
@@ -67,6 +72,16 @@ impl ViewerConfig {
             .find(|p| p.id == goal.player_id)
             .is_some_and(|p| p.is_home);
         scorer_is_home != goal.is_auto_goal
+    }
+
+    /// True when the home side created the chance. No own-goal twist here: a
+    /// chance belongs to whoever struck the ball, and nobody attacks their own
+    /// net on purpose.
+    pub fn chance_belongs_to_home(&self, chance: &ChanceInfo) -> bool {
+        self.players
+            .iter()
+            .find(|p| p.id == chance.player_id)
+            .is_some_and(|p| p.is_home)
     }
 }
 
@@ -143,4 +158,10 @@ pub struct GoalInfo {
     pub time: f64,
     #[serde(default)]
     pub is_auto_goal: bool,
+}
+
+#[derive(Deserialize)]
+pub struct ChanceInfo {
+    pub player_id: u32,
+    pub time: f64,
 }

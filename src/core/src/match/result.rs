@@ -118,8 +118,14 @@ pub enum RecordingScope {
     /// Every sample, first whistle to last. What `.dev/match` needs — its
     /// analyses read the whole match back off the recording.
     Full,
-    /// Only the goals: [`GOAL_CLIP_PRE_ROLL_MS`] before the ball crosses the
-    /// line and [`GOAL_CLIP_POST_ROLL_MS`] after it.
+    /// The highlights: [`GOAL_CLIP_PRE_ROLL_MS`] either side of each goal, and
+    /// of each near miss the match sheet shortlisted (`HighlightSelector`).
+    ///
+    /// Named for the goals because they were once all of it. At the measured
+    /// rate — 2.6 goals and 4.6 kept chances a match — that is about 72 seconds
+    /// of a 5,400-second match, or a seventy-fifth of a full recording; goals
+    /// alone were a two-hundredth. A nil-nil used to keep literally nothing and
+    /// say so, and now has a reel like any other match.
     Goals,
 }
 
@@ -140,18 +146,20 @@ impl RecordingScope {
     }
 }
 
-/// How long before a goal a clip starts.
+/// How long before a goal — or a chance — a clip starts.
 ///
-/// Five seconds is the build-up you need for the goal to make sense: the pass
+/// Five seconds is the build-up you need for the moment to make sense: the pass
 /// that released the run, the cross, the save that fell to somebody. Less and
 /// the ball simply appears in the box.
 pub const GOAL_CLIP_PRE_ROLL_MS: u64 = 5_000;
 
-/// How long after a goal a clip runs.
+/// How long after it a clip runs.
 ///
 /// The ball settling in the net and the first of the celebration — the engine
 /// plays that out rather than teleporting everyone back (see
-/// `handle_goal_reset`), so there is something there to keep.
+/// `handle_goal_reset`), so there is something there to keep. A chance gets the
+/// same five seconds, which is what carries the save, the rebound and whatever
+/// the follow-up was.
 pub const GOAL_CLIP_POST_ROLL_MS: u64 = 5_000;
 
 /// Rounding applied to a recorded coordinate, once on the way into the buffer
@@ -267,13 +275,47 @@ pub struct ResultMatchPositionData {
     /// pending queue, or the end of its kept vector when that queue is empty.
     pending_ball: VecDeque<ResultPositionDataItem>,
     pending_players: HashMap<u32, VecDeque<ResultPositionDataItem>>,
-    /// Time ranges the recording actually covers, merged and in order. Only
-    /// meaningful under [`RecordingScope::Goals`]; a full recording covers
-    /// everything and reports `None` from [`Self::recorded_segments`].
+    /// One entry per moment the engine asked to keep, in the order it asked.
+    /// Goals are final; chances are provisional until [`Self::finish_retaining`]
+    /// is told which of them the match sheet kept — see [`Clip`].
+    clips: Vec<Clip>,
+    /// Time ranges the recording actually covers, merged and in order.
+    ///
+    /// Derived from the surviving `clips` at full time rather than maintained
+    /// as they arrive, because until then it is not known which chance clips
+    /// survive. Only meaningful under [`RecordingScope::Goals`]; a full
+    /// recording covers everything and reports `None` from
+    /// [`Self::recorded_segments`].
     segments: Vec<(u64, u64)>,
-    /// End of the goal clip currently being written, while there is one.
-    /// Samples at or before it go straight into the kept vectors.
+    /// End of the clip currently being written, while there is one. Samples at
+    /// or before it go straight into the kept vectors.
     capture_until: Option<u64>,
+}
+
+/// A stretch of match the recorder was asked to hold on to, and why.
+///
+/// The why matters because the two kinds are decided at different times. A goal
+/// is a goal the instant the ball crosses the line and its clip is never in
+/// doubt; a chance is only ever a candidate — whether it was one of the best
+/// two or three its side had is a question about the whole match, which nobody
+/// can answer while it is still being played. So chances are recorded
+/// speculatively and the losers are thrown away at the whistle, which is also
+/// the only moment the segment list can honestly be built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Clip {
+    /// The instant the clip is cut around — the ball crossing the line, or the
+    /// ball being struck. Doubles as the clip's identity: the shortlist handed
+    /// to [`ResultMatchPositionData::finish_retaining`] is a list of these.
+    at: u64,
+    start: u64,
+    end: u64,
+    kind: ClipKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClipKind {
+    Goal,
+    Chance,
 }
 
 /// Compact top-level serialization.
@@ -321,6 +363,7 @@ impl ResultMatchPositionData {
             scope: RecordingScope::Full,
             pending_ball: VecDeque::new(),
             pending_players: HashMap::new(),
+            clips: Vec::new(),
             segments: Vec::new(),
             capture_until: None,
         }
@@ -610,6 +653,28 @@ impl ResultMatchPositionData {
     /// A no-op under [`RecordingScope::Full`], where every sample is kept
     /// anyway and the whole match is one segment.
     pub fn mark_goal(&mut self, timestamp: u64) {
+        self.open_clip(timestamp, ClipKind::Goal);
+    }
+
+    /// A shot worth calling a chance was just struck: keep it *for now*.
+    ///
+    /// Cut exactly like a goal, and speculative in one more way than a goal's
+    /// pre-roll already is — this clip only survives if the strike turns out to
+    /// be one of the best its side had, which is settled at the whistle by
+    /// `HighlightSelector` and applied by [`Self::finish_retaining`]. Marking
+    /// generously and pruning late is what buys a correctly-anchored clip:
+    /// there is no way to open one five seconds before a shot that has already
+    /// been taken.
+    ///
+    /// `timestamp` is the clip's identity as well as its centre — it has to be
+    /// the same instant the match sheet stamps on the chance, or the shortlist
+    /// and the footage stop lining up.
+    pub fn mark_chance(&mut self, timestamp: u64) {
+        self.open_clip(timestamp, ClipKind::Chance);
+    }
+
+    /// Keep the seconds either side of `timestamp`, and remember why.
+    fn open_clip(&mut self, timestamp: u64, kind: ClipKind) {
         if !self.track_positions || self.scope != RecordingScope::Goals {
             return;
         }
@@ -617,10 +682,12 @@ impl ResultMatchPositionData {
         let start = timestamp.saturating_sub(GOAL_CLIP_PRE_ROLL_MS);
         let end = timestamp.saturating_add(GOAL_CLIP_POST_ROLL_MS);
 
-        match self.segments.last_mut() {
-            Some(last) if start <= last.1 => last.1 = last.1.max(end),
-            _ => self.segments.push((start, end)),
-        }
+        self.clips.push(Clip {
+            at: timestamp,
+            start,
+            end,
+            kind,
+        });
         self.capture_until = Some(match self.capture_until {
             Some(open) => open.max(end),
             None => end,
@@ -649,17 +716,66 @@ impl ResultMatchPositionData {
         }
     }
 
-    /// Full time. Releases the pre-roll — whatever is left in it belongs to no
-    /// goal and never will — and trims the last clip back to the final whistle
-    /// so the viewer doesn't grey in five seconds of injury time that never
-    /// existed.
+    /// Full time, with no chance surviving. Goals only — what the recorder did
+    /// before it kept anything else, and what a caller who never marked a
+    /// chance gets either way.
     pub fn finish(&mut self, total_match_time: u64) {
+        self.finish_retaining(total_match_time, &[]);
+    }
+
+    /// Full time. Releases the pre-roll — whatever is left in it belongs to no
+    /// goal and never will — drops every chance clip the match sheet did not
+    /// keep, and trims what remains back to the final whistle so the viewer
+    /// doesn't grey in five seconds of injury time that never existed.
+    ///
+    /// `kept_chances` are the timestamps handed to [`Self::mark_chance`] that
+    /// survived selection, exactly as `HighlightSelector::select` returned
+    /// them. Everything else marked as a chance goes, along with the samples no
+    /// surviving clip is still holding — which is the whole point of marking
+    /// speculatively in the first place.
+    pub fn finish_retaining(&mut self, total_match_time: u64, kept_chances: &[u64]) {
         self.pending_ball = VecDeque::new();
         self.pending_players = HashMap::new();
         self.capture_until = None;
-        for segment in &mut self.segments {
-            segment.1 = segment.1.min(total_match_time.max(segment.0));
+
+        // A full recording has no clips and no segments — it is all one piece,
+        // and there is nothing here to prune it against.
+        if self.scope != RecordingScope::Goals {
+            return;
         }
+
+        self.clips
+            .retain(|clip| clip.kind == ClipKind::Goal || kept_chances.contains(&clip.at));
+
+        // Merge what is left into the segment list. Clips are marked in match
+        // order, but two of them can still overlap — a goal off a rebound from
+        // a chance five seconds earlier — and a viewer handed overlapping
+        // ranges has to reconcile them.
+        self.clips.sort_by_key(|clip| clip.start);
+        self.segments = Vec::with_capacity(self.clips.len());
+        for clip in &self.clips {
+            let end = clip.end.min(total_match_time.max(clip.start));
+            match self.segments.last_mut() {
+                Some(last) if clip.start <= last.1 => last.1 = last.1.max(end),
+                _ => self.segments.push((clip.start, end)),
+            }
+        }
+
+        // And the samples themselves. Everything inside a dropped clip was kept
+        // outright while it was open (there was no telling then that it would
+        // be dropped), so the segment list is the only thing that knows which
+        // of them still belong to the recording.
+        let segments = &self.segments;
+        let covered = |timestamp: u64| {
+            segments
+                .iter()
+                .any(|(start, end)| timestamp >= *start && timestamp <= *end)
+        };
+        self.ball.retain(|item| covered(item.timestamp));
+        self.players.retain(|_, samples| {
+            samples.retain(|item| covered(item.timestamp));
+            !samples.is_empty()
+        });
     }
 
     /// The parts of the match this recording covers, or `None` when it covers
@@ -1129,5 +1245,143 @@ mod height_recording_tests {
         // 0.1 u of resolution is 1.25 cm, which was never the problem.
         assert_eq!(Quantize::ground(400.04), 400.0);
         assert_eq!(Quantize::ground(400.06), 400.1);
+    }
+}
+
+/// The other half of a clipped recording: the near misses, which are marked on
+/// spec and pruned at the whistle.
+///
+/// The pruning is the part that can go quietly wrong. A recorder that keeps
+/// every marked chance costs several times what clipping was supposed to save
+/// and nobody notices until a season's worth of recordings is on disk; one that
+/// drops the segment but leaves the samples behind writes footage no segment
+/// points at, which the chunker then splits around. Neither shows up in a
+/// recording you watch — only here.
+#[cfg(test)]
+mod chance_clip_tests {
+    use super::*;
+
+    /// Plays `duration_ms` of ball and one player, scoring at each time in
+    /// `goals` and striking a chance at each time in `chances`, then finishes
+    /// keeping only `kept`.
+    fn record(
+        duration_ms: u64,
+        goals: &[u64],
+        chances: &[u64],
+        kept: &[u64],
+    ) -> ResultMatchPositionData {
+        let mut data = ResultMatchPositionData::new().with_scope(RecordingScope::Goals);
+        let mut t = 30;
+        while t <= duration_ms {
+            if goals.contains(&t) {
+                data.mark_goal(t);
+            }
+            if chances.contains(&t) {
+                data.mark_chance(t);
+            }
+            let drift = (t / 30) as f32;
+            data.add_ball_positions(t, Vector3::new(drift, 272.0, 0.0));
+            data.add_player_positions(7, t, Vector3::new(drift, 200.0, 0.0));
+            t += 30;
+        }
+        data.finish_retaining(duration_ms, kept);
+        data
+    }
+
+    #[test]
+    fn a_kept_chance_is_clipped_exactly_like_a_goal() {
+        let data = record(120_000, &[], &[60_000], &[60_000]);
+        assert_eq!(data.recorded_segments(), Some(&[(55_000, 65_000)][..]));
+        assert!(
+            data.ball
+                .iter()
+                .all(|item| (55_000..=65_000).contains(&item.timestamp)),
+            "a chance clip kept samples outside its window"
+        );
+    }
+
+    #[test]
+    fn a_chance_the_match_sheet_dropped_leaves_nothing_behind() {
+        // Marked, held for the whole ten seconds, and then not chosen. Both the
+        // segment AND the samples have to go: a segment list is what the viewer
+        // navigates by, so footage outside it is bytes nobody can ever reach.
+        let data = record(120_000, &[30_000], &[60_000, 90_000], &[]);
+
+        assert_eq!(data.recorded_segments(), Some(&[(25_000, 35_000)][..]));
+        assert!(
+            !data
+                .ball
+                .iter()
+                .any(|item| item.timestamp >= 55_000 && item.timestamp <= 95_000),
+            "the dropped chances left their samples in the recording"
+        );
+        let player = data.players.get(&7).expect("the player was recorded");
+        assert!(
+            !player
+                .iter()
+                .any(|item| item.timestamp >= 55_000 && item.timestamp <= 95_000),
+            "the dropped chances left the player's samples in the recording"
+        );
+    }
+
+    #[test]
+    fn a_goalless_match_can_still_have_a_reel() {
+        // What this whole feature is for. Nil-nil used to record literally
+        // nothing and the viewer said so; now the chances are the recording.
+        let data = record(120_000, &[], &[39_000, 81_000], &[39_000, 81_000]);
+        assert_eq!(
+            data.recorded_segments(),
+            Some(&[(34_000, 44_000), (76_000, 86_000)][..])
+        );
+        assert!(!data.is_empty());
+    }
+
+    #[test]
+    fn a_chance_that_became_a_goal_is_one_clip_rather_than_two() {
+        // The save and the rebound put away two seconds later. The shortlist
+        // drops the chance (see `HighlightSelector`), and what is left is the
+        // goal's own window — not an overlapping pair for the viewer to
+        // reconcile.
+        let data = record(120_000, &[63_000], &[60_000], &[]);
+        assert_eq!(data.recorded_segments(), Some(&[(58_000, 68_000)][..]));
+    }
+
+    #[test]
+    fn overlapping_clips_of_different_kinds_merge() {
+        // If the shortlist DOES keep a chance next to a goal — a different
+        // team's, at the other end — the two ranges still have to come out as
+        // one segment.
+        let data = record(120_000, &[60_000], &[66_000], &[66_000]);
+        assert_eq!(data.recorded_segments(), Some(&[(55_000, 71_000)][..]));
+
+        let stamps: Vec<u64> = data.ball.iter().map(|item| item.timestamp).collect();
+        let mut sorted = stamps.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            stamps, sorted,
+            "the merged clip repeats or reorders samples"
+        );
+    }
+
+    #[test]
+    fn a_full_recording_ignores_the_shortlist_entirely() {
+        // `.dev/match` and the calibration harness read the whole match back
+        // off the recording. A prune that ran here would gut them silently —
+        // and the shortlist they are handed is the same one the game uses.
+        let mut data = ResultMatchPositionData::new().with_scope(RecordingScope::Full);
+        let mut t = 30;
+        while t <= 60_000 {
+            if t == 30_000 {
+                data.mark_chance(t);
+            }
+            let drift = (t / 30) as f32;
+            data.add_ball_positions(t, Vector3::new(drift, 272.0, 0.0));
+            t += 30;
+        }
+        data.finish_retaining(60_000, &[]);
+
+        assert_eq!(data.recorded_segments(), None);
+        assert_eq!(data.ball.len(), 2_000, "samples went missing");
     }
 }

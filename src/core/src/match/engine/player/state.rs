@@ -556,7 +556,9 @@ impl PlayerMatchState {
                     player.last_activity_intensity,
                     player.player_attributes.condition_percentage(),
                 );
-                max_speed *= effort.max(state_change_result.shape_recall_pull);
+                max_speed *= effort
+                    .max(state_change_result.shape_recall_pull)
+                    .max(state_change_result.effort_floor);
             }
 
             // NaN/Inf guard: state velocity functions compose many

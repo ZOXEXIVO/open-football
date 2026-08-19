@@ -1,6 +1,7 @@
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::engine::ball::ball::HandlingVerdict;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperSetPosition,
+    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision, KeeperSetPosition,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -80,6 +81,35 @@ impl StateProcessingHandler for GoalkeeperHoldingState {
         if !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,
+            ));
+        }
+
+        // **You cannot HOLD a ball you have not picked up.**
+        //
+        // `has_ball` is ownership, and ownership says nothing about the
+        // gloves. `Catching` and `PickingUpBall` pair their transition with
+        // a `CaughtBall` event, so they arrive here holding it; `Diving`
+        // and `Jumping` route in on ownership ALONE. Any grant that reaches
+        // him without raising `held_in_hands` therefore put him in the one
+        // state whose whole meaning is that the ball is in his hands, with
+        // the ball on the grass at his feet — for the two to five and a
+        // half seconds this state deliberately dwells for, stationary at
+        // first and then walking it out. Measured before the fix: 155 ticks
+        // a match, 40% of all the foot possession in the game.
+        //
+        // That is unplayable in both directions: the opposition press and
+        // then tackle a man the engine believes is untouchable, and the
+        // replay draws a keeper standing over a ball rather than holding
+        // one. So the state asserts its own precondition. Hands legal —
+        // scoop it up, which is what a keeper does with a ball at his feet
+        // in his own box. Hands illegal — it is a foot possession and
+        // belongs to the foot states, so hand it to the one that fits.
+        if !ctx.tick_context.ball.held_in_hands {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                match ctx.ball().handling_verdict() {
+                    HandlingVerdict::Legal => GoalkeeperState::PickingUpBall,
+                    _ => KeeperFeetDecision::without_hands(ctx),
+                },
             ));
         }
 

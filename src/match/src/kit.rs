@@ -1,8 +1,8 @@
 use crate::config::{PlayerInfo, TeamColors, ViewerConfig};
 use crate::textures::{Beard, FaceLayout, FaceLook, Textures};
-use shared::Palette;
 use bevy::image::Image;
 use bevy::prelude::*;
+use shared::Palette;
 
 /// The colours one side takes the field in.
 struct Strip {
@@ -273,6 +273,20 @@ impl Complexion {
     /// weight. Twenty-two men breathing in unison is its own kind of robot.
     pub fn tempo(id: u32) -> f32 {
         0.80 + Self::trait_of(id, 0x3D9E) as f32 / 250.0
+    }
+
+    /// **How he takes a goal**, as a 0..99 draw — hands on his head, on his
+    /// hips, bent over his knees, or arms hanging.
+    ///
+    /// Its own salt rather than a sign off [`Self::carriage`], which is what
+    /// it used to be. Carriage already drives how wide he holds his arms,
+    /// how bent his elbows are and where in the run cycle he starts, so a
+    /// reaction cut from it is not an independent fact about the man: every
+    /// player who runs with his arms wide reacts to conceding the same way,
+    /// and the correlation is exactly what
+    /// `no_two_players_run_alike` exists to keep out of the squad.
+    pub fn reaction(id: u32) -> u32 {
+        Self::trait_of(id, 0x6A11)
     }
 
     /// Multiplier on the model's height. Spans roughly 1.70 m to 1.92 m

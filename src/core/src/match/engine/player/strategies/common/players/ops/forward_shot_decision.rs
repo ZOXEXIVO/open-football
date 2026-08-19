@@ -395,6 +395,37 @@ pub mod mid_run_diag {
     pub static FK_DIRECT_SHOT: AtomicU64 = AtomicU64::new(0);
     pub static FK_DELIVERED: AtomicU64 = AtomicU64::new(0);
 
+    /// **The corner box census.** How many outfielders of each side are
+    /// inside the defended penalty area at the instant the corner
+    /// delivery is airborne, summed over corners, plus the number of
+    /// corners summed over and the smallest defending count seen.
+    ///
+    /// This is the number the corner set-up exists to move. Without a
+    /// set-up the "corner shape" is whatever open play left behind, and
+    /// it measured **4.1 defenders in the box against a real 8-10, with
+    /// a floor of ONE** — a goalkeeper alone in his six-yard box while a
+    /// cross came in, which is what a player reported after watching it
+    /// in the 3D viewer.
+    pub static CORNER_BOX_DEF_SUM: AtomicU64 = AtomicU64::new(0);
+    pub static CORNER_BOX_ATT_SUM: AtomicU64 = AtomicU64::new(0);
+    pub static CORNER_BOX_N: AtomicU64 = AtomicU64::new(0);
+    pub static CORNER_BOX_DEF_MIN: AtomicU64 = AtomicU64::new(u64::MAX);
+    /// The same four, sampled at the instant the shape goes up instead of
+    /// at the delivery — see [`SetPieceDiag::note_corner_setup_box`].
+    pub static CORNER_SETUP_DEF_SUM: AtomicU64 = AtomicU64::new(0);
+    pub static CORNER_SETUP_ATT_SUM: AtomicU64 = AtomicU64::new(0);
+    pub static CORNER_SETUP_N: AtomicU64 = AtomicU64::new(0);
+    pub static CORNER_SETUP_DEF_MIN: AtomicU64 = AtomicU64::new(u64::MAX);
+    /// Ticks spent with a live `Corner` restart origin — the window the
+    /// corner shape is pinned for. Divided by the corner count it says
+    /// how long a corner actually lasts, which is what bounds how long
+    /// anybody is held off his own state's business.
+    pub static CORNER_SHAPE_TICKS: AtomicU64 = AtomicU64::new(0);
+    pub static CORNER_SHAPE_N: AtomicU64 = AtomicU64::new(0);
+    /// Of those, how many were let go by the deadline rather than by
+    /// first contact or the restart origin decaying.
+    pub static CORNER_SHAPE_DEADLINE_N: AtomicU64 = AtomicU64::new(0);
+
     impl SetPieceDiag {
         #[inline]
         pub fn note_corner(routine_index: usize, delivery: f32) {
@@ -431,31 +462,98 @@ pub mod mid_run_diag {
             }
         }
 
+        /// One sample of the corner box census, taken when the delivery
+        /// is in the air — so it reads the set-up AND whether the shape
+        /// survived to the cross.
+        #[inline]
+        pub fn note_corner_box(defenders: u32, attackers: u32) {
+            CORNER_BOX_DEF_SUM.fetch_add(defenders as u64, Ordering::Relaxed);
+            CORNER_BOX_ATT_SUM.fetch_add(attackers as u64, Ordering::Relaxed);
+            CORNER_BOX_N.fetch_add(1, Ordering::Relaxed);
+            CORNER_BOX_DEF_MIN.fetch_min(defenders as u64, Ordering::Relaxed);
+        }
+
+        /// The same census taken the instant the shape goes up. Unlike
+        /// its sibling this cannot fire at any other moment, so it is the
+        /// clean read of the set-up itself.
+        #[inline]
+        pub fn note_corner_setup_box(defenders: u32, attackers: u32) {
+            CORNER_SETUP_DEF_SUM.fetch_add(defenders as u64, Ordering::Relaxed);
+            CORNER_SETUP_ATT_SUM.fetch_add(attackers as u64, Ordering::Relaxed);
+            CORNER_SETUP_N.fetch_add(1, Ordering::Relaxed);
+            CORNER_SETUP_DEF_MIN.fetch_min(defenders as u64, Ordering::Relaxed);
+        }
+
+        /// How long one corner's shape stayed pinned, in engine ticks,
+        /// recorded once when it is released — and whether it was
+        /// released by something happening or by the deadline running
+        /// out.
+        ///
+        /// The split says which of the two is deciding. A deadline release
+        /// lets go EARLY — before anybody has reached the ball — so a high
+        /// share is safe but means the ceiling, not the football, is
+        /// setting how long the shape lasts. Read it alongside the mean:
+        /// a mean sitting hard against the ceiling with a high deadline
+        /// share is the signal to lengthen it.
+        #[inline]
+        pub fn note_corner_shape_held(ticks: u64, by_deadline: bool) {
+            CORNER_SHAPE_TICKS.fetch_add(ticks, Ordering::Relaxed);
+            CORNER_SHAPE_N.fetch_add(1, Ordering::Relaxed);
+            if by_deadline {
+                CORNER_SHAPE_DEADLINE_N.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `sum / n`, pre-multiplied by `scale` so the caller can carry
+        /// decimals through an integer snapshot. `scale` of 1000 is the
+        /// convention for the 0..1 composites; head counts use 100,
+        /// because "4.1 defenders in the box" needs two places to be a
+        /// readable number at all.
+        fn mean(sum: &AtomicU64, n: &AtomicU64, scale: u64) -> u64 {
+            let count = n.load(Ordering::Relaxed);
+            if count == 0 {
+                0
+            } else {
+                sum.load(Ordering::Relaxed) * scale / count
+            }
+        }
+
         /// `[near, spot, far, short, edge, corner_delivery_mean_x1000,
         ///   corner_n, penalty_exec_mean_x1000, penalty_n, long_throws,
-        ///   fk_shots, fk_deliveries]`
-        pub fn snapshot() -> [u64; 12] {
-            let mean = |sum: &AtomicU64, n: &AtomicU64| -> u64 {
-                let count = n.load(Ordering::Relaxed);
-                if count == 0 {
-                    0
-                } else {
-                    sum.load(Ordering::Relaxed) / count
-                }
-            };
+        ///   fk_shots, fk_deliveries, box_def_x100, box_att_x100,
+        ///   box_n, box_def_min, corner_shape_held_ticks_x100,
+        ///   corner_shape_deadline_n, corner_shape_n]`
+        pub fn snapshot() -> [u64; 23] {
             [
                 CORNER_ROUTINE[0].load(Ordering::Relaxed),
                 CORNER_ROUTINE[1].load(Ordering::Relaxed),
                 CORNER_ROUTINE[2].load(Ordering::Relaxed),
                 CORNER_ROUTINE[3].load(Ordering::Relaxed),
                 CORNER_ROUTINE[4].load(Ordering::Relaxed),
-                mean(&CORNER_DELIVERY_SUM_X1000, &CORNER_DELIVERY_N),
+                Self::mean(&CORNER_DELIVERY_SUM_X1000, &CORNER_DELIVERY_N, 1),
                 CORNER_DELIVERY_N.load(Ordering::Relaxed),
-                mean(&PENALTY_EXEC_SUM_X1000, &PENALTY_EXEC_N),
+                Self::mean(&PENALTY_EXEC_SUM_X1000, &PENALTY_EXEC_N, 1),
                 PENALTY_EXEC_N.load(Ordering::Relaxed),
                 LONG_THROW_LAUNCHED.load(Ordering::Relaxed),
                 FK_DIRECT_SHOT.load(Ordering::Relaxed),
                 FK_DELIVERED.load(Ordering::Relaxed),
+                Self::mean(&CORNER_BOX_DEF_SUM, &CORNER_BOX_N, 100),
+                Self::mean(&CORNER_BOX_ATT_SUM, &CORNER_BOX_N, 100),
+                CORNER_BOX_N.load(Ordering::Relaxed),
+                match CORNER_BOX_DEF_MIN.load(Ordering::Relaxed) {
+                    u64::MAX => 0,
+                    v => v,
+                },
+                Self::mean(&CORNER_SHAPE_TICKS, &CORNER_SHAPE_N, 100),
+                CORNER_SHAPE_DEADLINE_N.load(Ordering::Relaxed),
+                CORNER_SHAPE_N.load(Ordering::Relaxed),
+                Self::mean(&CORNER_SETUP_DEF_SUM, &CORNER_SETUP_N, 100),
+                Self::mean(&CORNER_SETUP_ATT_SUM, &CORNER_SETUP_N, 100),
+                CORNER_SETUP_N.load(Ordering::Relaxed),
+                match CORNER_SETUP_DEF_MIN.load(Ordering::Relaxed) {
+                    u64::MAX => 0,
+                    v => v,
+                },
             ]
         }
 
@@ -471,9 +569,20 @@ pub mod mid_run_diag {
                 &LONG_THROW_LAUNCHED,
                 &FK_DIRECT_SHOT,
                 &FK_DELIVERED,
+                &CORNER_BOX_DEF_SUM,
+                &CORNER_BOX_ATT_SUM,
+                &CORNER_BOX_N,
+                &CORNER_SHAPE_TICKS,
+                &CORNER_SHAPE_N,
+                &CORNER_SHAPE_DEADLINE_N,
+                &CORNER_SETUP_DEF_SUM,
+                &CORNER_SETUP_ATT_SUM,
+                &CORNER_SETUP_N,
             ] {
                 c.store(0, Ordering::Relaxed);
             }
+            CORNER_BOX_DEF_MIN.store(u64::MAX, Ordering::Relaxed);
+            CORNER_SETUP_DEF_MIN.store(u64::MAX, Ordering::Relaxed);
         }
     }
 

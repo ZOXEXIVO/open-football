@@ -144,6 +144,19 @@ pub struct MatchPlayer {
     /// Cleared after consumption.
     pub pending_shot_reason: Option<&'static str>,
 
+    /// Where this player has been told to stand for the corner that is
+    /// being taken, if one is. Written by the corner set-up teleport
+    /// (`CornerShape::plan` decides it), read by `CornerHold` in the state
+    /// dispatcher, cleared the moment the restart stops being a corner.
+    ///
+    /// A corner in this engine lives about a second and a half — the
+    /// taker is teleported onto the ball and the cross leaves his boot
+    /// 50 ms later — so the shape only has to survive that long. But
+    /// without something pinning it, it does not: a midfielder dropped
+    /// into his own six-yard box goes straight back to `Creating Space`
+    /// and sprints out of the area while the ball is still in the air.
+    pub set_piece_station: Option<Vector3<f32>>,
+
     /// Manager flag protecting this player from fatigue / development subs.
     /// Mirrored from `Player::is_force_match_selection` at squad-build time.
     pub is_force_match_selection: bool,
@@ -467,6 +480,7 @@ impl MatchPlayer {
             is_sent_off: false,
             tackle_cooldown: 0,
             pending_shot_reason: None,
+            set_piece_station: None,
             is_force_match_selection: player.is_force_match_selection,
             birth_date: player.birth_date,
             entry_match_time_ms: 0,
@@ -540,6 +554,7 @@ impl MatchPlayer {
             is_sent_off: false,
             tackle_cooldown: 0,
             pending_shot_reason: None,
+            set_piece_station: None,
             is_force_match_selection,
             birth_date,
             entry_match_time_ms: 0,

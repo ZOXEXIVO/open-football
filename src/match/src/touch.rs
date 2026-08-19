@@ -401,7 +401,9 @@ impl FlightPad {
         let stick = pad
             .stick
             .and_then(|(id, _)| touches.get_pressed(id).map(|touch| (id, touch.position())));
-        let lift = pad.lift.filter(|(id, _)| touches.get_pressed(*id).is_some());
+        let lift = pad
+            .lift
+            .filter(|(id, _)| touches.get_pressed(*id).is_some());
         pad.stick = stick;
         pad.lift = lift;
 

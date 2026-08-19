@@ -1,8 +1,10 @@
 use super::phase_prof::PhaseProf;
 use super::*;
 use crate::PlayerPositionType;
+use crate::r#match::PassOriginRestart;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::ball::ball::Ball;
+use crate::r#match::engine::corner_shape::{CornerRole, CornerShape};
 use crate::r#match::engine::player::events::players::FoulResolver;
 use crate::r#match::engine::set_pieces::{CORNER_DELIVERY_REFERENCE, CornerRoutine};
 use crate::r#match::forwarders::states::ForwardState;
@@ -12,7 +14,7 @@ use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::passing::CrossType;
 use crate::r#match::player::transition::TransitionSource;
 #[cfg(feature = "match-logs")]
-use crate::mid_run_diag::CrossDiag;
+use crate::mid_run_diag::{CrossDiag, SetPieceDiag};
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
@@ -268,31 +270,159 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
         }
 
-        // Corner dead-ball set-up: teleport the pushed-up centre-backs
-        // into the box so they can attack the delivery (see
-        // `Ball::pending_corner_teleports` — there's no stoppage in the
-        // sim for them to walk up during, and they can't run the length
-        // of the pitch inside the cross window).
+        // Corner dead-ball set-up: put both sides into the shape a corner
+        // is actually played in (see `Ball::pending_corner_teleports` and
+        // `CornerShape` — there's no stoppage in the sim to walk into it
+        // during, and nobody can cover the ground inside the 50 ms between
+        // the award and the cross).
         if !field.ball.pending_corner_teleports.is_empty() {
-            let teleports = std::mem::take(&mut field.ball.pending_corner_teleports);
-            for (player_id, pos) in teleports {
-                if let Some(idx) = field.player_index(player_id) {
+            let stations = std::mem::take(&mut field.ball.pending_corner_teleports);
+            for station in stations {
+                if let Some(idx) = field.player_index(station.player_id) {
                     let p = &mut field.players[idx];
-                    p.position = pos;
+                    p.position = station.position;
                     p.velocity = Vector3::zeros();
-                    // Force the AttackingCorner state directly — the CB may
-                    // have been in any defensive state when the corner was
-                    // won, and not all of them carry the entry hook. This
-                    // guarantees they attack the delivery. `transition_to`
-                    // also resets in_state_time so the run starts at entry.
-                    p.transition_to(
-                        PlayerState::Defender(DefenderState::AttackingCorner),
-                        TransitionSource::SetPiece,
-                    );
+                    if station.role == CornerRole::BoxAttacker {
+                        // The pushed-up centre-back is the one station that
+                        // forces a state instead of pinning a position: he
+                        // may have been in any defensive state when the
+                        // corner was won, and not all of them carry the
+                        // entry hook, so this is what guarantees he attacks
+                        // the delivery. `transition_to` resets in_state_time
+                        // so the run starts at entry.
+                        //
+                        // Deliberately NO station for him — `AttackingCorner`
+                        // already owns where he stands AND when he leaves it
+                        // to attack the ball, and pinning him too would fight
+                        // that state's own attack/hold blend.
+                        p.transition_to(
+                            PlayerState::Defender(DefenderState::AttackingCorner),
+                            TransitionSource::SetPiece,
+                        );
+                    } else {
+                        // Pin everyone else where they were put, for the life
+                        // of the corner. Without this the shape unravels
+                        // inside a second: a midfielder dropped into his own
+                        // six-yard box reads the next tick as ordinary open
+                        // play and sprints back out of it.
+                        p.set_piece_station = Some(station.position);
+                    }
                 }
             }
+            #[cfg(feature = "match-logs")]
+            Self::note_corner_setup_box(field);
         }
+
+        Self::clear_expired_corner_stations(field);
     }
+
+    /// Box census at the instant the shape goes up — one sample per
+    /// corner, at a moment that cannot be anything but a corner.
+    ///
+    /// Its sibling in `resolve_corner_contest` samples the same thing when
+    /// the delivery is airborne, which also proves the shape SURVIVED to
+    /// the cross — but that resolver fires on the first airborne,
+    /// ownerless tick with a live `Corner` origin, and the origin outlives
+    /// the set piece. A ball hooked up two seconds later, by then at the
+    /// other end, is sampled as if it were the delivery. That is what puts
+    /// the occasional 1-defender reading in the delivery census, and it is
+    /// a measurement artefact rather than a deserted goalmouth. Reading
+    /// both is what tells the two apart.
+    #[cfg(feature = "match-logs")]
+    fn note_corner_setup_box(field: &MatchField) {
+        let Some(shape) = field.ball.corner_shape else {
+            return;
+        };
+        let Some(taker) = field.players.iter().find(|p| p.id == shape.taker_id) else {
+            return;
+        };
+        let attacking_side = taker.side;
+        let field_height = field.size.height as f32;
+        // The corner is taken at a flag, so the defended goal is the near one.
+        let goal_x = if field.ball.position.x < field.size.width as f32 * 0.5 {
+            0.0
+        } else {
+            field.size.width as f32
+        };
+        let (mut defenders, mut attackers) = (0u32, 0u32);
+        for p in field.players.iter() {
+            if p.is_sent_off
+                || p.tactical_position.current_position.is_goalkeeper()
+                || !CornerShape::is_in_penalty_area(p.position, goal_x, field_height)
+            {
+                continue;
+            }
+            if p.side == attacking_side {
+                attackers += 1;
+            } else {
+                defenders += 1;
+            }
+        }
+        SetPieceDiag::note_corner_setup_box(defenders, attackers);
+    }
+
+    /// Release the corner shape once the corner is over.
+    ///
+    /// Three ways out, and each covers a case the others miss.
+    ///
+    /// **First contact** is the honest end of a set piece: the moment
+    /// anybody heads, blocks, claims or clears the delivery, the corner is
+    /// over and what follows is open play. The taker's own touch is
+    /// stamped at the award, on the same tick the stations are armed, so
+    /// any strictly later touch is somebody else on the ball.
+    ///
+    /// **The restart origin leaving `Corner`** is what a clean reception
+    /// clears, and what every other corner-aware read in the engine keys
+    /// off. Kept because it is the condition the rest of the corner code
+    /// agrees on.
+    ///
+    /// **The deadline** is what stops the other two deadlocking. Both are
+    /// events that require somebody to reach the ball, and the pin is what
+    /// keeps everybody standing still — so a delivery cleared out of the
+    /// box, or one that sails over everyone, satisfies neither and the pin
+    /// never lifts. Measured before the deadline landed: a mean **held
+    /// shape of about seven seconds per corner**, against a corner that is
+    /// over in one or two.
+    fn clear_expired_corner_stations(field: &mut MatchField) {
+        let Some(shape) = field.ball.corner_shape else {
+            return;
+        };
+        let held = field
+            .ball
+            .current_tick_cached
+            .saturating_sub(shape.armed_tick);
+        // The taker is the only man who may touch the ball without ending
+        // the set piece: the award stamps him as last toucher, and so does
+        // his own delivery (a cross is a deliberate kick). Anybody else on
+        // it is first contact.
+        let only_the_taker_has_touched_it = field.ball.last_touch_player_id == Some(shape.taker_id);
+        let corner_still_live = field.ball.pass_origin_restart == PassOriginRestart::Corner
+            && only_the_taker_has_touched_it;
+        if corner_still_live && held < Self::CORNER_SHAPE_MAX_TICKS {
+            return;
+        }
+        // `corner_still_live` here means nothing ended it — the deadline
+        // did. The harness prints that share so the ceiling stays visible
+        // as a backstop rather than quietly becoming the rule.
+        #[cfg(feature = "match-logs")]
+        SetPieceDiag::note_corner_shape_held(held, corner_still_live);
+        for p in field.players.iter_mut() {
+            p.set_piece_station = None;
+        }
+        field.ball.corner_shape = None;
+    }
+
+    /// Longest a corner shape may pin anybody, in engine ticks (10 ms
+    /// each), counted from the award.
+    ///
+    /// Sized off what a corner physically takes: the cross leaves the
+    /// taker 50 ms after the award, the flight from the flag to the far
+    /// post is 35 m at ~20 m/s, and the aerial contest resolves the
+    /// instant the ball is airborne. Two and a half seconds covers all of
+    /// it with room over, and nothing beyond it is still a corner —
+    /// whatever is happening by then is open play with the restart flag
+    /// left up.
+    const CORNER_SHAPE_MAX_TICKS: u64 = 250;
 
     /// Discrete corner aerial contest — fires once, the instant the corner
     /// cross is airborne. A played-out lofted corner can't thread the
@@ -403,6 +533,32 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
         }
 
+        // Box census, taken here because this is the one place that runs
+        // exactly once per corner at the instant the delivery is in the
+        // air — so it sees both the set-up AND whether the shape survived
+        // to the cross. Counted over the real penalty area rather than the
+        // contest's 135u radius: "in the box" has to mean the box, or the
+        // number cannot be compared with the real one (8-10 defenders).
+        #[cfg(feature = "match-logs")]
+        {
+            let field_height = context.field_size.height as f32;
+            let (mut def_in_box, mut att_in_box) = (0u32, 0u32);
+            for p in field.players.iter() {
+                if p.is_sent_off
+                    || p.tactical_position.current_position.is_goalkeeper()
+                    || !CornerShape::is_in_penalty_area(p.position, attacked_goal.x, field_height)
+                {
+                    continue;
+                }
+                if p.team_id == att_team {
+                    att_in_box += 1;
+                } else {
+                    def_in_box += 1;
+                }
+            }
+            SetPieceDiag::note_corner_box(def_in_box, att_in_box);
+        }
+
         let (att_idx, att_score) = match best_att {
             Some(v) => v,
             None => {
@@ -492,12 +648,26 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // them. The old (−0.35, 1.8) pair was written when the vertical
             // axis carried unit-scale speeds and would now fall through the
             // band in three ticks while drifting 60u out of reach.
+            let winner_id = field.players[att_idx].id;
             let b = &mut field.ball;
             b.position = Vector3::new(winner_pos.x - dir.x * 2.0, winner_pos.y - dir.y * 2.0, 2.5);
             b.velocity = Vector3::new(dir.x * 0.12, dir.y * 0.12, -0.02);
             b.current_owner = None;
             b.previous_owner = taker;
             b.flags.in_flight_state = 1;
+            // Name the winner, exactly as `resolve_cross_contest` does.
+            //
+            // Every heading state already reads this to take a
+            // clean-contact roll instead of re-deciding the duel — and
+            // the corner contest was the one that never wrote it, so the
+            // man it elected was treated as if nothing had been decided.
+            // That went unnoticed while the box was empty, because the
+            // election almost always fell to a pushed-up centre-back and
+            // `AttackingCorner` carves the double-jeopardy out for
+            // itself. Load the box properly and the best header in it is
+            // often a forward or a midfielder instead, and those two
+            // paths are exactly the ones that need this flag.
+            b.aerial_contest_winner = Some(winner_id);
         }
         // Otherwise the cross plays out — the keeper claims or a defender
         // clears (the realistic majority outcome).

@@ -1,5 +1,7 @@
 use crate::r#match::engine::ball::ball::HandlingVerdict;
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
@@ -82,8 +84,20 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
             return None;
         }
 
-        // 4. Attempt to pick up the ball
-        let pickup_success = ctx.context.rng.unit_f32() < PICKUP_SUCCESS_PROBABILITY;
+        // 4. Attempt to pick up the ball.
+        //
+        // A ball he ALREADY OWNS is not a claim he can fumble — it is
+        // sitting still under his own boot, and bending down to take it is
+        // not a skill test. The base rate is for a ball he is meeting;
+        // for one he is standing on it is near-certain, and only a keeper
+        // with genuinely poor handling makes a mess of it.
+        let handling = (ctx.player.skills.goalkeeping.handling / 20.0).clamp(0.0, 1.0);
+        let pickup_chance = if ctx.player.has_ball(ctx) {
+            (0.97 + handling * 0.03).min(1.0)
+        } else {
+            PICKUP_SUCCESS_PROBABILITY
+        };
+        let pickup_success = ctx.context.rng.unit_f32() < pickup_chance;
         if pickup_success {
             // Pickup is successful
             let mut state_change =
@@ -98,6 +112,14 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
             });
 
             Some(state_change)
+        } else if ctx.player.has_ball(ctx) {
+            // He fumbled a ball that is still his. Diving at it would be
+            // absurd — he is standing over it. Play it with his feet
+            // instead, which is what a keeper who cannot get his hands to
+            // it cleanly actually does.
+            Some(StateChangeResult::with_goalkeeper_state(
+                KeeperFeetDecision::without_hands(ctx),
+            ))
         } else {
             // Pickup failed, transition to appropriate state (e.g., Diving)
             Some(StateChangeResult::with_goalkeeper_state(

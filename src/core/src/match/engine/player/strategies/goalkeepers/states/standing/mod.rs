@@ -1,6 +1,7 @@
 use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperBallClaim,
-    KeeperCarrierThreat, KeeperDebug, KeeperOneOnOne, KeeperRestPosition, KeeperSmother,
+    KeeperCarrierThreat, KeeperDebug, KeeperFeetDecision, KeeperOneOnOne, KeeperRestPosition,
+    KeeperSmother,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -95,8 +96,14 @@ impl StateProcessingHandler for GoalkeeperStandingState {
                     },
                 ));
             }
+            // …and in open play the FIRST question is whether to pick it
+            // up. This branch went straight to `Distributing` — a foot
+            // pass — for every possession that was not a goal kick, so a
+            // keeper who had just smothered at a striker's feet stood on
+            // the ball hunting an outlet with the man he had beaten still
+            // next to him. See [`KeeperFeetDecision`].
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Distributing,
+                KeeperFeetDecision::state_for(ctx),
             ));
         }
 

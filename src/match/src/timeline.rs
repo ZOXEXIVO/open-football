@@ -5,6 +5,7 @@ use crate::loader::ChunkLoader;
 use crate::playback::{Playback, RecordedSpans};
 use crate::textures::Textures;
 use crate::typeface::Faces;
+use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::input::touch::Touches;
 use bevy::prelude::*;
 use bevy::text::{FontSource, LineBreak};
@@ -109,6 +110,18 @@ impl Timeline {
     /// goal marker so nothing pokes out of it.
     const TRACK_BAND: f32 = 20.0;
     const KNOB_SIZE: f32 = 13.0;
+    /// A goal's pin on the rail, and a chance's. Both stay inside
+    /// [`Self::TRACK_BAND`], which is the click target and is not allowed to
+    /// grow: anything poking out of it is a thing you can see and cannot hit.
+    /// The chance is smaller because it is the lesser event, and that is the
+    /// only difference between them that the eye has to hold — the glyph says
+    /// the rest.
+    const MARKER_SIZE: f32 = 18.0;
+    const MARKER_SIZE_CHANCE: f32 = 15.0;
+    /// How much of the pin the glyph takes. Short of the edge so the shirt
+    /// colour survives as a ring around it — a glyph filling its pin would
+    /// leave nothing to say whose moment it was.
+    const MARKER_GLYPH: f32 = 0.66;
     /// What the knob grows to while the pointer is over the track. The only
     /// thing that says the rail can be scrubbed at all — everything else in
     /// the bar is a button, and this one is a control you have to notice is
@@ -169,6 +182,15 @@ impl Timeline {
     ) {
         let home = config.home.background_color(Color::srgb(0.0, 0.19, 0.49));
         let away = config.away.background_color(Color::srgb(0.70, 0.25, 0.0));
+        // The ink inside a marker. A club's foreground is the colour it prints
+        // its own numbers in, so it is already the one thing guaranteed to read
+        // against its shirt — which is what a marker filled with that shirt
+        // needs and what a fixed white or black cannot promise across a league
+        // that wears everything.
+        let home_ink = config.home.foreground_color(Color::WHITE);
+        let away_ink = config.away.foreground_color(Color::WHITE);
+        let goal_glyph = Textures::goal_icon(&mut images);
+        let chance_glyph = Textures::chance_icon(&mut images);
         let icons = TransportIcons {
             play: Textures::play_icon(&mut images),
             pause: Textures::pause_icon(&mut images),
@@ -305,41 +327,40 @@ impl Timeline {
                                 BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.55)),
                             ));
 
-                            for goal in &config.goals {
-                                if config.match_time_ms <= 0.0 {
-                                    continue;
+                            // What the recording is FOR, laid out along it: the
+                            // goals, and the two or three moments a side that
+                            // came closest without being one. On a goals-only
+                            // recording these ARE the recording — the grey
+                            // between them is the rest of the match — so the
+                            // marker has to say both when something happened
+                            // and what, or every clip looks alike from here.
+                            //
+                            // Chances first, goals over the top of them: two
+                            // markers can land close enough to overlap and a
+                            // goal is never the one that should go under.
+                            if config.match_time_ms > 0.0 {
+                                for chance in &config.chances {
+                                    Self::marker(
+                                        track,
+                                        (chance.time / config.match_time_ms).clamp(0.0, 1.0) as f32,
+                                        config.chance_belongs_to_home(chance),
+                                        (home, home_ink),
+                                        (away, away_ink),
+                                        chance_glyph.clone(),
+                                        false,
+                                    );
                                 }
-                                let at = (goal.time / config.match_time_ms).clamp(0.0, 1.0) as f32;
-                                let color = if config.goal_belongs_to_home(goal) {
-                                    home
-                                } else {
-                                    away
-                                };
-                                // Taller than the rail and outlined, because on a
-                                // goals-only recording these ARE the recording —
-                                // the grey between them is the rest of the match.
-                                //
-                                // The outline is not trim. A kit colour is
-                                // whatever the club wears, and half the league
-                                // wears something dark: a navy post on a dark rail
-                                // over a dark pitch is an invisible marker. A
-                                // hairline of white puts every kit on the same
-                                // footing without touching the colour itself.
-                                track.spawn((
-                                    Node {
-                                        position_type: PositionType::Absolute,
-                                        left: percent(at * 100.0),
-                                        top: px(-6),
-                                        margin: UiRect::left(px(-2.5)),
-                                        width: px(5),
-                                        height: px(Self::TRACK_HEIGHT + 12.0),
-                                        border: UiRect::all(px(1)),
-                                        border_radius: BorderRadius::all(px(2.5)),
-                                        ..default()
-                                    },
-                                    BackgroundColor(color),
-                                    BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.6)),
-                                ));
+                                for goal in &config.goals {
+                                    Self::marker(
+                                        track,
+                                        (goal.time / config.match_time_ms).clamp(0.0, 1.0) as f32,
+                                        config.goal_belongs_to_home(goal),
+                                        (home, home_ink),
+                                        (away, away_ink),
+                                        goal_glyph.clone(),
+                                        true,
+                                    );
+                                }
                             }
 
                             track.spawn((
@@ -529,6 +550,72 @@ impl Timeline {
                 ..default()
             },
         ));
+    }
+
+    /// One event on the rail: a round pin in the shirt of the side it belongs
+    /// to, with a glyph in that shirt's own ink saying what it was — a ball for
+    /// a goal, an exclamation for a chance that stayed out.
+    ///
+    /// `at` is the fraction along the match. A goal's pin is the larger of the
+    /// two and sits under a brighter hairline, which is the whole of how the
+    /// bar ranks them: same shape, same place, one of them louder.
+    ///
+    /// The hairline is not trim. A kit colour is whatever the club wears and
+    /// half the league wears something dark: a navy pin on a dark rail over a
+    /// dark pitch is an invisible marker. A ring of white puts every kit on the
+    /// same footing without touching the colour itself.
+    fn marker(
+        track: &mut RelatedSpawnerCommands<ChildOf>,
+        at: f32,
+        is_home: bool,
+        home: (Color, Color),
+        away: (Color, Color),
+        glyph: Handle<Image>,
+        scored: bool,
+    ) {
+        let (shirt, ink) = if is_home { home } else { away };
+        let size = if scored {
+            Self::MARKER_SIZE
+        } else {
+            Self::MARKER_SIZE_CHANCE
+        };
+        let edge = if scored { 0.75 } else { 0.45 };
+
+        track
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: percent(at * 100.0),
+                    // Centred on the rail rather than hung off its top edge, so
+                    // the pin marks the instant with its middle — which is
+                    // where the eye reads a round shape as being.
+                    top: px((Self::TRACK_HEIGHT - size) * 0.5),
+                    margin: UiRect::left(px(-size * 0.5)),
+                    width: px(size),
+                    height: px(size),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    border: UiRect::all(px(1)),
+                    border_radius: BorderRadius::all(px(size * 0.5)),
+                    ..default()
+                },
+                BackgroundColor(shirt),
+                BorderColor::all(Color::srgba(1.0, 1.0, 1.0, edge)),
+            ))
+            .with_children(|pin| {
+                pin.spawn((
+                    ImageNode {
+                        image: glyph,
+                        color: ink,
+                        ..default()
+                    },
+                    Node {
+                        width: px(size * Self::MARKER_GLYPH),
+                        height: px(size * Self::MARKER_GLYPH),
+                        ..default()
+                    },
+                ));
+            });
     }
 
     /// Shared shape of the small labelled buttons that sit after the scrub
@@ -839,9 +926,11 @@ impl Timeline {
             }
         }
         if let Ok((mut visibility, mut text)) = notice.single_mut() {
-            // A recording with no clips in it is not still loading — it is a
-            // goalless match, and there will never be anything to show. Say
-            // that instead of spinning forever on "Loading…".
+            // A recording with no clips in it is not still loading — nothing
+            // was kept and nothing ever will be, so say that instead of
+            // spinning forever on "Loading…". It used to mean "goalless"; now
+            // that a near miss is kept too it means a match in which neither
+            // side had a shot worth the name, which is rarer and duller still.
             let empty = spans.nothing_recorded();
             *visibility = if loader.ready && !empty {
                 Visibility::Hidden

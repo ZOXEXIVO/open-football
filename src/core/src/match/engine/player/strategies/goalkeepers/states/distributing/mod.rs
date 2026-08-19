@@ -1,7 +1,9 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::PlayerSide;
 use crate::r#match::events::Event;
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -21,6 +23,28 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,
             ));
+        }
+
+        // **A man has arrived while he was looking for a pass.**
+        //
+        // This state stands perfectly still (`velocity` is a hard zero)
+        // for up to twenty ticks hunting an outlet at least 30u away that
+        // is not behind him and not in a blocked lane. With the ball on
+        // the floor that is the single most dangerous place it can be:
+        // `check_ball_ownership` gives a contested ball to the better
+        // tackler within 5u, and that is never the goalkeeper. Under real
+        // pressure the search is over — pick it up if the Laws allow, get
+        // rid if they do not. Only asked for a ball still on the floor;
+        // once it is in his gloves nobody can reach it and he has all the
+        // time `HoldingBall` gives him.
+        if !ctx.tick_context.ball.held_in_hands
+            && KeeperFeetDecision::pressure(ctx) > 0.5
+            && !ctx.ball().is_goal_kick_restart()
+        {
+            let escape = KeeperFeetDecision::state_for(ctx);
+            if escape != GoalkeeperState::Distributing {
+                return Some(StateChangeResult::with_goalkeeper_state(escape));
+            }
         }
 
         // Try to find the best pass option

@@ -37,8 +37,9 @@ use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::ops::xg::ShotType;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
-    GoalDetail, GoalPosition, MatchContext, MatchField, MatchPlayer, OffsideLine, OffsideSnapshot,
-    PassOriginRestart, PlayerSide, ResultMatchPositionData, ShotTarget,
+    ChanceDetail, GoalDetail, GoalPosition, HighlightSelector, MatchContext, MatchField,
+    MatchPlayer, OffsideLine, OffsideSnapshot, PassOriginRestart, PlayerSide,
+    ResultMatchPositionData, ShotTarget,
 };
 #[cfg(feature = "match-logs")]
 use crate::match_log_info;
@@ -1176,7 +1177,13 @@ impl PlayerEventDispatcher {
                         field.ball.pending_failed_claim_charged = false;
                     }
                 }
-                Self::handle_shoot_event(shoot_event_model, field, context, direct_assister_id);
+                Self::handle_shoot_event(
+                    shoot_event_model,
+                    field,
+                    context,
+                    match_data,
+                    direct_assister_id,
+                );
             }
             PlayerEvent::CaughtBall(player_id) => {
                 Self::handle_caught_ball_event(player_id, field, context);
@@ -2956,6 +2963,23 @@ impl PlayerEventDispatcher {
             return;
         }
 
+        // Nobody claims a ball out of a goalkeeper's gloves.
+        //
+        // The sibling handlers (`secure_ball_for`, `handle_move_ball_event`)
+        // have carried this guard for a while and this one never did. It has
+        // not been reachable in practice — a gather sets `claim_cooldown` to
+        // 700 ticks and the branch below refuses every claim while that runs
+        // — but "unreachable behind a timer" is not the same as "cannot
+        // happen", and the failure mode if the timer ever lapses first is
+        // not a lost ball, it is a CORRUPT one: this path would hand an
+        // outfielder a ball still flagged `held_in_hands`, which
+        // `check_ball_ownership` then refuses to take off him for the rest
+        // of the match. The keeper-possession census counts this at slot 9
+        // and it reads zero; the guard is what keeps it there.
+        if field.ball.held_in_hands && field.ball.current_owner != Some(player_id) {
+            return;
+        }
+
         // CLAIM COOLDOWN: Prevent rapid ping-pong between players
         // If the ball was just claimed by someone else, reject this claim
         const CLAIM_COOLDOWN_TICKS: u32 = 15; // ~250ms at 60fps - time before ball can change hands
@@ -3159,7 +3183,15 @@ impl PlayerEventDispatcher {
         // Downstream that was the whole ball game: `carrier_id` suppresses
         // pressing while the ball is held, so a quarter of every match ran
         // with the defending half of the engine switched off.
-        if field.ball.held_in_hands && field.ball.current_owner != Some(player_id) {
+        //
+        // …and that includes his OWN. The test used to exempt the holder,
+        // which reads as harmless until you notice what the last line of
+        // this function does: it lowers `held_in_hands`. So any path that
+        // re-secured the ball for the keeper already holding it opened his
+        // gloves without anybody touching the ball — and all three callers
+        // are "somebody won it at their feet", which is not something that
+        // can happen to a ball nobody is allowed to touch.
+        if field.ball.held_in_hands {
             return;
         }
         #[cfg(feature = "match-logs")]
@@ -3241,7 +3273,8 @@ impl PlayerEventDispatcher {
     fn handle_shoot_event(
         shoot_event_model: ShootingEventContext,
         field: &mut MatchField,
-        context: &MatchContext,
+        context: &mut MatchContext,
+        match_data: &mut ResultMatchPositionData,
         direct_assister_id: Option<u32>,
     ) {
         // Half-width of the goal in game units — the engine's own
@@ -4161,6 +4194,34 @@ impl PlayerEventDispatcher {
         if let Some(shooter) = field.get_player_mut(shoot_event_model.from_player_id) {
             shooter.memory.record_shot(shoot_event_model.tick);
             shooter.memory.record_shot_xg(shoot_event_model.tick, xg);
+        }
+
+        // ── Chance candidate ─────────────────────────────────────────
+        // A strike good enough to be worth watching again if it doesn't go
+        // in. Whether it WAS one is decided at full time — this shot has
+        // not even arrived yet, let alone been saved — so both the match
+        // sheet and the recording take it on spec and `HighlightSelector`
+        // cuts them back together in `build_result`. See `ChanceDetail`.
+        //
+        // Gated on the same bar the selector uses so the recorder never
+        // holds ten seconds of footage for a shot the shortlist could not
+        // have picked: a hopeful thirty-yarder is not a chance, and there
+        // are far more of those in a match than there are of these.
+        if xg >= HighlightSelector::MIN_XG {
+            let struck_at = context.total_match_time;
+            if let Some(team_id) = field
+                .get_player(shoot_event_model.from_player_id)
+                .map(|shooter| shooter.team_id)
+            {
+                context.chances.push(ChanceDetail {
+                    player_id: shoot_event_model.from_player_id,
+                    team_id,
+                    time: struck_at,
+                    xg,
+                    on_target,
+                });
+                match_data.mark_chance(struck_at);
+            }
         }
         #[cfg(feature = "match-logs")]
         {

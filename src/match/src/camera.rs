@@ -429,12 +429,12 @@ impl CameraFlight {
             // shift is its rim: pushed that far out it asks for the same
             // multiplier, which is what keeps a thumb from being permanently
             // slower than a hand on a keyboard.
-            let boost = if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) || drive.boost
-            {
-                Self::BOOST
-            } else {
-                1.0
-            };
+            let boost =
+                if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) || drive.boost {
+                    Self::BOOST
+                } else {
+                    1.0
+                };
             // Clamped rather than normalised, which is what lets an ANALOGUE
             // control through. A key is on or off, so its push is a unit
             // vector and the two are the same thing — a diagonal comes out at

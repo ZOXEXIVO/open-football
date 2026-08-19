@@ -1,5 +1,6 @@
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperOneOnOne, KeeperRestPosition, KeeperSmother,
+    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision, KeeperOneOnOne, KeeperRestPosition,
+    KeeperSmother,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -24,9 +25,13 @@ impl StateProcessingHandler for GoalkeeperReturningGoalState {
             }
         }
 
+        // He is jogging home WITH the ball at his feet. Same question as
+        // `Standing` asks, and the same answer: inside his own area with
+        // the hands legal, a keeper picks it up rather than dribbling it
+        // back and looking for a pass. See [`KeeperFeetDecision`].
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Distributing,
+                KeeperFeetDecision::state_for(ctx),
             ));
         }
 

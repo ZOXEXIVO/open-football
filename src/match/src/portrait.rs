@@ -249,23 +249,51 @@ struct Landmarks {
 
 impl Landmarks {
     /// How far down from the top of the head to start looking for eyes, and
-    /// how far to keep looking, as multiples of the head's WIDTH. A head is
-    /// about one and a half times as tall as it is wide and the eyes sit near
-    /// the middle of it, hair or no hair.
-    const SEARCH: (f32, f32) = (0.35, 1.00);
+    /// how far to keep looking, as multiples of the head's WIDTH.
+    ///
+    /// A head is about a third again as tall as it is wide and the eyes sit
+    /// near the middle of it, which puts them about two thirds of a width
+    /// below the crown; the band either side of that is how much hair moves
+    /// the crown. Kept as tight as the hair allows on purpose — every row of
+    /// it that is really scalp is a row where a shadow in a blond man's
+    /// fringe can outscore his own pale eyes, and a face pinned to a fringe
+    /// is a photograph hung a hand's breadth up the skull.
+    const SEARCH: (f32, f32) = (0.45, 0.95);
     /// Pupils, as a fraction of the width of the head they are in.
     ///
     /// 63 mm apart across 150 mm of head, ear to ear — the two measurements
     /// on a human head that vary least, and their ratio varies less still.
     /// This is the whole reason the silhouette is worth measuring: it turns
-    /// a shape anyone can find into a scale nobody has to guess.
+    /// a shape anyone can find into a scale nobody has to guess — and why the
+    /// width it is handed has to be the SKULL's (see [`Silhouette::CRANIUM`])
+    /// and not the outline's, which has a pair of ears on it.
     const PUPILS_OF_A_HEAD: f32 = 0.42;
     /// How much darker an eye has to be than the face round it before this
     /// is believed to have found one.
     const CONTRAST: f32 = 0.06;
-    /// How far below the band it finds the eye line is taken to be, in pupil
-    /// widths. See where it is used.
-    const BROW_BIAS: f32 = 0.10;
+    /// How far above the eye line the brow is, in pupil widths, and what a
+    /// brow found there is worth. Twenty millimetres over the pupils is where
+    /// one sits on nearly everybody.
+    const BROW_OVER: f32 = 0.30;
+    const BROWED: f32 = 0.6;
+    /// Where the white of an eye is, out from the middle of it, in pupil
+    /// widths.
+    ///
+    /// An iris is about 11 mm across and the eye round it about 30, so seven
+    /// to twelve millimetres out from the middle of one is sclera on both
+    /// sides whatever a man is doing with his face, short of shutting it.
+    /// Three of them rather than one because the eye this is looking for may
+    /// be a couple of millimetres from where the seeded pupil distance said
+    /// it would be, and the brightest of the three is the white.
+    const SCLERA: [f32; 3] = [0.11, 0.15, 0.19];
+    /// …and the same for the iris in the middle, where the DARKEST of them is
+    /// the one wanted, for the same reason.
+    const IRIS: [f32; 5] = [-0.07, -0.035, 0.0, 0.035, 0.07];
+    /// What that comparison is worth against the other two. Weighted up
+    /// because it is the only one of the three that a BROW cannot also
+    /// satisfy, and because a pale-eyed man under studio light gives it less
+    /// to work with than a dark-eyed one gives the rest.
+    const WHITES: f32 = 2.0;
 
     /// Measure a keyed patch, or admit it cannot.
     ///
@@ -274,9 +302,11 @@ impl Landmarks {
     /// of a head — it survives shadow, beards, bad white balance and a man
     /// squinting. Anatomy turns that width into a pupil distance, because the
     /// ratio between the two barely varies from person to person: 63 mm of
-    /// pupils across 150 mm of head. And the EYE LINE, which anatomy cannot
-    /// give (hair moves the top of a head and nothing else does), is looked
-    /// for in the picture.
+    /// pupils across 150 mm of head — and that is where the search for the
+    /// eyes themselves STARTS, since a window to look in is all a ratio can
+    /// honestly give. The EYE LINE, which anatomy cannot give at all (hair
+    /// moves the top of a head and nothing else does), is looked for in the
+    /// picture from the first.
     fn of(pixels: &[u8], width: u32, height: u32) -> Option<Landmarks> {
         let head = Silhouette::of(pixels, width, height);
         #[cfg(test)]
@@ -331,39 +361,89 @@ impl Landmarks {
         // the picture.
         let (from, to) = Self::SEARCH;
         let window = (pupils * 0.11).max(1.0);
+        // What is left of an eye once the iris is taken out of it: two wedges
+        // of sclera, the brightest thing on a face, seven to twelve
+        // millimetres either side of the middle. That pattern — dark, bright
+        // on BOTH sides, at that spacing — is the one mark nothing else on a
+        // head carries, and it is what tells an eye from the BROW over it: a
+        // brow is dark for its whole length, so a sample stepped along one is
+        // dark either side too and this comes out at nothing.
+        //
+        // Both ends are scanned rather than sampled, because where this is
+        // told to look is only ever as good as the pupil distance it was
+        // seeded with — a couple of millimetres out and a fixed sample for
+        // the iris lands on the white of the eye instead.
+        let iris = (pupils * 0.05).max(1.0);
+        let whites = |row: f32, at: f32| -> Option<f32> {
+            let middle = Self::IRIS
+                .iter()
+                .filter_map(|step| patch(at + pupils * step, row, iris))
+                .fold(f32::INFINITY, f32::min);
+            let side = |sign: f32| {
+                Self::SCLERA
+                    .iter()
+                    .filter_map(|out| patch(at + sign * pupils * out, row, iris))
+                    .fold(f32::NEG_INFINITY, f32::max)
+            };
+            let white = side(-1.0).min(side(1.0));
+            (middle.is_finite() && white.is_finite()).then_some(white - middle)
+        };
         let mut best: Option<(f32, f32)> = None;
         let mut row = head.crown as f32 + span * from;
         while row <= head.crown as f32 + span * to && row < height as f32 {
-            let eyes = (
-                patch(head.centre - pupils * 0.5, row, window),
-                patch(head.centre + pupils * 0.5, row, window),
-            );
+            let across = (head.centre - pupils * 0.5, head.centre + pupils * 0.5);
+            let eyes = (patch(across.0, row, window), patch(across.1, row, window));
             let bridge = patch(head.centre, row, pupils * 0.12);
             let cheeks = (
-                patch(head.centre - pupils * 0.5, row + pupils * 0.55, window),
-                patch(head.centre + pupils * 0.5, row + pupils * 0.55, window),
+                patch(across.0, row + pupils * 0.55, window),
+                patch(across.1, row + pupils * 0.55, window),
             );
-            let brow = patch(head.centre, row - pupils * 0.30, pupils * 0.30);
+            let brows = (
+                patch(across.0, row - pupils * Self::BROW_OVER, window),
+                patch(across.1, row - pupils * Self::BROW_OVER, window),
+            );
             if let (
                 (Some(left), Some(right)),
                 Some(bridge),
                 (Some(under_left), Some(under_right)),
-                Some(brow),
-            ) = (eyes, bridge, cheeks, brow)
+                (Some(over_left), Some(over_right)),
+            ) = (eyes, bridge, cheeks, brows)
+                && let (Some(white_left), Some(white_right)) =
+                    (whites(row, across.0), whites(row, across.1))
             {
-                // What an eye is, put as three comparisons. Darker than the
-                // bridge of the nose between the pair — which is what tells a
-                // face from a fringe, hair being dark all the way across.
-                // Darker than the cheek beneath it, which keeps the search off
-                // the hair at the temples. And with something dark of its own
-                // just above it: that is the BROW, and it is the one thing a
-                // brow does not have over it. Without that last term a heavy
-                // pair of eyebrows wins the row above the eyes on half the
-                // squad, and every one of those faces goes onto its skull a
-                // centimetre and a half low.
+                // What an eye is, put as four comparisons.
+                //
+                // WHITES either side of it, which is the one mark nothing
+                // else on a head carries. Darker than the BRIDGE of the nose
+                // between the pair, which tells a face from a fringe, hair
+                // being dark all the way across. Darker than the CHEEK
+                // beneath it, which keeps the search off the hair at the
+                // temples. And with something dark of its own just ABOVE it,
+                // which is the brow — the one thing a brow does not have over
+                // itself, and the term that decides between the two rows when
+                // the whites cannot. It is sampled over the EYES and not down
+                // the middle of the face: the middle of a forehead and the
+                // middle of a brow-line are both bare skin on most men, so
+                // asked there it answers the same for both rows and settles
+                // nothing. Without it a heavy pair of eyebrows wins the row
+                // two centimetres above the eyes, and the face goes onto the
+                // skull that far up.
                 let eye = left.max(right);
                 let under = under_left.min(under_right);
-                let score = (bridge - eye) + (under - eye) - (brow - eye) * 0.6;
+                let over = over_left.min(over_right);
+                let score =
+                    white_left.min(white_right) * Self::WHITES + (bridge - eye) + (under - eye)
+                        - (over - eye) * Self::BROWED;
+                #[cfg(test)]
+                if std::env::var("MATCH_PICTURE_ROWS").is_ok() {
+                    println!(
+                        "    row {row:.0} score {score:.3} whites {:.3} bridge {:.3} under {:.3} over {:.3} eye {eye:.3}",
+                        white_left.min(white_right),
+                        bridge - eye,
+                        under - eye,
+                        over - eye
+                    );
+                }
                 if best.is_none_or(|(_, found)| score > found) {
                     best = Some((row, score));
                 }
@@ -388,15 +468,16 @@ impl Landmarks {
 
         Some(Landmarks {
             centre: head.centre / width as f32,
-            // Nudged down by a fraction of a pupil width, because what the
-            // search actually finds is the BROW-AND-EYE band: two dark marks
-            // with a lit bridge between them describes an eyebrow as exactly
-            // as it describes an eye, and on a dark-browed man under studio
-            // light the brow is the darker of the two — a pair of eyes is
-            // half white. The brows sit about a third of a pupil width above
-            // the pupils, so half that splits the difference and leaves the
-            // face no more than a few millimetres out either way.
-            eyes: (row + pupils * Self::BROW_BIAS) / height as f32,
+            // The row itself, with nothing added to it. It used to be nudged
+            // down by a tenth of a pupil width, because what the search
+            // actually found half the time was the BROW-AND-EYE band and the
+            // brow was as often the winner — two dark marks with a lit bridge
+            // between them describes an eyebrow as exactly as it describes an
+            // eye. The bias split the difference and was wrong for both. What
+            // replaced it is the pair of comparisons that tell the two apart
+            // outright: the WHITES either side of an iris, and the brow that
+            // stands over an eye and over nothing else.
+            eyes: row / height as f32,
             pupils,
         })
         .map(|found| found.clamped(width, height))
@@ -424,6 +505,21 @@ struct Silhouette {
 }
 
 impl Silhouette {
+    /// The band of the outline that is CRANIUM and nothing else, measured
+    /// down from the crown in multiples of the head's gross width.
+    ///
+    /// There is a band at all because of the EARS. The widest row of a head
+    /// shot is almost never the skull: a pair of them stands an eighth of the
+    /// head's width out past it, and a maximum taken over the whole outline
+    /// hands everything downstream a head an eighth too wide — which becomes
+    /// a pupil distance an eighth too large, a picture laid down an eighth
+    /// too small, and a photograph sitting in the middle of a skull like a
+    /// mask on it. Ears start about six tenths of the way down a head and a
+    /// head is about a third again as tall as it is wide, so everything
+    /// within 0.58 of a width below the crown is skull. The top 0.18 is left
+    /// out at the other end, where the outline is still curving over.
+    const CRANIUM: (f32, f32) = (0.18, 0.58);
+
     fn of(pixels: &[u8], width: u32, height: u32) -> Option<Silhouette> {
         let mut spans: Vec<Option<(u32, u32)>> = Vec::with_capacity(height as usize);
         for y in 0..height {
@@ -445,18 +541,43 @@ impl Silhouette {
             .iter()
             .position(|span| span.is_some_and(|(first, last)| last - first > width / 6))?
             as u32;
-        // The head's width, taken over the top two thirds of what is left:
-        // below that a picture has shoulders in it, and shoulders are wider
-        // than any head.
+        // A first pass over the top two thirds of what is left — below that a
+        // picture has shoulders in it, and shoulders are wider than any head.
+        // This one is only ever a RULER for the band below: it takes the ears
+        // in and is that much too wide, and all the band wants of it is
+        // roughly how big this head is.
         let below = (crown + (height - crown) * 2 / 3).min(height);
-        let widest = spans[crown as usize..below as usize]
+        let gross = spans[crown as usize..below as usize]
+            .iter()
+            .flatten()
+            .map(|(first, last)| last - first)
+            .max()? as f32;
+        // …and the measurement itself, over the skull alone.
+        let band = |reach: f32| (crown + (gross * reach) as u32).min(height.saturating_sub(1));
+        let (from, to) = (band(Self::CRANIUM.0), band(Self::CRANIUM.1).max(crown + 2));
+        let cranium = spans.get(from as usize..to as usize)?;
+        // A head that runs off the side of the crop has not been measured,
+        // it has been cut to fit — and every number taken off it afterwards
+        // is the crop's rather than the man's. It happens on the one head in
+        // a squad with real volume of hair, and it hands the projection a
+        // skull half again too wide, which lays his face on at two thirds the
+        // size it should be. Better the framing's own numbers, which at least
+        // describe a head.
+        if cranium
+            .iter()
+            .flatten()
+            .any(|(first, last)| *first == 0 || *last >= width - 1)
+        {
+            return None;
+        }
+        let widest = cranium
             .iter()
             .flatten()
             .map(|(first, last)| last - first)
             .max()?;
         // …and its mid-line, from the rows around the widest point rather
         // than from the whole picture: a shoulder in frame is rarely centred.
-        let middles: Vec<f32> = spans[crown as usize..below as usize]
+        let middles: Vec<f32> = cranium
             .iter()
             .flatten()
             .filter(|(first, last)| last - first > widest * 3 / 4)
@@ -586,6 +707,19 @@ impl Portraits {
             look.shaved = true;
             if let Some(tone) = picture.hair_tone() {
                 look.hair = Color::srgb(tone.x, tone.y, tone.z);
+            }
+            // …and the SKIN, for the same reason and to the same picture.
+            // Everything on this sheet the picture does not reach is painted
+            // in this: the temples past the edge of it, the back of his head,
+            // the underside of his jaw. Left as the nationality-drawn guess
+            // it left a seam down the side of every photographed face with
+            // the man's own colour on one side of it and a stranger's on the
+            // other — the same argument that moved his neck and his arms onto
+            // the picture, applied to the part of his head the camera never
+            // saw. Not rounded to a ramp entry, unlike the body: this sheet is
+            // already his alone, so nothing is batched by it.
+            if let Some(tone) = picture.cheek_tone() {
+                look.skin = Color::srgb(tone.x, tone.y, tone.z);
             }
             if let Some((_, material)) = portraits.faces.iter().find(|(face, _)| *face == id) {
                 let sheet = images.add(Textures::photographed_face(&layout, &look, &picture));
@@ -1118,6 +1252,11 @@ mod tests {
     ///   MATCH_PICTURE=<file.rgba> MATCH_PICTURE_SIZE=260x310 \
     ///   MATCH_PICTURE_DUMP=<dir> cargo test -p match_viewer --lib \
     ///   dump_photographed_face -- --ignored
+    ///
+    /// `MATCH_PICTURE_ROWS` on top of that prints the eye-line search row by
+    /// row with its four terms broken out, which is the only way to see WHY a
+    /// face went onto a skull two centimetres up rather than merely that it
+    /// did.
     #[test]
     #[ignore = "writes a file; run by hand when the projection changes"]
     fn dump_photographed_face() {
@@ -1149,9 +1288,13 @@ mod tests {
         // arrived: the crown painted in the hair the picture has on it, and
         // the head under it shaved, because the cap comes off.
         let look = FaceLook {
-            // The tone the PREVIEW paints bare skin in, so the ears in the
-            // dump are the tone the viewer would give them.
-            skin: Color::srgb(0.78, 0.60, 0.46),
+            // Off the picture, exactly as `Portraits::attach` does it — the
+            // dump is worth nothing if the head in it is painted in a tone no
+            // player would be wearing.
+            skin: patch
+                .cheek_tone()
+                .map(|tone| Color::srgb(tone.x, tone.y, tone.z))
+                .unwrap_or(Color::srgb(0.78, 0.60, 0.46)),
             hair: patch
                 .hair_tone()
                 .map(|tone| Color::srgb(tone.x, tone.y, tone.z))
@@ -1232,6 +1375,131 @@ mod tests {
             sheet.width(),
             sheet.height(),
             directory.display()
+        );
+    }
+
+    /// Dev-only: measure a whole FOLDER of pictures at once and print what
+    /// comes out, which is the only way to tell a detector that works from
+    /// one that works on the two pictures it was written against.
+    ///
+    /// Every file is `<name>_<W>x<H>.rgba`. Beside each measurement it writes
+    /// the patch back out with the landmarks drawn on it, because a column of
+    /// numbers cannot say whether the mark that was found is an eye. RED is
+    /// what was measured — the eye line and the two pupils; CYAN is the top
+    /// of the head; and YELLOW and GREEN are where the SKULL this is all
+    /// going onto puts its own crown and chin, in this picture's pupil
+    /// widths. Yellow belongs on the top of his head and green on the point
+    /// of his chin, and how far off they are is how far off the skull is.
+    ///   MATCH_PICTURE_DIR=<dir> cargo test -p match_viewer --lib \
+    ///   measure_pictures -- --ignored --nocapture
+    #[test]
+    #[ignore = "reads a folder of raw pictures; run by hand"]
+    fn measure_pictures() {
+        let Ok(directory) = std::env::var("MATCH_PICTURE_DIR") else {
+            panic!("set MATCH_PICTURE_DIR");
+        };
+        let directory = std::path::Path::new(&directory);
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(directory)
+            .expect("read the folder")
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().is_some_and(|end| end == "rgba"))
+            .filter(|path| !path.to_string_lossy().contains(".marked"))
+            .collect();
+        files.sort();
+
+        // The head every one of these is going onto, so its own crown and
+        // chin can be drawn on each picture in that picture's pupil widths.
+        let skull = BodyParts::face_layout();
+        // Interpupillary distance in metres, as `Portrait::scale` has it.
+        const PUPILS: f32 = 0.064;
+
+        let mut cranium: Vec<f32> = Vec::new();
+        let mut breadth: Vec<f32> = Vec::new();
+        println!(
+            "{:<12} {:>7} {:>7} {:>7} {:>8} {:>8} {:>8}",
+            "picture", "crown", "widest", "pupils", "eyes", "crown/ipd", "wide/ipd"
+        );
+        for file in &files {
+            let stem = file.file_stem().unwrap().to_string_lossy().to_string();
+            let Some((name, size)) = stem.rsplit_once('_') else {
+                continue;
+            };
+            let Some((wide, tall)) = size.split_once('x') else {
+                continue;
+            };
+            let (wide, tall): (u32, u32) = (wide.parse().unwrap(), tall.parse().unwrap());
+            let source = std::fs::read(file).expect("read the picture");
+            let Some(patch) = Framing::PHOTOGRAPH.cut(&source, wide, tall) else {
+                println!("{name:<12} REFUSED");
+                continue;
+            };
+            let head = Silhouette::of(&patch.pixels, patch.width, patch.height);
+            let (crown, widest) = match &head {
+                Some(head) => (head.crown as f32, head.widest as f32),
+                None => (f32::NAN, f32::NAN),
+            };
+            let eyes = patch.eyes * patch.height as f32;
+            let above = (eyes - crown) / patch.pupils;
+            let across = widest / patch.pupils;
+            cranium.push(above);
+            breadth.push(across);
+            println!(
+                "{name:<12} {crown:>7.0} {widest:>7.0} {:>7.1} {eyes:>8.1} {above:>8.2} {across:>8.2}",
+                patch.pupils
+            );
+
+            let mut marked = patch.pixels.clone();
+            let mut mark = |x: i32, y: i32, ink: [u8; 3]| {
+                if x >= 0 && y >= 0 && x < patch.width as i32 && y < patch.height as i32 {
+                    let at = ((y as u32 * patch.width + x as u32) * 4) as usize;
+                    marked[at..at + 3].copy_from_slice(&ink);
+                    marked[at + 3] = 255;
+                }
+            };
+            for x in 0..patch.width as i32 {
+                mark(x, eyes as i32, [255, 0, 0]);
+                mark(x, crown as i32, [0, 200, 255]);
+                // Where the head the picture is going ONTO puts its crown and
+                // its chin, in this picture's own pupil widths — which is the
+                // whole question this whole dump exists to ask, and the only
+                // way to ask it of a squad at once. Yellow should sit on the
+                // top of his head and green on the point of his chin.
+                let of_a_head = |part: f32| (eyes + patch.pupils * part / PUPILS) as i32;
+                mark(
+                    x,
+                    of_a_head(skull.eyes - (skull.foot + skull.span)),
+                    [255, 220, 0],
+                );
+                mark(x, of_a_head(skull.eyes - skull.chin), [0, 255, 120]);
+            }
+            for side in [-0.5f32, 0.5] {
+                let column = (patch.centre * patch.width as f32 + side * patch.pupils) as i32;
+                for y in 0..patch.height as i32 {
+                    mark(column, y, [255, 0, 0]);
+                }
+            }
+            std::fs::write(
+                directory.join(format!(
+                    "{name}.marked_{}x{}.rgba",
+                    patch.width, patch.height
+                )),
+                &marked,
+            )
+            .expect("wrote the marked patch");
+        }
+
+        let median = |mut of: Vec<f32>| {
+            of.retain(|value| value.is_finite());
+            of.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            of.get(of.len() / 2).copied().unwrap_or(f32::NAN)
+        };
+        println!(
+            "\n{} pictures: median crown {:.2} pupil-widths above the eyes, \
+             head {:.2} pupil-widths across",
+            files.len(),
+            median(cranium),
+            median(breadth)
         );
     }
 }

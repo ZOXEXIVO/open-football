@@ -6,6 +6,7 @@
 use super::Ball;
 use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
+use crate::r#match::engine::corner_shape::{CornerShape, CornerShapeHold};
 use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::engine::set_pieces::{
     CornerRoutine, pick_corner_routine, score_corner_routines, score_corner_taker,
@@ -626,44 +627,44 @@ impl Ball {
                 // it when it has &mut field.players.
                 self.pending_set_piece_teleport = Some((taker_id, self.position));
 
-                // Dead-ball set-up: send the two best-heading centre-backs
-                // up into the box to attack the delivery. In real football
-                // the big men walk up during the corner stoppage; the sim
-                // has no stoppage, and a CB can't cover the length of the
-                // pitch inside the cross window, so position them directly.
-                // AttackingCorner keeps them there until the corner
-                // resolves, then they sprint back into shape.
-                let box_x = match side {
-                    GoalSide::Home => 52.0,
-                    GoalSide::Away => field_width - 52.0,
+                // Dead-ball set-up. In real football both sides spend the
+                // thirty-to-sixty-second stoppage walking into a shape: the
+                // defending side brings ten men back, the attacking side
+                // loads the box and leaves a short option by the flag. The
+                // sim has no stoppage — the cross is struck 50 ms after the
+                // corner is awarded — so the shape has to be placed
+                // directly, and until it was, the "corner shape" was
+                // whatever open-play positions the twenty-two happened to
+                // be standing in when the ball went behind. After a
+                // counter that ended with a defender hooking it out, that
+                // routinely meant the DEFENDING SIDE HAD NOBODY BUT THE
+                // KEEPER IN ITS OWN BOX.
+                //
+                // `CornerShape::plan` owns the geometry and the
+                // who-stands-where; the engine drains the plan in
+                // `apply_pending_set_piece_teleport`, which is the layer
+                // that has `&mut field.players`.
+                let goal_x = match side {
+                    GoalSide::Home => 0.0,
+                    GoalSide::Away => field_width,
                 };
-                let center_y = field_height / 2.0;
-                let mut cbs: Vec<(u32, f32)> = players
-                    .iter()
-                    .filter(|p| {
-                        p.side == Some(attacking_side)
-                            && p.id != taker_id
-                            && p.tactical_position.current_position.is_central_defender()
-                    })
-                    .map(|p| (p.id, p.skills.technical.heading))
-                    .collect();
-                cbs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
                 // Arm the discrete aerial contest for this corner: it fires
                 // once, the instant the cross is struck (see engine.rs
                 // resolve_corner_contest).
                 self.corner_contest_resolved = false;
-                self.pending_corner_teleports.clear();
-                for (i, (cb_id, _)) in cbs.iter().take(2).enumerate() {
-                    // Near / far post split — wide enough that the far CB
-                    // sits beyond the keeper's central cross-claim zone.
-                    let y = if i == 0 {
-                        center_y - field_height * 0.085
-                    } else {
-                        center_y + field_height * 0.085
-                    };
-                    self.pending_corner_teleports
-                        .push((*cb_id, Vector3::new(box_x, y, 0.0)));
-                }
+                self.corner_shape = Some(CornerShapeHold {
+                    armed_tick: self.current_tick_cached,
+                    taker_id,
+                });
+                self.pending_corner_teleports = CornerShape::plan(
+                    players,
+                    attacking_side,
+                    taker_id,
+                    goal_x,
+                    self.position,
+                    field_width,
+                    field_height,
+                );
 
                 return;
             }

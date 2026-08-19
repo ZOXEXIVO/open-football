@@ -391,6 +391,111 @@ impl Textures {
         }))
     }
 
+    /// The ball on the timeline, marking a goal.
+    ///
+    /// A disc with the panels taken OUT of it rather than drawn on: a mask
+    /// carries one colour and an alpha, and cutting the dark panels away lets
+    /// whatever the marker is filled with show through them. Two tones for
+    /// free, and both of them the club's.
+    ///
+    /// What survives of the pattern at a dozen pixels is the pentagons: a big
+    /// one in the middle and five smaller ones around it, sitting off its EDGES
+    /// the way a real ball's do — the panels next to a pentagon are the ones
+    /// across the hexagons from it, never the ones off its points. That
+    /// distinction is not pedantry at this size, it is the whole picture (see
+    /// below). A plain circle will not do: the playhead is one, and the two sit
+    /// ten pixels apart on the same rail.
+    ///
+    /// Three earlier drafts are worth not repeating, because each looks right
+    /// in the source and wrong on screen:
+    ///
+    /// - Round panels cut out of the RIM scallop the silhouette. A circle with
+    ///   five bites out of it is a cog.
+    /// - The same panels shrunk to fit inside the rim leave six dots of equal
+    ///   weight. That is a button.
+    /// - A big hub with seams running out of its VERTICES merges with them into
+    ///   five points. That is a star — and it is what putting the satellites on
+    ///   the vertex angles does too, since the hub already reaches its full
+    ///   radius there and the shapes touch.
+    ///
+    /// ⚠ NOTHING REACHES THE EDGE. `RIM` is a band of solid colour that keeps
+    /// the outline whole; all the pattern lives inside it.
+    pub fn goal_icon(images: &mut Assets<Image>) -> Handle<Image> {
+        const RADIUS: f32 = 0.47;
+        const RIM: f32 = 0.405;
+        const HUB: f32 = 0.20;
+        const PANEL_AT: f32 = 0.30;
+        const PANEL: f32 = 0.105;
+
+        images.add(Self::mask(|x, y| {
+            let (dx, dy) = (x - 0.5, y - 0.5);
+            let distance_sq = dx * dx + dy * dy;
+            if distance_sq > RADIUS * RADIUS {
+                return false;
+            }
+            if distance_sq > RIM * RIM {
+                return true;
+            }
+            // `y` runs down the square, so -π/2 is straight up: the hub's first
+            // vertex points there, and the first satellite sits off the edge
+            // clockwise of it.
+            if Self::pentagon(dx, dy, HUB, 0.0) {
+                return false;
+            }
+            (0..5).all(|panel| {
+                let angle = -std::f32::consts::FRAC_PI_2
+                    + std::f32::consts::PI / 5.0
+                    + panel as f32 * std::f32::consts::TAU / 5.0;
+                let (cx, cy) = (PANEL_AT * angle.cos(), PANEL_AT * angle.sin());
+                // Turned so its own point faces outward, which is what stops
+                // five little pentagons reading as five little circles.
+                !Self::pentagon(dx - cx, dy - cy, PANEL, angle + std::f32::consts::FRAC_PI_2)
+            })
+        }))
+    }
+
+    /// And the exclamation, marking a chance that stayed out.
+    ///
+    /// Tapered rather than a plain bar, and the taper is the whole reason it
+    /// can be drawn this small: at twelve pixels a stroke of even width beside
+    /// a dot reads as a colon stood on end. The stem has to visibly come to a
+    /// point for the eye to finish it.
+    pub fn chance_icon(images: &mut Assets<Image>) -> Handle<Image> {
+        const STEM_TOP: f32 = 0.14;
+        const STEM_FOOT: f32 = 0.62;
+        const STEM_HALF_TOP: f32 = 0.125;
+        const STEM_HALF_FOOT: f32 = 0.075;
+        const DOT_AT: f32 = 0.81;
+        const DOT: f32 = 0.115;
+
+        images.add(Self::mask(|x, y| {
+            let across = (x - 0.5).abs();
+            if (STEM_TOP..=STEM_FOOT).contains(&y) {
+                let down = (y - STEM_TOP) / (STEM_FOOT - STEM_TOP);
+                return across <= STEM_HALF_TOP + (STEM_HALF_FOOT - STEM_HALF_TOP) * down;
+            }
+            let below = y - DOT_AT;
+            across * across + below * below <= DOT * DOT
+        }))
+    }
+
+    /// Is this point inside a regular pentagon of `radius` centred on the
+    /// origin, turned `rotation` radians from vertex-straight-up?
+    ///
+    /// Five half-plane tests, one per edge: an edge normal points at
+    /// `-π/2 + π/5 + k·2π/5`, and every edge stands its apothem away from the
+    /// centre along it.
+    fn pentagon(dx: f32, dy: f32, radius: f32, rotation: f32) -> bool {
+        let apothem = radius * (std::f32::consts::PI / 5.0).cos();
+        (0..5).all(|edge| {
+            let angle = -std::f32::consts::FRAC_PI_2
+                + std::f32::consts::PI / 5.0
+                + rotation
+                + edge as f32 * std::f32::consts::TAU / 5.0;
+            dx * angle.cos() + dy * angle.sin() <= apothem
+        })
+    }
+
     /// White throughout, with alpha from how much of each texel the shape
     /// covers — sampled on a 4×4 grid, which is what gives a hard-edged glyph
     /// a soft enough edge to sit still at this size. `inside` is asked about
@@ -603,7 +708,8 @@ impl Textures {
         /// the least an iris and a pupil can be told apart in.
         const WIDTH: u32 = 128;
         const HEIGHT: u32 = 96;
-        /// …and what a PICTURE gets, which is four times as many texels.
+        /// …and what a PICTURE gets, which is more than five times as many
+        /// texels.
         ///
         /// The sheet above is sized to the rule the rest of this file works
         /// to: one texel on about one pixel at the range a face is looked at
@@ -614,9 +720,17 @@ impl Textures {
         /// a tinted smudge: the fifty texels across the front of his face are
         /// enough to say "a face" and nowhere near enough to say WHOSE.
         ///
+        /// SQUARE rather than the 4:3 the painted one is, because the two
+        /// axes are not the same problem. Across, the sheet has always had
+        /// more texels than a head shot has pixels to fill them. Down, at 192,
+        /// it had 580 to the metre against the photograph's 700 — so the last
+        /// sixth of the detail in every face was being thrown away at the one
+        /// step that had it to spare. 256 puts the sheet ahead of the picture
+        /// on both axes, which is where the limit belongs.
+        ///
         /// The cost of breaking the rule is minification crawl, and the answer
         /// to that is the mip chain below rather than a smaller sheet.
-        const PICTURE: (u32, u32) = (256, 192);
+        const PICTURE: (u32, u32) = (256, 256);
 
         let (width, height) = if portrait.is_some() {
             PICTURE
@@ -1501,12 +1615,29 @@ impl Painter<'_> {
         self.scalp(colour, height, angle)
     }
 
-    /// Past this angle a picture starts giving way to the painted head, and by
-    /// [`Self::FRONT`] it is gone. The surface has turned far enough by then
-    /// that a flat frontal is being seen edge-on and every pixel of it is
-    /// smeared along the side of the skull — the same reason the painted
-    /// features stop there, arrived at from the other direction.
-    const PICTURE_FRONT: f32 = 1.02;
+    /// Where a picture starts giving way to the painted head, and where it is
+    /// gone. Past the second of these the surface has turned so far that a
+    /// flat frontal laid on it is being seen edge-on and every pixel is
+    /// smeared along the side of the skull — the same argument that stops the
+    /// painted features at [`Self::FRONT`], arrived at from the other side.
+    ///
+    /// Both were a quarter of a radian tighter, and what that left was a hard
+    /// vertical seam down the temple of every photographed player with the
+    /// man's own cheek on one side of it and flat paint on the other. The
+    /// picture goes nearly to the silhouette now, which is also where his own
+    /// EARS are: they are not on this model any more, so the only ears a head
+    /// has are the ones in the photograph, and cutting the picture off before
+    /// them would leave him without any. It runs out on its own account at
+    /// the silhouette — the studio was keyed off the back of it, so the
+    /// outline of his head is exactly where its alpha stops — which is a
+    /// softer edge than any angle this could name.
+    ///
+    /// It does not go PAST the silhouette, which was tried: the projection is
+    /// `sin(angle)`, so beyond a quarter turn it folds back and starts laying
+    /// the same texels down a second time, and one row of them drags
+    /// backwards across the side of the head as a streak.
+    const PICTURE_FRONT: f32 = 1.26;
+    const PICTURE_EDGE: f32 = 1.56;
 
     /// The picture of this man's head, laid over the face just painted.
     ///
@@ -1546,7 +1677,7 @@ impl Painter<'_> {
         // Round the sides.
         let front = 1.0
             - Textures::smooth(
-                (angle.abs() - Self::PICTURE_FRONT) / (Self::FRONT - Self::PICTURE_FRONT),
+                (angle.abs() - Self::PICTURE_FRONT) / (Self::PICTURE_EDGE - Self::PICTURE_FRONT),
             );
         // Under the jaw, where a head shot has a throat, a collar and the top
         // of a shirt, and this head has the top of a neck that belongs to the
@@ -1558,10 +1689,20 @@ impl Painter<'_> {
         // photograph. So the picture stops at the jaw itself and is gone a
         // centimetre under it.
         let above_jaw = Textures::smooth((height - (self.layout.chin - 0.004)) / 0.016);
-        // And over the crown, which is where a head shot runs out of head and
-        // the last thing anybody wants is the top of a picture frame painted
-        // across the top of a skull.
-        let below_crown = 1.0 - Textures::smooth((height - (crown - 0.030)) / 0.026);
+        // And over the crown, where the surface has turned to face the sky and
+        // a flat frontal laid on it is being seen edge-on — the same argument
+        // as `front`, arrived at from above.
+        //
+        // It used to start three centimetres down and take the top of every
+        // head with it. That was written when the skull stood 125 mm above
+        // the eye line and no photograph reached the top of it anyway, so
+        // there was nothing up there to lose; what it painted instead was a
+        // flat dome in the colour of his hair, standing over the man's own
+        // hairline like a bald patch he does not have. The skull now ends
+        // where a photographed head ends (see `BodyParts::SKULL`), so the
+        // picture is carried to within a centimetre of the crown and it is
+        // his own hair that goes over the top.
+        let below_crown = 1.0 - Textures::smooth((height - (crown - 0.011)) / 0.010);
         front * above_jaw * below_crown
     }
 
@@ -1581,7 +1722,14 @@ impl Painter<'_> {
     /// second caller: see [`Self::photographed`].
     fn shading(&self, height: f32, angle: f32) -> f32 {
         let turned = Textures::smooth((angle.abs() / 1.9).min(1.0));
-        let mut shade = 1.0 - 0.16 * turned;
+        // How much the flank falls away. Deeper than it was, and what set the
+        // depth is a PHOTOGRAPH: where a picture gives out at the temple the
+        // paint has to carry on from the tone the picture had there, and a
+        // sixth off the front tone was nowhere near a studio-lit cheek turning
+        // into shadow. The step showed as a seam down the side of every
+        // photographed face, and on a painted one it left the head reading as
+        // a disc.
+        let mut shade = 1.0 - 0.26 * turned;
         // Under the jaw and down the neck, which is in the head's own shadow
         // for the whole match.
         let under = Textures::smooth(((self.layout.chin + 0.012 - height) / 0.055).clamp(0.0, 1.0));

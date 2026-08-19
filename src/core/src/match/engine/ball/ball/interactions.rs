@@ -2009,12 +2009,39 @@ impl Ball {
                 contact_along,
                 contact_across,
             );
-            // Clean catch — keeper holds. The ball goes to him, and the
-            // `Claimed` event below routes through `secure_ball_for`, which
-            // owns the gloves and the carry height from here. The change
-            // that matters for a catch is the one above: the window now
-            // opens at HIS plane, so this is a reach rather than a 3.5 m
-            // teleport.
+            // **Clean catch — and a catch means the ball is IN HIS GLOVES.**
+            //
+            // This used to set `current_owner` and nothing else, on the
+            // belief that the `Claimed` event below routed through
+            // `secure_ball_for`. It does not: `Claimed` becomes a
+            // `ClaimBall` player event, and that handler's first branch is
+            // "already owns the ball — return". So the one gather a keeper
+            // makes most often, the save he catches, never raised
+            // `held_in_hands`, and every consequence of the flag was lost
+            // with it:
+            //
+            //   * `carry_height` is 0 without it, so the replay drew these
+            //     possessions with the ball lying on the grass by his boots
+            //     — "the goalkeeper holds it at his feet";
+            //   * `carrier_id` reports him as a CARRIER, so the opposition
+            //     press a man holding the ball;
+            //   * `check_ball_ownership` treats it as a ball at his feet
+            //     and hands it to the best tackler within 5u the moment
+            //     `claim_cooldown` lapses — and the worst tackler on the
+            //     pitch is the goalkeeper.
+            //
+            // Measured over 12 matches before the fix: 84% of the keeper's
+            // possession WAS in his gloves, but the remaining 16% — 382
+            // ticks a match — was spent standing on the ball, 40% of that in
+            // `HoldingBall`, the state whose entire meaning is that the ball
+            // is in his hands. He was robbed 1.5 times a match off his feet
+            // and never once out of his gloves, which is the two reported
+            // symptoms in one number. See `reception_diag::KEEPER_BALL`.
+            //
+            // Handling still has to be LEGAL. A shot is never a back-pass
+            // and never his own second touch, so the area is the only test
+            // that can fail — a sweeper-keeper who heads a shot clear from
+            // outside his box keeps his feet.
             self.pending_save_site = 1; // catch
             self.position = keeper_pos;
             self.position.z = 0.0;
@@ -2022,7 +2049,14 @@ impl Ball {
             self.current_owner = Some(keeper_id);
             self.flags.in_flight_state = 0;
             self.claim_cooldown = 200;
-            self.record_touch(keeper_id, keeper_team, tick, true);
+            let area = context.penalty_area(keeper_side == Some(PlayerSide::Left));
+            let hands_legal = (area.min.x..=area.max.x).contains(&keeper_pos.x)
+                && (area.min.y..=area.max.y).contains(&keeper_pos.y);
+            if hands_legal {
+                self.gather_in_hands(keeper_id, keeper_team, tick);
+            } else {
+                self.record_touch(keeper_id, keeper_team, tick, true);
+            }
             events.add_ball_event(BallEvent::Claimed(keeper_id));
             return;
         }

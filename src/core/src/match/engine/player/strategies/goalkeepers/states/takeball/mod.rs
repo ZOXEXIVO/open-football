@@ -1,6 +1,6 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperSmother,
+    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision, KeeperSmother,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::common::states::LooseBallChase;
@@ -15,9 +15,15 @@ pub struct GoalkeeperTakeBallState {}
 
 impl StateProcessingHandler for GoalkeeperTakeBallState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // He has won the race. What happens to the ball is decided here,
+        // not by jogging home with it at his feet — `ReturningToGoal` used
+        // to be handed a keeper in possession and pass him on to
+        // `Distributing` a tick later, which is two states of dithering
+        // over a ball he could simply have picked up. See
+        // [`KeeperFeetDecision`].
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::ReturningToGoal,
+                KeeperFeetDecision::state_for(ctx),
             ));
         }
 

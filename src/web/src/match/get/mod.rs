@@ -7,7 +7,6 @@ use crate::common::slug::player_history_slug;
 use crate::face::skin::CountrySkin;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
-use shared::Appearance;
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
@@ -17,6 +16,7 @@ use core::SimulatorData;
 use core::r#match::MatchResultRaw;
 use core::r#match::player::statistics::MatchStatisticType;
 use serde::{Deserialize, Serialize};
+use shared::Appearance;
 
 #[derive(Deserialize)]
 pub struct MatchGetRequest {
@@ -96,6 +96,7 @@ struct ViewerConfigJson {
     away: TeamColorsJson,
     players: Vec<PlayerJson>,
     goals: Vec<GoalEventJson>,
+    chances: Vec<ChanceEventJson>,
     labels: ViewerLabelsJson,
 }
 
@@ -151,6 +152,16 @@ struct GoalEventJson {
     player_id: u32,
     time: u64,
     is_auto_goal: bool,
+}
+
+/// A goal-scoring moment that stayed out — the engine's shortlist, already cut
+/// to two or three a side (`HighlightSelector`), each with a clip of its own in
+/// the recording. The timeline marks them so there is something to seek to
+/// between the goals; on a goalless match they are the entire reel.
+#[derive(Serialize)]
+struct ChanceEventJson {
+    player_id: u32,
+    time: u64,
 }
 
 #[derive(Serialize)]
@@ -334,6 +345,15 @@ pub async fn match_get_action(
         })
         .collect();
 
+    let viewer_chances: Vec<ChanceEventJson> = result_details
+        .chances
+        .iter()
+        .map(|chance| ChanceEventJson {
+            player_id: chance.player_id,
+            time: chance.time,
+        })
+        .collect();
+
     let mut viewer_players: Vec<PlayerJson> = Vec::new();
 
     // Assign squad numbers (1-based) per team when shirt_number is not set
@@ -509,6 +529,7 @@ pub async fn match_get_action(
         away: TeamColorsJson::for_club(simulator_data, away_club_id, "#b33f00"),
         players: viewer_players,
         goals: viewer_goals,
+        chances: viewer_chances,
         labels: ViewerLabelsJson {
             first_half: i18n.t("first_half").to_string(),
             second_half: i18n.t("second_half").to_string(),

@@ -10,6 +10,7 @@ use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::state::PlayerState::{Defender, Forward, Goalkeeper, Midfielder};
 use crate::r#match::player::strategies::common::PlayerOperationsImpl;
 use crate::r#match::player::strategies::common::PlayersOperationsImpl;
+use crate::r#match::player::strategies::common::states::{CornerHold, KeeperReleaseSpace};
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::player_context::LooseBallChase;
 use crate::r#match::team::{ShapeDiscipline, TeamOperationsImpl};
@@ -121,7 +122,7 @@ impl PlayerFieldPositionGroup {
         let state_processor =
             StateProcessor::new(override_state_time, player, context, tick_context);
 
-        match player_state {
+        let mut result = match player_state {
             // Common states
             PlayerState::Injured => state_processor.process(CommonInjuredState::default()),
             // // Specific states
@@ -129,7 +130,13 @@ impl PlayerFieldPositionGroup {
             Defender(state) => DefenderStrategies::process(state, state_processor),
             Midfielder(state) => MidfielderStrategies::process(state, state_processor),
             Forward(state) => ForwardStrategies::process(state, state_processor),
-        }
+        };
+        // Universal corner-shape hold, applied at dispatch for the same
+        // reason as the loose-ball override above: a corner puts twenty
+        // players somewhere their own state did not choose, and not one of
+        // the four state machines knows to stay there. See `CornerHold`.
+        CornerHold::apply(player, tick_context, &mut result);
+        result
     }
 
     /// TakeBall variant for this position group. Outfield players commit
@@ -545,7 +552,18 @@ impl<'p> StateProcessor<'p> {
         let processing_ctx = self.into_ctx();
         let mut result = StateProcessingResult::new();
 
-        if let Some(velocity) = handler.velocity(&processing_ctx) {
+        // **The opposing keeper has the ball in his hands: leave his
+        // area.** Ahead of everything else, and deliberately ahead of
+        // `ShapeDiscipline` — the attacking plan's box slots are inside
+        // the area he has to vacate, so shaping this would pull him
+        // straight back in. It also has to sit outside the `if let`,
+        // because the states that stand still return no velocity at all
+        // and a striker idling on the six-yard line is the case being
+        // fixed. See [`KeeperReleaseSpace`].
+        if let Some((out, effort)) = KeeperReleaseSpace::retreat(&processing_ctx) {
+            result.velocity = Some(out);
+            result.effort_floor = effort;
+        } else if let Some(velocity) = handler.velocity(&processing_ctx) {
             // Positional discipline first: keep the state's own intent
             // inside the space the team plan gave this player. Applied
             // here — the one point every state's movement converges on —
@@ -833,6 +851,18 @@ pub struct StateProcessingResult {
     /// floor the block measured **54.2 m while defending against a
     /// planned 31.3 m and a real 35-45 m**.
     pub shape_recall_pull: f32,
+    /// A second FLOOR on the movement speed cap, for velocities imposed
+    /// from outside the state machine.
+    ///
+    /// Same mechanism and the same reason as `shape_recall_pull`: the cap
+    /// `state.rs` applies is keyed to whatever `ActivityIntensity` the
+    /// player's CURRENT state declared, and the low tiers are near-total
+    /// (`Recovery` is 0.12 of top speed). An override that replaces the
+    /// state's own velocity is therefore served at the pace of a state it
+    /// is no longer following — a striker told to leave the keeper's area
+    /// while nominally `Standing` backs away at a twelfth of walking pace.
+    /// See [`KeeperReleaseSpace`].
+    pub effort_floor: f32,
 }
 
 impl Default for StateProcessingResult {
@@ -851,6 +881,7 @@ impl StateProcessingResult {
             start_keeper_cooldown: false,
             shot_reason: None,
             shape_recall_pull: 0.0,
+            effort_floor: 0.0,
         }
     }
 
