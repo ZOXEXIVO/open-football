@@ -111,8 +111,6 @@ finances, and match engine can turn it into success.
 
 
 ![Match page](.docs/images/match.jpg "Match page")
-![Match view](https://open-football.org/player/Match.gif "Match view")
-
 
 [League page example](https://open-football.org/en/leagues/italian-serie-a)
 
