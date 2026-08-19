@@ -107,10 +107,18 @@ finances, and match engine can turn it into success.
 
 ![Player personal page](.docs/images/player_personal.jpg "Player personal page")
 
-
 [Match example](https://open-football.org/en/match/2026-08-29_1139_1129)
 
+
 ![Match page](.docs/images/match.jpg "Match page")
+
+[Match video example](https://open-football.org/player/Match.mp4)
+
+<video src="https://open-football.org/player/Match.mp4" controls muted loop playsinline width="900">
+  Your browser does not support the video tag.
+  <a href="https://open-football.org/player/Match.mp4">Watch the match video</a>
+</video>
+
 
 [League page example](https://open-football.org/en/leagues/italian-serie-a)
 
