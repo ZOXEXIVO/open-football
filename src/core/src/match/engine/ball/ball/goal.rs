@@ -744,7 +744,12 @@ impl Ball {
                 // put on it, so letting it run out behind the goal first
                 // would only make the teleport that follows longer and
                 // more visible. The two switches have to agree.
-                let runs_out = walked && RunOff::armed();
+                // …and `outside_posts` for the same reason the goal-kick
+                // branch below carries it: a ball that crossed BETWEEN THE
+                // POSTS has hit the net, so it has nowhere to run out to,
+                // and letting it roll on would draw it through the mesh
+                // and out the back of the stadium.
+                let runs_out = walked && RunOff::armed() && outside_posts;
                 let died_at = if runs_out {
                     self.position
                 } else {

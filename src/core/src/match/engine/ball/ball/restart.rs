@@ -234,6 +234,23 @@ impl Ball {
             // Substituted or sent off between the award and now. Drop the
             // restart and let the ordinary loose-ball logic have it rather
             // than waiting for a man who is not on the pitch.
+            //
+            // ⚠ **But not while the ball is off the pitch.** Handing a
+            // loose ball back used to be harmless because it was lying on
+            // the restart spot, two units INSIDE the line. It can now be
+            // four metres beyond the hoardings ([`RunOff`]), where the
+            // pitch clamp on every other player forbids anyone from ever
+            // reaching it — the ball would sit out there, unowned and
+            // untouchable, until a stall detector eventually kicked it
+            // away. Put it on the spot the restart was awarded at, which
+            // is the same backstop a taker who never arrives gets.
+            let spot = await_state.take_from.unwrap_or(await_state.spot);
+            if RunOff::armed() {
+                self.position.x = spot.x;
+                self.position.y = spot.y;
+                self.velocity = Vector3::zeros();
+                self.spin = Vector3::zeros();
+            }
             self.awaiting_restart = None;
             return;
         };

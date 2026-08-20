@@ -443,6 +443,41 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// over in one or two.
     fn clear_expired_corner_stations(field: &mut MatchField) {
         let Some(shape) = field.ball.corner_shape else {
+            // ⚠ **NO CORNER, SO NOBODY MAY HOLD A STATION — and this used
+            // to be a bare `return`.**
+            //
+            // It was safe for exactly as long as the corner was the only
+            // restart with a `take_from`: the carry leg writes
+            // `pending_restart_station`, that is the sole producer of
+            // `MatchPlayer::set_piece_station`, and this function was the
+            // sole consumer. Every restart has a carry leg now
+            // ([`RunOff`](crate::r#match::engine::ball::ball::RunOff)), so
+            // a throw-in or a goal kick stamps a station and nothing on
+            // the pitch ever takes it off again — not the half-time reset,
+            // not the goal reset.
+            //
+            // It then lies dormant until the next CORNER, because
+            // `CornerHold::apply` bails on `pass_origin_restart != Corner`
+            // — a guard exactly the wrong way round for this. Measured:
+            // the keeper carries a goal kick in from `(6, 199.8)`, keeps
+            // that station, and on the next corner `hold_weight` returns
+            // 1.0 for a man 270 u from the flag, replacing his velocity
+            // outright and walking him 12 m off his line onto an hour-old
+            // goal-kick spot while the cross comes in.
+            //
+            // Sweeping is the whole fix: a station exists only while a
+            // corner shape is live, or for the one man carrying a dead
+            // ball back to its spot right now.
+            let carrier = field
+                .ball
+                .awaiting_restart
+                .filter(|restart| restart.carrying)
+                .map(|restart| restart.taker_id);
+            for player in field.players.iter_mut() {
+                if Some(player.id) != carrier {
+                    player.set_piece_station = None;
+                }
+            }
             return;
         };
         // **Still being set up.** The taker is fetching the ball or

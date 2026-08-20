@@ -375,68 +375,71 @@ fn the_off_arm_still_places_the_ball_on_the_spot() {
     );
 }
 
-// ===== ZZ PROBE (temporary) =====
+/// **A restart must not leave its taker pinned to the spot afterwards.**
+///
+/// The carry leg writes the taker a `set_piece_station`, and until this
+/// change the corner was the only restart that had one — so
+/// `TickEngine::clear_expired_corner_stations`, whose first act is to
+/// return when no corner shape is armed, was a sufficient owner for it.
+/// Every throw-in and goal kick has a carry leg now, and a station written
+/// by one of those was never cleared by anything: not that function, not
+/// the half-time reset, not the goal reset.
+///
+/// It then lay dormant until the next CORNER, because `CornerHold::apply`
+/// bails unless the restart origin is `Corner` — a guard exactly the wrong
+/// way round for a stale station. Measured before the fix: the keeper
+/// carried a goal kick in from `(6.0, 199.8)`, kept that station, and on
+/// the next corner was walked 12 m off his line back onto it with his
+/// goalkeeping AI overridden for the whole delivery.
 #[test]
-fn zz_probe_over_the_bar_net() {
-    use crate::r#match::engine::ball::ball::net::GoalNet;
-    use crate::r#match::engine::goal::GOAL_WIDTH;
+fn a_taken_restart_leaves_nobody_holding_a_station() {
+    if !RunOff::armed() {
+        // See `the_off_arm_still_places_the_ball_on_the_spot`.
+        return;
+    }
     let mut m = RunOutMatch::new();
-    let shooter = m
+    m.shoot_wide_of_the_left_goal();
+    let taker = m.field.ball.awaiting_restart.expect("armed").taker_id;
+
+    // Play the goal kick right out, so the carry leg definitely ran.
+    let carried = {
+        let mut seen = false;
+        let mut done = false;
+        for _ in 0..3000 {
+            m.tick();
+            seen |= m
+                .field
+                .ball
+                .awaiting_restart
+                .is_some_and(|restart| restart.carrying);
+            if m.field.ball.awaiting_restart.is_none() {
+                done = true;
+                break;
+            }
+        }
+        assert!(done, "the goal kick never got taken");
+        seen
+    };
+    assert!(
+        carried,
+        "the taker never carried the ball, so the leak this pins was never opened"
+    );
+
+    // A few ticks for the tick engine to run its own housekeeping.
+    for _ in 0..5 {
+        m.tick();
+    }
+    let pinned: Vec<u32> = m
         .field
         .players
         .iter()
-        .find(|p| {
-            p.side == Some(PlayerSide::Right)
-                && !p.tactical_position.current_position.is_goalkeeper()
-        })
-        .map(|p| (p.id, p.team_id))
-        .expect("outfielder");
-    let goal_y = m.context.goal_positions.left.y;
-    m.field.ball.position = Vector3::new(-1.0, goal_y + 2.0, 3.2);
-    m.field.ball.velocity = Vector3::new(-1.4, 0.05, 0.01);
-    m.field.ball.current_owner = None;
-    m.field.ball.previous_owner = Some(shooter.0);
-    let tick = m.context.current_tick();
-    m.field.ball.record_touch(shooter.0, shooter.1, tick, true);
-    m.tick();
-    let aw = m.field.ball.awaiting_restart.expect("goal kick");
-    println!("PROBE: origin={:?} settled={}", aw.origin, aw.settled);
-    let taker = aw.taker_id;
-    let mut prev = m.field.ball.position;
-    let mut back_panel_cross: Option<(f32, f32)> = None;
-    let mut keeper_in_net = 0usize;
-    let mut keeper_min_x_in_mouth = f32::MAX;
-    for i in 1..=3000 {
-        m.tick();
-        let p = m.field.ball.position;
-        if back_panel_cross.is_none()
-            && prev.x > -GoalNet::DEPTH
-            && p.x <= -GoalNet::DEPTH
-            && (p.y - goal_y).abs() < GOAL_WIDTH
-        {
-            // roof height at the back of the net
-            back_panel_cross = Some((p.z, i as f32));
-            println!(
-                "PROBE: ball crossed the BACK PANEL (x={:.1}) at z={:.2} m on tick {i}; back-panel top is {:.2} m",
-                p.x, p.z, GoalNet::BACK_HEIGHT
-            );
-        }
-        if let Some(k) = m.field.players.iter().find(|p| p.id == taker) {
-            if k.position.x < 0.0 && k.position.x > -GoalNet::DEPTH
-                && (k.position.y - goal_y).abs() < GOAL_WIDTH
-            {
-                keeper_in_net += 1;
-                keeper_min_x_in_mouth = keeper_min_x_in_mouth.min(k.position.x);
-            }
-        }
-        prev = p;
-        if m.field.ball.awaiting_restart.is_none() {
-            println!("PROBE: resolved tick {i}");
-            break;
-        }
-    }
-    println!(
-        "PROBE: back_panel_cross={:?} keeper_ticks_inside_net_volume={keeper_in_net}",
-        back_panel_cross
+        .filter(|p| p.set_piece_station.is_some())
+        .map(|p| p.id)
+        .collect();
+    assert!(
+        pinned.is_empty(),
+        "the restart is over and {pinned:?} are still standing on a set-piece \
+         station (the taker is {taker}) — it will be read as a corner shape by \
+         the next corner and override their own AI"
     );
 }
