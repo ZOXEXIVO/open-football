@@ -12,14 +12,241 @@ use crate::r#match::player::strategies::common::players::ops::forward_shot_decis
     ShotDecision, evaluate_forward_shot_decision,
 };
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
+use crate::r#match::player::strategies::common::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::common::states::MarkEngagement;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
-    ConditionContext, DefensiveDuty, GamePhase, MatchPlayerLite, PassEvaluator, PlayerSide,
-    StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    ConditionContext, DefensiveDuty, GamePhase, MatchContext, MatchPlayerLite, PassEvaluator,
+    PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 use std::cmp::Ordering;
+
+/// **The arriving runner's shot, as a licence rather than a rule.**
+///
+/// # What this replaces, and why it had to go
+///
+/// The tier used to be DETERMINISTIC — five booleans and a `return`. Its
+/// own note above says why that cannot be bounded: *"wherever its gate
+/// ends, it saturates the band underneath, because nothing else in it is
+/// a probability"*. What that note could not see is the second half of
+/// the problem: **the one term in it that varies is the DEFENDING**, and
+/// so the whole tier's firing rate is a function of how good the
+/// opposition is. Measured over 300 matches at each level with equal
+/// squads, this single path was
+///
+/// | level | share of every shot in the match |
+/// |---|---|
+/// | 6 | **44%** |
+/// | 10 | 17% |
+/// | 14 | 4.5% |
+/// | 18 | 2% |
+///
+/// and switching it off took level 6 from 3.46 goals a match to 1.69
+/// while leaving level 14 and 18 untouched. It is, on its own, the reason
+/// lower divisions played 3-2 every week and the top flight played 0-0.
+///
+/// # The model
+///
+/// Two changes, both of which keep the football the tier was written for.
+///
+/// **Space is relative.** "Nobody within three metres" is a clear chance
+/// in a well-defended match and an ordinary Tuesday in a badly-defended
+/// one — in a poor game everybody has three metres, all the time, and it
+/// does not make every touch in the box a sitter. So the space this look
+/// needs is measured against how tightly the match is actually being
+/// defended, from the opposing side's defensive aggregate. Same idea as
+/// `SaveModel::ORDINARY_PACE` and `ShotBarPopulation`: subtract the
+/// population, and what is left is the part that is genuinely a chance.
+///
+/// **And it is a licence, not a certainty.** A contest between the man
+/// arriving and the defence he is arriving against, so an even matchup
+/// resolves to the same number at every level. Space and chance quality
+/// then scale it continuously — there is no cliff anywhere in it, and a
+/// man with two metres and a half-angle gets a real but small licence
+/// rather than a flat no.
+///
+/// The draw is **once per possession**, salted away from the shot bar's
+/// own draw so the two decisions are independent. That is the same
+/// "one opportunity, one decision" construction the bar uses, and it is
+/// what stops "ask again next tick" from being a winning strategy.
+struct ArrivingRunner;
+
+impl ArrivingRunner {
+    /// Space that counts as a clear chance in an ORDINARILY-defended
+    /// match, in game units (1u = 0.125 m). 24u = 3 m — the arriving
+    /// eight at the penalty spot with nobody close enough to commit.
+    const REFERENCE_SPACE: f32 = 24.0;
+    /// How far out to look for the nearest man. Beyond this the answer is
+    /// "nobody near", and the ramp below has already saturated.
+    const LOOK_RADIUS: f32 = 64.0;
+    /// Defensive-aggregate value `REFERENCE_SPACE` is quoted at.
+    /// `TeamSkillAggregates::neutral()` is 0.5 on every axis.
+    const REFERENCE_DEFENCE: f32 = 0.5;
+    /// How hard the requirement scales with how tightly the match is
+    /// defended, as an exponent on the ratio of defensive qualities.
+    ///
+    /// A RATIO and not a linear slope, for two reasons. It cannot go
+    /// negative, which a linear form does at the top of the generator —
+    /// there the requirement collapsed onto its own rail and the tier
+    /// stopped discriminating at exactly the levels it needed to. And
+    /// space genuinely is inversely proportional to pressure: halve the
+    /// closing-down and you double the room, you do not subtract a fixed
+    /// number of metres from it.
+    ///
+    /// This is the term that carries the tier's divisional flatness,
+    /// because the COUNT of unmarked moments is what swung 15×, not the
+    /// conversion of them. At the bottom of the pyramid it asks for ~5 m
+    /// before a look counts as clear, which is the right football — in a
+    /// match where nobody closes down you have to be genuinely alone for
+    /// it to be a chance rather than one more crowded touch.
+    ///
+    /// Fitted on `dev_match levels 200 4 20 2`, reading the FLATNESS
+    /// spread: 2.0 → 1.24, **2.2 → 0.63**, 2.5 → 1.12, 3.0 → 1.25,
+    /// 4.5 → 1.75. Either side of 2.2 the bottom of the pyramid moves
+    /// faster than the middle: too low and level 6 runs 3.4 goals a
+    /// match, too high and level 4 collapses to 1.6 and starts railing
+    /// against `MAX_REQUIRED`, which is a step in the clamp rather than
+    /// in the football.
+    ///
+    /// ⚠ Those are single runs and the spread is a max-minus-min over
+    /// nine points, so it carries roughly +0.25 of pure sampling. The
+    /// confirming run at 300 matches a level reads **0.92**, against a
+    /// baseline of 3.10 before any of this. Re-fit against the confirm,
+    /// not the fit.
+    const TIGHTNESS_EXPONENT: f32 = 2.20;
+    /// Rails on that, so the requirement stays a footballing distance at
+    /// both ends of the generator — between ~1.5 m and ~8 m.
+    const MIN_REQUIRED: f32 = 12.0;
+    const MAX_REQUIRED: f32 = 64.0;
+
+    /// Chance quality the licence starts to open at, and where it is
+    /// fully open. `expected_xg(d, true)` is the LOCATION value with a
+    /// clear lane assumed, so these are location numbers: the ramp runs
+    /// across roughly the penalty spot to the six-yard line.
+    const XG_OPENS: f32 = 0.08;
+    const XG_FULL: f32 = 0.16;
+
+    /// Licence for the worst possible arriving runner against the best
+    /// possible defence, and the width of the axis. An even duel
+    /// resolves to `FLOOR + SLOPE/2` = **0.62**: a genuinely unmarked
+    /// midfielder with a good look shoots about three times in five,
+    /// which is what "he shoots without thinking about it" is worth once
+    /// it is a probability instead of a rule.
+    const FLOOR: f32 = 0.30;
+    const SLOPE: f32 = 0.64;
+    /// Width of the duel axis, matching the other two contests in the
+    /// engine (`SaveModel::skill_multiplier`, `InterceptionDuel`).
+    const SPREAD: f32 = 1.30;
+
+    /// `OF_CLEAR_TIGHTNESS` overrides [`Self::TIGHTNESS_EXPONENT`] so the
+    /// fit can be swept without a rebuild, the same way `OF_BAR_POPQ`
+    /// carries the shot bar's own free parameter.
+    #[inline]
+    fn tightness_exponent() -> f32 {
+        use std::sync::OnceLock;
+        static E: OnceLock<f32> = OnceLock::new();
+        *E.get_or_init(|| {
+            std::env::var("OF_CLEAR_TIGHTNESS")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(Self::TIGHTNESS_EXPONENT)
+        })
+    }
+
+    /// Space this look needs before it counts as clear, given how
+    /// tightly the match is being defended.
+    #[inline]
+    fn required_space(defence: f32) -> f32 {
+        let tightness = Self::REFERENCE_DEFENCE / defence.clamp(0.05, 1.0);
+        (Self::REFERENCE_SPACE * tightness.powf(Self::tightness_exponent()))
+            .clamp(Self::MIN_REQUIRED, Self::MAX_REQUIRED)
+    }
+
+    /// Probability that this arriving runner hits it first time.
+    /// `nearest` is the distance to the closest opponent in game units,
+    /// `INFINITY` when there is nobody inside [`Self::LOOK_RADIUS`].
+    #[inline]
+    fn licence(finishing: f32, defence: f32, nearest: f32, xg: f32) -> f32 {
+        let required = Self::required_space(defence);
+        // Squared so a near-miss on space costs real licence: half the
+        // space he needs is a quarter of the chance, not half of it.
+        let space01 = (nearest / required).clamp(0.0, 1.0).powi(2);
+        let quality01 = ((xg - Self::XG_OPENS) / (Self::XG_FULL - Self::XG_OPENS)).clamp(0.0, 1.0);
+        let edge = finishing.clamp(0.0, 1.0) - defence.clamp(0.0, 1.0);
+        let advantage = (0.5 + edge * Self::SPREAD).clamp(0.0, 1.0);
+        (Self::FLOOR + advantage * Self::SLOPE) * space01 * quality01
+    }
+}
+
+#[cfg(test)]
+mod arriving_runner_tests {
+    use super::ArrivingRunner;
+
+    /// **The tier's licence must not be a function of the division.**
+    /// It was, completely: as a deterministic rule whose only varying
+    /// term was the defending, it produced 44% of every shot in a
+    /// level-6 match and 2% in a level-18 one, and switching it off took
+    /// level 6 from 3.46 goals a match to 1.69 while leaving 14 and 18
+    /// untouched.
+    ///
+    /// The two halves of the fix are checked separately below; this is
+    /// the one that matters. Equal squads, the same amount of space
+    /// RELATIVE to how tightly the match is defended, and the licence
+    /// comes out the same at every level.
+    #[test]
+    fn an_even_matchup_licences_the_same_at_every_level() {
+        let mut seen: Option<f32> = None;
+        for level in [0.25_f32, 0.40, 0.55, 0.70, 0.85] {
+            let space = ArrivingRunner::required_space(level);
+            let licence = ArrivingRunner::licence(level, level, space, 0.20);
+            match seen {
+                None => seen = Some(licence),
+                Some(first) => assert!(
+                    (licence - first).abs() < 1e-5,
+                    "licence drifted with the level: {first} at the first, {licence} at {level}"
+                ),
+            }
+        }
+    }
+
+    /// Space is relative, and that is the term carrying the flatness:
+    /// three metres is a clear chance in a well-defended match and an
+    /// ordinary Tuesday in a badly-defended one.
+    #[test]
+    fn a_worse_defence_demands_more_space_before_it_is_a_chance() {
+        let tight = ArrivingRunner::required_space(0.85);
+        let ordinary = ArrivingRunner::required_space(ArrivingRunner::REFERENCE_DEFENCE);
+        let loose = ArrivingRunner::required_space(0.30);
+        assert!(tight < ordinary, "{tight} vs {ordinary}");
+        assert!(ordinary < loose, "{ordinary} vs {loose}");
+        assert!(
+            (ordinary - ArrivingRunner::REFERENCE_SPACE).abs() < 1e-4,
+            "an ordinarily-defended match must ask for the reference space"
+        );
+        for defence in [0.0_f32, 0.05, 0.5, 1.0] {
+            let r = ArrivingRunner::required_space(defence);
+            assert!(
+                (ArrivingRunner::MIN_REQUIRED..=ArrivingRunner::MAX_REQUIRED).contains(&r),
+                "off the rails at {defence}: {r}"
+            );
+        }
+    }
+
+    /// It is a licence and never a certainty, and a man with nobody near
+    /// him is likelier to hit it than a man with a defender on his toe.
+    #[test]
+    fn the_licence_is_bounded_and_rises_with_space() {
+        let crowded = ArrivingRunner::licence(0.5, 0.5, 2.0, 0.20);
+        let free = ArrivingRunner::licence(0.5, 0.5, 64.0, 0.20);
+        assert!(crowded < free, "{crowded} vs {free}");
+        assert!(free < 1.0, "a licence, not a rule: {free}");
+        assert!(crowded >= 0.0);
+        // A poor look is not a chance however much room he has.
+        assert_eq!(ArrivingRunner::licence(0.5, 0.5, 64.0, 0.02), 0.0);
+    }
+}
 
 // Shooting distance constants for midfielders — more conservative than forwards
 /// Furthest a midfielder will even CONSIDER a strike, in game units
@@ -412,6 +639,23 @@ impl StateProcessingHandler for MidfielderRunningState {
                 // band underneath, because nothing else in it is a
                 // probability.
                 //
+                // ⚠ **AND IT IS NOT DETERMINISTIC ANY MORE — the prose
+                // above and below still describes the old rule.** Every
+                // note here diagnosed the shape correctly and none of
+                // them could fix it, because a rule cannot be bounded by
+                // moving its gate: whichever band the gate lands in, it
+                // owns. Worse, the one term in it that varied was the
+                // DEFENDING, so the tier's firing rate was a function of
+                // the division — 44% of every shot in a level-6 match
+                // against 2% in a level-18 one, and switching it off took
+                // level 6 from 3.46 goals a match to 1.69 while leaving
+                // 14 and 18 where they were. See `ArrivingRunner`, which
+                // replaces the boolean with a licence: space priced
+                // against how tightly this match is actually defended,
+                // chance quality on a ramp, a contest between the man
+                // arriving and the defence he is arriving against, and
+                // one draw per possession.
+                //
                 // A deterministic bypass of the whole decision layer has
                 // to be reserved for the look that genuinely admits no
                 // deliberation, and that is not "a midfielder inside
@@ -431,17 +675,42 @@ impl StateProcessingHandler for MidfielderRunningState {
                 // rightly removed (it asked about the LANE, which is
                 // priced continuously downstream); this asks about the MAN,
                 // which nothing downstream prices at all.
-                const CLEAR_CHANCE_SPACE: f32 = 24.0; // 3 m
-                let clear_good = distance_to_goal <= ARRIVING_RUNNER_RANGE
+                // ── …AND IT IS A LICENCE, NOT A RULE ──────────────────
+                //
+                // Everything above still holds; what changed is that the
+                // answer is now a probability whose terms are priced
+                // against the match rather than a boolean read off one
+                // radius. See `ArrivingRunner` for the measurements that
+                // forced it — this path alone was 44% of every shot in a
+                // level-6 match and 2% in a level-18 one.
+                //
+                // A/B control for the whole tier — see
+                // `MatchContext::mid_clear_off`.
+                let defence = if ctx.player.team_id == ctx.context.field_home_team_id {
+                    ctx.context.away_skill_aggregates.defensive_quality
+                } else {
+                    ctx.context.home_skill_aggregates.defensive_quality
+                };
+                let nearest_opponent = ctx
+                    .tick_context
+                    .grid
+                    .opponents(ctx.player.id, ArrivingRunner::LOOK_RADIUS)
+                    .map(|(_, d)| d)
+                    .fold(f32::INFINITY, f32::min);
+                let clear_good = !MatchContext::mid_clear_off()
+                    && distance_to_goal <= ARRIVING_RUNNER_RANGE
                     && coach.shooting_reluctance() < 0.5
                     && ctx.player().shooting().has_good_angle()
-                    && sp.expected_xg(distance_to_goal, true) >= 0.10
-                    && ctx
-                        .tick_context
-                        .grid
-                        .opponents(ctx.player.id, CLEAR_CHANCE_SPACE)
-                        .next()
-                        .is_none();
+                    && Opportunity::draw(ctx, CLEAR_CHANCE_SALT)
+                        < ArrivingRunner::licence(
+                            sc::shot_threat(
+                                ctx.player,
+                                sc::minute_from_ms(ctx.context.total_match_time),
+                            ),
+                            defence,
+                            nearest_opponent,
+                            sp.expected_xg(distance_to_goal, true),
+                        );
                 // 2026-08-16: the `shots_taken <= 2` anti-monopoly cap is
                 // REMOVED. A midfielder who has already had two efforts is
                 // not thereby barred from a clear chance at the penalty
@@ -449,9 +718,9 @@ impl StateProcessingHandler for MidfielderRunningState {
                 // match-long counter cannot see the chance in front of
                 // him. Removed with the other shot quotas and cooldowns;
                 // see `PlayerMemory::can_shoot`.
-                // Deterministic: the probability throttle is gone with the
-                // rest of the shot cooldowns. An arriving midfielder with
-                // a clear look inside the area shoots.
+                // One draw per possession, salted away from every other
+                // decision on this tree, so a runner who declines does not
+                // re-ask on the next tick and walk the gate down.
                 if clear_good {
                     #[cfg(feature = "match-logs")]
                     {

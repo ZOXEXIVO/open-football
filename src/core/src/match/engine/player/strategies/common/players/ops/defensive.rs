@@ -323,6 +323,36 @@ impl<'p> DefensiveOperationsImpl<'p> {
     /// Returns `true` if THIS defender should break shape and press the
     /// carrier. Two nearest defenders engage; the rest stay put so we
     /// don't leave the other side of the box open.
+    ///
+    /// ⚠ MEASURED NULL — DO NOT REPLACE THIS ELECTION WITH THE TEAM PLAN.
+    ///
+    /// The obvious tidy-up is that this local rank and
+    /// [`TackleEngagement::may_engage_carrier`] are two authorities
+    /// answering one question, and that the plan should win here as it
+    /// wins everywhere else in the defensive model. It was tried —
+    /// `matches!(my_duty(), Press | Cover)` while the plan is active,
+    /// this election kept only as the fallback — and it is **worse on
+    /// every axis that matters**, 120 fixtures at L14, same tree
+    /// otherwise:
+    ///
+    /// | | local rank | plan |
+    /// |---|---|---|
+    /// | goals/match | 2.73 | **2.93** |
+    /// | shots/team | 13.3 | **14.1** |
+    /// | penalties/match | 0.200 | **0.358** |
+    /// | opponent carrying in our area | 3 975 ticks | **4 280** |
+    ///
+    /// The reason is reach. The plan nominates from the point of attack
+    /// at `PRESS_REACH` 200u and `COVER_REACH` 140u — 25 m and 17.5 m —
+    /// on a 250 ms cadence, which is the right scale for organising a
+    /// block and far too coarse for a scramble in a six-yard box. Its
+    /// `Cover` man is goal-side of the presser by construction and can be
+    /// fifteen metres away, so routing him in place of the second-nearest
+    /// body meant nobody arrived: the carrier held the ball in the area
+    /// LONGER, and the extra challenges that did happen were late ones
+    /// that gave penalties away.
+    ///
+    /// Inside the area, proximity is the whole of the answer. Keep it.
     pub fn is_box_emergency_for_me(&self) -> bool {
         if !self.ctx.ball().in_own_penalty_area() {
             return false;

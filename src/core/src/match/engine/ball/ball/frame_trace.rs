@@ -24,8 +24,10 @@ use nalgebra::Vector3;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-/// Ticks of run-up kept before the contact.
-const PRE: usize = 20;
+/// Ticks of run-up kept before the contact. 1.2 s — a shot crosses about
+/// twenty-five metres in that, so a capture triggered on the CONSEQUENCE of
+/// a shot still contains the shot.
+const PRE: usize = 120;
 
 /// Ticks followed afterwards. 4 s — long enough to cover the rebound, the
 /// second ball, whatever restart it turns into, and the first touch after
@@ -58,6 +60,15 @@ pub struct Sample {
     pub in_net: bool,
     pub awaiting_restart: bool,
     pub held: bool,
+    /// The defending keeper nearest the ball, as the same tick left him:
+    /// his XY gap to the ball in game units, the height of his own centre
+    /// of mass in metres, and his [`PlayerState::compact_id`].
+    ///
+    /// A ball trace alone cannot answer *"was he on the floor when he got
+    /// it"*, and that is half of every report about a goalkeeper. His
+    /// height is the honest test — the engine flies him on a real
+    /// ballistic arc — and the state names what he thought he was doing.
+    pub gk: Option<(f32, f32, u16)>,
 }
 
 /// One sample plus everything the engine reported during that tick.
@@ -128,6 +139,39 @@ impl FrameTrace {
         *ON.get_or_init(|| {
             std::env::var("OF_FRAME_TRACE")
                 .map(|v| v.contains("net"))
+                .unwrap_or(false)
+        })
+    }
+
+    /// Whether a goalkeeper taking the ball opens a capture
+    /// (`OF_FRAME_TRACE=gather`).
+    ///
+    /// Same argument as [`Self::captures_goals`]: the report is a SEQUENCE
+    /// — a shot comes in, the keeper goes down, the ball ends up in his
+    /// gloves — and the only way to tell a catch from a yank is to read the
+    /// ticks either side of it. The gather is the trigger because it is the
+    /// moment the ball stops obeying its own velocity.
+    pub fn captures_gathers() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| {
+            std::env::var("OF_FRAME_TRACE")
+                .map(|v| v.contains("gather"))
+                .unwrap_or(false)
+        })
+    }
+
+    /// Whether a shot RETIRED AS A MISS opens a capture
+    /// (`OF_FRAME_TRACE=miss`).
+    ///
+    /// The trigger for *"he shoots, he misses, and the ball is in the
+    /// keeper's hands"*. Triggering on the gather instead finds the same
+    /// passage from the wrong end — most gathers are not shots at all, so
+    /// the miss has to be what opens the window.
+    pub fn captures_misses() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| {
+            std::env::var("OF_FRAME_TRACE")
+                .map(|v| v.contains("miss"))
                 .unwrap_or(false)
         })
     }
@@ -294,12 +338,38 @@ impl FrameTrace {
     /// how far it actually travelled since the previous sample. The two agree
     /// on every tick of honest physics; a row marked `*` moved further than
     /// its own velocity can explain, which is a relocation somebody applied.
+    /// Short name for a [`PlayerState::compact_id`] belonging to a
+    /// goalkeeper. Only his states are named, because he is the only player
+    /// the sample carries; anything else prints its raw id.
+    fn keeper_state_name(id: u16) -> &'static str {
+        match id {
+            100 => "stand",
+            102 => "jump",
+            103 => "DIVE",
+            104 => "catch",
+            105 => "punch",
+            106 => "kick",
+            107 => "clear",
+            108 => "hold",
+            109 => "throw",
+            110 => "pickup",
+            111 => "distrib",
+            112 => "comeout",
+            113 => "pass",
+            114 => "return",
+            117 => "prep",
+            118 => "walk",
+            119 => "takeball",
+            _ => "?",
+        }
+    }
+
     fn render(capture: &Capture) -> String {
         let mut out = String::with_capacity(8192);
         out.push_str(&capture.header);
         out.push('\n');
         out.push_str(
-            "      tick        x       y      z       vx      vy      vz     |v|      d  owner\n",
+            "      tick        x       y      z       vx      vy      vz     |v|      d  owner   gk_gap  gk_h  gk_state\n",
         );
         let mut previous: Option<Sample> = None;
         for entry in &capture.entries {
@@ -324,8 +394,17 @@ impl FrameTrace {
                 Some(id) => format!("{}{}", sample.owner_role, id % 1000),
                 None => "-".to_string(),
             };
+            let gk = match sample.gk {
+                Some((gap, height, state)) => format!(
+                    "{:>7.1} {:>5.2}  {:<8}",
+                    gap,
+                    height,
+                    Self::keeper_state_name(state)
+                ),
+                None => format!("{:>7} {:>5}  {:<8}", "-", "-", "-"),
+            };
             out.push_str(&format!(
-                "{mark} {:>8} {:>8.2} {:>7.2} {:>6.2}  {:>7.2} {:>7.2} {:>7.2} {:>7.2} {:>6.2}  {:<6}{}{}{}\n",
+                "{mark} {:>8} {:>8.2} {:>7.2} {:>6.2}  {:>7.2} {:>7.2} {:>7.2} {:>7.2} {:>6.2}  {:<6} {gk}{}{}{}\n",
                 sample.tick,
                 sample.pos.x,
                 sample.pos.y,

@@ -2,7 +2,7 @@
 //! safety nets, the standing-ball notification dance, and the per-tick
 //! ownership claim that decides who is on the ball.
 
-use super::{AerialReach, Ball};
+use super::{AerialReach, AwaitedRestart, Ball};
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::psychology::Psychology;
@@ -421,6 +421,18 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
+        // A ball waiting for its restart is out of play and it is nobody's.
+        //
+        // `Ball::update` already skips the whole tick for one, so this is
+        // for the award that raises the flag from INSIDE this function:
+        // `try_pass_target_claim` gives the offside below, and everything
+        // after it in this tick has to respect the dead ball it leaves —
+        // otherwise `check_ball_ownership` hands it straight back to
+        // whoever is nearest, which for an offside is the offside player,
+        // standing on it.
+        if self.awaiting_restart.is_some() {
+            return;
+        }
         if self.flags.in_flight_state > 0 {
             self.flags.in_flight_state -= 1;
             // Allow pass target to claim during flight
@@ -441,7 +453,10 @@ impl Ball {
             //
             // Checked AFTER the receiver's own attempt, so his priority is
             // never cut short by his pass arriving gently.
-            if self.current_owner.is_none() && self.is_delivery_spent() {
+            if self.current_owner.is_none()
+                && self.awaiting_restart.is_none()
+                && self.is_delivery_spent()
+            {
                 self.flags.in_flight_state = 0;
                 self.check_ball_ownership(context, players, events);
             }
@@ -626,6 +641,113 @@ impl Ball {
         ));
     }
 
+    /// The flag is up: kill the pass and set the indirect free kick up
+    /// **without moving anything**.
+    ///
+    /// # Why the spot is HERE and not where he started his run
+    ///
+    /// It used to be `snap.receiver_{x,y}_at_kick` — where the offside
+    /// player stood at the moment the ball was played — and the engine then
+    /// had to put the ball there: the whole length of his run, and he has
+    /// just run onto a through-ball, so 10 to 25 m. On top of that
+    /// `handle_offside_event` staged a `pending_set_piece_teleport` for the
+    /// taker, so a defender materialised on the spot as well. Between them
+    /// that is the single biggest ball relocation left in a match, and at
+    /// 9-12 offsides a match it fires far more often than the corner and
+    /// goal-kick shortcuts it was modelled on.
+    ///
+    /// Law 11 has not asked for that spot since 2016/17: the restart is an
+    /// indirect free kick **where the offence occurred**, and the offence is
+    /// this touch — the tick the offside player becomes involved in active
+    /// play, which is the tick this function runs on. So the ball is already
+    /// on the spot, to within the claim radius, and nothing has to move at
+    /// all. The snapshot is still what DECIDES the offence; it just no
+    /// longer decides where the kick is taken from.
+    ///
+    /// The taker walks, exactly as a thrower does — see [`AwaitedRestart`].
+    fn award_offside(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        receiver: &MatchPlayer,
+        events: &mut EventCollection,
+    ) {
+        // Where the offence happened, held a couple of units inside the
+        // pitch so the dead ball cannot sit on a line and be resolved as a
+        // throw-in or a corner while it waits for its taker.
+        let spot = Vector3::new(
+            self.position.x.clamp(2.0, self.field_width - 2.0),
+            self.position.y.clamp(2.0, self.field_height - 2.0),
+            0.0,
+        );
+
+        // Nearest opponent takes it. Nearest to the SPOT rather than to the
+        // ball's landing place, which is the same thing now — and the
+        // goalkeeper is eligible, because a through-ball flagged offside on
+        // the edge of his area is a free kick he takes himself.
+        let taker = players
+            .iter()
+            .filter(|p| p.side.is_some() && p.side != receiver.side && !p.is_sent_off)
+            .min_by(|a, b| {
+                let da = (a.position - spot).norm_squared();
+                let db = (b.position - spot).norm_squared();
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|p| p.id);
+
+        let Some(taker_id) = taker else {
+            // Nobody on the other side left to take it. Rather than leave a
+            // dead ball in mid-pitch with no restart coming, drop the
+            // offence: the snapshot goes and the pass completes as if the
+            // flag had stayed down. Reachable only with a side wiped off
+            // the pitch, and a stalled match is the worse failure.
+            self.offside_snapshot = None;
+            return;
+        };
+
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::RestartCensus::note_offside_given();
+
+        // Dead, where it lies. The height is NOT written down with it: a
+        // ball flagged out of the air settles onto the spot over the next
+        // few ticks (`tick_awaited_restart`) rather than being dropped a
+        // couple of metres in one.
+        self.position.x = spot.x;
+        self.position.y = spot.y;
+        self.velocity = Vector3::zeros();
+        self.spin = Vector3::zeros();
+        self.previous_owner = self.current_owner;
+        self.current_owner = None;
+        self.ownership_duration = 0;
+        self.claim_cooldown = 0;
+        self.flags.in_flight_state = 0;
+        self.contested_claim_count = 0;
+        self.clear_pass_history();
+        self.clear_open_play_metadata();
+        self.pass_origin_restart = PassOriginRestart::FreeKick;
+        // A carry that was still open when the flag went up ends here — the
+        // ball update is skipped for the whole wait, so otherwise it stays
+        // open and is charged to whoever takes the free kick.
+        self.tick_carry_tracker(events);
+
+        // The offside itself, for the statistic. `handle_offside_event` is
+        // purely a bookkeeping handler now; everything about the ball and
+        // the restart is settled above.
+        events.add_ball_event(BallEvent::Offside(receiver.id, spot));
+
+        self.awaiting_restart = Some(AwaitedRestart {
+            // Taken from where it died: see `AwaitedRestart::take_from`.
+            take_from: None,
+            carrying: false,
+            taker_id,
+            spot,
+            origin: PassOriginRestart::FreeKick,
+            awarded_tick: context.current_tick(),
+            patience_ticks: AwaitedRestart::PATIENCE_TICKS,
+        });
+        events.add_ball_event(BallEvent::TakeMe(taker_id));
+    }
+
     fn try_pass_target_claim(
         &mut self,
         context: &MatchContext,
@@ -668,19 +790,7 @@ impl Ball {
                     // no need to re-check the origin here.
                     if let Some(snap) = self.offside_snapshot {
                         if snap.receiver_id == target_id && snap.is_offside() {
-                            let restart_pos = Vector3::new(
-                                snap.receiver_x_at_kick.clamp(0.0, self.field_width),
-                                snap.receiver_y_at_kick.clamp(0.0, self.field_height),
-                                0.0,
-                            );
-                            self.offside_snapshot = None;
-                            self.pass_target_player_id = None;
-                            self.flags.in_flight_state = 0;
-                            self.cached_shot_target = None;
-                            self.pass_origin_restart = PassOriginRestart::FreeKick;
-                            #[cfg(feature = "match-logs")]
-                            crate::mid_run_diag::RestartCensus::note_offside_given();
-                            events.add_ball_event(BallEvent::Offside(target_id, restart_pos));
+                            self.award_offside(context, players, target_player, events);
                             return;
                         }
                     }

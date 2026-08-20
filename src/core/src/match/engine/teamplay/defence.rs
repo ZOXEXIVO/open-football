@@ -217,6 +217,13 @@ impl DutyAssigner<'_> {
     const LAYER_BIAS: f32 = 0.9;
     /// The presser has to be able to actually get there (~25 m).
     const PRESS_REACH: f32 = 200.0;
+    /// What a candidate for the PRESS duty is charged for being on a
+    /// tackle cooldown, in the same units as the distance he is ranked
+    /// by. 60u ≈ 7.5 m — comfortably more than the incumbency discount
+    /// (32u), so a man who has just gone to ground is displaced by any
+    /// team-mate who is genuinely in the picture, and keeps the job when
+    /// he is the only one there.
+    const NOT_READY_SURCHARGE: f32 = 60.0;
     /// Cover sits within this of the carrier (~17 m).
     const COVER_REACH: f32 = 140.0;
     /// How far from our own goal an opponent can be and still be somebody
@@ -323,7 +330,7 @@ impl DutyAssigner<'_> {
         // match**. From the stands that is a front two watching the
         // opposition play out from the back, which is how it was
         // reported.
-        let mut unit = [(0u32, Vector3::<f32>::zeros(), false); MAX_UNIT];
+        let mut unit = [(0u32, Vector3::<f32>::zeros(), false, true); MAX_UNIT];
         let mut unit_len = 0usize;
         let mut markers = 0usize;
         for p in self.field.players.iter() {
@@ -338,7 +345,7 @@ impl DutyAssigner<'_> {
             if !can_mark && MatchContext::press_off() {
                 continue; // A/B control — see `MatchContext::press_off`.
             }
-            unit[unit_len] = (p.id, p.position, can_mark);
+            unit[unit_len] = (p.id, p.position, can_mark, p.can_attempt_tackle());
             unit_len += 1;
             markers += can_mark as usize;
         }
@@ -448,6 +455,7 @@ impl DutyAssigner<'_> {
                 forward,
                 0.0,
                 false,
+                true,
             ) {
                 taken[i] = true;
                 n_press += 1;
@@ -456,6 +464,13 @@ impl DutyAssigner<'_> {
             // Cover is a back-line job — a forward sitting goal-side of
             // the presser is not what the duty means — so it is markers
             // only.
+            //
+            // Readiness counts here for the same reason it counts for
+            // the press: `Cover` is "the one who deals with it when the
+            // presser is beaten", and inside our own area
+            // `TackleEngagement::may_engage_carrier` now licenses him to
+            // do exactly that. A man who cannot challenge is a poor
+            // choice for the job whose definition is the challenge.
             if let Some(i) = self.nearest_free(
                 &unit[..unit_len],
                 &taken,
@@ -464,6 +479,7 @@ impl DutyAssigner<'_> {
                 None,
                 forward,
                 0.0,
+                true,
                 true,
             ) {
                 taken[i] = true;
@@ -533,6 +549,7 @@ impl DutyAssigner<'_> {
                 forward,
                 Self::LAYER_BIAS,
                 true,
+                false,
             ) else {
                 n_unreachable += 1;
                 continue;
@@ -548,7 +565,7 @@ impl DutyAssigner<'_> {
         // a zone" in any defensive sense — he is up the pitch waiting for
         // the ball back, and giving him the duty would only make the
         // zone-holding census lie.
-        for (i, (id, _, can_mark)) in unit[..unit_len].iter().enumerate() {
+        for (i, (id, _, can_mark, _)) in unit[..unit_len].iter().enumerate() {
             if !taken[i] && *can_mark {
                 Self::push(plan, *id, DefensiveDuty::HoldZone);
             }
@@ -577,9 +594,14 @@ impl DutyAssigner<'_> {
     /// below); it belongs to MARKING and is passed as 0.0 for the press.
     /// `markers_only` skips the forwards, who are in the pool for the
     /// press and nothing else.
+    ///
+    /// `ready_matters` surcharges a candidate who cannot currently
+    /// attempt a challenge — see [`Self::NOT_READY_SURCHARGE`]. Passed
+    /// for the PRESS nomination only: marking a man and holding a zone
+    /// are jobs a defender on a tackle cooldown does perfectly well.
     fn nearest_free(
         &self,
-        unit: &[(u32, Vector3<f32>, bool)],
+        unit: &[(u32, Vector3<f32>, bool, bool)],
         taken: &[bool; MAX_UNIT],
         target: Vector3<f32>,
         reach: f32,
@@ -587,9 +609,10 @@ impl DutyAssigner<'_> {
         forward: f32,
         layer_bias: f32,
         markers_only: bool,
+        ready_matters: bool,
     ) -> Option<usize> {
         let mut best: Option<(usize, f32)> = None;
-        for (i, (id, pos, can_mark)) in unit.iter().enumerate() {
+        for (i, (id, pos, can_mark, ready)) in unit.iter().enumerate() {
             if taken[i] || (markers_only && !can_mark) {
                 continue;
             }
@@ -622,6 +645,28 @@ impl DutyAssigner<'_> {
             // standing there, which is what being a screener means.
             let pulled_upfield = ((target.x - pos.x) * forward).max(0.0);
             let raw = raw + pulled_upfield * layer_bias;
+            // ── …AND HE HAS TO BE ABLE TO GO ─────────────────────────
+            //
+            // A defender who has just challenged carries a tackle
+            // cooldown, and `can_attempt_tackle` gates ENTRY into every
+            // `Tackling` state. Nominating him as the presser therefore
+            // does not merely pick a slightly worse man: because the
+            // press duty is exclusive and `may_engage_carrier` refuses
+            // everyone else, it leaves the side with **no legal
+            // challenger at all** until it runs out. And the incumbency
+            // below is a stickiness of four metres, which re-elects him
+            // on the next refresh and the one after that.
+            //
+            // Charged rather than skipped, in the same shape as the
+            // layer bias: he keeps the job when nobody else is anywhere
+            // near, and loses it the moment a team-mate is within a few
+            // metres — which is exactly what a defence does when one of
+            // its own has gone to ground.
+            let raw = if ready_matters && !*ready {
+                raw + Self::NOT_READY_SURCHARGE
+            } else {
+                raw
+            };
             // ~4 m of stickiness.
             let effective = if incumbent == Some(*id) {
                 raw - 32.0

@@ -97,6 +97,18 @@ impl PlayerFieldData {
         }
     }
 
+    /// Which side this player is on, or `None` if he is not in the store.
+    ///
+    /// Same O(1) probe as [`Self::position`]. Exists so a caller that has
+    /// only an id — the ball's `current_owner`, say — can ask "is he one
+    /// of mine?" without a linear scan of the whole store in a per-player
+    /// per-tick path.
+    #[inline]
+    pub fn side(&self, player_id: u32) -> Option<PlayerSide> {
+        self.lookup_index(player_id)
+            .map(|idx| unsafe { self.items.get_unchecked(idx) }.side)
+    }
+
     /// `position(player_id)` without the hash probe for callers that
     /// already know the player's slot (`items` order == `field.players`
     /// then `field.substitutes` order, so a `field.players` index maps

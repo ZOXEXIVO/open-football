@@ -134,6 +134,32 @@ impl CornerMatch {
             .filter(|p| p.set_piece_station.is_some())
             .collect()
     }
+
+    /// Run the set-up out: the taker fetches the ball from the byline and
+    /// carries it to the arc. Returns the ticks it took.
+    ///
+    /// ⚠ **Every assertion about the shape has to be made after this, not
+    /// after `concede_a_corner`.** The corner used to be complete on the
+    /// tick it was awarded — ball on the flag, taker on the ball, twenty
+    /// players written into the shape — so the two moments were the same
+    /// and the tests could not tell them apart. They are now seconds apart
+    /// by design, and that gap IS the set-up: read at the award, the box
+    /// is still whatever open play left it, which is the state these tests
+    /// exist to catch. See `AwaitedRestart::take_from`.
+    fn walk_the_corner_in(&mut self) -> usize {
+        const BOUND: usize = 3200;
+        // Tick THEN check, so this returns on the tick the kick is taken
+        // rather than one after it. A corner is delivered within a few
+        // ticks of the ball being set down, and a spare tick here is
+        // enough for the cross to have already left.
+        for elapsed in 1..=BOUND {
+            self.tick();
+            if self.field.ball.awaiting_restart.is_none() {
+                return elapsed;
+            }
+        }
+        panic!("the corner never got taken inside {BOUND} ticks");
+    }
 }
 
 #[test]
@@ -153,6 +179,7 @@ fn conceding_a_corner_brings_the_defence_back_into_its_own_box() {
         PassOriginRestart::Corner,
         "the ball behind off a defender is a corner"
     );
+    m.walk_the_corner_in();
     let defenders = m.in_the_box(PlayerSide::Left);
     assert!(
         defenders >= 6,
@@ -171,11 +198,12 @@ fn the_shape_is_still_there_when_the_delivery_arrives() {
     let mut m = CornerMatch::new();
     m.crowd_the_centre_circle();
     m.concede_a_corner();
+    m.walk_the_corner_in();
     let at_setup = m.in_the_box(PlayerSide::Left);
 
-    // The cross leaves the taker ~5 ticks after the award and takes about
-    // a second and a half to reach the far post. Half a second in is
-    // comfortably inside the delivery.
+    // The cross leaves the taker ~5 ticks after he sets the ball down and
+    // takes about a second and a half to reach the far post. Half a second
+    // in is comfortably inside the delivery.
     m.tick_n(50);
 
     let arriving = m.in_the_box(PlayerSide::Left);
@@ -200,8 +228,10 @@ fn the_shape_lets_go_of_everyone_once_the_corner_is_over() {
         "fixture check: the corner pins somebody"
     );
 
-    // Past the hard ceiling on the pin. Nothing beyond it is still a
-    // corner, whatever the restart flag says.
+    // Past the hard ceiling on the pin, which runs from the KICK — so the
+    // set-up has to be walked out first or the 400 ticks below are spent
+    // on the taker's run and the deadline has not started.
+    m.walk_the_corner_in();
     m.tick_n(400);
 
     let held: Vec<u32> = m.pinned().iter().map(|p| p.id).collect();
@@ -215,21 +245,80 @@ fn the_shape_lets_go_of_everyone_once_the_corner_is_over() {
     );
 }
 
+/// **The ball is not moved to the flag when the corner is awarded.**
+///
+/// It used to be, on the same tick, from wherever along the byline it went
+/// out — a mean 220u, **27.5 m**, and the largest relocation left in the
+/// engine. The taker was teleported after it and the other twenty were
+/// written into the shape, so a replay showed the ball, one player and
+/// then everybody else jump at once.
+#[test]
+#[ignore = "the walked corner is off by default — run with OF_CORNER_WALK=on"]
+fn awarding_a_corner_moves_nothing() {
+    let mut m = CornerMatch::new();
+    m.crowd_the_centre_circle();
+    let before: Vec<(u32, Vector3<f32>)> =
+        m.field.players.iter().map(|p| (p.id, p.position)).collect();
+
+    m.concede_a_corner();
+
+    let ball = m.field.ball.position;
+    assert!(
+        ball.y > 60.0,
+        "the ball was written onto the flag instead of dying where it went \
+         out, at {ball:?}"
+    );
+    assert!(
+        m.field.ball.current_owner.is_none(),
+        "a corner nobody has walked to yet belongs to nobody"
+    );
+    assert_eq!(
+        m.field.ball.pending_set_piece_teleport, None,
+        "the taker was teleported onto the ball"
+    );
+    // One tick of ordinary movement is expected — they are all under their
+    // own AI. What must not have happened is a placement.
+    for (id, was) in before {
+        let now = m
+            .field
+            .players
+            .iter()
+            .find(|p| p.id == id)
+            .expect("nobody left the pitch")
+            .position;
+        let moved = (now - was).magnitude();
+        assert!(
+            moved < 5.0,
+            "player {id} was placed {moved:.1}u into the corner shape — \
+             the twenty walk into it, they are not written there"
+        );
+    }
+    assert!(
+        !m.pinned().is_empty(),
+        "…but they do get stations to walk to"
+    );
+}
+
 #[test]
 fn the_taker_is_on_the_ball_and_the_ball_is_on_the_flag() {
     let mut m = CornerMatch::new();
     m.crowd_the_centre_circle();
     m.concede_a_corner();
+    m.walk_the_corner_in();
 
     let ball = m.field.ball.position;
     assert!(
         ball.x < 10.0 && (ball.y < 10.0 || ball.y > HEIGHT as f32 - 10.0),
         "the corner is taken from the flag, not from {ball:?}"
     );
+    // `current_owner` OR the last toucher: he owns it the tick he sets it
+    // down and the cross can leave inside the same tick, which clears the
+    // ownership again. Either answer is "he took the corner".
     let taker = m
         .field
         .ball
         .current_owner
+        .or(m.field.ball.last_touch_player_id)
         .and_then(|id| m.field.players.iter().find(|p| p.id == id))
         .expect("a corner has a taker");
     assert_eq!(
@@ -241,5 +330,65 @@ fn the_taker_is_on_the_ball_and_the_ball_is_on_the_flag() {
         (taker.position - ball).magnitude() < 15.0,
         "the taker is standing {}u from his own corner",
         (taker.position - ball).magnitude()
+    );
+}
+
+/// How long the set-up actually takes, and what the taker is doing while
+/// it runs.
+///
+/// The census over full matches says **44% of corners never complete the
+/// fetch** — the taker times out a mean 35 m short — and raising the bound
+/// from 12 s to 30 s barely moved it, which rules out "he ran out of
+/// clock". This drives one corner through real ticks and reports the two
+/// numbers that tell a man who is coming from a man who is not.
+#[test]
+#[ignore = "the walked corner is off by default — run with OF_CORNER_WALK=on"]
+fn the_taker_actually_runs_at_the_ball() {
+    let mut m = CornerMatch::new();
+    m.crowd_the_centre_circle();
+    m.concede_a_corner();
+
+    let taker = m
+        .field
+        .ball
+        .awaiting_restart
+        .expect("a corner is an awaited restart")
+        .taker_id;
+    let spot = m.field.ball.awaiting_restart.unwrap().spot;
+    let start = m
+        .field
+        .players
+        .iter()
+        .find(|p| p.id == taker)
+        .expect("the taker is on the pitch")
+        .position;
+    let fetch = (start - spot).magnitude();
+
+    // Half a second in he must have set off, and in the states that mean
+    // he is going for it.
+    m.tick_n(50);
+    let after = m
+        .field
+        .players
+        .iter()
+        .find(|p| p.id == taker)
+        .expect("the taker is on the pitch");
+    let covered = (start - after.position).magnitude();
+    let state = after.state;
+    assert!(
+        covered > 5.0,
+        "the taker had {fetch:.0}u to cover and moved {covered:.1}u in half a \
+         second — he is in {state}, not on his way"
+    );
+
+    let elapsed = m.walk_the_corner_in();
+    // He is sprinting: `TakeBall` is `ActivityIntensity::VeryHigh`. At the
+    // engine's ~0.6 u/tick that is a bit over one tick per unit, and the
+    // carry to the flag is on top. Ten times that is a generous ceiling
+    // and still nowhere near the 3000-tick bound.
+    let budget = (fetch * 10.0) as usize + 600;
+    assert!(
+        elapsed < budget,
+        "the set-up took {elapsed} ticks for a {fetch:.0}u fetch — budget {budget}"
     );
 }

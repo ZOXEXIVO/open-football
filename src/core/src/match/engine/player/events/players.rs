@@ -5,7 +5,7 @@ use crate::r#match::engine::ball::ball::interactions::SaveModel;
 use crate::r#match::engine::ball::ball::interactions::block_diag::BlockDiag;
 use crate::r#match::engine::ball::ball::motion::SpinModel;
 use crate::r#match::engine::ball::ball::{
-    Ball, GRAVITY_PER_TICK, GROUND_FRICTION, PossessionSource,
+    Ball, DeadBall, GRAVITY_PER_TICK, GROUND_FRICTION, PossessionSource,
 };
 use crate::r#match::engine::flow::context::PendingAdvantage;
 use crate::r#match::engine::flow::rng::MatchRng;
@@ -826,6 +826,58 @@ impl PlayerEventDispatcher {
             }
         }
 
+        // The ball is OUT OF PLAY, waiting for its restart taker to walk to
+        // it. Nobody may touch it — see [`DeadBall`], which owns the whole
+        // argument and the trace behind it.
+        //
+        // Same shape as the `in_net` guard above and for the same reason:
+        // the ball's own update pins a dead ball and strips its owner every
+        // tick, then returns, so the ONLY way one can move is a player
+        // event dispatched afterwards. `secure_ball_for` snaps the ball to
+        // the player's feet, so each of those is a visible 1-2 m jump and a
+        // jump back on the next tick.
+        //
+        // `TakeBall` is deliberately not on the list: it sets no ball state
+        // at all (`run_for_ball`), and it is how `tick_awaited_restart`
+        // keeps sending the taker. It is still refused for everybody else,
+        // because twenty-one players converging on a ball they may not
+        // touch is the other half of the same artefact.
+        if let Some(taker) = field.ball.awaiting_restart.map(|r| r.taker_id) {
+            let touches_the_ball = matches!(
+                event,
+                PlayerEvent::PassTo(_)
+                    | PlayerEvent::Shoot(_)
+                    | PlayerEvent::ClearBall(_)
+                    | PlayerEvent::MoveBall(_, _)
+                    | PlayerEvent::ClaimBall(_)
+                    | PlayerEvent::GainBall(_)
+                    | PlayerEvent::CaughtBall(_)
+                    | PlayerEvent::ParriedBall(_)
+                    | PlayerEvent::TacklingBall(_)
+                    | PlayerEvent::BallCollision(_)
+                    | PlayerEvent::BallOwnerChange(_)
+                    | PlayerEvent::RequestHeading(_, _)
+                    | PlayerEvent::RequestShot(_, _)
+                    | PlayerEvent::RequestBallReceive(_)
+            ) || matches!(event, PlayerEvent::TakeBall(id) if id != taker);
+            if touches_the_ball {
+                // Counted BEFORE the arm is consulted, so `OF_DEAD_BALL=off`
+                // reports the same pressure it then goes on to apply.
+                #[cfg(feature = "match-logs")]
+                {
+                    let from_goalkeeper = Self::actor_of(&event).is_some_and(|id| {
+                        field.players.iter().any(|p| {
+                            p.id == id && p.tactical_position.current_position.is_goalkeeper()
+                        })
+                    });
+                    crate::mid_run_diag::RestartCensus::note_dead_ball_event(from_goalkeeper);
+                }
+                if DeadBall::armed() {
+                    return remaining_events;
+                }
+            }
+        }
+
         match event {
             PlayerEvent::Goal(player_id, is_auto_goal) => {
                 Self::handle_goal_event(player_id, is_auto_goal, field, context);
@@ -1209,8 +1261,8 @@ impl PlayerEventDispatcher {
             PlayerEvent::CommitFoul(fouler_id, severity) => {
                 Self::handle_commit_foul_event(fouler_id, severity, field, context);
             }
-            PlayerEvent::Offside(player_id, position) => {
-                Self::handle_offside_event(player_id, position, field);
+            PlayerEvent::Offside(player_id, _spot) => {
+                Self::handle_offside_event(player_id, field);
             }
             _ => {} // Ignore unsupported events
         }
@@ -1647,6 +1699,36 @@ impl PlayerEventDispatcher {
     /// stat-line evidence the rating helper consumes via
     /// `touch_quality`. Pure deterministic seeding (receiver id × tick)
     /// keeps replays reproducible.
+    /// **A/B switch: take squad QUALITY out of the first-touch model.**
+    ///
+    /// `OF_TOUCH_FLAT=1` pins every receiver's control composite to the
+    /// population value below; `OF_TOUCH_FLAT=<0..1>` pins it to that
+    /// value instead. Pressure still varies, so the model keeps working —
+    /// only its response to how good the players are is removed.
+    ///
+    /// It exists because this curve is one of the three channels through
+    /// which a squad's skill level reaches the SCORELINE, and it is by
+    /// far the widest: `first_touch_loss_probability` is `(1-c)^2.5` and
+    /// `(1-c)^2` in a composite that runs ≈0.29 for a fourth-tier squad
+    /// against ≈0.78 for an elite one, so the same reception fails 34% of
+    /// the time at the bottom of the pyramid and 2.5% at the top. Measured
+    /// over 300 matches a level, miscontrols run **87 per team at level 4
+    /// and 2.9 at level 20** against a real 8-15 that does not move
+    /// between divisions at all. Every one of those is a loose ball, and
+    /// in the defending third it is a chance conceded.
+    ///
+    /// Flip it on and re-run a level sweep to see how much of the
+    /// engine's goals-per-level curve this channel alone carries, as
+    /// against chance supply and the shot-appetite roll.
+    fn flat_touch_composite() -> Option<f32> {
+        static FLAT: std::sync::OnceLock<Option<f32>> = std::sync::OnceLock::new();
+        *FLAT.get_or_init(|| match std::env::var("OF_TOUCH_FLAT") {
+            Ok(v) if v == "1" => Some(0.62),
+            Ok(v) => v.parse::<f32>().ok().map(|f| f.clamp(0.0, 1.0)),
+            Err(_) => None,
+        })
+    }
+
     pub(crate) fn maybe_record_first_touch_loss(
         receiver_id: u32,
         field: &mut MatchField,
@@ -1692,6 +1774,7 @@ impl PlayerEventDispatcher {
                     .filter(|q| q.team_id != team)
                     .filter(|q| (q.position - pos).magnitude() < PRESSURE_RADIUS)
                     .count();
+                let comp01 = Self::flat_touch_composite().unwrap_or(comp01);
                 (comp01, opp_close, ())
             }
             None => return,
@@ -4610,6 +4693,12 @@ impl PlayerEventDispatcher {
                     let ball_to_goal = (goal_line_x - ball_x).abs();
                     let (mut goalside, mut near_line) = (0u64, 0u64);
                     let (mut def_seen, mut def_depth_sum) = (0u64, 0.0f32);
+                    // How much space the shooter actually had. Measured
+                    // from the BALL rather than from the shooter's body:
+                    // it is the ball a defender has to reach, and the
+                    // shot models read their pressure counts around the
+                    // striking player at the same instant.
+                    let mut nearest_def = f32::MAX;
                     for p in &field.players {
                         if p.side != Some(defending_side)
                             || p.tactical_position.current_position.position_group()
@@ -4634,6 +4723,8 @@ impl PlayerEventDispatcher {
                                 BlockDiag::note_defender_state(ds as usize);
                             }
                         }
+                        nearest_def = nearest_def
+                            .min((p.position.x - ball_x).hypot(p.position.y - ball_y));
                         let is_goalside = match defending_side {
                             PlayerSide::Left => p.position.x < ball_x,
                             PlayerSide::Right => p.position.x > ball_x,
@@ -4653,6 +4744,9 @@ impl PlayerEventDispatcher {
                         if cross / span <= 30.0 {
                             near_line += 1;
                         }
+                    }
+                    if nearest_def < f32::MAX {
+                        BlockDiag::note_shot_pressure(nearest_def);
                     }
                     BlockDiag::note_strike(
                         goalside,
@@ -4750,6 +4844,62 @@ impl PlayerEventDispatcher {
         field.ball.cached_shot_target = None;
     }
 
+    /// Book one state-machine gather into [`KeeperGatherDiag`]: how far the
+    /// ball was, how fast it was still going, what the keeper was doing, and
+    /// whether the shot it belonged to was ever going to hit the goal.
+    #[cfg(feature = "match-logs")]
+    fn census_gather(player_id: u32, field: &MatchField, context: &MatchContext) {
+        use crate::r#match::goalkeepers::states::state::GoalkeeperState;
+        let Some(player) = field.players.iter().find(|p| p.id == player_id) else {
+            return;
+        };
+        let gap = (player.position.x - field.ball.position.x)
+            .hypot(player.position.y - field.ball.position.y);
+        let diving = player.state == PlayerState::Goalkeeper(GoalkeeperState::Diving);
+        if let PlayerState::Goalkeeper(s) = player.state {
+            crate::mid_run_diag::KeeperGatherDiag::note_state(s as usize, player.is_airborne());
+        }
+        let shot = field.ball.cached_shot_target.as_ref().map(|t| {
+            let (goal_x, goal_y) = match t.defending_side {
+                PlayerSide::Left => (context.goal_positions.left.x, context.goal_positions.left.y),
+                PlayerSide::Right => (
+                    context.goal_positions.right.x,
+                    context.goal_positions.right.y,
+                ),
+            };
+            let (frame_y, frame_z) = field.ball.projected_crossing(goal_x);
+            (
+                (frame_y - goal_y).abs() > GOAL_MOUTH_HALF_WIDTH,
+                frame_z > crate::r#match::engine::flow::goal::GOAL_HEIGHT,
+            )
+        });
+        crate::mid_run_diag::KeeperGatherDiag::note_grant(
+            gap,
+            field.ball.velocity.norm(),
+            player.is_airborne(),
+            diving,
+            shot,
+        );
+        use crate::r#match::engine::ball::ball::frame_trace::FrameTrace;
+        if FrameTrace::captures_gathers() {
+            FrameTrace::open(format!(
+                "GATHER gk={} {} h={:.2} gap={:.1}u ({:.2}m) ballv={:.2} shot={}",
+                player_id,
+                player.state,
+                player.height,
+                gap,
+                gap * 0.125,
+                field.ball.velocity.norm(),
+                match shot {
+                    Some((true, _)) => "WIDE",
+                    Some((_, true)) => "OVER",
+                    Some(_) => "on-frame",
+                    None => "none",
+                },
+            ));
+        }
+    }
+
     fn handle_caught_ball_event(player_id: u32, field: &mut MatchField, context: &MatchContext) {
         // You cannot catch a ball you are not near. Checked BEFORE the save
         // credit below, deliberately: a catch resolved while the ball was
@@ -4757,8 +4907,12 @@ impl PlayerEventDispatcher {
         // keeper never reached, which is how saves/on-target climbed above
         // its calibrated 67%.
         if !Self::can_take_possession(player_id, field) {
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperGatherDiag::note_refused();
             return;
         }
+        #[cfg(feature = "match-logs")]
+        Self::census_gather(player_id, field, context);
 
         // Detect saves: ball was moving and came from an opponent
         let ball_was_moving = field.ball.velocity.norm_squared() > 0.25;
@@ -4977,6 +5131,33 @@ impl PlayerEventDispatcher {
     fn handle_leap_event(player_id: u32, apex: f32, field: &mut MatchField) {
         if let Some(player) = field.get_player_mut(player_id) {
             player.leap(apex);
+        }
+    }
+
+    /// Whose event is this? Diagnostic only: the dead-ball census splits
+    /// refused events by whether a goalkeeper raised them, because that
+    /// split is what identified the artefact in the first place.
+    ///
+    /// `ClearBall` carries a velocity and no id — it applies to whoever
+    /// holds the ball — so it reports `None` rather than guessing.
+    #[cfg(feature = "match-logs")]
+    fn actor_of(event: &PlayerEvent) -> Option<u32> {
+        match event {
+            PlayerEvent::PassTo(pass) => Some(pass.from_player_id),
+            PlayerEvent::Shoot(shot) => Some(shot.from_player_id),
+            PlayerEvent::BallCollision(id)
+            | PlayerEvent::TacklingBall(id)
+            | PlayerEvent::BallOwnerChange(id)
+            | PlayerEvent::MoveBall(id, _)
+            | PlayerEvent::ClaimBall(id)
+            | PlayerEvent::GainBall(id)
+            | PlayerEvent::CaughtBall(id)
+            | PlayerEvent::ParriedBall(id)
+            | PlayerEvent::RequestHeading(id, _)
+            | PlayerEvent::RequestShot(id, _)
+            | PlayerEvent::RequestBallReceive(id)
+            | PlayerEvent::TakeBall(id) => Some(*id),
+            _ => None,
         }
     }
 
@@ -5583,66 +5764,23 @@ impl PlayerEventDispatcher {
     }
 
     /// Handle an offside event: stop the ball, award a free kick to the nearest opponent.
-    fn handle_offside_event(
-        offside_player_id: u32,
-        position: Vector3<f32>,
-        field: &mut MatchField,
-    ) {
-        // Increment offside stat on the player
+    /// The offside itself: one statistic, and nothing else.
+    ///
+    /// This used to run the whole restart — it wrote the ball to the spot
+    /// where the offside player stood when the pass was played, awarded
+    /// possession to the nearest opponent, and staged a
+    /// `pending_set_piece_teleport` to put him on top of it. That is two
+    /// relocations on every one of the 9-12 offsides a match: the ball by
+    /// the length of the receiver's run, and a defender out of thin air.
+    ///
+    /// `Ball::award_offside` now settles all of it on the tick the flag
+    /// goes up — where the offence happened, with nothing moved and the
+    /// taker walking — so the only thing left for the handler is the
+    /// player's own count.
+    fn handle_offside_event(offside_player_id: u32, field: &mut MatchField) {
         if let Some(player) = field.players.iter_mut().find(|p| p.id == offside_player_id) {
             player.statistics.offsides += 1;
         }
-
-        // Determine the offside player's side to find opponents
-        let offside_side = field
-            .players
-            .iter()
-            .find(|p| p.id == offside_player_id)
-            .and_then(|p| p.side);
-
-        // Find nearest opponent to the offside position to award free kick
-        let nearest_opponent_id = field
-            .players
-            .iter()
-            .filter(|p| p.side != offside_side && p.side.is_some())
-            .min_by(|a, b| {
-                let dist_a = (a.position - position).norm();
-                let dist_b = (b.position - position).norm();
-                dist_a
-                    .partial_cmp(&dist_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|p| p.id);
-
-        // Stop ball at offside position
-        field.ball.position = position;
-        field.ball.velocity = Vector3::new(0.0, 0.0, 0.0);
-
-        // Award possession to nearest opponent (free kick)
-        if let Some(opponent_id) = nearest_opponent_id {
-            field.ball.previous_owner = field.ball.current_owner;
-            field.ball.current_owner = Some(opponent_id);
-            field.ball.ownership_duration = 0;
-            // Walk him to the spot, exactly as the foul free kick does.
-            //
-            // "Nearest opponent" is nearest, not near: he is routinely tens
-            // of units from where the flag went up. Awarding him the ball
-            // without moving him left the restart beyond
-            // `MAX_OWNER_TRACK_DISTANCE`, so `Ball::move_to` disowned it on
-            // the next tick — and the two lines above had already parked the
-            // ball at `position` with zero velocity, which is the dead-ball-
-            // in-mid-pitch artefact exactly. The free kick path has staged
-            // this teleport all along; the offside restart was the one
-            // set piece that forgot to.
-            field.ball.pending_set_piece_teleport = Some((opponent_id, position));
-        }
-
-        // Protected possession (same pattern as foul free kick)
-        field.ball.claim_cooldown = 60;
-        field.ball.flags.in_flight_state = 60;
-        field.ball.contested_claim_count = 0;
-        field.ball.pass_target_player_id = None;
-        field.ball.clear_pass_history();
     }
 
     /// Identify the goalkeeper who is about to clear a shot, if any.

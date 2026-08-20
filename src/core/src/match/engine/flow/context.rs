@@ -598,6 +598,32 @@ impl MatchContext {
         *OFF.get_or_init(|| std::env::var("OF_SHAPE_OFF").is_ok())
     }
 
+    /// Diagnostic switch: with `OF_MID_CLEAR_OFF` set, the midfielder
+    /// Tier-1 "clear chance" shot in `midfielders/states/running` stops
+    /// being a DETERMINISTIC bypass and the same look goes through the
+    /// ordinary appetite-vs-bar decision with every other shot.
+    ///
+    /// It exists because that tier is the engine's single largest
+    /// quality-coupled channel into the SCORELINE, and nothing in the
+    /// aggregate stats says so — the tier's only skill-sensitive term is
+    /// "no opponent within 3 m", so it fires whenever the defending is
+    /// poor enough to leave that space, without a probability anywhere in
+    /// it to bound how often. Measured over 300 matches a level, uniform
+    /// squads, it is **44% of every shot in the game at level 6 and 2% at
+    /// level 18** — the mechanism behind "lower divisions play 3-2 and
+    /// the top flight plays 0-0".
+    ///
+    /// Same pattern and purpose as [`shape_off`](Self::shape_off): the
+    /// effect reaches every attacking tick in the box, so the question
+    /// "how much of the goals-per-division spread is this one path?"
+    /// cannot be answered from a diff. Debug infrastructure — do not
+    /// remove.
+    pub fn mid_clear_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_MID_CLEAR_OFF").is_ok())
+    }
+
     /// Diagnostic switch: with `OF_PRESS_OFF` set, [`DefensivePlan`]
     /// nominates a presser only when an opponent is actually CARRYING
     /// the ball, and only from the back line and midfield — the model as

@@ -96,6 +96,33 @@ impl CornerHold {
     /// How much of the player's movement the station owns this tick,
     /// 0 (his own state decides) to 1 (hold position).
     fn hold_weight(player: &MatchPlayer, tick_context: &GameTickContext) -> f32 {
+        // ── the corner has not been TAKEN yet ─────────────────────────
+        //
+        // The ball is lying on the byline where it went out, or moving up
+        // it under the taker's feet, and everybody else is walking into
+        // the shape. Nothing below applies to that: every release in this
+        // function is about a DELIVERY — the man it is dropping on plays
+        // it, the rest hold — and there is no delivery until the ball is
+        // on the arc.
+        //
+        // Both releases would otherwise fire on exactly the wrong people.
+        // The distance fade is measured from the ball, which spends the
+        // set-up on the byline a few metres from the near-post and short
+        // stations, so the players nearest the goal — the ones the shape
+        // exists to place — would be the ones let go. And the carrier is
+        // in `TakeBall` with the ball at his feet, so the chaser exemption
+        // AND the fade both zero him: his station is the only thing that
+        // can walk him to the flag, and it is refused unless this comes
+        // first. See `AwaitedRestart::carrying`.
+        if tick_context.ball.restart_taker.is_some() {
+            // …with one exception, and it is the deadlock if it is missed:
+            // the taker on his way to FETCH the ball has no business
+            // standing anywhere. He gets no station until he picks it up.
+            let fetching = tick_context.ball.restart_taker == Some(player.id)
+                && tick_context.ball.restart_carrier != Some(player.id);
+            return if fetching { 0.0 } else { 1.0 };
+        }
+
         // On the ball, or committed to something that cannot be aborted
         // — a shot, a tackle, a header already begun. Never overridden.
         if tick_context.ball.current_owner == Some(player.id) || player.state.is_committed_action()

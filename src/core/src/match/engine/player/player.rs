@@ -17,6 +17,7 @@ use crate::r#match::midfielders::states::common::MidfielderCondition;
 use crate::r#match::player::memory::PlayerMemory;
 use crate::r#match::player::state::{PlayerMatchState, PlayerState};
 use crate::r#match::player::statistics::MatchPlayerStatistics;
+use crate::r#match::common_states::TackleEngagement;
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::player::waypoints::WaypointManager;
 use crate::r#match::{
@@ -136,6 +137,35 @@ pub struct MatchPlayer {
     /// within the same second, which would otherwise produce 40+ fouls
     /// per team in the first 5 minutes of every match.
     pub tackle_cooldown: u16,
+    /// Consecutive AI ticks this player has spent within
+    /// [`TackleEngagement::CONTACT`] of an opposing ball carrier, while
+    /// in a challenging state. Zero the moment either stops being true.
+    ///
+    /// # Why the commitment clock cannot be `in_state_time`
+    ///
+    /// [`TackleDecision`] rolls once per moment rather than per tick, and
+    /// the moment it is trying to price is *a defender standing his man
+    /// up*. `in_state_time` counts something else: ticks since he entered
+    /// the `Tackling` state, which begins at up to 25u — the five
+    /// box-emergency routes and `Pressing`'s own hand-off all send him in
+    /// from outside contact — and an attempt is only ever rolled inside
+    /// `CONTACT` (10u = 1.25 m). So the cadence was counting the RUN and
+    /// the challenge together.
+    ///
+    /// Two things followed, and both are in the census. `is_decision_tick`
+    /// is `% DECISION_INTERVAL_TICKS`, so the documented "entry always
+    /// counts" roll fired while he was still three metres away with
+    /// `reach` at its floor, and was then discarded by the distance guard
+    /// that sits above it; by the time he actually arrived the phase had
+    /// moved on and he waited out the rest of the interval doing nothing.
+    /// Measured: **46% of the players in a `Tackling` state are inside
+    /// contact**, and a carrier inside our own penalty area — where a
+    /// possession lasts a second or two — drew 20 commit decisions a
+    /// match between every defender on the pitch.
+    ///
+    /// Counting CONTACT instead makes the roll happen on the tick he
+    /// arrives, which is when a real defender either goes or does not.
+    pub contact_ticks: u16,
     /// Tagged reason for the next Shoot event. Set by each transition
     /// point that routes into the Shooting state (e.g. "FWD_RUN_PRIO05",
     /// "FWD_POINT_BLANK", "MID_POINT_BLANK_RUN"). The Shooting state
@@ -479,6 +509,7 @@ impl MatchPlayer {
             fouls_committed: 0,
             is_sent_off: false,
             tackle_cooldown: 0,
+            contact_ticks: 0,
             pending_shot_reason: None,
             set_piece_station: None,
             is_force_match_selection: player.is_force_match_selection,
@@ -553,6 +584,7 @@ impl MatchPlayer {
             fouls_committed: 0,
             is_sent_off: false,
             tackle_cooldown: 0,
+            contact_ticks: 0,
             pending_shot_reason: None,
             set_piece_station: None,
             is_force_match_selection,
@@ -723,20 +755,73 @@ impl MatchPlayer {
         self.tackle_cooldown == 0
     }
 
+    /// Advance [`Self::contact_ticks`]. Called once per AI tick from
+    /// `update()`, before the state machine runs, so a state asking
+    /// `TackleDecision::is_decision_tick` this tick sees a clock that
+    /// already includes it.
+    ///
+    /// "In contact" is deliberately the same question the `Tackling`
+    /// states ask — an opposing carrier within
+    /// [`TackleEngagement::CONTACT`] — and nothing about which state the
+    /// player is in. A defender who is stood on the carrier's toes while
+    /// nominally `Marking` is in contact in every sense that matters, and
+    /// keying the clock to a state would reset it on every hand-off
+    /// between the states that share one duel.
+    fn tick_contact_clock(&mut self, tick_context: &GameTickContext) {
+        let in_contact = tick_context
+            .ball
+            .current_owner
+            // A keeper with it in his gloves cannot be challenged at all
+            // (Law 12), so standing next to him is not contact.
+            .filter(|_| !tick_context.ball.held_in_hands)
+            .and_then(|id| {
+                let side = tick_context.positions.players.side(id)?;
+                if Some(side) == self.side {
+                    return None;
+                }
+                let holder = tick_context.positions.players.position(id);
+                Some((holder - self.position).magnitude() <= TackleEngagement::CONTACT)
+            })
+            .unwrap_or(false);
+        self.contact_ticks = if in_contact {
+            self.contact_ticks.saturating_add(1)
+        } else {
+            0
+        };
+    }
+
     /// Start the post-tackle cooldown. Called right after any attempt
     /// resolves (success, miss, or foul).
     #[inline]
     pub fn start_tackle_cooldown(&mut self) {
-        // 3000 ticks ≈ 30 seconds. Real football: a player contests 2-4
-        // tackles per 90 minutes — one every ~25 minutes. The previous
-        // 15-second cooldown still let attempts run at 205/team/match
-        // (5x real) because 10 outfield players × 15s allowed up to one
-        // attempt per second team-wide. 30s halves the team-wide ceiling
-        // and matches the realistic "commit, resolve, regroup,
-        // reposition" cadence — a defender who lunges and either wins,
-        // misses, or fouls is realistically out of the next play for
-        // half a minute, not 15 seconds.
-        self.tackle_cooldown = 3000;
+        // ⚠ 3000 → 250, AND 3000 WAS NEVER THE 30 SECONDS IT CLAIMED.
+        //
+        // The comment this replaces reasoned entirely in seconds — "30s
+        // halves the team-wide ceiling", "out of the next play for half a
+        // minute" — and did its arithmetic in raw simulation ticks. But
+        // `tick_tackle_cooldown` runs only on FULL AI ticks (`update`,
+        // `lod_skip_update`), never on the movement-only light ones, and
+        // an AI tick is 20 ms. 3000 of them is **sixty seconds of match
+        // clock**: longer than any attacking phase, so one challenge
+        // anywhere near our box removed that defender from the rest of
+        // it. And because `can_attempt_tackle` gates ENTRY into every
+        // `Tackling` state, it removed him from CONTAINING too — he could
+        // not even stand the man up.
+        //
+        // It was also load-bearing for the wrong reason. The old figure
+        // was fitted as the team-wide RATE LIMIT on attempts, at a time
+        // when `TackleDecision` was, in its own words, decorative: a
+        // per-tick roll that made a challenge a certainty inside a
+        // second, so the cooldown was the only thing bounding volume.
+        // That is no longer true — the commitment model is now a real
+        // once-per-second-of-contact decision, priced by temperament,
+        // cover, danger and the moment — so the rate limiter belongs
+        // there, where it is continuous and skill-shaped, and this
+        // constant can go back to being what its name says: the physical
+        // recovery from a committed challenge.
+        //
+        // 250 ticks = 5 s. Get up, turn, re-engage.
+        self.tackle_cooldown = 250;
     }
 
     /// Start the post-smother cooldown for a GOALKEEPER.
@@ -749,7 +834,12 @@ impl MatchPlayer {
     /// striker's feet, is beaten, is back on his feet 0.44 s later with the
     /// same striker still on the same ball, and commits again.
     ///
-    /// 500 ticks = 5 s: long enough that the attack he was beaten in has
+    /// 500 ticks = 10 s (an AI tick is 20 ms — the comment used to read
+    /// "5 s", from the same tick-vs-millisecond slip corrected in
+    /// [`Self::start_tackle_cooldown`]). Left where it is: the number was
+    /// fitted by measuring repeat smothers, not derived from the unit, so
+    /// it is the duration that was calibrated whatever it is called.
+    /// Long enough that the attack he was beaten in has
     /// resolved, short enough that the next one still finds a keeper who
     /// will come. See `KeeperSmother`.
     #[inline]
@@ -781,6 +871,11 @@ impl MatchPlayer {
         events: &mut EventCollection,
     ) {
         self.tick_tackle_cooldown();
+        // Before the state machine, so a `Tackling` state asking
+        // `TackleDecision::is_decision_tick` this tick sees a clock that
+        // already counts it — which is what makes the roll happen on the
+        // tick he arrives.
+        self.tick_contact_clock(tick_context);
 
         let player_events = PlayerMatchState::process(self, context, tick_context);
 
@@ -830,6 +925,11 @@ impl MatchPlayer {
         ball_vel: Vector3<f32>,
     ) {
         self.tick_tackle_cooldown();
+        // An LOD-skipped player is by definition far from the ball, so he
+        // is not in contact with anybody — and leaving a stale count
+        // standing would hand him a free decision the moment he is
+        // processed again.
+        self.contact_ticks = 0;
 
         let half_ms = MATCH_HALF_TIME_MS as f32;
         let full_ms = half_ms * 2.0;

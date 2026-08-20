@@ -109,6 +109,26 @@ pub mod block_diag {
     /// in a state's steering target or in the state selection above it.
     pub static DEF_STATE_AT_STRIKE: [AtomicU64; 21] = [const { AtomicU64::new(0) }; 21];
 
+    /// How close the nearest defending outfielder is to the SHOOTER when
+    /// he strikes it, banded in metres: `<1 | 1-2 | 2-3 | 3-5 | 5-8 | 8+`.
+    ///
+    /// # Why this band list and not another
+    ///
+    /// The shot models read pressure through
+    /// `ShotInputs::pressure_count_5u` / `_10u`, and 1u is 0.125 m — so
+    /// those are radii of **0.62 m and 1.25 m**, i.e. a defender who is
+    /// physically touching the shooter. Everything from a stride away
+    /// outward is priced identically to an empty stadium, in both the
+    /// accuracy model (`ShotOutcome::pressure_penalty`) and the reported
+    /// xG (`XgModel::pressure_factor`). Real pressure runs out at 5-8 m,
+    /// which is most of a defended box.
+    ///
+    /// The bands therefore straddle the model's own cut-offs: everything
+    /// in band 0 and part of band 1 is seen by the models, and bands 2-4
+    /// are the shots taken under real pressure that the engine currently
+    /// treats as free.
+    pub static NEAREST_DEF_AT_STRIKE: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+
     /// Diagnostic accessors. Grouped on a struct so the module exposes
     /// no free functions — the statics stay module-level because Rust
     /// has no associated statics.
@@ -125,6 +145,32 @@ pub mod block_diag {
         /// Per-state counts, in discriminant order.
         pub fn defender_state_snapshot() -> [u64; 21] {
             std::array::from_fn(|i| DEF_STATE_AT_STRIKE[i].load(Ordering::Relaxed))
+        }
+
+        /// Book the nearest defending outfielder's distance to the
+        /// shooter, in UNITS. Banding lives here so the caller cannot
+        /// disagree with [`NEAREST_DEF_AT_STRIKE`]'s documented edges.
+        pub fn note_shot_pressure(gap_units: f32) {
+            let metres = gap_units / 8.0;
+            let band = if metres < 1.0 {
+                0
+            } else if metres < 2.0 {
+                1
+            } else if metres < 3.0 {
+                2
+            } else if metres < 5.0 {
+                3
+            } else if metres < 8.0 {
+                4
+            } else {
+                5
+            };
+            NEAREST_DEF_AT_STRIKE[band].fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// Per-band counts, closest first.
+        pub fn shot_pressure_snapshot() -> [u64; 6] {
+            std::array::from_fn(|i| NEAREST_DEF_AT_STRIKE[i].load(Ordering::Relaxed))
         }
 
         /// Sample the defensive picture at the moment a shot is struck.
@@ -175,6 +221,9 @@ pub mod block_diag {
             ] {
                 c.store(0, Ordering::Relaxed);
             }
+            for c in &NEAREST_DEF_AT_STRIKE {
+                c.store(0, Ordering::Relaxed);
+            }
             for c in &DEF_STATE_AT_STRIKE {
                 c.store(0, Ordering::Relaxed);
             }
@@ -208,6 +257,70 @@ pub mod block_diag {
                 mean_perp,
             )
         }
+    }
+}
+
+/// **The interception duel, priced as a contest.**
+///
+/// # The defect this fixes
+///
+/// `try_intercept` scored the chance as `sc::interception(defender)` and
+/// nothing else — the man who PLAYED the pass did not appear in it at
+/// all. So the rate was a property of one side's ability rather than of
+/// the duel between two, and it walked straight up the pyramid with
+/// squad quality: measured over 300 matches at each level with EQUAL
+/// squads, interceptions ran 13.9 per team at level 4 against 31.7 at
+/// level 18, and pass accuracy fell the other way, 89.6% → 79.2%.
+///
+/// Both of those are backwards. Real football's interception count does
+/// not move between divisions, and better passers complete MORE of their
+/// passes, not fewer. What actually happens as the standard rises is that
+/// the defending improves and the passing improves with it, and the two
+/// cancel — which is precisely what a contest does and an absolute skill
+/// term cannot.
+///
+/// # The model
+///
+/// The same shape as [`SaveModel::skill_multiplier`], for the same
+/// reason. An evenly-matched duel resolves to `FLOOR + SLOPE/2` at EVERY
+/// level, so the population rate is a property of these constants and not
+/// of the standard of football; the edge either man carries is a spread
+/// around it. `sc::passing_execution` is the counter-skill because that
+/// is what makes a pass hard to read and hard to reach: weight, lane and
+/// disguise.
+///
+/// ⚠ **The population RATE is load-bearing and must not move.** The
+/// turnover volume this site produces is what keeps attacking sequences
+/// noisy; cutting it has been measured driving goals to 8-11 a match.
+/// `PARITY` is therefore pinned to the value `sc::interception` used to
+/// return for a mid-pyramid squad, and the check that matters after any
+/// change here is that `int/tm` in `dev_match levels` stays near its
+/// old level-14 reading (~26) — flat across the sweep, not lower.
+pub(crate) struct InterceptionDuel;
+
+impl InterceptionDuel {
+    /// Chance multiplier for the worst possible reader of the game
+    /// against the best possible delivery.
+    const FLOOR: f32 = 0.40;
+    /// Width of the duel axis. `FLOOR + SLOPE/2` = **0.66**, which is
+    /// what `sc::interception` returned for a mid-pyramid squad — the
+    /// level the 0.16 coefficient below was calibrated against.
+    const SLOPE: f32 = 0.52;
+    /// How much a skill edge is worth. Matches the save contest's own
+    /// spread: a 0.38 advantage saturates the axis, and the ±0.2 edges
+    /// that occur inside a real squad move the multiplier about ±0.13.
+    const SPREAD: f32 = 1.30;
+
+    /// Multiplier an evenly-matched duel resolves to. Quoted so callers
+    /// and tests can name the population anchor instead of re-deriving
+    /// it from the two constants above.
+    pub(crate) const PARITY: f32 = Self::FLOOR + Self::SLOPE * 0.5;
+
+    #[inline]
+    pub(crate) fn advantage(interceptor: f32, delivery: f32) -> f32 {
+        let edge = interceptor.clamp(0.0, 1.0) - delivery.clamp(0.0, 1.0);
+        let advantage = (0.5 + edge * Self::SPREAD).clamp(0.0, 1.0);
+        Self::FLOOR + advantage * Self::SLOPE
     }
 }
 
@@ -370,7 +483,55 @@ impl SaveModel {
     /// (`shots arriving on frame … BEYOND HIS REACH`) and the `< 11 m` row
     /// of `KEEPER BY SHOT RANGE` if the keeper's behaviour during a flight
     /// changes again.
-    const REFLEX_FLOOR: f32 = 0.46;
+    ///
+    /// # 2026-08-20 — 0.46 → 0.54, paired with `base_reach` 20 → 23
+    ///
+    /// Re-derived when the BEATEN-KEEPER adjudication was removed — see the
+    /// save plane in `Ball::try_save_shot`, and `OF_SAVE_BEATEN`, which is
+    /// the A/B that produced these numbers. A shot that had already gone
+    /// past the keeper used to get a second roll at the goal line with his
+    /// LATER position feeding `wedge`, and that second roll was carrying
+    /// real save rate. Three 400-match runs an arm: **67.6% saves/on-target
+    /// and 2.59 goals/match with it, 64.2% and 2.89 without.**
+    ///
+    /// Those saves were not real — he was behind the ball, and the catch
+    /// then dragged it back onto him, which is the reported bug the removal
+    /// exists to fix. The population rate they carried IS real, so it has
+    /// to come back from something that is. It comes back from the two
+    /// terms that say how much of the goal he covers, because covering
+    /// ground he had not covered yet is exactly what the second roll was
+    /// silently crediting him with. One 400-match run an arm:
+    ///
+    /// | arm                              | goals | saves/on-target |
+    /// |----------------------------------|-------|-----------------|
+    /// | no compensation                  | 2.89  | 64.2%           |
+    /// | `base_reach` 22                  | 2.68  | 65.3%           |
+    /// | `base_reach` 24                  | 2.55  | 67.6%           |
+    /// | this floor 0.52                  | 2.67  | 66.6%           |
+    /// | this floor 0.58                  | 2.61  | 67.2%           |
+    /// | `CENTRED_BASE` 1.20              | 2.64  | 67.2%           |
+    /// | `CENTRED_BASE` 1.28              | 2.23  | 72.8%           |
+    /// | `base_reach` 22 + floor 0.52     | 2.69  | 66.2%           |
+    /// | **`base_reach` 23 + floor 0.54** | 2.64  | 67.1%           |
+    ///
+    /// The last two rows are five and four 400-match runs rather than one;
+    /// every other row is a single run and is indicative only. The 22 +
+    /// 0.52 pair looked right on one run and measured a point light over
+    /// five, which is why the landed pair is 23 + 0.54 — and that one is
+    /// within half a point and six hundredths of a goal of the 67.6% /
+    /// 2.59 the removal cost, i.e. inside the run-to-run floor.
+    ///
+    /// The PAIR was taken over any single constant for two reasons. Each
+    /// moves least that way, and each stays inside its own physical story.
+    /// And it is the arm that also reproduces the per-band profile:
+    /// `KEEPER BY SHOT RANGE` reads 67/40/21% beyond reach against 67/44/19
+    /// before, saved 22/43/61 against 21/39/60. `CENTRED_BASE` restores the
+    /// aggregate from the WRONG band — it leaves close-range saves at 17%
+    /// against 21% and makes it up at range — which is why the population
+    /// lever this file names in `SKILL_FLOOR`'s note is not the one used
+    /// here. The note stands for a rate that has drifted on its own; this
+    /// is a reach that was being over-credited by a bug.
+    const REFLEX_FLOOR: f32 = 0.54;
     /// Ceiling on the angle projection. Physically it runs away as the
     /// keeper closes on the ball, and past a certain point the model stops
     /// describing a save and starts describing a block.
@@ -753,15 +914,21 @@ impl Ball {
             return;
         }
 
-        // Need to know who passed to determine the opposing team
-        let passer_team = match self.previous_owner {
-            Some(prev_id) => players.iter().find(|p| p.id == prev_id).map(|p| p.team_id),
+        // Need to know who passed — for the opposing team, and for the
+        // other half of the duel. See `InterceptionDuel`: the delivery is
+        // what makes a pass hard to read, and without it this site scored
+        // one man's ability instead of a contest between two.
+        let passer = match self.previous_owner {
+            Some(prev_id) => players.iter().find(|p| p.id == prev_id),
             None => return,
         };
-        let passer_team = match passer_team {
-            Some(t) => t,
+        let passer = match passer {
+            Some(p) => p,
             None => return,
         };
+        let passer_team = passer.team_id;
+        let delivery =
+            sc::passing_execution(passer, sc::minute_from_ticks(self.current_tick_cached));
 
         // Ball velocity determines the interception corridor width.
         //
@@ -831,7 +998,9 @@ impl Ball {
             // the legacy 4-skill average; magnitude lands in the same band
             // (0..1). Minute derived from the cached tick (10ms ticks).
             let minute = sc::minute_from_ticks(self.current_tick_cached);
-            let skill_factor = sc::interception(player, minute);
+            // A CONTEST — see `InterceptionDuel`.
+            let skill_factor =
+                InterceptionDuel::advantage(sc::interception(player, minute), delivery);
 
             // Proximity factor: closer = higher chance (1.0 at 0m, 0.3 at max radius)
             let dist = dist_sq.sqrt();
@@ -1584,6 +1753,19 @@ impl Ball {
         *AT_LINE.get_or_init(|| std::env::var("OF_SAVE_AT_LINE").is_ok())
     }
 
+    /// Diagnostic switch: with `OF_SAVE_BEATEN` set, a keeper the ball has
+    /// already gone past gets his old second adjudication at the goal line.
+    ///
+    /// The A/B control for that removal. It decides whether a shot that has
+    /// beaten the keeper can still be saved, so it moves the population save
+    /// rate and "what did this cost?" cannot be answered by reading the
+    /// diff. Same pattern and purpose as [`Self::save_at_line`]. Debug
+    /// infrastructure — do not remove.
+    fn save_when_beaten() -> bool {
+        static BEATEN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *BEATEN.get_or_init(|| std::env::var("OF_SAVE_BEATEN").is_ok())
+    }
+
     /// Where the ball is projected to cross `goal_x`, as `(y, z)`.
     ///
     /// A short ballistic extrapolation of the ball's own current state —
@@ -1595,7 +1777,7 @@ impl Ball {
     ///
     /// Falls back to the ball's current position when it is not travelling
     /// toward that line, because then there is no crossing to project.
-    fn projected_crossing(&self, goal_x: f32) -> (f32, f32) {
+    pub(crate) fn projected_crossing(&self, goal_x: f32) -> (f32, f32) {
         let gap = goal_x - self.position.x;
         if Self::save_at_line() || gap * self.velocity.x <= 0.0 || self.velocity.x.abs() < 1.0e-3 {
             return (self.position.y, self.position.z);
@@ -1676,20 +1858,40 @@ impl Ball {
         // ball bouncing off empty space on the goal line and flying back
         // out to a follow-up shot, which is exactly how it was reported.
         //
-        // The plane is his, clamped so it is never in FRONT of the ball
-        // (a keeper the ball has already passed cannot come back for it —
-        // then the line is the last chance, which is what `wedge` says too)
-        // and never behind the goal line.
-        let toward_goal = (goal_x - self.position.x).signum();
+        // The plane is his, clamped so it is never behind the goal line.
         let keeper_plane = match shot_target.defending_side {
             PlayerSide::Left => keeper.position.x.max(goal_x),
             PlayerSide::Right => keeper.position.x.min(goal_x),
         };
-        let keeper_is_ahead = (keeper_plane - self.position.x) * toward_goal > 0.0;
-        let save_plane_x = if keeper_is_ahead && !Self::save_at_line() {
-            keeper_plane
-        } else {
+        // **And it STAYS his once the ball is past him.**
+        //
+        // It used to fall back to the goal LINE for a keeper the ball had
+        // already gone by, on the reading that the line is his last chance.
+        // It is not a chance at all — he is behind the ball — and what the
+        // fallback actually bought was a second adjudication metres up the
+        // pitch from him. The reach test below returns WITHOUT latching
+        // `save_rolled` (deliberately: it is a positioning outcome, not a
+        // roll), so a shot that beat him at his own plane had the window
+        // re-open at the goal line and got rolled again, this time with his
+        // position — which has moved since — feeding `wedge`. When that
+        // second roll came off, the catch branch wrote the ball onto his
+        // coordinate, and a ball a metre from crossing the line teleported
+        // four and a half metres BACKWARDS into his gloves. That is the
+        // reported bug, verbatim: *"it flies through his hands and into the
+        // goal, and then instantly flips back into the goalkeeper's
+        // hands."* Measured off recorded matches: 114 of them in 3 000 goal
+        // clips, up to 4.7 m of pull-back, 27 of them beyond 3 m.
+        //
+        // Measuring against his own plane bounds it without a tolerance
+        // constant. The arrival window below is ±2.5 ticks of flight wide
+        // and centred on HIM, so the ball can be at most a couple of ticks
+        // past him when the roll fires — a trailing hand, which is real —
+        // and once it is beyond that the window closes and stays closed.
+        let beaten = (keeper_plane - self.position.x) * (goal_x - self.position.x).signum() <= 0.0;
+        let save_plane_x = if Self::save_at_line() || (beaten && Self::save_when_beaten()) {
             goal_x
+        } else {
+            keeper_plane
         };
 
         let dist_to_plane = (self.position.x - save_plane_x).abs();
@@ -1737,6 +1939,20 @@ impl Ball {
         let off_frame_high = frame_z > 2.8;
         let off_frame_wide = (frame_y - goal_y).abs() > GOAL_WIDTH + 1.0;
         if off_frame_high || off_frame_wide {
+            #[cfg(feature = "match-logs")]
+            if super::frame_trace::FrameTrace::captures_misses() {
+                super::frame_trace::FrameTrace::open(format!(
+                    "MISS {} crossing y={:+.1}u past the post, z={:.2} m; gk at gap {:.1}u ({:.2} m)",
+                    if off_frame_wide { "WIDE" } else { "OVER" },
+                    (frame_y - goal_y).abs() - GOAL_WIDTH,
+                    frame_z,
+                    (keeper.position.x - self.position.x)
+                        .hypot(keeper.position.y - self.position.y),
+                    (keeper.position.x - self.position.x)
+                        .hypot(keeper.position.y - self.position.y)
+                        * 0.125,
+                ));
+            }
             self.cached_shot_target = None;
             return;
         }
@@ -1786,10 +2002,17 @@ impl Ball {
         // they can reach it. The previous 10u floor made corner shots
         // literally unreachable for weak keepers, so blowouts in youth
         // leagues (hnd=1, ref=1) pushed matches to 10+ goals. New reach:
-        //   skills 1   → 20u (2.5m, standing dive — can touch the post)
-        //   skills 10  → 26u (3.25m, covers most of the goal)
-        //   skills 20  → 32u (4.0m, elite full-stretch — beyond the post)
-        let base_reach = 20.0 + scaled_agility * 8.0 + scaled_reflexes * 4.0;
+        //   skills 1   → 23u (2.9m, standing dive — can touch the post)
+        //   skills 10  → 29u (3.6m, covers most of the goal)
+        //   skills 20  → 35u (4.4m, elite full-stretch — beyond the post)
+        //
+        // Intercept 20 → 23 on 2026-08-20, half of the re-derivation the
+        // removal of the beaten-keeper adjudication forced. The other half
+        // is `SaveModel::REFLEX_FLOOR`, whose doc carries the measurement
+        // table and the reasoning for both. The SLOPE is untouched: the
+        // spread between the worst keeper alive and the best is still 12u,
+        // so nothing about the keeper-quality axis moves.
+        let base_reach = 23.0 + scaled_agility * 8.0 + scaled_reflexes * 4.0;
         // …and how much of the GOAL that reach is worth from where he is
         // standing. See `SaveModel::wedge`: measuring the gap flat at the
         // goal line charged him for every metre he came to narrow the
@@ -2060,13 +2283,16 @@ impl Ball {
 
         if outcome_roll < p_catch {
             #[cfg(feature = "match-logs")]
-            crate::mid_run_diag::SaveContactDiag::note(
-                0,
-                contact_gap,
-                contact_height,
-                contact_along,
-                contact_across,
-            );
+            {
+                crate::mid_run_diag::SaveContactDiag::note(
+                    0,
+                    contact_gap,
+                    contact_height,
+                    contact_along,
+                    contact_across,
+                );
+                crate::mid_run_diag::KeeperGatherDiag::note_physics(contact_gap);
+            }
             // **Clean catch — and a catch means the ball is IN HIS GLOVES.**
             //
             // This used to set `current_owner` and nothing else, on the
@@ -2101,12 +2327,42 @@ impl Ball {
             // that can fail — a sweeper-keeper who heads a shot clear from
             // outside his box keeps his feet.
             self.pending_save_site = 1; // catch
-            self.position = keeper_pos;
-            self.position.z = 0.0;
+            // **His hands are where the BALL is — so leave it there.**
+            //
+            // This used to write his own coordinate into the ball, which is
+            // the same defect the parry branches had before `contact_z` was
+            // kept, on the other two axes. A save resolves anywhere inside
+            // the reach `wedge` prices — up to `base_reach`, 2.5 to 4 m —
+            // so on every caught save the ball jumped that far in a single
+            // 10 ms tick, onto his chest, and then a second time up to
+            // `carry_height`. Measured across 4 000 recorded goal clips:
+            // 2 706 gathers, a median jump of 0.39 m, 306 of them over a
+            // metre and 27 over three.
+            //
+            // Stopping it where it was caught and letting the ordinary
+            // owner-tracking draw it in is both continuous and true to what
+            // happened: he takes it at full stretch and brings it into his
+            // body over the next tenth of a second (`Ball::move_to`,
+            // `BALL_TRACK_SPEED` and `CARRY_RATE`). Nobody can take it off
+            // him meanwhile — `held_in_hands` is raised below and
+            // `check_ball_ownership` returns on it — and `move_to` will not
+            // disown it for the distance either, for the same reason.
             self.velocity = Vector3::zeros();
+            self.spin = Vector3::zeros();
             self.current_owner = Some(keeper_id);
             self.flags.in_flight_state = 0;
             self.claim_cooldown = 200;
+            // Read off the KEEPER, not the contact point, and the two are
+            // no longer the same thing now that the catch leaves the ball
+            // where it happened. The Laws test the ball; this tests him.
+            // Kept as it is deliberately: he is a good five metres inside
+            // his own area whenever this fires and the contact is at most
+            // four from him, so the two can only disagree for a
+            // sweeper-keeper standing on the edge of the D — and the
+            // alternative reading would put a catch made just outside it on
+            // his FEET, with the ball then metres from an owner who is not
+            // allowed to hold it. That is a worse failure than the one it
+            // would fix. Revisit if the reach model ever grows.
             let area = context.penalty_area(keeper_side == Some(PlayerSide::Left));
             let hands_legal = (area.min.x..=area.max.x).contains(&keeper_pos.x)
                 && (area.min.y..=area.max.y).contains(&keeper_pos.y);
@@ -2132,36 +2388,64 @@ impl Ball {
                     contact_across,
                 );
             }
-            // Parried OUT for a corner. The outcome is already decided, so
-            // resolve it POSITIONALLY — place the ball just past the byline,
-            // wide of the post — rather than driving it there by velocity.
-            // The velocity approach half-failed: the keeper sits on the goal
-            // line, so the ball only reached the post (y±GOAL_WIDTH) by the
-            // time it crossed x=0, landing borderline → ~half fell inside
-            // for a goal kick. Placing it out (outside `goal_y ± GOAL_WIDTH`,
-            // a few units past x=0) makes the endline resolver award the
-            // corner reliably next tick (keeper = last toucher → corner for
-            // the attackers; save already booked via `pending_save_credit`).
+            // Parried OUT for a corner — and it TRAVELS there.
+            //
+            // This used to resolve POSITIONALLY: the ball was written just
+            // past the byline, wide of the post, on the tick of the save.
+            // That is a mean 6.5 m teleport (`flight_diag`'s `save_shot`
+            // stage: 1.8 a match, worst 12.6 m), and on screen it is a shot
+            // vanishing from in front of the keeper and reappearing beside
+            // the corner flag — the same class of artefact as the catch
+            // teleport above, and the reason it looked like the ball "flies
+            // off to nowhere" around the goal.
+            //
+            // It was written that way because the first attempt gave the
+            // ball a DIRECTION and let it run: the keeper is near his line,
+            // so a ball merely pushed outward had only reached the post by
+            // the time it crossed the byline and about half of them fell
+            // inside for a goal kick. The fix for that is not to stop the
+            // ball travelling, it is to aim it at the point it has to leave
+            // the pitch through. Aimed at `(goal line, outside the post)`,
+            // a straight run crosses the byline exactly there whatever the
+            // keeper's own position, so the endline resolver awards the
+            // corner as reliably as the teleport did — and the ball gets
+            // there in about a fifth of a second, which is what a tip round
+            // the post looks like.
             let goal_y_for_side = match keeper_side {
                 Some(PlayerSide::Left) => context.goal_positions.left.y,
                 Some(PlayerSide::Right) => context.goal_positions.right.y,
                 None => self.position.y,
             };
             let to_top = self.position.y < goal_y_for_side;
-            self.position.x = match keeper_side {
-                Some(PlayerSide::Left) => -3.0,
-                Some(PlayerSide::Right) => self.field_width + 3.0,
+            let exit_x = match keeper_side {
+                Some(PlayerSide::Left) => context.goal_positions.left.x,
+                Some(PlayerSide::Right) => context.goal_positions.right.x,
                 None => self.position.x,
             };
-            self.position.y = if to_top {
+            let exit_y = if to_top {
                 (goal_y_for_side - GOAL_WIDTH - 10.0).max(3.0)
             } else {
                 (goal_y_for_side + GOAL_WIDTH + 10.0).min(self.field_height - 3.0)
             };
-            self.position.z = 0.0;
-            self.velocity = Vector3::zeros();
+            /// Ticks the tipped ball takes to reach the byline. 18 is
+            /// 0.18 s — the ball comes off his fingertips still carrying
+            /// most of the pace it arrived with.
+            const PARRY_OUT_TICKS: f32 = 18.0;
+            let dx = exit_x - self.position.x;
+            let dy = exit_y - self.position.y;
+            let dist = (dx * dx + dy * dy).sqrt().max(1.0);
+            let out_speed = (dist / PARRY_OUT_TICKS).clamp(0.8, 3.0);
+            self.velocity.x = (dx / dist) * out_speed;
+            self.velocity.y = (dy / dist) * out_speed;
+            self.velocity.z = 0.0;
+            // Off his hands at the height his hands were — same rule as the
+            // spilled parry below.
+            self.position.z = contact_z;
             self.current_owner = None;
-            self.flags.in_flight_state = 0;
+            // Nobody gets a touch on a ball that has been tipped round the
+            // post: the window covers the whole run to the byline, so the
+            // corner cannot be cancelled by a follow-up claim on the way.
+            self.flags.in_flight_state = PARRY_OUT_TICKS as usize + 12;
             self.claim_cooldown = 30;
             self.record_touch(keeper_id, keeper_team, tick, false);
             // NB: do NOT emit Intercepted here — its ClaimBall follow-up
@@ -2265,6 +2549,66 @@ impl Ball {
             self.previous_owner,
             false,
         ));
+    }
+}
+
+#[cfg(test)]
+mod interception_duel_tests {
+    use super::InterceptionDuel;
+
+    /// **The population interception rate must not be a function of the
+    /// division.** This is the whole point of the contest: an evenly
+    /// matched duel resolves to the same multiplier whether it is two
+    /// fourth-tier players or two internationals, so the rate the 0.16
+    /// coefficient was calibrated against survives everywhere.
+    ///
+    /// It is also the guard on a load-bearing number. The turnover volume
+    /// this site produces is what keeps attacking sequences noisy, and
+    /// cutting it has been measured driving goals to 8-11 a match — so a
+    /// change here that quietly moves parity moves the whole engine.
+    #[test]
+    fn an_even_duel_resolves_identically_at_every_level() {
+        for level in [0.20_f32, 0.35, 0.50, 0.66, 0.80, 0.95] {
+            let even = InterceptionDuel::advantage(level, level);
+            assert!(
+                (even - InterceptionDuel::PARITY).abs() < 1e-6,
+                "parity at {level} was {even}, expected {}",
+                InterceptionDuel::PARITY
+            );
+        }
+    }
+
+    /// The reader of the game still beats the poor passer, and the good
+    /// passer still beats the poor reader — the contest is a spread
+    /// around parity, not a flattening of the skill axis.
+    #[test]
+    fn the_edge_still_decides_the_duel() {
+        let sharp_vs_sloppy = InterceptionDuel::advantage(0.80, 0.40);
+        let sloppy_vs_sharp = InterceptionDuel::advantage(0.40, 0.80);
+        assert!(sharp_vs_sloppy > InterceptionDuel::PARITY);
+        assert!(sloppy_vs_sharp < InterceptionDuel::PARITY);
+        // Symmetric about parity, so neither side of the duel is
+        // structurally favoured the way the old one-sided form was.
+        let above = sharp_vs_sloppy - InterceptionDuel::PARITY;
+        let below = InterceptionDuel::PARITY - sloppy_vs_sharp;
+        assert!((above - below).abs() < 1e-6, "{above} vs {below}");
+    }
+
+    /// Monotone in both arguments, and bounded — a defender who cannot
+    /// read the game at all still gets something, and the best reader
+    /// alive against the worst delivery does not get a certainty.
+    #[test]
+    fn the_axis_is_monotone_and_bounded() {
+        let mut previous = 0.0;
+        for step in 0..=20 {
+            let skill = step as f32 / 20.0;
+            let v = InterceptionDuel::advantage(skill, 0.5);
+            assert!(v >= previous, "not monotone at {skill}");
+            assert!((0.0..=1.0).contains(&v), "out of range at {skill}: {v}");
+            previous = v;
+        }
+        assert!(InterceptionDuel::advantage(0.0, 1.0) > 0.0);
+        assert!(InterceptionDuel::advantage(1.0, 0.0) < 1.0);
     }
 }
 

@@ -20,6 +20,46 @@ use crate::mid_run_diag::ShapeCensus;
 use log::debug;
 use nalgebra::Vector3;
 
+/// Whether the loose-ball election stands down while the ball is out of
+/// play, and who is exempt from it.
+///
+/// A dead ball is not a loose ball: only the awarded taker may touch it,
+/// and he is not racing anybody for it. Both halves of the election
+/// disagreed — [`should_yield_takeball`](PlayerFieldPositionGroup::
+/// should_yield_takeball) threw the taker out of `TakeBall` the moment a
+/// teammate stood nearer the spot (for a goal kick, always), and
+/// `should_force_takeball` sent the other twenty-one at a ball they are
+/// not allowed to have.
+///
+/// `OF_RESTART_HOLD=off` restores the old behaviour so the two can be
+/// measured against each other: the change lands during ~5% of the match
+/// (157 awaited restarts × 1.8 s), so it moves more than the restart
+/// itself and the aggregate has to be checked rather than assumed.
+pub struct RestartHold;
+
+impl RestartHold {
+    /// False when `OF_RESTART_HOLD=off` — the election runs on dead balls
+    /// exactly as it used to.
+    pub fn armed() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| {
+            std::env::var("OF_RESTART_HOLD")
+                .map(|v| v != "off" && v != "0")
+                .unwrap_or(true)
+        })
+    }
+
+    /// The taker a pending restart belongs to, or `None` when the ball is
+    /// in play (or the hold is switched off).
+    #[inline]
+    pub fn taker(tick_context: &GameTickContext) -> Option<u32> {
+        if !Self::armed() {
+            return None;
+        }
+        tick_context.ball.restart_taker
+    }
+}
+
 pub trait StateProcessingHandler {
     /// Decide whether the state should transition or emit an event this tick.
     fn process(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
@@ -200,7 +240,10 @@ impl PlayerFieldPositionGroup {
         player.state.is_committed_action()
     }
 
-    fn should_yield_takeball(
+    // `pub(crate)` so `goal_kick_tests` can put the question directly. The
+    // election is a pure function of the frozen tick snapshot, and driving
+    // it through a whole engine tick would test the dispatcher instead.
+    pub(crate) fn should_yield_takeball(
         _group: PlayerFieldPositionGroup,
         player: &MatchPlayer,
         tick_context: &GameTickContext,
@@ -217,6 +260,14 @@ impl PlayerFieldPositionGroup {
         // If the ball has been claimed, TakeBall's own `process` will
         // handle the transition to Running. Don't front-run it.
         if tick_context.ball.is_owned {
+            return false;
+        }
+        // **The taker of a dead ball is not in a race.** See
+        // `BallMetadata::restart_taker`: the election below asks whether a
+        // teammate is nearer, and for a goal kick one nearly always is, so
+        // the keeper was thrown out of `TakeBall` on the tick after every
+        // nudge and never covered a metre.
+        if RestartHold::taker(tick_context) == Some(player.id) {
             return false;
         }
         // Mirror of the receiving rule in `should_force_takeball`: the
@@ -337,7 +388,8 @@ impl PlayerFieldPositionGroup {
     ///     (no ability weighting — we want exactly one claimant, not the
     ///     tolerance band of `is_best_player_to_chase_ball`),
     ///   - Not already in TakeBall (don't re-trigger and reset timers).
-    fn should_force_takeball(
+    // `pub(crate)` for the same reason as `should_yield_takeball`.
+    pub(crate) fn should_force_takeball(
         group: PlayerFieldPositionGroup,
         player: &MatchPlayer,
         tick_context: &GameTickContext,
@@ -368,6 +420,14 @@ impl PlayerFieldPositionGroup {
         // Ball must actually be loose.
         if tick_context.ball.is_owned {
             return false;
+        }
+
+        // A ball OUT OF PLAY is loose in the sense this test means and in
+        // no other: nobody but its taker may touch it, and everyone else
+        // converging on it is twenty-one players running at a ball they
+        // are not allowed to have. See `BallMetadata::restart_taker`.
+        if let Some(taker) = RestartHold::taker(tick_context) {
+            return taker == player.id;
         }
 
         // A pass in the air belongs to its target — see the deadlock

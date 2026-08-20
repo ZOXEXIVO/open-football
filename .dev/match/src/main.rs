@@ -2543,6 +2543,12 @@ fn print_usage() {
         "  dev_match stats [N] [lvlA] [lvlB]  run N matches headless; per-match random levels"
     );
     eprintln!("                                      unless BOTH lvlA and lvlB are passed");
+    eprintln!(
+        "  dev_match levels [N] [minLvl] [maxLvl] [step]  divisional-flatness sweep: equal squads at"
+    );
+    eprintln!(
+        "                                      each level; goals/match MUST be flat across the pyramid"
+    );
     eprintln!("  dev_match league [teams] [rounds] [minLvl] [maxLvl]  full round-robin season");
     eprintln!(
         "                                      defaults: 20 teams, 2 rounds (38 games), levels 8–18"
@@ -2762,6 +2768,14 @@ fn main() {
             let level_b: Option<u8> = args.get(4).and_then(|s| s.parse().ok());
             run_stats(n_matches, level_a, level_b);
         }
+        // Divisional-flatness sweep - see `LevelSweep`.
+        "levels" => {
+            let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(300);
+            let lo: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(4);
+            let hi: u8 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(18);
+            let step: u8 = args.get(5).and_then(|s| s.parse().ok()).unwrap_or(2);
+            LevelSweep::run(n, lo, hi, step);
+        }
         "league" => {
             let teams: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(20);
             let rounds: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(2);
@@ -2845,6 +2859,16 @@ fn main() {
             let n = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(40usize);
             let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
             run_woodwork(n, lvl);
+        }
+        // The same trace, triggered on the goalkeeper taking the ball into
+        // his hands. Answers "how did it get there" — the ticks before the
+        // gather carry the shot, and the keeper's own gap / height / state
+        // ride alongside every row, so a catch at full stretch and a ball
+        // dragged into a man lying on the floor are told apart by reading.
+        "gather" => {
+            let n = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(2usize);
+            let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
+            run_gather(n, lvl);
         }
         // Runtime per-player flicker / state-churn trace. Samples every
         // simulation tick inside the engine rather than reading the
@@ -3473,6 +3497,225 @@ fn run_audit_engine_gap(n: usize, level_a: u8, level_b: u8) {
         "  reference for {} (gap {}): fav {}%, draw {}%, upset {}%",
         ref_label, gap, ref_fav, ref_draw, ref_up,
     );
+}
+
+// ── levels: the divisional-flatness instrument ─────────────────────────
+//
+// Sweeps `level` with both squads EQUAL at each point and reports what
+// the scoreline actually looks like there. The question it answers is
+// the one no other mode can: **does this engine play the same football
+// in every division?**
+//
+// Real football says it must. Goals per match sit near 2.5-2.8 from the
+// fourth tier to the Champions League; 0-0 is ~8% of matches and four or
+// more goals ~22% at every level of the pyramid. What separates the
+// divisions is the quality of the football, not the number of goals in
+// it. So a column here that walks with `level` is an engine bug, and
+// which column walks says which channel is coupled to squad quality.
+//
+// It exists because that coupling is invisible to every other harness
+// mode. `stats` fixes one level and reads beautifully calibrated at 14
+// while the same binary produced 3.5 goals a match at level 6 and 4.5 at
+// 18; `league` mixes levels inside one table and averages the two ends
+// together. Only a sweep sees it, and until this mode existed nobody had
+// run one — the reported symptom was "lower divisions play 3-2 and the
+// top flight plays 0-0", and it had been in the engine the whole time.
+//
+// Run it under `SQUAD_SPREAD` as well. A uniform squad and a
+// realistically-spread one at the SAME mean quality should produce the
+// same match; if they don't, the shot decision is convex in quality,
+// which is the fingerprint of a decision living in the tail of a
+// distribution rather than in its bulk.
+struct LevelSweep;
+
+/// One level's worth of the sweep.
+#[derive(Default, Clone, Copy)]
+struct LevelRow {
+    level: u8,
+    matches: u32,
+    goals: u32,
+    shots: u32,
+    on_target: u32,
+    saves: u32,
+    interceptions: u32,
+    passes_attempted: u32,
+    passes_completed: u32,
+    nil_nil: u32,
+    draws: u32,
+    high_scoring: u32,
+    box_shot_share: f32,
+}
+
+impl LevelSweep {
+    /// Goals per match real football holds at every level of the
+    /// pyramid, and the band this sweep is trying to keep the engine
+    /// inside. The verdict below reports the SPREAD across levels
+    /// against it, because the population level is `stats`'s question
+    /// and divisional flatness is this mode's.
+    const REAL_GOALS: f32 = 2.65;
+    /// How far apart the best and worst level are allowed to be before
+    /// the sweep calls the engine division-coupled. Two runs of the same
+    /// binary carry ±0.13 goals (see the harness noise floor), so
+    /// anything under ~0.4 across a whole sweep is indistinguishable
+    /// from sampling.
+    const FLAT_TOLERANCE: f32 = 0.40;
+
+    fn run(n_matches: usize, min_level: u8, max_level: u8, step: u8) {
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("error")).init();
+        let step = step.max(1);
+        let levels: Vec<u8> = (min_level..=max_level).step_by(step as usize).collect();
+        println!(
+            "Level sweep: {} matches at each of {} levels ({}-{} step {}), squads EQUAL at every point.",
+            n_matches,
+            levels.len(),
+            min_level,
+            max_level,
+            step
+        );
+        if SquadSpread::sd() > 0.0 {
+            println!(
+                "SQUAD_SPREAD={:.1} - squads are spread around each level's mean.",
+                SquadSpread::sd()
+            );
+        }
+        println!();
+
+        let rows: Vec<LevelRow> = levels
+            .iter()
+            .map(|&l| Self::one_level(n_matches, l))
+            .collect();
+
+        println!(
+            "{:>5} {:>8} {:>9} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>8}",
+            "level", "goals/m", "shots/tm", "OT%", "save%", "0-0%", "draw%", "4+%", "box%", "int/tm"
+        );
+        for r in &rows {
+            let n = r.matches.max(1) as f32;
+            let shots = r.shots.max(1) as f32;
+            println!(
+                "{:>5} {:>8.2} {:>9.1} {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>8.1}",
+                r.level,
+                r.goals as f32 / n,
+                r.shots as f32 / n / 2.0,
+                r.on_target as f32 / shots * 100.0,
+                if r.on_target > 0 {
+                    r.saves as f32 / r.on_target as f32 * 100.0
+                } else {
+                    0.0
+                },
+                r.nil_nil as f32 / n * 100.0,
+                r.draws as f32 / n * 100.0,
+                r.high_scoring as f32 / n * 100.0,
+                r.box_shot_share * 100.0,
+                r.interceptions as f32 / n / 2.0,
+            );
+        }
+
+        // ── Verdict ───────────────────────────────────────────────────
+        //
+        // Two numbers, and they are different questions. SPREAD is this
+        // mode's own: how far apart the divisions are. LEVEL is
+        // `stats`'s: whether the population is scoring like football. An
+        // engine can pass one and fail the other, and reading only the
+        // mean is how a 1.8-to-4.5 swing hid behind a calibrated 2.4.
+        let per_match: Vec<f32> = rows
+            .iter()
+            .map(|r| r.goals as f32 / r.matches.max(1) as f32)
+            .collect();
+        let lo_i = per_match
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        let hi_i = per_match
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        let spread = per_match[hi_i] - per_match[lo_i];
+        let mean = per_match.iter().sum::<f32>() / per_match.len().max(1) as f32;
+        println!();
+        println!(
+            "  goals/match spread across levels: {:.2}  ({:.2} at level {} -> {:.2} at level {})",
+            spread, per_match[lo_i], rows[lo_i].level, per_match[hi_i], rows[hi_i].level,
+        );
+        println!(
+            "  FLATNESS: {}  (tolerance {:.2}; real football is flat across the pyramid)",
+            if spread <= Self::FLAT_TOLERANCE {
+                "PASS"
+            } else {
+                "FAIL - the engine plays a different sport in different divisions"
+            },
+            Self::FLAT_TOLERANCE,
+        );
+        println!(
+            "  LEVEL:    mean {:.2} goals/match against a real ~{:.2}  (that one is `stats`'s question)",
+            mean, Self::REAL_GOALS,
+        );
+    }
+
+    fn one_level(n_matches: usize, level: u8) -> LevelRow {
+        // The distance diagnostic is a process-global accumulator, so it
+        // has to be zeroed BEFORE the level runs for `box%` to be this
+        // level's mix rather than the sweep's running one.
+        core::time_band_diag::reset();
+
+        let outcomes: Vec<(u8, u8, TeamStats, TeamStats)> = (0..n_matches)
+            .into_par_iter()
+            .map(|_| {
+                let home = make_squad_simple(1, level);
+                let away = make_squad_simple(2, level);
+                let result = FootballEngine::<840, 545>::play(home, away, false, false, false);
+                let score = result.score.as_ref().unwrap();
+                (
+                    score.home_team.get(),
+                    score.away_team.get(),
+                    team_stats(&result, 1),
+                    team_stats(&result, 2),
+                )
+            })
+            .collect();
+
+        // Where the football was played, read off the shared distance
+        // diagnostic rather than re-derived. It is the clearest single
+        // signal in the sweep: the share of shots taken from inside the
+        // box moved 85% -> 31% across the level range while goals moved
+        // far less, so a flat goals column with a sliding `box%` is an
+        // engine that has swapped one kind of football for another.
+        let [dshots, ..] = core::time_band_diag::distance_snapshot();
+        let all_shots: u64 = dshots.iter().sum();
+        let box_shot_share = if all_shots > 0 {
+            (dshots[0] + dshots[1] + dshots[2]) as f32 / all_shots as f32
+        } else {
+            0.0
+        };
+
+        let mut row = LevelRow {
+            level,
+            matches: outcomes.len() as u32,
+            box_shot_share,
+            ..Default::default()
+        };
+        for (hg, ag, h, a) in &outcomes {
+            let total = *hg as u32 + *ag as u32;
+            row.goals += total;
+            row.nil_nil += (total == 0) as u32;
+            row.draws += (hg == ag) as u32;
+            row.high_scoring += (total >= 4) as u32;
+            for t in [h, a] {
+                row.shots += t.shots as u32;
+                row.on_target += t.on_target as u32;
+                row.saves += t.saves as u32;
+                row.interceptions += t.interceptions;
+                row.passes_attempted += t.passes_attempted;
+                row.passes_completed += t.passes_completed;
+            }
+        }
+        eprintln!("  levels: level {} done", level);
+        row
+    }
 }
 
 fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
@@ -4773,6 +5016,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             "  ├ press",
             "  └ corrid",
             "BAR",
+            "popq",
         ];
         println!();
         println!("  willingness factor MEANS by distance band (roll samples):");
@@ -6175,6 +6419,30 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 depth,
                 depth * 0.125,
             );
+            {
+                // How much SPACE the shooter had. The shot models only
+                // price a defender inside `pressure_count_10u` — 10u is
+                // 1.25 m — so every band from "1-2m" rightward is a shot
+                // the engine currently treats as completely unpressured.
+                let bands = BlockDiag::shot_pressure_snapshot();
+                let total: u64 = bands.iter().sum::<u64>().max(1);
+                const EDGES: [&str; 6] = ["<1m", "1-2m", "2-3m", "3-5m", "5-8m", "8m+"];
+                let row = EDGES
+                    .iter()
+                    .zip(bands.iter())
+                    .map(|(e, c)| format!("{e} {:.0}%", *c as f64 / total as f64 * 100.0))
+                    .collect::<Vec<_>>()
+                    .join("  ");
+                println!(
+                    "  space at the strike (nearest defending outfielder to the ball): {row}"
+                );
+                println!(
+                    "    the shot models see pressure only inside 1.25m — {:.0}% of shots are \
+                     struck with the nearest defender further out than that and are priced as \
+                     if the shooter were alone",
+                    (total - bands[0]) as f64 / total as f64 * 100.0,
+                );
+            }
             const DEF_STATE_NAMES: [&str; 21] = [
                 "Standing",
                 "Covering",
@@ -6209,7 +6477,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             ranked.sort_by(|a, b| b.1.cmp(&a.1));
             let listed = ranked
                 .iter()
-                .take(6)
+                .take(10)
                 .map(|(i, c)| {
                     format!(
                         "{} {:.0}%",
@@ -6715,6 +6983,94 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 s[12] as f64 / 100.0 / s[8] as f64 * 0.125
             );
         }
+        // HOW THE KEEPER COMES TO BE HOLDING IT. The save-contact census
+        // above only sees the physics path; most gathers arrive through the
+        // state machine, which does not put the ball where the contact was
+        // — it grants ownership wherever the ball is and lets `move_to`
+        // drag it in. This is the census of that grant.
+        {
+            use core::mid_run_diag::KeeperGatherDiag;
+            let g = KeeperGatherDiag::snapshot();
+            if g[0] + g[15] > 0 {
+                let n = g[0].max(1) as f64;
+                println!();
+                println!("--- KEEPER GATHER CENSUS (how the ball gets into his gloves) ---");
+                println!(
+                    "  state-machine grants {:>5.2}/match   physics catches {:>5.2}/match   \
+                     refused out-of-reach {:>5.2}/match",
+                    g[0] as f64 / n_matches as f64,
+                    g[15] as f64 / n_matches as f64,
+                    g[14] as f64 / n_matches as f64
+                );
+                println!(
+                    "  gap ball→keeper at the grant: mean {:.2} m, worst {:.2} m   \
+                     (physics path {:.2} m)",
+                    g[1] as f64 / 100.0 / n * 0.125,
+                    g[2] as f64 / 100.0 * 0.125,
+                    if g[15] > 0 {
+                        g[16] as f64 / 100.0 / g[15] as f64 * 0.125
+                    } else {
+                        0.0
+                    }
+                );
+                println!(
+                    "  over 1 m {:>5.1}%   over 1.5 m {:>5.1}%   ball still doing >12.5 m/s \
+                     when it stopped dead {:>5.1}%   mean {:.1} m/s",
+                    g[3] as f64 * 100.0 / n,
+                    g[4] as f64 * 100.0 / n,
+                    g[6] as f64 * 100.0 / n,
+                    g[5] as f64 / 100.0 / n * 12.5
+                );
+                println!(
+                    "  posture: airborne {:>5.1}%   diving {:>5.1}%   ON THE FLOOR mid-dive {:>5.1}%",
+                    g[7] as f64 * 100.0 / n,
+                    g[8] as f64 * 100.0 / n,
+                    g[9] as f64 * 100.0 / n
+                );
+                println!(
+                    "  live shot on the ball {:>5.1}%   of those OFF THE FRAME {:>5.1}% \
+                     (wide {:.1}%, over {:.1}%)  ← a miss he collected",
+                    g[10] as f64 * 100.0 / n,
+                    g[11] as f64 * 100.0 / g[10].max(1) as f64,
+                    g[12] as f64 * 100.0 / g[10].max(1) as f64,
+                    g[13] as f64 * 100.0 / g[10].max(1) as f64
+                );
+                let by_state = KeeperGatherDiag::state_snapshot();
+                let names: [(usize, &str); 17] = [
+                    (0, "Standing"),
+                    (2, "Jumping"),
+                    (3, "Diving"),
+                    (4, "Catching"),
+                    (5, "Punching"),
+                    (6, "Kicking"),
+                    (7, "Clearing"),
+                    (8, "HoldingBall"),
+                    (9, "Throwing"),
+                    (10, "PickingUpBall"),
+                    (11, "Distributing"),
+                    (12, "ComingOut"),
+                    (13, "Passing"),
+                    (14, "ReturningToGoal"),
+                    (17, "PreparingForSave"),
+                    (18, "Walking"),
+                    (19, "TakeBall"),
+                ];
+                println!("  by the state he was in when the ball was handed to him:");
+                for (id, name) in names {
+                    let count = by_state[id * 2];
+                    if count == 0 {
+                        continue;
+                    }
+                    println!(
+                        "    {name:<18} {:>6.2}/match  ({:>5.1}%)   airborne {:>5.1}%",
+                        count as f64 / n_matches as f64,
+                        count as f64 * 100.0 / n,
+                        by_state[id * 2 + 1] as f64 * 100.0 / count as f64
+                    );
+                }
+            }
+        }
+
         // The woodwork. Real football strikes the frame about 0.5 times a
         // match; a count far above that means the posts are protruding into
         // the goal, and a zero means the swept test never fires.
@@ -7215,12 +7571,19 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 r[3] as f64 / r[0] as f64 * 0.125,
                 r[4] as f64 * 100.0 / r[0] as f64
             );
+            // Denominator is slot 10 — every restart that WAITED, which is
+            // throw-ins plus the offside free kick since `award_offside`
+            // stopped teleporting the ball and the taker. Against slot 0
+            // this row used to read over 100%.
             println!(
-                "  he WALKED there {:.0}% of the time (teleported {:.1}/match), ball waiting \
-                 {:.1} s each   →   {:.0} s/match with the ball on the line",
-                r[9] as f64 * 100.0 / r[0].max(1) as f64,
+                "  of {:.1} awaited restarts/match ({:.1} of them offside free kicks) he WALKED \
+                 to {:.0}% (teleported {:.1}/match), ball waiting {:.1} s each   →   \
+                 {:.0} s/match with the ball dead on the spot",
+                per(r[10]),
+                per(r[6]),
+                r[9] as f64 * 100.0 / r[10].max(1) as f64,
                 per(r[7]),
-                r[8] as f64 / r[0].max(1) as f64 / 100.0,
+                r[8] as f64 / r[10].max(1) as f64 / 100.0,
                 r[8] as f64 / n_matches as f64 / 100.0
             );
         }
@@ -7229,6 +7592,82 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 "  offside: {:.1} snapshots/match → {:.2} GIVEN   (real ~4-6 given)",
                 per(r[5]),
                 per(r[6])
+            );
+        }
+        // The goal kick joined the same wait when "the ball instantly ends
+        // up in the keeper's hands" was traced to it. The number that says
+        // whether that was affordable is the TELEPORT rate: a keeper who
+        // cannot reach the dead ball inside the patience bound gets it
+        // placed under him, which is the behaviour this replaced.
+        if r[11] > 0 {
+            println!(
+                "  goal kicks: {:.1}/match, keeper walks {:.1} m to the ball on average \
+                 ({:.0}% of them more than a stride), never reached {:.2}/match ({:.1}%) with {:.1} m still to go",
+                per(r[11]),
+                r[12] as f64 / r[11] as f64 * 0.125,
+                r[13] as f64 * 100.0 / r[11] as f64,
+                per(r[14]),
+                r[14] as f64 * 100.0 / r[11] as f64,
+                r[15] as f64 / r[14].max(1) as f64 * 0.125,
+            );
+        }
+        // What the player layer tried to do to a ball that was out of play.
+        // Every one of these used to be applied: `secure_ball_for` snaps the
+        // ball to the actor's feet, so each was a metre-plus jump off the
+        // restart spot and a jump back on the next tick — the reported "the
+        // ball bounces off the side of the field and ends up in the
+        // goalkeeper's hands". See `core::DeadBall`; `OF_DEAD_BALL=off`
+        // stops refusing them and this row measures the same pressure.
+        if r[18] > 0 {
+            println!(
+                "  DEAD BALL: {:.1} s/match out of play, {:.1} ball-touching player events \
+                 refused on it ({:.0}% from goalkeepers)   must be applied to NOTHING",
+                r[18] as f64 / n_matches as f64 / 100.0,
+                per(r[16]),
+                r[17] as f64 * 100.0 / r[16].max(1) as f64,
+            );
+        }
+        // The corner is the one restart NOT taken from where the ball
+        // died, so its taker fetches the ball and then carries it to the
+        // arc. The CARRY is the distance the ball used to teleport.
+        if r[19] > 0 {
+            let w = RestartCensus::corner_walk_snapshot();
+            println!(
+                "  corners: {:.1}/match, taker fetches from {:.1} m away and carries the ball \
+                 {:.1} m to the arc; {:.0}% of them reach the ball on their own feet",
+                per(r[19]),
+                w[0] as f64 / r[19] as f64 * 0.125,
+                w[1] as f64 / r[19] as f64 * 0.125,
+                w[2] as f64 * 100.0 / r[19] as f64,
+            );
+            // A leg that timed out took the backstop teleport, which is
+            // the thing the walk exists to remove. HOW FAR SHORT is what
+            // says whether the bound is too tight or he never set off.
+            println!(
+                "    legs that timed out: {:.2}/match, a mean {:.1} m still to go",
+                per(w[4]),
+                w[5] as f64 / w[4].max(1) as f64 * 0.125,
+            );
+        }
+        // A taker who timed out in `TakeBall` was on his way; one who timed
+        // out in `Standing` was never coming. Opposite fixes.
+        let timeouts = RestartCensus::timeout_state_snapshot();
+        if !timeouts.is_empty() {
+            let total: u64 = timeouts.iter().map(|(_, n)| n).sum();
+            let names: Vec<String> = timeouts
+                .iter()
+                .take(10)
+                .map(|(id, n)| {
+                    format!(
+                        "{} {:.0}%",
+                        StateNames::of(*id),
+                        *n as f64 * 100.0 / total as f64
+                    )
+                })
+                .collect();
+            println!(
+                "  TAKERS who timed out were in: {}   (of {total} timeouts overall)",
+                names.join(", ")
             );
         }
     }
@@ -7756,6 +8195,68 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 );
             }
         }
+        {
+            use core::mid_run_diag::DuelDiag;
+            let (gates, box_gates) = DuelDiag::gates();
+            let (box_ticks, bodies, surrounded, contested, cooldown) = DuelDiag::box_picture();
+            let total: u64 = gates.iter().sum();
+            if total > 0 {
+                let pct = |v: u64, d: u64| {
+                    if d == 0 {
+                        0.0
+                    } else {
+                        v as f64 / d as f64 * 100.0
+                    }
+                };
+                println!(
+                    "  CHALLENGE GATE CENSUS ({total} defender-ticks inside commit range of a carrier): \
+                     challenging {:.0}%  tackle cooldown {:.0}%  not the nominated engager {:.0}%  \
+                     permitted, declined {:.0}%",
+                    pct(gates[0], total),
+                    pct(gates[1], total),
+                    pct(gates[2], total),
+                    pct(gates[3], total),
+                );
+                let box_total: u64 = box_gates.iter().sum();
+                println!(
+                    "    …with the ball in our own BOX ({box_total}): challenging {:.0}%  \
+                     cooldown {:.0}%  not nominated {:.0}%  declined {:.0}%",
+                    pct(box_gates[0], box_total),
+                    pct(box_gates[1], box_total),
+                    pct(box_gates[2], box_total),
+                    pct(box_gates[3], box_total),
+                );
+                println!(
+                    "    carrier in our box: {:.1} ticks/match, {bodies:.2} defenders within 3 m, \
+                     {:.0}% of those ticks had ANY body that close and only {:.0}% a live challenge",
+                    box_ticks as f64 / n_matches as f64,
+                    surrounded * 100.0,
+                    contested * 100.0,
+                );
+                println!(
+                    "    tackle cooldown blocks {:.0}% of all defending outfielder-ticks \
+                     (see `MatchPlayer::start_tackle_cooldown`; one AI tick is 20 ms)",
+                    cooldown * 100.0,
+                );
+                let (reach, decisions, mean_p, box_decisions, box_p) = DuelDiag::commitment();
+                let reach_total: u64 = reach.iter().sum::<u64>().max(1);
+                println!(
+                    "    where the CHALLENGER is standing: inside contact (1.2m) {:.0}%  \
+                     out to 2m {:.0}%  out to 3m {:.0}%  beyond {:.0}%   \
+                     (an attempt is only ever rolled in the first band)",
+                    pct(reach[0], reach_total),
+                    pct(reach[1], reach_total),
+                    pct(reach[2], reach_total),
+                    pct(reach[3], reach_total),
+                );
+                println!(
+                    "    commitment: {:.1} decisions/match at mean p={mean_p:.3}; \
+                     in our own box {:.1}/match at p={box_p:.3}",
+                    decisions as f64 / n_matches as f64,
+                    box_decisions as f64 / n_matches as f64,
+                );
+            }
+        }
         let (seen, fired, won, gk, header) = CrossDiag::contest();
         println!(
             "  aerial contest: seen={seen}  fired={fired}  attacker-won={won}  keeper-claimed={gk}  headers on goal={header}"
@@ -8145,6 +8646,45 @@ fn run_woodwork(matches: usize, level: u8) {
     println!(
         "  windows that ended with the ball still in the goal: {}",
         s.rested_in_net
+    );
+    for capture in &captures {
+        println!();
+        println!("{capture}");
+    }
+}
+
+fn run_gather(matches: usize, level: u8) {
+    // `gather,miss` arms BOTH triggers: the gather is the moment the ball
+    // stops obeying its velocity, and the miss is the moment the report
+    // starts. Together they cover the whole passage either way round.
+    unsafe { std::env::set_var("OF_FRAME_TRACE", "gather,miss") };
+    core::frame_trace::FrameTrace::reset();
+
+    for m in 0..matches {
+        MatchRuntime::set_events_mode(true);
+        let (home, _) = make_squad_viewer(1, HOME_TEAM_NAME, level, 0);
+        let (away, _) = make_squad_viewer(2, AWAY_TEAM_NAME, level, 11);
+        let _ = FootballEngine::<840, 545>::play(home, away, true, false, false);
+        eprintln!("  gather: match {}/{} played", m + 1, matches);
+    }
+
+    let (_, captures) = core::frame_trace::FrameTrace::report();
+    let s = core::frame_trace::FrameTrace::summary();
+    println!();
+    println!("=== KEEPER GATHER TRACE ({matches} matches, level {level}) ===");
+    println!("  {} captures", captures.len());
+    println!(
+        "  a '*' row travelled further than its own velocity explains — somebody relocated the ball"
+    );
+    println!(
+        "  gk_gap is the nearest keeper's XY distance to the ball in game units (1u = 12.5 cm),"
+    );
+    println!("  gk_h his own height in metres: >0 means both feet are off the ground.");
+    println!();
+    println!("  loose jumps (open play, unclaimed)   : {}", s.loose_jumps);
+    println!(
+        "  worst unexplained jump               : {} cm",
+        s.worst_jump_cm
     );
     for capture in &captures {
         println!();

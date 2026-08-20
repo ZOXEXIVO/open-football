@@ -93,6 +93,34 @@ impl NetPanel {
     /// for the eighty-nine minutes of a match in which nothing goes in.
     const NEGLIGIBLE: f32 = 0.004;
 
+    /// How far past a panel a ball can be and still be IN it: the engine's
+    /// largest slack, `GoalNet::GIVE_BACK` = 8 game units.
+    ///
+    /// # This is what stopped the net moving when a shot MISSED
+    ///
+    /// The contact test used to be "is the ball past this panel's plane,
+    /// anywhere within its extent" — with no bound on HOW FAR past. A side
+    /// panel's plane is the post, extended sideways to the ends of the
+    /// world, and its `across` axis is the goal's own 1.9 m depth. So a
+    /// shot crossing the goal-line plane wide of the post satisfied both:
+    /// it was inside the panel's depth (the plane is 24 cm thick either
+    /// side once [`Self::MARGIN`] is allowed) and it was "past" the panel by
+    /// however far outside the post it happened to be.
+    ///
+    /// `amplitude` is then that distance, and it feeds `shape` directly —
+    /// so a shot that missed by three metres pushed the side netting three
+    /// metres out over the touchline, and one that missed by ten pushed it
+    /// ten. `weight`'s Gaussian widens with the push as well
+    /// ([`Self::SPREAD_PER_DEPTH`]), so at that size the falloff is flat and
+    /// the WHOLE panel goes with it. That is the reported "when the ball
+    /// misses the goal, the net moves".
+    ///
+    /// A membrane tied along its edges cannot be pushed further than its
+    /// slack, so anything beyond it is a ball that is somewhere else.
+    /// [`Netting::inside_a_goal`] is the other half and the stricter one;
+    /// this bound is what keeps the panel honest on its own.
+    const MAX_GIVE: f32 = Netting::GIVE_BACK;
+
     /// Up-extent at `u`, which runs -1..1 across the panel.
     #[inline]
     fn edge_at(&self, u: f32) -> f32 {
@@ -181,23 +209,34 @@ impl NetPanel {
         )
     }
 
+    /// Half a ball's grace either side of a panel's own extent, so a shot
+    /// into the very top corner still takes the netting with it.
+    const MARGIN: f32 = 0.25;
+
     /// Take the ball's push on this panel for one frame.
+    ///
+    /// `ball` is `None` when the ball is not inside a goal at all — see
+    /// [`Netting::inside_a_goal`] — in which case the panel only rings down
+    /// whatever it was already carrying.
     ///
     /// Returns `true` if the mesh needs rewriting — because the ball is in
     /// it, because it is still ringing, or because it has just come to rest
     /// and needs one last frame to lie flat.
-    fn absorb(&mut self, ball: Vec3, ball_radius: f32, delta: f32) -> bool {
-        let offset = ball - self.origin;
-        let out = offset.dot(self.normal) + ball_radius;
-        let u = offset.dot(self.across) / self.half_across.max(1e-3);
-        let v = offset.dot(self.up) / self.edge_at(u).max(1e-3);
+    fn absorb(&mut self, ball: Option<Vec3>, ball_radius: f32, delta: f32) -> bool {
+        // How far past this panel the ball is pressing, or `None` if it is
+        // not pressing on this one. A ball further out than the netting can
+        // stretch was never in it: see [`Self::MAX_GIVE`].
+        let push = ball.and_then(|ball| {
+            let offset = ball - self.origin;
+            let out = offset.dot(self.normal) + ball_radius;
+            let u = offset.dot(self.across) / self.half_across.max(1e-3);
+            let v = offset.dot(self.up) / self.edge_at(u).max(1e-3);
+            let within =
+                u.abs() <= 1.0 + Self::MARGIN && (-Self::MARGIN..=1.0 + Self::MARGIN).contains(&v);
+            (within && out > 0.0 && out <= Self::MAX_GIVE + ball_radius).then_some((offset, out, u))
+        });
 
-        // Half a ball's grace either side, so a shot into the very top
-        // corner still takes the netting with it.
-        const MARGIN: f32 = 0.25;
-        let within = u.abs() <= 1.0 + MARGIN && (-MARGIN..=1.0 + MARGIN).contains(&v);
-
-        if within && out > 0.0 {
+        if let Some((offset, out, u)) = push {
             // The mesh is wherever the ball is: project the ball onto the
             // panel and push that point out by however far past it the ball
             // has travelled.
@@ -291,6 +330,19 @@ impl Netting {
     /// this pitch, and it is what turns the panel's real size into a texture
     /// repeat count — see [`Textures::netting`].
     const MESH_SQUARE: f32 = 0.12;
+
+    /// How far the netting lets the ball past each panel, matching the
+    /// engine's `GoalNet::GIVE_BACK` (8 game units) and `GIVE_SIDE` (4).
+    /// The back net is hung slack and bags; the sides and roof are pulled
+    /// tighter, which is why a ball driven into the side netting stops
+    /// against it rather than in it.
+    ///
+    /// They differ, and using the largest for all three axes is what let a
+    /// ball SAILING OVER THE BAR count as being in the goal — 3.4 m is
+    /// inside 2.44 + 1.0 and outside 2.44 + 0.5. See
+    /// [`Self::inside_a_goal`].
+    const GIVE_BACK: f32 = 8.0 * Field::METERS_PER_UNIT;
+    const GIVE_SIDE: f32 = 4.0 * Field::METERS_PER_UNIT;
 
     pub fn spawn(
         commands: &mut Commands,
@@ -482,6 +534,64 @@ impl Netting {
         )
     }
 
+    /// The near-touchline side panel of the right-hand goal, built exactly
+    /// as `spawn` builds it. This is the panel a shot that misses wide
+    /// passes closest to, so it is the one the miss test needs.
+    #[cfg(test)]
+    fn side_panel() -> (NetPanel, Mesh) {
+        NetPanel::build(
+            Vec3::new(
+                Field::HALF_LENGTH + Field::NET_DEPTH * 0.5,
+                0.0,
+                Field::PHYSICS_GOAL_HALF_WIDTH,
+            ),
+            Vec3::X,
+            Vec3::Y,
+            Vec3::Z,
+            Field::NET_DEPTH * 0.5,
+            Field::PHYSICS_GOAL_HEIGHT,
+            Field::NET_BACK_HEIGHT,
+            Self::SIDE_STEPS,
+        )
+    }
+
+    /// Is the ball inside one of the two goals?
+    ///
+    /// **A net bags because the ball is IN it.** Nothing else moves one: a
+    /// ball passing outside a post is beside the netting, not against it,
+    /// and one thumped down the touchline is not near a goal at all.
+    ///
+    /// Each panel used to answer that for itself, from its own plane and
+    /// extent, and the side panels cannot — their plane is the post, which
+    /// divides the whole world into "inside the goal" and "the rest of the
+    /// pitch", and their `across` axis is the goal's 1.9 m depth, which a
+    /// shot crossing the goal line satisfies exactly. So every ball that
+    /// missed WIDE was read as pressing on the side netting from the
+    /// inside, by however far wide it had missed. See [`NetPanel::MAX_GIVE`]
+    /// for what that then did to the mesh.
+    ///
+    /// One test for the whole net, in the one place that knows where the
+    /// goals are. The bounds are the goal's own volume plus the netting's
+    /// slack, since the engine settles the ball INSIDE the mesh
+    /// ([`Self::GIVE_BACK`] / [`Self::GIVE_SIDE`]) and those balls must
+    /// still count.
+    ///
+    /// ⚠ **The goal line gets no grace at all, and that is the load-bearing
+    /// half.** Every other bound is a metre or less from a genuinely wide
+    /// shot, so the only thing that separates a ball bagging the side
+    /// netting from one flashing past the post is whether it is BEHIND THE
+    /// LINE. Allowing even a ball's radius of slack there lets the miss
+    /// back in: a shot that goes wide crosses the plane of the goal line
+    /// exactly, which is the frame the artefact was drawn on.
+    fn inside_a_goal(ball: Vec3) -> bool {
+        // Distance past the nearer goal line — negative out on the pitch.
+        let past_line = ball.x.abs() - Field::HALF_LENGTH;
+        past_line > 0.0
+            && past_line < Field::NET_DEPTH + Self::GIVE_BACK
+            && ball.z.abs() < Field::PHYSICS_GOAL_HALF_WIDTH + Self::GIVE_SIDE
+            && ball.y < Field::PHYSICS_GOAL_HEIGHT + Self::GIVE_SIDE
+    }
+
     /// Push the netting around with the ball, once per frame.
     pub fn ripple(
         ball: Res<BallState>,
@@ -490,8 +600,13 @@ impl Netting {
         mut panels: Query<(&mut NetPanel, &Mesh3d)>,
     ) {
         let delta = time.delta_secs().clamp(1e-4, 0.1);
+        // Resolved once for the whole net rather than per panel: it is a
+        // question about the BALL, and asking it ten times invites ten
+        // different answers — which is precisely how the side panels came
+        // to disagree with the back one about what "in the goal" means.
+        let contact = Self::inside_a_goal(ball.position).then_some(ball.position);
         for (mut panel, handle) in &mut panels {
-            if !panel.absorb(ball.position, Actors::BALL_RADIUS, delta) {
+            if !panel.absorb(contact, Actors::BALL_RADIUS, delta) {
                 continue;
             }
             if let Some(mut mesh) = meshes.get_mut(&handle.0) {
@@ -537,7 +652,7 @@ mod tests {
             Field::NET_BACK_HEIGHT * 0.5,
             0.0,
         );
-        assert!(panel.absorb(ball, Actors::BALL_RADIUS, 1.0 / 60.0));
+        assert!(panel.absorb(Some(ball), Actors::BALL_RADIUS, 1.0 / 60.0));
         panel.shape(&mut mesh);
         let reach = deepest(&panel, &mesh);
         assert!(
@@ -561,7 +676,7 @@ mod tests {
             0.25,
             Field::PHYSICS_GOAL_HALF_WIDTH + 0.2,
         );
-        assert!(panel.absorb(ball, Actors::BALL_RADIUS, 1.0 / 60.0));
+        assert!(panel.absorb(Some(ball), Actors::BALL_RADIUS, 1.0 / 60.0));
         panel.shape(&mut mesh);
         let reach = deepest(&panel, &mesh);
         assert!(
@@ -578,7 +693,7 @@ mod tests {
         let (mut panel, mut mesh) = Netting::back_panel();
         let ball = Vec3::new(0.0, 0.3, 0.0); // centre spot
         // First call reports nothing to do…
-        assert!(!panel.absorb(ball, Actors::BALL_RADIUS, 1.0 / 60.0));
+        assert!(!panel.absorb(Some(ball), Actors::BALL_RADIUS, 1.0 / 60.0));
         // …and if something does write the mesh, it writes it flat.
         panel.shape(&mut mesh);
         assert!(deepest(&panel, &mesh).abs() < 1.0e-6);
@@ -594,17 +709,16 @@ mod tests {
             Field::NET_BACK_HEIGHT * 0.5,
             0.0,
         );
-        panel.absorb(ball, Actors::BALL_RADIUS, 1.0 / 60.0);
+        panel.absorb(Some(ball), Actors::BALL_RADIUS, 1.0 / 60.0);
         panel.shape(&mut mesh);
         assert!(deepest(&panel, &mesh) > 0.4, "it starts bagged");
         // Ball gone. Four seconds of frames, sampling what the ring has left
         // at one second — a net is visually dead well inside that, even
         // though the buffer keeps being rewritten down to `NEGLIGIBLE`.
-        let away = Vec3::new(0.0, 0.3, 0.0);
         let mut ringing = 0;
         let mut after_a_second = f32::NAN;
         for frame in 0..240 {
-            if panel.absorb(away, Actors::BALL_RADIUS, 1.0 / 60.0) {
+            if panel.absorb(None, Actors::BALL_RADIUS, 1.0 / 60.0) {
                 ringing += 1;
                 panel.shape(&mut mesh);
             }
@@ -626,6 +740,111 @@ mod tests {
             "and finish exactly flat, left at {:.5} m",
             deepest(&panel, &mesh)
         );
+    }
+
+    /// **A shot that misses does not move the net.** Reported from the
+    /// viewer: *"when ball miss goals, net moving"*.
+    ///
+    /// The side panel's plane is the post, and a plane divides the whole
+    /// world — so every ball outside the post read as pressing on the
+    /// netting from the inside, by however far outside it was. The
+    /// amplitude IS that distance, so a shot missing by two metres bagged
+    /// the side net two metres over the touchline.
+    #[test]
+    fn a_shot_that_misses_wide_leaves_the_side_netting_alone() {
+        let (mut panel, mut mesh) = Netting::side_panel();
+        for wide in [0.4f32, 2.0, 8.0] {
+            // Crossing the goal-line plane at chest height, `wide` metres
+            // outside the near post — the commonest miss in football.
+            let ball = Vec3::new(
+                Field::HALF_LENGTH,
+                1.2,
+                Field::PHYSICS_GOAL_HALF_WIDTH + wide,
+            );
+            assert!(
+                !Netting::inside_a_goal(ball),
+                "a ball {wide} m wide of the post is not in the goal"
+            );
+            let contact = Netting::inside_a_goal(ball).then_some(ball);
+            panel.absorb(contact, Actors::BALL_RADIUS, 1.0 / 60.0);
+            panel.shape(&mut mesh);
+            let reach = deepest(&panel, &mesh).abs();
+            assert!(
+                reach < 1.0e-6,
+                "missing by {wide} m moved the side netting {reach:.3} m"
+            );
+        }
+    }
+
+    /// …and the panel refuses it on its own, without the volume test in
+    /// front of it. Both halves have to hold: `inside_a_goal` is what keeps
+    /// the ball out, `MAX_GIVE` is what keeps the panel honest if anything
+    /// ever offers it one anyway.
+    #[test]
+    fn a_panel_refuses_a_ball_further_out_than_it_can_stretch() {
+        let (mut panel, _) = Netting::side_panel();
+        // Inside the goal's depth and height, so only the distance past the
+        // post decides it.
+        let just_in = Vec3::new(
+            Field::HALF_LENGTH + Field::NET_DEPTH * 0.5,
+            1.2,
+            Field::PHYSICS_GOAL_HALF_WIDTH + 0.2,
+        );
+        assert!(
+            panel.absorb(Some(just_in), Actors::BALL_RADIUS, 1.0 / 60.0),
+            "a ball 20 cm into the side netting is in it"
+        );
+        let (mut panel, _) = Netting::side_panel();
+        let far_out = Vec3::new(
+            Field::HALF_LENGTH + Field::NET_DEPTH * 0.5,
+            1.2,
+            Field::PHYSICS_GOAL_HALF_WIDTH + 3.0,
+        );
+        assert!(
+            !panel.absorb(Some(far_out), Actors::BALL_RADIUS, 1.0 / 60.0),
+            "3 m past the post is not a contact — the netting cannot stretch that far"
+        );
+    }
+
+    /// The volume test has to keep saying yes to the balls that DO belong
+    /// in the net, including the ones the engine has settled inside the
+    /// mesh, or the fix above trades one stationary net for another.
+    #[test]
+    fn a_ball_in_the_goal_is_still_in_the_goal() {
+        // Crossing the line dead centre, under the bar.
+        assert!(Netting::inside_a_goal(Vec3::new(
+            Field::HALF_LENGTH + 0.1,
+            1.5,
+            0.0
+        )));
+        // Bagged in the back netting, where the engine settles it.
+        assert!(Netting::inside_a_goal(Vec3::new(
+            Field::HALF_LENGTH + Field::NET_DEPTH + 0.5,
+            0.4,
+            0.0
+        )));
+        // Wedged against the inside of a post, past it by the side give.
+        assert!(Netting::inside_a_goal(Vec3::new(
+            Field::HALF_LENGTH + 0.6,
+            0.2,
+            Field::PHYSICS_GOAL_HALF_WIDTH + 0.4
+        )));
+        // …and no to the places a ball actually spends the match. The
+        // corner flag is the one that matters: it is a quarter of a metre
+        // in front of the goal line, which is inside the side panel's own
+        // depth, and thirty metres outside the post.
+        assert!(!Netting::inside_a_goal(Vec3::new(0.0, 0.2, 0.0)));
+        assert!(!Netting::inside_a_goal(Vec3::new(
+            Field::HALF_LENGTH - 0.25,
+            0.11,
+            Field::HALF_WIDTH - 0.25
+        )));
+        // Over the bar, on its way out of the ground.
+        assert!(!Netting::inside_a_goal(Vec3::new(
+            Field::HALF_LENGTH + 0.5,
+            3.4,
+            0.0
+        )));
     }
 
     /// The netting has to be netting. An untextured sheet is why the net

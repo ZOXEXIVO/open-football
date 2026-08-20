@@ -243,8 +243,11 @@ impl MidfielderTacklingState {
             .context
             .penalty_area(ctx.player.side == Some(PlayerSide::Left))
             .contains(&ctx.tick_context.positions.ball.position);
+        // 0.008 → 0.06 — see the defender model for why, including that
+        // the old value sat below this model's own `max(0.005)` floor and
+        // so was a saturating constant rather than a tendency.
         if in_own_box {
-            base_foul *= 0.008;
+            base_foul *= 0.06;
         }
         // Self-preservation on a booking — see defenders/tackling.
         if ctx.player.yellow_cards > 0 {

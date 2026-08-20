@@ -1,6 +1,6 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::engine::ball::ball::interactions::SaveModel;
-use crate::r#match::engine::ball::ball::{AerialReach, GRAVITY_PER_TICK, ShotTarget};
+use crate::r#match::engine::ball::ball::{AerialReach, DeadBall, GRAVITY_PER_TICK, ShotTarget};
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 use crate::r#match::engine::player::strategies::common::{
     ActivityIntensityConfig, ConditionProcessor, GOALKEEPER_JADEDNESS_INCREMENT,
@@ -638,6 +638,25 @@ impl KeeperBallClaim {
 
     /// Is this keeper favourite for the loose ball in front of him?
     pub fn is_favourite(ctx: &StateProcessingContext) -> bool {
+        // A DEAD ball is not a loose ball and he is not favourite for it —
+        // nobody is, it belongs to whoever was awarded the restart. See
+        // [`DeadBall`](crate::r#match::engine::ball::ball::DeadBall).
+        //
+        // The dispatcher refuses the touch either way, so this is not what
+        // stops the ball moving; it is what stops him WALKING AT IT. All
+        // three doors into a claim ask this question (`Standing`,
+        // `PreparingForSave` and `Catching`'s own gate), and without it he
+        // shuttles `Catching` → `Clearing` → `Standing` → `Catching` beside
+        // a ball he can never have, at sprint pace, for as long as the
+        // restart waits. Measured on a throw-in by the corner flag: nine
+        // round trips in 120 ticks.
+        //
+        // The taker is not exempt: `tick_awaited_restart` hands him the
+        // ball when he arrives, and a keeper who "claims" it on the way
+        // would drag it to wherever he had got to.
+        if DeadBall::is_dead(ctx.tick_context.ball.restart_taker) {
+            return false;
+        }
         let ball = ctx.tick_context.positions.ball.position;
         let aerial = (ball.z / AerialReach::STANDING).clamp(0.0, 1.0);
         let edge = Self::HANDS_ADVANTAGE + Self::AERIAL_ADVANTAGE * aerial;

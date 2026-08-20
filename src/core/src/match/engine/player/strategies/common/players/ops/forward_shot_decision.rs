@@ -591,6 +591,191 @@ pub mod mid_run_diag {
         }
     }
 
+    /// **Why is nobody challenging the man on the ball?**
+    ///
+    /// Every part of the defensive model can be right — the plan can
+    /// nominate a presser, the marker can be on his man, the back line can
+    /// be goal-side — and the picture from the stands still be a carrier
+    /// running through four defenders untouched, because the only thing
+    /// that takes the ball off him is a challenge, and every challenge
+    /// passes through a chain of gates that no aggregate stat can see.
+    ///
+    /// This counts the chain. For every defending outfielder standing
+    /// inside `TackleEngagement::COMMIT` of an opposing carrier it asks
+    /// what he is doing about it, and buckets the answer by the gate that
+    /// stopped him. The buckets are ordered as the gates are, so the first
+    /// large one is the binding one.
+    pub struct DuelDiag;
+
+    /// Pairs (a defender within commit range of a carrier) by what stopped
+    /// him: 0 challenging, 1 tackle cooldown, 2 the duel gate said no
+    /// (somebody else is the nominated engager), 3 permitted and not
+    /// challenging anyway.
+    pub static DUEL_GATE: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    /// The same four buckets restricted to a carrier inside the DEFENDING
+    /// side's own penalty area — the situation the report is about.
+    pub static DUEL_GATE_BOX: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    /// Ticks on which an opponent carried the ball inside our area, and
+    /// the number of defenders within 3 m of him summed over them.
+    pub static BOX_CARRY_TICKS: AtomicU64 = AtomicU64::new(0);
+    pub static BOX_CARRY_BODIES: AtomicU64 = AtomicU64::new(0);
+    /// …of those ticks, the ones on which at least one defender was in a
+    /// `Tackling` state, and the ones with anybody within 3 m at all.
+    pub static BOX_CARRY_CONTESTED: AtomicU64 = AtomicU64::new(0);
+    pub static BOX_CARRY_SURROUNDED: AtomicU64 = AtomicU64::new(0);
+    /// Tackle-cooldown occupancy across the DEFENDING side's outfielders:
+    /// player-ticks seen, and player-ticks with the cooldown still
+    /// running. `can_attempt_tackle` gates entry into every `Tackling`
+    /// state from every path, so a high share here is a defence that is
+    /// not allowed to defend.
+    pub static COOLDOWN_SEEN: AtomicU64 = AtomicU64::new(0);
+    pub static COOLDOWN_BLOCKED: AtomicU64 = AtomicU64::new(0);
+
+    /// Where a player who IS in a `Tackling` state is standing, relative
+    /// to the man he is supposed to be challenging: 0 inside
+    /// `TackleEngagement::CONTACT` (the only band in which an attempt is
+    /// ever rolled), 1 out to `COMMIT`, 2 out to `DISENGAGE`, 3 beyond.
+    /// The commitment model can only see band 0; everything else is a
+    /// defender in the challenging state who cannot challenge.
+    pub static DUEL_REACH: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    /// Decisions `TackleDecision` actually got to take, and the sum of the
+    /// probabilities it returned — the mean is the per-second commitment
+    /// rate of a defender who has arrived.
+    pub static DUEL_DECISIONS: AtomicU64 = AtomicU64::new(0);
+    pub static DUEL_P_X10000: AtomicU64 = AtomicU64::new(0);
+    /// …and the same two restricted to a decision taken with the ball in
+    /// the defender's own penalty area, where `box_restraint` applies.
+    pub static DUEL_DECISIONS_BOX: AtomicU64 = AtomicU64::new(0);
+    pub static DUEL_P_BOX_X10000: AtomicU64 = AtomicU64::new(0);
+
+    impl DuelDiag {
+        pub fn note_reach(band: usize) {
+            DUEL_REACH[band].fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub fn note_decision(p: f32, in_box: bool) {
+            DUEL_DECISIONS.fetch_add(1, Ordering::Relaxed);
+            DUEL_P_X10000.fetch_add((p * 10_000.0) as u64, Ordering::Relaxed);
+            if in_box {
+                DUEL_DECISIONS_BOX.fetch_add(1, Ordering::Relaxed);
+                DUEL_P_BOX_X10000.fetch_add((p * 10_000.0) as u64, Ordering::Relaxed);
+            }
+        }
+
+        /// `([reach bands], decisions, mean p, box decisions, mean box p)`
+        pub fn commitment() -> ([u64; 4], u64, f32, u64, f32) {
+            let n = DUEL_DECISIONS.load(Ordering::Relaxed);
+            let nb = DUEL_DECISIONS_BOX.load(Ordering::Relaxed);
+            (
+                [
+                    DUEL_REACH[0].load(Ordering::Relaxed),
+                    DUEL_REACH[1].load(Ordering::Relaxed),
+                    DUEL_REACH[2].load(Ordering::Relaxed),
+                    DUEL_REACH[3].load(Ordering::Relaxed),
+                ],
+                n,
+                if n == 0 {
+                    0.0
+                } else {
+                    DUEL_P_X10000.load(Ordering::Relaxed) as f32 / 10_000.0 / n as f32
+                },
+                nb,
+                if nb == 0 {
+                    0.0
+                } else {
+                    DUEL_P_BOX_X10000.load(Ordering::Relaxed) as f32 / 10_000.0 / nb as f32
+                },
+            )
+        }
+
+        pub fn note_gate(bucket: usize, in_box: bool) {
+            DUEL_GATE[bucket].fetch_add(1, Ordering::Relaxed);
+            if in_box {
+                DUEL_GATE_BOX[bucket].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn note_box_carry(bodies: u64, contested: bool) {
+            BOX_CARRY_TICKS.fetch_add(1, Ordering::Relaxed);
+            BOX_CARRY_BODIES.fetch_add(bodies, Ordering::Relaxed);
+            if bodies > 0 {
+                BOX_CARRY_SURROUNDED.fetch_add(1, Ordering::Relaxed);
+            }
+            if contested {
+                BOX_CARRY_CONTESTED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn note_cooldown(blocked: bool) {
+            COOLDOWN_SEEN.fetch_add(1, Ordering::Relaxed);
+            if blocked {
+                COOLDOWN_BLOCKED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `([all four buckets], [the same in the box])`
+        pub fn gates() -> ([u64; 4], [u64; 4]) {
+            let read = |a: &[AtomicU64; 4]| {
+                [
+                    a[0].load(Ordering::Relaxed),
+                    a[1].load(Ordering::Relaxed),
+                    a[2].load(Ordering::Relaxed),
+                    a[3].load(Ordering::Relaxed),
+                ]
+            };
+            (read(&DUEL_GATE), read(&DUEL_GATE_BOX))
+        }
+
+        /// `(box-carry ticks, mean bodies within 3 m, share with any body,
+        /// share with a live challenge, cooldown-blocked share)`
+        pub fn box_picture() -> (u64, f32, f32, f32, f32) {
+            let n = BOX_CARRY_TICKS.load(Ordering::Relaxed);
+            let share = |v: u64| {
+                if n == 0 {
+                    0.0
+                } else {
+                    v as f32 / n as f32
+                }
+            };
+            let seen = COOLDOWN_SEEN.load(Ordering::Relaxed);
+            (
+                n,
+                share(BOX_CARRY_BODIES.load(Ordering::Relaxed)),
+                share(BOX_CARRY_SURROUNDED.load(Ordering::Relaxed)),
+                share(BOX_CARRY_CONTESTED.load(Ordering::Relaxed)),
+                if seen == 0 {
+                    0.0
+                } else {
+                    COOLDOWN_BLOCKED.load(Ordering::Relaxed) as f32 / seen as f32
+                },
+            )
+        }
+
+        pub fn reset() {
+            for c in DUEL_GATE
+                .iter()
+                .chain(DUEL_GATE_BOX.iter())
+                .chain(DUEL_REACH.iter())
+            {
+                c.store(0, Ordering::Relaxed);
+            }
+            for c in [
+                &BOX_CARRY_TICKS,
+                &BOX_CARRY_BODIES,
+                &BOX_CARRY_CONTESTED,
+                &BOX_CARRY_SURROUNDED,
+                &COOLDOWN_SEEN,
+                &COOLDOWN_BLOCKED,
+                &DUEL_DECISIONS,
+                &DUEL_P_X10000,
+                &DUEL_DECISIONS_BOX,
+                &DUEL_P_BOX_X10000,
+            ] {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
     /// Defensive-shape counters.
     pub struct DefenceDiag;
 
@@ -1089,8 +1274,8 @@ pub mod mid_run_diag {
             }
         }
 
-        pub fn snapshot() -> [u64; 16] {
-            let mut out = [0u64; 16];
+        pub fn snapshot() -> [u64; 20] {
+            let mut out = [0u64; 20];
             for (slot, c) in out.iter_mut().zip(GK_ACTIONS.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
@@ -1445,6 +1630,132 @@ pub mod mid_run_diag {
         }
     }
 
+    /// **How the goalkeeper comes to be holding the ball.**
+    ///
+    /// The report this exists to answer is *"a player shoots and misses and
+    /// the ball instantly ends up in the hands of a prone keeper"*. Three
+    /// separate claims are folded into that sentence and only a census can
+    /// take them apart: how FAR the ball was when he was given it, what he
+    /// was DOING at the time, and whether the shot was even on target.
+    ///
+    /// Slots:
+    ///   0  grants through the state machine (`CaughtBall`, in reach)
+    ///   1  Σ×100 of the XY gap, game units — the distance the ball is
+    ///      then dragged across by `Ball::move_to`
+    ///   2  worst such gap ×100
+    ///   3  grants with the gap over 8u (1 m)
+    ///   4  grants with the gap over 12u (1.5 m)
+    ///   5  Σ×100 of the ball's speed (u/tick) at the moment it was
+    ///      stopped dead
+    ///   6  …of which the ball was still travelling over 1.0 u/t (12.5 m/s)
+    ///   7  keeper AIRBORNE at the grant
+    ///   8  keeper in `Diving`
+    ///   9  keeper in `Diving` with both feet down — on the floor
+    ///  10  a shot was live on the ball
+    ///  11  …and its projected crossing was OFF THE FRAME: a miss
+    ///  12  …wide of a post
+    ///  13  …over the bar
+    ///  14  grants REFUSED because the ball was out of possession reach
+    ///  15  catches resolved by the physics (`try_save_shot`), the other
+    ///      half of the denominator
+    ///  16  Σ×100 of the XY gap on that path
+    pub static GK_GATHER: [AtomicU64; 17] = [const { AtomicU64::new(0) }; 17];
+
+    /// The same grants split by the state the keeper was IN when he got the
+    /// ball, indexed by the `GoalkeeperState` discriminant: `s * 2` counts
+    /// the grants and `s * 2 + 1` how many of them found him off the ground.
+    /// Which state is handing him the ball is the whole question — a catch
+    /// in `Catching` is a catch, and the same grant in `Diving` mid-fall is
+    /// the reported artefact.
+    pub static GK_GATHER_STATE: [AtomicU64; 48] = [const { AtomicU64::new(0) }; 48];
+
+    pub struct KeeperGatherDiag;
+
+    impl KeeperGatherDiag {
+        /// One state-machine grant. `gap` is the XY distance in game units,
+        /// `speed` the ball's speed in units per tick, `airborne`/`diving`
+        /// the keeper's posture, and `off_frame` the live shot's projected
+        /// crossing when one was armed.
+        pub fn note_grant(
+            gap: f32,
+            speed: f32,
+            airborne: bool,
+            diving: bool,
+            shot: Option<(bool, bool)>,
+        ) {
+            GK_GATHER[0].fetch_add(1, Ordering::Relaxed);
+            let gap_x100 = (gap.max(0.0) * 100.0) as u64;
+            GK_GATHER[1].fetch_add(gap_x100, Ordering::Relaxed);
+            GK_GATHER[2].fetch_max(gap_x100, Ordering::Relaxed);
+            if gap > 8.0 {
+                GK_GATHER[3].fetch_add(1, Ordering::Relaxed);
+            }
+            if gap > 12.0 {
+                GK_GATHER[4].fetch_add(1, Ordering::Relaxed);
+            }
+            GK_GATHER[5].fetch_add((speed.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+            if speed > 1.0 {
+                GK_GATHER[6].fetch_add(1, Ordering::Relaxed);
+            }
+            if airborne {
+                GK_GATHER[7].fetch_add(1, Ordering::Relaxed);
+            }
+            if diving {
+                GK_GATHER[8].fetch_add(1, Ordering::Relaxed);
+                if !airborne {
+                    GK_GATHER[9].fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            if let Some((wide, high)) = shot {
+                GK_GATHER[10].fetch_add(1, Ordering::Relaxed);
+                if wide || high {
+                    GK_GATHER[11].fetch_add(1, Ordering::Relaxed);
+                }
+                if wide {
+                    GK_GATHER[12].fetch_add(1, Ordering::Relaxed);
+                }
+                if high {
+                    GK_GATHER[13].fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        /// Which state the grant arrived in, and whether he was airborne.
+        pub fn note_state(state_id: usize, airborne: bool) {
+            let slot = state_id * 2;
+            if slot + 1 < GK_GATHER_STATE.len() {
+                GK_GATHER_STATE[slot].fetch_add(1, Ordering::Relaxed);
+                if airborne {
+                    GK_GATHER_STATE[slot + 1].fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        pub fn state_snapshot() -> [u64; 48] {
+            let mut out = [0u64; 48];
+            for (slot, c) in out.iter_mut().zip(GK_GATHER_STATE.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+
+        pub fn note_refused() {
+            GK_GATHER[14].fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub fn note_physics(gap: f32) {
+            GK_GATHER[15].fetch_add(1, Ordering::Relaxed);
+            GK_GATHER[16].fetch_add((gap.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+        }
+
+        pub fn snapshot() -> [u64; 17] {
+            let mut out = [0u64; 17];
+            for (slot, c) in out.iter_mut().zip(GK_GATHER.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
     pub struct SaveContactDiag;
 
     impl SaveContactDiag {
@@ -1677,6 +1988,7 @@ pub mod mid_run_diag {
         CrossDiag::reset();
         PlanDiag::reset();
         DefenceDiag::reset();
+        DuelDiag::reset();
         ClearDiag::reset();
         EvasionDiag::reset();
         SetPieceDiag::reset();
@@ -2006,10 +2318,38 @@ pub mod mid_run_diag {
     /// back out from the restart spot), 3 Σ of the distance the taker had
     /// to cover to reach the ball, 4 takers who were more than a stride
     /// away, 5 offside snapshots built, 6 offsides actually given,
-    /// 7 throw-ins the taker still had to be teleported to, 8 Σ of the
-    /// ticks the ball spent lying on the line waiting for him, 9 restarts
-    /// he WALKED to rather than being placed at.
-    pub static RESTARTS: [AtomicU64; 10] = [const { AtomicU64::new(0) }; 10];
+    /// 7 restarts the taker still had to be teleported to, 8 Σ of the
+    /// ticks the ball spent lying there waiting for him, 9 restarts he
+    /// WALKED to rather than being placed at, 10 restarts resolved through
+    /// [`AwaitedRestart`] at all.
+    ///
+    /// ⚠ Slots 7-9 are NOT throw-ins only and slot 0 is not their
+    /// denominator. The offside free kick goes through the same wait (see
+    /// `Ball::award_offside`), so a rate taken against slot 0 reads over
+    /// 100%. Slot 10 is the denominator for all three.
+    /// Slots 11-14 are the GOAL KICK, which joined the same wait when the
+    /// "ball instantly ends up in the keeper's hands" report was traced to
+    /// it: 11 awarded, 12 Σ of the distance the keeper had to walk, 13 of
+    /// those over a stride, 14 goal kicks he never reached.
+    ///
+    /// Slots 16-18 are the DEAD BALL itself — how much the player layer
+    /// tried to do to a ball that was out of play. 16 ball-touching player
+    /// events refused, 17 of those raised by a goalkeeper, 18 ticks the
+    /// ball spent out of play (the denominator). See
+    /// [`DeadBall`](crate::r#match::engine::ball::ball::DeadBall): the
+    /// events are counted whether or not the guard is armed, so
+    /// `OF_DEAD_BALL=off` measures the same quantity it removes.
+    pub static RESTARTS: [AtomicU64; 20] = [const { AtomicU64::new(0) }; 20];
+
+    /// The two legs a corner is now walked rather than teleported, in game
+    /// units: `(fetch Σ, carry Σ, carries begun, carry-at-pickup Σ)`. See
+    /// `RestartCensus::note_corner_walk`.
+    pub static CORNER_WALK: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+
+    /// Taker states at the moment a waited restart timed out, indexed by
+    /// `PlayerState::compact_id` — see `RestartCensus::note_restart_timeout_state`.
+    pub static RESTART_TIMEOUT_STATE: [AtomicU64; STATE_SLOTS] =
+        [const { AtomicU64::new(0) }; STATE_SLOTS];
 
     pub struct RestartCensus;
 
@@ -2032,6 +2372,108 @@ pub mod mid_run_diag {
             }
         }
 
+        /// One goal kick awarded, and how far its taker has to walk.
+        pub fn note_goal_kick(walk: f32) {
+            RESTARTS[11].fetch_add(1, Ordering::Relaxed);
+            RESTARTS[12].fetch_add(walk.max(0.0) as u64, Ordering::Relaxed);
+            if walk > 8.0 {
+                RESTARTS[13].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// A goal kick whose keeper never reached the ball, so the backstop
+        /// teleport had to place it under him.
+        /// A goal kick whose keeper never reached the ball. `left` is how
+        /// far he still had to go when the patience ran out — the number
+        /// that says whether he was sent too far or simply never went.
+        pub fn note_goal_kick_teleport(left: f32) {
+            RESTARTS[14].fetch_add(1, Ordering::Relaxed);
+            RESTARTS[15].fetch_add(left.max(0.0) as u64, Ordering::Relaxed);
+        }
+
+        /// What the taker was DOING when the patience ran out, by
+        /// `PlayerState::compact_id`. A keeper who timed out in `TakeBall`
+        /// was on his way and was not given long enough; one who timed out
+        /// in `Standing` was never coming, and no amount of patience fixes
+        /// that. The two need opposite fixes, and the aggregate cannot tell
+        /// them apart.
+        pub fn note_restart_timeout_state(state_id: u16) {
+            let i = state_id as usize;
+            if i < RESTART_TIMEOUT_STATE.len() {
+                RESTART_TIMEOUT_STATE[i].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(compact_id, timeouts)`, heaviest first.
+        pub fn timeout_state_snapshot() -> Vec<(u16, u64)> {
+            let mut out: Vec<(u16, u64)> = RESTART_TIMEOUT_STATE
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| {
+                    let n = c.load(Ordering::Relaxed);
+                    (n > 0).then_some((i as u16, n))
+                })
+                .collect();
+            out.sort_by(|a, b| b.1.cmp(&a.1));
+            out
+        }
+
+        /// One ball-touching player event raised against a ball that was
+        /// out of play. Counted at the dispatcher whether or not the guard
+        /// is armed, so the two arms of `OF_DEAD_BALL` report the same
+        /// pressure and only the outcome differs.
+        pub fn note_dead_ball_event(from_goalkeeper: bool) {
+            RESTARTS[16].fetch_add(1, Ordering::Relaxed);
+            if from_goalkeeper {
+                RESTARTS[17].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// One tick with the ball out of play — the denominator for the
+        /// row above. Without it "12 refused events a match" cannot be told
+        /// from "the ball is dead twice as often".
+        pub fn note_dead_ball_tick() {
+            RESTARTS[18].fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// A corner awarded: how far its taker has to go to FETCH the
+        /// ball, and how far the ball then has to be CARRIED to the arc.
+        ///
+        /// The carry is the number that used to be a teleport, so it is
+        /// the size of what was removed. Both are summed against slot 19,
+        /// which counts corners that made it as far as the award.
+        pub fn note_corner_walk(fetch: f32, carry: f32) {
+            RESTARTS[19].fetch_add(1, Ordering::Relaxed);
+            CORNER_WALK[0].fetch_add(fetch.max(0.0) as u64, Ordering::Relaxed);
+            CORNER_WALK[1].fetch_add(carry.max(0.0) as u64, Ordering::Relaxed);
+        }
+
+        /// A corner whose taker reached the ball and started the carry.
+        /// Against slot 19 this is the share that got past the fetch on
+        /// their own feet rather than through the backstop teleport.
+        pub fn note_restart_carry(carry: f32) {
+            CORNER_WALK[2].fetch_add(1, Ordering::Relaxed);
+            CORNER_WALK[3].fetch_add(carry.max(0.0) as u64, Ordering::Relaxed);
+        }
+
+        /// A corner leg the taker never finished, and how far short he
+        /// still was. A man two metres short is a tolerance problem; one
+        /// twenty-five metres short never set off, and the two need
+        /// opposite fixes.
+        pub fn note_corner_leg_timeout(left: f32) {
+            CORNER_WALK[4].fetch_add(1, Ordering::Relaxed);
+            CORNER_WALK[5].fetch_add(left.max(0.0) as u64, Ordering::Relaxed);
+        }
+
+        /// `(fetch Σ, carry Σ, carries begun, carry-at-pickup Σ, legs timed out, Σ short)`.
+        pub fn corner_walk_snapshot() -> [u64; 6] {
+            let mut out = [0u64; 6];
+            for (slot, c) in out.iter_mut().zip(CORNER_WALK.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+
         pub fn note_offside_snapshot() {
             RESTARTS[5].fetch_add(1, Ordering::Relaxed);
         }
@@ -2040,7 +2482,9 @@ pub mod mid_run_diag {
             RESTARTS[6].fetch_add(1, Ordering::Relaxed);
         }
 
-        pub fn note_throw_in_teleport() {
+        /// The taker never arrived and the ball had to be placed under him.
+        /// Counted for every restart kind that waits, not just throw-ins.
+        pub fn note_restart_teleport() {
             RESTARTS[7].fetch_add(1, Ordering::Relaxed);
         }
 
@@ -2051,10 +2495,11 @@ pub mod mid_run_diag {
             if walked {
                 RESTARTS[9].fetch_add(1, Ordering::Relaxed);
             }
+            RESTARTS[10].fetch_add(1, Ordering::Relaxed);
         }
 
-        pub fn snapshot() -> [u64; 10] {
-            let mut out = [0u64; 10];
+        pub fn snapshot() -> [u64; 20] {
+            let mut out = [0u64; 20];
             for (slot, c) in out.iter_mut().zip(RESTARTS.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
@@ -2427,7 +2872,7 @@ pub mod time_band_diag {
     /// against: without it the table shows an appetite with nothing to
     /// read it against, and the appetite-vs-bar GAP is the whole
     /// question.
-    pub const WFACTORS: usize = 12;
+    pub const WFACTORS: usize = 13;
     const ZERO_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
     pub static WILL_FACTOR_SUM: [[AtomicU64; BANDS]; WFACTORS] = [ZERO_BAND; WFACTORS];
 
@@ -2693,6 +3138,146 @@ const LONG_RANGE_RELIEF: f32 = 0.14;
 /// capping how far the bar could fall for a striker inside the six-yard
 /// box — the one look in football that should be close to automatic.
 const LONG_RANGE_FLOOR: f32 = 0.20;
+/// **The bar, priced against the standard of football being played.**
+///
+/// # The defect this fixes
+///
+/// `threshold` carries no player term at all — deliberately, and the note
+/// above it argues the case well: the bar is the COST OF THE DECISION,
+/// and from thirty metres a miss costs a goal kick whoever takes it. The
+/// appetite it is compared against does carry the player. Put an absolute
+/// bar against a skill-driven appetite and the comparison stops being a
+/// decision and becomes a TAIL EVENT: mean appetite runs 0.335 in the
+/// 16.5-22 m band and the mean bar runs 0.74, so a shot is approved only
+/// when a high appetite meets a low `spread` draw, which is two or three
+/// standard deviations out in a joint distribution.
+///
+/// The consequence is that shot volume is EXPONENTIAL in squad quality.
+/// Measured over 300 matches at each level, uniform squads:
+///
+/// | band | mean appetite, level 4 → 20 | approvals per 10⁴ rolls | elasticity |
+/// |---|---|---|---|
+/// | 6-11 m | 0.4195 → 0.4867 (+16%) | 4.09 → 52.2 (×12.8) | ~17 |
+/// | 16.5-22 m | 0.3351 → 0.3852 (+15%) | 2.35 → 41.2 (×17.5) | ~20 |
+/// | 22-30 m | 0.2731 → 0.3067 (+12%) | 0.117 → 13.79 (**×118**) | ~41 |
+///
+/// A 12-16% shift in the mean — the whole spread of world football, from
+/// a fourth-tier squad to an elite one — moves the shot count by an order
+/// of magnitude, and with it the scoreline: 9.9 shots and 1.89 goals a
+/// match at level 12 against 22.6 and 4.99 at level 18. Real football is
+/// flat. The same convexity is why `SQUAD_SPREAD=2` at an UNCHANGED mean
+/// lifts level 14 from 2.40 goals to 4.03 — spreading quality around a
+/// mean can only add volume if the decision is convex in it.
+///
+/// # The model
+///
+/// Exactly the trick `SaveModel::ORDINARY_PACE` uses, and for exactly the
+/// same reason: subtract the population so the ORDINARY case costs
+/// nothing, and let the term be a spread around it rather than a tax.
+/// Here the population is the standard of football in this match, taken
+/// from both squads' attacking aggregates, and the bar rises with it.
+///
+/// That is a football argument and not only an arithmetic one. The bar is
+/// the cost of the decision, and the cost of a speculative shot is what
+/// you gave up to take it. In a fourth-tier match the alternative — one
+/// more pass, one more phase of possession — is itself poor, so the shot
+/// is a reasonable option; in a Champions League match the alternatives
+/// are good, and the same shot is a worse decision. This is that, priced.
+///
+/// # Deliberately a MATCH property, not a player one
+///
+/// Both squads, averaged, so every player on the pitch gets the same
+/// scale. Within-match behaviour is therefore untouched: a strong side
+/// still out-shoots a weak one, through chance SUPPLY (they hold the ball
+/// in dangerous areas more, which the roll counts already show) rather
+/// than through a per-opportunity willingness edge that the appetite
+/// would otherwise double-count. Making it a per-player contest was the
+/// obvious alternative and it is the wrong one — it would hand the worse
+/// player the lower bar, which is neither the football nor the fix.
+struct ShotBarPopulation;
+
+impl ShotBarPopulation {
+    /// The standard of football the bar's height was calibrated at.
+    ///
+    /// **Measured, not chosen.** `SHOT_BAR_BASE` and every relief around
+    /// it were titrated on `dev_match stats 300 14 14`, so the scale has
+    /// to be exactly 1.0 there or this correction silently re-levels the
+    /// whole engine: at a nominal 0.5 it multiplied the level-14 bar by
+    /// 1.08 and took the calibration level from 2.77 goals a match to
+    /// 2.18. `dev_match stats 60 14 14` prints the aggregate as `popq`
+    /// in the willingness table — re-read it if the attacking composite
+    /// or the generator moves.
+    const REFERENCE: f32 = 0.638;
+
+    /// How much the bar moves per unit of population quality.
+    ///
+    /// Fitted on the `levels` sweep, not derived. Cancelling the MEAN
+    /// appetite drift needs only ~0.33 — that is a five-fold
+    /// under-estimate, because what has to come out flat is the approval
+    /// RATE and the rate answers to the bar with the elasticity in the
+    /// table above, not to the mean. Measured at `REFERENCE` = 0.5:
+    ///
+    /// | slope | level-18 goals | spread across the sweep |
+    /// |---|---|---|
+    /// | 0 | 4.97 | 2.94 |
+    /// | 0.55 | 3.29 | 1.31 |
+    /// | 0.90 | 2.57 | 1.59 |
+    /// | 1.30 | 1.99 | 1.89 |
+    ///
+    /// Re-fit with `dev_match levels 300 4 18 2` and read the FLATNESS
+    /// verdict — one number, one sweep. `OF_BAR_POPQ` overrides it so a
+    /// re-fit costs no rebuild.
+    const SLOPE: f32 = 1.75;
+
+    /// Rails. The scale is a correction, not a second shot model: at the
+    /// top of the generator it must not be able to push the bar out of
+    /// reach altogether.
+    ///
+    /// ⚠ **The floor is 1.0, and the asymmetry is deliberate.** A better
+    /// match raises the bar; a worse one does NOT lower it. Measured both
+    /// ways on `dev_match levels`: a symmetric correction strong enough
+    /// to bring level 18 back to 11 shots a team simultaneously pushed
+    /// level 4 to 20, because it was answering the wrong question at that
+    /// end. What makes a fourth-tier match high-scoring in this engine is
+    /// not that its players fancy one from thirty metres — the shot MIX
+    /// there is 80% from inside the box — it is that nobody stops them
+    /// getting into the box at all, and chance SUPPLY is not this term's
+    /// to price. Handing the bottom of the pyramid a lower bar on top of
+    /// that supply just adds shots to a match that already has enough.
+    const MIN_SCALE: f32 = 1.0;
+    const MAX_SCALE: f32 = 1.35;
+
+    /// `OF_BAR_POPQ` overrides [`Self::SLOPE`] for a re-fit without a
+    /// rebuild — the sweep that fits it is a dozen runs, and the slope is
+    /// the only free parameter in this correction.
+    #[inline]
+    fn slope() -> f32 {
+        use std::sync::OnceLock;
+        static SLOPE: OnceLock<f32> = OnceLock::new();
+        *SLOPE.get_or_init(|| {
+            std::env::var("OF_BAR_POPQ")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(Self::SLOPE)
+        })
+    }
+
+    /// Population quality of the match — both squads, averaged.
+    #[inline]
+    fn quality(ctx: &StateProcessingContext) -> f32 {
+        let home = ctx.context.home_skill_aggregates.attacking_quality;
+        let away = ctx.context.away_skill_aggregates.attacking_quality;
+        (home + away) * 0.5
+    }
+
+    /// Multiplier on the assembled bar.
+    #[inline]
+    fn scale(ctx: &StateProcessingContext) -> f32 {
+        (1.0 + (Self::quality(ctx) - Self::REFERENCE) * Self::slope())
+            .clamp(Self::MIN_SCALE, Self::MAX_SCALE)
+    }
+}
+
 /// Height of the shot bar before the per-opportunity spread and the two
 /// distance reliefs. This is the engine's shot-volume knob — see the note
 /// at the threshold.
@@ -4032,7 +4617,12 @@ pub fn evaluate_forward_shot_decision(
     // preserved under any level, and `SHOT_BAR_BASE` moves volume alone.
     let shape = RELIEF_REFERENCE_BASE + spread * 0.24 - range_ease;
     let level = SHOT_BAR_BASE / RELIEF_REFERENCE_BASE;
-    let threshold = (shape * level).max(LONG_RANGE_FLOOR * level);
+    // …and the whole thing is then priced against the standard of
+    // football being played, so the bar means the same thing in the
+    // fourth tier as it does in the Champions League. See
+    // `ShotBarPopulation`, which is where the divisional spread lives.
+    let population = ShotBarPopulation::scale(ctx);
+    let threshold = (shape * level * population).max(LONG_RANGE_FLOOR * level * population);
 
     // Sampled HERE rather than at the top of the roll so the table can
     // carry `threshold` alongside the appetite. Nothing between the two
@@ -4058,6 +4648,7 @@ pub fn evaluate_forward_shot_decision(
                 sight.pressure_clarity,
                 sight.corridor_clarity,
                 threshold,
+                ShotBarPopulation::quality(ctx),
             ],
         );
         helper_diag::SUM_XG_X1000.fetch_add((xg_for_diag * 1000.0) as u64, Ordering::Relaxed);
@@ -4249,6 +4840,62 @@ pub fn find_cutback_to_arriving_runner(ctx: &StateProcessingContext) -> Option<M
         }
     }
     best.map(|(t, _)| t)
+}
+
+#[cfg(test)]
+mod shot_bar_population_tests {
+    use super::ShotBarPopulation;
+
+    /// Reproduces [`ShotBarPopulation::scale`] without a
+    /// `StateProcessingContext`, which cannot be fixtured here. Kept
+    /// beside the real one deliberately: if the live form changes and
+    /// this does not, the tests below stop describing the engine.
+    fn scale(population: f32) -> f32 {
+        (1.0 + (population - ShotBarPopulation::REFERENCE) * ShotBarPopulation::SLOPE)
+            .clamp(ShotBarPopulation::MIN_SCALE, ShotBarPopulation::MAX_SCALE)
+    }
+
+    /// **The calibration level must come out at exactly 1.0.**
+    /// `SHOT_BAR_BASE` and every relief around it were titrated at
+    /// `dev_match` level 14; a scale that is not 1.0 there re-levels the
+    /// whole engine behind the calibration's back. It happened once —
+    /// a nominal 0.5 reference multiplied the level-14 bar by 1.08 and
+    /// took that level from 2.77 goals a match to 2.18.
+    #[test]
+    fn the_calibration_level_is_left_exactly_alone() {
+        assert!((scale(ShotBarPopulation::REFERENCE) - 1.0).abs() < 1e-6);
+    }
+
+    /// A better match raises the bar; a worse one does NOT lower it.
+    /// The asymmetry is the fix — see the note on `MIN_SCALE`.
+    #[test]
+    fn only_a_better_match_raises_the_bar() {
+        assert!(scale(0.80) > 1.0, "an elite match must raise the bar");
+        assert!(scale(0.70) > 1.0);
+        for poor in [0.20_f32, 0.35, 0.50, 0.60] {
+            assert!(
+                (scale(poor) - 1.0).abs() < 1e-6,
+                "a poorer match must not lower the bar (population {poor})"
+            );
+        }
+    }
+
+    /// Monotone and railed, so neither end of the generator can turn the
+    /// correction into a second shot model.
+    #[test]
+    fn the_scale_is_monotone_and_railed() {
+        let mut previous = 0.0;
+        for step in 0..=20 {
+            let population = step as f32 / 20.0;
+            let v = scale(population);
+            assert!(v >= previous, "not monotone at {population}");
+            assert!(
+                (ShotBarPopulation::MIN_SCALE..=ShotBarPopulation::MAX_SCALE).contains(&v),
+                "off the rails at {population}: {v}"
+            );
+            previous = v;
+        }
+    }
 }
 
 #[cfg(test)]

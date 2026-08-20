@@ -131,8 +131,40 @@ impl TackleEngagement {
     /// nobody has been nominated, whoever can get there first goes.
     /// When somebody HAS been nominated, he is the man, and everybody
     /// else covers.
+    /// …AND IN YOUR OWN BOX, TWO GO.
+    ///
+    /// One engager is right in open play — it is what stopped four
+    /// defenders converging on one carrier and rolling four independent
+    /// foul chances. It is wrong inside your own penalty area, and the
+    /// engine already knew that: `is_box_emergency_for_me` elects the
+    /// **two** closest defenders to a carrier in our area, and five
+    /// defender states (`Standing`, `Marking`, `Covering`, `Guarding`,
+    /// `HoldingLine`) send them to `Tackling` on the strength of it.
+    /// Every one of those second men was then refused here on the entry
+    /// tick and handed back to `Pressing`, so the emergency was computed
+    /// in five places and discarded in one.
+    ///
+    /// Measured, that is the user's report exactly: with a carrier in
+    /// our own area, 20% of all defender-ticks inside `COMMIT` fail on
+    /// this gate, and a box carry draws 20 commit decisions a match
+    /// between all of them.
+    ///
+    /// The second man is the plan's `Cover` — the duty is already
+    /// defined as "second body, goal-side of the presser — the one who
+    /// deals with it when the presser is beaten", it is already
+    /// exclusive, and `DutyAssigner` already picks it markers-only and
+    /// within `COVER_REACH`. So the licence stays a licence: two named
+    /// players, not everybody who is near.
+    ///
+    /// Gated on [`PenaltyRisk::applies`] — the referee's test, the ball
+    /// inside the area we are defending — rather than on the defender's
+    /// own position, so the second man is licensed by where the BALL is
+    /// and not by his having drifted into his own box.
     pub fn may_engage_carrier(ctx: &StateProcessingContext) -> bool {
         if Self::is_nominated_presser(ctx) {
+            return true;
+        }
+        if PenaltyRisk::applies(ctx) && matches!(ctx.team().my_duty(), DefensiveDuty::Cover) {
             return true;
         }
         ctx.team().defensive_plan().presser().is_none() && ctx.team().is_best_player_to_chase_ball()
@@ -567,7 +599,27 @@ impl TackleDecision {
     /// 29.5 successful tackles per team per match against a real ~18, and
     /// 22.4 fouls against ~12 — a foul being a failed challenge, the two
     /// move together and both are a function of this number.
-    const BASE: f32 = 0.098;
+    ///
+    /// ⚠ RE-ANCHORED AGAIN, 0.098 → 0.073, AND AGAIN NOT BECAUSE THE
+    /// DECISION CHANGED — because the DIVISOR did.
+    ///
+    /// [`Self::is_decision_tick`] now counts time in CONTACT rather than
+    /// time in the `Tackling` state, and the interval is the one real
+    /// second the doc always claimed rather than two. Both corrections
+    /// pull the same way: a defender who arrives on the carrier is asked
+    /// on the tick he arrives, and asked again every second he stands him
+    /// up. Measured over the change, 120 fixtures at L14: commit
+    /// decisions **470 → 632 per match**, and inside our own penalty area
+    /// — the case that had almost no decisions at all — **35.6 → 75.0**.
+    ///
+    /// The same 0.098 over that many more moments gave 24.5 successful
+    /// tackles per team against a real ~18 and 20.0 fouls against ~12.
+    /// Scaled back by the ratio the volume moved by, so the per-match
+    /// rate returns to where it was calibrated and only its DISTRIBUTION
+    /// changes — which is the point: challenges now land where the
+    /// contact is, and a carrier in our own box draws roughly three times
+    /// as many as before.
+    const BASE: f32 = 0.062;
 
     /// Commitment multiplier inside the defender's own penalty area when
     /// there is cover behind him — see [`Self::box_restraint`].
@@ -580,7 +632,7 @@ impl TackleDecision {
     /// …and when he is the last man, where the challenge has to be made.
     const BOX_RESTRAINT_LAST_MAN: f32 = 0.60;
 
-    /// How often the decision is taken while containing, in ticks.
+    /// How often the decision is taken while containing, in AI ticks.
     ///
     /// ONE ROLL PER MOMENT, not one per tick — the same discipline
     /// `intercept_rolled` / `save_rolled` / `block_rolled` enforce
@@ -588,20 +640,51 @@ impl TackleDecision {
     /// rate a function of how long the defender happens to stay in range
     /// rather than of the defending: at 100 ticks in contact and any
     /// per-tick probability above ~3%, a challenge becomes a certainty,
-    /// so the tackle cooldown (~1 s) silently remained the only real
-    /// limiter and the whole decision was decorative. Measured that way
-    /// it moved tackles per defender only 11.9 → 10.3 against a real 1.6.
+    /// so the tackle cooldown silently remained the only real limiter and
+    /// the whole decision was decorative. Measured that way it moved
+    /// tackles per defender only 11.9 → 10.3 against a real 1.6.
     ///
     /// One second is the natural cadence: it is roughly how long a
     /// carrier holds a shape before his next touch, which is what creates
     /// or denies the moment.
-    const DECISION_INTERVAL_TICKS: u64 = 100;
+    ///
+    /// ⚠ 100 → 50, AND THAT IS A UNITS FIX, NOT A RATE CHANGE.
+    ///
+    /// The engine alternates full AI ticks with movement-only light ones
+    /// and only the full ones run the state machine, so **one AI tick is
+    /// 20 ms**, not 10 (`MatchPlayer::in_state_time`, `game_tick_light`).
+    /// 100 was therefore a TWO-second cadence while the comment above —
+    /// and the whole argument for the number — says one. 50 is what the
+    /// doc has always described.
+    const DECISION_INTERVAL_TICKS: u16 = 50;
 
-    /// Is this tick one on which the defender re-decides? Entry always
-    /// counts, so a defender arriving on a carrier who has already lost
-    /// control can challenge immediately.
+    /// Is this tick one on which the defender re-decides?
+    ///
+    /// ⚠ THE CLOCK IS TIME IN CONTACT, NOT TIME IN THE STATE.
+    ///
+    /// This read `ctx.in_state_time`, and the comment claimed "entry
+    /// always counts, so a defender arriving on a carrier who has already
+    /// lost control can challenge immediately". Neither half held.
+    /// `Tackling` is entered from up to 25u — every one of the five
+    /// box-emergency routes hands over at that range, and so does
+    /// `Pressing` — while an attempt is only ever rolled inside
+    /// [`TackleEngagement::CONTACT`] (10u), and the state's own distance
+    /// guard `return None`s above this call. So the entry roll was spent
+    /// three metres away and discarded, and the defender then contained
+    /// in silence until the phase came round again.
+    ///
+    /// Measured: **46% of the players in a `Tackling` state are inside
+    /// contact**, and a carrier inside our own area — where a possession
+    /// lasts a second or two — drew 20 commit decisions a match between
+    /// every defender on the pitch. The commitment model was not
+    /// declining those duels; it was never asked about them.
+    ///
+    /// [`MatchPlayer::contact_ticks`] counts the thing the cadence is
+    /// about. It is incremented before the state machine runs, so the
+    /// first tick in contact reads 1 and the roll happens on arrival.
     pub fn is_decision_tick(ctx: &StateProcessingContext) -> bool {
-        ctx.in_state_time % Self::DECISION_INTERVAL_TICKS == 0
+        let t = ctx.player.contact_ticks;
+        t > 0 && (t - 1) % Self::DECISION_INTERVAL_TICKS == 0
     }
 
     /// Probability this defender commits to a challenge at this decision.
@@ -680,7 +763,7 @@ impl TackleDecision {
         let proximity = (1.0 - distance / TackleEngagement::CONTACT.max(1.0)).clamp(0.0, 1.0);
         let reach = 0.65 + proximity * 0.70;
 
-        (Self::BASE
+        let p = (Self::BASE
             * temperament
             * cover_licence
             * necessity
@@ -688,7 +771,10 @@ impl TackleDecision {
             * reach
             * Self::urgency(ctx)
             * Self::box_restraint(ctx))
-        .clamp(0.0, 0.55)
+        .clamp(0.0, 0.55);
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::DuelDiag::note_decision(p, PenaltyRisk::in_own_box(ctx));
+        p
     }
 
     /// How much the state of the match makes this defender go and get it.
@@ -810,12 +896,34 @@ impl TackleDecision {
     /// "A team-mate goal-side of me and near enough to deal with it" is
     /// the question a player actually asks, it works for every role, and
     /// it does not depend on which unit the plan happens to cover.
+    ///
+    /// ⚠ THE GOALKEEPER IS NOT COVER, AND COUNTING HIM MADE
+    /// [`Self::BOX_RESTRAINT_LAST_MAN`] DEAD CODE.
+    ///
+    /// The scan walked the whole roster, and the keeper is goal-side of
+    /// every outfielder who is not standing on his own goal line and
+    /// well inside `COVER_SCAN` of anybody defending his own box. So
+    /// inside our own penalty area — the one place the last-man branch
+    /// exists for — `cover_exists` was unconditionally true: every box
+    /// challenge took `BOX_RESTRAINT` (0.14) and `cover_licence` 1.55,
+    /// and the 0.60 arm written for "the carrier has beaten everyone and
+    /// I am the last man" could not be reached.
+    ///
+    /// He is also the wrong answer to the question. "Is there somebody
+    /// behind me if I miss" asks who deals with the carrier once he is
+    /// past me; the keeper is the thing being protected, and a defender
+    /// who misses in front of him has produced a one-on-one, which is
+    /// the opposite of cover. Excluding him is what makes a genuine last
+    /// man behave like one: `box_restraint` 0.14 → 0.60 and
+    /// `cover_licence` 1.55 → 0.75, a net ×2.1 on exactly the duels
+    /// where a real defender does commit.
     fn cover_exists(ctx: &StateProcessingContext) -> bool {
         let own_goal = ctx.ball().direction_to_own_goal();
         let me = ctx.player.position;
         let my_depth = (own_goal - me).magnitude();
         ctx.players().teammates().all().any(|t| {
             t.id != ctx.player.id
+                && !t.tactical_positions.is_goalkeeper()
                 && (own_goal - t.position).magnitude() < my_depth
                 && (t.position - me).magnitude() < COVER_SCAN
         })
@@ -859,7 +967,19 @@ impl TackleDecision {
 pub struct ContactFoul;
 
 impl ContactFoul {
-    /// How often the decision is taken while engaged, in ticks.
+    /// How often the decision is taken while engaged, in AI ticks — so
+    /// **two real seconds**, not one. One AI tick is 20 ms: the engine
+    /// alternates full ticks with movement-only light ones and only the
+    /// full ones advance `in_state_time` (see `game_tick_light`).
+    ///
+    /// Left at 100 deliberately. Unlike [`TackleDecision`]'s clock this
+    /// one is anchored to the right thing already — dwell in the
+    /// engagement is exactly what a shirt-pull is a function of — so the
+    /// only defect was the doc, and `BASE` below is fitted against this
+    /// cadence and a foul rate that is already 16.3 per team against a
+    /// real ~12. Halving the interval here doubles contact fouls and
+    /// nothing else; it is a calibration change wearing a units fix's
+    /// clothes.
     const DECISION_INTERVAL_TICKS: u64 = 100;
     /// Close enough for contact (~2.5 m).
     const CONTACT_RANGE: f32 = 20.0;

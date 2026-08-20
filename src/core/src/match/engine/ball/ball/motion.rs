@@ -432,10 +432,49 @@ impl Ball {
             if self.velocity.norm_squared() < 0.0001 {
                 // 0.01^2
                 self.velocity = Vector3::zeros();
-                self.position.z = 0.0;
+                // **…but a ball somebody is CARRYING is not lying on the
+                // grass, and its height is not this branch's to write.**
+                //
+                // A carried ball has no velocity at all — `move_to` zeroes
+                // it every tick — so it lands here every tick, and the
+                // height it is climbing towards (`carry_height`, 1.15 m in
+                // a keeper's gloves) was flattened back to zero every time.
+                // `carry_toward` climbs at exactly 0.10 m a tick and the
+                // `airborne` test above reads `z > 0.1`, so a gather off
+                // the deck settled into a perfect two-cycle: 0 → 0.10 →
+                // 0 → 0.10, for the whole two-to-five-second hold.
+                //
+                // On screen that is the keeper standing over the ball
+                // rather than holding it, which is the artefact
+                // `carry_height` was written to fix — reintroduced from
+                // the other side. Seen in `dev_match gather`: z pinned at
+                // 0.10 for 400 consecutive ticks of `HELD`.
+                if self.current_owner.is_none() {
+                    self.position.z = 0.0;
+                }
                 self.spin = Vector3::zeros();
             }
         }
+    }
+
+    /// Move the ball's HEIGHT toward the one its owner carries it at,
+    /// rather than writing it there.
+    ///
+    /// A direct assignment is a teleport on the vertical axis, and the
+    /// vertical axis is the one where a teleport always shows: a keeper's
+    /// gather lifted the ball off the grass into his chest inside a single
+    /// 10 ms tick, and a ball claimed out of the air dropped a metre and a
+    /// half just as fast. Both were reported as the ball "flipping" to the
+    /// player.
+    ///
+    /// `CARRY_RATE` is 0.10 m/tick — 10 m/s, as fast as a man can snatch a
+    /// ball into his chest and no faster. A keeper's gather off the deck
+    /// therefore takes about a tenth of a second and a claim out of the air
+    /// about a fifth, which is what each of them takes.
+    #[inline]
+    fn carry_toward(&mut self, carry: f32) {
+        const CARRY_RATE: f32 = 0.10;
+        self.position.z += (carry - self.position.z).clamp(-CARRY_RATE, CARRY_RATE);
     }
 
     pub(super) fn move_to(&mut self, tick_context: &GameTickContext) {
@@ -472,14 +511,17 @@ impl Ball {
             let dy = owner_position.y - self.position.y;
             let distance_squared = dx * dx + dy * dy;
 
-            if distance_squared <= MAX_OWNER_TELEPORT_DISTANCE_SQUARED {
+            // `held_in_hands` overrides the distance cap: see the branch
+            // below for why a ball in a keeper's gloves is never disowned.
+            if distance_squared <= MAX_OWNER_TELEPORT_DISTANCE_SQUARED || self.held_in_hands {
                 if distance_squared <= SNAP_DISTANCE_SQUARED {
                     // Close enough - snap to owner, at whatever height he is
                     // carrying it: on the deck at his feet, or into his chest
                     // if he is a keeper with it in his gloves.
                     let carry = self.carry_height();
-                    self.position = owner_position;
-                    self.position.z = carry;
+                    self.position.x = owner_position.x;
+                    self.position.y = owner_position.y;
+                    self.carry_toward(carry);
                     self.velocity = Vector3::zeros();
                     self.spin = Vector3::zeros();
                 } else {
@@ -488,15 +530,25 @@ impl Ball {
                     let dir_x = dx / distance;
                     let dir_y = dy / distance;
                     let carry = self.carry_height();
-                    self.position.x += dir_x * BALL_TRACK_SPEED;
-                    self.position.y += dir_y * BALL_TRACK_SPEED;
-                    self.position.z = carry;
+                    let step = BALL_TRACK_SPEED.min(distance);
+                    self.position.x += dir_x * step;
+                    self.position.y += dir_y * step;
+                    self.carry_toward(carry);
                     self.velocity = Vector3::zeros();
                     self.spin = Vector3::zeros();
                 }
             } else {
                 // Owner is too far - this shouldn't happen but is a safety net
-                // Clear ownership and let ball move naturally
+                // Clear ownership and let ball move naturally.
+                //
+                // A ball in a keeper's GLOVES never reaches here (see the
+                // `held_in_hands` term on the test above). `try_save_shot`'s
+                // catch resolves wherever the save physically happened —
+                // anywhere inside the dive reach `SaveModel::wedge` prices,
+                // up to 4 m — and no longer teleports the ball onto him, so
+                // the gap it leaves is real and the tracking above closes it
+                // over the next few ticks. Disowning it for that distance
+                // would hand a caught shot straight back to the six-yard box.
                 #[cfg(feature = "match-logs")]
                 {
                     super::ownership::reception_diag::OWNER_TOO_FAR
@@ -535,7 +587,11 @@ impl Ball {
         }
     }
 
-    pub(super) fn move_to_with_players(&mut self, players: &[MatchPlayer]) {
+    // `pub(crate)` rather than `pub(super)` so `keeper_save_contact_tests`
+    // can drive the owner-tracking directly. The alternative is running a
+    // whole `update_light`, which tests the tick orchestration rather than
+    // how the ball gets into a keeper's hands. Same reason `check_goal` is.
+    pub(crate) fn move_to_with_players(&mut self, players: &[MatchPlayer]) {
         const MAX_OWNER_TELEPORT_DISTANCE_SQUARED: f32 =
             super::MAX_OWNER_TRACK_DISTANCE * super::MAX_OWNER_TRACK_DISTANCE;
         const BALL_TRACK_SPEED: f32 = 1.5;
@@ -547,18 +603,22 @@ impl Ball {
                 let dy = owner.position.y - self.position.y;
                 let dist_sq = dx * dx + dy * dy;
 
-                if dist_sq <= MAX_OWNER_TELEPORT_DISTANCE_SQUARED {
+                // See `move_to`: a held ball ignores the distance cap, and
+                // the carry height is approached rather than written.
+                if dist_sq <= MAX_OWNER_TELEPORT_DISTANCE_SQUARED || self.held_in_hands {
                     if dist_sq <= SNAP_DISTANCE_SQUARED {
                         let carry = self.carry_height();
-                        self.position = owner.position;
-                        self.position.z = carry;
+                        self.position.x = owner.position.x;
+                        self.position.y = owner.position.y;
+                        self.carry_toward(carry);
                         self.velocity = Vector3::zeros();
                     } else {
                         let carry = self.carry_height();
                         let dist = dist_sq.sqrt();
-                        self.position.x += (dx / dist) * BALL_TRACK_SPEED;
-                        self.position.y += (dy / dist) * BALL_TRACK_SPEED;
-                        self.position.z = carry;
+                        let step = BALL_TRACK_SPEED.min(dist);
+                        self.position.x += (dx / dist) * step;
+                        self.position.y += (dy / dist) * step;
+                        self.carry_toward(carry);
                         self.velocity = Vector3::zeros();
                     }
                 } else {

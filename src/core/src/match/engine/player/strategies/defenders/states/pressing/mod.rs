@@ -113,6 +113,24 @@ impl StateProcessingHandler for DefenderPressingState {
                 ));
             }
 
+            // THE PLAN'S PRESSER DOES NOT GET RE-RANKED OUT OF PRESSING.
+            //
+            // The block below is a per-tick geometric rank over the back
+            // line only, and it ejects anybody who is not the single
+            // closest defender to the carrier. `DefensivePlan` nominates
+            // the presser over the whole unit, on a 250 ms cadence, with
+            // an incumbency bonus so the nomination does not swap on
+            // sub-metre movement — and `TackleEngagement::may_engage_carrier`
+            // then licenses ONLY that man to challenge. So the two
+            // disagreeing meant the licensed presser could be handed out
+            // of the state that takes him to the ball, by a rank that has
+            // no say in whether he is allowed to challenge when he gets
+            // there. Same "THE ASSIGNMENT WINS" precedence
+            // `DefenderMarkingState::find_best_marking_target` opens with.
+            if TackleEngagement::is_nominated_presser(ctx) {
+                return None;
+            }
+
             // Role-based coordination: a defender only stays in Pressing
             // while they're still the Primary for the current carrier.
             // When the carrier dribbles past (or another defender gets
@@ -146,6 +164,31 @@ impl StateProcessingHandler for DefenderPressingState {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Intercepting,
                 ));
+            }
+            // …AND A NOMINATED PRESSER IS NOT "NOTHING TO DO".
+            //
+            // Nobody owns the ball for well over half a match — ~1 700
+            // passes at ~1.5 s of flight each — and `DutyAssigner`
+            // deliberately nominates a presser onto a TRAVELLING ball for
+            // exactly that reason: you go WITH the pass, not after it
+            // lands. That change took press duties per refresh 0.25 →
+            // 0.61.
+            //
+            // This branch then threw all of it away. A presser whose
+            // carrier had just released the ball fell straight through to
+            // `HoldingLine`, which declares `ActivityIntensity::Recovery`
+            // — a hard **0.12 of top speed**, a slow walk — for as long as
+            // he held it. So the man the plan had sent to the ball was
+            // capped at walking pace on the half of the match the press is
+            // FOR, and `Defender: Pressing` measured 0.5% of all AI ticks
+            // against `Marking`'s 13.3%.
+            //
+            // `velocity()` already knows where to take him: `my_duty_anchor`
+            // resolves a `Press` duty to the point of attack, and its own
+            // doc says it was extended to cover the in-flight case for
+            // precisely this reason.
+            if TackleEngagement::is_nominated_presser(ctx) {
+                return None;
             }
             Some(StateChangeResult::with_defender_state(
                 DefenderState::HoldingLine,
@@ -270,6 +313,27 @@ impl StateProcessingHandler for DefenderPressingState {
                 (ctx.tick_context.positions.ball.position - ctx.player.position).normalize();
             let speed = ctx.player.skills.physical.pace;
             return Some(direction * speed);
+        }
+
+        // Nobody on the ball and it is further out than the loose-ball
+        // leg above: this is the presser going with a pass in flight.
+        // `my_duty_anchor` resolves his `Press` duty to the point of
+        // attack — the ball, when nobody owns it — which is the same
+        // point `DutyAssigner` nominated him over, so the plan and the
+        // run agree about where the press is happening.
+        //
+        // `Pursuit` rather than `Seek`, for the same reason the carrier
+        // branch above uses it: a ball in flight is going somewhere, and
+        // aiming at where it IS arrives behind it every time.
+        if let Some(anchor) = ctx.team().my_duty_anchor() {
+            return Some(
+                SteeringBehavior::Pursuit {
+                    target: anchor,
+                    target_velocity: ctx.tick_context.positions.ball.velocity,
+                }
+                .calculate(ctx.player)
+                .velocity,
+            );
         }
 
         None

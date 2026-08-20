@@ -4,6 +4,7 @@ use crate::PlayerPositionType;
 use crate::r#match::PassOriginRestart;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::ball::ball::Ball;
+use crate::r#match::engine::ball::ball::CornerWalk;
 use crate::r#match::engine::corner_shape::{CornerRole, CornerShape};
 use crate::r#match::engine::player::events::players::FoulResolver;
 use crate::r#match::engine::set_pieces::{CORNER_DELIVERY_REFERENCE, CornerRoutine};
@@ -55,6 +56,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         field.ball.update_light(context, &field.players, events);
         Self::apply_pending_set_piece_teleport(field);
+        // A corner can become takeable on a light tick too, and a census
+        // that only watched the full ones lost half its sample.
+        #[cfg(feature = "match-logs")]
+        Self::note_corner_setup_box_if_taken(field);
         Self::apply_pending_save_credit(field);
 
         // Shot-flight GK reactivity: normally light ticks skip player
@@ -176,6 +181,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let t = prof_on.then(Instant::now);
         Self::play_ball(field, context, tick_ctx, events);
         Self::apply_pending_set_piece_teleport(field);
+        #[cfg(feature = "match-logs")]
+        Self::note_corner_setup_box_if_taken(field);
         Self::apply_pending_save_credit(field);
         Self::resolve_corner_contest(field, context);
         Self::resolve_cross_contest(field, context);
@@ -195,6 +202,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         #[cfg(feature = "match-logs")]
         Self::sample_defensive_shape(field, context);
+        #[cfg(feature = "match-logs")]
+        Self::sample_duel_gates(field, context);
 
         let t = prof_on.then(Instant::now);
         Self::play_players(field, context, tick_ctx, events);
@@ -270,18 +279,39 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
         }
 
+        // The corner taker's own station: where he has to stand to take the
+        // kick, while he walks the ball there. See `Ball::pending_restart_station`.
+        if let Some((player_id, station)) = field.ball.pending_restart_station.take() {
+            if let Some(idx) = field.player_index(player_id) {
+                field.players[idx].set_piece_station = Some(station);
+            }
+        }
+
         // Corner dead-ball set-up: put both sides into the shape a corner
         // is actually played in (see `Ball::pending_corner_teleports` and
-        // `CornerShape` — there's no stoppage in the sim to walk into it
-        // during, and nobody can cover the ground inside the 50 ms between
-        // the award and the cross).
+        // `CornerShape`).
+        //
+        // ⚠ **The positions are NOT written any more.** The comment this
+        // replaces said there was no stoppage in the sim to walk into the
+        // shape during, and nobody could cover the ground inside the 50 ms
+        // between the award and the cross. Both were true when the corner
+        // was awarded, the ball placed on the arc and the taker teleported
+        // onto it, all on one tick. The corner now waits for its taker to
+        // go and fetch the ball and carry it to the flag — several seconds
+        // — so the stoppage exists, and the twenty walk into the shape
+        // under `CornerHold` exactly as they do in the thirty seconds
+        // before a real one. Writing the positions on top of that is the
+        // last of the corner's three teleports.
         if !field.ball.pending_corner_teleports.is_empty() {
             let stations = std::mem::take(&mut field.ball.pending_corner_teleports);
             for station in stations {
                 if let Some(idx) = field.player_index(station.player_id) {
                     let p = &mut field.players[idx];
-                    p.position = station.position;
-                    p.velocity = Vector3::zeros();
+                    if !CornerWalk::armed() {
+                        // `OF_CORNER_WALK=off`: written, not walked.
+                        p.position = station.position;
+                        p.velocity = Vector3::zeros();
+                    }
                     if station.role == CornerRole::BoxAttacker {
                         // The pushed-up centre-back is the one station that
                         // forces a state instead of pinning a position: he
@@ -300,17 +330,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                             TransitionSource::SetPiece,
                         );
                     } else {
-                        // Pin everyone else where they were put, for the life
-                        // of the corner. Without this the shape unravels
-                        // inside a second: a midfielder dropped into his own
-                        // six-yard box reads the next tick as ordinary open
-                        // play and sprints back out of it.
+                        // Everyone else walks to his station and stays on
+                        // it for the life of the corner. Without the pin
+                        // the shape unravels inside a second: a midfielder
+                        // heading for his own six-yard box reads the next
+                        // tick as ordinary open play and turns round.
                         p.set_piece_station = Some(station.position);
                     }
                 }
             }
-            #[cfg(feature = "match-logs")]
-            Self::note_corner_setup_box(field);
         }
 
         Self::clear_expired_corner_stations(field);
@@ -328,6 +356,31 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// the occasional 1-defender reading in the delivery census, and it is
     /// a measurement artefact rather than a deserted goalmouth. Reading
     /// both is what tells the two apart.
+    /// The box census, on the tick the kick becomes takeable and only
+    /// then.
+    ///
+    /// ⚠ **Called from the tick loop, not from the drain.** The drain runs
+    /// twice per full tick — once after `play_ball` and once after
+    /// dispatch — so a census inside it counted every corner twice; and it
+    /// has to be reached from the LIGHT tick as well, where the ball is
+    /// updated but the players only move, or half the sample is lost.
+    ///
+    /// It also has to fire at the KICK, not at the award. Those used to be
+    /// the same tick. They are now several seconds apart with the walk-in
+    /// in between, and read at the award it would report the open-play
+    /// shape the corner was won from — which is the very thing
+    /// `CornerShape` exists to replace — and report it as a success.
+    #[cfg(feature = "match-logs")]
+    fn note_corner_setup_box_if_taken(field: &MatchField) {
+        if field
+            .ball
+            .corner_shape
+            .is_some_and(|s| s.live_tick == Some(field.ball.current_tick_cached))
+        {
+            Self::note_corner_setup_box(field);
+        }
+    }
+
     #[cfg(feature = "match-logs")]
     fn note_corner_setup_box(field: &MatchField) {
         let Some(shape) = field.ball.corner_shape else {
@@ -387,6 +440,23 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let Some(shape) = field.ball.corner_shape else {
             return;
         };
+        // **Still being set up.** The taker is fetching the ball or
+        // carrying it to the arc, so the kick has not been taken — and
+        // neither of the two release conditions can be reached from here:
+        // first contact needs somebody to touch a ball nobody may touch,
+        // and the ball's last toucher is still whoever put it out, which
+        // reads as "first contact" the moment the test is applied. The
+        // shape holds for the whole walk-in, which is the only time the
+        // players are actually walking into it. `AwaitedRestart` carries
+        // its own timeout, so this cannot deadlock behind a taker who
+        // never arrives.
+        if field
+            .ball
+            .awaiting_restart
+            .is_some_and(|r| r.origin == PassOriginRestart::Corner)
+        {
+            return;
+        }
         let held = field
             .ball
             .current_tick_cached
@@ -964,6 +1034,116 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     DefenceDiag::note_duel((d.position - man.position).magnitude(), line, bucket);
                 }
             }
+        }
+    }
+
+    /// **What happens to the man who has the ball in our box.**
+    ///
+    /// The shape sampler above measures where defenders STAND. This one
+    /// measures what they DO about a carrier who is already among them —
+    /// the question behind "he runs around the penalty area surrounded by
+    /// defenders and nobody tries to take it off him".
+    ///
+    /// Every challenge in the engine, from every state and every role,
+    /// funnels through the same three gates before an attempt is rolled:
+    /// the per-player tackle cooldown (`can_attempt_tackle`), the duel
+    /// gate (`TackleEngagement::may_engage_carrier`), and the commitment
+    /// roll (`TackleDecision`). A defender stopped by any of them looks
+    /// identical from the stands and identical in the aggregate stats —
+    /// he is next to the carrier, doing nothing. Bucketing the pairs by
+    /// which gate stopped them is the only way to tell which one is
+    /// binding.
+    ///
+    /// Sampled every tick, because a challenge is a moment: a
+    /// quarter-second sampler would miss most of the `Tackling` ticks it
+    /// is looking for.
+    #[cfg(feature = "match-logs")]
+    pub(super) fn sample_duel_gates(field: &MatchField, context: &MatchContext) {
+        use crate::mid_run_diag::DuelDiag;
+        use crate::r#match::common_states::TackleEngagement;
+
+        /// Close enough to be in the picture the report describes. 24u = 3 m.
+        const SURROUND_RADIUS: f32 = 24.0;
+
+        let Some(carrier) = field
+            .ball
+            .current_owner
+            .and_then(|id| field.players.iter().find(|p| p.id == id))
+        else {
+            return;
+        };
+        if carrier.tactical_position.current_position.is_goalkeeper() {
+            return;
+        }
+        let attacking_team = carrier.team_id;
+        let Some(defending) = field.players.iter().find(|p| p.team_id != attacking_team) else {
+            return;
+        };
+        let defending_team = defending.team_id;
+        let Some(defending_side) = defending.side else {
+            return;
+        };
+        let plan = context.defence_plan_for_team(defending_team);
+        let presser = plan.presser();
+        // The referee's own test — the ball inside the area the defending
+        // side is protecting. Same question `PenaltyRisk::applies` asks.
+        let in_box = context
+            .penalty_area(defending_side == PlayerSide::Left)
+            .contains(&field.ball.position);
+
+        let mut bodies = 0u64;
+        let mut contested = false;
+        for d in field.players.iter() {
+            if d.team_id == attacking_team || d.tactical_position.current_position.is_goalkeeper() {
+                continue;
+            }
+            DuelDiag::note_cooldown(!d.can_attempt_tackle());
+            let gap = (d.position - carrier.position).magnitude();
+            if gap <= SURROUND_RADIUS {
+                bodies += 1;
+            }
+            let challenging = matches!(
+                d.state,
+                PlayerState::Defender(DefenderState::Tackling)
+                    | PlayerState::Midfielder(MidfielderState::Tackling)
+                    | PlayerState::Forward(ForwardState::Tackling)
+            );
+            if challenging {
+                // An attempt is only ever rolled inside `CONTACT`. Where the
+                // rest of them are standing is the difference between a
+                // defence that declines its challenges and one that never
+                // reaches them.
+                DuelDiag::note_reach(if gap <= TackleEngagement::CONTACT {
+                    0
+                } else if gap <= TackleEngagement::COMMIT {
+                    1
+                } else if gap <= TackleEngagement::DISENGAGE {
+                    2
+                } else {
+                    3
+                });
+            }
+            if challenging && gap <= SURROUND_RADIUS {
+                contested = true;
+            }
+            if gap > TackleEngagement::COMMIT {
+                continue;
+            }
+            // Ordered as the gates are, so the first large bucket is the
+            // binding one.
+            let bucket = if challenging {
+                0
+            } else if !d.can_attempt_tackle() {
+                1
+            } else if presser.is_some_and(|p| p != d.id) {
+                2
+            } else {
+                3
+            };
+            DuelDiag::note_gate(bucket, in_box);
+        }
+        if in_box {
+            DuelDiag::note_box_carry(bodies, contested);
         }
     }
 

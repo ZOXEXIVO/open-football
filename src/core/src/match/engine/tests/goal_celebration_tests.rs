@@ -489,3 +489,46 @@ fn a_goal_at_the_whistle_still_restarts_cleanly() {
     );
     assert!((field.ball.position.x - 420.0).abs() < 1.0);
 }
+
+/// **The ball is PICKED UP out of the net; it does not snap into his hands.**
+///
+/// `GoalCelebration::move_ball` used to write the retriever's own coordinate
+/// into the ball at `CARRY_HEIGHT` on the tick he first came within
+/// `COLLECT_DISTANCE` — up to 75 cm across the grass and the whole metre of
+/// carry height, inside one frame — and he set off with it on the same tick.
+/// Measured over 3 000 recorded goal clips: 1 366 of them show it, a median
+/// 1.9 s after the ball crossed the line. That is the second half of the
+/// report *"it flies through his hands and into the goal, and then instantly
+/// flips back into the goalkeeper's hands"*; the first half was the save
+/// teleport in `Ball::try_save_shot`.
+#[test]
+fn the_ball_is_picked_out_of_the_net_rather_than_snapping_into_his_hands() {
+    let (mut field, mut context) = kickoff();
+    score_at_the_home_end(&mut field, &mut context);
+    handle_goal_reset(&mut field, &mut context);
+
+    let restart_at = context.dead_ball_until_ms;
+    let mut previous = field.ball.position;
+    let mut worst = 0.0f32;
+    let mut owned_ticks = 0u32;
+    while context.total_match_time < restart_at - 10 {
+        context.total_match_time += 10;
+        advance_goal_celebration(&mut field, &mut context);
+        // Only once somebody has it. Before that the ball is running on its
+        // own physics inside the netting, and it arrives there at the pace
+        // the shot was struck at — which is movement, not relocation.
+        if field.ball.current_owner.is_some() {
+            owned_ticks += 1;
+            worst = worst.max((field.ball.position - previous).magnitude());
+        }
+        previous = field.ball.position;
+    }
+    assert!(owned_ticks > 100, "nobody ever collected the ball");
+    // A carried ball moves at the pace of the man carrying it — `RUN` is
+    // 0.48 u/tick — and the pick-up is slower again. Anything near a unit in
+    // one tick is a relocation, not a movement.
+    assert!(
+        worst < 1.0,
+        "the ball jumped {worst:.2} units in one tick after he reached it"
+    );
+}

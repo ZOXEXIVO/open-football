@@ -131,10 +131,14 @@ impl Ball {
         self.tick_carry_tracker(events);
 
         self.awaiting_restart = Some(AwaitedRestart {
+            // Taken from where it died: see `AwaitedRestart::take_from`.
+            take_from: None,
+            carrying: false,
             taker_id: thrower_id,
             spot: throw_pos,
             origin: PassOriginRestart::ThrowIn,
             awarded_tick: context.current_tick(),
+            patience_ticks: AwaitedRestart::PATIENCE_TICKS,
         });
         // Send him. `TakeMe` is the engine's existing "go and get the
         // ball" signal (`MatchPlayer::run_for_ball`), so the taker runs
@@ -145,24 +149,26 @@ impl Ball {
 
     /// One tick of a dead ball waiting for its taker.
     ///
-    /// Pins the ball on the line, hands it over the moment he arrives, and
-    /// falls back to the old teleport if he never does. Runs BEFORE
+    /// Pins the ball where it lies, hands it over the moment he arrives,
+    /// and falls back to the old teleport if he never does. Runs BEFORE
     /// ownership so nothing can claim a ball that is out of play.
+    ///
+    /// A restart with an [`AwaitedRestart::take_from`] — the corner, and
+    /// only the corner — runs the same thing TWICE: he fetches the ball
+    /// from wherever it went out, and then carries it to the arc.
     pub(crate) fn tick_awaited_restart(
         &mut self,
         context: &MatchContext,
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        let Some(await_state) = self.awaiting_restart else {
+        let Some(mut await_state) = self.awaiting_restart else {
             return;
         };
-
-        // The ball is out of play: it does not move and it is nobody's,
-        // whatever else happened this tick.
-        self.position = await_state.spot;
-        self.velocity = Vector3::zeros();
-        self.current_owner = None;
+        // Denominator for the dead-ball census: "twelve refused touches a
+        // match" means nothing without how long the ball is dead for.
+        #[cfg(feature = "match-logs")]
+        RestartCensus::note_dead_ball_tick();
 
         let Some(taker) = players.iter().find(|p| p.id == await_state.taker_id) else {
             // Substituted or sent off between the award and now. Drop the
@@ -172,12 +178,37 @@ impl Ball {
             return;
         };
 
+        // The ball is out of play: it does not move by itself and it is
+        // nobody's, whatever else happened this tick. On the second leg of
+        // a corner it moves with the man CARRYING it, which is the one
+        // case where a dead ball travels — and it travels at his pace,
+        // under his feet, rather than being written onto the arc.
+        //
+        // …the height settles either way. A throw-in's ball is already on
+        // the deck, but an offside is flagged the moment the receiver
+        // reaches the ball and that can be at chest height, so writing the
+        // spot's `z` in would drop it a couple of metres in one tick — the
+        // teleport this whole mechanism exists to avoid, on the one axis
+        // where it is always visible. 0.10 m/tick is a ball dying on the
+        // grass.
+        const SETTLE_RATE: f32 = 0.10;
+        let resting = if await_state.carrying {
+            taker.position
+        } else {
+            await_state.spot
+        };
+        self.position.x = resting.x;
+        self.position.y = resting.y;
+        self.position.z = (self.position.z - SETTLE_RATE).max(await_state.spot.z);
+        self.velocity = Vector3::zeros();
+        self.current_owner = None;
+
         let range = (taker.position - await_state.spot).magnitude();
         let waited = context
             .current_tick()
             .saturating_sub(await_state.awarded_tick);
         let arrived = range <= AwaitedRestart::REACH;
-        if !arrived && waited < AwaitedRestart::PATIENCE_TICKS {
+        if !arrived && waited < await_state.patience_ticks {
             // Keep sending him. `run_for_ball` is a no-op for a player who
             // is already chasing, so this cannot restart his chase clock;
             // what it does do is pick him up again if something else — a
@@ -193,9 +224,55 @@ impl Ball {
         if !arrived {
             // He never got there. The teleport is the backstop, not the
             // behaviour — a restart that never happens stalls the match.
+            //
+            // A restart that still had a leg to run skips it: the point is
+            // to get play going again, and a carry he has not started is
+            // not going to run better than the fetch he just failed.
+            let final_spot = await_state.take_from.take().unwrap_or(await_state.spot);
             #[cfg(feature = "match-logs")]
-            RestartCensus::note_throw_in_teleport();
-            self.pending_set_piece_teleport = Some((await_state.taker_id, await_state.spot));
+            {
+                RestartCensus::note_restart_teleport();
+                RestartCensus::note_restart_timeout_state(taker.state.compact_id());
+                if await_state.origin == PassOriginRestart::GoalKick {
+                    RestartCensus::note_goal_kick_teleport(range);
+                }
+                if await_state.origin == PassOriginRestart::Corner {
+                    RestartCensus::note_corner_leg_timeout(range);
+                }
+            }
+            self.pending_set_piece_teleport = Some((await_state.taker_id, final_spot));
+            await_state.spot = final_spot;
+            self.position.x = final_spot.x;
+            self.position.y = final_spot.y;
+        } else if let Some(take_from) = await_state.take_from.take() {
+            // **He has reached the ball, and the kick is taken somewhere
+            // else.** Second leg: he picks it up and walks it to the arc,
+            // and the ball goes with him because he is holding it.
+            await_state.carrying = true;
+            await_state.spot = take_from;
+            await_state.awarded_tick = context.current_tick();
+            let carry = (taker.position - take_from).magnitude();
+            await_state.patience_ticks = AwaitedRestart::corner_patience_for(carry);
+            self.awaiting_restart = Some(await_state);
+            // His touch, from here on. `clear_expired_corner_stations`
+            // releases the shape when anybody OTHER than the taker touches
+            // the ball, so the stamp has to be his before the walk starts.
+            self.record_touch(
+                await_state.taker_id,
+                taker.team_id,
+                context.current_tick(),
+                true,
+            );
+            // ⚠ **Nothing else can steer him now.** `run_for_ball` sends a
+            // man to the ball and the ball is at his feet, so he reads as
+            // arrived and stands still; `CornerHold` releases anybody
+            // within four metres of it for the same reason. The station is
+            // what walks him to the flag — see `CornerHold::hold_weight`.
+            self.pending_restart_station = Some((await_state.taker_id, take_from));
+            events.add_ball_event(BallEvent::TakeMe(await_state.taker_id));
+            #[cfg(feature = "match-logs")]
+            RestartCensus::note_restart_carry(carry);
+            return;
         }
         #[cfg(feature = "match-logs")]
         RestartCensus::note_restart_taken(waited, arrived);
@@ -218,6 +295,20 @@ impl Ball {
             context.current_tick(),
             true,
         );
+        // **A corner only becomes a corner here** — the taker on the arc
+        // with the ball at his feet, several seconds after it was awarded.
+        // Both of these used to be armed at the award because that WAS the
+        // same tick.
+        if await_state.origin == PassOriginRestart::Corner {
+            if let Some(shape) = self.corner_shape.as_mut() {
+                // The deadline runs from the kick, not from the award, or
+                // the walk-in spends it and the shape drops before the
+                // cross — see `CornerShapeHold::armed_tick`.
+                shape.armed_tick = context.current_tick();
+                shape.live_tick = Some(context.current_tick());
+            }
+            self.corner_contest_resolved = false;
+        }
         events.add_ball_event(BallEvent::Claimed(await_state.taker_id));
     }
 
@@ -235,6 +326,156 @@ impl Ball {
                 }
             }
         }
+    }
+}
+
+/// **A dead ball may not be touched, by anybody, including its taker.**
+///
+/// [`Ball::tick_awaited_restart`] pins the ball on the spot and strips its
+/// owner every tick, and [`Ball::update`] returns immediately afterwards —
+/// so nothing inside the ball's own update can move a ball that is out of
+/// play. Nothing OUTSIDE it knew the rule at all.
+///
+/// The player layer reaches the ball through its own events, which run
+/// after `play_ball` in the same tick (see `TickEngine::game_tick_inner`),
+/// and every one of them writes the ball directly: `GainBall` and
+/// `BallOwnerChange` route to `secure_ball_for`, which SNAPS THE BALL TO
+/// THE PLAYER'S FEET. So a player standing near the spot took the ball off
+/// the line, `tick_awaited_restart` yanked it back on the next tick, and
+/// the cycle repeated for as long as the restart waited.
+///
+/// Traced on a throw-in awarded by the corner flag (`dev_match gather`,
+/// `OF_FRAME_TRACE=gather,miss`): the defending keeper was 1.2 m from the
+/// spot and took the ball nine times in 120 ticks, the ball jumping 1.1 m
+/// to his feet and 1.1 m back on alternate ticks.
+///
+/// ```text
+///  270389  801.51 543.00  own -      catch    WAIT   <- pinned on the touchline
+/// *270390  802.74 534.01  own G200   clear    WAIT   <- GainBall: snapped to him
+/// *270391  801.51 543.00  own -      clear    WAIT   <- pinned again
+/// ```
+///
+/// That is the reported *"the ball bounces off the side of the field and
+/// then appears in the goalkeeper's hands"* verbatim, and it is a
+/// GOALKEEPER problem in practice for a mundane reason: he is the one
+/// player whose states chase a ball he is merely standing next to, and
+/// dead balls near his own goal are the ones he is standing next to.
+///
+/// Enforced in two places on purpose, because that is the split that has
+/// held elsewhere in this engine:
+/// * `PlayerEventDispatcher::dispatch` refuses every ball-touching event —
+///   the backstop, and the reason the artefact cannot come back through a
+///   route nobody has thought of. Same allow-list shape as the `in_net`
+///   guard directly above it, and for the same reason.
+/// * [`KeeperBallClaim::is_favourite`](crate::r#match::goalkeepers::states::
+///   common::KeeperBallClaim) refuses to call a dead ball his, so he does
+///   not walk at it in the first place. Without that half he still shuttles
+///   between `Catching`, `Clearing` and `Standing` beside a ball he can
+///   never have — the state churn is the same shape the sweep-limit and
+///   catch-release bands were widened to remove.
+///
+/// The taker is NOT exempt. He acquires the ball through
+/// `tick_awaited_restart` the moment he arrives, and that is the only
+/// legitimate route: letting him take it through an event would teleport
+/// the ball to him from wherever he had got to, which is the whole
+/// artefact [`AwaitedRestart`] exists to remove.
+///
+/// `OF_DEAD_BALL=off` restores the old behaviour as the A/B.
+pub struct DeadBall;
+
+impl DeadBall {
+    /// False when `OF_DEAD_BALL=off` — a dead ball is touchable again,
+    /// exactly as it used to be.
+    pub fn armed() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| {
+            std::env::var("OF_DEAD_BALL")
+                .map(|v| v != "off" && v != "0")
+                .unwrap_or(true)
+        })
+    }
+
+    /// The man a pending restart is waiting for, or `None` when the ball is
+    /// in play (or the guard is switched off).
+    ///
+    /// Takes the taker rather than the ball so both sides can use it: the
+    /// engine passes `ball.awaiting_restart.map(|r| r.taker_id)` and the
+    /// player states pass `BallMetadata::restart_taker`, which is the same
+    /// value copied into their view of the tick.
+    #[inline]
+    pub fn taker(restart_taker: Option<u32>) -> Option<u32> {
+        if !Self::armed() {
+            return None;
+        }
+        restart_taker
+    }
+
+    /// Is the ball out of play right now?
+    #[inline]
+    pub fn is_dead(restart_taker: Option<u32>) -> bool {
+        Self::taker(restart_taker).is_some()
+    }
+}
+
+/// **Whether a corner is walked or placed.**
+///
+/// The corner used to be three teleports on one tick: the ball jumped to
+/// the arc (a mean 220u, **27.5 m** — the largest relocation left in the
+/// engine), the taker was teleported onto it, and `CornerShape` wrote all
+/// twenty other players into the set-piece shape. Then the cross was
+/// struck 50 ms later.
+///
+/// Armed, the taker fetches the ball from wherever it went out and carries
+/// it to the arc ([`AwaitedRestart::take_from`]), which takes several
+/// seconds — and those seconds are the stoppage the shape needed all
+/// along, so the twenty walk into it under `CornerHold` instead of being
+/// written there.
+///
+/// ⚠ **OFF BY DEFAULT, and the measurement is why.** `OF_CORNER_WALK=on`
+/// arms it. The corner carries its own calibration — the routine chooser,
+/// the discrete aerial contest and the box-occupancy census all key off a
+/// shape that used to be exact and instantaneous — and 60 matches an arm
+/// say the walk is not yet worth what it costs:
+///
+/// | per match | placed | walked |
+/// |---|---|---|
+/// | box at the kick, defenders | 7.0 (worst 7) | 6.5 (worst 2) |
+/// | box at the kick, **attackers** | **5.4** (real 5-7) | **3.0** |
+/// | corners | 8.9 (real ~10.4) | 7.8 |
+/// | ball dead | 287 s | 400 s |
+/// | goals | 2.67 | 2.62 |
+///
+/// Two things have to land before it can be the default, and both are
+/// visible in that table:
+///
+/// * **The attacking box does not fill.** The stations are planned and the
+///   men are released to walk to them, but the kick is taken the moment
+///   the TAKER is ready — which for a short fetch is a couple of seconds,
+///   nowhere near long enough for five runners to arrive. A real taker
+///   waits for the box. The kick already waits for one man; it has to wait
+///   for the shape.
+/// * **44% of corners never complete the fetch** and fall back to the
+///   backstop teleport, which is the artefact this exists to remove.
+///   Raising the bound from 12 s to 30 s
+///   ([`AwaitedRestart::CORNER_CEILING`]) barely moved it, so the takers
+///   are not running out of clock — and `corner_setup_tests::
+///   the_taker_actually_runs_at_the_ball` shows one sprinting to the ball
+///   and setting it down well inside budget, so it is not the mechanism
+///   either. The next instrument is a corner-specific taker-state
+///   histogram at timeout, the same one that solved the goal kick
+///   ([[goal-kick-restart-teleport]]).
+pub struct CornerWalk;
+
+impl CornerWalk {
+    /// True only when `OF_CORNER_WALK=on`. Off, the ball, the taker and
+    /// the shape are all placed, exactly as they always were.
+    pub fn armed() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| {
+            std::env::var("OF_CORNER_WALK")
+                .map(|v| v == "on" || v == "1")
+                .unwrap_or(false)
+        })
     }
 }
 

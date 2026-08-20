@@ -107,8 +107,24 @@ pub struct CornerStation {
 /// took the kick.
 #[derive(Debug, Clone, Copy)]
 pub struct CornerShapeHold {
-    /// Engine tick the stations were armed on.
+    /// Engine tick the deadline runs from — the stations going up while
+    /// the corner is being set, and then the kick itself.
+    ///
+    /// **Re-stamped when the corner goes live**, because the two are no
+    /// longer the same tick: the taker has to fetch the ball and carry it
+    /// to the arc first (see [`AwaitedRestart::take_from`]), and a
+    /// deadline measured from the award would expire during the walk-in
+    /// and drop the shape before the cross was struck.
+    ///
+    /// [`AwaitedRestart::take_from`]: crate::r#match::engine::ball::ball::AwaitedRestart::take_from
     pub armed_tick: u64,
+    /// The tick the kick became takeable — the taker on the arc with the
+    /// ball at his feet — or `None` while he is still bringing it.
+    ///
+    /// Read for two things that must not happen during the set-up: the
+    /// box census (which would otherwise sample the open-play shape and
+    /// call it a corner shape) and the aerial contest.
+    pub live_tick: Option<u64>,
     /// The taker. He is the only man allowed to touch the ball without
     /// ending the set piece — the award stamps him as last toucher and so
     /// does his own delivery, so "anybody else has touched it" is the

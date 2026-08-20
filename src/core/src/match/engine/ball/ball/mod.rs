@@ -32,7 +32,7 @@ pub mod net;
 pub mod motion;
 pub mod ownership;
 mod restart;
-pub use restart::ThrowIn;
+pub use restart::{CornerWalk, DeadBall, ThrowIn};
 // `pub` for `dead_ball_diag` — the stall attribution counters are read by
 // the dev harness, same as `ownership::reception_diag`.
 pub mod stall;
@@ -125,11 +125,51 @@ pub struct AwaitedRestart {
     pub taker_id: u32,
     /// Where the ball is and where he has to get to.
     pub spot: Vector3<f32>,
+    /// Where the restart must be TAKEN from, when that is not where the
+    /// ball came to rest — so the taker has to bring it there.
+    ///
+    /// **Only the corner has one, and it is the whole reason the leg
+    /// exists.** Every other restart is taken from where the ball died: a
+    /// throw-in from the point it crossed the touchline, a goal kick from
+    /// the goal area it went out over. A corner is taken from the ARC
+    /// while the ball goes out anywhere along the byline — measured a mean
+    /// 220u, **27.5 m**, from the flag — so placing the ball on the arc is
+    /// a teleport of exactly that size, and it was the largest one left in
+    /// the engine.
+    ///
+    /// Consumed on arrival: the taker picks the ball up, `spot` becomes
+    /// this point and [`Self::carrying`] goes up, so the second leg reuses
+    /// the same wait, the same nudge and the same backstop as the first.
+    pub take_from: Option<Vector3<f32>>,
+    /// True once he has reached the ball and is carrying it to `spot`.
+    ///
+    /// While it is set the ball rides on him rather than lying on the
+    /// spot — he is walking to the flag with it, which is what a corner
+    /// taker does — and [`CornerHold`](crate::r#match::player::strategies::
+    /// common::states::CornerHold) steers him there, because everything
+    /// that normally moves a player toward a ball reads this one as
+    /// already reached.
+    pub carrying: bool,
     /// Which restart this is, re-applied when he arrives — the origin
     /// decides offside exemption and how the delivery is scored.
     pub origin: PassOriginRestart,
     /// The tick it was awarded on, for the patience bound.
     pub awarded_tick: u64,
+    /// How long THIS restart waits, in engine ticks.
+    ///
+    /// A throw-in's taker is chosen for being near the ball —
+    /// `ThrowIn::pick_thrower` weights distance at half the score — so the
+    /// walk is short by construction and one constant covers it. A goal
+    /// kick's taker is not chosen at all: it is the goalkeeper, and he is
+    /// wherever the shot that went out of play left him, which can be the
+    /// far post at the end of a dive. `run_for_ball` will not interrupt a
+    /// dive either (it is a committed action), so up to 1.8 s of the wait
+    /// can be spent before he takes his first step towards it.
+    ///
+    /// Measured with the flat 5 s bound: 11.2% of goal kicks timed out with
+    /// the keeper still **15.1 m** short, and a timeout is the teleport
+    /// this whole mechanism exists to avoid. See [`Self::patience_for`].
+    pub patience_ticks: u64,
 }
 
 impl AwaitedRestart {
@@ -147,6 +187,59 @@ impl AwaitedRestart {
     /// run, and short enough that a taker who gets stuck (blocked, or
     /// pulled into another state) cannot hold the match up.
     pub const PATIENCE_TICKS: u64 = 500;
+
+    /// The wait a `walk` of this length actually needs, in engine ticks.
+    ///
+    /// [`Self::PATIENCE_TICKS`] as a floor, plus the ground at 1.6 m/s —
+    /// half the 3.6 m/s the census measures a fetch at, so the bound is
+    /// never the thing that decides the outcome for a taker who is
+    /// genuinely on his way. Capped at 12 s, which is shorter than a real
+    /// goal kick takes and long enough that nothing can stall behind it.
+    pub fn patience_for(walk: f32) -> u64 {
+        Self::patience_within(walk, Self::CEILING)
+    }
+
+    /// Longest an ordinary restart may wait. 12 s — shorter than a real
+    /// goal kick takes and long enough that nothing can stall behind it.
+    const CEILING: u64 = 1200;
+
+    /// …and a CORNER's, which is a different job.
+    ///
+    /// Every other restart is taken by a man chosen for being near the
+    /// ball. A corner's taker is chosen for `corners` and `crossing` and
+    /// can be anywhere on the pitch — measured, a mean 28.8 m from where
+    /// the ball went out, and the tail runs past forty — and then he has
+    /// the ball to carry to the flag on top of that.
+    ///
+    /// ⚠ At the ordinary 12 s ceiling **45% of corners timed out and took
+    /// the backstop teleport**, which is the artefact the walk exists to
+    /// remove. The census that says so is the one that matters: the takers
+    /// who timed out were in `TakeBall` — *coming* — with a mean **34.7 m
+    /// still to go**, not standing still the way the goal kick's were
+    /// ([[goal-kick-restart-teleport]]'s histogram). A man who is on his
+    /// way and runs out of clock needs more clock.
+    ///
+    /// 30 s is what a real corner takes, and the wait is not dead time in
+    /// the sense that matters — it is the stoppage both sides spend
+    /// walking into the shape, which is the whole reason `CornerShape`
+    /// exists.
+    const CORNER_CEILING: u64 = 3000;
+
+    /// The wait for a corner leg — the fetch or the carry.
+    pub fn corner_patience_for(walk: f32) -> u64 {
+        Self::patience_within(walk, Self::CORNER_CEILING)
+    }
+
+    fn patience_within(walk: f32, ceiling: u64) -> u64 {
+        /// Engine ticks per game unit at 1.6 m/s.
+        const TICKS_PER_UNIT: f32 = 8.0;
+        // Clamped BEFORE the cast. `f32 as u64` saturates rather than
+        // wrapping, so a non-finite or absurd walk produced `u64::MAX` and
+        // the addition below overflowed — a panic reachable from any caller
+        // that hands this a garbage distance.
+        let ground = (walk.max(0.0) * TICKS_PER_UNIT).min(ceiling as f32) as u64;
+        (Self::PATIENCE_TICKS + ground).min(ceiling)
+    }
 }
 
 /// Snapshot of the offside-relevant geometry at the moment a pass is
@@ -1000,6 +1093,16 @@ pub struct Ball {
     /// A dead ball lying on the touchline waiting for its taker to WALK to
     /// it. See [`AwaitedRestart`].
     pub awaiting_restart: Option<AwaitedRestart>,
+    /// `(player, where he has to stand)` for the man CARRYING a dead ball
+    /// to the spot it is taken from — the corner taker walking the ball to
+    /// the arc, and nothing else.
+    ///
+    /// Same reason as [`Self::pending_set_piece_teleport`]: the ball can
+    /// only mutate itself, and a station lives on the player. Drained into
+    /// `MatchPlayer::set_piece_station` by the engine, which is what
+    /// `CornerHold` steers off — see [`AwaitedRestart::carrying`] for why
+    /// nothing else can move him.
+    pub pending_restart_station: Option<(u32, Vector3<f32>)>,
     /// The corner set-up: where all twenty other players stand while the
     /// corner is taken, as planned by `CornerShape::plan` in the corner
     /// branch of `check_wide_of_goal` and drained by the engine alongside
@@ -1011,6 +1114,13 @@ pub struct Ball {
     /// ground, and without the plan the "corner shape" is just wherever
     /// open play left everyone: measured at 3-6 defenders in the box
     /// against a real 8-10, with a low of one (the goalkeeper).
+    ///
+    /// ⚠ **They are stations, not teleports, since the corner started
+    /// waiting for its taker to fetch the ball.** That wait — a fetch and
+    /// a carry, several seconds of it — is the stoppage this comment says
+    /// the sim does not have, so both sides now WALK into the shape under
+    /// `CornerHold` and the positions are no longer written. See
+    /// `TickEngine::apply_pending_set_piece_teleport`.
     pub pending_corner_teleports: Vec<CornerStation>,
     /// The corner shape currently pinned on the players, if any — when it
     /// went up and who is taking the kick. `None` on every tick that is
@@ -1490,6 +1600,7 @@ impl Ball {
             cached_landing_position: Vector3::new(x, y, 0.0),
             pending_set_piece_teleport: None,
             awaiting_restart: None,
+            pending_restart_station: None,
             pending_corner_teleports: Vec::new(),
             corner_shape: None,
             corner_contest_resolved: true,
@@ -2206,6 +2317,19 @@ impl Ball {
                 },
             )
             .unwrap_or('-');
+        // Nearest keeper, so the trace can answer whether he was on the
+        // floor when the ball came to him — see `Sample::gk`.
+        let gk = players
+            .iter()
+            .filter(|p| {
+                p.tactical_position.current_position.position_group()
+                    == crate::PlayerFieldPositionGroup::Goalkeeper
+            })
+            .map(|p| {
+                let gap = (p.position.x - self.position.x).hypot(p.position.y - self.position.y);
+                (gap, p.height, p.state.compact_id())
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
         frame_trace::FrameTrace::note_tick(frame_trace::Sample {
             tick,
             pos: self.position,
@@ -2215,6 +2339,7 @@ impl Ball {
             in_net: self.in_net.is_some(),
             awaiting_restart: self.awaiting_restart.is_some(),
             held: self.held_in_hands,
+            gk,
         });
     }
 

@@ -792,6 +792,35 @@ pub struct BallMetadata {
     /// re-rolling the duel the contest just decided.
     /// See `Ball::aerial_contest_winner`.
     pub aerial_contest_winner: Option<u32>,
+
+    /// The man a dead ball is waiting for, if one is
+    /// (`Ball::awaiting_restart`).
+    ///
+    /// **The loose-ball election must not run on a ball that is out of
+    /// play.** A restart's taker is not racing anybody — the ball is his
+    /// by award — but to `should_yield_takeball` he was simply a player in
+    /// `TakeBall` with a teammate nearer the ball, which for a goal kick
+    /// he almost always is. So he was yielded straight back to `Standing`
+    /// on the tick after every nudge and never took a step: measured, of
+    /// the goal kicks whose keeper failed to arrive, **100% of them found
+    /// him standing still**, a mean 15.7 m short, and the backstop
+    /// teleport put the ball under him — which is the artefact
+    /// [`AwaitedRestart`] exists to remove.
+    ///
+    /// It is also what stops the other twenty-one converging on a dead
+    /// ball they are not allowed to touch.
+    pub restart_taker: Option<u32>,
+
+    /// The taker of a corner while he is CARRYING the ball to the arc, if
+    /// one is (`AwaitedRestart::carrying`).
+    ///
+    /// He is the one player a dead ball moves with, and every rule that
+    /// normally puts a man on a ball reads him as already there: the ball
+    /// is at his feet, so `run_for_ball` stops him and `CornerHold`'s
+    /// release fades to nothing. His set-piece station is what actually
+    /// walks him to the flag, and this is what tells `CornerHold` to obey
+    /// it instead of standing him down as the chaser.
+    pub restart_carrier: Option<u32>,
 }
 
 impl BallMetadata {
@@ -835,6 +864,12 @@ impl BallMetadata {
         self.recollect_blocked_player = field.ball.blocked_recollect_player();
         self.held_in_hands = field.ball.held_in_hands;
         self.aerial_contest_winner = field.ball.aerial_contest_winner;
+        self.restart_taker = field.ball.awaiting_restart.map(|r| r.taker_id);
+        self.restart_carrier = field
+            .ball
+            .awaiting_restart
+            .filter(|r| r.carrying)
+            .map(|r| r.taker_id);
         self.deliberate_kick_by = if field.ball.last_touch_was_deliberate_kick {
             field
                 .ball
@@ -871,6 +906,8 @@ impl From<&MatchField> for BallMetadata {
             deliberate_kick_by: None,
             hands_released_by: None,
             aerial_contest_winner: None,
+            restart_taker: None,
+            restart_carrier: None,
         };
         meta.update(field);
         meta

@@ -383,8 +383,34 @@ impl DefenderTacklingState {
             .context
             .penalty_area(ctx.player.side == Some(PlayerSide::Left))
             .contains(&ctx.tick_context.positions.ball.position);
+        // ⚠ 0.008 → 0.06, AND THE OLD VALUE WAS BELOW ITS OWN CLAMP.
+        //
+        // `base_foul` before this line is 0.34-0.68 for a plausible
+        // defender, so ×0.008 lands on 0.003-0.005 — under the
+        // `clamp(0.006, …)` two lines down. Every in-box challenge
+        // therefore fouled at exactly 0.6%, identically, whatever the
+        // defender's aggression, discipline or condition and whether or
+        // not he won it: the constant was saturating a floor rather than
+        // expressing a tendency, and any value below ~0.012 produced the
+        // same match.
+        //
+        // It was also the THIRD restraint stacked on one event.
+        // `TackleDecision::box_restraint` already prices whether he
+        // commits at all (0.14 with cover, 0.60 as the last man) and
+        // `ContactFoul::BOX_PENALTY_RESTRAINT` prices the non-challenge
+        // fouls; between them the tackle path was contributing on the
+        // order of 0.02 penalties a match and the engine sat at 0.18
+        // against a real 0.25-0.30 — under the target while reading as
+        // if the penalty budget were spent, which is why every previous
+        // pass over this area correctly refused to loosen anything.
+        //
+        // 0.06 says a challenge in your own box is about fifteen times
+        // less likely to be a foul than the same challenge in open play
+        // — he goes in with his feet and not through the man — which is
+        // a tendency rather than a floor, and lets the attributes
+        // upstream reach the outcome again.
         if in_own_box {
-            base_foul *= 0.008;
+            base_foul *= 0.06;
         }
         // Self-preservation on a booking: a player carrying a yellow
         // measurably tones the challenges down (and managers hook the
