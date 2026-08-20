@@ -6,6 +6,39 @@ pub struct DefensiveOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
 }
 
+/// **Is this player on the pitch at all, or is he the sent-off sentinel?**
+///
+/// A player sent off is stashed at `(-500, -500)` rather than removed from
+/// the collection, and the four defensive-line calculations below have to
+/// drop him: one red-carded defender otherwise drags the line's `min_x` to
+/// −500 and kills the offside logic for the rest of the match.
+///
+/// ⚠ **They used to test `x >= 0.0` for that**, which was the same thing
+/// right up until a player could legitimately stand outside the rectangle.
+/// He can now: the man fetching a ball that has run out of play goes into
+/// the run-off, up to 3.6 m past his own byline
+/// ([`RunOff::player_bounds`]), and every one of those tests would have
+/// quietly dropped him from his own side's line and from the offside
+/// calculation built on it. For a goal kick that is the GOALKEEPER, so the
+/// line would be computed without the deepest man on the pitch at exactly
+/// the moment he is deepest.
+///
+/// [`RunOff::player_bounds`]: crate::r#match::engine::ball::ball::RunOff::player_bounds
+pub struct PitchPresence;
+
+impl PitchPresence {
+    /// Left of this nobody is playing football. −100 units is 12.5 m
+    /// outside the pitch: four times the run-off and a fifth of the way to
+    /// the sentinel, so it cannot be reached from either side by accident.
+    const SENTINEL_X: f32 = -100.0;
+
+    /// True for anybody actually taking part, run-off included.
+    #[inline]
+    pub fn is_playing(position: Vector3<f32>) -> bool {
+        position.x > Self::SENTINEL_X
+    }
+}
+
 /// Role a defender plays relative to the current ball carrier.
 ///
 /// Computed per-tick from geometry (no flag storage), so when the
@@ -140,16 +173,16 @@ impl<'p> DefensiveOperationsImpl<'p> {
 
     /// Find the opponent defensive line position — single-pass, zero allocation
     pub fn find_defensive_line(&self) -> f32 {
-        // `x >= 0.0` drops sent-off players (stashed off-pitch at
-        // (-500,-500)); one red-card defender otherwise drags min_x to
-        // -500 and kills the Right-side offside logic for the rest of
-        // the match.
+        // Drops sent-off players (stashed off-pitch at (-500,-500)); one
+        // red-card defender otherwise drags min_x to -500 and kills the
+        // Right-side offside logic for the rest of the match. See
+        // [`PitchPresence`] for why the test is not `>= 0.0`.
         let (sum, count, min_x, max_x) = self
             .ctx
             .players()
             .opponents()
             .all()
-            .filter(|p| p.tactical_positions.is_defender() && p.position.x >= 0.0)
+            .filter(|p| p.tactical_positions.is_defender() && PitchPresence::is_playing(p.position))
             .map(|p| p.position.x)
             .fold((0.0f32, 0u32, f32::MAX, f32::MIN), |(s, c, mn, mx), x| {
                 (s + x, c + 1, mn.min(x), mx.max(x))
@@ -173,7 +206,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
             .players()
             .teammates()
             .defenders()
-            .filter(|p| p.position.x >= 0.0) // exclude sent-off sentinel
+            .filter(|p| PitchPresence::is_playing(p.position))
             .map(|p| p.position.x)
             .fold((0.0f32, 0u32), |(s, c), x| (s + x, c + 1));
 
@@ -208,7 +241,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
             .players()
             .teammates()
             .defenders()
-            .filter(|d| d.position.x >= 0.0) // exclude sent-off sentinel
+            .filter(|d| PitchPresence::is_playing(d.position))
             .all(|d| match self.ctx.player.side {
                 Some(PlayerSide::Left) => d.position.x >= self.ctx.player.position.x,
                 Some(PlayerSide::Right) => d.position.x <= self.ctx.player.position.x,
@@ -223,7 +256,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
             .players()
             .teammates()
             .defenders()
-            .filter(|d| d.position.x >= 0.0) // exclude sent-off sentinel
+            .filter(|d| PitchPresence::is_playing(d.position))
             .map(|d| d.position.x)
             .fold((0.0f32, 0u32), |(s, c), x| (s + x, c + 1));
 

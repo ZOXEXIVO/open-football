@@ -3,7 +3,8 @@
 //! flow stages the set-piece teleport via `pending_set_piece_teleport`
 //! since the ball can't move other players' positions itself.
 
-use super::Ball;
+use super::runoff::ExitAxis;
+use super::{AwaitedRestart, Ball, CornerWalk, RunOff};
 use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::engine::corner_shape::{CornerShape, CornerShapeHold};
@@ -68,6 +69,21 @@ impl Ball {
         // in the net until the restart, sitting permanently inside
         // `is_goal`, so the durable marker is the one that has to gate this.
         if self.goal_scored || self.in_net.is_some() {
+            return;
+        }
+
+        // ⚠ **AND NOT WHILE THE BALL IS OUT OF PLAY.**
+        //
+        // `GoalPosition::is_goal` is a pure half-space test — `x <= 0`,
+        // `|y - centre| <= GOAL_WIDTH`, `z <= GOAL_HEIGHT` — with no depth
+        // bound, because until the ball started running out past the line
+        // nothing could be behind the goal without having gone into it.
+        // Now something can: a shot that misses by a foot is awarded a
+        // goal kick and then rolls on behind the goal, and the moment its
+        // `y` drifts inside the posts it satisfies every clause above. The
+        // engine would award a goal off a miss, silently, several seconds
+        // after the shot. See [`RunOff`].
+        if self.awaiting_restart.is_some() {
             return;
         }
 
@@ -289,9 +305,9 @@ impl Ball {
     /// frame, which measure against x = 0 exactly.
     fn goal_kick_spot(&self, side: GoalSide, exit_y: f32) -> Vector3<f32> {
         // Far enough inside the line that no endline resolver reads the
-        // ball as still out, and short enough that nothing moves a viewer
-        // could see: 2u is 25 cm.
-        const BYLINE_INSET: f32 = 2.0;
+        // ball as still out, and that the keeper carrying it back finishes
+        // his walk ON the pitch — see [`AwaitedRestart::SPOT_INSET`].
+        const BYLINE_INSET: f32 = AwaitedRestart::SPOT_INSET;
         let x = match side {
             GoalSide::Home => BYLINE_INSET,
             GoalSide::Away => self.field_width - BYLINE_INSET,
@@ -331,6 +347,7 @@ impl Ball {
         &mut self,
         gk_id: u32,
         spot: Vector3<f32>,
+        runs_out: bool,
         context: &MatchContext,
         players: &[MatchPlayer],
         events: &mut EventCollection,
@@ -343,18 +360,30 @@ impl Ball {
             .map(|p| (p.position - spot).magnitude())
             .unwrap_or(0.0);
         #[cfg(feature = "match-logs")]
-        crate::mid_run_diag::RestartCensus::note_goal_kick(walk);
+        RestartCensus::note_goal_kick(walk);
 
-        // Only the horizontal axes are written. `tick_awaited_restart`
-        // settles the height at 10 cm a tick, which matters for the
-        // over-the-bar caller — its ball is three metres up when the
-        // restart is awarded, and writing `spot.z` in here would drop it
-        // to the grass in a single tick: the same teleport, on the axis
-        // where it always shows.
-        self.position.x = spot.x;
-        self.position.y = spot.y;
-        self.velocity = Vector3::zeros();
-        self.spin = Vector3::zeros();
+        // **Nothing is written at all when the ball runs out.** It has
+        // just crossed the byline and it goes on going — behind the goal,
+        // across the run-off, until the hoardings stop it — and the keeper
+        // fetches it from there and brings it back to `spot`. That is the
+        // reported *"the ball must go beyond the goal, and the goalkeeper
+        // must put it into play"*. See [`RunOff`];
+        // `OF_RUN_OUT=off` restores the snap below.
+        //
+        // Switched off — or refused by the caller, which is the ball that
+        // crossed BETWEEN THE POSTS and hit the netting — only the
+        // horizontal axes are written. `tick_awaited_restart` settles the
+        // height at 10 cm a tick, which matters for the over-the-bar
+        // caller: its ball is three metres up when the restart is awarded,
+        // and writing `spot.z` in here would drop it to the grass in a
+        // single tick — the same teleport, on the axis where it always
+        // shows.
+        if !runs_out {
+            self.position.x = spot.x;
+            self.position.y = spot.y;
+            self.velocity = Vector3::zeros();
+            self.spin = Vector3::zeros();
+        }
 
         // Out of play and NOBODY'S. Ownership is what `move_to` tracks the
         // ball by, so granting it here is what dragged the ball across the
@@ -380,17 +409,26 @@ impl Ball {
         // waits. Same reason `check_throw_in` does it.
         self.tick_carry_tracker(events);
 
-        self.awaiting_restart = Some(super::AwaitedRestart {
-            // Taken from where it died: see `AwaitedRestart::take_from`.
-            take_from: None,
+        #[cfg(feature = "match-logs")]
+        if runs_out {
+            RestartCensus::note_run_out_begun();
+        }
+        self.awaiting_restart = Some(AwaitedRestart {
+            // `spot` follows the ball out and is latched when it stops;
+            // `take_from` is the goal-area point the kick is taken from and
+            // is fixed here. See `AwaitedRestart::take_from`.
+            take_from: runs_out.then_some(spot),
+            settled: !runs_out,
             carrying: false,
             taker_id: gk_id,
-            spot,
+            spot: if runs_out { self.position } else { spot },
             origin: PassOriginRestart::GoalKick,
             awarded_tick: context.current_tick(),
             // The keeper is not chosen for being near it — see
-            // `AwaitedRestart::patience_ticks`.
-            patience_ticks: super::AwaitedRestart::patience_for(walk),
+            // `AwaitedRestart::patience_ticks`. Recomputed against the real
+            // distance once the ball comes to rest, because until it does
+            // this is measured against a spot the ball is not on.
+            patience_ticks: AwaitedRestart::patience_for(walk),
         });
         events.add_ball_event(BallEvent::TakeMe(gk_id));
     }
@@ -407,7 +445,20 @@ impl Ball {
         // A ball already in the goal is not a ball going out of play — see
         // `Ball::in_net`. Without this, one settling against the roof
         // netting reads as a skied shot and awards a goal kick.
-        if self.goal_scored || self.in_net.is_some() {
+        //
+        // Nor is one that has ALREADY been put out of play and is running
+        // out behind the goal: it is over the byline and above the bar for
+        // the whole run-out, so this would re-award the same goal kick on
+        // every tick of it and reset the patience clock each time.
+        if self.goal_scored || self.in_net.is_some() || self.awaiting_restart.is_some() {
+            return;
+        }
+
+        // Nor a ball somebody is holding — see `check_wide_of_goal`. It
+        // cannot reach `is_over_goal` today (a carried ball rides at
+        // 1.15 m and the bar is at 2.44) but the rule is the same one and
+        // stating it here costs a branch.
+        if self.current_owner.is_some() {
             return;
         }
 
@@ -434,20 +485,30 @@ impl Ball {
         if let Some(gk) = players.iter().find(|p| {
             p.side == Some(defending_side) && p.tactical_position.current_position.is_goalkeeper()
         }) {
-            // The ball dies on the goal line where it went over, the same
-            // as one that went out beside the post. It is three metres up
-            // when this fires, so the only thing left to travel is the
-            // HEIGHT — `tick_awaited_restart` settles that at 10 cm a tick
-            // while the keeper walks — and the horizontal jump that used to
-            // put it over the six-yard box is gone. See `goal_kick_spot`.
-            let spot = self.goal_kick_spot(over_side, self.position.y);
+            // The goal kick is taken from the point on the goal line the
+            // ball went over — `goal_kick_spot` insets it by a stride — and
+            // the ball itself flies on. A skied shot is three metres up and
+            // still climbing when this fires; it clears the netting, comes
+            // down behind the goal and runs to the hoardings, which is
+            // where a real one goes and where the keeper then walks to
+            // fetch it. See [`RunOff`].
+            let byline = match over_side {
+                GoalSide::Home => 0.0,
+                GoalSide::Away => context.field_size.width as f32,
+            };
+            let exit_y = self
+                .line_crossing(ExitAxis::Endline, byline)
+                .map(|p| p.y)
+                .unwrap_or(self.position.y);
+            let spot = self.goal_kick_spot(over_side, exit_y);
             #[cfg(feature = "match-logs")]
             super::frame_trace::FrameTrace::note(format!(
-                "check_over_goal: over the bar at ({:.1}, {:.1}, {:.2}) -> goal kick, GK {} walks to ({:.1}, {:.1})",
+                "check_over_goal: over the bar at ({:.1}, {:.1}, {:.2}) -> goal kick, GK {} takes it from ({:.1}, {:.1})",
                 self.position.x, self.position.y, self.position.z, gk.id, spot.x, spot.y
             ));
             let gk_id = gk.id;
-            self.award_goal_kick(gk_id, spot, context, players, events);
+            let runs_out = RunOff::armed();
+            self.award_goal_kick(gk_id, spot, runs_out, context, players, events);
         }
     }
 
@@ -471,7 +532,12 @@ impl Ball {
         // that has gone OUT. Ahead of everything else in here: the corner /
         // goal-kick decision below would otherwise fire on every tick of
         // every celebration.
-        if self.goal_scored || self.in_net.is_some() {
+        //
+        // The same holds for a ball that is already out of play. It spends
+        // its whole run-out past the byline, so without this the corner or
+        // goal kick is re-awarded every tick, `awarded_tick` is rewritten
+        // each time and the patience bound becomes unreachable.
+        if self.goal_scored || self.in_net.is_some() || self.awaiting_restart.is_some() {
             return;
         }
 
@@ -513,8 +579,20 @@ impl Ball {
         // position clamp can pin a keeper on his own goal line, and a
         // keeper standing there with it in his gloves is holding the
         // ball, not putting it out.
+        //
+        // ⚠ **The owner test now covers the OUTSIDE-the-posts case too**,
+        // and it did not have to before. It was safe to award a corner or
+        // a goal kick against a ball somebody was carrying past the byline
+        // beside the post, because nobody could get there: the player
+        // clamp held everyone within 12.5 cm of the line. It no longer
+        // does — the taker of a restart may go 3.6 m into the run-off
+        // (`MatchPlayer::check_boundary_collision`) — so a keeper who
+        // collects the ball beyond his own byline and turns to bring it
+        // back would otherwise be awarding a corner against himself, once
+        // per tick, for as long as he held it. Carrying the ball out is
+        // not putting it out.
         let outside_posts = (self.position.y - goal_center_y).abs() > goal_half_width;
-        if !outside_posts && self.current_owner.is_some() {
+        if self.current_owner.is_some() {
             return;
         }
 
@@ -595,8 +673,20 @@ impl Ball {
                 GoalSide::Away => field_width - 2.0,
             };
             let field_height = context.field_size.height as f32;
-            // Pick the near corner based on where the ball went out
-            let near_top = self.position.y < field_height * 0.5;
+            // Pick the near corner from where the ball CROSSED the byline,
+            // not from where the move that carried it over left it — and
+            // once it runs on behind the goal the two are metres apart, so
+            // a ball that went out a yard from the flag could be given the
+            // far corner. See `Ball::line_crossing`.
+            let byline = match side {
+                GoalSide::Home => 0.0,
+                GoalSide::Away => field_width,
+            };
+            let exit_y = self
+                .line_crossing(ExitAxis::Endline, byline)
+                .map(|p| p.y)
+                .unwrap_or(self.position.y);
+            let near_top = exit_y < field_height * 0.5;
             let corner_y = if near_top { 2.0 } else { field_height - 2.0 };
 
             // Find the attacking team's designated corner taker via the
@@ -646,21 +736,34 @@ impl Ball {
                 // taken from where the ball died, he carries it to the
                 // arc. See [`AwaitedRestart::take_from`]; the two legs are
                 // what removes the 27.5 m the ball used to jump.
-                let walked = super::restart::CornerWalk::armed();
+                let walked = CornerWalk::armed();
                 let arc = Vector3::new(corner_x, corner_y, 0.0);
-                let died_at = Vector3::new(
-                    self.position.x.clamp(2.0, field_width - 2.0),
-                    self.position.y.clamp(2.0, field_height - 2.0),
-                    0.0,
-                );
-                let rest = if walked { died_at } else { arc };
-                self.position.x = rest.x;
-                self.position.y = rest.y;
-                if !walked {
-                    self.position.z = 0.0;
+                // ⚠ **The run-out is tied to the WALK, not to `RunOff`
+                // alone.** With `OF_CORNER_WALK` off — the default — the
+                // ball is placed on the arc on this tick and the taker is
+                // put on it, so letting it run out behind the goal first
+                // would only make the teleport that follows longer and
+                // more visible. The two switches have to agree.
+                let runs_out = walked && RunOff::armed();
+                let died_at = if runs_out {
+                    self.position
+                } else {
+                    Vector3::new(
+                        self.position.x.clamp(2.0, field_width - 2.0),
+                        self.position.y.clamp(2.0, field_height - 2.0),
+                        0.0,
+                    )
+                };
+                if !runs_out {
+                    let rest = if walked { died_at } else { arc };
+                    self.position.x = rest.x;
+                    self.position.y = rest.y;
+                    if !walked {
+                        self.position.z = 0.0;
+                    }
+                    self.velocity = Vector3::zeros();
+                    self.spin = Vector3::zeros();
                 }
-                self.velocity = Vector3::zeros();
-                self.spin = Vector3::zeros();
 
                 // Out of play, and NOBODY'S — the whole point. Handing the
                 // taker the ball on the tick it went behind is what let
@@ -810,14 +913,19 @@ impl Ball {
                     let fetch = (taker.position - died_at).magnitude();
                     #[cfg(feature = "match-logs")]
                     RestartCensus::note_corner_walk(fetch, (died_at - arc).magnitude());
-                    self.awaiting_restart = Some(super::AwaitedRestart {
+                    #[cfg(feature = "match-logs")]
+                    if runs_out {
+                        RestartCensus::note_run_out_begun();
+                    }
+                    self.awaiting_restart = Some(AwaitedRestart {
                         taker_id,
                         spot: died_at,
                         take_from: Some(arc),
                         carrying: false,
+                        settled: !runs_out,
                         origin: PassOriginRestart::Corner,
                         awarded_tick: context.current_tick(),
-                        patience_ticks: super::AwaitedRestart::corner_patience_for(fetch),
+                        patience_ticks: AwaitedRestart::corner_patience_for(fetch),
                     });
                     events.add_ball_event(BallEvent::TakeMe(taker_id));
                 } else {
@@ -841,20 +949,40 @@ impl Ball {
         }) {
             let gk_id = gk.id;
 
-            // **The ball dies where it went out**, brought back onto the
-            // pitch by the width of a stride and no further. A shot that
-            // misses crosses the byline beside the post, so the keeper has
-            // a few metres to walk and NOTHING moves that a viewer could
-            // see — which is the whole point. See `goal_kick_spot`, which
-            // now owns this placement for the over-the-bar case as well.
-            let spot = self.goal_kick_spot(side, self.position.y);
+            // The kick is taken from the point on the byline the ball
+            // crossed at, brought onto the pitch by the width of a stride
+            // and no further — see `goal_kick_spot`, which owns this
+            // placement for the over-the-bar case as well.
+            let byline = match side {
+                GoalSide::Home => 0.0,
+                GoalSide::Away => field_width,
+            };
+            let exit_y = self
+                .line_crossing(ExitAxis::Endline, byline)
+                .map(|p| p.y)
+                .unwrap_or(self.position.y);
+            let spot = self.goal_kick_spot(side, exit_y);
+
+            // ⚠ **A ball that crossed BETWEEN THE POSTS does not run out.**
+            // The goal is in the way. This branch takes those balls too —
+            // `check_goal` declines a ball with no shot behind it (a cross
+            // carrying through, a through-ball hit too hard), and they land
+            // here rather than in the net — and letting one roll on would
+            // draw it straight through the netting and out the back of the
+            // stadium. It has hit the net, so it stops where it hit it.
+            let runs_out = RunOff::armed() && outside_posts;
             #[cfg(feature = "match-logs")]
             super::frame_trace::FrameTrace::note(format!(
-                "check_wide_of_goal: GOAL KICK, ball ({:.1}, {:.1}, {:.2}) dies at ({:.1}, {:.1}); GK {gk_id} walks to it",
-                self.position.x, self.position.y, self.position.z, spot.x, spot.y
+                "check_wide_of_goal: GOAL KICK, ball ({:.1}, {:.1}, {:.2}) {}; GK {gk_id} takes it from ({:.1}, {:.1})",
+                self.position.x,
+                self.position.y,
+                self.position.z,
+                if runs_out { "runs out behind the goal" } else { "dies there" },
+                spot.x,
+                spot.y
             ));
             let _ = goal_center_y;
-            self.award_goal_kick(gk_id, spot, context, players, events);
+            self.award_goal_kick(gk_id, spot, runs_out, context, players, events);
         }
     }
 }

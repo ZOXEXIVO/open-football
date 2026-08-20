@@ -369,7 +369,15 @@ impl Ball {
         // segment below is not a flight and reflecting it would tear the
         // ball out of his feet; and a ball already in the net is behind
         // the frame by design.
-        if self.current_owner.is_some() || self.in_net.is_some() || GoalFrame::disabled() {
+        // …and not one that is out of play. A ball running out behind the
+        // goal passes the frame from the wrong side every time, and a
+        // rebound off it would put a dead ball back on the pitch. See
+        // [`RunOff`](super::RunOff).
+        if self.current_owner.is_some()
+            || self.in_net.is_some()
+            || self.awaiting_restart.is_some()
+            || GoalFrame::disabled()
+        {
             return None;
         }
         // The frame check is the first thing after the move, so the ball's

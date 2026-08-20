@@ -587,8 +587,21 @@ impl Netting {
         // Distance past the nearer goal line — negative out on the pitch.
         let past_line = ball.x.abs() - Field::HALF_LENGTH;
         past_line > 0.0
+            // ⚠ **No lateral grace, for the same reason the goal line gets
+            // none.** `GIVE_SIDE` is the slack the engine settles a ball
+            // INTO the side netting by, and it is measured inward from the
+            // panel; adding it to the half-width instead put a 50 cm band
+            // just OUTSIDE each post inside the goal. That was nearly
+            // unreachable while a ball wide of the post was snapped back
+            // onto the pitch the instant it crossed the line. It is not any
+            // more — a miss now runs on behind the goal (`core::RunOff`)
+            // and passes straight through that band on its way to the
+            // hoardings, and every one of them would ripple the side net as
+            // if it had gone in. The post's own radius is the honest
+            // boundary: a ball touching the outside of the post is not in
+            // the goal.
             && past_line < Field::NET_DEPTH + Self::GIVE_BACK
-            && ball.z.abs() < Field::PHYSICS_GOAL_HALF_WIDTH + Self::GIVE_SIDE
+            && ball.z.abs() < Field::PHYSICS_GOAL_HALF_WIDTH + Field::POST_RADIUS
             && ball.y < Field::PHYSICS_GOAL_HEIGHT + Self::GIVE_SIDE
     }
 

@@ -10,7 +10,9 @@ use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::state::PlayerState::{Defender, Forward, Goalkeeper, Midfielder};
 use crate::r#match::player::strategies::common::PlayerOperationsImpl;
 use crate::r#match::player::strategies::common::PlayersOperationsImpl;
-use crate::r#match::player::strategies::common::states::{CornerHold, KeeperReleaseSpace};
+use crate::r#match::player::strategies::common::states::{
+    CornerHold, KeeperReleaseSpace, RestartCarry,
+};
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::player_context::LooseBallChase;
 use crate::r#match::team::{ShapeDiscipline, TeamOperationsImpl};
@@ -176,6 +178,12 @@ impl PlayerFieldPositionGroup {
         // players somewhere their own state did not choose, and not one of
         // the four state machines knows to stay there. See `CornerHold`.
         CornerHold::apply(player, tick_context, &mut result);
+        // …and the man carrying a dead ball back to the spot it is taken
+        // from, for every restart rather than only the corner. LAST, and
+        // deliberately an outright override: the ball rides on his
+        // position while he carries it, so anything that moves him moves
+        // it. See `RestartCarry`.
+        RestartCarry::apply(player, tick_context, &mut result);
         result
     }
 

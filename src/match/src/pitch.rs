@@ -221,10 +221,19 @@ impl Pitch {
             perceptual_roughness: 1.0,
             ..default()
         });
+        // ⚠ **Set 1 cm below the turf, not 5.** It only ever had to clear
+        // the turf's own z-fighting, and 5 cm was free while nothing was
+        // ever drawn out here — the ball was snapped back onto the pitch
+        // the instant it crossed a line. It is not free now: a ball put out
+        // of play runs into this strip and comes to rest on it (`RunOff`),
+        // and the engine puts it at height zero, so at −0.05 it floated a
+        // visible finger's width above the ground with its contact shadow
+        // (pinned at +0.02) hanging under it. The fetching player's boots
+        // did the same.
         commands.spawn((
             Mesh3d(meshes.add(Plane3d::default().mesh().size(320.0, 260.0))),
             MeshMaterial3d(surround),
-            Transform::from_xyz(0.0, -0.05, 0.0),
+            Transform::from_xyz(0.0, -0.01, 0.0),
         ));
 
         Self::spawn_turf(&mut commands, &mut meshes, &mut materials);

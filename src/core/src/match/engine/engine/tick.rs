@@ -102,6 +102,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             );
         }
 
+        // Read before the loop borrows `field.players` — the man fetching a
+        // ball that has gone out of play is the one player allowed off the
+        // pitch. See `MatchPlayer::check_boundary_collision`.
+        let restart_taker = field.ball.awaiting_restart.map(|r| r.taker_id);
+
         for player in field.players.iter_mut().filter(|p| !p.is_sent_off) {
             // A keeper the shot branch above just ran has ALREADY been moved:
             // `MatchPlayer::update` ends in `move_to` + the boundary clamp.
@@ -119,7 +124,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
             // Move first, then clamp — see `MatchPlayer::update`.
             player.move_to();
-            player.check_boundary_collision(context);
+            player.check_boundary_collision(context, restart_taker);
             #[cfg(feature = "match-logs")]
             player.trace_motion(context, ball_pos, ball_vel);
         }

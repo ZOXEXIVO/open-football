@@ -655,6 +655,21 @@ impl Ball {
             return;
         }
 
+        // …and neither is a ball that has been put OUT OF PLAY. It is
+        // outside the rectangle on purpose — that is the whole of the
+        // reported *"the ball stops on the line behind the goal, but must
+        // go beyond the goal"* — and its own bound is the run-off
+        // perimeter, applied by `Ball::tick_run_out`. Clamping it here
+        // would drag it 10 units back onto the pitch on the very tick it
+        // crossed the line, which is the artefact in its purest form.
+        //
+        // Same stand-down as `in_net` directly above, and for the same
+        // reason: the ball is somewhere this function was never told
+        // about, and something else owns it there. See [`RunOff`](super::RunOff).
+        if self.awaiting_restart.is_some() {
+            return;
+        }
+
         let field_width = context.field_size.width as f32;
         let field_height = context.field_size.height as f32;
 

@@ -2351,6 +2351,23 @@ pub mod mid_run_diag {
     pub static RESTART_TIMEOUT_STATE: [AtomicU64; STATE_SLOTS] =
         [const { AtomicU64::new(0) }; STATE_SLOTS];
 
+    /// **The run-out**: what the ball does after it crosses the line and
+    /// before the restart can be taken. See
+    /// [`RunOff`](crate::r#match::engine::ball::ball::RunOff).
+    ///
+    /// Without this the change is unmeasurable — "the ball goes out now"
+    /// is a screenshot, not a number, and the two ways it can go wrong are
+    /// invisible in every existing row: a ball that never comes to rest
+    /// blows the patience bound and shows up only as a teleport, and one
+    /// that stops on the line after all shows up as nothing at all.
+    ///
+    /// Slots: 0 run-outs begun, 1 Σ of the distance the ball travelled
+    /// past the line in units, 2 Σ of the ticks it took to settle, 3
+    /// run-outs the boards had to stop, 4 run-outs settled by the travel
+    /// ceiling rather than by coming to rest, 5 Σ of the distance the ball
+    /// finished from its own restart spot — the carry the taker then has.
+    pub static RUN_OUT: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+
     pub struct RestartCensus;
 
     impl RestartCensus {
@@ -2469,6 +2486,45 @@ pub mod mid_run_diag {
         pub fn corner_walk_snapshot() -> [u64; 6] {
             let mut out = [0u64; 6];
             for (slot, c) in out.iter_mut().zip(CORNER_WALK.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+
+        /// One ball that has crossed a line and started to run out of
+        /// play. Counted at the award, so it is the denominator for the
+        /// three outcomes below even when the run-out is switched off.
+        pub fn note_run_out_begun() {
+            RUN_OUT[0].fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// …and how it ended. `travelled` is how far past the line the
+        /// ball got, `ticks` how long it took, `boards` whether the
+        /// perimeter had to stop it and `expired` whether it was still
+        /// moving when the travel ceiling fired. `carry` is the gap left
+        /// between the ball and the spot the restart is taken from.
+        pub fn note_run_out_settled(
+            travelled: f32,
+            ticks: u64,
+            boards: bool,
+            expired: bool,
+            carry: f32,
+        ) {
+            RUN_OUT[1].fetch_add(travelled.max(0.0) as u64, Ordering::Relaxed);
+            RUN_OUT[2].fetch_add(ticks, Ordering::Relaxed);
+            if boards {
+                RUN_OUT[3].fetch_add(1, Ordering::Relaxed);
+            }
+            if expired {
+                RUN_OUT[4].fetch_add(1, Ordering::Relaxed);
+            }
+            RUN_OUT[5].fetch_add(carry.max(0.0) as u64, Ordering::Relaxed);
+        }
+
+        /// `(begun, Σ travelled, Σ ticks, stopped by the boards, expired, Σ carry)`.
+        pub fn run_out_snapshot() -> [u64; 6] {
+            let mut out = [0u64; 6];
+            for (slot, c) in out.iter_mut().zip(RUN_OUT.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
             out

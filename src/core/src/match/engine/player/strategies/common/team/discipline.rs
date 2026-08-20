@@ -259,6 +259,20 @@ impl ShapeDiscipline {
             return true;
         }
 
+        // He is the one taking a restart. Nothing else about the shape
+        // applies to him: he has to leave it, go out into the run-off for
+        // a ball that has gone off the pitch and bring it back.
+        //
+        // The `BALL_ENGAGEMENT` exemption above covers him only while the
+        // ball is within 10 m, and a throw-in taker is routinely picked
+        // from further out than that — at which point the recall takes up
+        // to 85% of his velocity and points it back at his formation slot,
+        // i.e. away from the ball he has been sent for. Same exemption
+        // `CornerHold` already makes for the same man.
+        if ctx.tick_context.ball.restart_taker == Some(ctx.player.id) {
+            return true;
+        }
+
         // ⚠ NOT EXEMPT: a player holding an individual defensive duty.
         //
         // Tried 2026-08-17 and REVERTED, because the reasoning was good

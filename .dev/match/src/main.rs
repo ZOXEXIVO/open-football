@@ -7649,6 +7649,34 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 w[5] as f64 / w[4].max(1) as f64 * 0.125,
             );
         }
+        // ── THE RUN-OUT ────────────────────────────────────────────────
+        // Reported as "the ball stops on the line behind the goal, but must
+        // go beyond the goal". Every restart used to write the ball onto
+        // its spot two units INSIDE the pitch on the tick it crossed the
+        // line; it now keeps travelling until the hoardings stop it and the
+        // taker fetches it from out there. See `core::RunOff`;
+        // `OF_RUN_OUT=off` restores the snap.
+        //
+        // Two ways it can go wrong and neither shows in any row above. A
+        // ball that never comes to rest blows the patience bound and
+        // appears only as a teleport; one that stops on the line after all
+        // appears as nothing whatsoever.
+        {
+            let o = RestartCensus::run_out_snapshot();
+            if o[0] > 0 {
+                println!(
+                    "  RUN-OUT: {:.1}/match, ball ends {:.2} m outside the pitch in {:.2} s \
+                     ({:.0}% stopped by the boards, {:.1}% still moving at the ceiling), \
+                     then carried {:.2} m back to the spot",
+                    per(o[0]),
+                    o[1] as f64 / o[0] as f64 * 0.125,
+                    o[2] as f64 / o[0] as f64 / 100.0,
+                    o[3] as f64 * 100.0 / o[0] as f64,
+                    o[4] as f64 * 100.0 / o[0] as f64,
+                    o[5] as f64 / o[0] as f64 * 0.125,
+                );
+            }
+        }
         // A taker who timed out in `TakeBall` was on his way; one who timed
         // out in `Standing` was never coming. Opposite fixes.
         let timeouts = RestartCensus::timeout_state_snapshot();

@@ -736,8 +736,13 @@ impl Ball {
         events.add_ball_event(BallEvent::Offside(receiver.id, spot));
 
         self.awaiting_restart = Some(AwaitedRestart {
-            // Taken from where it died: see `AwaitedRestart::take_from`.
+            // ⚠ **The only restart with nothing to fetch.** An offside is
+            // an offence committed ON the pitch, so the ball has not left
+            // it and there is no run-out: it is dead where it lies and it
+            // is taken from where it lies. `settled` up, `take_from` empty
+            // — see [`AwaitedRestart::take_from`] and [`RunOff`].
             take_from: None,
+            settled: true,
             carrying: false,
             taker_id,
             spot,

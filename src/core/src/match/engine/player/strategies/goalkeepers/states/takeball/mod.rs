@@ -78,19 +78,38 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
             ));
         }
 
-        // Timeout after 120 ticks — but only if ball isn't very close
-        // If ball is close, keep trying instead of giving up
-        if ctx.in_state_time > 120 && ctx.ball().distance() > 10.0 {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Standing,
-            ));
-        }
+        // ⚠ **Neither timeout applies to the taker of a restart.**
+        //
+        // Both were written for a keeper who has come off his line after a
+        // loose ball and lost the race: giving up after a couple of
+        // seconds and going back to his goal is right, because somebody
+        // else has the ball. A goal kick is the opposite situation. He is
+        // the only man on the pitch allowed to touch it, nobody is racing
+        // him, and it may be lying four metres behind his own goal after
+        // running out — a walk that comfortably exceeds 200 ticks.
+        //
+        // Time him out and `clamp_sweep_range` in `Standing` steers him
+        // straight back in front of his goal, the 40-tick `TakeMe` nudge
+        // drags him out again, and the pair runs as a two-cycle until the
+        // patience bound teleports the ball to him — which is the artefact
+        // the walk exists to remove. Same shape as the `RestartHold`
+        // exemption from the loose-ball election, and for the same reason:
+        // a dead ball is not a loose ball.
+        if ctx.tick_context.ball.restart_taker != Some(ctx.player.id) {
+            // Timeout after 120 ticks — but only if ball isn't very close
+            // If ball is close, keep trying instead of giving up
+            if ctx.in_state_time > 120 && ctx.ball().distance() > 10.0 {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::Standing,
+                ));
+            }
 
-        // Hard timeout after 200 ticks regardless
-        if ctx.in_state_time > 200 {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Standing,
-            ));
+            // Hard timeout after 200 ticks regardless
+            if ctx.in_state_time > 200 {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::Standing,
+                ));
+            }
         }
 
         None

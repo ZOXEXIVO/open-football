@@ -9,7 +9,8 @@
 //! if even that is missing, we leave the boundary inset as the safety
 //! net for `check_boundary_collision`.
 
-use super::{AwaitedRestart, Ball};
+use super::runoff::ExitAxis;
+use super::{AwaitedRestart, Ball, RunOff};
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::BallEvent;
@@ -37,8 +38,27 @@ impl Ball {
         events: &mut EventCollection,
     ) {
         // Already resolved this tick (goal scored, etc.), or the ball is
-        // still in the goal from the last one.
-        if self.goal_scored || self.in_net.is_some() {
+        // still in the goal from the last one — or it is already out of
+        // play and running out past the line, in which case awarding it
+        // again on every tick of the run-out would keep resetting the
+        // patience clock. See [`RunOff`](super::RunOff).
+        if self.goal_scored || self.in_net.is_some() || self.awaiting_restart.is_some() {
+            return;
+        }
+
+        // ⚠ **A ball somebody is HOLDING is not a ball that has gone out.**
+        //
+        // This never needed saying while the player clamp pinned everybody
+        // inside the rectangle: the only way an owned ball reached `y <= 0`
+        // was an owner standing exactly on the touchline, and even that
+        // handed a throw-in to the other side against a man who was still
+        // dribbling. It needs saying now, because the taker of a restart is
+        // allowed out into the run-off — so a thrower who has just picked
+        // the ball up two metres past the line would award a throw-in
+        // against his own team, once per tick, all the way back in.
+        //
+        // Same rule `check_wide_of_goal` states for the byline.
+        if self.current_owner.is_some() {
             return;
         }
         let field_height = context.field_size.height as f32;
@@ -62,11 +82,29 @@ impl Ball {
             None => return, // Safety net: let boundary_collision handle it.
         };
 
-        // Inset the throw-in slightly inside the touchline so subsequent
-        // physics doesn't immediately re-trigger a boundary cross.
+        // **Where it crossed, not where it now is.** Law 15 takes the throw
+        // from the point the ball crossed the touchline, and this resolver
+        // runs immediately after `move_to`, so `self.position` is that
+        // point plus whatever was left of the tick — up to a metre down
+        // the line on a hard-struck ball. `line_crossing` solves the tick
+        // back; it declines the cases where that reconstruction is not
+        // valid and this falls back to the position, as it always did.
+        //
+        // Inset two units inside the line so no boundary test can read the
+        // spot itself as out.
         let field_width = context.field_size.width as f32;
-        let throw_x = self.position.x.clamp(2.0, field_width - 2.0);
-        let throw_y = if crossed_top { 2.0 } else { field_height - 2.0 };
+        let touchline = if crossed_top { 0.0 } else { field_height };
+        let crossed_at = self
+            .line_crossing(ExitAxis::Touchline, touchline)
+            .map(|p| p.x)
+            .unwrap_or(self.position.x);
+        let inset = AwaitedRestart::SPOT_INSET;
+        let throw_x = crossed_at.clamp(inset, field_width - inset);
+        let throw_y = if crossed_top {
+            inset
+        } else {
+            field_height - inset
+        };
         let throw_pos = Vector3::new(throw_x, throw_y, 0.0);
 
         let thrower = ThrowIn::pick_thrower(players, throwing_side, throw_pos);
@@ -99,13 +137,26 @@ impl Ball {
             RestartCensus::note_throw_in(disagree, since_last, walk);
         }
 
+        // **The ball is NOT written onto the spot.** It has just crossed
+        // the touchline and it goes on going — out across the run-off
+        // until the hoardings stop it — and the thrower fetches it from
+        // wherever that leaves it and brings it back to `throw_pos`. See
+        // [`RunOff`]; `OF_RUN_OUT=off` restores the snap.
+        let runs_out = RunOff::armed();
         #[cfg(feature = "match-logs")]
         super::frame_trace::FrameTrace::note(format!(
-            "check_throw_in: THROW-IN, ball ({:.1}, {:.1}, {:.2}) -> ({:.1}, {:.1}) taker {thrower_id}",
-            self.position.x, self.position.y, self.position.z, throw_pos.x, throw_pos.y
+            "check_throw_in: THROW-IN, ball ({:.1}, {:.1}, {:.2}) {} ({:.1}, {:.1}) taker {thrower_id}",
+            self.position.x,
+            self.position.y,
+            self.position.z,
+            if runs_out { "runs out; taken from" } else { "->" },
+            throw_pos.x,
+            throw_pos.y
         ));
-        self.position = throw_pos;
-        self.velocity = Vector3::zeros();
+        if !runs_out {
+            self.position = throw_pos;
+            self.velocity = Vector3::zeros();
+        }
 
         // OUT OF PLAY, and nobody's. The taker has to go and get it — see
         // [`AwaitedRestart`]. Handing him the ball here and teleporting him
@@ -130,12 +181,21 @@ impl Ball {
         // reported as having ended on the tick play resumed.
         self.tick_carry_tracker(events);
 
+        // While the ball runs out, `spot` is provisional and follows it;
+        // `take_from` is the touchline point the throw is legally taken
+        // from and never moves. Switched off, the ball is already on that
+        // point and there is nothing to fetch it from — the old
+        // single-leg shape, unchanged.
+        #[cfg(feature = "match-logs")]
+        if runs_out {
+            RestartCensus::note_run_out_begun();
+        }
         self.awaiting_restart = Some(AwaitedRestart {
-            // Taken from where it died: see `AwaitedRestart::take_from`.
-            take_from: None,
+            take_from: runs_out.then_some(throw_pos),
+            settled: !runs_out,
             carrying: false,
             taker_id: thrower_id,
-            spot: throw_pos,
+            spot: if runs_out { self.position } else { throw_pos },
             origin: PassOriginRestart::ThrowIn,
             awarded_tick: context.current_tick(),
             patience_ticks: AwaitedRestart::PATIENCE_TICKS,
@@ -178,6 +238,58 @@ impl Ball {
             return;
         };
 
+        // ── STILL RUNNING OUT ────────────────────────────────────────
+        //
+        // The ball crossed the line on the tick the restart was awarded
+        // and it has not finished travelling. It is out of play from that
+        // instant — nobody may touch it, nothing may claim it — but it is
+        // emphatically not stationary, and pinning it here is exactly the
+        // reported *"the ball stops on the line"*. So the ordinary physics
+        // runs, the perimeter bounds it, and only when it comes to rest
+        // does the pin below take over. See [`RunOff`].
+        //
+        // The taker was sent at the award and is already on his way, so
+        // the run-out costs the restart almost nothing: he is walking
+        // across the pitch while the ball is crossing the last four
+        // metres of it.
+        if !await_state.settled {
+            let now = context.current_tick();
+            if !self.tick_run_out(&mut await_state, now) {
+                self.current_owner = None;
+                // Keep sending him — the ball is moving, so a chaser who
+                // reached where it WAS has to be told again. Same 40-tick
+                // cadence as the wait below.
+                if now.saturating_sub(await_state.awarded_tick) % Self::NUDGE_TICKS == 0 {
+                    events.add_ball_event(BallEvent::TakeMe(await_state.taker_id));
+                }
+                self.awaiting_restart = Some(await_state);
+                return;
+            }
+            // It has just stopped. The patience was set at the award
+            // against a spot the ball was never on — recompute it against
+            // the walk he actually has, or a keeper who has to come four
+            // metres further than the award assumed runs out of clock for
+            // a reason that has nothing to do with him.
+            let left = (taker.position - await_state.spot).magnitude();
+            let ceiling = if await_state.origin == PassOriginRestart::Corner {
+                AwaitedRestart::corner_patience_for(left)
+            } else {
+                AwaitedRestart::patience_for(left)
+            };
+            await_state.patience_ticks = now
+                .saturating_sub(await_state.awarded_tick)
+                .saturating_add(ceiling);
+            // ⚠ **Written back HERE, not at the end.** The pin below
+            // returns without storing `await_state` — it never had to,
+            // because nothing above it used to mutate the restart — so
+            // leaving the write to the fall-through loses both the settle
+            // and the new bound, and the ball re-settles from scratch on
+            // every subsequent tick. `settled` would never be true in the
+            // ball's own copy and the taker's arrival would never be
+            // tested.
+            self.awaiting_restart = Some(await_state);
+        }
+
         // The ball is out of play: it does not move by itself and it is
         // nobody's, whatever else happened this tick. On the second leg of
         // a corner it moves with the man CARRYING it, which is the one
@@ -192,14 +304,25 @@ impl Ball {
         // where it is always visible. 0.10 m/tick is a ball dying on the
         // grass.
         const SETTLE_RATE: f32 = 0.10;
-        let resting = if await_state.carrying {
-            taker.position
+        /// Where a carried dead ball rides, in metres — `Ball::carry_height`'s
+        /// own figure for a ball in a player's hands.
+        ///
+        /// A restart is fetched BY HAND: the thrower picks the ball up off
+        /// the run-off, the keeper carries it in for the goal kick, the
+        /// corner taker walks it to the flag. Left settling to the spot's
+        /// zero the ball rode along the grass at his feet for the whole
+        /// carry, which the viewer draws as a man dribbling rather than
+        /// one carrying — `Actors::in_his_hands` wants it between 0.85 and
+        /// 1.45 m before it will put it in his arms.
+        const CARRY_HEIGHT: f32 = 1.15;
+        let (resting, height) = if await_state.carrying {
+            (taker.position, CARRY_HEIGHT)
         } else {
-            await_state.spot
+            (await_state.spot, await_state.spot.z)
         };
         self.position.x = resting.x;
         self.position.y = resting.y;
-        self.position.z = (self.position.z - SETTLE_RATE).max(await_state.spot.z);
+        self.position.z += (height - self.position.z).clamp(-SETTLE_RATE, SETTLE_RATE);
         self.velocity = Vector3::zeros();
         self.current_owner = None;
 
@@ -207,7 +330,27 @@ impl Ball {
         let waited = context
             .current_tick()
             .saturating_sub(await_state.awarded_tick);
-        let arrived = range <= AwaitedRestart::REACH;
+        // ⚠ **A carried ball is handed over only once its carrier is back
+        // ON the pitch.**
+        //
+        // `REACH` is 1.5 m and deliberately generous — the taker is
+        // steered by behaviours that settle beside a point rather than
+        // landing on it. That is harmless for the fetch, whose spot is
+        // wherever the ball lies; it is not harmless for the carry, whose
+        // spot is two units inside the line. A man walking in from the
+        // run-off satisfies `range <= REACH` while still 1.3 m the wrong
+        // side of it, and the ball is at his feet — so the restart would
+        // be TAKEN from outside the pitch, and the first thing the throw
+        // or the kick did was cross the line again from the wrong side and
+        // be awarded to the opposition. He is a stride away and walking;
+        // waiting for that stride costs a tenth of a second.
+        let clearance = AwaitedRestart::IN_PLAY_CLEARANCE;
+        let on_the_pitch = !await_state.carrying
+            || (taker.position.x >= clearance
+                && taker.position.x <= self.field_width - clearance
+                && taker.position.y >= clearance
+                && taker.position.y <= self.field_height - clearance);
+        let arrived = range <= AwaitedRestart::REACH && on_the_pitch;
         if !arrived && waited < await_state.patience_ticks {
             // Keep sending him. `run_for_ball` is a no-op for a player who
             // is already chasing, so this cannot restart his chase clock;

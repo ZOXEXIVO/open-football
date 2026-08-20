@@ -11,6 +11,7 @@
 //! | [`frame`]       | The woodwork: posts and crossbar, and rebounds off them      |
 //! | [`net`]         | What the ball does after it crosses the line                 |
 //! | [`motion`]      | Velocity integration, owner tracking, boundary inset         |
+//! | [`runoff`]      | The ground outside the lines, and the boards at the end of it |
 //! | [`stall`]       | Position-anchor stall detector + snapshot diagnostics        |
 
 // `pub` for `GoalFrame` / `FramePart` — the replay viewer draws the same
@@ -33,6 +34,11 @@ pub mod motion;
 pub mod ownership;
 mod restart;
 pub use restart::{CornerWalk, DeadBall, ThrowIn};
+// `pub` for `RunOff` — the player layer reads the same rectangle when it
+// decides how far off the pitch a restart taker may go, and the two must
+// be one constant or the taker is pinned short of the ball he is fetching.
+pub mod runoff;
+pub use runoff::RunOff;
 // `pub` for `dead_ball_diag` — the stall attribution counters are read by
 // the dev harness, same as `ownership::reception_diag`.
 pub mod stall;
@@ -119,28 +125,69 @@ impl PassOriginRestart {
 /// The teleport survives as the TIMEOUT (see [`Self::PATIENCE_TICKS`]):
 /// a restart that never happens would stall the match, and no visual is
 /// worth that.
+///
+/// # The ball is not on the line when this is armed
+///
+/// It is armed on the tick the ball CROSSES the line, and the ball goes on
+/// travelling — out of the pitch, into the run-off, until the boards stop
+/// it ([`RunOff`]). So a restart now has three phases rather than one, and
+/// the fields below split along them:
+///
+/// | phase | [`Self::settled`] | [`Self::carrying`] | where the ball is |
+/// |---|---|---|---|
+/// | running out | false | false | rolling, wherever the physics has it |
+/// | waiting | true | false | at rest in the run-off, pinned |
+/// | being carried in | true | true | under the taker's feet |
+///
+/// [`Self::spot`] follows the ball through all three; [`Self::take_from`]
+/// is the point the kick or the throw is legally taken from, captured at
+/// the crossing and fixed from then on.
 #[derive(Debug, Clone, Copy)]
 pub struct AwaitedRestart {
     /// Who is taking it.
     pub taker_id: u32,
     /// Where the ball is and where he has to get to.
+    ///
+    /// Provisional while [`Self::settled`] is false: the ball is still
+    /// rolling out and this is rewritten to follow it every tick. Latched
+    /// the moment it stops, which is also when [`Self::patience_ticks`] is
+    /// recomputed against the distance the taker actually has to cover.
     pub spot: Vector3<f32>,
     /// Where the restart must be TAKEN from, when that is not where the
     /// ball came to rest — so the taker has to bring it there.
     ///
-    /// **Only the corner has one, and it is the whole reason the leg
-    /// exists.** Every other restart is taken from where the ball died: a
-    /// throw-in from the point it crossed the touchline, a goal kick from
-    /// the goal area it went out over. A corner is taken from the ARC
-    /// while the ball goes out anywhere along the byline — measured a mean
-    /// 220u, **27.5 m**, from the flag — so placing the ball on the arc is
-    /// a teleport of exactly that size, and it was the largest one left in
-    /// the engine.
+    /// **This used to be the corner's alone**, because the corner was the
+    /// only restart whose ball did not die where it was taken from: it is
+    /// taken from the ARC while the ball goes out anywhere along the
+    /// byline, a measured mean of 220 u — **27.5 m** — away.
+    ///
+    /// Now every restart has one, because no restart's ball dies where it
+    /// is taken from any more. A ball put out of play crosses the line and
+    /// keeps going ([`RunOff`]); the legal spot is the point it crossed at,
+    /// and the taker has to go out into the run-off, pick it up, and bring
+    /// it back to that point. Law 15 has the throw taken "from the point
+    /// where it crossed the touchline" and Law 16 puts the goal kick in the
+    /// goal area — neither of them is "wherever it finished rolling".
     ///
     /// Consumed on arrival: the taker picks the ball up, `spot` becomes
     /// this point and [`Self::carrying`] goes up, so the second leg reuses
     /// the same wait, the same nudge and the same backstop as the first.
     pub take_from: Option<Vector3<f32>>,
+    /// False while the ball is still running out of play.
+    ///
+    /// The award happens on the tick the ball crosses the line and not one
+    /// tick later, because everything that keeps a dead ball dead —
+    /// `RestartHold`, [`DeadBall`], the dispatcher's allow-list — keys off
+    /// `awaiting_restart` being set. Defer it and the ball spends its
+    /// run-out as a live loose ball outside the pitch with `TakeMe` signals
+    /// sending the nearest man of either side at it.
+    ///
+    /// So the restart is armed first and the ball rolls afterwards, and
+    /// this is the flag that says which of the two is happening. While it
+    /// is false [`Ball::tick_awaited_restart`] integrates the physics
+    /// instead of pinning the ball, and the taker's arrival test is held
+    /// off — he must not pick up a ball that is still moving.
+    pub settled: bool,
     /// True once he has reached the ball and is carrying it to `spot`.
     ///
     /// While it is set the ball rides on him rather than lying on the
@@ -173,6 +220,48 @@ pub struct AwaitedRestart {
 }
 
 impl AwaitedRestart {
+    /// How far inside the line a restart is taken from, in game units.
+    /// 6 u = 75 cm.
+    ///
+    /// It used to be 2 u, justified as "nothing a viewer could see" —
+    /// which was the right test when the BALL was written onto this point
+    /// on the tick it went out. The ball is not written anywhere any more
+    /// ([`RunOff`]); this is where the taker brings it BACK to, and the
+    /// binding constraint is a different one.
+    ///
+    /// ⚠ **It has to clear [`SteeringBehavior::Arrive`]'s 3 u deadzone.**
+    /// The carrier is steered at this point and stops braking 3 u short of
+    /// it, in whatever direction he approached from — which for a man
+    /// walking in out of the run-off is from OUTSIDE. At 2 u he came to
+    /// rest around a unit the wrong side of the line, with the ball at his
+    /// feet, and then: the arrival gate below refuses a restart taken off
+    /// the pitch, `Arrive` has already stopped pushing him, and the pair
+    /// deadlock until the patience bound teleports the ball. At 6 u he
+    /// stops between 3 and 9 u inside and the ball is comfortably in play.
+    ///
+    /// Still legal on both counts. Law 16 puts a goal kick anywhere in the
+    /// goal area, which runs 44 u deep; Law 15's throw-in is taken at the
+    /// point the ball crossed, and 75 cm of it is inside the tolerance
+    /// every referee gives.
+    ///
+    /// [`SteeringBehavior::Arrive`]: crate::r#match::SteeringBehavior::Arrive
+    pub const SPOT_INSET: f32 = 6.0;
+
+    /// How far inside the line the carrier has to be before the restart is
+    /// handed to him, in game units. 2 u = 25 cm.
+    ///
+    /// [`Self::REACH`] is 1.5 m and measured from the spot, so a man
+    /// walking in from the run-off satisfies it while still standing on
+    /// the line — and the ball is at his feet, so the throw or the kick is
+    /// then taken from `x = 0.0`, which every out-of-play resolver reads
+    /// as out. Measured: he stopped at 0.1 u and the ball at 0.0.
+    ///
+    /// Chosen against [`Self::SPOT_INSET`] and `Arrive`'s deadzone, and it
+    /// has to stay under both: he is steered to within 3 u of a point 6 u
+    /// inside, so anything up to 3 u is reachable and anything above it
+    /// deadlocks.
+    pub const IN_PLAY_CLEARANCE: f32 = 2.0;
+
     /// Close enough to pick the ball up, in game units. 12u = 1.5 m.
     ///
     /// Deliberately generous: the taker is steered by the ordinary chase
@@ -201,7 +290,12 @@ impl AwaitedRestart {
 
     /// Longest an ordinary restart may wait. 12 s — shorter than a real
     /// goal kick takes and long enough that nothing can stall behind it.
-    const CEILING: u64 = 1200;
+    ///
+    /// `pub` for the tests, which have to run past it: the wait is no
+    /// longer a constant they can predict, because the ball spends the
+    /// first fraction of a second running out of play and the bound is
+    /// re-derived when it stops. See [`RunOff`].
+    pub const CEILING: u64 = 1200;
 
     /// …and a CORNER's, which is a different job.
     ///
@@ -2415,9 +2509,12 @@ impl Ball {
         // simply give it to whoever was nearest. So the restart is ticked
         // here and the rest of the update is skipped outright.
         //
-        // The physics below is skipped too, deliberately: the ball is
-        // pinned on the line by `tick_awaited_restart` and a dead ball
-        // does not roll. See [`AwaitedRestart`].
+        // The physics below is skipped too, but the physics does not stop:
+        // a ball that has just been put out of play is still travelling,
+        // and `tick_awaited_restart` integrates it itself until the
+        // hoardings stop it, then pins it where it comes to rest. What is
+        // skipped is everything that would let somebody TOUCH it. See
+        // [`AwaitedRestart`] and [`RunOff`].
         if self.awaiting_restart.is_some() {
             self.tick_awaited_restart(context, players, events);
             if self.awaiting_restart.is_some() {
@@ -2987,8 +3084,15 @@ impl Ball {
         let landing_x = self.position.x + self.velocity.x * time_to_ground;
         let landing_y = self.position.y + self.velocity.y * time_to_ground;
 
-        let clamped_x = landing_x.clamp(0.0, self.field_width);
-        let clamped_y = landing_y.clamp(0.0, self.field_height);
+        // Clamped to the RUN-OFF, not to the pitch. Every chaser steers at
+        // this point (it is copied into each player's tick view and read by
+        // `LooseBallChase::aim`), so a pitch-bounded answer told them a
+        // ball flying out of play was going to land on the line — and the
+        // man fetching it stopped there, a couple of metres short of where
+        // it actually came down. See [`RunOff`].
+        let (min_x, max_x, min_y, max_y) = RunOff::ball_bounds(self.field_width, self.field_height);
+        let clamped_x = landing_x.clamp(min_x, max_x);
+        let clamped_y = landing_y.clamp(min_y, max_y);
 
         Vector3::new(clamped_x, clamped_y, 0.0)
     }

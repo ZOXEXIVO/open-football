@@ -3,7 +3,7 @@ use crate::club::player::traits::PlayerTrait;
 use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::DefenderCondition;
-use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK};
+use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK, RunOff};
 use crate::r#match::engine::engine::MATCH_HALF_TIME_MS;
 use crate::r#match::engine::result::PlayerMatchPhysicalSnapshot;
 use crate::r#match::engine::tactics::TacticalPositions;
@@ -892,7 +892,7 @@ impl MatchPlayer {
         // back the next, which is a velocity reversal per tick for as
         // long as his state kept pointing outward.
         self.move_to();
-        self.check_boundary_collision(context);
+        self.check_boundary_collision(context, tick_context.ball.restart_taker);
         #[cfg(feature = "match-logs")]
         self.trace_motion(
             context,
@@ -923,6 +923,7 @@ impl MatchPlayer {
         context: &MatchContext,
         ball_pos: Vector3<f32>,
         ball_vel: Vector3<f32>,
+        restart_taker: Option<u32>,
     ) {
         self.tick_tackle_cooldown();
         // An LOD-skipped player is by definition far from the ball, so he
@@ -970,34 +971,64 @@ impl MatchPlayer {
         // back the next, which is a velocity reversal per tick for as
         // long as his state kept pointing outward.
         self.move_to();
-        self.check_boundary_collision(context);
+        self.check_boundary_collision(context, restart_taker);
         #[cfg(feature = "match-logs")]
         self.trace_motion(context, ball_pos, ball_vel);
     }
 
+    /// Keep the player on the pitch — **unless he is the man fetching a
+    /// ball that has gone off it.**
+    ///
+    /// `restart_taker` is `Ball::awaiting_restart`'s taker, passed down
+    /// from each of the three call sites. For everybody else the bound is
+    /// the pitch plus a unit, as it has always been. For him it is the
+    /// run-off ([`RunOff`]), held [`RunOff::PLAYER_INSET`] short of the
+    /// advertising hoardings so he is not drawn standing inside them.
+    ///
+    /// ⚠ **This clamp is why the ball could never leave the pitch.** A
+    /// ball that runs out stops up to 4.6 m behind the byline;
+    /// `AwaitedRestart::REACH` is 12 u = 1.5 m; a keeper pinned 12.5 cm
+    /// past his own goal line can never get within that, so *every* goal
+    /// kick would fall through to the backstop teleport — strictly worse
+    /// than the artefact being fixed. The two halves land together or not
+    /// at all.
+    ///
+    /// [`RunOff`]: crate::r#match::engine::ball::ball::RunOff
+    /// [`RunOff::PLAYER_INSET`]: crate::r#match::engine::ball::ball::RunOff::PLAYER_INSET
     #[inline]
-    pub fn check_boundary_collision(&mut self, context: &MatchContext) {
-        let field_width = context.field_size.width as f32 + 1.0;
-        let field_height = context.field_size.height as f32 + 1.0;
+    pub fn check_boundary_collision(&mut self, context: &MatchContext, restart_taker: Option<u32>) {
+        let (min_x, max_x, min_y, max_y) = if restart_taker == Some(self.id) {
+            RunOff::player_bounds(
+                context.field_size.width as f32,
+                context.field_size.height as f32,
+            )
+        } else {
+            (
+                0.0,
+                context.field_size.width as f32 + 1.0,
+                0.0,
+                context.field_size.height as f32 + 1.0,
+            )
+        };
 
         // Clamp position to field boundaries
-        self.position.x = self.position.x.clamp(0.0, field_width);
-        self.position.y = self.position.y.clamp(0.0, field_height);
+        self.position.x = self.position.x.clamp(min_x, max_x);
+        self.position.y = self.position.y.clamp(min_y, max_y);
 
         // Only stop velocity if player is trying to move OUT of bounds
         // Allow velocity that moves them back into the field
-        if self.position.x <= 0.0 && self.velocity.x < 0.0 {
+        if self.position.x <= min_x && self.velocity.x < 0.0 {
             // At left boundary, trying to move further left
             self.velocity.x = 0.0;
-        } else if self.position.x >= field_width && self.velocity.x > 0.0 {
+        } else if self.position.x >= max_x && self.velocity.x > 0.0 {
             // At right boundary, trying to move further right
             self.velocity.x = 0.0;
         }
 
-        if self.position.y <= 0.0 && self.velocity.y < 0.0 {
+        if self.position.y <= min_y && self.velocity.y < 0.0 {
             // At bottom boundary, trying to move further down
             self.velocity.y = 0.0;
-        } else if self.position.y >= field_height && self.velocity.y > 0.0 {
+        } else if self.position.y >= max_y && self.velocity.y > 0.0 {
             // At top boundary, trying to move further up
             self.velocity.y = 0.0;
         }

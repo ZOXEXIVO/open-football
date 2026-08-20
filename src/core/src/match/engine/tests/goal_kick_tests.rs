@@ -94,37 +94,60 @@ fn shoot_wide(field: &mut MatchField, context: &MatchContext, exit_y: f32) {
         .check_wide_of_goal(context, &players, &mut events);
 }
 
-/// **The ball dies where it went out.**
+/// **The ball is not moved at all when it goes out — it carries on.**
 ///
-/// It used to be written onto the goal-kick spot — a 6.3 m jump in a
-/// single tick, on the restart the report is actually about. A shot that
-/// misses crosses the byline beside the post, so there is a real resting
-/// place a few metres from the keeper and nothing has to move at all.
+/// It used to be written onto the goal-kick spot: first a 6.3 m jump into
+/// the six-yard box, then, when that went, a 25 cm snap back over the
+/// byline onto a spot a stride inside the pitch. The second one is the
+/// reported *"the ball stops on the line behind the goal, but must go
+/// beyond the goal"* — small, and the one you watch every time.
+///
+/// Two separate things now, and the test is that they are separate: the
+/// BALL is untouched by the award and goes on rolling behind the goal, and
+/// the SPOT the kick is taken from is on the pitch, where the ball crossed.
 #[test]
-fn a_shot_that_goes_wide_leaves_the_ball_where_it_died() {
+fn a_shot_that_goes_wide_leaves_the_ball_travelling() {
     let (mut field, context) = kickoff();
     keeper_at(&mut field, Vector3::new(20.0, 272.0, 0.0));
     let exit_y = 200.0;
     let crossed_at = Vector3::new(-1.8, exit_y, 0.30);
+    let struck_at = Vector3::new(-2.4, -0.9, 0.0);
     shoot_wide(&mut field, &context, exit_y);
 
-    let spot = field
+    let awaited = field
         .ball
         .awaiting_restart
-        .expect("a goal kick is a restart somebody has to come and take")
-        .spot;
-    let moved = (Vector3::new(spot.x, spot.y, 0.0) - Vector3::new(crossed_at.x, crossed_at.y, 0.0))
-        .magnitude();
-    assert!(
-        moved < 8.0,
-        "the dead ball was moved {:.1}u ({:.2} m) from where it crossed — \
-         that is the placement teleport, not a restart",
-        moved,
-        moved * 0.125
+        .expect("a goal kick is a restart somebody has to come and take");
+    assert_eq!(
+        field.ball.position, crossed_at,
+        "the award moved the ball — it has to be left exactly where the \
+         tick that carried it over the line left it"
+    );
+    assert_eq!(
+        field.ball.velocity, struck_at,
+        "and it has to keep the pace it crossed with, or it stops dead on \
+         the line by another route"
     );
     assert!(
-        field.ball.position.x > 0.0,
-        "and it has to come back onto the pitch, not sit behind the line"
+        !awaited.settled,
+        "the ball is still travelling, so the restart is not yet waiting on a spot"
+    );
+
+    let take_from = awaited
+        .take_from
+        .expect("a run-out restart is taken from where the ball CROSSED, not where it stops");
+    assert!(
+        take_from.x > 0.0,
+        "the goal kick itself is taken on the pitch, got x={:.1}",
+        take_from.x
+    );
+    let off_the_crossing = (Vector3::new(take_from.x, take_from.y, 0.0)
+        - Vector3::new(crossed_at.x, crossed_at.y, 0.0))
+    .magnitude();
+    assert!(
+        off_the_crossing < 8.0,
+        "the spot is {off_the_crossing:.1}u from where the ball crossed — \
+         that is the placement teleport wearing a different name"
     );
 }
 
@@ -190,7 +213,14 @@ fn a_ball_over_the_bar_also_dies_where_it_crossed() {
     let gk = keeper_at(&mut field, Vector3::new(20.0, 272.0, 0.0));
     let (shooter, team) = attacker(&field);
     field.ball.position = Vector3::new(-1.0, 272.0, 3.4);
-    field.ball.velocity = Vector3::new(-2.0, 0.0, 0.4);
+    // ⚠ **A realistic vertical, and it has to be.** This used to read 0.4,
+    // which is 0.4 METRES PER TICK — 40 m/s straight up, a 40 m apex, and
+    // above the engine's own launch ceiling. It cost nothing while the
+    // restart nursed the height down at a flat 10 cm a tick and ignored
+    // the velocity entirely; under real physics the fixture ball simply
+    // left the stadium. 0.03 m/tick is 3 m/s: a shot skied over the bar
+    // and still rising a little as it crosses.
+    field.ball.velocity = Vector3::new(-2.0, 0.0, 0.03);
     field.ball.current_owner = None;
     field
         .ball
@@ -208,35 +238,45 @@ fn a_ball_over_the_bar_also_dies_where_it_crossed() {
     assert!(
         field.ball.position.z > 3.0,
         "the ball was dropped from 3.4 m to {:.2} m in one tick — the \
-         placement must not write the height, `tick_awaited_restart` \
-         settles it",
+         award must not write the height, the flight does",
         field.ball.position.z
     );
     let crossed_at = Vector3::new(-1.0, 272.0, 0.0);
-    let moved = (Vector3::new(awaited.spot.x, awaited.spot.y, 0.0) - crossed_at).magnitude();
+    let take_from = awaited
+        .take_from
+        .expect("the kick is taken from the goal line the ball went over");
+    let moved = (Vector3::new(take_from.x, take_from.y, 0.0) - crossed_at).magnitude();
     assert!(
         moved < 8.0,
-        "the ball was moved {:.1}u ({:.2} m) sideways off the point it went \
+        "the spot is {:.1}u ({:.2} m) sideways of the point the ball went \
          over the bar — that is the placement teleport",
         moved,
         moved * 0.125
     );
     assert!(
-        awaited.spot.x > 0.0,
-        "and it still has to come back onto the pitch, got x={:.1}",
-        awaited.spot.x
+        take_from.x > 0.0,
+        "and the kick itself is taken on the pitch, got x={:.1}",
+        take_from.x
     );
 }
 
-/// The ball settles onto the grass over several ticks rather than being
+/// The ball comes down to the grass under gravity rather than being
 /// dropped there, and stays put once it arrives.
+///
+/// The bug this pins is a WRITE — the placement putting `spot.z = 0` into
+/// the ball and teleporting it three metres downward on one tick. The
+/// route to the grass has changed since (it is the flight now, not the
+/// restart's 10 cm/tick settle) but the assertion has not: whatever brings
+/// the ball down, no single tick of it may be a drop.
 #[test]
-fn the_placed_ball_falls_to_the_grass_instead_of_being_dropped_on_it() {
+fn the_ball_falls_to_the_grass_instead_of_being_dropped_on_it() {
     let (mut field, mut context) = kickoff();
     keeper_at(&mut field, Vector3::new(20.0, 272.0, 0.0));
     let (shooter, team) = attacker(&field);
     field.ball.position = Vector3::new(-1.0, 272.0, 3.4);
-    field.ball.velocity = Vector3::new(-2.0, 0.0, 0.4);
+    // See `a_ball_over_the_bar_also_dies_where_it_crossed` on why this is
+    // 0.03 and not 0.4.
+    field.ball.velocity = Vector3::new(-2.0, 0.0, 0.03);
     field.ball.current_owner = None;
     field
         .ball
@@ -248,7 +288,7 @@ fn the_placed_ball_falls_to_the_grass_instead_of_being_dropped_on_it() {
         .check_over_goal(&mut context, &players, &mut events);
 
     let mut previous = field.ball.position.z;
-    for _ in 0..80 {
+    for _ in 0..400 {
         context.increment_time();
         let players = field.players.clone();
         field
@@ -257,7 +297,7 @@ fn the_placed_ball_falls_to_the_grass_instead_of_being_dropped_on_it() {
         let fell = previous - field.ball.position.z;
         assert!(
             fell <= 0.11,
-            "the ball fell {fell:.2} m in one tick — that is a drop, not a settle"
+            "the ball fell {fell:.2} m in one tick — that is a drop, not a fall"
         );
         previous = field.ball.position.z;
     }
@@ -434,7 +474,28 @@ fn nobody_may_touch_a_dead_ball_including_its_taker() {
     let (mut field, mut context) = kickoff();
     let gk = keeper_at(&mut field, Vector3::new(20.0, 300.0, 0.0));
     shoot_wide(&mut field, &context, 180.0);
-    let spot = field.ball.awaiting_restart.expect("armed").spot;
+    // Let the run-out finish first. The rule under test is "nothing may
+    // touch it", and a ball that is still rolling out has a velocity of
+    // its own — which is not a touch, and would make an absolute
+    // "velocity must be zero" assertion measure the wrong thing.
+    let mut settle_events = EventCollection::with_capacity(4);
+    for _ in 0..400 {
+        if field
+            .ball
+            .awaiting_restart
+            .is_some_and(|restart| restart.settled)
+        {
+            break;
+        }
+        context.increment_time();
+        let players = field.players.clone();
+        field
+            .ball
+            .tick_awaited_restart(&context, &players, &mut settle_events);
+    }
+    let restart = field.ball.awaiting_restart.expect("armed");
+    assert!(restart.settled, "the run-out has to finish inside 4 s");
+    let spot = restart.spot;
 
     // Somebody is standing right on the ball — the shape that used to take
     // it off the line. The taker is included on purpose: he acquires it

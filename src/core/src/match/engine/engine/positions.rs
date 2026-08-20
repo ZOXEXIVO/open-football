@@ -130,7 +130,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     && (player.position - ball_pos).norm_squared() > LOD_DISTANCE_SQ
                     && (idx as u64 & 1) == stagger
                 {
-                    player.lod_skip_update(context, ball_pos, tick_context.positions.ball.velocity);
+                    player.lod_skip_update(
+                        context,
+                        ball_pos,
+                        tick_context.positions.ball.velocity,
+                        tick_context.ball.restart_taker,
+                    );
                     return;
                 }
                 player.update(idx, context, tick_context, events)

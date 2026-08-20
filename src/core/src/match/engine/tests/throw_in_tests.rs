@@ -18,7 +18,7 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::engine::ball::ball::AwaitedRestart;
+use crate::r#match::engine::ball::ball::{AwaitedRestart, RunOff};
 use crate::r#match::engine::result::Score;
 use crate::r#match::{
     MatchContext, MatchField, MatchPlayerCollection, PlayerSide, events::EventCollection,
@@ -164,10 +164,23 @@ fn a_taker_who_never_arrives_is_placed_rather_than_waited_for() {
     let toucher = outfielder(&field, PlayerSide::Left);
     put_it_out(&mut field, &context, toucher, None);
     let awaited = field.ball.awaiting_restart.expect("armed");
+    // The throw is taken from the touchline whatever the ball does next —
+    // the backstop consumes `take_from` first, so this is the placement,
+    // not the run-out's resting place.
+    let throw_from = awaited
+        .take_from
+        .expect("a throw-in is taken from where the ball crossed the line");
 
-    // Nobody moves. Run past the patience bound.
+    // Nobody moves. Run past the patience bound — which is no longer a
+    // constant: the ball spends the first fraction of a second running out
+    // of play, and `tick_run_out` re-derives the wait against the distance
+    // the taker is left with once it stops.
     let mut events = EventCollection::with_capacity(4);
-    for _ in 0..(AwaitedRestart::PATIENCE_TICKS + 2) {
+    let bound = AwaitedRestart::CEILING + AwaitedRestart::PATIENCE_TICKS;
+    for _ in 0..bound {
+        if field.ball.awaiting_restart.is_none() {
+            break;
+        }
         context.increment_time();
         let players = field.players.clone();
         field
@@ -182,33 +195,97 @@ fn a_taker_who_never_arrives_is_placed_rather_than_waited_for() {
     assert_eq!(field.ball.current_owner, Some(awaited.taker_id));
     assert_eq!(
         field.ball.pending_set_piece_teleport,
-        Some((awaited.taker_id, awaited.spot)),
-        "and the backstop is the placement it always was"
+        Some((awaited.taker_id, throw_from)),
+        "and the backstop is the placement it always was — on the line, \
+         not out in the run-off where the ball came to rest"
     );
 }
 
-/// The ball does not move while it is out of play, and nothing may take it
-/// off the man it was awarded to. Both were true of the old restart only
-/// because it lasted a single tick.
+/// **The ball goes OUT, comes to rest out there, and then does not move
+/// again** — and nothing may take it off the man it was awarded to at any
+/// point.
+///
+/// The reported artefact is in the first tick: the award used to write the
+/// ball 2 u back INSIDE the touchline and zero its velocity, so a ball
+/// that had gone out of play stopped dead on the line. It now keeps the
+/// pace it crossed with, runs across the run-off, and is stopped by the
+/// hoardings — which is where a real one goes and where the thrower has to
+/// go and get it.
 #[test]
-fn an_out_of_play_ball_neither_moves_nor_changes_hands() {
+fn a_ball_put_out_runs_off_the_pitch_and_stays_there() {
     let (mut field, mut context) = kickoff();
     let toucher = outfielder(&field, PlayerSide::Left);
     put_it_out(&mut field, &context, toucher, None);
-    let spot = field.ball.awaiting_restart.expect("armed").spot;
 
     let mut events = EventCollection::with_capacity(4);
-    for _ in 0..60 {
+    let mut furthest = field.ball.position.y;
+    let mut settled_at: Option<Vector3<f32>> = None;
+    for _ in 0..300 {
+        let before = field.ball.position;
         context.increment_time();
         let players = field.players.clone();
         field.ball.update_light(&mut context, &players, &mut events);
+        let step = (field.ball.position - before).magnitude();
         assert!(
-            (field.ball.position - spot).magnitude() < 1.0e-3,
-            "the ball drifted off the line while out of play"
+            step < 3.0,
+            "the ball jumped {step:.1}u in one tick — a run-out is travel, not a teleport"
         );
         assert!(
             field.ball.current_owner.is_none(),
             "somebody claimed a ball that is out of play"
         );
+        furthest = furthest.min(field.ball.position.y);
+        if let Some(rest) = settled_at {
+            assert!(
+                (field.ball.position - rest).magnitude() < 1.0e-3,
+                "the ball moved again after coming to rest"
+            );
+        } else if field
+            .ball
+            .awaiting_restart
+            .is_some_and(|restart| restart.settled)
+        {
+            settled_at = Some(field.ball.position);
+        }
     }
+
+    let rest = settled_at.expect("the run-out has to finish inside three seconds");
+    assert!(
+        rest.y < 0.0,
+        "the ball has to end up OFF the pitch, got y={:.1}",
+        rest.y
+    );
+    assert!(
+        furthest >= -RunOff::SIDE - 1.0e-3,
+        "and the hoardings have to stop it, got y={furthest:.1} against a \
+         perimeter at {:.1}",
+        -RunOff::SIDE
+    );
+}
+
+/// …while the throw itself is still taken from the touchline, where the
+/// ball crossed. Law 15, and the reason the restart carries two points
+/// rather than one.
+#[test]
+fn the_throw_is_still_taken_from_the_point_it_crossed() {
+    let (mut field, context) = kickoff();
+    let toucher = outfielder(&field, PlayerSide::Left);
+    put_it_out(&mut field, &context, toucher, None);
+
+    let take_from = field
+        .ball
+        .awaiting_restart
+        .expect("armed")
+        .take_from
+        .expect("a run-out restart is taken from the crossing point");
+    assert!(
+        take_from.y > 0.0 && take_from.y < 8.0,
+        "the throw is taken on the touchline, got y={:.1}",
+        take_from.y
+    );
+    assert!(
+        (take_from.x - 420.0).abs() < 8.0,
+        "and at the point the ball crossed it, got x={:.1} against 420",
+        take_from.x
+    );
 }

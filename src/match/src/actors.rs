@@ -571,11 +571,18 @@ impl Actors {
     /// throw-in, in metres, and how slowly it has to have been travelling
     /// first.
     ///
-    /// The engine sets a throw-in down two game units — a quarter of a metre —
-    /// inside the line and zeroes its velocity (`Ball::check_throw_in`), so
-    /// this is that quarter metre with room either side rather than a guess.
-    /// Nothing else in football is played from a standing start out there.
-    const TOUCHLINE_REACH: f32 = 0.45;
+    /// The engine takes a throw-in from `AwaitedRestart::SPOT_INSET` inside
+    /// the line — six game units, 75 cm — so this is that spot with room
+    /// either side rather than a guess. Nothing else in football is played
+    /// from a standing start out there.
+    ///
+    /// ⚠ **It was 0.45 m, derived from an inset of two units.** The inset
+    /// moved to six when the ball started RUNNING OUT of play instead of
+    /// being written onto its spot: the thrower now walks the ball back in
+    /// from the run-off and has to finish inside the line, and `Arrive`'s
+    /// own 3-unit deadzone is what sets how far inside that ends up being.
+    /// At 0.45 m every throw-in was drawn as a boot instead.
+    const TOUCHLINE_REACH: f32 = 1.3;
     const DEAD_BALL: f32 = 0.6;
     /// How far ahead of the playhead the viewer goes looking for the next
     /// kick, as a number of probes of the recording's own 30 ms sample step.
