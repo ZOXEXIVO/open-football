@@ -89,6 +89,10 @@ finances, and match engine can turn it into success.
 
 ![Player page](.docs/images/player.jpg "Player page")
 
+
+![Match page](.docs/images/match.jpg "Match page")
+![Match view](.docs/images/match.avif "Match view")
+
 [Tactics page example](https://open-football.org/en/teams/napoli)
 
 ![Player page](.docs/images/tactics.jpg "Player page")
@@ -108,9 +112,6 @@ finances, and match engine can turn it into success.
 ![Player personal page](.docs/images/player_personal.jpg "Player personal page")
 
 [Match example](https://open-football.org/en/match/2026-08-29_1139_1129)
-
-
-![Match page](.docs/images/match.jpg "Match page")
 
 [League page example](https://open-football.org/en/leagues/italian-serie-a)
 

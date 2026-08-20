@@ -166,10 +166,9 @@ fn a_taker_who_never_arrives_is_placed_rather_than_waited_for() {
     let awaited = field.ball.awaiting_restart.expect("armed");
     // The throw is taken from the touchline whatever the ball does next —
     // the backstop consumes `take_from` first, so this is the placement,
-    // not the run-out's resting place.
-    let throw_from = awaited
-        .take_from
-        .expect("a throw-in is taken from where the ball crossed the line");
+    // not the run-out's resting place. With the run-out off there is no
+    // second leg and `spot` is that same point.
+    let throw_from = awaited.take_from.unwrap_or(awaited.spot);
 
     // Nobody moves. Run past the patience bound — which is no longer a
     // constant: the ball spends the first fraction of a second running out
@@ -213,6 +212,12 @@ fn a_taker_who_never_arrives_is_placed_rather_than_waited_for() {
 /// go and get it.
 #[test]
 fn a_ball_put_out_runs_off_the_pitch_and_stays_there() {
+    if !RunOff::armed() {
+        // `OF_RUN_OUT=off` restores the snap onto the spot, which is the
+        // behaviour this test exists to catch. Its own arm is
+        // `run_out_tests::the_off_arm_still_places_the_ball_on_the_spot`.
+        return;
+    }
     let (mut field, mut context) = kickoff();
     let toucher = outfielder(&field, PlayerSide::Left);
     put_it_out(&mut field, &context, toucher, None);
@@ -266,18 +271,18 @@ fn a_ball_put_out_runs_off_the_pitch_and_stays_there() {
 /// …while the throw itself is still taken from the touchline, where the
 /// ball crossed. Law 15, and the reason the restart carries two points
 /// rather than one.
+///
+/// Deliberately arm-agnostic: with the run-out off there is only one
+/// point, and `spot` IS the touchline point, so the same assertions hold
+/// against `take_from.unwrap_or(spot)` in both.
 #[test]
 fn the_throw_is_still_taken_from_the_point_it_crossed() {
     let (mut field, context) = kickoff();
     let toucher = outfielder(&field, PlayerSide::Left);
     put_it_out(&mut field, &context, toucher, None);
 
-    let take_from = field
-        .ball
-        .awaiting_restart
-        .expect("armed")
-        .take_from
-        .expect("a run-out restart is taken from the crossing point");
+    let awaited = field.ball.awaiting_restart.expect("armed");
+    let take_from = awaited.take_from.unwrap_or(awaited.spot);
     assert!(
         take_from.y > 0.0 && take_from.y < 8.0,
         "the throw is taken on the touchline, got y={:.1}",

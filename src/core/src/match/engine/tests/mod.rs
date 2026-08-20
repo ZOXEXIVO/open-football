@@ -17,3 +17,4 @@ mod run_out_tests;
 mod solid_engine_tests;
 mod state_reachability_tests;
 mod throw_in_tests;
+mod zz_probe_tests;

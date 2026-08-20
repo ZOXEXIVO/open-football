@@ -145,6 +145,10 @@ impl RunOutMatch {
 /// old 10-unit pitch clamp — must be what eventually stops it.
 #[test]
 fn a_shot_that_misses_runs_on_behind_the_goal() {
+    if !RunOff::armed() {
+        // See `the_off_arm_still_places_the_ball_on_the_spot`.
+        return;
+    }
     let mut m = RunOutMatch::new();
     m.shoot_wide_of_the_left_goal();
 
@@ -275,6 +279,10 @@ fn a_ball_running_out_behind_the_goal_never_scores() {
 /// was cross the byline again and be given as a corner.
 #[test]
 fn the_keeper_fetches_it_from_behind_the_goal_and_restarts_on_the_pitch() {
+    if !RunOff::armed() {
+        // See `the_off_arm_still_places_the_ball_on_the_spot`.
+        return;
+    }
     let mut m = RunOutMatch::new();
     m.shoot_wide_of_the_left_goal();
     let taker = m.field.ball.awaiting_restart.expect("armed").taker_id;
@@ -364,5 +372,71 @@ fn the_off_arm_still_places_the_ball_on_the_spot() {
     assert!(
         m.play_the_restart_out(3000).is_some(),
         "and the restart still resolves"
+    );
+}
+
+// ===== ZZ PROBE (temporary) =====
+#[test]
+fn zz_probe_over_the_bar_net() {
+    use crate::r#match::engine::ball::ball::net::GoalNet;
+    use crate::r#match::engine::goal::GOAL_WIDTH;
+    let mut m = RunOutMatch::new();
+    let shooter = m
+        .field
+        .players
+        .iter()
+        .find(|p| {
+            p.side == Some(PlayerSide::Right)
+                && !p.tactical_position.current_position.is_goalkeeper()
+        })
+        .map(|p| (p.id, p.team_id))
+        .expect("outfielder");
+    let goal_y = m.context.goal_positions.left.y;
+    m.field.ball.position = Vector3::new(-1.0, goal_y + 2.0, 3.2);
+    m.field.ball.velocity = Vector3::new(-1.4, 0.05, 0.01);
+    m.field.ball.current_owner = None;
+    m.field.ball.previous_owner = Some(shooter.0);
+    let tick = m.context.current_tick();
+    m.field.ball.record_touch(shooter.0, shooter.1, tick, true);
+    m.tick();
+    let aw = m.field.ball.awaiting_restart.expect("goal kick");
+    println!("PROBE: origin={:?} settled={}", aw.origin, aw.settled);
+    let taker = aw.taker_id;
+    let mut prev = m.field.ball.position;
+    let mut back_panel_cross: Option<(f32, f32)> = None;
+    let mut keeper_in_net = 0usize;
+    let mut keeper_min_x_in_mouth = f32::MAX;
+    for i in 1..=3000 {
+        m.tick();
+        let p = m.field.ball.position;
+        if back_panel_cross.is_none()
+            && prev.x > -GoalNet::DEPTH
+            && p.x <= -GoalNet::DEPTH
+            && (p.y - goal_y).abs() < GOAL_WIDTH
+        {
+            // roof height at the back of the net
+            back_panel_cross = Some((p.z, i as f32));
+            println!(
+                "PROBE: ball crossed the BACK PANEL (x={:.1}) at z={:.2} m on tick {i}; back-panel top is {:.2} m",
+                p.x, p.z, GoalNet::BACK_HEIGHT
+            );
+        }
+        if let Some(k) = m.field.players.iter().find(|p| p.id == taker) {
+            if k.position.x < 0.0 && k.position.x > -GoalNet::DEPTH
+                && (k.position.y - goal_y).abs() < GOAL_WIDTH
+            {
+                keeper_in_net += 1;
+                keeper_min_x_in_mouth = keeper_min_x_in_mouth.min(k.position.x);
+            }
+        }
+        prev = p;
+        if m.field.ball.awaiting_restart.is_none() {
+            println!("PROBE: resolved tick {i}");
+            break;
+        }
+    }
+    println!(
+        "PROBE: back_panel_cross={:?} keeper_ticks_inside_net_volume={keeper_in_net}",
+        back_panel_cross
     );
 }

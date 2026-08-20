@@ -315,13 +315,38 @@ impl Ball {
         /// one carrying — `Actors::in_his_hands` wants it between 0.85 and
         /// 1.45 m before it will put it in his arms.
         const CARRY_HEIGHT: f32 = 1.15;
-        let (resting, height) = if await_state.carrying {
-            (taker.position, CARRY_HEIGHT)
+        /// How fast the ball closes the last stride onto the man picking it
+        /// up, in units per tick — `Ball::move_to`'s own `BALL_TRACK_SPEED`,
+        /// which is what carries a ball along with its owner.
+        ///
+        /// ⚠ **The carry used to start by writing the ball onto him**, and
+        /// [`AwaitedRestart::REACH`] is 12 u, so it started with a jump of
+        /// up to a metre and a half. Caught in a recorded track: the ball
+        /// lay against the hoardings at x = −36.8 and the next sample had
+        /// it at −27.6 with the keeper. He is *bending down to pick it up*
+        /// — the last teleport in a sequence that exists to remove them.
+        const PICKUP_RATE: f32 = 1.5;
+        let height = if await_state.carrying {
+            let to_taker = Vector3::new(
+                taker.position.x - self.position.x,
+                taker.position.y - self.position.y,
+                0.0,
+            );
+            let gap = to_taker.norm();
+            if gap > PICKUP_RATE {
+                let step = to_taker * (PICKUP_RATE / gap);
+                self.position.x += step.x;
+                self.position.y += step.y;
+            } else {
+                self.position.x = taker.position.x;
+                self.position.y = taker.position.y;
+            }
+            CARRY_HEIGHT
         } else {
-            (await_state.spot, await_state.spot.z)
+            self.position.x = await_state.spot.x;
+            self.position.y = await_state.spot.y;
+            await_state.spot.z
         };
-        self.position.x = resting.x;
-        self.position.y = resting.y;
         self.position.z += (height - self.position.z).clamp(-SETTLE_RATE, SETTLE_RATE);
         self.velocity = Vector3::zeros();
         self.current_owner = None;

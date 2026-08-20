@@ -27,7 +27,7 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::engine::ball::ball::AwaitedRestart;
+use crate::r#match::engine::ball::ball::{AwaitedRestart, RunOff};
 use crate::r#match::engine::result::Score;
 use crate::r#match::{
     MatchContext, MatchField, MatchPlayerCollection, PlayerSide, events::EventCollection,
@@ -107,6 +107,12 @@ fn shoot_wide(field: &mut MatchField, context: &MatchContext, exit_y: f32) {
 /// the SPOT the kick is taken from is on the pitch, where the ball crossed.
 #[test]
 fn a_shot_that_goes_wide_leaves_the_ball_travelling() {
+    if !RunOff::armed() {
+        // `OF_RUN_OUT=off` puts the ball back on the spot, which is the
+        // behaviour under test. Its own arm is
+        // `run_out_tests::the_off_arm_still_places_the_ball_on_the_spot`.
+        return;
+    }
     let (mut field, context) = kickoff();
     keeper_at(&mut field, Vector3::new(20.0, 272.0, 0.0));
     let exit_y = 200.0;
@@ -242,9 +248,9 @@ fn a_ball_over_the_bar_also_dies_where_it_crossed() {
         field.ball.position.z
     );
     let crossed_at = Vector3::new(-1.0, 272.0, 0.0);
-    let take_from = awaited
-        .take_from
-        .expect("the kick is taken from the goal line the ball went over");
+    // Arm-agnostic: with the run-out off there is one point and `spot` IS
+    // the goal-line point, so the same assertions hold in both arms.
+    let take_from = awaited.take_from.unwrap_or(awaited.spot);
     let moved = (Vector3::new(take_from.x, take_from.y, 0.0) - crossed_at).magnitude();
     assert!(
         moved < 8.0,
