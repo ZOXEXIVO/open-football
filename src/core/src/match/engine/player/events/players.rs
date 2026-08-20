@@ -3433,7 +3433,13 @@ impl PlayerEventDispatcher {
             // +17pp draw-correlation surplus — the volume half of the
             // chase was modeled without the quality half.
             let late01 = ((minute as f32 - 55.0) / 30.0).clamp(0.0, 1.0);
-            deficit01 * late01 * (1.0 - composure01 * 0.5)
+            // Scaled with the regime's gain, and it MUST be — this is the
+            // conversion counterweight to the chasing VOLUME lift in
+            // `compute_risk_appetite`. Leave it at full strength while the
+            // volume half is turned down and the pairing inverts: a
+            // trailing side would shoot no more than usual and convert
+            // worse. See `MatchContext::SCORE_REACTION_GAIN`.
+            deficit01 * late01 * (1.0 - composure01 * 0.5) * MatchContext::score_reaction_gain()
         };
 
         // Pressure counts: scan opposing-side players close to the

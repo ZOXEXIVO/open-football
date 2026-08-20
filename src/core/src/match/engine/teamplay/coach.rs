@@ -2,6 +2,15 @@
 ///
 /// The coach evaluates score, time, and fatigue every few seconds and issues
 /// instructions that all players consult when making decisions.
+///
+/// **Every clock threshold that gates a SCORE-dependent branch in here goes
+/// through [`MatchContext::score_reaction_threshold`]**, so the coach's
+/// escalation ladder moves with the rest of the score-reactive regime
+/// instead of being tuned against it — see
+/// [`MatchContext::SCORE_REACTION_GAIN`] for why a partial application is
+/// worse than none. Thresholds that read only the clock or the fatigue
+/// (half-time management, tired legs) are NOT score-reactive and stay put.
+use crate::r#match::MatchContext;
 
 /// High-level tempo instruction from the coach
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -254,8 +263,15 @@ impl MatchCoach {
         self.last_update_tick = current_tick;
 
         let _time_remaining = 1.0 - match_progress;
-        let is_late_game = match_progress > 0.75;
-        let is_very_late = match_progress > 0.88;
+        // The escalation ladder is DISCRETE — a trailing side is on
+        // `AllOutAttack` or it is not — so the regime's amplitude knob
+        // cannot scale it. What it scales instead is how much of the match
+        // is spent past each rung: see
+        // `MatchContext::score_reaction_threshold`. At full gain these are
+        // the thresholds they have always been.
+        let rung = MatchContext::score_reaction_threshold;
+        let is_late_game = match_progress > rung(0.75);
+        let is_very_late = match_progress > rung(0.88);
         let is_first_half_end = match_progress > 0.45 && match_progress < 0.55;
         let team_tired = avg_team_condition < 0.45;
 
@@ -293,9 +309,9 @@ impl MatchCoach {
             // the game around minute 80 — so protection now starts at
             // ~minute 75 (progress 0.83) and the bus parks at ~minute 83.
             1 => {
-                if match_progress > 0.92 {
+                if match_progress > rung(0.92) {
                     CoachInstruction::ParkTheBus
-                } else if match_progress > 0.83 {
+                } else if match_progress > rung(0.83) {
                     CoachInstruction::SlowDown
                 } else if is_first_half_end {
                     CoachInstruction::SlowDown
@@ -323,7 +339,7 @@ impl MatchCoach {
                     CoachInstruction::AllOutAttack
                 } else if is_late_game {
                     CoachInstruction::AllOutAttack
-                } else if match_progress > 0.55 {
+                } else if match_progress > rung(0.55) {
                     CoachInstruction::PushForward
                 } else {
                     CoachInstruction::Normal
@@ -335,7 +351,7 @@ impl MatchCoach {
                     CoachInstruction::AllOutAttack
                 } else if is_late_game {
                     CoachInstruction::AllOutAttack
-                } else if match_progress > 0.55 {
+                } else if match_progress > rung(0.55) {
                     CoachInstruction::PushForward
                 } else {
                     CoachInstruction::Normal
@@ -477,8 +493,9 @@ impl MatchCoach {
         self.metrics = metrics;
 
         let xg_diff_15 = metrics.xg_for_last_15 - metrics.xg_against_last_15;
-        let is_late = match_progress > 0.66;
-        let is_very_late = match_progress > 0.83;
+        let rung = MatchContext::score_reaction_threshold;
+        let is_late = match_progress > rung(0.66);
+        let is_very_late = match_progress > rung(0.83);
 
         // Drawing but dominating xG → don't blow the shape. Stay on
         // PushForward (or Normal) instead of AllOutAttack.
@@ -499,7 +516,7 @@ impl MatchCoach {
         // "compact mid block" with ParkTheBus's posture but only after
         // 75').
         if score_diff == 1
-            && match_progress > 0.83
+            && match_progress > rung(0.83)
             && metrics.xg_against_last_15 > 0.6
             && matches!(
                 self.instruction,
@@ -563,7 +580,8 @@ impl TacticalNeed {
         avg_team_condition: f32,
         metrics: RollingTeamMetrics,
     ) -> Self {
-        let late = match_progress > 0.66;
+        let rung = MatchContext::score_reaction_threshold;
+        let late = match_progress > rung(0.66);
         if late && score_diff < 0 {
             return TacticalNeed::Chasing;
         }
@@ -576,7 +594,7 @@ impl TacticalNeed {
         if metrics.dangerous_turnovers_last_10 >= 4 || avg_team_condition < 0.40 {
             return TacticalNeed::BeingPressed;
         }
-        if score_diff <= 0 && match_progress > 0.55 && metrics.shots_for_last_15 < 2 {
+        if score_diff <= 0 && match_progress > rung(0.55) && metrics.shots_for_last_15 < 2 {
             return TacticalNeed::NeedingCrosses;
         }
         TacticalNeed::Fatigue
@@ -603,7 +621,10 @@ impl TacticalNeed {
             CoachInstruction::ParkTheBus | CoachInstruction::WasteTime => {
                 return TacticalNeed::ProtectingLead;
             }
-            CoachInstruction::SlowDown if score_diff > 0 && match_progress > 0.66 => {
+            CoachInstruction::SlowDown
+                if score_diff > 0
+                    && match_progress > MatchContext::score_reaction_threshold(0.66) =>
+            {
                 return TacticalNeed::ProtectingLead;
             }
             _ => {}

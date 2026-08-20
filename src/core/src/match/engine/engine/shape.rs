@@ -36,6 +36,26 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         };
         let away_diff = -home_diff;
 
+        // The shape table's own rungs (chase from 70', protect from 75')
+        // are score-reactive, so they move with the regime's amplitude —
+        // see `MatchContext::SCORE_REACTION_GAIN`. The table is a pure
+        // function with its own unit tests, so rather than reach into it
+        // the CLOCK it is shown is compressed toward the whistle: a
+        // threshold at minute `m` then fires at `90 - (90 - m) * gain`,
+        // which is the same rung mapping the coach ladder uses. At full
+        // gain the minute passes through untouched.
+        //
+        // Not scaling it was measurable: with every continuous channel
+        // turned down to 0.4 the post-62' swing was still 0.75 goals/90
+        // for a leader against 2.03 for a trailer, and a formation swap
+        // to a front three is not a magnitude any of them could reach.
+        let gain = MatchContext::score_reaction_gain();
+        let minutes = if gain <= 0.0 {
+            0
+        } else {
+            (90.0 - (90.0 - minutes as f32) / gain).clamp(0.0, 120.0) as u8
+        };
+
         // Hysteresis: skip the probe entirely if the last shape change
         // (any side) was within `SHAPE_CHANGE_MIN_MINUTES_GAP` minutes.
         // First change is always allowed because `last_shape_change_tick`

@@ -720,7 +720,10 @@ impl TackleDecision {
         }
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
         let from = MatchContext::SCORE_REACTION_FROM_MINUTE as f32;
-        let pressure = ((minute as f32 - from) / (90.0 - from)).clamp(0.0, 1.0);
+        // Scaled with the rest of the regime — see
+        // `MatchContext::SCORE_REACTION_GAIN`.
+        let pressure = ((minute as f32 - from) / (90.0 - from)).clamp(0.0, 1.0)
+            * MatchContext::score_reaction_gain();
         let home = ctx.player.team_id == ctx.context.field_home_team_id;
         let (mine, theirs) = if home {
             (

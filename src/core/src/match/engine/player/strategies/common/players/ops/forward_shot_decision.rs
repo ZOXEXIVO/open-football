@@ -2746,7 +2746,35 @@ const LONG_RANGE_FLOOR: f32 = 0.20;
 /// question — 44 of those 100 shots came from inside the box against a
 /// real ~8, and that half is chance supply and belongs to the defensive
 /// shape (41% of attackers in our own third have nobody within 3 m).
-const SHOT_BAR_BASE: f32 = 0.950;
+///
+/// # 2026-08-20 — 0.950 → 0.905, for the shot COUNT
+///
+/// 0.950 measured **11.4 shots a team against a real ~13**, and the
+/// shortfall was being hidden by an equal and opposite error on the other
+/// side of the same equation: the keeper was saving 61.9% of what reached
+/// him against a real ~67%, so too few shots converting too well summed
+/// to a plausible 2.7 goals a match. Both halves are corrected together
+/// (see `SaveModel::CENTRED_BASE`) — moving either alone walks the goal
+/// total off its target.
+///
+/// Still a steep knob and still not share-preserving in principle, but
+/// the reliefs are anchored at `RELIEF_REFERENCE_BASE` now, so this
+/// scales the assembled bar rather than reshaping it: measured, the
+/// distance mix moved 3 points at most and kept its ordering.
+///
+/// Sensitivity, for the next person to move it: 0.950 → 11.5 shots a
+/// team, 0.920 → 12.6, 0.905 → 13.8. About 0.08 shots per thousandth,
+/// so it is still a knob to move in small steps and re-read.
+///
+/// Landed at 0.912 rather than lower because the goal TOTAL rides on it
+/// too: at 0.920 the engine ran 12.6 shots and 2.53 goals, which is real
+/// football's shot count and the bottom of its goal range, and the
+/// scoreline distribution answers to the goal level — 2.53 goals puts
+/// 1-0 at 23% where 2.7 puts it at 19%. The remaining honest lift is
+/// ACCURACY, not volume: on-target sits at 31% against a real 33%, and
+/// closing that alone would carry the total the rest of the way without
+/// another shot being taken.
+const SHOT_BAR_BASE: f32 = 0.912;
 /// The base the three reliefs, the spread and the floor were all sized
 /// against. Changing this re-shapes the bar; changing `SHOT_BAR_BASE`
 /// does not.

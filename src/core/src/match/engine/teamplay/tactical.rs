@@ -15,7 +15,7 @@
 //! makes the calculator boundary obvious from a `cargo doc` view.
 
 use crate::Tactics;
-use crate::r#match::{MatchField, PlayerSide};
+use crate::r#match::{MatchContext, MatchField, PlayerSide};
 
 /// The team's high-level game phase. Recomputed from ball position,
 /// possession, and recent turnover. Player states branch on this before
@@ -892,10 +892,19 @@ impl TeamTacticalState {
             // still capable of scoring the counter-punch goal that
             // kills real games off.
             let late_bonus = 0.30 * late_factor;
-            ((lead_base + weaker_bonus) * manage_ramp + late_bonus).clamp(0.0, 0.95)
+            // Scaled by the regime's single amplitude knob — see
+            // `MatchContext::SCORE_REACTION_GAIN`. This is the biggest of
+            // the score-reactive channels: `game_management_intensity`
+            // feeds tempo, press, compactness, the defensive line drop,
+            // risk appetite, build-up patience and rest defence, so it
+            // has to move with the rest of the regime rather than being
+            // tuned against it.
+            (((lead_base + weaker_bonus) * manage_ramp + late_bonus)
+                * MatchContext::score_reaction_gain())
+            .clamp(0.0, 0.95)
         } else if score_diff == 0 && ability_gap > 0.2 && late_factor > 0.5 {
             // Weaker team late in a draw plays for the point.
-            (0.15 + 0.20 * late_factor).clamp(0.0, 0.5)
+            ((0.15 + 0.20 * late_factor) * MatchContext::score_reaction_gain()).clamp(0.0, 0.5)
         } else {
             0.0
         }
@@ -1025,10 +1034,14 @@ impl TeamTacticalState {
         // score reactions on, −0.05 blind). Real chasing pressure exists
         // but converts poorly — the volume lift here is paired with the
         // desperation conversion penalty in the shot resolver.
+        // Scaled with the rest of the regime — see
+        // `MatchContext::SCORE_REACTION_GAIN`.
         let chasing_factor = if score_diff < 0 {
             let late_factor = ((minute - 60.0).max(0.0) / 30.0).min(1.0);
             let deficit = (-score_diff).min(3) as f32;
-            (0.08 + deficit * 0.04) * (0.25 + late_factor * 0.75)
+            (0.08 + deficit * 0.04)
+                * (0.25 + late_factor * 0.75)
+                * MatchContext::score_reaction_gain()
         } else {
             0.0
         };
@@ -1060,10 +1073,16 @@ impl TeamTacticalState {
             GamePhase::LowBlock => 1,
             _ => 0,
         };
-        // Chasing late — sacrifice a defender to push for the goal.
-        let chasing_delta: i8 = if score_diff < 0 && minute > 75.0 {
+        // Chasing late — sacrifice a defender to push for the goal. A
+        // whole man is not a magnitude the regime's gain can scale, so
+        // this rung moves in the clock instead, like the coach ladder —
+        // see `MatchContext::score_reaction_threshold`.
+        let from = 90.0 - (90.0 - 75.0) * MatchContext::score_reaction_gain();
+        let chasing_delta: i8 = if minute <= from {
+            0
+        } else if score_diff < 0 {
             -1
-        } else if score_diff > 0 && minute > 75.0 {
+        } else if score_diff > 0 {
             1
         } else {
             0
@@ -1212,7 +1231,18 @@ mod tests {
             weak_late > strong_even,
             "weak_late={weak_late} strong_even={strong_even}"
         );
-        assert!(weak_late > 0.5, "got {weak_late}");
+        // The absolute height belongs to `MatchContext::SCORE_REACTION_GAIN`
+        // — it is the calibration knob for the whole score-reactive regime
+        // and it is titrated against the draw-correlation surplus, not
+        // against this shape. Divide it back out so the test asks what it
+        // has always meant to ask: that the SHAPE of the signal puts a
+        // weaker side protecting a late lead deep into "park the bus".
+        let gain = MatchContext::score_reaction_gain();
+        assert!(
+            gain > 0.0,
+            "the regime is off; this test cannot mean anything"
+        );
+        assert!(weak_late / gain > 0.5, "got {weak_late} at gain {gain}");
     }
 
     #[test]

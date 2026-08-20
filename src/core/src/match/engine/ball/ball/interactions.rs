@@ -244,7 +244,29 @@ impl SaveModel {
     /// and squeezes the keeper-quality axis against `MAX_SAVE` — at 0.86
     /// the spread between the worst keeper alive and the best collapsed
     /// to 12.9 points against a real ~20.
-    const CENTRED_BASE: f32 = 1.03;
+    ///
+    /// # 2026-08-20 — 1.03 → 1.12, for the population save rate
+    ///
+    /// Measured 61.9% saves/on-target against the harness's real ~67%,
+    /// stable across four independent 400-match runs (61.9 / 61.7 / 60.0 /
+    /// 61.9) and unmoved by the score-reactive regime, so it is a property
+    /// of this curve and not of the football around it.
+    ///
+    /// The arithmetic is direct. Of 2856 on-target shots the physics roll
+    /// adjudicated 2597 and passed 1689 — a 65.0% hit rate — and the state
+    /// machine added 80, for 1769 saves. Reaching 67% needs 1914, i.e. the
+    /// roll at ~70.6%. An ordinary duel is `skill_multiplier` 0.68 against
+    /// a mean realised 0.65, so the mean `geometric_base` in force is
+    /// 0.956, which back-solves to a mean reach ratio of 0.42; holding
+    /// that ratio and asking for 0.706/0.68 = 1.038 gives this value. The
+    /// clamp at `MAX_SAVE` does not bind on the way — an elite keeper on a
+    /// dead-centre shot reaches 1.12 × 0.82 = 0.92 exactly, so the ceiling
+    /// still means what it says.
+    ///
+    /// ⚠ It goes HERE and not in `SKILL_FLOOR` — see the note there.
+    /// Paired with `SHOT_BAR_BASE`, which was carrying the opposite error:
+    /// too few shots converting too well.
+    const CENTRED_BASE: f32 = 1.12;
     /// How much of that ceiling a full-stretch shot gives away.
     const STRETCH_PENALTY: f32 = 0.42;
     /// Save probability for the worst keeper alive on a centred shot,

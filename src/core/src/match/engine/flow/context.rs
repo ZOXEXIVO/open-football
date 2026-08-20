@@ -639,6 +639,93 @@ impl MatchContext {
     /// correlation budget.
     pub const SCORE_REACTION_FROM_MINUTE: u32 = 62;
 
+    /// **How hard the score-reactive regime pulls, as one number.**
+    ///
+    /// The gate above decides WHEN teams start reading the scoreline;
+    /// this decides HOW MUCH. It scales every continuous score-reactive
+    /// magnitude in the engine — game-management intensity, the chasing
+    /// risk lift, defensive urgency, the desperation conversion penalty —
+    /// and shifts the coach's escalation ladder later in the match, so the
+    /// whole regime moves together.
+    ///
+    /// # Why it has to be ONE number
+    ///
+    /// The regime is a dozen small channels that compound, and the
+    /// previous calibration round tuned them one at a time: halving the
+    /// instruction coefficients, the chasing-risk lift, the
+    /// game-management risk slope and the line drop each moved the
+    /// measured draw surplus by **under 10%**, because the other eleven
+    /// channels were still at full strength. Nothing short of a common
+    /// factor moves the regime as a whole.
+    ///
+    /// # What it was titrated against
+    ///
+    /// `OF_SCORE_BLIND` is the regime's own A/B and it lands on real
+    /// football almost exactly — rho +0.03, variance/mean 1.12/1.05,
+    /// 22.5% draws at equal strength — while the regime at full strength
+    /// ran rho +0.36, variance/mean **0.65/0.84** and 37.5% draws. The
+    /// under-dispersion is the part a viewer actually sees: a team that
+    /// goes two up stops scoring, so 3-0 and 4-0 essentially never happen
+    /// (1.2% and 0.5% against a real 5.5% and 2%) and every match ends
+    /// 1-0, 1-1 or 2-1. Post-62' the leader was scoring at 0.55 goals/90
+    /// against the trailer's 2.77 — a five-fold swing where real football
+    /// has a mild one.
+    ///
+    /// # The sweep, 400 equal-strength matches a point
+    ///
+    /// | gain | goals | draws | correlation surplus | post-62' lead / trail |
+    /// |---|---|---|---|---|
+    /// | 1.0 | 2.81 | 36.8% | **+11.2pp** | 0.75 / 2.67 |
+    /// | 0.6 | 2.70 | 35.0% | +8.6pp | 0.87 / 2.57 |
+    /// | 0.4 | 2.47 | 33.0% | +5.2pp | 0.75 / 2.03 |
+    /// | 0.2 | 2.50 | **27.0%** | **+0.4pp** | 1.10 / 1.80 |
+    /// | blind | 2.62 | 22.5% | −2.3pp | 1.57 / 1.23 |
+    ///
+    /// The surplus is the metric to read — it is the observed draw rate
+    /// against the rate the same two goal counts would produce if they
+    /// were independent, so it isolates the correlation from the goal
+    /// level. It falls cleanly with the gain where `rho` and the
+    /// equalizer share are too noisy at n=400 to rank neighbouring points.
+    ///
+    /// 0.25 is the setting: real football's surplus is zero, and the
+    /// regime keeps a quarter of its amplitude — a leader still slows
+    /// down and a trailer still pushes, visibly, without the leader
+    /// scoring at a third of the trailer's rate. The sweep above was run
+    /// BEFORE the situational shape swap joined the gain, so a given
+    /// number now carries slightly more of the regime than it did there.
+    ///
+    /// `OF_SCORE_GAIN` overrides it for a sweep; read once per process.
+    /// Calibration infrastructure — do not remove.
+    pub const SCORE_REACTION_GAIN: f32 = 0.25;
+
+    /// The gain in force, honouring `OF_SCORE_GAIN` and `OF_SCORE_BLIND`.
+    pub fn score_reaction_gain() -> f32 {
+        use std::sync::OnceLock;
+        static GAIN: OnceLock<f32> = OnceLock::new();
+        *GAIN.get_or_init(|| {
+            if Self::score_blind() {
+                return 0.0;
+            }
+            std::env::var("OF_SCORE_GAIN")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .map(|v| v.clamp(0.0, 2.0))
+                .unwrap_or(Self::SCORE_REACTION_GAIN)
+        })
+    }
+
+    /// A progress threshold moved later in proportion as the gain falls.
+    ///
+    /// The coach's escalation ladder is DISCRETE — a trailing side is on
+    /// `AllOutAttack` or it is not — so the gain cannot scale it. What it
+    /// can do is decide how much of the match is spent past each rung:
+    /// at gain 1.0 the ladder is untouched, at 0.5 a threshold sits
+    /// halfway between where it was and the final whistle, and at 0 the
+    /// coach never escalates at all.
+    pub fn score_reaction_threshold(progress: f32) -> f32 {
+        1.0 - (1.0 - progress) * Self::score_reaction_gain()
+    }
+
     /// The scoreline as BEHAVIOR is allowed to see it: 0-0 (level)
     /// before `SCORE_REACTION_FROM_MINUTE`, the real difference after.
     /// All tactical / coach / desperation score reads route through
