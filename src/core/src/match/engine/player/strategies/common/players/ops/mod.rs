@@ -1,35 +1,26 @@
-pub mod defender_skill;
-pub mod defensive;
-pub mod dribble_duel;
-pub mod effective_skill;
-pub mod first_touch;
-pub mod forward_shot_decision;
-pub mod goalkeeper_skill;
-pub mod marker_evasion;
-pub mod midfielder_skill;
-pub mod movement;
-pub mod panic;
-pub mod passing;
-pub mod pressure;
-pub mod shooting;
-pub mod skill_composites;
-pub mod traits_bias;
-pub mod xg;
+//! Player operations — the shared helper layer the state machines read.
+//!
+//! Grouped by concern:
+//!
+//! * [`skill`] — attribute → ability. What a player can do right now,
+//!   after fatigue, match standard and trait bias. Knows nothing about
+//!   the pitch.
+//! * [`attacking`] — on-ball attacking play: movement, passing, and the
+//!   shoot-or-not decision with its xG model.
+//! * [`defending`] — defensive shape, marking, pressing, and the
+//!   under-pressure panic modifier.
+//! * [`duels`] — the contested one-on-one micro-resolvers.
+//!
+//! Each group re-exports its own modules, and this module re-exports
+//! the groups, so both `ops::<module>::Item` and the flat `ops::Item`
+//! paths keep resolving exactly as they did before the regrouping.
 
-pub use defender_skill::*;
-pub use defensive::*;
-pub use dribble_duel::*;
-pub use effective_skill::*;
-pub use first_touch::*;
-pub use forward_shot_decision::*;
-pub use goalkeeper_skill::*;
-pub use marker_evasion::*;
-pub use midfielder_skill::*;
-pub use movement::*;
-pub use panic::*;
-pub use passing::*;
-pub use pressure::*;
-pub use shooting::*;
-pub use skill_composites::*;
-pub use traits_bias::*;
-pub use xg::*;
+pub mod attacking;
+pub mod defending;
+pub mod duels;
+pub mod skill;
+
+pub use attacking::*;
+pub use defending::*;
+pub use duels::*;
+pub use skill::*;

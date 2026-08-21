@@ -7,7 +7,7 @@
 # fail with ".cargo-ok: File exists". Distinct ids cost a little disk and some
 # repeat downloads; `sharing=locked` would be the alternative but it holds the
 # lock for the whole RUN, serialising every platform build end to end.
-ARG RUST_VERSION=1.97
+ARG RUST_VERSION=1.98
 # osxcross + macOS SDK + Rust, prebuilt. Only the osxcross half is used: the
 # image's own Rust lags well behind (latest shipped 1.89, and `sysinfo` needs
 # 1.95+), so the mac stages install RUST_VERSION over the top of it.
