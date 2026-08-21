@@ -37,6 +37,7 @@
 use super::goal_celebration_tests::squad;
 use crate::r#match::engine::ball::ball::RunOff;
 use crate::r#match::engine::engine::FootballEngine;
+use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::engine::result::Score;
 use crate::r#match::{
     GameTickContext, MatchContext, MatchField, MatchPlayerCollection, PassOriginRestart,
@@ -252,9 +253,7 @@ fn a_ball_running_out_behind_the_goal_never_scores() {
             !m.field.ball.goal_scored,
             "a goal was given for a ball that had already gone out of play, \
              at ({:.1}, {:.1}, {:.2})",
-            m.field.ball.position.x,
-            m.field.ball.position.y,
-            m.field.ball.position.z
+            m.field.ball.position.x, m.field.ball.position.y, m.field.ball.position.z
         );
     }
     assert_eq!(
@@ -442,4 +441,147 @@ fn a_taken_restart_leaves_nobody_holding_a_station() {
          station (the taker is {taker}) — it will be read as a corner shape by \
          the next corner and override their own AI"
     );
+}
+
+/// A shot from the away side that clears the crossbar between the posts,
+/// still climbing — the shape of every skied effort in the engine.
+impl RunOutMatch {
+    fn shoot_over_the_left_bar(&mut self) {
+        let shooter = self
+            .field
+            .players
+            .iter()
+            .find(|p| {
+                p.side == Some(PlayerSide::Right)
+                    && !p.tactical_position.current_position.is_goalkeeper()
+            })
+            .map(|p| (p.id, p.team_id))
+            .expect("the away side has outfielders");
+        let goal_y = self.context.goal_positions.left.y;
+        // Between the posts, well over the 2.44 m bar, carrying shot pace.
+        self.field.ball.position = Vector3::new(-1.0, goal_y + 6.0, 3.4);
+        self.field.ball.velocity = Vector3::new(-2.4, -0.3, 0.02);
+        self.field.ball.current_owner = None;
+        self.field.ball.previous_owner = Some(shooter.0);
+        let tick = self.context.current_tick();
+        self.field
+            .ball
+            .record_touch(shooter.0, shooter.1, tick, true);
+        self.tick();
+    }
+}
+
+/// **A goal kick is not taken from inside the goal.**
+///
+/// `goal_kick_spot` puts the ball where it went out, one stride inside the
+/// line, and that is right for a ball out beside the post. For one out
+/// OVER THE BAR "where it went out" is a point in the middle of the goal
+/// mouth — so the ball was placed on the goal line between the posts and
+/// the keeper walked into his own goal to kick it. That is the reported
+/// *"when it goes over the goal it appears on the goal line on the floor"*.
+#[test]
+fn a_ball_over_the_bar_restarts_from_the_goal_area() {
+    let mut m = RunOutMatch::new();
+    m.shoot_over_the_left_bar();
+
+    let awaited = m
+        .field
+        .ball
+        .awaiting_restart
+        .expect("a ball over the bar is a goal kick");
+    assert_eq!(awaited.origin, PassOriginRestart::GoalKick);
+    let spot = awaited.take_from.unwrap_or(awaited.spot);
+    let goal_y = m.context.goal_positions.left.y;
+    assert!(
+        (spot.y - goal_y).abs() <= GOAL_WIDTH,
+        "the fixture aims between the posts; it went out at y={:.1} against \
+         a goal at {goal_y:.1}",
+        spot.y
+    );
+    assert!(
+        spot.x > 20.0,
+        "the goal kick is teed up at x={:.1} — that is in the goalmouth, on \
+         the line, between the posts. Nobody takes a goal kick from inside \
+         their own goal",
+        spot.x
+    );
+}
+
+/// **Nothing is fetched from behind the goal, and nothing is carried back
+/// through the net.**
+///
+/// There is no path round a goal in the engine. A ball that runs out
+/// behind the frame is one the keeper walks *through* his own netting to
+/// reach, and then carries back out through it at chest height — which the
+/// viewer draws as the ball sliding through the mesh and appearing on the
+/// goal line. The ball that got there in the first place had been stopped
+/// dead in mid-air by a metre-high advertising board four metres beneath
+/// it.
+///
+/// So: it flies on (nothing may pin it), it never comes to rest behind the
+/// frame, and the keeper never goes back there.
+#[test]
+fn nobody_fetches_a_ball_from_behind_the_goal() {
+    if !RunOff::armed() {
+        // See `the_off_arm_still_places_the_ball_on_the_spot`.
+        return;
+    }
+    let mut m = RunOutMatch::new();
+    m.shoot_over_the_left_bar();
+    let taker = m.field.ball.awaiting_restart.expect("armed").taker_id;
+
+    // It has to still be flying: the award moves nothing.
+    assert!(
+        !m.field.ball.awaiting_restart.expect("armed").settled,
+        "the ball crossed the line this tick — it cannot already be at rest"
+    );
+
+    let mut airborne_pin = 0;
+    let mut resolved = None;
+    for elapsed in 1..=3000 {
+        let before = m.field.ball.position;
+        m.tick();
+        let ball = m.field.ball.position;
+        // A ball stopped dead with metres of air under it is the boards
+        // acting as a wall of infinite height.
+        if ball.z > RunOff::BOARD_HEIGHT
+            && (ball.x - before.x).abs() < 1.0e-4
+            && (ball.y - before.y).abs() < 1.0e-4
+        {
+            airborne_pin += 1;
+        }
+        if let Some(restart) = m.field.ball.awaiting_restart {
+            if restart.settled {
+                assert!(
+                    RunOff::retrievable(ball, WIDTH as f32, HEIGHT as f32),
+                    "the ball settled at ({:.1}, {:.1}) — behind the goal, \
+                     where the only way to it is through the netting",
+                    ball.x,
+                    ball.y
+                );
+            }
+        } else {
+            resolved = Some(elapsed);
+            break;
+        }
+        let keeper = m
+            .field
+            .players
+            .iter()
+            .find(|p| p.id == taker)
+            .expect("the taker is on the pitch");
+        assert!(
+            !RunOff::behind_a_goal(keeper.position, WIDTH as f32, HEIGHT as f32),
+            "the keeper walked to ({:.1}, {:.1}) — that is behind his own \
+             goal, through the net",
+            keeper.position.x,
+            keeper.position.y
+        );
+    }
+    assert_eq!(
+        airborne_pin, 0,
+        "the ball was held motionless in mid-air for {airborne_pin} ticks — \
+         the hoardings are 0.95 m high and cannot stop a ball above them"
+    );
+    resolved.expect("the goal kick never got taken");
 }

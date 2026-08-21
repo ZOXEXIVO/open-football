@@ -1,6 +1,7 @@
 use crate::r#match::MAX_OWNER_TRACK_DISTANCE;
 use crate::r#match::MatchPlayer;
 use crate::r#match::StateProcessingContext;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     SkillBands, SkillCategory,
 };
@@ -25,6 +26,17 @@ use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 pub struct GoalkeeperSkillInputs {
     pub minute: u32,
     pub condition_pct: f32,
+    /// How far the standard of goalkeeping in this match sits from the
+    /// division every constant in this file was fitted in — see
+    /// [`crate::r#match::engine::teamplay::standard::MatchStandard`].
+    ///
+    /// Subtracted from every ability read below, so the profile describes
+    /// this keeper against the football he is actually playing in. Zero
+    /// at the calibration division, so nothing here recalibrates; the
+    /// whole point is that the shot-stopping composites are convex in
+    /// skill, which makes an absolute read of them price the DIVISION and
+    /// not the man.
+    pub standard_shift: f32,
 }
 
 /// Continuous selection / execution profile for goalkeepers. All values
@@ -148,11 +160,15 @@ impl GoalkeeperSkillProfile {
         let inputs = GoalkeeperSkillInputs {
             minute,
             condition_pct,
+            standard_shift: MatchStandard::keeper_shift(ctx.context),
         };
 
         let key = (player.player_attributes.condition as u16 as u64)
             | (player.player_attributes.jadedness as u16 as u64) << 16
-            | (minute as u64 & 0xFF) << 32;
+            | (minute as u64 & 0xFF) << 32
+            // …and whether the standard of football has been read yet —
+            // see `DefenderSkillProfile::memo_key`.
+            | ((inputs.standard_shift != 0.0) as u64) << 40;
         let cached = ctx
             .tick_context
             .profile_memos
@@ -215,34 +231,59 @@ impl GoalkeeperSkillProfile {
         let match_readiness01 = skill01(s.physical.match_readiness);
 
         // ── Normalised reads (0..1 via skill01) ──────────────────────
-        let reflexes01 = skill01(reflexes_eff);
-        let handling01 = skill01(handling_eff);
-        let one_on_ones01 = skill01(one_on_ones_eff);
-        let aerial_reach01 = skill01(aerial_reach_eff);
-        let punching01 = skill01(punching_eff);
-        let kicking01 = skill01(kicking_eff);
-        let throwing01 = skill01(throwing_eff);
-        let gk_passing01 = skill01(gk_passing_eff);
-        let gk_first_touch01 = skill01(gk_first_touch_eff);
-        let rushing_out_raw01 = skill01(rushing_out_eff);
-        let command_of_area01 = skill01(command_of_area_eff);
-        let communication01 = skill01(communication_eff);
+        //
+        // …AND EVERY ABILITY READ IS MEASURED AGAINST THIS MATCH.
+        //
+        // `skill01` puts an attribute on a 0..1 scale that means the same
+        // thing in every league, which is precisely the problem: the
+        // composites below are CONVEX in it (`keeper_curve` 1.55,
+        // `reaction_curve` 1.65, `handling_curve` 1.60), so as everybody
+        // improves the keeper improves faster than the shooters he faces.
+        // `SaveModel::skill_multiplier` was rewritten as a contest to
+        // remove exactly this bias from the physics path and its note
+        // spells it out; this file was left absolute, and it is the
+        // second save path plus every reach and gather radius.
+        //
+        // Measured, `dev_match levels 300 4 20 2`, equal squads at every
+        // point: saves per shot on target ran **56.6% at level 4 to 70.7%
+        // at level 18** against a real ~68% everywhere.
+        //
+        // `peer` subtracts the match's own standard, so an ordinary
+        // keeper reads as an ordinary keeper in any division and the
+        // convex curves go back to describing the spread WITHIN one.
+        // Fitness is deliberately left absolute — `stamina`,
+        // `natural_fitness` and `match_readiness` feed the condition
+        // model rather than the shot contest, and a fourth-tier keeper
+        // really does tire like a fourth-tier keeper.
+        let peer = |v: f32| (v - inputs.standard_shift).clamp(0.0, 1.0);
+        let reflexes01 = peer(skill01(reflexes_eff));
+        let handling01 = peer(skill01(handling_eff));
+        let one_on_ones01 = peer(skill01(one_on_ones_eff));
+        let aerial_reach01 = peer(skill01(aerial_reach_eff));
+        let punching01 = peer(skill01(punching_eff));
+        let kicking01 = peer(skill01(kicking_eff));
+        let throwing01 = peer(skill01(throwing_eff));
+        let gk_passing01 = peer(skill01(gk_passing_eff));
+        let gk_first_touch01 = peer(skill01(gk_first_touch_eff));
+        let rushing_out_raw01 = peer(skill01(rushing_out_eff));
+        let command_of_area01 = peer(skill01(command_of_area_eff));
+        let communication01 = peer(skill01(communication_eff));
 
-        let positioning01 = skill01(positioning_eff);
-        let anticipation01 = skill01(anticipation_eff);
-        let concentration01 = skill01(concentration_eff);
-        let decisions01 = skill01(decisions_eff);
-        let composure01 = skill01(composure_eff);
-        let bravery01 = skill01(bravery_eff);
-        let teamwork01 = skill01(teamwork_eff);
-        let vision01 = skill01(vision_eff);
+        let positioning01 = peer(skill01(positioning_eff));
+        let anticipation01 = peer(skill01(anticipation_eff));
+        let concentration01 = peer(skill01(concentration_eff));
+        let decisions01 = peer(skill01(decisions_eff));
+        let composure01 = peer(skill01(composure_eff));
+        let bravery01 = peer(skill01(bravery_eff));
+        let teamwork01 = peer(skill01(teamwork_eff));
+        let vision01 = peer(skill01(vision_eff));
 
-        let agility01 = skill01(agility_eff);
-        let acceleration01 = skill01(acceleration_eff);
-        let pace01 = skill01(pace_eff);
-        let jumping01 = skill01(jumping_eff);
-        let strength01 = skill01(strength_eff);
-        let balance01 = skill01(balance_eff);
+        let agility01 = peer(skill01(agility_eff));
+        let acceleration01 = peer(skill01(acceleration_eff));
+        let pace01 = peer(skill01(pace_eff));
+        let jumping01 = peer(skill01(jumping_eff));
+        let strength01 = peer(skill01(strength_eff));
+        let balance01 = peer(skill01(balance_eff));
         let stamina01 = skill01(stamina_eff);
 
         // ── Headline penalty / lift (drives weak/elite differentiation) ─
@@ -625,6 +666,7 @@ mod tests {
         GoalkeeperSkillInputs {
             minute: 30,
             condition_pct: 0.95,
+            standard_shift: 0.0,
         }
     }
 
@@ -681,6 +723,7 @@ mod tests {
             &GoalkeeperSkillInputs {
                 minute: 80,
                 condition_pct: 0.95,
+                standard_shift: 0.0,
             },
         );
         let tired = GoalkeeperSkillProfile::from_player(
@@ -688,6 +731,7 @@ mod tests {
             &GoalkeeperSkillInputs {
                 minute: 80,
                 condition_pct: 0.25,
+                standard_shift: 0.0,
             },
         );
         assert!(fresh.explosive_mult > tired.explosive_mult);

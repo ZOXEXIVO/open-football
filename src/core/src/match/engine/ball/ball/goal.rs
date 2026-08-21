@@ -303,14 +303,47 @@ impl Ball {
     /// area's own boundary — a keeper teeing up on his line is a thing that
     /// happens. One inset stride keeps it clear of `check_goal` and the
     /// frame, which measure against x = 0 exactly.
+    ///
+    /// # …except when it went out THROUGH the goal
+    ///
+    /// A ball out beside the post went out at a point on the byline the
+    /// keeper can walk to and stand on. A ball out over the bar — or one
+    /// that carried through the goalmouth and was refused as a goal — did
+    /// not: "where it went out" is a point *in the middle of the goal
+    /// mouth*, on the line, between the posts.
+    ///
+    /// That is the reported *"when it goes over the goal, the ball appears
+    /// on the goal line on the floor"*, and it is not a placement anybody
+    /// would recognise: nobody takes a goal kick from inside their own
+    /// goal. The rest of the run-out machinery then compounds it — the
+    /// keeper walks into his own six-yard box to a ball sitting in the
+    /// goalmouth and kicks it from there.
+    ///
+    /// So the exit point is only honoured while it is outside the frame.
+    /// Between the posts the ball goes where every keeper in the game puts
+    /// it: on the six-yard line, level with where it went out.
     fn goal_kick_spot(&self, side: GoalSide, exit_y: f32) -> Vector3<f32> {
         // Far enough inside the line that no endline resolver reads the
         // ball as still out, and that the keeper carrying it back finishes
         // his walk ON the pitch — see [`AwaitedRestart::SPOT_INSET`].
         const BYLINE_INSET: f32 = AwaitedRestart::SPOT_INSET;
+        /// Depth of the goal area, in game units. 44 u = 5.5 m —
+        /// `Field::GOAL_AREA_DEPTH` in the viewer, so the ball is drawn on
+        /// the line that is drawn.
+        const GOAL_AREA_DEPTH: f32 = 44.0;
+        // The goal's own centre, which is the pitch's: `GoalPosition` is
+        // built from the field size and both goals sit on it. Read here
+        // rather than taken from `MatchContext` so the spot cannot drift
+        // from the frame `is_goal` measures against.
+        let through_the_goal = (exit_y - self.field_height * 0.5).abs() <= GOAL_WIDTH;
+        let inset = if through_the_goal {
+            GOAL_AREA_DEPTH
+        } else {
+            BYLINE_INSET
+        };
         let x = match side {
-            GoalSide::Home => BYLINE_INSET,
-            GoalSide::Away => self.field_width - BYLINE_INSET,
+            GoalSide::Home => inset,
+            GoalSide::Away => self.field_width - inset,
         };
         Vector3::new(
             x,
@@ -501,6 +534,20 @@ impl Ball {
                 .map(|p| p.y)
                 .unwrap_or(self.position.y);
             let spot = self.goal_kick_spot(over_side, exit_y);
+            #[cfg(feature = "match-logs")]
+            if super::frame_trace::FrameTrace::captures_over_the_bar() {
+                super::frame_trace::FrameTrace::open(format!(
+                    "OVER THE BAR at ({:.1}, {:.1}, {:.2}) v({:.2},{:.2},{:.3}) -> goal kick from ({:.1}, {:.1})",
+                    self.position.x,
+                    self.position.y,
+                    self.position.z,
+                    self.velocity.x,
+                    self.velocity.y,
+                    self.velocity.z,
+                    spot.x,
+                    spot.y
+                ));
+            }
             #[cfg(feature = "match-logs")]
             super::frame_trace::FrameTrace::note(format!(
                 "check_over_goal: over the bar at ({:.1}, {:.1}, {:.2}) -> goal kick, GK {} takes it from ({:.1}, {:.1})",
@@ -977,12 +1024,30 @@ impl Ball {
             // stadium. It has hit the net, so it stops where it hit it.
             let runs_out = RunOff::armed() && outside_posts;
             #[cfg(feature = "match-logs")]
+            if super::frame_trace::FrameTrace::captures_over_the_bar() {
+                super::frame_trace::FrameTrace::open(format!(
+                    "ENDLINE GOAL KICK at ({:.1}, {:.1}, {:.2}) v({:.2},{:.2},{:.3}) outside_posts={outside_posts} runs_out={runs_out} -> from ({:.1}, {:.1})",
+                    self.position.x,
+                    self.position.y,
+                    self.position.z,
+                    self.velocity.x,
+                    self.velocity.y,
+                    self.velocity.z,
+                    spot.x,
+                    spot.y
+                ));
+            }
+            #[cfg(feature = "match-logs")]
             super::frame_trace::FrameTrace::note(format!(
                 "check_wide_of_goal: GOAL KICK, ball ({:.1}, {:.1}, {:.2}) {}; GK {gk_id} takes it from ({:.1}, {:.1})",
                 self.position.x,
                 self.position.y,
                 self.position.z,
-                if runs_out { "runs out behind the goal" } else { "dies there" },
+                if runs_out {
+                    "runs out behind the goal"
+                } else {
+                    "dies there"
+                },
                 spot.x,
                 spot.y
             ));

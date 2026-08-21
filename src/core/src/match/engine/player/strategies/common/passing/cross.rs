@@ -27,6 +27,7 @@
 //!   state machine happened to run first.
 
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{MatchPlayer, MatchPlayerLite, StateProcessingContext};
@@ -454,7 +455,21 @@ impl CrossModel {
         // driven-low choices scale smoothly with the target's actual
         // heading, instead of cliff-gating everyone below a threshold into
         // the same bucket.
-        let raw_heading = target_heading_skill * 20.0;
+        //
+        // …and it is a POOR HEADER OF THE BALL RELATIVE TO THE PEOPLE HE
+        // IS PLAYING AGAINST. The 10-11/20 pivots sit dead in the middle
+        // of the generator, so read absolutely they flip the entire
+        // crossing model over as the pyramid rises: measured
+        // (`OPEN-PLAY CROSSING`, `dev_match stats 16 L L`) the mix runs
+        // **57% along the ground at level 6 against 5% at level 18**,
+        // with `FloatedFarPost` going 24% → 68% — and the aerial route
+        // is a measured 4-5% conversion dead end, so the top of the
+        // pyramid loses the whole channel. A ball on the deck into the
+        // box is what produces box shots; whether it is the right ball
+        // depends on the target against the men marking him, not against
+        // a number from another league. See `MatchStandard`.
+        let raw_heading =
+            (target_heading_skill - MatchStandard::shift(ctx.context)).clamp(0.0, 1.0) * 20.0;
         let p_poor_header_byline = 1.0 - SkillCurve::new(raw_heading, 11.0, 0.6).probability();
         let p_poor_header_wide = 1.0 - SkillCurve::new(raw_heading, 10.0, 0.6).probability();
 

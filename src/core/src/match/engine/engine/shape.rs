@@ -4,6 +4,7 @@ use crate::TacticSelectionReason;
 use crate::Tactics;
 use crate::r#match::MatchCoach;
 use crate::r#match::RollingTeamMetrics;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     // ───────────────────────────────────────────────────────────────────────
@@ -428,6 +429,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             context.away_skill_aggregates = away_skills.finalize();
             context.last_skill_aggregate_tick = current_tick;
             context.skill_aggregates_dirty = false;
+            // First pass only — the standard of football in a fixture is
+            // a property of the squads that turned up, not of how tired
+            // they are by the 80th minute. See `MatchStandard`.
+            MatchStandard::latch(context);
         }
         let home_skill_aggregates = context.home_skill_aggregates;
         let away_skill_aggregates = context.away_skill_aggregates;
@@ -480,6 +485,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             home_skills: home_skill_aggregates,
             away_skills: away_skill_aggregates,
             home_edge: context.environment.crowd_intensity * context.environment.home_advantage,
+            standard_shift: MatchStandard::shift(context),
+            standard_gk_shift: MatchStandard::keeper_shift(context),
         };
         TeamTacticalState::refresh(
             &mut context.tactical_home,

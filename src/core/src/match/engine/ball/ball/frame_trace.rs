@@ -176,6 +176,23 @@ impl FrameTrace {
         })
     }
 
+    /// Whether a ball crossing the goal line ABOVE THE BAR opens a
+    /// capture (`OF_FRAME_TRACE=over`).
+    ///
+    /// The trigger for *"the ball flies over the goal and then appears on
+    /// the goal line"*. A skied shot is retired by `check_over_goal` and
+    /// then keeps flying for several seconds, so the only way to see where
+    /// it ends up — and what put it there — is to open the window on the
+    /// award and read the whole descent.
+    pub fn captures_over_the_bar() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| {
+            std::env::var("OF_FRAME_TRACE")
+                .map(|v| v.contains("over"))
+                .unwrap_or(false)
+        })
+    }
+
     fn with<R>(f: impl FnOnce(&mut Store) -> R) -> Option<R> {
         if !Self::armed() {
             return None;

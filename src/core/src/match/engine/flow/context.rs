@@ -55,6 +55,7 @@ impl MatchEngineConfig {
         }
     }
 }
+use crate::r#match::engine::teamplay::standard::StandardReading;
 use crate::r#match::{
     AttackPlan, DefensivePlan, GameState, GoalCelebration, GoalDetail, GoalPosition,
     MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MatchCoach, MatchField, MatchFieldSize,
@@ -259,6 +260,11 @@ pub struct MatchContext {
     /// active roster changes (sub / red card / formation swap).
     pub skill_aggregates_dirty: bool,
 
+    /// The standard of football in this fixture, read once at the first
+    /// aggregate pass and then held — see `MatchStandard`. `None` until
+    /// then, which reads as "nothing to measure this match against yet".
+    pub standard: Option<StandardReading>,
+
     /// Match-owned seedable RNG. Engine decision paths draw from this
     /// (substitution timing, shootout, foul cards, corner contest,
     /// passing / shooting / save / first-touch / tackle rolls, every
@@ -421,6 +427,7 @@ impl MatchContext {
             away_skill_aggregates: TeamSkillAggregates::neutral(),
             last_skill_aggregate_tick: 0,
             skill_aggregates_dirty: true,
+            standard: None,
             rng: MatchRng::from_entropy(),
             today: Utc::now().naive_utc().date(),
             pending_advantage: None,

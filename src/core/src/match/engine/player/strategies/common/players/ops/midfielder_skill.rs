@@ -1,5 +1,6 @@
 use crate::r#match::MatchPlayer;
 use crate::r#match::StateProcessingContext;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     SkillBands, SkillCategory,
 };
@@ -30,6 +31,21 @@ pub struct MidfielderSkillInputs {
     /// Ball ownership duration in ticks.
     pub ownership_ticks: u64,
     pub recent_sprint_or_high_intensity: bool,
+    /// How far the standard of football in this match sits from the
+    /// division these curves were fitted in — see
+    /// [`crate::r#match::engine::teamplay::standard::MatchStandard`].
+    ///
+    /// Subtracted from every ability read below. The profiles here are
+    /// CONVEX in skill (`pow_curve` exponents 1.10-1.65) while the
+    /// attacking composites they play against are linear blends of
+    /// `sc::n(skill)`, so an absolute read makes the defensive side of
+    /// the game improve faster than the attacking side as the whole
+    /// pyramid rises — which is the reported symptom, and it is smooth
+    /// and monotone exactly as a power curve would be. Zero at the
+    /// calibration division, so nothing here recalibrates; within a
+    /// division the curve still separates the good from the ordinary,
+    /// which is what it was written for.
+    pub standard_shift: f32,
 }
 
 /// Continuous selection / execution profile for midfielders. All values
@@ -145,6 +161,7 @@ impl MidfielderSkillProfile {
             distance_to_own_goal: ctx.ball().distance_to_own_goal(),
             ownership_ticks: ctx.tick_context.ball.ownership_duration as u64,
             recent_sprint_or_high_intensity: ctx.in_state_time as f32 > 30.0,
+            standard_shift: MatchStandard::shift(ctx.context),
         };
         Self::from_player_memo(ctx, &inputs)
     }
@@ -161,6 +178,13 @@ impl MidfielderSkillProfile {
             | (inputs.minute as u64 & 0xFF) << 32
             | (inputs.pressure_count_5u as u64 & 0xFF) << 40
             | (inputs.pressure_count_10u as u64 & 0xFF) << 48
+            // …and whether the standard of football has been read yet.
+            // `MatchStandard::shift` returns 0 for the handful of ticks
+            // before the first skill-aggregate pass and its real value
+            // afterwards, so without this bit a profile built in that
+            // window could be served after it — which the debug oracle
+            // would (correctly) call a memo mismatch.
+            | ((inputs.standard_shift != 0.0) as u64) << 56
     }
 
     /// Cross-tick memoized `from_player` — bit-identical between key
@@ -222,32 +246,38 @@ impl MidfielderSkillProfile {
         let strength_eff = bands.apply(s.physical.strength, SkillCategory::Explosive);
 
         // ── Normalised reads ─────────────────────────────────────────
-        let passing01 = norm01(passing_eff);
-        let technique01 = norm01(technique_eff);
-        let first_touch01 = norm01(first_touch_eff);
-        let dribbling01 = norm01(dribbling_eff);
-        let long_shots01 = norm01(long_shots_eff);
-        let finishing01 = norm01(finishing_eff);
-        let tackling01 = norm01(tackling_eff);
+        // …each measured against the standard of football in this match,
+        // so the convex curves below describe the spread WITHIN a
+        // division rather than the division itself. See
+        // `MidfielderSkillInputs::standard_shift`. Fitness is left
+        // absolute: it feeds the condition model, not a contest.
+        let peer = |v: f32| (norm01(v) - inputs.standard_shift).clamp(0.0, 1.0);
+        let passing01 = peer(passing_eff);
+        let technique01 = peer(technique_eff);
+        let first_touch01 = peer(first_touch_eff);
+        let dribbling01 = peer(dribbling_eff);
+        let long_shots01 = peer(long_shots_eff);
+        let finishing01 = peer(finishing_eff);
+        let tackling01 = peer(tackling_eff);
 
-        let vision01 = norm01(vision_eff);
-        let decisions01 = norm01(decisions_eff);
-        let composure01 = norm01(composure_eff);
-        let concentration01 = norm01(concentration_eff);
-        let anticipation01 = norm01(anticipation_eff);
-        let teamwork01 = norm01(teamwork_eff);
-        let off_ball01 = norm01(off_ball_eff);
-        let positioning01 = norm01(positioning_eff);
-        let work_rate01 = norm01(work_rate_eff);
-        let bravery01 = norm01(bravery_eff);
-        let aggression01 = norm01(aggression_eff);
-        let flair01 = norm01(flair_eff);
+        let vision01 = peer(vision_eff);
+        let decisions01 = peer(decisions_eff);
+        let composure01 = peer(composure_eff);
+        let concentration01 = peer(concentration_eff);
+        let anticipation01 = peer(anticipation_eff);
+        let teamwork01 = peer(teamwork_eff);
+        let off_ball01 = peer(off_ball_eff);
+        let positioning01 = peer(positioning_eff);
+        let work_rate01 = peer(work_rate_eff);
+        let bravery01 = peer(bravery_eff);
+        let aggression01 = peer(aggression_eff);
+        let flair01 = peer(flair_eff);
 
         let stamina01 = norm01(stamina_eff);
-        let acceleration01 = norm01(acceleration_eff);
-        let agility01 = norm01(agility_eff);
-        let balance01 = norm01(balance_eff);
-        let strength01 = norm01(strength_eff);
+        let acceleration01 = peer(acceleration_eff);
+        let agility01 = peer(agility_eff);
+        let balance01 = peer(balance_eff);
+        let strength01 = peer(strength_eff);
 
         // ── Headline mappers ─────────────────────────────────────────
         // Use a blended "midfielder skill" centred on passing/decisions/
@@ -603,6 +633,7 @@ mod tests {
             distance_to_own_goal: 400.0,
             ownership_ticks: 20,
             recent_sprint_or_high_intensity: false,
+            standard_shift: 0.0,
         }
     }
 

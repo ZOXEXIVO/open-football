@@ -13,6 +13,7 @@ use crate::r#match::engine::goal::GOAL_WIDTH as GOAL_MOUTH_HALF_WIDTH;
 use crate::r#match::engine::officiating::referee::{ContactLocation, FoulCallContext};
 use crate::r#match::engine::psychology::{NegativeEvent, PositiveEvent};
 use crate::r#match::engine::set_pieces::{FreeKickBand, wall_block_prob, wall_size_for};
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::engine::zones::MatchZone;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::gk_claim::GkClaimContest;
@@ -350,7 +351,15 @@ impl PassSkills {
     /// numbers without each call site having to apply the band itself.
     /// `minute` should be the current match minute (0..=120). Use
     /// `MatchContext::total_match_time / 60_000` to derive it.
-    fn from_player(player: &MatchPlayer, minute: u32) -> Self {
+    /// `standard_shift` measures every read against the standard of
+    /// football in this match rather than against a fixed 0-20 scale —
+    /// see `MatchStandard`. The targeting error these feed is compared
+    /// with the receiver's absolute claim radius, so read raw the pass
+    /// lands 7.3u from its target at the bottom of the pyramid and 2.5u
+    /// at the top while the radius never moves, and possession dies
+    /// before it reaches the final third in the lower divisions.
+    fn from_player(player: &MatchPlayer, minute: u32, standard_shift: f32) -> Self {
+        let peer = |v: f32| v - standard_shift;
         let tech = EffSkillCtx::technical(minute);
         let mental = EffSkillCtx::mental(minute);
         let expl = EffSkillCtx::explosive(minute);
@@ -361,25 +370,32 @@ impl PassSkills {
         // Stamina keeps a slightly higher floor (0.05) so a wrecked
         // player can still walk through a possession; flair was
         // already unfloored.
-        let passing = (effective_skill(player, player.skills.technical.passing, tech) / 20.0)
+        let passing = (peer(effective_skill(player, player.skills.technical.passing, tech) / 20.0))
             .clamp(0.02, 1.0);
-        let technique = (effective_skill(player, player.skills.technical.technique, tech) / 20.0)
+        let technique =
+            (peer(effective_skill(player, player.skills.technical.technique, tech) / 20.0))
+                .clamp(0.02, 1.0);
+        let vision = (peer(effective_skill(player, player.skills.mental.vision, mental) / 20.0))
             .clamp(0.02, 1.0);
-        let vision =
-            (effective_skill(player, player.skills.mental.vision, mental) / 20.0).clamp(0.02, 1.0);
-        let composure = (effective_skill(player, player.skills.mental.composure, mental) / 20.0)
-            .clamp(0.02, 1.0);
-        let decisions = (effective_skill(player, player.skills.mental.decisions, mental) / 20.0)
-            .clamp(0.02, 1.0);
-        let concentration = (effective_skill(player, player.skills.mental.concentration, mental)
-            / 20.0)
-            .clamp(0.02, 1.0);
-        let flair =
-            (effective_skill(player, player.skills.mental.flair, mental) / 20.0).clamp(0.0, 1.0);
-        let long_shots = (effective_skill(player, player.skills.technical.long_shots, tech) / 20.0)
-            .clamp(0.02, 1.0);
-        let crossing = (effective_skill(player, player.skills.technical.crossing, tech) / 20.0)
-            .clamp(0.02, 1.0);
+        let composure =
+            (peer(effective_skill(player, player.skills.mental.composure, mental) / 20.0))
+                .clamp(0.02, 1.0);
+        let decisions =
+            (peer(effective_skill(player, player.skills.mental.decisions, mental) / 20.0))
+                .clamp(0.02, 1.0);
+        let concentration =
+            (peer(effective_skill(player, player.skills.mental.concentration, mental) / 20.0))
+                .clamp(0.02, 1.0);
+        let flair = (peer(effective_skill(player, player.skills.mental.flair, mental) / 20.0))
+            .clamp(0.0, 1.0);
+        let long_shots =
+            (peer(effective_skill(player, player.skills.technical.long_shots, tech) / 20.0))
+                .clamp(0.02, 1.0);
+        let crossing =
+            (peer(effective_skill(player, player.skills.technical.crossing, tech) / 20.0))
+                .clamp(0.02, 1.0);
+        // Fitness is deliberately left absolute — it feeds the
+        // availability model rather than a contest.
         let stamina =
             (effective_skill(player, player.skills.physical.stamina, expl) / 20.0).clamp(0.05, 1.0);
 
@@ -1748,7 +1764,24 @@ impl PlayerEventDispatcher {
                     + s.mental.composure * 0.20
                     + s.mental.anticipation * 0.15
                     + s.mental.decisions * 0.15;
-                let comp01 = (composite / 20.0).clamp(0.0, 1.0);
+                // …measured against the standard of football in this
+                // match. The note at `flat_touch_composite` already names
+                // this curve as "one of the three channels through which
+                // a squad's skill level reaches the SCORELINE, and by far
+                // the widest": `(1-c)^2.5` and `(1-c)^2` on a composite
+                // running 0.29 in the fourth tier against 0.78 at the
+                // top fails the same reception 34% of the time at one end
+                // of the pyramid and 2.5% at the other, against a real
+                // 8-15 miscontrols a team that does not move between
+                // divisions at all. Every one is a loose ball, and in the
+                // defending third it is a chance conceded.
+                //
+                // The composite is a weight-1 linear blend, so subtracting
+                // `MatchStandard::shift` is exact and is zero at the
+                // calibration division — the 5×/0.55 titration above is
+                // untouched where it was measured. `OF_TOUCH_FLAT` stays
+                // as the harder control that pins the composite outright.
+                let comp01 = (composite / 20.0 - MatchStandard::shift(context)).clamp(0.0, 1.0);
                 let pos = p.position;
                 let team = p.team_id;
                 /// How close an opponent has to be to make a reception
@@ -2096,7 +2129,7 @@ impl PlayerEventDispatcher {
         let player = field.get_player(event_model.from_player_id).unwrap();
         let passer_position = player.position;
         let passer_side = player.side;
-        let skills = PassSkills::from_player(player, minute);
+        let skills = PassSkills::from_player(player, minute, MatchStandard::shift(context));
 
         // Calculate overall quality for accuracy - affected by condition
         let overall_quality = skills.overall_quality();
@@ -3591,6 +3624,7 @@ impl PlayerEventDispatcher {
                 t @ (ShotType::Penalty | ShotType::DirectFreeKick) => Some(t),
                 _ => None,
             },
+            standard_shift: MatchStandard::shift(context),
         };
         let profile = {
             let player = field.get_player(shoot_event_model.from_player_id).unwrap();
@@ -4604,6 +4638,7 @@ impl PlayerEventDispatcher {
                             &GoalkeeperSkillInputs {
                                 minute: sc::minute_from_ms(context.total_match_time),
                                 condition_pct: k.player_attributes.condition_percentage() as f32,
+                                standard_shift: MatchStandard::keeper_shift(context),
                             },
                         )
                         .positioning
@@ -4723,8 +4758,8 @@ impl PlayerEventDispatcher {
                                 BlockDiag::note_defender_state(ds as usize);
                             }
                         }
-                        nearest_def = nearest_def
-                            .min((p.position.x - ball_x).hypot(p.position.y - ball_y));
+                        nearest_def =
+                            nearest_def.min((p.position.x - ball_x).hypot(p.position.y - ball_y));
                         let is_goalside = match defending_side {
                             PlayerSide::Left => p.position.x < ball_x,
                             PlayerSide::Right => p.position.x > ball_x,

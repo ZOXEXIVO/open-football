@@ -195,24 +195,31 @@ fn the_keeper_is_neither_handed_the_ball_nor_placed_on_it() {
     );
 }
 
-/// **And so does a ball over the BAR.**
+/// **And so does a ball over the BAR — but not into the goalmouth.**
 ///
 /// This one was left placed in the goal area — 50 units up the pitch —
 /// on the argument that a ball three metres up and behind the goal has no
-/// honest resting place. It has one: the point on the goal line it went
-/// over, which is inside the goal area anyway, so the placement is still a
-/// legal goal kick and nothing moves sideways. Traced off a shot that came
-/// back off the crossbar and looped over (`dev_match woodwork`):
+/// honest resting place. Traced off a shot that came back off the
+/// crossbar and looped over (`dev_match woodwork`):
 ///
 /// ```text
 ///  515328    0.35 283.41  3.09   v(-0.40, 0.73, 0.27)
 /// *515329   50.00 281.24  3.36   v( 0.00, 0.00, 0.00)   d = 49.70u = 6.2 m
 /// ```
 ///
-/// — the ball vanishes as it crosses the line and reappears hanging over
+/// — the ball vanished as it crossed the line and reappeared hanging over
 /// the six-yard box, which is the reported *"after a miss the ball appears
-/// in the goalkeeper's hands, it looks like magic"*. Only the HEIGHT
-/// should still have anywhere to go.
+/// in the goalkeeper's hands, it looks like magic"*. The answer was the
+/// point on the goal line it went over, and that fixed the sideways jump
+/// and introduced a worse one: **the goal line between the posts is the
+/// goalmouth**, so the ball was teed up inside the goal and the keeper
+/// walked in there after it. Reported 2026-08-21, with a screenshot.
+///
+/// So the rule is split by axis, and both halves are pinned here. ACROSS
+/// the pitch nothing moves: the kick is level with where the ball went
+/// over, as it was. ALONG it the ball comes out of the goal and onto the
+/// six-yard line, which is where a goal kick is taken from and what the
+/// exit point cannot supply when the exit point is between the posts.
 #[test]
 fn a_ball_over_the_bar_also_dies_where_it_crossed() {
     let (mut field, mut context) = kickoff();
@@ -249,19 +256,26 @@ fn a_ball_over_the_bar_also_dies_where_it_crossed() {
     );
     let crossed_at = Vector3::new(-1.0, 272.0, 0.0);
     // Arm-agnostic: with the run-out off there is one point and `spot` IS
-    // the goal-line point, so the same assertions hold in both arms.
+    // the restart point, so the same assertions hold in both arms.
     let take_from = awaited.take_from.unwrap_or(awaited.spot);
-    let moved = (Vector3::new(take_from.x, take_from.y, 0.0) - crossed_at).magnitude();
     assert!(
-        moved < 8.0,
-        "the spot is {:.1}u ({:.2} m) sideways of the point the ball went \
+        (take_from.y - crossed_at.y).abs() < 8.0,
+        "the spot is {:.1}u ({:.2} m) SIDEWAYS of the point the ball went \
          over the bar — that is the placement teleport",
-        moved,
-        moved * 0.125
+        (take_from.y - crossed_at.y).abs(),
+        (take_from.y - crossed_at.y).abs() * 0.125
     );
     assert!(
-        take_from.x > 0.0,
-        "and the kick itself is taken on the pitch, got x={:.1}",
+        take_from.x >= 40.0,
+        "the kick is teed up at x={:.1} — the goal line is x=0 and the posts \
+         are 29u either side of {:.1}, so that is inside the goal. A goal \
+         kick is taken from the goal AREA",
+        take_from.x,
+        crossed_at.y
+    );
+    assert!(
+        take_from.x <= 44.0,
+        "…and from the goal area, not the edge of the box, got x={:.1}",
         take_from.x
     );
 }
@@ -271,9 +285,18 @@ fn a_ball_over_the_bar_also_dies_where_it_crossed() {
 ///
 /// The bug this pins is a WRITE — the placement putting `spot.z = 0` into
 /// the ball and teleporting it three metres downward on one tick. The
-/// route to the grass has changed since (it is the flight now, not the
-/// restart's 10 cm/tick settle) but the assertion has not: whatever brings
-/// the ball down, no single tick of it may be a drop.
+/// route to the grass has changed twice since (it is the flight now, not
+/// the restart's 10 cm/tick settle) but the assertion has not: whatever
+/// brings the ball down, no single tick of it may be a drop.
+///
+/// ⚠ **With one exception, and telling it apart is the point.** A ball
+/// over the bar flies out of the ground, and the ball that comes back is
+/// a different one — `Ball::replace_dead_ball` puts it on the spot, at
+/// rest, on the deck. That tick drops the height *and* moves the ball
+/// across the pitch, because it is a swap. The artefact this test exists
+/// for does neither: it leaves the ball where it is and sinks it. So a
+/// drop is allowed exactly when the ball has been relocated with it, and
+/// only once.
 #[test]
 fn the_ball_falls_to_the_grass_instead_of_being_dropped_on_it() {
     let (mut field, mut context) = kickoff();
@@ -293,19 +316,30 @@ fn the_ball_falls_to_the_grass_instead_of_being_dropped_on_it() {
         .ball
         .check_over_goal(&mut context, &players, &mut events);
 
-    let mut previous = field.ball.position.z;
+    let mut previous = field.ball.position;
+    let mut swaps = 0;
     for _ in 0..400 {
         context.increment_time();
         let players = field.players.clone();
         field
             .ball
             .tick_awaited_restart(&context, &players, &mut events);
-        let fell = previous - field.ball.position.z;
-        assert!(
-            fell <= 0.11,
-            "the ball fell {fell:.2} m in one tick — that is a drop, not a fall"
-        );
-        previous = field.ball.position.z;
+        let now = field.ball.position;
+        let fell = previous.z - now.z;
+        if fell > 0.11 {
+            let moved = ((now.x - previous.x).powi(2) + (now.y - previous.y).powi(2)).sqrt();
+            assert!(
+                moved > AwaitedRestart::REACH,
+                "the ball fell {fell:.2} m in one tick without going anywhere \
+                 — that is a drop, not a fall and not a new ball"
+            );
+            swaps += 1;
+            assert!(
+                swaps == 1,
+                "the ball has been swapped {swaps} times for one restart"
+            );
+        }
+        previous = now;
     }
     assert!(
         field.ball.position.z < 1.0e-3,

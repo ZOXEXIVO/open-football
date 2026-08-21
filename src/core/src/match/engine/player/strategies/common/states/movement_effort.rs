@@ -73,8 +73,23 @@ impl MovementEffort {
     /// 0.524, below the population mean, so every professional resolved
     /// to the same number and none of the six attributes behind
     /// `movement_speed_with_ball` reached anything.
-    pub fn carrier_ceiling(player: &MatchPlayer, minute: u32, condition_pct: u32) -> f32 {
-        let composite = sc::movement_speed_with_ball(player, minute);
+    /// `standard_shift` measures the carry composite against the standard
+    /// of football in this match — see `MatchStandard`. The chaser has no
+    /// skill term at all here, so read absolutely the carrier's handicap
+    /// shrinks monotonically up the pyramid: measured on the harness's own
+    /// curve, the ordinary carrier is 9.5% slower than a flat-out chaser
+    /// at the bottom and 1.7% FASTER at the top, i.e. a top-flight carrier
+    /// cannot be caught by anybody. Centred, the ordinary carrier gives up
+    /// the same 3% in every division and the elite one still keeps his
+    /// edge over the men he plays with.
+    pub fn carrier_ceiling(
+        player: &MatchPlayer,
+        minute: u32,
+        condition_pct: u32,
+        standard_shift: f32,
+    ) -> f32 {
+        let composite =
+            (sc::movement_speed_with_ball(player, minute) - standard_shift).clamp(0.0, 1.0);
         if Self::chase_legacy() {
             return (0.78 + composite * 0.42).clamp(0.75, 1.00);
         }

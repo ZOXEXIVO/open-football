@@ -1099,8 +1099,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// is looking for.
     #[cfg(feature = "match-logs")]
     pub(super) fn sample_duel_gates(field: &MatchField, context: &MatchContext) {
-        use crate::mid_run_diag::DuelDiag;
         use crate::r#match::common_states::TackleEngagement;
+        use crate::mid_run_diag::DuelDiag;
 
         /// Close enough to be in the picture the report describes. 24u = 3 m.
         const SURROUND_RADIUS: f32 = 24.0;

@@ -68,6 +68,7 @@
 //! [`AwaitedRestart::CEILING`]: super::AwaitedRestart
 
 use super::{AwaitedRestart, Ball};
+use crate::r#match::engine::goal::GOAL_WIDTH;
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::RestartCensus;
 use nalgebra::Vector3;
@@ -81,6 +82,19 @@ pub enum ExitAxis {
     Touchline,
 }
 
+/// What the perimeter did to the ball this tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Perimeter {
+    /// Still inside the run-off, travelling.
+    Inside,
+    /// It reached the boards and they took the pace off it.
+    Boards,
+    /// It went OVER them. The boards are a metre high; a ball above that
+    /// is in the stand, and it is not coming back — see
+    /// [`RunOff::BOARD_HEIGHT`].
+    Crowd,
+}
+
 /// The strip of ground outside the pitch, and the perimeter at the end of
 /// it.
 pub struct RunOff;
@@ -92,6 +106,32 @@ impl RunOff {
 
     /// Beyond each touchline. 27.2 u = 3.4 m — `SIDE_MARGIN`, likewise.
     pub const SIDE: f32 = 27.2;
+
+    /// **How high the boards are, in metres.** `HOARDING_HEIGHT` in
+    /// `Pitch::spawn_ground`, and the reason it has to be here is the
+    /// same reason [`Self::END`] and [`Self::SIDE`] are: the perimeter
+    /// the physics uses and the perimeter the viewer draws are one wall.
+    ///
+    /// ⚠ **Without it the perimeter is a wall of infinite height**, and
+    /// that is what a ball skied over the bar hits. Traced off a real
+    /// run-out (`dev_match overbar`):
+    ///
+    /// ```text
+    ///   392964  -35.44  300.75  3.80   v(-2.19, 1.22, -0.01)   crossing the run-off
+    /// * 392965  -36.80  301.97  3.79   v( 0.00, 0.00, -0.01)   stopped dead, 3.8 m up
+    ///   392966  -36.80  301.97  3.77   v( 0.00, 0.00, -0.02)   …and falls straight down
+    /// ```
+    ///
+    /// — the ball hits a metre-high advertising board four metres above
+    /// it, loses every scrap of horizontal pace and drops like a plumb
+    /// line for two seconds. Above this the boards are not there.
+    pub const BOARD_HEIGHT: f32 = 0.95;
+
+    /// How much wider than the goal the ground behind it is treated as
+    /// unreachable, in units. 4 u = 50 cm — a post's radius and a little
+    /// clearance, so a ball resting against the outside of a post is not
+    /// asked to be squeezed past.
+    const GOAL_SHADOW_MARGIN: f32 = 4.0;
 
     /// How far short of the boards a player is allowed to go, in units.
     ///
@@ -181,10 +221,15 @@ impl RunOff {
     /// Bring a rolling ball back inside the perimeter, killing the
     /// horizontal pace it hit the boards with.
     ///
-    /// Returns true if it made contact. The vertical axis is deliberately
-    /// untouched: a ball that reaches the boards two metres up has to
-    /// finish falling, and zeroing `velocity.z` here would leave it
-    /// hanging against them.
+    /// The vertical axis is deliberately untouched: a ball that reaches
+    /// the boards half a metre up has to finish falling, and zeroing
+    /// `velocity.z` here would leave it hanging against them.
+    ///
+    /// ⚠ **The boards are a metre high, so they only stop a ball a metre
+    /// high.** See [`Self::BOARD_HEIGHT`] for the trace of what the
+    /// unbounded version did to a ball that had gone over the bar. One
+    /// that clears them is in the crowd, and [`Perimeter::Crowd`] is not
+    /// a failure to contain it — it is the answer.
     #[inline]
     pub fn contain(
         position: &mut Vector3<f32>,
@@ -192,29 +237,56 @@ impl RunOff {
         spin: &mut Vector3<f32>,
         field_width: f32,
         field_height: f32,
-    ) -> bool {
+    ) -> Perimeter {
         let (min_x, max_x, min_y, max_y) = Self::ball_bounds(field_width, field_height);
-        let mut hit = false;
-        if position.x <= min_x {
-            position.x = min_x;
-            hit = true;
-        } else if position.x >= max_x {
-            position.x = max_x;
-            hit = true;
+        let past = position.x <= min_x
+            || position.x >= max_x
+            || position.y <= min_y
+            || position.y >= max_y;
+        if !past {
+            return Perimeter::Inside;
         }
-        if position.y <= min_y {
-            position.y = min_y;
-            hit = true;
-        } else if position.y >= max_y {
-            position.y = max_y;
-            hit = true;
+        if position.z > Self::BOARD_HEIGHT {
+            return Perimeter::Crowd;
         }
-        if hit {
-            velocity.x = 0.0;
-            velocity.y = 0.0;
-            *spin = Vector3::zeros();
+        position.x = position.x.clamp(min_x, max_x);
+        position.y = position.y.clamp(min_y, max_y);
+        velocity.x = 0.0;
+        velocity.y = 0.0;
+        *spin = Vector3::zeros();
+        Perimeter::Boards
+    }
+
+    /// **Is the ball behind a goal?** — the strip of run-off directly
+    /// behind the frame, which is the one part of the ground a fetching
+    /// player cannot walk into.
+    ///
+    /// There is no path round a goal in the engine: a taker sent to a
+    /// ball lying four metres behind the line and level with the six-yard
+    /// box walks *through* the netting to get it, and then carries it
+    /// back out through the netting at chest height. That is the reported
+    /// *"it appears on the goal line"* — the ball sliding through the
+    /// mesh and over the line on its way to the restart spot.
+    ///
+    /// Measured against the goal's own half-width plus
+    /// [`Self::GOAL_SHADOW_MARGIN`], and against the byline rather than
+    /// the goal's depth: a ball behind the BACK bar is still behind the
+    /// net from every direction a keeper standing on his line can come at
+    /// it from.
+    #[inline]
+    pub fn behind_a_goal(position: Vector3<f32>, field_width: f32, field_height: f32) -> bool {
+        if position.x > 0.0 && position.x < field_width {
+            return false;
         }
-        hit
+        (position.y - field_height * 0.5).abs() <= GOAL_WIDTH + Self::GOAL_SHADOW_MARGIN
+    }
+
+    /// Whether the taker can actually be sent to fetch the ball from
+    /// where it has come to rest. False behind a goal — see
+    /// [`Self::behind_a_goal`].
+    #[inline]
+    pub fn retrievable(position: Vector3<f32>, field_width: f32, field_height: f32) -> bool {
+        !Self::behind_a_goal(position, field_width, field_height)
     }
 }
 
@@ -285,13 +357,27 @@ impl Ball {
     pub(super) fn tick_run_out(&mut self, await_state: &mut AwaitedRestart, now: u64) -> bool {
         self.update_velocity();
         self.apply_movement();
-        let boards = RunOff::contain(
+        let perimeter = RunOff::contain(
             &mut self.position,
             &mut self.velocity,
             &mut self.spin,
             self.field_width,
             self.field_height,
         );
+
+        // **Into the stand.** The boards are a metre high and it went over
+        // them, so it is in the crowd and nobody on the pitch is fetching
+        // it. A fresh ball goes on the spot — which is what a ball into
+        // the crowd gets in a real match, and the only alternative here is
+        // the wall of infinite height that stopped a skied shot dead four
+        // metres up. See [`RunOff::BOARD_HEIGHT`].
+        if perimeter == Perimeter::Crowd {
+            self.replace_dead_ball(await_state);
+            #[cfg(feature = "match-logs")]
+            RestartCensus::note_run_out_replaced(true);
+            return true;
+        }
+        let boards = perimeter == Perimeter::Boards;
 
         // The spot follows the ball. `tick_awaited_restart` pins the ball
         // to it once this returns true, so the two have to agree on the
@@ -300,8 +386,8 @@ impl Ball {
         await_state.spot.x = self.position.x;
         await_state.spot.y = self.position.y;
 
-        let horizontal = (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y)
-            .sqrt();
+        let horizontal =
+            (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y).sqrt();
         // 0.012 m/tick is `update_velocity`'s own "this is a roll, not a
         // bounce" threshold — a ball still bouncing has not come to rest,
         // however slowly it is moving across the ground.
@@ -319,6 +405,19 @@ impl Ball {
         let expired = elapsed >= ceiling;
         if !expired && !(horizontal < RunOff::STOPPED && grounded) {
             return false;
+        }
+
+        // **…and behind the goal.** It has stopped somewhere there is no
+        // walking to: the frame and its netting are between the taker and
+        // the ball from every direction he can come at it from. Same
+        // answer as the crowd, and for the same reason — the alternative
+        // is a keeper walking through his own net and carrying the ball
+        // back out through it at chest height.
+        if !RunOff::retrievable(self.position, self.field_width, self.field_height) {
+            self.replace_dead_ball(await_state);
+            #[cfg(feature = "match-logs")]
+            RestartCensus::note_run_out_replaced(false);
+            return true;
         }
 
         await_state.settled = true;
@@ -343,12 +442,50 @@ impl Ball {
         }
         true
     }
+
+    /// **A new ball, on the spot.**
+    ///
+    /// The one the game was being played with has gone somewhere nobody
+    /// is going to go and get it — into the stand, or behind the goal
+    /// where the netting is in the way — and in a real match that is not
+    /// a problem anyone solves by walking: the fourth official or a ball
+    /// boy puts another one down and play restarts. The engine has one
+    /// ball, so the swap is a relocation, and it is a *deliberate* one:
+    /// it happens the moment the old ball dies, four metres or more
+    /// outside the pitch with the camera on the players, and it replaces
+    /// a fetch that had the taker walking through his own goal.
+    ///
+    /// Both legs collapse into one. There is nothing to carry, so
+    /// `take_from` is dropped and the taker walks to the ball where it
+    /// now lies — which is exactly where the restart is taken from.
+    fn replace_dead_ball(&mut self, await_state: &mut AwaitedRestart) {
+        let spot = await_state.take_from.take().unwrap_or(await_state.spot);
+        await_state.spot = Vector3::new(spot.x, spot.y, 0.0);
+        await_state.settled = true;
+        // The height goes with it. `tick_awaited_restart` lowers a ball
+        // onto its spot at 10 cm a tick so a live one is never dropped out
+        // of the air — but this ball is not the one that was in the air,
+        // and sinking the replacement through two metres of nothing is the
+        // artefact that dressing it up would create.
+        self.position = await_state.spot;
+        self.velocity = Vector3::zeros();
+        self.spin = Vector3::zeros();
+        // Named in the trace so the tally does not read the swap as a
+        // relocation nobody owns — `FrameTrace::tally` exempts a tick that
+        // carries a note, and this one is exactly the kind it exists to
+        // tell apart from a bug.
+        #[cfg(feature = "match-logs")]
+        super::frame_trace::FrameTrace::note(format!(
+            "run-out: nobody can fetch it — fresh ball on ({:.1}, {:.1})",
+            await_state.spot.x, await_state.spot.y
+        ));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::AwaitedRestart;
-    use super::RunOff;
+    use super::{GOAL_WIDTH, Perimeter, RunOff};
     use nalgebra::Vector3;
 
     /// The engine's run-off and the viewer's hoardings are the same wall.
@@ -368,6 +505,11 @@ mod tests {
             "SIDE must be pitch.rs SIDE_MARGIN = 3.4 m, got {} m",
             RunOff::SIDE * METRES_PER_UNIT
         );
+        assert!(
+            (RunOff::BOARD_HEIGHT - 0.95).abs() < 1.0e-4,
+            "BOARD_HEIGHT must be pitch.rs HOARDING_HEIGHT = 0.95 m, got {} m",
+            RunOff::BOARD_HEIGHT
+        );
     }
 
     /// A fetching player has to be able to reach a ball lying against the
@@ -385,11 +527,15 @@ mod tests {
 
     #[test]
     fn the_boards_take_the_pace_off_and_let_the_ball_fall() {
-        let mut position = Vector3::new(-50.0, 200.0, 1.8);
+        let mut position = Vector3::new(-50.0, 200.0, 0.6);
         let mut velocity = Vector3::new(-1.2, 0.1, -0.05);
         let mut spin = Vector3::new(0.0, 0.0, 0.4);
         let hit = RunOff::contain(&mut position, &mut velocity, &mut spin, 840.0, 545.0);
-        assert!(hit, "a ball 6 m behind the byline is past the boards");
+        assert_eq!(
+            hit,
+            Perimeter::Boards,
+            "a ball 6 m behind the byline at knee height is stopped by the boards"
+        );
         assert_eq!(position.x, -RunOff::END);
         assert_eq!(velocity.x, 0.0);
         assert_eq!(velocity.y, 0.0);
@@ -400,19 +546,61 @@ mod tests {
         );
     }
 
+    /// The one this was all for. A skied shot reaches the perimeter with
+    /// metres of air under it, and the boards are a metre high — so it
+    /// goes OVER them, and it must not be snatched out of the air and
+    /// dropped down their face. Traced on a real run-out before the fix:
+    /// the ball stopped dead at 3.79 m and fell like a plumb line for two
+    /// seconds. See [`RunOff::BOARD_HEIGHT`].
+    #[test]
+    fn a_ball_above_the_boards_flies_over_them() {
+        let mut position = Vector3::new(-50.0, 200.0, 3.8);
+        let mut velocity = Vector3::new(-2.2, 1.2, -0.01);
+        let mut spin = Vector3::new(0.0, 0.0, 0.4);
+        let hit = RunOff::contain(&mut position, &mut velocity, &mut spin, 840.0, 545.0);
+        assert_eq!(hit, Perimeter::Crowd, "3.8 m clears a 0.95 m board");
+        assert_eq!(position.x, -50.0, "nothing may move it");
+        assert_eq!(velocity.x, -2.2, "and nothing may take its pace off");
+    }
+
     #[test]
     fn a_ball_inside_the_run_off_is_left_alone() {
         let mut position = Vector3::new(-10.0, 200.0, 0.0);
         let mut velocity = Vector3::new(-0.4, 0.0, 0.0);
         let mut spin = Vector3::zeros();
-        assert!(!RunOff::contain(
-            &mut position,
-            &mut velocity,
-            &mut spin,
-            840.0,
-            545.0
-        ));
+        assert_eq!(
+            RunOff::contain(&mut position, &mut velocity, &mut spin, 840.0, 545.0),
+            Perimeter::Inside
+        );
         assert_eq!(position.x, -10.0);
         assert_eq!(velocity.x, -0.4, "still rolling out");
+    }
+
+    /// The strip behind the frame is the one place a taker cannot walk
+    /// to: there is no path round a goal in the engine, so a keeper sent
+    /// there walks through his own netting and carries the ball back out
+    /// through it.
+    #[test]
+    fn the_ground_behind_a_goal_is_not_retrievable() {
+        let centre = 545.0 / 2.0;
+        for (x, y, reachable, what) in [
+            (-30.0, centre, false, "dead behind the goal"),
+            (-30.0, centre + GOAL_WIDTH, false, "behind a post"),
+            (
+                -30.0,
+                centre + GOAL_WIDTH + 12.0,
+                true,
+                "behind the byline but clear of the frame",
+            ),
+            (870.0, centre - 10.0, false, "behind the other goal"),
+            (400.0, -20.0, true, "over the touchline, nothing in the way"),
+            (200.0, centre, true, "still on the pitch"),
+        ] {
+            assert_eq!(
+                RunOff::retrievable(Vector3::new(x, y, 0.0), 840.0, 545.0),
+                reachable,
+                "({x}, {y}) — {what}"
+            );
+        }
     }
 }

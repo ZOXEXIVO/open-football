@@ -1,6 +1,7 @@
 use crate::club::player::events::PositionLoad;
 use crate::club::player::traits::PlayerTrait;
 use crate::r#match::PlayerMatchEndStats;
+use crate::r#match::common_states::TackleEngagement;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::DefenderCondition;
 use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK, RunOff};
@@ -17,7 +18,6 @@ use crate::r#match::midfielders::states::common::MidfielderCondition;
 use crate::r#match::player::memory::PlayerMemory;
 use crate::r#match::player::state::{PlayerMatchState, PlayerState};
 use crate::r#match::player::statistics::MatchPlayerStatistics;
-use crate::r#match::common_states::TackleEngagement;
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::player::waypoints::WaypointManager;
 use crate::r#match::{

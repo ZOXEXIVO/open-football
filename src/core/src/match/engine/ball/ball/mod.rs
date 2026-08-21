@@ -38,7 +38,7 @@ pub use restart::{CornerWalk, DeadBall, ThrowIn};
 // decides how far off the pitch a restart taker may go, and the two must
 // be one constant or the taker is pinned short of the ball he is fetching.
 pub mod runoff;
-pub use runoff::RunOff;
+pub use runoff::{Perimeter, RunOff};
 // `pub` for `dead_ball_diag` — the stall attribution counters are read by
 // the dev harness, same as `ownership::reception_diag`.
 pub mod stall;
@@ -2711,6 +2711,7 @@ impl Ball {
                                 .total_cmp(&(b.position - owner.position).magnitude())
                         })
                     {
+                        use crate::r#match::engine::teamplay::standard::MatchStandard;
                         use crate::r#match::player::strategies::players::ops::skill_composites as sc;
                         use crate::r#match::{ActivityIntensity, MovementEffort};
                         let minute = sc::minute_from_ticks(self.current_tick_cached);
@@ -2724,6 +2725,7 @@ impl Ball {
                                 owner,
                                 minute,
                                 owner.player_attributes.condition_percentage(),
+                                MatchStandard::shift(context),
                             );
                         let chaser_cap = chaser.max_speed_with_condition_cached()
                             * MovementEffort::speed_fraction(

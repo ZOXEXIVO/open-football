@@ -4,6 +4,7 @@ use crate::r#match::PlayerSide;
 use crate::r#match::StateProcessingContext;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::set_pieces::{FreeKickBand, score_free_kick_choices};
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
@@ -731,11 +732,7 @@ pub mod mid_run_diag {
         pub fn box_picture() -> (u64, f32, f32, f32, f32) {
             let n = BOX_CARRY_TICKS.load(Ordering::Relaxed);
             let share = |v: u64| {
-                if n == 0 {
-                    0.0
-                } else {
-                    v as f32 / n as f32
-                }
+                if n == 0 { 0.0 } else { v as f32 / n as f32 }
             };
             let seen = COOLDOWN_SEEN.load(Ordering::Relaxed);
             (
@@ -2366,7 +2363,7 @@ pub mod mid_run_diag {
     /// run-outs the boards had to stop, 4 run-outs settled by the travel
     /// ceiling rather than by coming to rest, 5 Σ of the distance the ball
     /// finished from its own restart spot — the carry the taker then has.
-    pub static RUN_OUT: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+    pub static RUN_OUT: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
 
     pub struct RestartCensus;
 
@@ -2498,6 +2495,16 @@ pub mod mid_run_diag {
             RUN_OUT[0].fetch_add(1, Ordering::Relaxed);
         }
 
+        /// A run-out that ended with the ball somewhere nobody was going
+        /// to fetch it from, and a fresh one put on the spot instead —
+        /// `crowd` true for one over the boards, false for one behind the
+        /// goal. Both are the replacement being made deliberately; a rise
+        /// in either against the run-out count says the perimeter or the
+        /// goal's shadow has moved, not that anything is broken.
+        pub fn note_run_out_replaced(crowd: bool) {
+            RUN_OUT[if crowd { 6 } else { 7 }].fetch_add(1, Ordering::Relaxed);
+        }
+
         /// …and how it ended. `travelled` is how far past the line the
         /// ball got, `ticks` how long it took, `boards` whether the
         /// perimeter had to stop it and `expired` whether it was still
@@ -2521,9 +2528,10 @@ pub mod mid_run_diag {
             RUN_OUT[5].fetch_add(carry.max(0.0) as u64, Ordering::Relaxed);
         }
 
-        /// `(begun, Σ travelled, Σ ticks, stopped by the boards, expired, Σ carry)`.
-        pub fn run_out_snapshot() -> [u64; 6] {
-            let mut out = [0u64; 6];
+        /// `(begun, Σ travelled, Σ ticks, stopped by the boards, expired,
+        /// Σ carry, replaced into the crowd, replaced behind the goal)`.
+        pub fn run_out_snapshot() -> [u64; 8] {
+            let mut out = [0u64; 8];
             for (slot, c) in out.iter_mut().zip(RUN_OUT.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
@@ -2928,7 +2936,7 @@ pub mod time_band_diag {
     /// against: without it the table shows an appetite with nothing to
     /// read it against, and the appetite-vs-bar GAP is the whole
     /// question.
-    pub const WFACTORS: usize = 13;
+    pub const WFACTORS: usize = 16;
     const ZERO_BAND: [AtomicU64; BANDS] = [ZERO; BANDS];
     pub static WILL_FACTOR_SUM: [[AtomicU64; BANDS]; WFACTORS] = [ZERO_BAND; WFACTORS];
 
@@ -3283,7 +3291,27 @@ impl ShotBarPopulation {
     /// Re-fit with `dev_match levels 300 4 18 2` and read the FLATNESS
     /// verdict — one number, one sweep. `OF_BAR_POPQ` overrides it so a
     /// re-fit costs no rebuild.
-    const SLOPE: f32 = 1.75;
+    ///
+    /// # 2026-08-21 — SUPERSEDED, and set to zero
+    ///
+    /// The appetite this bar is compared against was uncentred, so the
+    /// bar was raised to cancel the drift. `MatchStandard` now centres
+    /// the appetite at source — `ShotSkillProfile`, `StrikingRange`,
+    /// `poise` and `boldness` all read against the standard of football
+    /// in the match — and a correction on top of a corrected quantity
+    /// simply subtracts twice.
+    ///
+    /// It is not a small double-count. Measured on the same sweep, with
+    /// every source fix in and the slope left at 1.75, level 20 played
+    /// **1.30 goals a match on 5.8 shots a team**; at 0 it played 3.67 on
+    /// 15.8. The answer is not a value in between — the term no longer
+    /// has anything to correct, and anything non-zero re-introduces the
+    /// division into a decision that has just been freed of it.
+    ///
+    /// `REFERENCE`, the rails and `OF_BAR_POPQ` are all kept so the
+    /// correction can be re-fitted without a rebuild if the appetite ever
+    /// drifts again.
+    const SLOPE: f32 = 0.0;
 
     /// Rails. The scale is a correction, not a second shot model: at the
     /// top of the generator it must not be able to push the bar out of
@@ -3625,16 +3653,51 @@ impl StrikingRange {
     /// How far this player can strike a ball with something on it, in game
     /// units (1u = 0.125 m).
     ///
-    /// His own property, not a league-wide expectation: a centre-half with
-    /// a hammer is live from 30 m and a poacher is not live from 20. 200u
-    /// = 25 m at the bottom of the range, 390u = 49 m for a specialist who
-    /// genuinely tries them from there.
+    /// His own property RELATIVE TO THE FOOTBALL AROUND HIM, not an
+    /// absolute one: a centre-half with a hammer is live from 30 m and a
+    /// poacher is not live from 20, in any division. 200u = 25 m at the
+    /// bottom of the range, 390u = 49 m for a specialist who genuinely
+    /// tries them from there.
+    ///
+    /// ⚠ **It used to be absolute, and that made it the engine's chance
+    /// SUPPLY problem.** This range sets two things — where the appetite
+    /// stops paying a distance cost ([`Self::comfortable`]) and, through
+    /// [`Self::carry_hold`], **the nearest goal a carried ball ever
+    /// gets**. Read absolutely, a better player refuses to drive as far
+    /// in, which is not football at either end of the pyramid. Measured,
+    /// `dev_match stats 150 L L`:
+    ///
+    /// | level | carry_hold | mean shot range | shots inside 16.5 m |
+    /// |---|---|---|---|
+    /// | 6  | 11.5 m | 12.4 m | 84% |
+    /// | 12 | 12.7 m | 16.0 m | 53% |
+    /// | 20 | 14.6 m | 18.6 m | 44% |
+    ///
+    /// Real football takes ~62% of its shots from inside the box in every
+    /// division. This single term walks the whole distance MIX up the
+    /// pyramid, and `ShotBarPopulation` cannot answer it — that scales
+    /// the bar by one distance-independent number, so it holds the shot
+    /// COUNT flat and leaves the mix exactly where it was. It is the
+    /// residual `SHOT_BAR_BASE`'s own note leaves open: "44 of those 100
+    /// shots came from inside the box against a real ~8, and that half is
+    /// chance supply".
+    ///
+    /// Subtracting [`MatchStandard::shift`] measures the strike against
+    /// the standard of the match: zero at the calibration division, so
+    /// nothing here recalibrates, and the specialist keeps every metre of
+    /// his edge over the men he actually plays with.
     pub fn of(ctx: &StateProcessingContext) -> f32 {
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
         let tech = sc::EffActionContext::technical(minute);
-        let power = (sc::n(sc::eff(ctx.player, tech, |p| p.skills.technical.long_shots)) * 0.45
-            + sc::n(sc::eff(ctx.player, tech, |p| p.skills.technical.technique)) * 0.30
-            + (ctx.player.skills.physical.strength / 20.0).clamp(0.0, 1.0) * 0.25)
+        let shift = MatchStandard::shift(ctx.context);
+        let peer = |v: f32| (v - shift).clamp(0.0, 1.0);
+        let power = (peer(sc::n(sc::eff(ctx.player, tech, |p| {
+            p.skills.technical.long_shots
+        }))) * 0.45
+            + peer(sc::n(sc::eff(ctx.player, tech, |p| {
+                p.skills.technical.technique
+            }))) * 0.30
+            + peer((ctx.player.skills.physical.strength / 20.0).clamp(0.0, 1.0)) * 0.25)
             .clamp(0.0, 1.0);
         200.0 + power * 190.0
     }
@@ -4052,14 +4115,28 @@ pub fn evaluate_forward_shot_decision(
     let tech = sc::EffActionContext::technical(minute);
     let mental = sc::EffActionContext::mental(minute);
     // A few raw-band reads still drive 1v1 cool-headedness; routed
-    // through effective_skill so fatigue applies.
-    let _finishing = sc::n(sc::eff(ctx.player, tech, |p| p.skills.technical.finishing));
-    let composure = sc::n(sc::eff(ctx.player, mental, |p| p.skills.mental.composure));
-    let _technique = (skills.technical.technique / 20.0).clamp(0.0, 1.0);
-    let first_touch = sc::n(sc::eff(ctx.player, tech, |p| {
+    // through effective_skill so fatigue applies, and through the
+    // match's own standard so they mean the same thing in every
+    // division. `ShotSkillProfile` centres its half already; these are
+    // the leftovers that feed `poise` and `boldness`, and measured on
+    // `dev_match stats` those two ran **poise 0.697 → 0.917** and
+    // **boldness 0.909 → 1.155** from level 6 to level 20, i.e. a 27%
+    // flat lift on the urge of every shot at the top of the pyramid.
+    let standard_shift = MatchStandard::shift(ctx.context);
+    let peer = |v: f32| (v - standard_shift).clamp(0.0, 1.0);
+    let _finishing = peer(sc::n(sc::eff(ctx.player, tech, |p| {
+        p.skills.technical.finishing
+    })));
+    let composure = peer(sc::n(sc::eff(ctx.player, mental, |p| {
+        p.skills.mental.composure
+    })));
+    let _technique = peer((skills.technical.technique / 20.0).clamp(0.0, 1.0));
+    let first_touch = peer(sc::n(sc::eff(ctx.player, tech, |p| {
         p.skills.technical.first_touch
-    }));
-    let decisions = sc::n(sc::eff(ctx.player, mental, |p| p.skills.mental.decisions));
+    })));
+    let decisions = peer(sc::n(sc::eff(ctx.player, mental, |p| {
+        p.skills.mental.decisions
+    })));
 
     // ── Sight of goal ─────────────────────────────────────────────────
     // Geometry and bodies. `angle_quality` is how central he is FOR HIS
@@ -4148,8 +4225,8 @@ pub fn evaluate_forward_shot_decision(
     // and it is a term that varies with the moment instead of with the
     // roster.
     let sprinting = Poise::pace(ctx);
-    let physical_balance = (skills.physical.strength / 20.0
-        + skills.physical.agility / 20.0
+    let physical_balance = (peer(skills.physical.strength / 20.0)
+        + peer(skills.physical.agility / 20.0)
         + first_touch
         + composure)
         / 4.0;
@@ -4264,7 +4341,9 @@ pub fn evaluate_forward_shot_decision(
     // i.e. it was a fourth flat tax with a little variation riding on
     // top, and the bar had been calibrated against the depressed
     // distribution the four of them produced together.
-    let temperament = sc::n(sc::eff(ctx.player, mental, |p| p.skills.mental.flair)) * 0.45
+    let temperament = peer(sc::n(sc::eff(ctx.player, mental, |p| {
+        p.skills.mental.flair
+    }))) * 0.45
         + composure_skill * 0.25
         + execution_skill * 0.30;
     let boldness = (1.0 + (temperament - 0.5) * 0.55).clamp(0.70, 1.30);
@@ -4705,6 +4784,24 @@ pub fn evaluate_forward_shot_decision(
                 sight.corridor_clarity,
                 threshold,
                 ShotBarPopulation::quality(ctx),
+                // The standard of football in this match and the
+                // goalkeeping standard alongside it, so
+                // `MatchStandard::CALIBRATION` can be re-derived from the
+                // harness rather than guessed. See `MatchStandard`.
+                MatchStandard::of(
+                    &ctx.context.home_skill_aggregates,
+                    &ctx.context.away_skill_aggregates,
+                ),
+                MatchStandard::keeper_of(
+                    &ctx.context.home_skill_aggregates,
+                    &ctx.context.away_skill_aggregates,
+                ),
+                // …and the DEFENDING standard, which is what
+                // `ArrivingRunner::required_space` prices its space
+                // against.
+                (ctx.context.home_skill_aggregates.defensive_quality
+                    + ctx.context.away_skill_aggregates.defensive_quality)
+                    * 0.5,
             ],
         );
         helper_diag::SUM_XG_X1000.fetch_add((xg_for_diag * 1000.0) as u64, Ordering::Relaxed);
@@ -4922,15 +5019,41 @@ mod shot_bar_population_tests {
         assert!((scale(ShotBarPopulation::REFERENCE) - 1.0).abs() < 1e-6);
     }
 
-    /// A better match raises the bar; a worse one does NOT lower it.
-    /// The asymmetry is the fix — see the note on `MIN_SCALE`.
+    /// **The correction is retired** — see the note on [`SLOPE`]. With
+    /// the appetite centred at source by `MatchStandard` there is nothing
+    /// left for it to cancel, so the bar has to mean the same thing at
+    /// every standard of football. A correction on top of a corrected
+    /// quantity subtracts twice, and measured it subtracted hard: level
+    /// 20 played 1.30 goals a match on 5.8 shots a team with the old
+    /// slope still live.
+    ///
+    /// [`SLOPE`]: ShotBarPopulation::SLOPE
     #[test]
-    fn only_a_better_match_raises_the_bar() {
-        assert!(scale(0.80) > 1.0, "an elite match must raise the bar");
-        assert!(scale(0.70) > 1.0);
+    fn the_correction_is_inert_at_every_population() {
+        for population in [0.20_f32, 0.35, 0.50, 0.638, 0.70, 0.80, 0.95] {
+            assert!(
+                (scale(population) - 1.0).abs() < 1e-6,
+                "a retired correction must not move the bar (population {population})"
+            );
+        }
+    }
+
+    /// …and the SHAPE it would take if it were ever re-fitted is kept
+    /// under test rather than lost with the constant: a better match
+    /// raises the bar, a worse one does NOT lower it. That asymmetry was
+    /// hard-won — see the note on `MIN_SCALE` — so it is asserted against
+    /// an explicit slope, which is also what `OF_BAR_POPQ` would supply.
+    #[test]
+    fn a_refitted_correction_would_still_be_one_sided() {
+        let refit = |population: f32| {
+            (1.0 + (population - ShotBarPopulation::REFERENCE) * 1.75)
+                .clamp(ShotBarPopulation::MIN_SCALE, ShotBarPopulation::MAX_SCALE)
+        };
+        assert!(refit(0.80) > 1.0, "an elite match must raise the bar");
+        assert!(refit(0.70) > 1.0);
         for poor in [0.20_f32, 0.35, 0.50, 0.60] {
             assert!(
-                (scale(poor) - 1.0).abs() < 1e-6,
+                (refit(poor) - 1.0).abs() < 1e-6,
                 "a poorer match must not lower the bar (population {poor})"
             );
         }

@@ -1,4 +1,5 @@
 use crate::r#match::engine::context::PenaltyArea;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::events::FoulSeverity;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
@@ -692,10 +693,47 @@ impl TackleDecision {
     /// `distance` is defender-to-carrier; closer is a better moment
     /// because the angle to the ball is better.
     pub fn commit_probability(ctx: &StateProcessingContext, distance: f32) -> f32 {
+        // ── …AND EVERY ATTRIBUTE IN IT IS READ AGAINST THIS MATCH ──────
+        //
+        // The `tackling` term below has always been centred on the
+        // calibration division's population mean, for the reason its own
+        // note gives. That fixes the LEVEL and not the GRADIENT: the
+        // slope is steep enough that the term alone spans −0.45 at the
+        // bottom of the pyramid to 0.00 at the top, and `aggression`,
+        // `decisions` and `anticipation` were not centred at all.
+        //
+        // Measured, `dev_match stats 150 L L` (CHALLENGE GATE CENSUS,
+        // equal squads, so none of this is a mismatch):
+        //
+        // | level | commit p | tackles/DEF | carrier-in-our-box ticks |
+        // |---|---|---|---|
+        // | 6  | 0.050 | 1.08 | 18 140 |
+        // | 8  | 0.067 | 1.19 | 12 929 |
+        // | 12 | 0.110 | 1.80 |  4 119 |
+        // | 14 | 0.126 | 2.07 |  3 842 |
+        // | 20 | 0.161 | 3.35 |  5 869 |
+        //
+        // A real back four makes ~1.6 challenges a match in every
+        // division. The fourth tier never challenges the carrier and the
+        // top flight challenges three times as often, and the third
+        // column is the consequence the whole engine feels: an attacker
+        // holds the ball inside the area **4.7× longer** at the bottom of
+        // the pyramid, which is the chance SUPPLY that `SHOT_BAR_BASE`'s
+        // own note names as the residual it cannot price ("nobody stops
+        // them getting into the box at all").
+        //
+        // Subtracting [`MatchStandard::shift`] reads each attribute
+        // against the football around it instead of against a yardstick
+        // from another league. It is exactly neutral at the calibration
+        // level — the shift is 0 there — and leaves the within-division
+        // spread untouched: the aggressive defender still dives in, the
+        // thoughtful one still picks his moment.
+        let shift = MatchStandard::shift(ctx.context);
+        let peer = |v: f32| (v / 20.0 - shift).clamp(0.0, 1.0);
         let skills = &ctx.player.skills;
-        let aggression = (skills.mental.aggression / 20.0).clamp(0.0, 1.0);
-        let decisions = (skills.mental.decisions / 20.0).clamp(0.0, 1.0);
-        let anticipation = (skills.mental.anticipation / 20.0).clamp(0.0, 1.0);
+        let aggression = peer(skills.mental.aggression);
+        let decisions = peer(skills.mental.decisions);
+        let anticipation = peer(skills.mental.anticipation);
 
         // Temperament. An aggressive defender dives in; a good
         // decision-maker picks his moment, which means fewer challenges
@@ -725,7 +763,7 @@ impl TackleDecision {
         // `tackle_profile` already prices whether he WINS it. This prices
         // whether he goes — the two are different questions and the
         // second one had no answer.
-        let tackling = (skills.technical.tackling / 20.0).clamp(0.0, 1.0);
+        let tackling = peer(skills.technical.tackling);
         let temperament =
             (0.55 + aggression * 0.90 - decisions * 0.30 + (tackling - 0.70) * 1.10).max(0.12);
 
@@ -1045,10 +1083,18 @@ impl ContactFoul {
         if gap > Self::CONTACT_RANGE {
             return 0.0;
         }
+        // …measured against this match, exactly as `TackleDecision` is
+        // and for the same reason. A foul is dead-ball time in somebody's
+        // final third, and an uncentred temperament spends far more of
+        // the top flight's match with the ball out of play: measured over
+        // `dev_match stats 16 L L`, fouls ran **9.9 a team at level 6
+        // against 18.0 at level 18** and direct free kicks 10.2 against
+        // 18.3, which resets both shapes every time.
+        let shift = MatchStandard::shift(ctx.context);
+        let peer = |v: f32| (v - shift).clamp(0.0, 1.0);
         let skills = &ctx.player.skills;
-        let aggression = (skills.mental.aggression / 20.0).clamp(0.0, 1.0);
-        let discipline =
-            ((skills.mental.composure + skills.mental.concentration) / 40.0).clamp(0.0, 1.0);
+        let aggression = peer(skills.mental.aggression / 20.0);
+        let discipline = peer((skills.mental.composure + skills.mental.concentration) / 40.0);
 
         // Temperament — the same pull the tackle model uses.
         let temperament = (0.55 + aggression * 0.95 - discipline * 0.35).clamp(0.2, 1.6);

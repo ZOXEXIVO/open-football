@@ -2860,6 +2860,15 @@ fn main() {
             let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
             run_woodwork(n, lvl);
         }
+        // The same trace, triggered on a ball crossing the goal line ABOVE
+        // the bar. Answers "where does a skied shot actually end up", which
+        // is a sequence — the award, the descent, the run-out and the
+        // restart — and every counter in the harness is a sum.
+        "overbar" => {
+            let n = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(6usize);
+            let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
+            run_over_the_bar(n, lvl);
+        }
         // The same trace, triggered on the goalkeeper taking the ball into
         // his hands. Answers "how did it get there" — the ticks before the
         // gather carry the shot, and the keeper's own gap / height / state
@@ -5017,6 +5026,9 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             "  └ corrid",
             "BAR",
             "popq",
+            "STANDARD",
+            "gk_std",
+            "def_q",
         ];
         println!();
         println!("  willingness factor MEANS by distance band (roll samples):");
@@ -7675,6 +7687,19 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     o[4] as f64 * 100.0 / o[0] as f64,
                     o[5] as f64 / o[0] as f64 * 0.125,
                 );
+                // …and the ones nobody fetched. A ball over the metre-high
+                // boards is in the crowd and one that stops behind the goal
+                // is behind the netting, so both get a fresh ball on the
+                // spot rather than a taker walking through a stand or a
+                // net. Deliberate — see `Ball::replace_dead_ball` — but it
+                // is a relocation, so it is counted where relocations are.
+                println!(
+                    "           replaced (nobody could fetch it): {:.1}/match into the crowd, \
+                     {:.1}/match behind the goal — {:.0}% of all run-outs",
+                    per(o[6]),
+                    per(o[7]),
+                    (o[6] + o[7]) as f64 * 100.0 / o[0] as f64,
+                );
             }
         }
         // A taker who timed out in `TakeBall` was on his way; one who timed
@@ -10055,5 +10080,55 @@ async fn chunk_handler(
         )
             .into_response(),
         Err(_) => (axum::http::StatusCode::NOT_FOUND, "not found").into_response(),
+    }
+}
+
+/// Trace what a ball that clears the crossbar actually does.
+///
+/// Report, 2026-08-21: *"the ball flies over the goal, then appears on the
+/// goal line on the floor, and it runs into the goal."* Every part of that
+/// is a sequence — the award, the several seconds of flight behind the
+/// goal, whatever stops it, and the restart — so the only instrument that
+/// can answer it is the per-tick trace. `over` opens a window on
+/// `check_over_goal` and on every endline goal kick, which is the family
+/// the report belongs to.
+fn run_over_the_bar(matches: usize, level: u8) {
+    unsafe { std::env::set_var("OF_FRAME_TRACE", "over") };
+    core::frame_trace::FrameTrace::reset();
+
+    for m in 0..matches {
+        MatchRuntime::set_events_mode(true);
+        let (home, _) = make_squad_viewer(1, HOME_TEAM_NAME, level, 0);
+        let (away, _) = make_squad_viewer(2, AWAY_TEAM_NAME, level, 11);
+        let _ = FootballEngine::<840, 545>::play(home, away, true, false, false);
+        eprintln!("  overbar: match {}/{} played", m + 1, matches);
+    }
+
+    let (_, captures) = core::frame_trace::FrameTrace::report();
+    let s = core::frame_trace::FrameTrace::summary();
+    println!();
+    println!("=== OVER-THE-BAR TRACE ({matches} matches, level {level}) ===");
+    println!("  {} captures", captures.len());
+    println!(
+        "  a '*' row travelled further than its own velocity explains — somebody relocated the ball"
+    );
+    println!();
+    println!("  mesh jumps (netting PULLED the ball) : {}", s.mesh_jumps);
+    println!("  loose jumps (open play, unclaimed)   : {}", s.loose_jumps);
+    println!(
+        "  worst unexplained jump               : {} cm",
+        s.worst_jump_cm
+    );
+    println!(
+        "  ground snaps (z collapsed, no fall)  : {}",
+        s.ground_snaps
+    );
+    println!(
+        "  windows that ended with the ball still in the goal: {}",
+        s.rested_in_net
+    );
+    for capture in &captures {
+        println!();
+        println!("{capture}");
     }
 }

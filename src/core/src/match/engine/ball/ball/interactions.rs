@@ -9,6 +9,7 @@ use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::EventCollection;
 #[cfg(feature = "match-logs")]
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
@@ -1990,10 +1991,19 @@ impl Ball {
         // Concentration acts on the catch / parry split — focused
         // keepers catch cleaner, distracted ones parry into danger.
         let concentration = effective_skill(keeper, keeper.skills.mental.concentration, mental_ctx);
-        let scaled_handling = ((handling - 1.0) / 19.0).max(0.0);
-        let scaled_reflexes = ((reflexes - 1.0) / 19.0).max(0.0);
-        let scaled_agility = ((agility - 1.0) / 19.0).max(0.0);
-        let scaled_concentration = ((concentration - 1.0) / 19.0).max(0.0);
+        // …each measured against the standard of goalkeeping in this
+        // match, so a keeper is compared with the football he is playing
+        // in rather than with a fixed 1-20 scale. See `MatchStandard` and
+        // the note at `base_reach` below for the measurement that forced
+        // it. Applied here, at the normalisation, so the reach, the pace
+        // penalty and the catch/parry split all agree about how good he
+        // is.
+        let gk_shift = MatchStandard::keeper_shift(context);
+        let peer = |v: f32| (v - gk_shift).clamp(0.0, 1.0);
+        let scaled_handling = peer(((handling - 1.0) / 19.0).max(0.0));
+        let scaled_reflexes = peer(((reflexes - 1.0) / 19.0).max(0.0));
+        let scaled_agility = peer(((agility - 1.0) / 19.0).max(0.0));
+        let scaled_concentration = peer(((concentration - 1.0) / 19.0).max(0.0));
 
         // Diving reach in game units. Field is 840u = 105m, so 1u = 0.126m
         // (half-goal 29u = 3.66m matches real 3.66m). Every keeper, even a
@@ -2012,6 +2022,29 @@ impl Ball {
         // table and the reasoning for both. The SLOPE is untouched: the
         // spread between the worst keeper alive and the best is still 12u,
         // so nothing about the keeper-quality axis moves.
+        //
+        // ── …AND THE REACH IS MEASURED AGAINST THIS MATCH ──────────────
+        //
+        // `SaveModel::skill_multiplier` was rewritten as a CONTEST for
+        // exactly one reason, and its own note states it: "squads scale
+        // with the division, so an absolute bar makes a lower-division
+        // keeper worse without making the strikers he faces any less
+        // dangerous". The geometry was left absolute, and it carries the
+        // same bias — the half-goal is a fixed 29u whatever league you
+        // are in, so a reach that grows with the keeper's own attributes
+        // covers a steadily larger share of it as everyone improves.
+        //
+        // Measured, `dev_match levels 300 4 20 2`, equal squads: saves
+        // per shot on target ran **56.6% at level 4 to 70.7% at level
+        // 18**, against a real ~68% at every level of every pyramid — and
+        // the contest multiplier was already flat across that whole
+        // sweep, so what remained was the geometry.
+        //
+        // `MatchStandard::keeper_shift` reads the two attributes against
+        // the goalkeeping standard of the match. Zero at the calibration
+        // division, so the 23/8/4 numbers above are untouched where they
+        // were fitted; within a division the agile keeper still reaches
+        // further than the heavy-legged one.
         let base_reach = 23.0 + scaled_agility * 8.0 + scaled_reflexes * 4.0;
         // …and how much of the GOAL that reach is worth from where he is
         // standing. See `SaveModel::wedge`: measuring the gap flat at the

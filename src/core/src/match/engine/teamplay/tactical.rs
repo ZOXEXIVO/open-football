@@ -211,6 +211,20 @@ pub struct TacticalRefreshInputs<'a> {
     /// the play-quality half of home advantage (the referee
     /// marginal-call half lives in `RefereeProfile::home_bias`).
     pub home_edge: f32,
+    /// How far the standard of football in this fixture sits from the
+    /// division the skill gates below were fitted in — see
+    /// `MatchStandard`. Subtracted from every team-quality read in
+    /// `refresh`, because those gates are ABSOLUTE thresholds (0.45 /
+    /// 0.55 / 0.65) on a quantity that scales with the division, so read
+    /// raw they hand every side below mid-table a weak press and a deep
+    /// line and every side above it a high one. Measured, the whole
+    /// family switches over between levels 8 and 12 — which is exactly
+    /// where the `levels` sweep steps.
+    pub standard_shift: f32,
+    /// The goalkeeping equivalent — `gk_quality` blends the goalkeeping
+    /// attributes, which the generator does not hand the same population
+    /// mean as the outfield ones, so `gk_line_lift` needs its own.
+    pub standard_gk_shift: f32,
 }
 
 /// Team-level tactical context, shared across all eleven players. Cheap
@@ -367,6 +381,15 @@ impl TeamTacticalState {
     /// from the match tick loop (every ~10 ticks is enough — phase shifts
     /// settle over multiple seconds, not every frame).
     pub fn refresh(home: &mut Self, away: &mut Self, inputs: &TacticalRefreshInputs<'_>) {
+        // Every team-quality read below goes through this. The skill
+        // gates are absolute thresholds on a quantity that scales with
+        // the division — see `TacticalRefreshInputs::standard_shift` — so
+        // without it a fourth-tier side presses 35% softer and sits 8% of
+        // the pitch deeper than the identical side one division up, for
+        // no footballing reason: a manager sets his line and his press
+        // against the eleven men in front of him.
+        let peer = |q: f32| (q - inputs.standard_shift).clamp(0.0, 1.0);
+        let gk_peer = |q: f32| (q - inputs.standard_gk_shift).clamp(0.0, 1.0);
         let field = inputs.field;
         let field_width = field.size.width as f32;
         let field_height = field.size.height as f32;
@@ -491,11 +514,11 @@ impl TeamTacticalState {
         // toward direct outlets.
         home.build_up_patience = Self::skill_adjusted_build_up_patience(
             home.build_up_patience,
-            inputs.home_skills.build_up_quality,
+            peer(inputs.home_skills.build_up_quality),
         );
         away.build_up_patience = Self::skill_adjusted_build_up_patience(
             away.build_up_patience,
-            inputs.away_skills.build_up_quality,
+            peer(inputs.away_skills.build_up_quality),
         );
 
         // ── Phase ────────────────────────────────────────────────────
@@ -555,15 +578,15 @@ impl TeamTacticalState {
         // Home plays toward x=high, away toward x=low — invert the
         // sign accordingly.
         let home_line_drop_units =
-            Self::line_height_drop(inputs.home_skills.defensive_quality, field_width);
+            Self::line_height_drop(peer(inputs.home_skills.defensive_quality), field_width);
         let away_line_drop_units =
-            Self::line_height_drop(inputs.away_skills.defensive_quality, field_width);
+            Self::line_height_drop(peer(inputs.away_skills.defensive_quality), field_width);
         // GK-quality lift: a sweeper-keeper-class GK lets us play a
         // higher line than skill on the back four alone would warrant.
         // Bounded to +0.02 of pitch width so it's a tweak, not a
         // dominant signal.
-        let home_gk_lift = Self::gk_line_lift(inputs.home_skills.gk_quality, field_width);
-        let away_gk_lift = Self::gk_line_lift(inputs.away_skills.gk_quality, field_width);
+        let home_gk_lift = Self::gk_line_lift(gk_peer(inputs.home_skills.gk_quality), field_width);
+        let away_gk_lift = Self::gk_line_lift(gk_peer(inputs.away_skills.gk_quality), field_width);
         // Game-management line drop: a side protecting a result actually
         // sits DEEPER, not just slower. Before this, game management only
         // reduced the leader's own tempo/risk/press — their block stayed
@@ -617,10 +640,14 @@ impl TeamTacticalState {
         // the press intensity by up to 35% of the deficit so an
         // unfit/under-skilled side cannot run a hopelessly hot press
         // even if the coach asked for one.
-        home.press_intensity =
-            Self::press_skill_adjustment(home.press_intensity, inputs.home_skills.press_quality);
-        away.press_intensity =
-            Self::press_skill_adjustment(away.press_intensity, inputs.away_skills.press_quality);
+        home.press_intensity = Self::press_skill_adjustment(
+            home.press_intensity,
+            peer(inputs.home_skills.press_quality),
+        );
+        away.press_intensity = Self::press_skill_adjustment(
+            away.press_intensity,
+            peer(inputs.away_skills.press_quality),
+        );
 
         home.compactness_target =
             Self::compute_compactness(home_compact, home.phase, home.game_management_intensity);
@@ -684,12 +711,14 @@ impl TeamTacticalState {
         let home_chasing = inputs.home_score_diff < 0;
         let away_chasing = inputs.home_score_diff > 0;
         if home_chasing {
-            let lift = Self::attacking_chase_lift(inputs.home_skills.attacking_quality, minute);
+            let lift =
+                Self::attacking_chase_lift(peer(inputs.home_skills.attacking_quality), minute);
             home.tempo = (home.tempo + lift).clamp(0.10, 1.0);
             home.risk_appetite = (home.risk_appetite + lift).clamp(0.0, 1.0);
         }
         if away_chasing {
-            let lift = Self::attacking_chase_lift(inputs.away_skills.attacking_quality, minute);
+            let lift =
+                Self::attacking_chase_lift(peer(inputs.away_skills.attacking_quality), minute);
             away.tempo = (away.tempo + lift).clamp(0.10, 1.0);
             away.risk_appetite = (away.risk_appetite + lift).clamp(0.0, 1.0);
         }
@@ -700,13 +729,15 @@ impl TeamTacticalState {
         // game-management intensity is high AND the side organises
         // well. The 0.85..1.05 factor keeps the effect subtle.
         if home.game_management_intensity > 0.05 {
-            let damp = Self::protect_lead_damping(inputs.home_skills.concentration_teamwork_avg);
+            let damp =
+                Self::protect_lead_damping(peer(inputs.home_skills.concentration_teamwork_avg));
             // Scale only the protect-lead delta, not the whole tempo.
             let delta = damp - 1.0; // negative when damping
             home.tempo = (home.tempo + delta * home.game_management_intensity).clamp(0.10, 1.0);
         }
         if away.game_management_intensity > 0.05 {
-            let damp = Self::protect_lead_damping(inputs.away_skills.concentration_teamwork_avg);
+            let damp =
+                Self::protect_lead_damping(peer(inputs.away_skills.concentration_teamwork_avg));
             let delta = damp - 1.0;
             away.tempo = (away.tempo + delta * away.game_management_intensity).clamp(0.10, 1.0);
         }

@@ -6,6 +6,7 @@ use super::{AerialReach, AwaitedRestart, Ball};
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::psychology::Psychology;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
@@ -511,7 +512,16 @@ impl Ball {
         }
 
         let minute = sc::minute_from_ticks(self.current_tick_cached);
-        let quality = sc::receiving_first_touch(receiver, minute);
+        // …against the standard of football in this match. `1.15 -
+        // quality` is an absolute bar and `receiving_first_touch` is a
+        // weight-1 linear blend, so subtracting the shift is exact —
+        // see `MatchStandard`. Read raw, the term is 0.78 at the bottom
+        // of the pyramid against 0.28 at the top and the fourth tier
+        // drowns in loose balls: measured 67.9 miscontrols + 107.2 heavy
+        // touches per team at level 6 against 5.9 + 14.6 at level 18, on
+        // an identical 841 passes, against a real ~8-15 everywhere.
+        let quality = (sc::receiving_first_touch(receiver, minute) - MatchStandard::shift(context))
+            .clamp(0.0, 1.0);
 
         // Arrival difficulty — every term continuous in [0, 1].
         let speed01 = ((self.velocity.norm() - 1.5) / 5.0).clamp(0.0, 1.0);

@@ -3,6 +3,7 @@ use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::ball::ball::AerialReach;
 use crate::r#match::engine::flow::goal::GOAL_HEIGHT;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::EventCollection;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
@@ -523,6 +524,7 @@ impl PlayerMatchState {
                     player,
                     minute,
                     player.player_attributes.condition_percentage(),
+                    MatchStandard::shift(context),
                 );
             }
 

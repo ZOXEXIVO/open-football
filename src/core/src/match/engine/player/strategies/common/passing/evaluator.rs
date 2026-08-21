@@ -7,6 +7,7 @@ use crate::r#match::engine::ball::ball::{OffsideLine, ThrowIn};
 use crate::r#match::engine::chemistry::chemistry_modifiers;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::set_pieces::{ThrowRoutine, pick_throw_routine};
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
@@ -1058,6 +1059,10 @@ impl PassEvaluator {
         // Use 25% of pass distance as alternative for short passes.
         let min_intercept_projection = 20.0_f32.min(pass_distance * 0.25);
 
+        // Hoisted out of the per-opponent filter below — it is a match
+        // constant, and this walk runs for every pass candidate.
+        let shift = MatchStandard::shift(ctx.context);
+
         // Check for opponents who could intercept the pass
         let intercepting_opponents = ctx
             .players()
@@ -1091,11 +1096,24 @@ impl PassEvaluator {
                     return true;
                 }
 
-                // Consider opponent's interception ability
+                // Consider opponent's interception ability — measured
+                // against the standard of football in this match, not
+                // against a fixed 0-20 scale. The lane he denies is
+                // compared with a raw perpendicular distance in game
+                // units, so an absolute read grows the swept area ~90%
+                // from the bottom of the pyramid to the top (4.2u to
+                // 5.8u) with nothing on the passer's side of the
+                // expression, and the count then falls into fixed risk
+                // bands (0 → 0.0, 1 → 0.55, 2 → 0.85). A forward pass
+                // that scores fine in the fourth tier is scored as
+                // suicidal in the first by nothing but the division.
+                // See `MatchStandard`; `InterceptionDuel` already
+                // resolves the interception itself as a contest.
                 let players = ctx.player();
                 let opponent_skills = players.skills(opponent.id);
-                let interception_ability = opponent_skills.technical.tackling / 20.0;
-                let anticipation = opponent_skills.mental.anticipation / 20.0;
+                let peer = |v: f32| (v / 20.0 - shift).clamp(0.0, 1.0);
+                let interception_ability = peer(opponent_skills.technical.tackling);
+                let anticipation = peer(opponent_skills.mental.anticipation);
 
                 // Better opponents can intercept from further away
                 let effective_radius = 3.0 + (interception_ability + anticipation) * 2.0;

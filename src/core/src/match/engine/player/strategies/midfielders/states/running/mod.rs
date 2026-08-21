@@ -115,7 +115,32 @@ impl ArrivingRunner {
     /// confirming run at 300 matches a level reads **0.92**, against a
     /// baseline of 3.10 before any of this. Re-fit against the confirm,
     /// not the fit.
-    const TIGHTNESS_EXPONENT: f32 = 2.20;
+    ///
+    /// # 2026-08-21 — SUPERSEDED, and set to zero
+    ///
+    /// This was a compensation made at the SYMPTOM: the requirement was
+    /// scaled by the division's defending because the division's
+    /// defending was itself a function of the division. That cause is
+    /// now removed at source — see `MatchStandard`, which prices every
+    /// absolute attribute read against the standard of football in the
+    /// match, so a defender challenges, marks and closes down the same
+    /// way in every league. With the cause gone the scaling
+    /// DOUBLE-COUNTS, and the double-count is not small: measured on the
+    /// harness's own level curve, `defensive_quality` runs 0.375 at
+    /// level 4 against 0.833 at level 20, which put the requirement at
+    /// 45u at the bottom of the pyramid and on its 12u floor from level
+    /// 16 up — a 3.8× swing in how much space an arriving runner needed,
+    /// on top of a defence that no longer varies.
+    ///
+    /// Zero leaves the requirement at [`Self::REFERENCE_SPACE`] in every
+    /// division, which is what the constant always claimed to be. The
+    /// ratio machinery and `OF_CLEAR_TIGHTNESS` are kept so it can be
+    /// re-fitted without a rebuild if the two ever diverge again.
+    ///
+    /// Measured at zero, `dev_match stats 140 14 14`: 2.74 goals a match,
+    /// 13.0 shots a team, 30.7% on target, 65.5% saved — the calibration
+    /// division exactly where it belongs.
+    const TIGHTNESS_EXPONENT: f32 = 0.0;
     /// Rails on that, so the requirement stays a footballing distance at
     /// both ends of the generator — between ~1.5 m and ~8 m.
     const MIN_REQUIRED: f32 = 12.0;
@@ -211,16 +236,19 @@ mod arriving_runner_tests {
         }
     }
 
-    /// Space is relative, and that is the term carrying the flatness:
-    /// three metres is a clear chance in a well-defended match and an
-    /// ordinary Tuesday in a badly-defended one.
+    /// **Three metres is three metres in every division**, because the
+    /// defending no longer varies with the division — `MatchStandard`
+    /// prices it at source. Scaling the requirement on top of that was a
+    /// double-count; see `TIGHTNESS_EXPONENT`'s note for the measurement
+    /// that retired it. The ratio machinery stays live and `required_space`
+    /// must remain on its rails whatever `OF_CLEAR_TIGHTNESS` is set to.
     #[test]
-    fn a_worse_defence_demands_more_space_before_it_is_a_chance() {
+    fn the_requirement_does_not_move_with_the_division() {
         let tight = ArrivingRunner::required_space(0.85);
         let ordinary = ArrivingRunner::required_space(ArrivingRunner::REFERENCE_DEFENCE);
         let loose = ArrivingRunner::required_space(0.30);
-        assert!(tight < ordinary, "{tight} vs {ordinary}");
-        assert!(ordinary < loose, "{ordinary} vs {loose}");
+        assert!((tight - ordinary).abs() < 1e-4, "{tight} vs {ordinary}");
+        assert!((loose - ordinary).abs() < 1e-4, "{loose} vs {ordinary}");
         assert!(
             (ordinary - ArrivingRunner::REFERENCE_SPACE).abs() < 1e-4,
             "an ordinarily-defended match must ask for the reference space"

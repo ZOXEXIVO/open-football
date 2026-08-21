@@ -149,7 +149,11 @@ impl Ball {
             self.position.x,
             self.position.y,
             self.position.z,
-            if runs_out { "runs out; taken from" } else { "->" },
+            if runs_out {
+                "runs out; taken from"
+            } else {
+                "->"
+            },
             throw_pos.x,
             throw_pos.y
         ));

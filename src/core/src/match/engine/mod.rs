@@ -30,9 +30,10 @@ pub use teamplay::chemistry::{
 pub use teamplay::coach::*;
 pub use teamplay::defence::{DefenceRefreshInputs, DefensiveDuty, DefensivePlan};
 pub use teamplay::shape::{ShapeRefreshInputs, TeamShape};
+pub use teamplay::standard::MatchStandard;
 pub use teamplay::tactical::*;
 pub use teamplay::zones::{LateralLane, MatchZone, ZoneCoeffs, ZoneStats};
-pub use teamplay::{attack, chemistry, coach, defence, shape, tactical, zones};
+pub use teamplay::{attack, chemistry, coach, defence, shape, standard, tactical, zones};
 
 // flow/
 pub use flow::celebration::GoalCelebration;

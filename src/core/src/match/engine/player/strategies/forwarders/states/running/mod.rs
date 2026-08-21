@@ -1,5 +1,6 @@
 use crate::PlayerPositionType;
 use crate::r#match::engine::psychology::Psychology;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
@@ -1851,9 +1852,20 @@ impl ForwardRunningState {
             return false;
         }
 
-        // Check player attributes - relaxed requirements
-        let pace = ctx.player.skills.physical.pace / 20.0;
-        let off_ball = ctx.player.skills.mental.off_the_ball / 20.0;
+        // Check player attributes — measured against the standard of
+        // football in this match, not against a fixed 0-20 scale. The
+        // defensive line he would be running behind never enters the
+        // expression, so read absolutely the bar bites only at the bottom
+        // of the pyramid: a level-4 forward scores ~0.43 fresh and drops
+        // under 0.40 by the time he is at 60% condition, at which point he
+        // stops making runs behind for the rest of the match, while a
+        // top-flight forward never approaches it. See `MatchStandard`.
+        // Condition is left alone — it is fitness, not ability, and a
+        // tired forward genuinely does stop running.
+        let shift = MatchStandard::shift(ctx.context);
+        let peer = |v: f32| (v - shift).clamp(0.0, 1.0);
+        let pace = peer(ctx.player.skills.physical.pace / 20.0);
+        let off_ball = peer(ctx.player.skills.mental.off_the_ball / 20.0);
         let stamina = ctx.player.player_attributes.condition_percentage() as f32 / 100.0;
 
         // Counter-attack: lower skill threshold — be more aggressive

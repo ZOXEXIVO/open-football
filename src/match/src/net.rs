@@ -602,7 +602,42 @@ impl Netting {
             // the goal.
             && past_line < Field::NET_DEPTH + Self::GIVE_BACK
             && ball.z.abs() < Field::PHYSICS_GOAL_HALF_WIDTH + Field::POST_RADIUS
-            && ball.y < Field::PHYSICS_GOAL_HEIGHT + Self::GIVE_SIDE
+            && ball.y < Self::roof_ceiling(past_line)
+    }
+
+    /// **How high the roof netting reaches, `past_line` metres behind the
+    /// goal line.**
+    ///
+    /// The lid used to be flat at the crossbar plus the side give — 2.94 m
+    /// across the whole 2.9 m of depth. A goal's roof net does not do
+    /// that. It is a membrane pinned along two bars: the 2.44 m crossbar
+    /// at the front and [`Field::NET_BACK_HEIGHT`] at the back, which is
+    /// why a ball driven in under the bar dips as it goes, and it is the
+    /// shape the roof PANEL is already built to ([`Netting::roof`] takes
+    /// an `edge_near` and an `edge_far`).
+    ///
+    /// **And the give goes to zero at both ends**, for the reason
+    /// `GoalNet::slack_at` gives in the engine: a membrane tied along an
+    /// edge cannot be pushed AT that edge. Full slack in the middle of the
+    /// panel, none at the bar. Carried here because the front pin is the
+    /// crossbar itself, so without it a ball that has just cleared the bar
+    /// is half a metre inside the volume at the exact moment it goes over.
+    ///
+    /// A flat lid is only ever wrong for a ball ABOVE the goal, and until
+    /// a miss started running on behind the byline (`core::RunOff`) there
+    /// was hardly ever one there. There is now: every ball over the bar
+    /// flies the length of the goal at two and a half metres or more, and
+    /// each one rippled the netting on its way over as though it had gone
+    /// in. Reported 2026-08-21.
+    ///
+    /// Past the back bar the mesh has stopped sloping — it is the back
+    /// panel from there on, and that panel's top IS the back height.
+    #[inline]
+    fn roof_ceiling(past_line: f32) -> f32 {
+        let t = (past_line / Field::NET_DEPTH).clamp(0.0, 1.0);
+        let mesh = Field::PHYSICS_GOAL_HEIGHT
+            + (Field::NET_BACK_HEIGHT - Field::PHYSICS_GOAL_HEIGHT) * t;
+        mesh + Self::GIVE_SIDE * 4.0 * t * (1.0 - t)
     }
 
     /// Push the netting around with the ball, once per frame.
@@ -836,12 +871,24 @@ mod tests {
             0.4,
             0.0
         )));
-        // Wedged against the inside of a post, past it by the side give.
+        // Wedged against the inside of a post. The lateral bound is the
+        // POST, not the side netting's give — see `inside_a_goal`: the
+        // give is measured inward from the panel, and adding it to the
+        // half-width put a 50 cm band OUTSIDE each post inside the goal,
+        // which is the band every ball that misses now runs through.
         assert!(Netting::inside_a_goal(Vec3::new(
             Field::HALF_LENGTH + 0.6,
             0.2,
-            Field::PHYSICS_GOAL_HALF_WIDTH + 0.4
+            Field::PHYSICS_GOAL_HALF_WIDTH - 0.05
         )));
+        assert!(
+            !Netting::inside_a_goal(Vec3::new(
+                Field::HALF_LENGTH + 0.6,
+                0.2,
+                Field::PHYSICS_GOAL_HALF_WIDTH + 0.4
+            )),
+            "40 cm outside the post is beside the goal, not in it"
+        );
         // …and no to the places a ball actually spends the match. The
         // corner flag is the one that matters: it is a quarter of a metre
         // in front of the goal line, which is inside the side panel's own
@@ -858,6 +905,47 @@ mod tests {
             3.4,
             0.0
         )));
+    }
+
+    /// **The lid slopes, because the roof netting does.**
+    ///
+    /// A goal's roof net runs from the 2.44 m crossbar down to
+    /// [`Field::NET_BACK_HEIGHT`], and the volume test used to hold the
+    /// crossbar's height across the whole 2.9 m of depth. Nothing was ever
+    /// up there to notice until a miss started running on behind the goal
+    /// (`core::RunOff`): now every ball over the bar flies the length of
+    /// the goal at two and a half metres or more, and a flat lid ripples
+    /// the netting for each one as though it had gone in.
+    #[test]
+    fn a_ball_over_the_goal_never_reaches_the_netting() {
+        // Just under the bar at the line is in; the same height at the
+        // back bar is over the roof net, which has sloped away beneath it.
+        assert!(Netting::inside_a_goal(Vec3::new(
+            Field::HALF_LENGTH + 0.1,
+            2.3,
+            0.0
+        )));
+        assert!(
+            !Netting::inside_a_goal(Vec3::new(
+                Field::HALF_LENGTH + Field::NET_DEPTH,
+                2.3,
+                0.0
+            )),
+            "the roof net is {:.2} m up at the back bar — a ball at 2.30 m \
+             is over the top of it",
+            Field::NET_BACK_HEIGHT
+        );
+        // The whole flight of a ball skied over the bar, from the line to
+        // the back of the netting. None of it is in the goal.
+        let mut depth = 0.05;
+        while depth < Field::NET_DEPTH + Netting::GIVE_BACK {
+            assert!(
+                !Netting::inside_a_goal(Vec3::new(Field::HALF_LENGTH + depth, 2.6, 0.0)),
+                "a ball 2.60 m up — above the 2.44 m bar — registered inside \
+                 the goal {depth:.2} m past the line"
+            );
+            depth += 0.05;
+        }
     }
 
     /// The netting has to be netting. An untextured sheet is why the net

@@ -421,10 +421,12 @@ fn scenario_tired_keeper_drops_reach_without_collapsing() {
     let fresh_inputs = GoalkeeperSkillInputs {
         minute: 80,
         condition_pct: 0.95,
+        standard_shift: 0.0,
     };
     let tired_inputs = GoalkeeperSkillInputs {
         minute: 80,
         condition_pct: 0.25,
+        standard_shift: 0.0,
     };
     let fresh_keeper = build_player(15.0, 9500, PlayerPositionType::Goalkeeper);
     let tired_keeper = build_player(15.0, 2500, PlayerPositionType::Goalkeeper);

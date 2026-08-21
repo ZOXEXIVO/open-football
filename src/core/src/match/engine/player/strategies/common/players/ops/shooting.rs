@@ -2,6 +2,7 @@ use crate::club::player::traits::PlayerTrait;
 use crate::r#match::MatchPlayer;
 use crate::r#match::StateProcessingContext;
 use crate::r#match::engine::set_pieces::PENALTY_EXECUTION_REFERENCE;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext as EffActionContext, effective_skill,
 };
@@ -49,6 +50,20 @@ pub struct ShotSkillInputs {
     /// `free_kicks` could pick a taker and then have no effect at all on
     /// whether he scored.
     pub set_piece: Option<ShotType>,
+    /// How far the standard of football in this match sits from the
+    /// division these curves were fitted in — see
+    /// [`crate::r#match::engine::teamplay::standard::MatchStandard`].
+    ///
+    /// Subtracted from every skill read below, and it is the other half
+    /// of the goalkeeper's own centring. The two axes have to move
+    /// together or the goal total tilts: measured over
+    /// `dev_match levels 300 4 20 2`, shots on target ran **26.4% at
+    /// level 4 to 42.5% at level 20** against a real ~33% flat, and saves
+    /// per shot on target ran 56.6% to 70.7% against a real ~68% flat.
+    /// The two errors were cancelling in the scoreline while each was
+    /// wrong on its own, and flattening either alone walks the goals off
+    /// their target.
+    pub standard_shift: f32,
 }
 
 /// Unified shooting profile — drives every shot quality decision.
@@ -117,18 +132,25 @@ impl ShotSkillProfile {
         let agility_eff = effective_skill(player, s.physical.agility, expl);
         let strength_eff = effective_skill(player, s.physical.strength, expl);
 
-        // Normalised skill bands.
-        let finishing01 = norm01(finishing_eff);
-        let technique01 = norm01(technique_eff);
-        let first_touch01 = norm01(first_touch_eff);
-        let long_shots01 = norm01(long_shots_eff);
-        let composure01 = norm01(composure_eff);
-        let decisions01 = norm01(decisions_eff);
-        let concentration01 = norm01(concentration_eff);
-        let _anticipation01 = norm01(anticipation_eff);
-        let balance01 = norm01(balance_eff);
-        let agility01 = norm01(agility_eff);
-        let strength01 = norm01(strength_eff);
+        // Normalised skill bands, each measured against the standard of
+        // football in this match — see `ShotSkillInputs::standard_shift`.
+        // The curves below are convex, `poor_penalty` and `elite_lift`
+        // are smoothsteps on absolute pivots (0.45/0.15 and 0.70/0.95),
+        // and `POPULATION_EXECUTION` compares the result against one
+        // division's measured mean, so read absolutely the whole striking
+        // model prices the league rather than the striker.
+        let peer = |v: f32| (norm01(v) - inputs.standard_shift).clamp(0.0, 1.0);
+        let finishing01 = peer(finishing_eff);
+        let technique01 = peer(technique_eff);
+        let first_touch01 = peer(first_touch_eff);
+        let long_shots01 = peer(long_shots_eff);
+        let composure01 = peer(composure_eff);
+        let decisions01 = peer(decisions_eff);
+        let concentration01 = peer(concentration_eff);
+        let _anticipation01 = peer(anticipation_eff);
+        let balance01 = peer(balance_eff);
+        let agility01 = peer(agility_eff);
+        let strength01 = peer(strength_eff);
 
         // Headline penalties / lifts. The "headline" skill for a shooter is
         // finishing — the smoothstep around it controls the heavy-handed
@@ -490,6 +512,7 @@ impl<'p> ShootingOperationsImpl<'p> {
             // set piece — same rule the event builder classifies by, so
             // the pre-shot gate and the in-flight resolution agree.
             set_piece: ShotType::from_restart(self.ctx.tick_context.ball.pass_origin_restart),
+            standard_shift: MatchStandard::shift(self.ctx.context),
         };
 
         ShotSkillProfile::from_player(player, &inputs)
