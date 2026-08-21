@@ -4,6 +4,7 @@ use core::block_diag::BlockDiag;
 use core::club::player::Player;
 use core::club::player::PlayerPositionType;
 use core::club::team::tactics::{MatchTacticType, Tactics};
+use core::frame_trace::FrameTrace;
 use core::r#match::FootballEngine;
 use core::r#match::MatchSquad;
 use core::r#match::player::MatchPlayer;
@@ -2688,6 +2689,9 @@ fn print_usage() {
         "                                      distance-to-goal profile, box occupancy, and an ASCII map"
     );
     eprintln!(
+        "  dev_match sky [N] [level]       skied-ball trace: every flight that climbs past 12 m, and what launched it"
+    );
+    eprintln!(
         "  dev_match trace [N] [level]     runtime per-player trace: position flicker + state looping"
     );
     eprintln!(
@@ -2995,7 +2999,7 @@ fn main() {
         "sky" => {
             let n = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(2usize);
             let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
-            run_skied(n, lvl);
+            SkiedBallTrace::run(n, lvl);
         }
         // The same trace, triggered on the goalkeeper taking the ball into
         // his hands. Answers "how did it get there" — the ticks before the
@@ -8859,6 +8863,78 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     .collect();
                 println!("    what he was doing: {}", labels.join("  ·  "));
             }
+            // "Defenders with TakeBall don't intercept — they run parallel
+            // with the ball." A different population from the closing
+            // census above: that one only samples while somebody OWNS the
+            // ball, and `TakeBall` exists only while nobody does. See
+            // `mid_run_diag::CHASE_SAMPLES`.
+            {
+                use core::mid_run_diag::ChaseDiag;
+                let (cn, crate_, clead, calign, cgap, cspeed, cpar, cahead, closing_, cgain) =
+                    ChaseDiag::totals();
+                if cn > 0 {
+                    println!(
+                        "  LOOSE-BALL CHASE CENSUS ({cn} samples of a player in TakeBall, ball loose and moving)\n    \
+                         gap {:.2} m, ball {cspeed:.3} u/tick, closing at {crate_:+.4} u/tick, heading alignment {calign:+.2}",
+                        cgap / 8.0,
+                    );
+                    println!(
+                        "    aim LEAD {clead:+.3}  (0 = pointed at where the ball IS — a stern chase; \
+                         >0 = cutting in front of it)  →  aimed AHEAD on {:.0}% of samples",
+                        cahead * 100.0,
+                    );
+                    println!(
+                        "    →  running PARALLEL {:.0}%, gaining {:.0}%, gap not shrinking at all {:.0}%",
+                        cpar * 100.0,
+                        cgain * 100.0,
+                        closing_ * 100.0,
+                    );
+                    let lines: Vec<String> = ChaseDiag::by_line()
+                        .iter()
+                        .map(|(l, c, p, a)| {
+                            format!(
+                                "{l} {:.0}% of samples/{:.0}% parallel/{:.0}% ahead",
+                                *c as f64 / cn as f64 * 100.0,
+                                p * 100.0,
+                                a * 100.0
+                            )
+                        })
+                        .collect();
+                    println!("    who is chasing: {}", lines.join("  ·  "));
+                    let speeds: Vec<String> = ChaseDiag::by_speed()
+                        .iter()
+                        .map(|(l, c, p)| {
+                            format!(
+                                "{l} u/tick {:.0}%/{:.0}% parallel",
+                                *c as f64 / cn as f64 * 100.0,
+                                p * 100.0
+                            )
+                        })
+                        .collect();
+                    println!(
+                        "    by ball speed (a sprint is ~0.45-0.63 u/tick): {}",
+                        speeds.join("  ·  ")
+                    );
+                    let gaps: Vec<String> = ChaseDiag::by_gap()
+                        .iter()
+                        .map(|(l, c, p, a)| {
+                            format!(
+                                "{l} {:.0}%/{:.0}% parallel/{:.0}% ahead",
+                                *c as f64 / cn as f64 * 100.0,
+                                p * 100.0,
+                                a * 100.0
+                            )
+                        })
+                        .collect();
+                    println!("    by gap: {}", gaps.join("  ·  "));
+                    println!(
+                        "      (the first band is inside CONTROL_DISTANCE — a man travelling"
+                    );
+                    println!(
+                        "       with the ball there is COLLECTING it, not failing to close)"
+                    );
+                }
+            }
         }
         let (seen, fired, won, gk, header) = CrossDiag::contest();
         println!(
@@ -10683,46 +10759,64 @@ fn run_over_the_bar(matches: usize, level: u8) {
     }
 }
 
-/// **Where does a ball that goes UP end up.**
+
+/// **Where a ball that goes UP ends up.**
 ///
 /// The same trace as [`run_over_the_bar`], triggered on the ball climbing
-/// through `FrameTrace::SKY_HEIGHT` instead of on a line crossing. The
+/// through [`FrameTrace::SKY_HEIGHT`] instead of on a line crossing. The
 /// report it answers — *"the ball flies upward, hits an invisible obstacle
 /// at a height and flies back down"* — names no resolver and no restart,
-/// so the height is the only thing that can open the window.
-fn run_skied(matches: usize, level: u8) {
-    unsafe { std::env::set_var("OF_FRAME_TRACE", "sky") };
-    core::frame_trace::FrameTrace::reset();
+/// so the height itself is the only thing that can open the window.
+///
+/// What it found on the run it was written for: a midfielder's knock-down
+/// header leaving the forehead at **110 m/s straight up**, trimmed by the
+/// ball physics' own `MAX_APEX_METRES` guard and still peaking 28 m up.
+/// Nothing else could see it — the woodwork triggers need the frame, the
+/// out-of-play ones need a line, and the apex census in `flight_diag`
+/// counts the launch without being able to name the site.
+struct SkiedBallTrace;
 
-    for m in 0..matches {
-        MatchRuntime::set_events_mode(true);
-        let (home, _) = make_squad_viewer(1, HOME_TEAM_NAME, level, 0);
-        let (away, _) = make_squad_viewer(2, AWAY_TEAM_NAME, level, 11);
-        let _ = FootballEngine::<840, 545>::play(home, away, true, false, false);
-        eprintln!("  sky: match {}/{} played", m + 1, matches);
-    }
+impl SkiedBallTrace {
+    fn run(matches: usize, level: u8) {
+        unsafe { std::env::set_var("OF_FRAME_TRACE", "sky") };
+        FrameTrace::reset();
 
-    let (_, captures) = core::frame_trace::FrameTrace::report();
-    let s = core::frame_trace::FrameTrace::summary();
-    println!();
-    println!("=== SKIED-BALL TRACE ({matches} matches, level {level}) ===");
-    println!("  {} captures", captures.len());
-    println!(
-        "  a '*' row travelled further than its own velocity explains — somebody relocated the ball"
-    );
-    println!();
-    println!("  mesh jumps (netting PULLED the ball) : {}", s.mesh_jumps);
-    println!("  loose jumps (open play, unclaimed)   : {}", s.loose_jumps);
-    println!(
-        "  worst unexplained jump               : {} cm",
-        s.worst_jump_cm
-    );
-    println!(
-        "  ground snaps (z collapsed, no fall)  : {}",
-        s.ground_snaps
-    );
-    for capture in &captures {
+        for m in 0..matches {
+            MatchRuntime::set_events_mode(true);
+            let (home, _) = make_squad_viewer(1, HOME_TEAM_NAME, level, 0);
+            let (away, _) = make_squad_viewer(2, AWAY_TEAM_NAME, level, 11);
+            let _ = FootballEngine::<840, 545>::play(home, away, true, false, false);
+            eprintln!("  sky: match {}/{} played", m + 1, matches);
+        }
+
+        let (_, captures) = FrameTrace::report();
+        let summary = FrameTrace::summary();
         println!();
-        println!("{capture}");
+        println!("=== SKIED-BALL TRACE ({matches} matches, level {level}) ===");
+        println!("  {} captures", captures.len());
+        println!(
+            "  a '*' row travelled further than its own velocity explains — somebody relocated the ball"
+        );
+        println!();
+        println!(
+            "  mesh jumps (netting PULLED the ball) : {}",
+            summary.mesh_jumps
+        );
+        println!(
+            "  loose jumps (open play, unclaimed)   : {}",
+            summary.loose_jumps
+        );
+        println!(
+            "  worst unexplained jump               : {} cm",
+            summary.worst_jump_cm
+        );
+        println!(
+            "  ground snaps (z collapsed, no fall)  : {}",
+            summary.ground_snaps
+        );
+        for capture in &captures {
+            println!();
+            println!("{capture}");
+        }
     }
 }

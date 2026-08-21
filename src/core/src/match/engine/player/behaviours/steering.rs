@@ -1,4 +1,6 @@
 use crate::r#match::MatchPlayer;
+use crate::r#match::common_states::LooseBallChase;
+use crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
 use nalgebra::Vector3;
 
 pub enum SteeringBehavior<'a> {
@@ -10,6 +12,122 @@ pub enum SteeringBehavior<'a> {
         slowing_distance: f32,
     },
     Pursuit {
+        target: Vector3<f32>,
+        target_velocity: Vector3<f32>,
+    },
+    /// Constant-bearing interception — steer so the line of sight to a
+    /// moving target does not rotate.
+    ///
+    /// `target` and `target_velocity` are where the thing is NOW and how
+    /// fast it is going.
+    ///
+    /// # Why [`Pursuit`](Self::Pursuit) is not this
+    ///
+    /// `Pursuit` picks a point the target will reach and runs at it, and
+    /// the lead it applies is `target_velocity × intercept_time` with
+    /// that time clamped to **5 ticks** — 50 ms, because the constant
+    /// reads as seconds and never was (see
+    /// [`calculate_interception_point`](Self::calculate_interception_point)).
+    /// So its aim point sits a few centimetres from where the ball is
+    /// now, which makes it a `Seek` in all but name. A runner aimed at
+    /// where the ball IS turns to follow it as it goes past: his heading
+    /// converges on the ball's and he trails it at a fixed gap for as
+    /// long as he keeps running. That is a tail chase, and it is exactly
+    /// the report — *"defenders with TakeBall don't intercept the ball,
+    /// they run parallel with it"*.
+    ///
+    /// Measured before this existed (`mid_run_diag::CHASE_SAMPLES`, 200
+    /// fixtures at L14, 65M samples of a player in a `TakeBall` state
+    /// with the ball loose and moving): aimed AHEAD of the ball on **34%**
+    /// of samples, running PARALLEL to it on **40%** (defenders 45%), the
+    /// gap not shrinking at all on 38%, at a mean separation of 9.5 m.
+    /// The ball averaged **0.889 u/tick against a 0.45-0.63 u/tick
+    /// sprint** — so the thing being chased is normally FASTER than the
+    /// man chasing it, and running at it is a race nobody can win.
+    ///
+    /// # The rule
+    ///
+    /// You do not reach a moving ball by running at it. You run to where
+    /// it is going, and the test for being on that line is that the
+    /// bearing to it holds steady — which is how a defender reads a pass
+    /// and how anyone catches anything. So take the target's velocity
+    /// ACROSS the line of sight and match it, since that is what holds
+    /// the bearing still, and spend whatever speed is left over closing
+    /// the gap:
+    ///
+    /// ```text
+    /// v = v_across + r̂ · √(s² − |v_across|²)
+    /// ```
+    ///
+    /// Every case falls out of the one expression instead of being named:
+    ///
+    /// * a stationary target has nothing across the line, the root is
+    ///   `s`, and this reduces EXACTLY to `Seek`;
+    /// * a ball rolling straight at him, or straight away from him, is
+    ///   the same — there is nothing to cut off, so he runs at it flat
+    ///   out;
+    /// * a ball crossing in front of him is met on the diagonal, at the
+    ///   angle that makes the two arrive together;
+    /// * a ball whose cross-track speed exceeds his own leaves nothing
+    ///   under the root, so he spends everything on the lateral and gets
+    ///   as near the line as he physically can — beaten, but beaten
+    ///   running the right way, and back on the line the moment the ball
+    ///   slows enough for the root to reopen.
+    ///
+    /// ## ⚠ The lost-cause branch — a real hole, left open
+    ///
+    /// Spending everything sideways closes NO gap while it lasts, and
+    /// `loose_ball_chase_tests` pins a defender who never gets nearer a
+    /// ball crossing his front at twice his speed
+    /// (`a_ball_crossing_faster_than_he_can_run_is_conceded`). A ball
+    /// slows down, so it IS reachable further downstream, and two ways of
+    /// exploiting that were built and run:
+    ///
+    ///   * steer at [`LooseBallChase::meeting_point`] instead of holding
+    ///     the bearing on the ball;
+    ///   * blend the two headings by the squared speed ratio, meaning to
+    ///     leave ordinary chases alone and rescue only the lost ones.
+    ///
+    /// **Both measured worse, and BOTH MEASUREMENTS ARE CONFOUNDED — do
+    /// not cite them as settled.** Each was built on a version of
+    /// [`LooseBallChase::aim`] that had folded its aerial branch into
+    /// this behaviour, which steers a chaser at the XY a flying ball
+    /// passes OVER rather than the one it lands on. That fold alone costs
+    /// the whole change (55% aimed-ahead → 48%, tackles 16.3 → 12.6 per
+    /// team over 200 fixtures), so neither arm isolates the thing it was
+    /// supposed to test. The note on `aim` has the numbers.
+    ///
+    /// What IS established: this law, against `OF_TAIL_CHASE`, over 200
+    /// fixtures each, reproduced on two independent builds —
+    ///
+    /// | | tail chase | this |
+    /// |---|---|---|
+    /// | aimed AHEAD | 34% | **54%** |
+    /// | PARALLEL | 40% | **34%** |
+    /// | goals/match (real ~2.5) | 2.48 | 2.52 |
+    /// | shots/team (real ~13) | 12.9 | 13.7 |
+    /// | pass accuracy (real ~85) | 82.4 | **85.5** |
+    /// | tackles/team (real ~18) | 16.0 | 16.1 |
+    /// | interceptions/team (real ~10) | 24.3 | 28.1 ← |
+    ///
+    /// So the hole is left open because nothing has yet been shown to
+    /// close it for free — not because closing it was proven to cost.
+    /// Anyone retrying either idea should rebuild it on the CURRENT
+    /// `aim` and re-run both arms; the earlier verdicts are void.
+    ///
+    /// Inside [`Self::SETTLE`] the desired velocity crosses smoothly to
+    /// the target's own, because collecting a moving ball means arriving
+    /// at its speed rather than braking to a halt beside it — and for a
+    /// ball at rest that same term IS braking to a halt, with no branch
+    /// needed to say so. It fades out again as the ball outruns him,
+    /// since a ball he cannot live with is not being collected and
+    /// falling in behind one is the whole defect again at a metre and a
+    /// half.
+    ///
+    /// Worked in the XY plane throughout. The runner cannot fly, and the
+    /// stored vectors carry game units in x/y against metres in z, so a
+    /// norm taken over all three silently mixes scales.
+    Intercept {
         target: Vector3<f32>,
         target_velocity: Vector3<f32>,
     },
@@ -219,6 +337,89 @@ impl<'a> SteeringBehavior<'a> {
                     rotation: 0.0,
                 }
             }
+            SteeringBehavior::Intercept {
+                target,
+                target_velocity,
+            } => {
+                // A/B control — see `LooseBallChase::tail_chase`.
+                if LooseBallChase::tail_chase() {
+                    return SteeringBehavior::Pursuit {
+                        target: *target,
+                        target_velocity: *target_velocity,
+                    }
+                    .calculate(player);
+                }
+
+                let max_speed = player.max_speed_with_condition_cached();
+                let here = Self::flat(player.position);
+                let own_velocity = Self::flat(player.velocity);
+                let to_target = Self::flat(*target) - here;
+                let distance = to_target.norm();
+                let target_velocity = Self::flat(*target_velocity);
+
+                // Standing on it. Travel with it — for a ball at rest
+                // that is a standstill, and there is no line of sight to
+                // resolve anything against anyway.
+                const ON_IT: f32 = 0.25;
+                if distance < ON_IT {
+                    return SteeringOutput {
+                        velocity: Self::limit_magnitude(target_velocity, max_speed),
+                        rotation: 0.0,
+                    };
+                }
+                let line_of_sight = to_target / distance;
+
+                // Split the target's travel into the part that carries it
+                // ALONG our line of sight and the part that carries it
+                // ACROSS. Only the second can leave us behind, and
+                // matching it is what holds the bearing still.
+                let across = target_velocity - line_of_sight * target_velocity.dot(&line_of_sight);
+                let across_sq = across.norm_squared();
+                let speed_sq = max_speed * max_speed;
+
+                let mut desired = if across_sq >= speed_sq {
+                    // He cannot live with it across the line. Everything
+                    // he has goes sideways: beaten, but beaten running
+                    // the right way, and back on the line the moment the
+                    // ball slows enough for the root to reopen.
+                    across * (max_speed / across_sq.sqrt().max(1e-4))
+                } else {
+                    // Match it across, close the gap with what is left.
+                    across + line_of_sight * (speed_sq - across_sq).sqrt()
+                };
+
+                // Arriving is travelling WITH it, not stopping next to
+                // it. Continuous, and it collapses to an ordinary braking
+                // arrival whenever the target is standing still.
+                //
+                // …but only onto something he can live with. A ball
+                // moving faster than he can run is not being collected,
+                // it is escaping, and settling in behind one is the tail
+                // chase again at a metre and a half — the band a third of
+                // the census samples sit in. So the settle fades out as
+                // the target outruns him and he keeps cutting at it.
+                let target_speed = target_velocity.norm();
+                let catchable = if target_speed <= max_speed {
+                    1.0
+                } else {
+                    max_speed / target_speed
+                };
+                let settle = 1.0 - (1.0 - (distance / Self::SETTLE).clamp(0.0, 1.0)) * catchable;
+                desired = target_velocity + (desired - target_velocity) * settle;
+
+                let acceleration_normalized =
+                    0.8 + (player.skills.physical.acceleration - 1.0) / 19.0;
+                let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
+                let max_acceleration = max_speed * agility_normalized * acceleration_normalized;
+
+                let steering = Self::limit_magnitude(desired - own_velocity, max_acceleration);
+                let velocity = Self::limit_magnitude(own_velocity + steering, max_speed);
+
+                SteeringOutput {
+                    velocity,
+                    rotation: 0.0,
+                }
+            }
             SteeringBehavior::Evade { target } => {
                 let to_player = player.position - *target;
                 let max_speed = player.max_speed_with_condition_cached();
@@ -381,6 +582,27 @@ impl<'a> SteeringBehavior<'a> {
                 }
             }
         }
+    }
+
+    /// Gap inside which [`Intercept`](Self::Intercept) stops trying to
+    /// close and simply travels with what it is chasing.
+    ///
+    /// [`CONTROL_DISTANCE`] — the range at which a player actually takes
+    /// the ball — because that is the moment the chase turns into a
+    /// first touch, and a number picked separately here would be a
+    /// second opinion about the same event.
+    const SETTLE: f32 = CONTROL_DISTANCE;
+
+    /// Drop a stored vector into the plane the runner moves in.
+    ///
+    /// `x`/`y` are game units and `z` is metres (see `GRAVITY_PER_TICK`),
+    /// so any norm or dot product taken across all three mixes two
+    /// scales. Nobody chasing a ball can leave the ground anyway, so the
+    /// vertical is not merely inconsistent here, it is not part of the
+    /// question.
+    #[inline]
+    fn flat(v: Vector3<f32>) -> Vector3<f32> {
+        Vector3::new(v.x, v.y, 0.0)
     }
 
     fn limit_magnitude(v: Vector3<f32>, max_magnitude: f32) -> Vector3<f32> {

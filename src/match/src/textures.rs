@@ -282,6 +282,20 @@ impl Portrait {
 /// team-coloured ring beside it, drawn round each player's boots; that went
 /// once the footballers themselves were legible enough to tell apart by their
 /// kit, which is how you tell them apart in a broadcast.
+/// The playing surface, as the two sheets that describe it.
+///
+/// One sheet, two questions: what colour the grass is, and which way it is
+/// facing. They have to be generated together — the relief is taken off the
+/// same rasterised blades the colour is — and they have to be handed out
+/// together, since a material carrying one without the other is either a flat
+/// picture of grass or grass with no colour in it.
+pub struct Turf {
+    /// What the grass looks like: blades in the shade it was asked for.
+    pub albedo: Handle<Image>,
+    /// Which way each leaf is facing, as a tangent-space normal map.
+    pub relief: Handle<Image>,
+}
+
 pub struct Textures;
 
 impl Textures {
@@ -1189,14 +1203,36 @@ impl Textures {
     fn mipped_netting(size: u32, base: Vec<u8>) -> Image {
         // Repeat on BOTH axes: a panel is many mesh squares across and many
         // up, and the panel's own UVs say how many.
-        Self::tiled(Self::mipped(size, size, base))
+        //
+        // Plain trilinear, deliberately. The chain converging to a flat haze
+        // of the net's own density is what this function is FOR — see the note
+        // above — and sharpening the far netting back up would undo it.
+        Self::tiled(Self::mipped(size, size, base), 1)
     }
 
-    /// The same image, repeated past its edges rather than clamped at them.
-    fn tiled(mut image: Image) -> Image {
+    /// The same image, repeated past its edges rather than clamped at them,
+    /// and sampled along the axis it is squashed on.
+    ///
+    /// `anisotropy` is how many samples the hardware may take across a
+    /// foreshortened footprint. One is plain trilinear filtering, which picks a
+    /// mip level from the WIDER of the two directions a texel is stretched
+    /// over — so a surface seen edge-on is filtered as though it were blurred
+    /// in both directions and not just the one, and its detail is gone long
+    /// before the geometry is. That is the difference between a pitch with
+    /// grass on it and a green rectangle, and it is what the mip note in
+    /// [`Self::turf`] was describing when it said everything past twenty
+    /// metres resolves to the mean.
+    ///
+    /// Free to ask for: `EXT_texture_filter_anisotropic` is on essentially
+    /// every WebGL2 device, and wgpu quietly clamps this back to one where it
+    /// is not — so the worst case is exactly the picture we had before, with
+    /// no error and nothing to handle. See `wgpu_core`'s `create_sampler`,
+    /// which sets it unconditionally to 1 without the downlevel flag.
+    fn tiled(mut image: Image, anisotropy: u16) -> Image {
         let mut sampler = ImageSamplerDescriptor::linear();
         sampler.address_mode_u = ImageAddressMode::Repeat;
         sampler.address_mode_v = ImageAddressMode::Repeat;
+        sampler.anisotropy_clamp = anisotropy;
         image.sampler = ImageSampler::Descriptor(sampler);
         image
     }
@@ -1230,14 +1266,27 @@ impl Textures {
     /// size of a blade, and what keeps it from looking mechanical is the spread
     /// between one leaf and the next.
     ///
-    /// **Mip-chained.** There is no anisotropic filtering in this scene, and
-    /// turf is seen at every angle down to flat-on at the far touchline, where
-    /// one pixel covers hundreds of texels. Undersampled blade detail there
-    /// does not read as grass, it crawls — the same failure
-    /// [`Self::mipped_netting`] was written for. The chain resolves it to the
-    /// mean instead, so past about twenty metres this looks like the flat green
-    /// it replaces. That is the intended behaviour and not a shortfall: what
-    /// changes is everything nearer than that.
+    /// The unevenness itself did not go away — it went where it can be
+    /// authored across a whole ground instead of inside a two-metre square.
+    /// See [`crate::pitch::Sward`], which carries it, the mow and the wear of a
+    /// played match in the vertices of the pitch.
+    ///
+    /// **Mip-chained, and sampled anisotropically.** Turf is seen at every
+    /// angle down to flat-on at the far touchline, where one pixel covers
+    /// hundreds of texels along the line of sight and a handful across it.
+    /// Undersampled blade detail there does not read as grass, it crawls — the
+    /// same failure [`Self::mipped_netting`] was written for — so the chain is
+    /// needed either way.
+    ///
+    /// It is not sufficient on its own, though, and this note used to say it
+    /// was: trilinear filtering picks its level off the WIDER of the two
+    /// directions, so a surface seen edge-on was blurred across as hard as it
+    /// was blurred along, and everything past about twenty metres resolved to
+    /// the mean — which is to say, back to the flat green the sheet replaced.
+    /// That was recorded here as intended behaviour. It was a filtering
+    /// setting. See [`Self::tiled`], which asks for sixteen samples along the
+    /// squashed axis and costs nothing measurable: this scene is bound per
+    /// entity, and renders in the same time at 720p and at 4K.
     ///
     /// **Exactly the colour it was asked for.** The blades are a MULTIPLIER on
     /// `shade`, normalised at the end so the tile averages to one. Which is
@@ -1245,10 +1294,13 @@ impl Textures {
     /// of the pitch — the only reason the two are safe to work on separately —
     /// and it puts the 1x1 end of the mip chain on `shade` itself.
     ///
-    /// Costs about 55 ms of a release build to draw, mip chain included, on the
-    /// browser's main thread before the first frame. That is the budget every
-    /// constant below is set against, and `dump_turf` prints it.
-    pub fn turf(images: &mut Assets<Image>, shade: Color) -> Handle<Image> {
+    /// Costs about 85 ms of a release build to draw — both sheets, both mip
+    /// chains — on the browser's main thread before the first frame. That is
+    /// the budget every constant below is set against, and `dump_turf` prints
+    /// it. It was 55 ms for the colour alone; [`Self::relief`] would have put
+    /// it past 120 had the box filter in [`Self::mipped_as`] not been tightened
+    /// at the same time.
+    pub fn turf(images: &mut Assets<Image>, shade: Color) -> Turf {
         /// Texels on a side. Against the two-metre tile in `Pitch::TURF_TILE`
         /// this is 512 to the metre, which puts a 4 mm blade at two texels
         /// across — the floor for anything that has to survive minification,
@@ -1398,7 +1450,77 @@ impl Textures {
             ]);
         }
 
-        images.add(Self::tiled(Self::mipped(SIZE, SIZE, data)))
+        /// How far down the pitch the blades are asked to survive.
+        ///
+        /// Sixteen is the ceiling every implementation that offers this at all
+        /// offers, and the pitch is the one surface in the scene that earns
+        /// it: it runs a hundred metres away from the lens on a long lens, so
+        /// the far touchline is compressed by well over an order of magnitude
+        /// and nothing less would reach it.
+        const ALONG_THE_PITCH: u16 = 16;
+
+        Turf {
+            albedo: images.add(Self::tiled(
+                Self::mipped(SIZE, SIZE, data),
+                ALONG_THE_PITCH,
+            )),
+            relief: images.add(Self::tiled(
+                Self::mipped_linear(SIZE, SIZE, Self::relief(SIZE, &lit)),
+                ALONG_THE_PITCH,
+            )),
+        }
+    }
+
+    /// The same sward as a normal map, taken off the brightness the blades
+    /// were rasterised into.
+    ///
+    /// Without this the pitch is a Lambertian plane with a picture of grass
+    /// printed on it — and a plane lit from one direction returns exactly one
+    /// value, which is what "flat" means. A sward is not flat: every leaf
+    /// faces somewhere of its own, catches the light on one side and shades
+    /// its neighbour on the other, and that is most of what the eye reads as
+    /// depth in grass at any range where it can still see leaves.
+    ///
+    /// `lit` is used as a height field, which is not an approximation but the
+    /// thing itself: the rasteriser resolves overlapping blades by keeping the
+    /// brightest, so whichever leaf is ON TOP is the one that wrote each texel
+    /// — see the note there. A depth buffer arrived at from the other end.
+    ///
+    /// Gradients wrap, exactly as the blades did, so the relief is seamless
+    /// wherever the albedo is.
+    fn relief(size: u32, lit: &[f32]) -> Vec<u8> {
+        /// How steep to make it. Not a physical figure — `lit` is a
+        /// brightness, and the conversion from "this leaf is a fifth brighter
+        /// than its neighbour" to "this leaf stands a millimetre proud of it"
+        /// has no honest constant in it. Judged on a render from a metre off
+        /// the deck, which is the only place the full-resolution mip is ever
+        /// seen: below about one it does not read as grass at all, and past
+        /// about four the sward turns to gravel.
+        const RELIEF: f32 = 2.4;
+
+        let at = |x: u32, y: u32| lit[(y * size + x) as usize];
+        let wrap = |value: i64| value.rem_euclid(size as i64) as u32;
+
+        let mut data = Vec::with_capacity((size * size * 4) as usize);
+        for y in 0..size {
+            for x in 0..size {
+                let across = at(wrap(x as i64 + 1), y) - at(wrap(x as i64 - 1), y);
+                let down = at(x, wrap(y as i64 + 1)) - at(x, wrap(y as i64 - 1));
+                // A height field's normal is (-dh/du, -dh/dv, 1) normalised.
+                // Tangent space here is the one [`crate::pitch::Sward`] writes
+                // out: U on +X, V on +Z, and the green channel positive along
+                // V, which is the convention Bevy's own normal maps use.
+                let normal =
+                    Vec3::new(-across * RELIEF, -down * RELIEF, 1.0).normalize_or(Vec3::Z);
+                data.extend_from_slice(&[
+                    ((normal.x * 0.5 + 0.5) * 255.0) as u8,
+                    ((normal.y * 0.5 + 0.5) * 255.0) as u8,
+                    ((normal.z * 0.5 + 0.5) * 255.0) as u8,
+                    255,
+                ]);
+            }
+        }
+        data
     }
 
     /// Any image, with a box-filtered mip chain down to a single texel.
@@ -1412,6 +1534,27 @@ impl Textures {
     /// can be sampled at one texel per pixel, and undersampling is answered by
     /// pre-filtering or not at all.
     fn mipped(width: u32, height: u32, base: Vec<u8>) -> Image {
+        Self::mipped_as(width, height, base, TextureFormat::Rgba8UnormSrgb)
+    }
+
+    /// The same for a sheet that is data rather than a picture.
+    ///
+    /// A normal map holds three signed numbers packed into a byte each, and
+    /// putting them through the sRGB transfer curve would bend every one of
+    /// them — a normal map read as a colour points the wrong way everywhere
+    /// except straight up.
+    ///
+    /// Box-filtering normals and NOT renormalising them is deliberate too: a
+    /// pair of leaves facing opposite ways average to something short, which
+    /// the shader normalises back to straight up. That is exactly right —
+    /// grass seen from far enough away that two blades share a pixel has no
+    /// relief left to show, and the chain arriving at flat is the same
+    /// resolution to the mean the albedo makes.
+    fn mipped_linear(width: u32, height: u32, base: Vec<u8>) -> Image {
+        Self::mipped_as(width, height, base, TextureFormat::Rgba8Unorm)
+    }
+
+    fn mipped_as(width: u32, height: u32, base: Vec<u8>, format: TextureFormat) -> Image {
         let mut levels: Vec<(u32, u32, Vec<u8>)> = vec![(width, height, base)];
         while levels
             .last()
@@ -1421,15 +1564,25 @@ impl Textures {
             let (across, down) = (*across, *down);
             let (half_across, half_down) = ((across / 2).max(1), (down / 2).max(1));
             let mut next = Vec::with_capacity((half_across * half_down * 4) as usize);
+            // Row and column offsets hoisted out of the sample loop. The
+            // obvious way to write this recomputes `(y * width + x) * 4 +
+            // channel` for all four taps of all four channels of every texel,
+            // which is sixteen multiplications where two would do — and this
+            // is the hot end of the whole load: a 1024-square sheet and its
+            // chain is some twenty million taps, and the pitch now builds two
+            // of them. Same arithmetic, same clamping at the far edge, an
+            // eighth of the address maths.
             for y in 0..half_down {
+                let top = ((y * 2).min(down - 1) * across) as usize * 4;
+                let bottom = ((y * 2 + 1).min(down - 1) * across) as usize * 4;
                 for x in 0..half_across {
+                    let left = (x * 2).min(across - 1) as usize * 4;
+                    let right = (x * 2 + 1).min(across - 1) as usize * 4;
                     for channel in 0..4 {
-                        let mut sum = 0u32;
-                        for (dy, dx) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
-                            let sy = (y * 2 + dy).min(down - 1);
-                            let sx = (x * 2 + dx).min(across - 1);
-                            sum += source[((sy * across + sx) * 4 + channel) as usize] as u32;
-                        }
+                        let sum = source[top + left + channel] as u32
+                            + source[top + right + channel] as u32
+                            + source[bottom + left + channel] as u32
+                            + source[bottom + right + channel] as u32;
                         next.push((sum / 4) as u8);
                     }
                 }
@@ -1452,7 +1605,7 @@ impl Textures {
                 depth_or_array_layers: 1,
             },
             TextureDimension::D2,
-            TextureFormat::Rgba8UnormSrgb,
+            format,
             RenderAssetUsages::RENDER_WORLD,
         );
         // `TextureDataOrder` defaults to layer-major, which for one layer is
@@ -2734,18 +2887,33 @@ mod tests {
         let shade = crate::pitch::Pitch::MOWN;
         let mut images = Assets::<Image>::default();
         let started = std::time::Instant::now();
-        let handle = Textures::turf(&mut images, shade);
+        let sheets = Textures::turf(&mut images, shade);
         // Load-time cost, and the reason `BLADES` is not simply turned up until
         // it stops looking better: this runs once on a browser's main thread
         // before the first frame, so it is measured rather than assumed.
         println!("built in {:?}", started.elapsed());
-        let image = images.get(&handle).expect("the tile was just added");
+        let image = images.get(&sheets.albedo).expect("the tile was just added");
         let size = image.texture_descriptor.size.width as usize;
         // Mip 0 only: the chain is appended after it and is not a picture.
         let tile = &image.data.as_ref().expect("pixels")[..size * size * 4];
 
         std::fs::write(directory.join("turf.rgba"), tile).expect("wrote the tile");
         println!("{size}x{size} at {}", directory.join("turf.rgba").display());
+
+        // And the relief beside it, so the two can be looked at together — a
+        // normal map is readable by eye as a lilac sheet with the blades
+        // embossed in it, and a wrong sign shows up as the whole sward lit
+        // from underneath.
+        let relief = images.get(&sheets.relief).expect("built alongside");
+        std::fs::write(
+            directory.join("turf-relief.rgba"),
+            &relief.data.as_ref().expect("pixels")[..size * size * 4],
+        )
+        .expect("wrote the relief");
+        println!(
+            "{size}x{size} at {}",
+            directory.join("turf-relief.rgba").display()
+        );
 
         // Four across and four down. A tile that does not wrap prints a cross
         // through the middle of this and nothing else will show it.

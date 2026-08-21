@@ -33,47 +33,53 @@ impl StateProcessingHandler for DefenderTakeBallState {
         // stalemates where nobody actually went for the ball.
         None
     }
-
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Aim point and steering both cross smoothly from the ball itself
-        // to its landing spot as it rises — see `LooseBallChase::aim`.
+        // Run to where the ball is GOING. The aim point crosses smoothly
+        // from the meeting point on the ground to the landing spot as the
+        // ball rises — see `LooseBallChase::aim`.
         //
-        // UNSOLVED — this state is the largest remaining source of
-        // position flicker in the engine: 5.8-6.5 velocity reversals per
-        // second held, with essentially ALL of them at running speed
-        // (`dev_match trace` FAST column), i.e. a chaser visibly snapping
-        // around at a sprint rather than settling onto a target. Five
-        // hypotheses have been tested and every one changed the number by
-        // less than run-to-run noise, so DON'T repeat them:
+        // ⚠ THIS STATE AIMED AT WHERE THE BALL WAS, FOR ITS WHOLE LIFE.
+        //
+        // `Ball::calculate_landing_position` returns the ball's own
+        // position for anything on the turf, and `Pursuit` — the one
+        // thing meant to lead a moving target — clamps its lead to five
+        // TICKS. So a defender chasing a ground pass was steered at a
+        // point inside half a metre of the ball on every tick, which is a
+        // tail chase: his heading converges on the ball's and he trails
+        // it at a fixed gap. Reported from the viewer as *"defenders with
+        // TakeBall don't intercept, they run parallel with the ball"*,
+        // and measured at 44% of a defender's samples in that state
+        // (`mid_run_diag::CHASE_SAMPLES`). `SteeringBehavior::Intercept`
+        // carries the numbers and `OF_TAIL_CHASE` restores the old model.
+        //
+        // ── on the flicker note this comment used to carry ────────────
+        //
+        // It listed five ruled-out hypotheses for `Defender: Take Ball`
+        // being the engine's largest source of velocity reversals at
+        // 5.8-6.5 per second held, and said the next attempt should
+        // instrument rather than inspect. The instrument built for the
+        // chase report is not that instrument — it measures aim, not
+        // stability — but `dev_match trace` no longer ranks this state in
+        // the top twelve at all, in EITHER arm of `OF_TAIL_CHASE`. So the
+        // flicker was fixed by something else, some time between that
+        // note and now, and the five hypotheses are left recorded below
+        // because they are still worth not repeating:
         //
         //   1. the aerial/ground aim point snapping at `z > 2.3`
-        //      (blended — this fix is kept, in `LooseBallChase::aim`; it
-        //      removes a real discontinuity even though it did not move
-        //      the number);
+        //      (blended — kept, in `LooseBallChase::aim`);
         //   2. the separation weight's 0.3 -> 1.0 step at 10u (smoothed);
         //   3. the separation force entirely (disabled outright);
         //   4. `Pursuit`'s discontinuous interception solver (rewritten
         //      continuous — kept, in `steering.rs`);
-        //   5. `Pursuit` swapped for `Arrive` across the whole range,
-        //      on the theory that its 0.2x min-speed floor made chasers
-        //      overshoot a loose ball and snap back.
+        //   5. `Pursuit` swapped for `Arrive` across the whole range.
         //
         // Also ruled OUT: the chaser faithfully tracking a jittery ball.
         // The ball's own direction was measured reversing **6 times in
         // 1.38M ticks** (the `(ball direction changes)` control row), so
-        // the target is essentially perfectly stable and the instability
-        // is being generated on the player side.
-        //
-        // The next attempt should instrument the actual per-tick velocity
-        // vectors for one chaser rather than reason about the code —
-        // inspection has now been wrong five times running.
-        let (target, mut arrive_velocity) = LooseBallChase::aim(
-            ctx.player,
-            ctx.tick_context.positions.ball.position,
-            ctx.tick_context.positions.ball.velocity,
-            ctx.tick_context.positions.ball.landing_position,
-            10.0,
-        );
+        // the target is essentially perfectly stable and any instability
+        // is generated on the player side.
+        let (target, mut arrive_velocity) = LooseBallChase::aim(ctx);
+        let (target, mut arrive_velocity) = LooseBallChase::aim(ctx);
 
         // Add separation force to prevent player stacking
         // Reduce separation when approaching ball, but keep minimum to prevent clustering

@@ -1,3 +1,4 @@
+use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::{
@@ -75,8 +76,15 @@ impl StateProcessingHandler for MidfielderInterceptingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // The state's own answer to where the ball can be met — which
+        // until now it computed and then ignored. `velocity()` steered
+        // at the ball's CURRENT position, while
+        // `calculate_interception_point` was consulted only by
+        // `can_reach_before_opponent`, so the state's steering and its
+        // own idea of where the ball could be reached were unrelated.
+        // One point, used for both.
         Some(
-            SteeringBehavior::Pursuit {
+            SteeringBehavior::Intercept {
                 target: ctx.tick_context.positions.ball.position,
                 target_velocity: ctx.tick_context.positions.ball.velocity,
             }
@@ -130,33 +138,33 @@ impl MidfielderInterceptingState {
         defender_time < opponent_time
     }
 
-    /// Calculates the interception point of the ball
+    /// Where the ball can actually be met.
+    ///
+    /// # What this used to compute
+    ///
+    /// A ground ball was led by `distance / (pace + ball_speed)`, and
+    /// `pace` is a 1-20 SKILL, not a speed — the divisor was dominated
+    /// by an attribute in the wrong units, so the "time to intercept"
+    /// came out around `distance / 15` whatever the ball was doing, and
+    /// the lead it bought was a few tens of centimetres. The number was
+    /// then fed to [`Self::can_reach_before_opponent`], which races it
+    /// against opponents measured the same wrong way — the ratio hid the
+    /// unit error, which is why it survived.
+    ///
+    /// One solve now, shared with the `TakeBall` states and with the
+    /// steering above, so where a player is sent and where he is steered
+    /// cannot disagree. See [`LooseBallChase::meeting_point`].
     fn calculate_interception_point(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        // For aerial balls, use the precalculated landing position
         let ball_position = ctx.tick_context.positions.ball.position;
         let landing_position = ctx.tick_context.positions.ball.landing_position;
 
-        // Check if ball is aerial (high enough that landing position differs significantly)
+        // A ball still in the air has to come down before anyone can play
+        // it, and where it lands is the meeting point.
         let is_aerial = (ball_position - landing_position).norm_squared() > 5.0 * 5.0;
-
         if is_aerial {
-            // For aerial balls, target the landing position
-            landing_position
-        } else {
-            // For ground balls, do normal interception calculation
-            let ball_velocity = ctx.tick_context.positions.ball.velocity;
-            let defender_speed = ctx.player.skills.physical.pace.max(0.1);
-
-            // Relative position and velocity
-            let relative_position = ball_position - ctx.player.position;
-            let relative_velocity = ball_velocity;
-
-            // Time to intercept
-            let time_to_intercept = relative_position.magnitude()
-                / (defender_speed + relative_velocity.magnitude()).max(0.1);
-
-            // Predict ball position after time_to_intercept
-            ball_position + ball_velocity * time_to_intercept
+            return landing_position;
         }
+
+        LooseBallChase::meeting_point(ctx, ball_position, ctx.tick_context.positions.ball.velocity)
     }
 }

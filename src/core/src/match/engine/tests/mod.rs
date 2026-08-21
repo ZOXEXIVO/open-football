@@ -11,6 +11,7 @@ mod goal_kick_tests;
 mod intelligence_tests;
 mod keeper_punt_tests;
 mod keeper_save_contact_tests;
+mod loose_ball_chase_tests;
 mod match_realism_tests;
 mod offside_restart_tests;
 mod recording_globals;

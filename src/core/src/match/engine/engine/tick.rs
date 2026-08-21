@@ -299,6 +299,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         Self::sample_defensive_shape(field, context);
         #[cfg(feature = "match-logs")]
         Self::sample_duel_gates(field, context);
+        #[cfg(feature = "match-logs")]
+        Self::sample_loose_chase(field);
 
         let t = prof_on.then(Instant::now);
         Self::play_players(field, context, tick_ctx, events);
@@ -1480,6 +1482,71 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
     }
 
+    /// IS HE RUNNING AT THE BALL, OR JUST ALONGSIDE IT?
+    ///
+    /// The sibling of the closing census in
+    /// [`sample_duel_gates`](Self::sample_duel_gates), for the half of
+    /// the game that one cannot see. It samples only while the ball is
+    /// LOOSE — which is exactly when it bails out, because a `TakeBall`
+    /// state exists only while nobody owns the ball.
+    ///
+    /// See `mid_run_diag::CHASE_SAMPLES` for what `lead` means and why it
+    /// is the quantity that separates an interception from a stern chase.
+    #[cfg(feature = "match-logs")]
+    pub(super) fn sample_loose_chase(field: &MatchField) {
+        use crate::mid_run_diag::ChaseDiag;
+
+        if field.ball.current_owner.is_some() {
+            return;
+        }
+        let ball_v = Vector3::new(field.ball.velocity.x, field.ball.velocity.y, 0.0);
+        let ball_speed = ball_v.magnitude();
+        // A ball that is barely moving cannot be run alongside, and the
+        // lead of a stationary target is undefined. 0.05 u/tick is
+        // 6 cm/s — a ball at rest in everything but the last decimal.
+        if ball_speed < 0.05 {
+            return;
+        }
+        let ball_dir = ball_v / ball_speed;
+        let ball_pos = Vector3::new(field.ball.position.x, field.ball.position.y, 0.0);
+
+        for p in field.players.iter() {
+            let line = match p.state {
+                PlayerState::Defender(DefenderState::TakeBall) => 0,
+                PlayerState::Midfielder(MidfielderState::TakeBall) => 1,
+                PlayerState::Forward(ForwardState::TakeBall) => 2,
+                PlayerState::Goalkeeper(GoalkeeperState::TakeBall) => 3,
+                _ => continue,
+            };
+            let flat = Vector3::new(p.position.x, p.position.y, 0.0);
+            let to_ball = ball_pos - flat;
+            let gap = to_ball.magnitude();
+            // Inside a stride the geometry is degenerate — the aim point
+            // and the ball are the same place whatever the model does.
+            if gap < 2.0 {
+                continue;
+            }
+            let to_ball_dir = to_ball / gap;
+
+            let p_v = Vector3::new(p.velocity.x, p.velocity.y, 0.0);
+            let p_speed = p_v.magnitude();
+            // Standing still is not a chase; it is a different defect and
+            // averaging it in would mute this one.
+            if p_speed < 0.02 {
+                continue;
+            }
+            let p_dir = p_v / p_speed;
+
+            let rate = (p_v - ball_v).dot(&to_ball_dir);
+            let align = p_dir.dot(&ball_dir);
+            // Cross-track aim: strip the part of his heading that points
+            // AT the ball, and ask how much of what is left runs with the
+            // ball's travel. Zero is a man pointed at where the ball is.
+            let lead = (p_dir - to_ball_dir * p_dir.dot(&to_ball_dir)).dot(&ball_dir);
+
+            ChaseDiag::note(rate, lead, align, gap, ball_speed, line);
+        }
+    }
     /// Discrete OPEN-PLAY cross contest — the sibling of
     /// [`resolve_corner_contest`](Self::resolve_corner_contest), and for
     /// the same reason.

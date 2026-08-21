@@ -143,13 +143,24 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Use Seek for full-speed approach - no slowing when chasing a loose ball
-        // …but never past the edge of his own ground. `process` decides
-        // when the chase is over; this is what stops him overrunning it
-        // and then having to sprint back, which is the version of the same
-        // bug that shows from the stands as a keeper with his back to the
+        // Where the ball can be MET, and never past the edge of his own
+        // ground. `process` decides when the chase is over; the
+        // containment here is what stops him overrunning it and then
+        // having to sprint back, which is the version of the same bug
+        // that shows from the stands as a keeper with his back to the
         // play. The restart taker is exempt for the reason given there.
-        let target = ctx.tick_context.positions.ball.position;
+        //
+        // He used to be steered at the ball's live position by a bare
+        // `Seek` — the purest tail chase in the engine, with no lead of
+        // any kind — and the loose-ball chase census measured him aimed
+        // ahead of the ball on 10% of samples against the outfield's
+        // 34%. `KeeperSweepLimit` still has the last word on how far out
+        // he may go; this only decides where he is going.
+        let target = LooseBallChase::meeting_point(
+            ctx,
+            ctx.tick_context.positions.ball.position,
+            ctx.tick_context.positions.ball.velocity,
+        );
         let target = if ctx.tick_context.ball.restart_taker == Some(ctx.player.id) {
             target
         } else {
@@ -176,9 +187,12 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         };
         let max_speed = base_speed * urgency;
 
-        let mut arrive_velocity = SteeringBehavior::Seek { target }
-            .calculate(ctx.player)
-            .velocity
+        let mut arrive_velocity = SteeringBehavior::Intercept {
+            target,
+            target_velocity: ctx.tick_context.positions.ball.velocity,
+        }
+        .calculate(ctx.player)
+        .velocity
             * urgency;
 
         // Add separation force to prevent player stacking

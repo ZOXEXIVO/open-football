@@ -49,13 +49,7 @@ impl StateProcessingHandler for ForwardTakeBallState {
         // snap at `ball_pos.z > 2.3`, which inverted the chaser's velocity
         // every time a bouncing ball crossed that height — see
         // `LooseBallChase::aim` for the measurement.
-        let (target, mut arrive_velocity) = LooseBallChase::aim(
-            ctx.player,
-            ctx.tick_context.positions.ball.position,
-            ctx.tick_context.positions.ball.velocity,
-            ctx.tick_context.positions.ball.landing_position,
-            10.0,
-        );
+        let (target, mut arrive_velocity) = LooseBallChase::aim(ctx);
 
         // Add separation force to prevent player stacking
         // Reduce separation when approaching ball, but keep minimum to prevent clustering

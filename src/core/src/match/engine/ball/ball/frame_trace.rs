@@ -211,9 +211,16 @@ impl FrameTrace {
         })
     }
 
-    /// Above the crossbar and above any header, in metres — a ball up
-    /// here was launched at something, and the launch is what the report
-    /// is about.
+    /// The height, in metres, that makes a flight worth a window.
+    ///
+    /// Deliberately well above a normal high ball rather than just above
+    /// a header. A goalkeeper's punt peaks at 17-25 m by design and a
+    /// defender's hoof at 9-12, so a bar set at head height opens forty
+    /// windows on ordinary football in one match and spends the whole
+    /// [`MAX_CAPTURES`] budget before anything odd happens — measured:
+    /// at 6 m the trace filled up inside the first half with punts. At 12
+    /// it catches the hoof's ceiling and everything above it, which is
+    /// where a mis-scaled launch lives.
     pub const SKY_HEIGHT: f32 = 12.0;
 
     fn with<R>(f: impl FnOnce(&mut Store) -> R) -> Option<R> {

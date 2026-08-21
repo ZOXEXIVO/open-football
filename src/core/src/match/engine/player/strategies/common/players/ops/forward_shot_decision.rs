@@ -823,7 +823,10 @@ pub mod mid_run_diag {
         /// `(samples, mean closing rate u/tick, mean alignment, mean gap u,
         /// parallel share, gaining share)` — all, then the same restricted
         /// to a carrier in the defending side's own third.
-        pub fn closing() -> ((u64, f32, f32, f32, f32, f32), (u64, f32, f32, f32, f32, f32)) {
+        pub fn closing() -> (
+            (u64, f32, f32, f32, f32, f32),
+            (u64, f32, f32, f32, f32, f32),
+        ) {
             let pack = |n: &AtomicU64,
                         rate: &AtomicI64,
                         align: &AtomicI64,
@@ -949,6 +952,272 @@ pub mod mid_run_diag {
                 &CLOSE_RATE_DEEP_X10000,
                 &CLOSE_ALIGN_DEEP_X10000,
             ] {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// ── THE LOOSE-BALL CHASE CENSUS ───────────────────────────────────
+    ///
+    /// [`DuelDiag`]'s closing census only ever samples while somebody OWNS
+    /// the ball, so it cannot see a `TakeBall` chase at all — that state
+    /// drops straight out to `Running` the moment the ball is claimed.
+    /// The report ("defenders with TakeBall don't intercept, they run
+    /// parallel with the ball") is about the other half of the pitch's
+    /// life, and nothing measured it.
+    ///
+    /// The two quantities that separate an INTERCEPTION from a stern
+    /// chase, sampled over every player in a `TakeBall` state while the
+    /// ball is loose and moving:
+    ///
+    ///   * **closing rate** — `(p.velocity − ball.velocity) · to_ball`.
+    ///     The ball's own motion counts: running at a ball that is
+    ///     rolling away faster than you is not closing on it.
+    ///   * **lead** — the chaser's heading resolved into the component
+    ///     PERPENDICULAR to the line to the ball, projected onto the
+    ///     ball's direction of travel. This is the discriminator, and it
+    ///     is what no angle-to-ball measure can give:
+    ///
+    ///     - `lead ≈ 0` — he is pointed exactly at where the ball IS. A
+    ///       stern chase. Since a rolling ball outruns a man, his heading
+    ///       converges on the ball's and he trails it forever. That is
+    ///       the reported frame, and it is what an aim point of "the
+    ///       ball's current position" produces by construction.
+    ///     - `lead > 0` — he is cutting across in FRONT of the ball,
+    ///       which is what taking up an interception line looks like.
+    ///     - `lead < 0` — he is aiming behind it.
+    ///
+    /// Deliberately observational: only positions and velocities, no
+    /// re-derivation of any steering formula. A sampler that recomputes
+    /// the model it is measuring goes stale the first time the model
+    /// changes, which has already happened once here (see
+    /// `MovementEffort::carrier_ceiling`).
+    pub static CHASE_SAMPLES: AtomicU64 = AtomicU64::new(0);
+    pub static CHASE_RATE_X10000: AtomicI64 = AtomicI64::new(0);
+    pub static CHASE_LEAD_X10000: AtomicI64 = AtomicI64::new(0);
+    pub static CHASE_ALIGN_X10000: AtomicI64 = AtomicI64::new(0);
+    pub static CHASE_GAP_X100: AtomicU64 = AtomicU64::new(0);
+    pub static CHASE_BALL_SPEED_X10000: AtomicU64 = AtomicU64::new(0);
+    /// …of those, the frames the report describes: pointed the same way
+    /// as the ball and closing at under a tenth of its speed.
+    pub static CHASE_PARALLEL: AtomicU64 = AtomicU64::new(0);
+    /// …the ones where the gap is not shrinking AT ALL, and the ones
+    /// where he is genuinely gaining.
+    pub static CHASE_LOSING: AtomicU64 = AtomicU64::new(0);
+    pub static CHASE_GAINING: AtomicU64 = AtomicU64::new(0);
+    /// …and the ones aimed AHEAD of the ball at all (`lead > 0.05`) —
+    /// the share of the chase that is an interception rather than a
+    /// pursuit.
+    pub static CHASE_AHEAD: AtomicU64 = AtomicU64::new(0);
+    /// Split by the chaser's line: 0 defender, 1 midfielder, 2 forward,
+    /// 3 keeper. Indexed by [`ChaseDiag::CHASE_LINES`].
+    pub static CHASE_BY_LINE: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static CHASE_PARALLEL_BY_LINE: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static CHASE_AHEAD_BY_LINE: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    /// Ball speed at the moment of the sample, bucketed. A chaser can
+    /// only be beaten by a ball he cannot outrun, so the parallel share
+    /// has to be read against how fast the thing he is chasing is
+    /// actually going — a top-speed sprint is ~0.45-0.63 u/tick.
+    pub static CHASE_BY_SPEED: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static CHASE_PARALLEL_BY_SPEED: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    /// Gap at the moment of the sample, bucketed by what the chaser is
+    /// actually doing at that range.
+    ///
+    /// ⚠ The first band is NOT a defect and must never be read as one. A
+    /// player inside `CONTROL_DISTANCE` moving with the ball is
+    /// collecting it — that is what a first touch looks like, and
+    /// `SteeringBehavior::Intercept` steers for it deliberately — yet he
+    /// scores `align ≈ 1` and `rate ≈ 0` and trips the parallel test on
+    /// every tick of it. Reading the headline share without this split
+    /// counts the engine's correct behaviour as its bug, which is the
+    /// same trap the closing census's `goal_side` term exists to avoid.
+    pub static CHASE_BY_GAP: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static CHASE_PARALLEL_BY_GAP: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static CHASE_AHEAD_BY_GAP: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+
+    /// The loose-ball chase census. See [`CHASE_SAMPLES`].
+    pub struct ChaseDiag;
+
+    impl ChaseDiag {
+        /// Labels for [`CHASE_BY_LINE`], in index order.
+        pub const CHASE_LINES: [&'static str; 4] = ["DEF", "MID", "FWD", "GK"];
+        /// Labels for [`CHASE_BY_SPEED`]'s buckets, in u/tick.
+        pub const CHASE_SPEED_BANDS: [&'static str; 4] = ["<0.5", "0.5-1.0", "1.0-2.0", ">2.0"];
+        /// Labels for [`CHASE_BY_GAP`]'s buckets. The first is inside
+        /// `CONTROL_DISTANCE` — collecting, not chasing.
+        pub const CHASE_GAP_BANDS: [&'static str; 4] = ["<1.5m (on it)", "1.5-5m", "5-12m", ">12m"];
+
+        /// One sample of a player chasing a loose, moving ball.
+        ///
+        /// `rate` is u/tick of gap closure (positive = gaining), `lead`
+        /// the signed cross-track aim described on [`CHASE_SAMPLES`],
+        /// `align` the cosine between his heading and the ball's, `gap`
+        /// the separation in u, `ball_speed` in u/tick, `line` an index
+        /// into [`Self::CHASE_LINES`].
+        pub fn note(rate: f32, lead: f32, align: f32, gap: f32, ball_speed: f32, line: usize) {
+            CHASE_SAMPLES.fetch_add(1, Ordering::Relaxed);
+            CHASE_RATE_X10000.fetch_add((rate * 10_000.0) as i64, Ordering::Relaxed);
+            CHASE_LEAD_X10000.fetch_add((lead * 10_000.0) as i64, Ordering::Relaxed);
+            CHASE_ALIGN_X10000.fetch_add((align * 10_000.0) as i64, Ordering::Relaxed);
+            CHASE_GAP_X100.fetch_add((gap * 100.0) as u64, Ordering::Relaxed);
+            CHASE_BALL_SPEED_X10000.fetch_add((ball_speed * 10_000.0) as u64, Ordering::Relaxed);
+
+            let parallel = align > 0.5 && rate < ball_speed * 0.10;
+            let ahead = lead > 0.05;
+            if parallel {
+                CHASE_PARALLEL.fetch_add(1, Ordering::Relaxed);
+            }
+            if rate <= 0.0 {
+                CHASE_LOSING.fetch_add(1, Ordering::Relaxed);
+            }
+            if rate > ball_speed * 0.10 {
+                CHASE_GAINING.fetch_add(1, Ordering::Relaxed);
+            }
+            if ahead {
+                CHASE_AHEAD.fetch_add(1, Ordering::Relaxed);
+            }
+
+            let l = line.min(Self::CHASE_LINES.len() - 1);
+            CHASE_BY_LINE[l].fetch_add(1, Ordering::Relaxed);
+            if parallel {
+                CHASE_PARALLEL_BY_LINE[l].fetch_add(1, Ordering::Relaxed);
+            }
+            if ahead {
+                CHASE_AHEAD_BY_LINE[l].fetch_add(1, Ordering::Relaxed);
+            }
+
+            let s = if ball_speed < 0.5 {
+                0
+            } else if ball_speed < 1.0 {
+                1
+            } else if ball_speed < 2.0 {
+                2
+            } else {
+                3
+            };
+            CHASE_BY_SPEED[s].fetch_add(1, Ordering::Relaxed);
+            if parallel {
+                CHASE_PARALLEL_BY_SPEED[s].fetch_add(1, Ordering::Relaxed);
+            }
+
+            let g = if gap < 12.0 {
+                0
+            } else if gap < 40.0 {
+                1
+            } else if gap < 96.0 {
+                2
+            } else {
+                3
+            };
+            CHASE_BY_GAP[g].fetch_add(1, Ordering::Relaxed);
+            if parallel {
+                CHASE_PARALLEL_BY_GAP[g].fetch_add(1, Ordering::Relaxed);
+            }
+            if ahead {
+                CHASE_AHEAD_BY_GAP[g].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(samples, mean closing rate, mean lead, mean alignment, mean
+        /// gap u, mean ball speed u/tick, parallel share, ahead share,
+        /// losing share, gaining share)`
+        pub fn totals() -> (u64, f32, f32, f32, f32, f32, f32, f32, f32, f32) {
+            let n = CHASE_SAMPLES.load(Ordering::Relaxed);
+            let d = n.max(1) as f32;
+            (
+                n,
+                CHASE_RATE_X10000.load(Ordering::Relaxed) as f32 / 10_000.0 / d,
+                CHASE_LEAD_X10000.load(Ordering::Relaxed) as f32 / 10_000.0 / d,
+                CHASE_ALIGN_X10000.load(Ordering::Relaxed) as f32 / 10_000.0 / d,
+                CHASE_GAP_X100.load(Ordering::Relaxed) as f32 / 100.0 / d,
+                CHASE_BALL_SPEED_X10000.load(Ordering::Relaxed) as f32 / 10_000.0 / d,
+                CHASE_PARALLEL.load(Ordering::Relaxed) as f32 / d,
+                CHASE_AHEAD.load(Ordering::Relaxed) as f32 / d,
+                CHASE_LOSING.load(Ordering::Relaxed) as f32 / d,
+                CHASE_GAINING.load(Ordering::Relaxed) as f32 / d,
+            )
+        }
+
+        /// `(label, samples, parallel share, ahead share)` per line.
+        pub fn by_line() -> Vec<(&'static str, u64, f32, f32)> {
+            Self::CHASE_LINES
+                .iter()
+                .enumerate()
+                .map(|(i, label)| {
+                    let n = CHASE_BY_LINE[i].load(Ordering::Relaxed);
+                    let d = n.max(1) as f32;
+                    (
+                        *label,
+                        n,
+                        CHASE_PARALLEL_BY_LINE[i].load(Ordering::Relaxed) as f32 / d,
+                        CHASE_AHEAD_BY_LINE[i].load(Ordering::Relaxed) as f32 / d,
+                    )
+                })
+                .filter(|(_, n, _, _)| *n > 0)
+                .collect()
+        }
+
+        /// `(band, samples, parallel share, ahead share)` per gap bucket.
+        pub fn by_gap() -> Vec<(&'static str, u64, f32, f32)> {
+            Self::CHASE_GAP_BANDS
+                .iter()
+                .enumerate()
+                .map(|(i, label)| {
+                    let n = CHASE_BY_GAP[i].load(Ordering::Relaxed);
+                    let d = n.max(1) as f32;
+                    (
+                        *label,
+                        n,
+                        CHASE_PARALLEL_BY_GAP[i].load(Ordering::Relaxed) as f32 / d,
+                        CHASE_AHEAD_BY_GAP[i].load(Ordering::Relaxed) as f32 / d,
+                    )
+                })
+                .filter(|(_, n, _, _)| *n > 0)
+                .collect()
+        }
+
+        /// `(band, samples, parallel share)` per ball-speed bucket.
+        pub fn by_speed() -> Vec<(&'static str, u64, f32)> {
+            Self::CHASE_SPEED_BANDS
+                .iter()
+                .enumerate()
+                .map(|(i, label)| {
+                    let n = CHASE_BY_SPEED[i].load(Ordering::Relaxed);
+                    (
+                        *label,
+                        n,
+                        CHASE_PARALLEL_BY_SPEED[i].load(Ordering::Relaxed) as f32 / n.max(1) as f32,
+                    )
+                })
+                .filter(|(_, n, _)| *n > 0)
+                .collect()
+        }
+
+        pub fn reset() {
+            for c in CHASE_BY_LINE
+                .iter()
+                .chain(CHASE_PARALLEL_BY_LINE.iter())
+                .chain(CHASE_AHEAD_BY_LINE.iter())
+                .chain(CHASE_BY_SPEED.iter())
+                .chain(CHASE_PARALLEL_BY_SPEED.iter())
+                .chain(CHASE_BY_GAP.iter())
+                .chain(CHASE_PARALLEL_BY_GAP.iter())
+                .chain(CHASE_AHEAD_BY_GAP.iter())
+            {
+                c.store(0, Ordering::Relaxed);
+            }
+            for c in [
+                &CHASE_SAMPLES,
+                &CHASE_GAP_X100,
+                &CHASE_BALL_SPEED_X10000,
+                &CHASE_PARALLEL,
+                &CHASE_LOSING,
+                &CHASE_GAINING,
+                &CHASE_AHEAD,
+            ] {
+                c.store(0, Ordering::Relaxed);
+            }
+            for c in [&CHASE_RATE_X10000, &CHASE_LEAD_X10000, &CHASE_ALIGN_X10000] {
                 c.store(0, Ordering::Relaxed);
             }
         }
@@ -2340,6 +2609,7 @@ pub mod mid_run_diag {
         PlanDiag::reset();
         DefenceDiag::reset();
         DuelDiag::reset();
+        ChaseDiag::reset();
         ClearDiag::reset();
         EvasionDiag::reset();
         SetPieceDiag::reset();
