@@ -31,7 +31,10 @@ pub mod tick;
 // decides how far off the pitch a restart taker may go, and the two must
 // be one constant or the taker is pinned short of the ball he is fetching.
 pub use boundary::{Perimeter, RunOff, frame, net, runoff};
-pub use contest::{PassChainEntry, PossessionSource, interactions, ownership, possession};
+pub use contest::{
+    ContactInPlace, PassChainEntry, PossessionSource, block, contact, interception, ownership,
+    possession, save,
+};
 // `pub` for `SpinModel` — the strike sites (shot / cross) solve the
 // rotation they need from the same Magnus coefficient the physics
 // integrates, so the two can never drift apart.
@@ -50,7 +53,7 @@ pub use restarts::{
 // the resolvers and the player layer that run after it, which is where
 // the set pieces live.
 #[cfg(feature = "match-logs")]
-pub use diagnostics::{assist_diag, flight_diag, frame_trace, teleport};
+pub use diagnostics::{assist_diag, block_diag, flight_diag, frame_trace, teleport};
 
 use crate::r#match::PlayerSide;
 use crate::r#match::engine::ball::ball::net::BallInNet;

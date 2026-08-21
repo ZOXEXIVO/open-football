@@ -514,10 +514,10 @@ impl Ball {
     /// deck: `vz = 0` on a ball that was two metres up leaves it hanging
     /// there under gravity alone, which is why every call site paired it
     /// with a `position.z = 0.0` assignment. See
-    /// [`ContactInPlace`](crate::r#match::engine::ball::ball::interactions::ContactInPlace).
+    /// [`ContactInPlace`](crate::r#match::engine::ball::ball::contest::contact::ContactInPlace).
     #[inline]
     pub(crate) fn settle_or_flatten(&mut self) {
-        if crate::r#match::engine::ball::ball::interactions::ContactInPlace::armed() {
+        if crate::r#match::engine::ball::ball::contest::contact::ContactInPlace::armed() {
             self.sink_to_ground();
         } else {
             self.velocity.z = 0.0;

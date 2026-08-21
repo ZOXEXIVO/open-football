@@ -26,7 +26,7 @@
 #![cfg(test)]
 
 use crate::r#match::engine::ball::ball::Ball;
-use crate::r#match::engine::ball::ball::interactions::SaveModel;
+use crate::r#match::engine::ball::ball::contest::save::SaveModel;
 use crate::r#match::engine::environment::{MatchEnvironment, Pitch, Weather};
 use crate::r#match::engine::referee::RefereeProfile;
 use crate::r#match::engine::rng::MatchRng;

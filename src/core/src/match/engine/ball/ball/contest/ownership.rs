@@ -660,7 +660,7 @@ impl Ball {
         // descent rate puts it there inside an eighth of a second instead
         // — quick enough that the block window, `is_aerial` and the
         // receiver ceiling see what they always saw, slow enough to draw.
-        if !crate::r#match::engine::ball::ball::interactions::ContactInPlace::armed() {
+        if !crate::r#match::engine::ball::ball::contest::contact::ContactInPlace::armed() {
             self.position = receiver_position;
             self.position.z = 0.0;
         }

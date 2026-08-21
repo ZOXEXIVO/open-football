@@ -360,7 +360,7 @@ impl<'a> RatingContext<'a> {
     /// invariants — fully intact.
     ///
     /// `stats.xg_faced` accumulates
-    /// [`SaveModel::expected_goal_on_target`](crate::r#match::engine::ball::interactions::SaveModel)
+    /// [`SaveModel::expected_goal_on_target`](crate::r#match::engine::ball::ball::contest::save::SaveModel)
     /// per shot: the probability a league-average keeper concedes that
     /// exact strike, from its placement, power and height. Averaging it
     /// and re-expressing it as a ratio (rather than using the sum

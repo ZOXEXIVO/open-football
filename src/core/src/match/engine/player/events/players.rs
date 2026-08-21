@@ -1,9 +1,9 @@
 use crate::PlayerFieldPositionGroup;
 use crate::club::player::PlayerTrait;
 use crate::r#match::engine::ball::ball::AwaitedRestart;
-use crate::r#match::engine::ball::ball::interactions::SaveModel;
+use crate::r#match::engine::ball::ball::contest::save::SaveModel;
 #[cfg(feature = "match-logs")]
-use crate::r#match::engine::ball::ball::interactions::block_diag::BlockDiag;
+use crate::r#match::engine::ball::ball::diagnostics::block_diag::BlockDiag;
 use crate::r#match::engine::ball::ball::motion::SpinModel;
 use crate::r#match::engine::ball::ball::{
     Ball, DeadBall, GRAVITY_PER_TICK, GROUND_FRICTION, PossessionSource,

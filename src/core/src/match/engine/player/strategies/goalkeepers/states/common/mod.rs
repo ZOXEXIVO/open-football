@@ -1,5 +1,5 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
-use crate::r#match::engine::ball::ball::interactions::SaveModel;
+use crate::r#match::engine::ball::ball::contest::save::SaveModel;
 use crate::r#match::engine::ball::ball::{AerialReach, DeadBall, GRAVITY_PER_TICK, ShotTarget};
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 use crate::r#match::engine::player::strategies::common::{

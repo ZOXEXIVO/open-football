@@ -1,6 +1,9 @@
 //! **Instrumentation.** Compiled only under `match-logs`, inert until
 //! armed, and read by the `dev_match` harness — never delete these.
 //!
+//! * [`block_diag`] — why shot blocks do not happen: the counter alone
+//!   cannot say whether the shot never reaches the check, no defender is
+//!   ever in the lane, or the roll simply fails.
 //! * [`flight_diag`] — where the ball actually goes each tick, and which
 //!   line of code sent it there. "The ball jumped" is not actionable;
 //!   "the ball jumped 91u inside `try_block_shot`" is.
@@ -13,6 +16,8 @@
 
 #[cfg(feature = "match-logs")]
 pub mod assist_diag;
+#[cfg(feature = "match-logs")]
+pub mod block_diag;
 #[cfg(feature = "match-logs")]
 pub mod flight_diag;
 #[cfg(feature = "match-logs")]
