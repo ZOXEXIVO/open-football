@@ -206,6 +206,121 @@ const POSITIONS_442: [PlayerPositionType; 11] = [
     PlayerPositionType::ForwardRight,
 ];
 
+/// Formation the synthetic squads line up in, read once from `TACTIC` (and
+/// `TACTIC_B` for the away side).
+///
+/// `make_squad_simple` has always fielded a hardcoded 4-4-2 with TWO
+/// forwards, and every calibration number in the project was measured on
+/// it. The world fields whatever each club's `TacticsSelector` picked, and
+/// most of those shapes carry ONE: a 4-2-3-1 is, counted in position
+/// GROUPS, five defenders (the holding midfielder is one — see
+/// `PlayerPositionType::position_group`), four midfielders and a lone
+/// striker. That is a different quantity of attacking football, so it is
+/// the first thing to vary whenever the harness and the world disagree
+/// about goals.
+///
+/// `TACTIC=4231` — or any other name in the table — swaps BOTH the slot
+/// list the players are generated for AND the `Tactics` handed to the
+/// engine, so the shape a squad was built for and the shape it is asked to
+/// play can never drift apart. `TACTIC_B` gives the away side a different
+/// shape, which is what a real fixture looks like; unset, both sides play
+/// `TACTIC`. Unset (or unrecognised) keeps 4-4-2.
+///
+/// `UNIFORM_PROFILE=1` additionally generates every outfielder from the
+/// SAME source position, so the eleven differ only in the slot they were
+/// handed. That separates the two things a shape change moves at once —
+/// the attributes a slot's player is generated with, and the behaviour the
+/// engine dispatches for that slot — and without it neither can be blamed.
+struct HarnessTactic;
+
+impl HarnessTactic {
+    fn parse(name: &str) -> Option<MatchTacticType> {
+        Some(match name.trim() {
+            "442" => MatchTacticType::T442,
+            "433" => MatchTacticType::T433,
+            "451" => MatchTacticType::T451,
+            "4231" => MatchTacticType::T4231,
+            "352" => MatchTacticType::T352,
+            "4141" => MatchTacticType::T4141,
+            "4411" => MatchTacticType::T4411,
+            "343" => MatchTacticType::T343,
+            "4312" => MatchTacticType::T4312,
+            "4222" => MatchTacticType::T4222,
+            "442d" => MatchTacticType::T442Diamond,
+            "442n" => MatchTacticType::T442Narrow,
+            _ => return None,
+        })
+    }
+
+    fn from_env(var: &'static str, fallback: MatchTacticType) -> MatchTacticType {
+        match std::env::var(var) {
+            Ok(name) => Self::parse(&name).unwrap_or_else(|| {
+                eprintln!(
+                    "{var}={name} not recognised — playing {}",
+                    fallback.display_name()
+                );
+                fallback
+            }),
+            Err(_) => fallback,
+        }
+    }
+
+    /// The home side's shape — and the default for both.
+    fn selected() -> MatchTacticType {
+        static PICK: std::sync::OnceLock<MatchTacticType> = std::sync::OnceLock::new();
+        *PICK.get_or_init(|| Self::from_env("TACTIC", MatchTacticType::T442))
+    }
+
+    /// The away side's shape. Falls back to the home side's, so a run with
+    /// only `TACTIC` set is still a like-for-like contest.
+    fn selected_away() -> MatchTacticType {
+        static PICK: std::sync::OnceLock<MatchTacticType> = std::sync::OnceLock::new();
+        *PICK.get_or_init(|| Self::from_env("TACTIC_B", Self::selected()))
+    }
+
+    /// Team 1 is the home side in every mode that builds two squads.
+    fn for_team(team_id: u32) -> MatchTacticType {
+        if team_id == 1 {
+            Self::selected()
+        } else {
+            Self::selected_away()
+        }
+    }
+
+    /// The eleven slots of a side's shape, in the engine's own order.
+    fn positions(team_id: u32) -> &'static [PlayerPositionType; 11] {
+        static HOME: std::sync::OnceLock<[PlayerPositionType; 11]> = std::sync::OnceLock::new();
+        static AWAY: std::sync::OnceLock<[PlayerPositionType; 11]> = std::sync::OnceLock::new();
+        let cell = if team_id == 1 { &HOME } else { &AWAY };
+        cell.get_or_init(|| *Tactics::new(Self::for_team(team_id)).positions())
+    }
+
+    /// The position a slot's player is GENERATED for. Normally the slot
+    /// itself; under `UNIFORM_PROFILE` a single midfield profile for every
+    /// outfielder, which holds attributes constant while the slot varies.
+    fn generation_position(slot: PlayerPositionType) -> PlayerPositionType {
+        static UNIFORM: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let uniform =
+            *UNIFORM.get_or_init(|| std::env::var("UNIFORM_PROFILE").ok().as_deref() == Some("1"));
+        if !uniform || slot.is_goalkeeper() {
+            slot
+        } else {
+            PlayerPositionType::MidfielderCenter
+        }
+    }
+
+    /// Printed by every mode that builds squads, so a run's numbers can
+    /// never be read back without knowing which shapes produced them.
+    fn label() -> String {
+        let (home, away) = (Self::selected(), Self::selected_away());
+        if home == away {
+            home.display_name().to_string()
+        } else {
+            format!("{} vs {}", home.display_name(), away.display_name())
+        }
+    }
+}
+
 const LAST_NAMES: &[&str] = &[
     "Silva",
     "Martinez",
@@ -834,7 +949,7 @@ fn make_squad_simple(team_id: u32, level: u8) -> MatchSquad {
     let playmaker = std::env::var("PLAYMAKER")
         .ok()
         .and_then(|v| v.parse::<u8>().ok());
-    let main_squad: Vec<MatchPlayer> = POSITIONS_442
+    let main_squad: Vec<MatchPlayer> = HarnessTactic::positions(team_id)
         .iter()
         .enumerate()
         .map(|(i, &pos)| {
@@ -845,7 +960,11 @@ fn make_squad_simple(team_id: u32, level: u8) -> MatchSquad {
             } else {
                 level
             };
-            let mut player = generate_player(base_id + i as u32, pos, lvl);
+            let mut player = generate_player(
+                base_id + i as u32,
+                HarnessTactic::generation_position(pos),
+                lvl,
+            );
             if pos == PlayerPositionType::MidfielderCenterLeft {
                 let s = &mut player.skills;
                 match playmaker {
@@ -891,7 +1010,7 @@ fn make_squad_simple(team_id: u32, level: u8) -> MatchSquad {
     MatchSquad {
         team_id,
         team_name: format!("Team {}", team_id),
-        tactics: Tactics::new(MatchTacticType::T442),
+        tactics: Tactics::new(HarnessTactic::for_team(team_id)),
         main_squad,
         substitutes: Vec::new(),
         captain_id: None,
@@ -3596,7 +3715,16 @@ impl LevelSweep {
 
         println!(
             "{:>5} {:>8} {:>9} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>8}",
-            "level", "goals/m", "shots/tm", "OT%", "save%", "0-0%", "draw%", "4+%", "box%", "int/tm"
+            "level",
+            "goals/m",
+            "shots/tm",
+            "OT%",
+            "save%",
+            "0-0%",
+            "draw%",
+            "4+%",
+            "box%",
+            "int/tm"
         );
         for r in &rows {
             let n = r.matches.max(1) as f32;
@@ -3661,7 +3789,8 @@ impl LevelSweep {
         );
         println!(
             "  LEVEL:    mean {:.2} goals/match against a real ~{:.2}  (that one is `stats`'s question)",
-            mean, Self::REAL_GOALS,
+            mean,
+            Self::REAL_GOALS,
         );
     }
 
@@ -3741,6 +3870,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             n_matches, RANDOM_LEVEL_MIN, RANDOM_LEVEL_MAX, n_threads
         ),
     }
+    println!("  shape: {}", HarnessTactic::label());
     println!();
     println!(
         "{:>3} {:>3}v{:>3} {:>3}-{:>3} | {:>3}/{:>3} sh {:>3}/{:>3} ot {:>4}/{:>4} xG {:>3}/{:>3} sv {:>3}/{:>3} tk {:>3}/{:>3} int {:>4}/{:>4} pa {:>2}/{:>2}% acc",
@@ -3778,6 +3908,8 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::assist_diag::reset();
     core::reception_diag::reset();
     core::flight_diag::FlightDiag::reset();
+    core::teleport::TeleportCensus::reset();
+    core::teleport::PlayerTeleportCensus::reset();
     BlockDiag::reset();
     core::helper_diag::reset();
     core::mid_run_diag::reset();
@@ -6339,6 +6471,184 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         }
                     }
 
+                    // ── WHOLE-TICK RELOCATION CENSUS ────────────────────
+                    //
+                    // The table above only covers `Ball::update`. This one
+                    // covers the whole tick — the aerial contests, the
+                    // player layer, the restart drains — and it is where
+                    // every "the ball teleported" report has actually
+                    // lived. `visible` is the subset a 3D replay shows: a
+                    // relocation of half a metre or more.
+                    {
+                        let tel = core::teleport::TeleportCensus::snapshot();
+                        let ticks = core::teleport::TeleportCensus::ticks().max(1);
+                        // The `∟` rows break the ball's own pass down; they
+                        // are already counted in `ball_update`.
+                        let is_total = |i: usize| !core::teleport::SUBROWS.contains(&i);
+                        let total: u64 = tel
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, _)| is_total(*i))
+                            .map(|(_, s)| s.0)
+                            .sum();
+                        let visible: u64 = tel
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, _)| is_total(*i))
+                            .map(|(_, s)| s.3)
+                            .sum();
+                        let metres: f32 = tel
+                            .iter()
+                            .enumerate()
+                            .filter(|(i, _)| is_total(*i))
+                            .map(|(_, s)| s.0 as f32 * s.1 * 0.125)
+                            .sum::<f32>();
+                        println!(
+                            "    WHOLE-TICK relocations: {} ({:.1}/match), {} viewer-visible \
+                             ({:.1}/match), {:.0} m of teleport per match, over {} ticks",
+                            total,
+                            total as f32 / n_matches as f32,
+                            visible,
+                            visible as f32 / n_matches as f32,
+                            metres / n_matches as f32,
+                            ticks,
+                        );
+                        let mut rows: Vec<_> = core::teleport::STAGES
+                            .iter()
+                            .zip(tel.iter())
+                            .filter(|(_, s)| s.0 > 0)
+                            .collect();
+                        // Ranked by the thing that matters — metres of
+                        // visible ball movement a match, not raw counts.
+                        rows.sort_by(|a, b| {
+                            (b.1.0 as f32 * b.1.1)
+                                .partial_cmp(&(a.1.0 as f32 * a.1.1))
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        for (stage, (n, mean, max, vis, dead, vert)) in rows {
+                            println!(
+                                "      {:<34} {:>7} ({:>5.2}/match) mean {:>6.1}u ({:>5.2}m), \
+                                 worst {:>7.1}u ({:>5.1}m) — {} visible, {} dead-ball, {} of those VERTICAL",
+                                stage,
+                                n,
+                                *n as f32 / n_matches as f32,
+                                mean,
+                                mean * 0.125,
+                                max,
+                                max * 0.125,
+                                vis,
+                                dead,
+                                vert,
+                            );
+                        }
+                        // The flight the aerial contests now give their ball
+                        // instead of writing it onto the winner's head. The
+                        // win rate is measured in the SET PIECES block; this
+                        // is the question the flight introduces — does the
+                        // ball actually get to him?
+                        let (armed, arrived, lost, flight, gap) =
+                            core::teleport::TeleportCensus::delivery_snapshot();
+                        if armed > 0 {
+                            println!(
+                                "      aerial deliveries: {} ({:.2}/match) flown a mean {:.2} s — \
+                                 {:.0}% reached the winner ({:.1}u from him), {:.0}% timed out",
+                                armed,
+                                armed as f32 / n_matches as f32,
+                                flight / 100.0,
+                                arrived as f32 * 100.0 / armed as f32,
+                                gap,
+                                lost as f32 * 100.0 / armed as f32,
+                            );
+                        }
+                        // ── THE TWENTY-TWO ──────────────────────────────
+                        //
+                        // Read this table against the one above, in the
+                        // same currency. The ball census was built for a
+                        // report about the BALL; on a corner the ball
+                        // moved 16 m and seventeen players moved 30 m
+                        // each, so a relocation census that watches only
+                        // the ball is measuring the small half.
+                        {
+                            let pl = core::teleport::PlayerTeleportCensus::snapshot();
+                            let expected = core::teleport::PLAYER_EXPECTED;
+                            let is_expected = |i: usize| expected.contains(&i);
+                            let metres: f32 = pl
+                                .iter()
+                                .enumerate()
+                                .filter(|(i, _)| !is_expected(*i))
+                                .map(|(_, s)| s.0 as f32 * s.1 * 0.125)
+                                .sum::<f32>();
+                            let moved: u64 = pl
+                                .iter()
+                                .enumerate()
+                                .filter(|(i, _)| !is_expected(*i))
+                                .map(|(_, s)| s.0)
+                                .sum();
+                            println!(
+                                "    PLAYER relocations: {} ({:.1}/match), {:.0} m of player \
+                                 teleport per match  (substitutions and dismissals excluded — \
+                                 those are supposed to move somebody)",
+                                moved,
+                                moved as f32 / n_matches as f32,
+                                metres / n_matches as f32,
+                            );
+                            let mut rows: Vec<_> = core::teleport::PLAYER_SITES
+                                .iter()
+                                .zip(pl.iter())
+                                .enumerate()
+                                .filter(|(_, (_, s))| s.0 > 0 || s.3 > 0)
+                                .collect();
+                            rows.sort_by(|a, b| {
+                                (b.1.1.0 as f32 * b.1.1.1)
+                                    .partial_cmp(&(a.1.1.0 as f32 * a.1.1.1))
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            for (i, (site, (n, mean, max, firings))) in rows {
+                                println!(
+                                    "      {:<32} {:>6.2} firings/match x {:>4.1} players, \
+                                     mean {:>6.1}u ({:>5.2}m), worst {:>6.1}u ({:>5.1}m) \
+                                     = {:>6.0} m/match{}",
+                                    site,
+                                    *firings as f32 / n_matches as f32,
+                                    *n as f32 / (*firings).max(1) as f32,
+                                    mean,
+                                    mean * 0.125,
+                                    max,
+                                    max * 0.125,
+                                    *n as f32 * mean * 0.125 / n_matches as f32,
+                                    if is_expected(i) { "  (expected)" } else { "" },
+                                );
+                            }
+                        }
+
+                        let ev = core::teleport::TeleportCensus::event_snapshot();
+                        let mut ev_rows: Vec<_> = core::teleport::EVENT_LABELS
+                            .iter()
+                            .zip(ev.iter())
+                            .filter(|(_, e)| e.0 > 0)
+                            .collect();
+                        ev_rows.sort_by(|a, b| {
+                            (b.1.0 as f32 * b.1.1)
+                                .partial_cmp(&(a.1.0 as f32 * a.1.1))
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        if !ev_rows.is_empty() {
+                            println!("      — the `dispatch` row, split by handler —");
+                            for (label, (n, mean, max)) in ev_rows {
+                                println!(
+                                    "        {:<24} {:>7} ({:>5.2}/match) mean {:>6.1}u ({:>5.2}m), worst {:>7.1}u ({:>5.1}m)",
+                                    label,
+                                    n,
+                                    *n as f32 / n_matches as f32,
+                                    mean,
+                                    mean * 0.125,
+                                    max,
+                                    max * 0.125,
+                                );
+                            }
+                        }
+                    }
+
                     let (icept, mean_z, above, no_leap, headers, headers_air) =
                         core::flight_diag::FlightDiag::aerial_snapshot();
                     println!(
@@ -6445,9 +6755,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     .map(|(e, c)| format!("{e} {:.0}%", *c as f64 / total as f64 * 100.0))
                     .collect::<Vec<_>>()
                     .join("  ");
-                println!(
-                    "  space at the strike (nearest defending outfielder to the ball): {row}"
-                );
+                println!("  space at the strike (nearest defending outfielder to the ball): {row}");
                 println!(
                     "    the shot models see pressure only inside 1.25m — {:.0}% of shots are \
                      struck with the nearest defender further out than that and are priced as \
@@ -7210,6 +7518,64 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     // ── GOALKEEPER ACTION CENSUS ───────────────────────────────────────
     // How often the keeper actually does each of the things a keeper does,
     // counted at the moment he commits rather than at the moment a stat is
+    // ── KEEPER DISTRIBUTION CENSUS ─────────────────────────────────────
+    // The state census can say he entered `Kicking`; only this can say
+    // how far the ball then went. A keeper's release mix and the ground
+    // each one covers is the whole of his distribution model, and both
+    // were invisible — which is how `Kicking` came to mean "short pass to
+    // a midfielder eighteen metres away" without anything noticing.
+    //
+    // Real-football reference: an open-play keeper possession is played
+    // short roughly half the time; long kicks (punt + goal kick) carry
+    // 50-65 m and make up most of the rest.
+    {
+        use core::mid_run_diag::KeeperReleaseDiag;
+        let r = KeeperReleaseDiag::snapshot();
+        let total: u64 = [0usize, 2, 4, 6, 8, 10].iter().map(|&i| r[i]).sum();
+        if total > 0 {
+            let keeper_matches = (n_matches * 2) as f64;
+            println!();
+            println!(
+                "--- KEEPER DISTRIBUTION CENSUS ({:.1} releases per keeper per match) ---",
+                total as f64 / keeper_matches
+            );
+            println!(
+                "  {:<22} {:>10}  {:>7}  {:>14}  {:>12}",
+                "release", "count", "share", "per keeper/match", "mean distance"
+            );
+            for (slot, label) in [
+                (0usize, "short (out from back)"),
+                (2, "throw"),
+                (4, "punt from hands"),
+                (6, "drop-kick"),
+                (8, "long goal kick"),
+                (10, "clearance"),
+            ] {
+                let n = r[slot];
+                if n == 0 {
+                    println!("  {:<22} {:>10}  ** NEVER **", label, 0);
+                    continue;
+                }
+                println!(
+                    "  {:<22} {:>10} {:>6.1}%  {:>14.2}  {:>9.1} m",
+                    label,
+                    n,
+                    n as f64 * 100.0 / total as f64,
+                    n as f64 / keeper_matches,
+                    r[slot + 1] as f64 / n as f64 * 0.125
+                );
+            }
+            let punts = r[4] + r[6];
+            if punts > 0 {
+                println!(
+                    "  punts aimed at a target man {:.0}%   mean apex {:.1} m (real ~20)",
+                    r[12] as f64 * 100.0 / (r[12] + r[13]).max(1) as f64,
+                    r[14] as f64 / 100.0 / punts as f64
+                );
+            }
+        }
+    }
+
     // credited. Real-football reference in the header of each line.
     {
         use core::mid_run_diag::KeeperActionDiag;
@@ -7660,6 +8026,20 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 per(w[4]),
                 w[5] as f64 / w[4].max(1) as f64 * 0.125,
             );
+            // Then he stands over it and waits for the box. The ceiling
+            // share is what says whether the wait is doing any work: if
+            // most corners hit it, the runners are not arriving and the
+            // delay is pure dead time.
+            if w[6] > 0 {
+                println!(
+                    "    set-up wait: {:.2}/match, a mean {:.2} s on the arc waiting for {} \
+                     attackers in the box ({:.0}% released by the CEILING rather than the box)",
+                    per(w[6]),
+                    w[7] as f64 / w[6] as f64 / 100.0,
+                    core::r#match::engine::ball::ball::AwaitedRestart::CORNER_BOX_TARGET,
+                    w[8] as f64 * 100.0 / w[6] as f64,
+                );
+            }
         }
         // ── THE RUN-OUT ────────────────────────────────────────────────
         // Reported as "the ball stops on the line behind the goal, but must
@@ -8308,6 +8688,35 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     decisions as f64 / n_matches as f64,
                     box_decisions as f64 / n_matches as f64,
                 );
+            }
+            // "They run parallel to the movement and don't try to take it."
+            // The gate census above cannot see this; see `CLOSE_SAMPLES`.
+            let ((n, rate, align, gap, par, gain), (dn, drate, dalign, dgap, dpar, dgain)) =
+                DuelDiag::closing();
+            if n > 0 {
+                println!(
+                    "  CLOSING CENSUS ({n} samples of the NEAREST defender to a moving carrier)\n    \
+                     gap {:.2} m, closing at {rate:+.4} u/tick, heading alignment {align:+.2}  \
+                     →  running PARALLEL {:.0}%, gaining on him {:.0}%",
+                    gap / 8.0,
+                    par * 100.0,
+                    gain * 100.0,
+                );
+                println!(
+                    "    …with the carrier in OUR OWN THIRD ({dn}): gap {:.2} m, closing {drate:+.4}, \
+                     alignment {dalign:+.2}  →  PARALLEL {:.0}%, gaining {:.0}%",
+                    dgap / 8.0,
+                    dpar * 100.0,
+                    dgain * 100.0,
+                );
+                let rows = DuelDiag::closing_by_state();
+                let labels: Vec<String> = rows
+                    .iter()
+                    .map(|(l, c, p)| {
+                        format!("{l} {:.0}% of samples/{:.0}% parallel", *c as f64 / n as f64 * 100.0, p * 100.0)
+                    })
+                    .collect();
+                println!("    what he was doing: {}", labels.join("  ·  "));
             }
         }
         let (seen, fired, won, gk, header) = CrossDiag::contest();

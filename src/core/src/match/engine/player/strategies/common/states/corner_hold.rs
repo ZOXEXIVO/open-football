@@ -91,6 +91,31 @@ impl CornerHold {
 
         let own = result.velocity.unwrap_or_else(Vector3::zeros);
         result.velocity = Some(own * (1.0 - weight) + station_velocity * weight);
+        // ⚠ **A velocity imposed from outside the state machine has to
+        // carry its own effort, or it is served at the pace of a state
+        // nobody is following any more.**
+        //
+        // Same mechanism and the same reason as `ShapeDiscipline`'s
+        // `shape_recall_pull` and `KeeperReleaseSpace`'s floor: the speed
+        // cap in `state.rs` is keyed to the `ActivityIntensity` the
+        // player's CURRENT state declared, and the states a man drifts in
+        // while a corner is being set up are the low ones — `Standing` is
+        // `Recovery`, 0.12 of top speed. So the twenty were steered to
+        // their stations at a twelfth of walking pace.
+        //
+        // That is why the walked corner's box would not fill. Measured,
+        // `OF_CORNER_WALK=on` over 60 matches at level 14 with the taker
+        // already waiting on the arc: **3.3 attackers in the box at the
+        // delivery against a placed corner's 5.4** and a real 5-7, with
+        // over half the set-ups released by the ceiling rather than by
+        // the box arriving. They were not short of time; they were
+        // forbidden to run.
+        //
+        // Floored at `weight` exactly, which is the share of the final
+        // velocity the station owns — the same "permit this component and
+        // nothing more" rule the other two overrides use. `Arrive` still
+        // decelerates them into the station, so nobody overshoots it.
+        result.effort_floor = result.effort_floor.max(weight);
     }
 
     /// How much of the player's movement the station owns this tick,

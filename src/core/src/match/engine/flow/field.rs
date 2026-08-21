@@ -7,6 +7,70 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
+/// Which restart is re-forming the teams, for
+/// [`MatchField::reset_players_positions`].
+///
+/// The distinction is a measurement one before it is anything else. Both
+/// arms write all twenty-two onto their formation spots, but only one of
+/// them is a defect: see
+/// [`PLAYER_EXPECTED`](crate::r#match::engine::ball::ball::teleport::PLAYER_EXPECTED).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResetReason {
+    /// A restart inside the run of play — after a goal, or the fallback
+    /// when no conceding side could be resolved. `GoalCelebration` has a
+    /// 45-75 s window to walk everybody home before this fires, so
+    /// anybody it still has to move is somebody it failed to bring back.
+    ///
+    /// `keep` is the man already standing over the ball on the centre
+    /// spot: the retriever who carried it there during the celebration.
+    /// He is on the conceding side, which is the side kicking off, so he
+    /// is the natural taker — and resetting him to his formation slot
+    /// only to teleport a team-mate onto the ball he is standing on is
+    /// two relocations to achieve nothing. Measured, that pair was
+    /// **120 m/match (`restart_reset`) plus 46 m/match
+    /// (`kickoff:taker`)**.
+    Restart { keep: Option<u32> },
+    /// A period boundary the viewer SEES: the second half, extra time.
+    /// The teams have changed ends, so this writes everybody to his
+    /// mirrored slot and it is the one cut in the match a replay shows
+    /// across the interval. The teams leave the pitch and come back out
+    /// at the other end, so there is no motion to draw and no window to
+    /// draw it in.
+    Period,
+    /// The reset at the END of the first half — before `swap_squads`, to
+    /// each player's own un-mirrored slot.
+    ///
+    /// ⚠ **Nothing ever samples it.** `MatchContext::increment_time`
+    /// returns `false` for `HalfTime`, so the half-time `play_inner` runs
+    /// its body zero times and never reaches `write_match_positions`;
+    /// [`Self::Period`] then overwrites the result ten milliseconds of
+    /// match clock later. Booked apart because otherwise it doubles the
+    /// only row in the census big enough to hide things behind — ~519
+    /// m/match of movement that does not exist as far as any viewer,
+    /// recording or downstream read is concerned.
+    PeriodDead,
+}
+
+impl ResetReason {
+    #[cfg(feature = "match-logs")]
+    pub fn census_site(self) -> usize {
+        use crate::r#match::engine::ball::ball::teleport as tc;
+        match self {
+            ResetReason::Restart { .. } => tc::PSITE_GOAL_RESET,
+            ResetReason::Period => tc::PSITE_PERIOD_RESET,
+            ResetReason::PeriodDead => tc::PSITE_PERIOD_DEAD,
+        }
+    }
+
+    /// The one player this reset leaves where he is.
+    fn keeps_in_place(self) -> Option<u32> {
+        match self {
+            ResetReason::Restart { keep } => keep,
+            ResetReason::Period | ResetReason::PeriodDead => None,
+        }
+    }
+}
+
 pub struct MatchField {
     pub size: MatchFieldSize,
     pub ball: Ball,
@@ -95,8 +159,42 @@ impl MatchField {
         }
     }
 
-    pub fn reset_players_positions(&mut self) {
+    /// Put the twenty-two back on their formation spots.
+    ///
+    /// `reason` says which restart is doing it, and it is not decoration:
+    /// a PERIOD boundary has no in-match window to walk anybody through
+    /// and a viewer does not expect continuity across half-time, while a
+    /// RESTART after a goal has a 45-75 s celebration that is supposed to
+    /// have walked everybody home already. The two need reading apart —
+    /// see [`PLAYER_EXPECTED`](crate::r#match::engine::ball::ball::teleport::PLAYER_EXPECTED).
+    pub fn reset_players_positions(&mut self, reason: ResetReason) {
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::ball::ball::teleport::PlayerTeleportCensus::note_firing(
+            reason.census_site(),
+        );
+        let keep = reason.keeps_in_place();
         self.players.iter_mut().for_each(|p| {
+            // ⚠ **A dismissed player does not come back on.**
+            //
+            // He is stashed at the off-pitch sentinel (-500, -500) so that
+            // no distance-based roster scan can ever see him — the same
+            // reason the bench is parked there. This loop had no
+            // `is_sent_off` filter, so the next restart wrote him back
+            // onto his formation spot, where he stood as a phantom: no AI
+            // (every mover filters him out) but a body on the pitch for
+            // every "who is nearest" test and for the replay. The census
+            // caught it as the worst single entry in the
+            // `restart_reset` row — 1210 u, **151 m**, which is exactly
+            // the sentinel-to-formation distance.
+            if p.is_sent_off || Some(p.id) == keep {
+                return;
+            }
+            #[cfg(feature = "match-logs")]
+            crate::r#match::engine::ball::ball::teleport::PlayerTeleportCensus::note(
+                reason.census_site(),
+                p.position,
+                p.start_position,
+            );
             p.position = p.start_position;
             p.velocity = Vector3::zeros();
 
@@ -287,6 +385,16 @@ impl MatchField {
         player_in.tactical_position.current_position = position;
         player_in.tactical_position.regenerate_waypoints(side);
         player_in.start_position = start_pos;
+        // A substitute coming on IS placed — he walks on from the
+        // touchline in reality, and the engine has no touchline to walk
+        // him from. Counted so the rest of the table can be read against
+        // something known to be legitimate.
+        #[cfg(feature = "match-logs")]
+        {
+            use crate::r#match::engine::ball::ball::teleport as tc;
+            tc::PlayerTeleportCensus::note_firing(tc::PSITE_SUBSTITUTION);
+            tc::PlayerTeleportCensus::note(tc::PSITE_SUBSTITUTION, player_in.position, start_pos);
+        }
         player_in.position = start_pos;
         player_in.set_default_state(TransitionSource::Substitution);
 

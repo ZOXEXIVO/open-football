@@ -250,6 +250,16 @@ pub mod reception_diag {
     pub static SHOT_OVER: AtomicU64 = AtomicU64::new(0);
     /// Somebody took control of the ball while the shot was still live.
     pub static SHOT_CLAIMED: AtomicU64 = AtomicU64::new(0);
+    /// `secure_ball_for` granted possession to a player further from the
+    /// ball than [`MAX_OWNER_TRACK_DISTANCE`](super::super::MAX_OWNER_TRACK_DISTANCE),
+    /// so the ball had to be written to his feet rather than tracked in.
+    ///
+    /// A tackle or an interception is something you do to a ball at your
+    /// feet, so every one of these is a grant that should not have been
+    /// made — the write is the symptom. Kept as a counter rather than
+    /// refused outright because refusing changes the tackle and
+    /// interception rates, which are calibrated numbers.
+    pub static SECURE_OUT_OF_REACH: AtomicU64 = AtomicU64::new(0);
     /// Shot emitted with NO projected goal-line target — the keeper can
     /// never engage it and no save/goal accounting reaches it.
     pub static SHOT_NO_TARGET: AtomicU64 = AtomicU64::new(0);
@@ -624,14 +634,38 @@ impl Ball {
         // Beyond his reach the contact is a stretched leg that got a toe on
         // it: the ball deflects from its own position and he does not get to
         // drag it to himself first.
-        let reach =
-            (receiver_position.x - self.position.x).hypot(receiver_position.y - self.position.y);
-        if reach <= super::CONTROL_DISTANCE {
+        //
+        // ⚠ **AND SO IS EVERY OTHER TOUCH — the guard was dead code.**
+        //
+        // Both callers already gate on the same radius before they get
+        // here (`dist_sq < RECEIVER_CLAIM_DISTANCE_SQ` at :810 and
+        // `dist_sq < RECEIVER_PRIORITY_DISTANCE_SQ` at :1443, both
+        // `CONTROL_DISTANCE²`), so `reach <= CONTROL_DISTANCE` could
+        // never be false and the ball was ALWAYS dragged onto the
+        // receiver — up to the full 12 u. Measured on the whole-tick
+        // relocation census: **13 a match at a mean of 1.43 m**, every one
+        // of them large enough for a replay to show, and pinned at the
+        // cap rather than distributed under it, which is the signature of
+        // a guard that never fires.
+        //
+        // The paragraph above is the right rule; it just was not being
+        // applied. A failed touch happens where the ball is. The
+        // deflection below works identically from there — same direction,
+        // same speed — and `move_to` was never going to draw this ball in
+        // anyway, because the whole point is that he did not control it.
+        //
+        // The height goes the same way. `position.z = 0.0` snapped a ball
+        // from as high as `RECEIVER_MAX_HEIGHT` (2.8 m) onto the grass in
+        // one 10 ms tick, on the axis a replay shows most plainly. A
+        // descent rate puts it there inside an eighth of a second instead
+        // — quick enough that the block window, `is_aerial` and the
+        // receiver ceiling see what they always saw, slow enough to draw.
+        if !super::interactions::ContactInPlace::armed() {
             self.position = receiver_position;
+            self.position.z = 0.0;
         }
-        self.position.z = 0.0;
         self.velocity = out_dir * out_speed;
-        self.velocity.z = 0.0;
+        self.settle_or_flatten();
         self.previous_owner = Some(receiver_id);
         self.current_owner = None;
         self.pass_target_player_id = None;
@@ -759,6 +793,7 @@ impl Ball {
             origin: PassOriginRestart::FreeKick,
             awarded_tick: context.current_tick(),
             patience_ticks: AwaitedRestart::PATIENCE_TICKS,
+            settled_tick: None,
         });
         events.add_ball_event(BallEvent::TakeMe(taker_id));
     }

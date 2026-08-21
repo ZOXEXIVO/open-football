@@ -24,6 +24,7 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
+use crate::r#match::engine::ball::ball::AwaitedRestart;
 use crate::r#match::engine::engine::FootballEngine;
 use crate::r#match::engine::result::Score;
 use crate::r#match::{
@@ -253,7 +254,6 @@ fn the_shape_lets_go_of_everyone_once_the_corner_is_over() {
 /// written into the shape, so a replay showed the ball, one player and
 /// then everybody else jump at once.
 #[test]
-#[ignore = "the walked corner is off by default — run with OF_CORNER_WALK=on"]
 fn awarding_a_corner_moves_nothing() {
     let mut m = CornerMatch::new();
     m.crowd_the_centre_circle();
@@ -306,10 +306,30 @@ fn the_taker_is_on_the_ball_and_the_ball_is_on_the_flag() {
     m.concede_a_corner();
     m.walk_the_corner_in();
 
+    // Within a stride of the arc, not exactly on it.
+    //
+    // The taker CARRIES the ball to the flag and the kick goes live when
+    // he arrives, where "arrives" is `AwaitedRestart::REACH` — 1.5 m,
+    // sized so `SteeringBehavior::Arrive`'s 3 u deadzone cannot deadlock
+    // against the spot. So the ball ends up wherever he stopped, and
+    // nothing writes it the rest of the way: that write would be the
+    // teleport this whole mechanism exists to remove, on the one axis and
+    // at the one moment a replay is already watching. A referee gives the
+    // same tolerance.
     let ball = m.field.ball.position;
+    let arc = Vector3::new(
+        AwaitedRestart::SPOT_INSET,
+        if ball.y < HEIGHT as f32 * 0.5 {
+            AwaitedRestart::SPOT_INSET
+        } else {
+            HEIGHT as f32 - AwaitedRestart::SPOT_INSET
+        },
+        0.0,
+    );
+    let off_the_arc = (ball.xy() - arc.xy()).magnitude();
     assert!(
-        ball.x < 10.0 && (ball.y < 10.0 || ball.y > HEIGHT as f32 - 10.0),
-        "the corner is taken from the flag, not from {ball:?}"
+        off_the_arc <= AwaitedRestart::REACH,
+        "the corner is taken from the flag, not {off_the_arc:.1}u away at {ball:?}"
     );
     // `current_owner` OR the last toucher: he owns it the tick he sets it
     // down and the cross can leave inside the same tick, which clears the
@@ -342,7 +362,6 @@ fn the_taker_is_on_the_ball_and_the_ball_is_on_the_flag() {
 /// clock". This drives one corner through real ticks and reports the two
 /// numbers that tell a man who is coming from a man who is not.
 #[test]
-#[ignore = "the walked corner is off by default — run with OF_CORNER_WALK=on"]
 fn the_taker_actually_runs_at_the_ball() {
     let mut m = CornerMatch::new();
     m.crowd_the_centre_circle();

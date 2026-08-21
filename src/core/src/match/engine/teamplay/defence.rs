@@ -53,6 +53,21 @@ const MAX_UNIT: usize = 11;
 /// Most opponents worth ranking as threats.
 const MAX_THREATS: usize = 10;
 
+#[cfg(feature = "match-logs")]
+static MARK_CENSUS: [std::sync::atomic::AtomicU64; 11] = [
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+    std::sync::atomic::AtomicU64::new(0),
+];
+
 /// What one defender is responsible for in the current defensive phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DefensiveDuty {
@@ -557,6 +572,58 @@ impl DutyAssigner<'_> {
             taken[i] = true;
             n_marks += 1;
             Self::push(plan, unit[i].0, DefensiveDuty::Mark(opp_id));
+        }
+
+        // ── TEMPORARY MARK-RETENTION CENSUS (additive, no behaviour) ──
+        #[cfg(feature = "match-logs")]
+        {
+            use std::sync::atomic::Ordering as CensusOrd;
+            for (d_id, duty) in previous.duties[..previous.len].iter() {
+                let Some(t_id) = duty.target() else { continue };
+                let Some(dpos) = self.field.players.iter().find(|p| p.id == *d_id).map(|p| p.position) else { continue };
+                let Some(tpos) = self.field.players.iter().find(|p| p.id == t_id).map(|p| p.position) else { continue };
+                let gap = (dpos - tpos).magnitude();
+                let was_threat = threats[..threat_len].iter().any(|(id, _, _)| *id == t_id);
+                let new_duty = plan.duties[..plan.len].iter().find(|(id, _)| id == d_id).map(|(_, d)| *d);
+                let man_marked_by_other = plan.duties[..plan.len].iter().any(|(id, d)| id != d_id && d.target() == Some(t_id));
+                MARK_CENSUS[0].fetch_add(1, CensusOrd::Relaxed);
+                if new_duty == Some(DefensiveDuty::Mark(t_id)) {
+                    MARK_CENSUS[1].fetch_add(1, CensusOrd::Relaxed);
+                } else if matches!(new_duty, Some(DefensiveDuty::Mark(_))) {
+                    MARK_CENSUS[2].fetch_add(1, CensusOrd::Relaxed);
+                    if was_threat && gap <= Self::MARK_REACH {
+                        MARK_CENSUS[3].fetch_add(1, CensusOrd::Relaxed);
+                    }
+                } else if matches!(new_duty, Some(DefensiveDuty::Press) | Some(DefensiveDuty::Cover)) {
+                    MARK_CENSUS[4].fetch_add(1, CensusOrd::Relaxed);
+                } else if !was_threat {
+                    MARK_CENSUS[5].fetch_add(1, CensusOrd::Relaxed);
+                } else if gap > Self::MARK_REACH {
+                    MARK_CENSUS[6].fetch_add(1, CensusOrd::Relaxed);
+                } else {
+                    MARK_CENSUS[7].fetch_add(1, CensusOrd::Relaxed);
+                }
+                if man_marked_by_other {
+                    MARK_CENSUS[8].fetch_add(1, CensusOrd::Relaxed);
+                }
+            }
+            let n = MARK_CENSUS[10].fetch_add(1, CensusOrd::Relaxed) + 1;
+            if n % 20_000 == 0 {
+                let g = |i: usize| MARK_CENSUS[i].load(CensusOrd::Relaxed);
+                let tot = g(0).max(1) as f64;
+                eprintln!(
+                    "MARKCENSUS refreshes={} prev_pairs={} retained={:.1}% steal_same_def={:.2}% (reachable {:.2}%) to_press_cover={:.2}% man_left_threatset={:.2}% out_of_reach={:.2}% dropped_idle={:.2}% man_to_other_def={:.2}%",
+                    n, g(0),
+                    100.0 * g(1) as f64 / tot,
+                    100.0 * g(2) as f64 / tot,
+                    100.0 * g(3) as f64 / tot,
+                    100.0 * g(4) as f64 / tot,
+                    100.0 * g(5) as f64 / tot,
+                    100.0 * g(6) as f64 / tot,
+                    100.0 * g(7) as f64 / tot,
+                    100.0 * g(8) as f64 / tot,
+                );
+            }
         }
 
         // ── Everyone else holds the zone ─────────────────────────────

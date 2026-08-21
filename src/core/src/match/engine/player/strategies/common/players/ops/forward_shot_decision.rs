@@ -54,7 +54,7 @@ pub mod helper_diag {
 #[cfg(feature = "match-logs")]
 pub mod mid_run_diag {
     use crate::r#match::player::strategies::passing::CrossType;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
     pub static RUNNER_BOX_TICKS: AtomicU64 = AtomicU64::new(0);
     pub static FWD_CUTBACK: AtomicU64 = AtomicU64::new(0);
     pub static MID_CUTBACK: AtomicU64 = AtomicU64::new(0);
@@ -649,6 +649,54 @@ pub mod mid_run_diag {
     pub static DUEL_DECISIONS_BOX: AtomicU64 = AtomicU64::new(0);
     pub static DUEL_P_BOX_X10000: AtomicU64 = AtomicU64::new(0);
 
+    /// ── THE CLOSING CENSUS ────────────────────────────────────────────
+    ///
+    /// Every counter above answers *did he challenge*. None of them can
+    /// see the thing the report is actually about — "they run parallel to
+    /// the movement and don't try to take it". A defender who matches the
+    /// carrier's velocity at a two-metre standing lag passes the duel
+    /// gate, sits in a `Tackling` state and shows up in every bucket as a
+    /// defence doing its job, while never getting any closer.
+    ///
+    /// So this samples the two quantities that separate a converging run
+    /// from a parallel one, over the nearest defender to a MOVING carrier:
+    ///
+    ///   * **closing rate** — the component of his velocity along the line
+    ///     to the carrier, i.e. how fast the gap is shrinking. Zero is a
+    ///     man running alongside; negative is one being left behind.
+    ///   * **heading alignment** — the cosine between his velocity and the
+    ///     CARRIER's. +1 is running the same way (parallel), 0 is cutting
+    ///     across him, −1 is coming at him head-on.
+    ///
+    /// Accumulated as fixed point so the counters stay integral and
+    /// lock-free like the rest of this block. Sampled only while the
+    /// carrier is genuinely moving: a defender standing off a stationary
+    /// man is jockeying, which is correct, not failing to close.
+    pub static CLOSE_SAMPLES: AtomicU64 = AtomicU64::new(0);
+    pub static CLOSE_RATE_X10000: AtomicI64 = AtomicI64::new(0);
+    pub static CLOSE_ALIGN_X10000: AtomicI64 = AtomicI64::new(0);
+    pub static CLOSE_GAP_X100: AtomicU64 = AtomicU64::new(0);
+    /// …of those, the samples where he was travelling PARALLEL: closing
+    /// at under a tenth of the carrier's speed while pointed the same way.
+    /// That is the frame the report describes, counted.
+    pub static CLOSE_PARALLEL: AtomicU64 = AtomicU64::new(0);
+    /// …and the ones where he was genuinely gaining on him.
+    pub static CLOSE_GAINING: AtomicU64 = AtomicU64::new(0);
+    /// The same six restricted to a carrier inside the DEFENDING side's
+    /// own third — "near the goal", which is where the report is from.
+    pub static CLOSE_SAMPLES_DEEP: AtomicU64 = AtomicU64::new(0);
+    pub static CLOSE_RATE_DEEP_X10000: AtomicI64 = AtomicI64::new(0);
+    pub static CLOSE_ALIGN_DEEP_X10000: AtomicI64 = AtomicI64::new(0);
+    pub static CLOSE_GAP_DEEP_X100: AtomicU64 = AtomicU64::new(0);
+    pub static CLOSE_PARALLEL_DEEP: AtomicU64 = AtomicU64::new(0);
+    pub static CLOSE_GAINING_DEEP: AtomicU64 = AtomicU64::new(0);
+    /// Which state the nearest defender was in, and how many of those
+    /// samples were parallel — a parallel run out of `Marking` is a
+    /// different defect from a parallel run out of `Tackling`. Indexed by
+    /// [`DuelDiag::CLOSE_STATES`].
+    pub static CLOSE_BY_STATE: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+    pub static CLOSE_PARALLEL_BY_STATE: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+
     impl DuelDiag {
         pub fn note_reach(band: usize) {
             DUEL_REACH[band].fetch_add(1, Ordering::Relaxed);
@@ -714,6 +762,121 @@ pub mod mid_run_diag {
             }
         }
 
+        /// Labels for [`CLOSE_BY_STATE`], in index order.
+        pub const CLOSE_STATES: [&'static str; 8] = [
+            "Tackling",
+            "Pressing",
+            "Marking",
+            "Covering",
+            "Running",
+            "HoldingLine",
+            "TrackingBack",
+            "other",
+        ];
+
+        /// One sample of the nearest defender to a moving carrier. See the
+        /// note on [`CLOSE_SAMPLES`].
+        ///
+        /// `rate` is u/tick of gap closure (positive = gaining), `align`
+        /// the cosine between the two headings, `gap` the current
+        /// separation in u, `deep` whether the carrier is in the
+        /// defending side's own third, `state` an index into
+        /// [`Self::CLOSE_STATES`].
+        pub fn note_closing(
+            rate: f32,
+            align: f32,
+            gap: f32,
+            deep: bool,
+            parallel: bool,
+            gaining: bool,
+            state: usize,
+        ) {
+            CLOSE_SAMPLES.fetch_add(1, Ordering::Relaxed);
+            CLOSE_RATE_X10000.fetch_add((rate * 10_000.0) as i64, Ordering::Relaxed);
+            CLOSE_ALIGN_X10000.fetch_add((align * 10_000.0) as i64, Ordering::Relaxed);
+            CLOSE_GAP_X100.fetch_add((gap * 100.0) as u64, Ordering::Relaxed);
+            if parallel {
+                CLOSE_PARALLEL.fetch_add(1, Ordering::Relaxed);
+            }
+            if gaining {
+                CLOSE_GAINING.fetch_add(1, Ordering::Relaxed);
+            }
+            let s = state.min(Self::CLOSE_STATES.len() - 1);
+            CLOSE_BY_STATE[s].fetch_add(1, Ordering::Relaxed);
+            if parallel {
+                CLOSE_PARALLEL_BY_STATE[s].fetch_add(1, Ordering::Relaxed);
+            }
+            if deep {
+                CLOSE_SAMPLES_DEEP.fetch_add(1, Ordering::Relaxed);
+                CLOSE_RATE_DEEP_X10000.fetch_add((rate * 10_000.0) as i64, Ordering::Relaxed);
+                CLOSE_ALIGN_DEEP_X10000.fetch_add((align * 10_000.0) as i64, Ordering::Relaxed);
+                CLOSE_GAP_DEEP_X100.fetch_add((gap * 100.0) as u64, Ordering::Relaxed);
+                if parallel {
+                    CLOSE_PARALLEL_DEEP.fetch_add(1, Ordering::Relaxed);
+                }
+                if gaining {
+                    CLOSE_GAINING_DEEP.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+
+        /// `(samples, mean closing rate u/tick, mean alignment, mean gap u,
+        /// parallel share, gaining share)` — all, then the same restricted
+        /// to a carrier in the defending side's own third.
+        pub fn closing() -> ((u64, f32, f32, f32, f32, f32), (u64, f32, f32, f32, f32, f32)) {
+            let pack = |n: &AtomicU64,
+                        rate: &AtomicI64,
+                        align: &AtomicI64,
+                        gap: &AtomicU64,
+                        par: &AtomicU64,
+                        gain: &AtomicU64| {
+                let n = n.load(Ordering::Relaxed);
+                let d = n.max(1) as f32;
+                (
+                    n,
+                    rate.load(Ordering::Relaxed) as f32 / 10_000.0 / d,
+                    align.load(Ordering::Relaxed) as f32 / 10_000.0 / d,
+                    gap.load(Ordering::Relaxed) as f32 / 100.0 / d,
+                    par.load(Ordering::Relaxed) as f32 / d,
+                    gain.load(Ordering::Relaxed) as f32 / d,
+                )
+            };
+            (
+                pack(
+                    &CLOSE_SAMPLES,
+                    &CLOSE_RATE_X10000,
+                    &CLOSE_ALIGN_X10000,
+                    &CLOSE_GAP_X100,
+                    &CLOSE_PARALLEL,
+                    &CLOSE_GAINING,
+                ),
+                pack(
+                    &CLOSE_SAMPLES_DEEP,
+                    &CLOSE_RATE_DEEP_X10000,
+                    &CLOSE_ALIGN_DEEP_X10000,
+                    &CLOSE_GAP_DEEP_X100,
+                    &CLOSE_PARALLEL_DEEP,
+                    &CLOSE_GAINING_DEEP,
+                ),
+            )
+        }
+
+        /// `(label, samples, parallel share)` per state, heaviest first.
+        pub fn closing_by_state() -> Vec<(&'static str, u64, f32)> {
+            let mut rows: Vec<_> = Self::CLOSE_STATES
+                .iter()
+                .enumerate()
+                .map(|(i, label)| {
+                    let n = CLOSE_BY_STATE[i].load(Ordering::Relaxed);
+                    let p = CLOSE_PARALLEL_BY_STATE[i].load(Ordering::Relaxed);
+                    (*label, n, p as f32 / n.max(1) as f32)
+                })
+                .filter(|(_, n, _)| *n > 0)
+                .collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows
+        }
+
         /// `([all four buckets], [the same in the box])`
         pub fn gates() -> ([u64; 4], [u64; 4]) {
             let read = |a: &[AtomicU64; 4]| {
@@ -753,6 +916,8 @@ pub mod mid_run_diag {
                 .iter()
                 .chain(DUEL_GATE_BOX.iter())
                 .chain(DUEL_REACH.iter())
+                .chain(CLOSE_BY_STATE.iter())
+                .chain(CLOSE_PARALLEL_BY_STATE.iter())
             {
                 c.store(0, Ordering::Relaxed);
             }
@@ -767,6 +932,22 @@ pub mod mid_run_diag {
                 &DUEL_P_X10000,
                 &DUEL_DECISIONS_BOX,
                 &DUEL_P_BOX_X10000,
+                &CLOSE_SAMPLES,
+                &CLOSE_GAP_X100,
+                &CLOSE_PARALLEL,
+                &CLOSE_GAINING,
+                &CLOSE_SAMPLES_DEEP,
+                &CLOSE_GAP_DEEP_X100,
+                &CLOSE_PARALLEL_DEEP,
+                &CLOSE_GAINING_DEEP,
+            ] {
+                c.store(0, Ordering::Relaxed);
+            }
+            for c in [
+                &CLOSE_RATE_X10000,
+                &CLOSE_ALIGN_X10000,
+                &CLOSE_RATE_DEEP_X10000,
+                &CLOSE_ALIGN_DEEP_X10000,
             ] {
                 c.store(0, Ordering::Relaxed);
             }
@@ -1217,6 +1398,72 @@ pub mod mid_run_diag {
     /// stopped the ball — the difference between a keeper diving into
     /// the corner and a keeper falling over next to a stopped ball).
     pub static GK_ACTIONS: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
+
+    /// **How the keeper puts the ball back into play.**
+    ///
+    /// The state census can say he entered `Kicking`; it cannot say the
+    /// ball then travelled eighteen metres to a midfielder, which is what
+    /// `Kicking` did for every keeper below the top few percent. A
+    /// distribution model is only as good as the DISTANCE it produces, so
+    /// each release is counted with the ground it actually covered.
+    ///
+    /// Six release paths, each `(count, summed distance in units)`:
+    ///   0/1 short — `Distributing`, the roll/pass out from the back
+    ///   2/3 throw — `Throwing`
+    ///   4/5 punt from the hands, full height
+    ///   6/7 drop-kick from the hands, flat and fast
+    ///   8/9 long goal kick struck off the floor
+    ///  10/11 clearance — the emergency hoof, from hands or feet
+    ///  12 punts that had a target man in mind, 13 that had nobody
+    ///  14 summed punt apex in metres ×100
+    pub static KEEPER_RELEASE: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
+
+    pub struct KeeperReleaseDiag;
+
+    impl KeeperReleaseDiag {
+        #[inline]
+        fn add(slot: usize, n: u64) {
+            if slot < KEEPER_RELEASE.len() {
+                KEEPER_RELEASE[slot].fetch_add(n, Ordering::Relaxed);
+            }
+        }
+
+        #[inline]
+        fn note_pair(slot: usize, distance: f32) {
+            Self::add(slot, 1);
+            Self::add(slot + 1, distance.max(0.0) as u64);
+        }
+
+        pub fn note_short(distance: f32) {
+            Self::note_pair(0, distance);
+        }
+
+        pub fn note_throw(distance: f32) {
+            Self::note_pair(2, distance);
+        }
+
+        pub fn note_punt(drop_kick: bool, distance: f32, apex: f32, had_target: bool) {
+            Self::note_pair(if drop_kick { 6 } else { 4 }, distance);
+            Self::add(if had_target { 12 } else { 13 }, 1);
+            Self::add(14, (apex.max(0.0) * 100.0) as u64);
+        }
+
+        pub fn note_goal_kick(distance: f32) {
+            Self::note_pair(8, distance);
+        }
+
+        pub fn note_clearance(distance: f32) {
+            Self::note_pair(10, distance);
+        }
+
+        pub fn snapshot() -> [u64; 16] {
+            let mut out = [0u64; 16];
+            for (slot, c) in out.iter_mut().zip(KEEPER_RELEASE.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
 
     /// **Why the keeper stayed on his feet.** `KeeperShotDive::should_launch`
     /// is a conjunction, and "he never dives" cannot say which term killed
@@ -2341,7 +2588,7 @@ pub mod mid_run_diag {
     /// The two legs a corner is now walked rather than teleported, in game
     /// units: `(fetch Σ, carry Σ, carries begun, carry-at-pickup Σ)`. See
     /// `RestartCensus::note_corner_walk`.
-    pub static CORNER_WALK: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+    pub static CORNER_WALK: [AtomicU64; 9] = [const { AtomicU64::new(0) }; 9];
 
     /// Taker states at the moment a waited restart timed out, indexed by
     /// `PlayerState::compact_id` — see `RestartCensus::note_restart_timeout_state`.
@@ -2479,9 +2726,26 @@ pub mod mid_run_diag {
             CORNER_WALK[5].fetch_add(left.max(0.0) as u64, Ordering::Relaxed);
         }
 
-        /// `(fetch Σ, carry Σ, carries begun, carry-at-pickup Σ, legs timed out, Σ short)`.
-        pub fn corner_walk_snapshot() -> [u64; 6] {
-            let mut out = [0u64; 6];
+        /// A corner held on the arc while its taker waited for the box to
+        /// fill, and whether the wait ended because the box arrived or
+        /// because the ceiling did.
+        ///
+        /// The ceiling share is the number that says whether the wait is
+        /// doing any work: if most corners hit it, the box is not filling
+        /// and the delay is pure dead time — which is what
+        /// `AwaitedRestart::CORNER_SETUP_CEILING` has to be read against.
+        pub fn note_corner_setup_wait(ticks: u64, hit_ceiling: bool) {
+            CORNER_WALK[6].fetch_add(1, Ordering::Relaxed);
+            CORNER_WALK[7].fetch_add(ticks, Ordering::Relaxed);
+            if hit_ceiling {
+                CORNER_WALK[8].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(fetch Σ, carry Σ, carries begun, carry-at-pickup Σ, legs timed
+        /// out, Σ short, set-ups waited, Σ wait ticks, ceilings hit)`.
+        pub fn corner_walk_snapshot() -> [u64; 9] {
+            let mut out = [0u64; 9];
             for (slot, c) in out.iter_mut().zip(CORNER_WALK.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }

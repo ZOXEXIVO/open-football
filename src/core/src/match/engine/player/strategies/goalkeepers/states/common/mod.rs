@@ -16,6 +16,11 @@ use crate::r#match::{MatchPlayerLite, PlayerSide, StateChangeResult, StateProces
 use crate::mid_run_diag::{KeeperActionDiag, KeeperDiveDiag};
 use nalgebra::Vector3;
 
+mod punt;
+mod release;
+pub use punt::*;
+pub use release::*;
+
 /// Goalkeeper-specific activity intensity configuration
 pub struct GoalkeeperConfig;
 

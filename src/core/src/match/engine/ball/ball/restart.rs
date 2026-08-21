@@ -14,6 +14,7 @@ use super::{AwaitedRestart, Ball, RunOff};
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::BallEvent;
+use crate::r#match::engine::corner_shape::CornerShape;
 use crate::r#match::events::EventCollection;
 use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
 #[cfg(feature = "match-logs")]
@@ -203,6 +204,7 @@ impl Ball {
             origin: PassOriginRestart::ThrowIn,
             awarded_tick: context.current_tick(),
             patience_ticks: AwaitedRestart::PATIENCE_TICKS,
+            settled_tick: None,
         });
         // Send him. `TakeMe` is the engine's existing "go and get the
         // ball" signal (`MatchPlayer::run_for_ball`), so the taker runs
@@ -217,6 +219,38 @@ impl Ball {
     /// and falls back to the old teleport if he never does. Runs BEFORE
     /// ownership so nothing can claim a ball that is out of play.
     ///
+    /// Which goal a corner taken from `spot` is attacking, as an x
+    /// coordinate. The kick is taken from the byline of the goal being
+    /// attacked, so the nearer end is the answer.
+    fn corner_attacked_goal_x(&self, spot: Vector3<f32>) -> f32 {
+        if spot.x < self.field_width * 0.5 {
+            0.0
+        } else {
+            self.field_width
+        }
+    }
+
+    /// Attackers standing in the penalty area, excluding the taker and
+    /// the goalkeeper. The census the corner set-up waits on.
+    fn attackers_in_the_box(
+        players: &[MatchPlayer],
+        attacking_team: u32,
+        taker_id: u32,
+        goal_x: f32,
+        field_height: f32,
+    ) -> usize {
+        players
+            .iter()
+            .filter(|p| {
+                p.team_id == attacking_team
+                    && p.id != taker_id
+                    && !p.is_sent_off
+                    && !p.tactical_position.current_position.is_goalkeeper()
+                    && CornerShape::is_in_penalty_area(p.position, goal_x, field_height)
+            })
+            .count()
+    }
+
     /// A restart with an [`AwaitedRestart::take_from`] — the corner, and
     /// only the corner — runs the same thing TWICE: he fetches the ball
     /// from wherever it went out, and then carries it to the arc.
@@ -397,6 +431,52 @@ impl Ball {
                 && taker.position.y >= clearance
                 && taker.position.y <= self.field_height - clearance);
         let arrived = range <= AwaitedRestart::REACH && on_the_pitch;
+
+        // **The corner waits for the box.**
+        //
+        // He is on the arc with the ball at his feet and every other
+        // restart would be taken now. A corner is not ready: five runners
+        // have to arrive from the other half, and taking it the moment the
+        // TAKER was ready is the single reason the walked corner was left
+        // switched off — the attacking box at the delivery measured 3.5
+        // against a placed corner's 5.4 and a real 5-7.
+        //
+        // ⚠ **Ahead of the patience gate, and it resets the clock.**
+        // `patience_ticks` bounds how long he may take to REACH the ball;
+        // standing over it is not taking too long, it is the restart
+        // working. Put after the gate instead, the wait ran the same
+        // counter down and the backstop teleport fired on a man already
+        // on the spot: measured **9.5 timed-out legs a match at a mean of
+        // 0.8 m still to go**, which is the signature of a bound expiring
+        // under somebody standing still rather than of a walk that failed.
+        //
+        // See [`AwaitedRestart::settled_tick`].
+        if arrived && await_state.take_from.is_none() {
+            if await_state.origin == PassOriginRestart::Corner {
+                let now = context.current_tick();
+                let settled_at = *await_state.settled_tick.get_or_insert(now);
+                let holding = now.saturating_sub(settled_at);
+                let box_full = Self::attackers_in_the_box(
+                    players,
+                    taker.team_id,
+                    await_state.taker_id,
+                    self.corner_attacked_goal_x(await_state.spot),
+                    self.field_height,
+                ) >= AwaitedRestart::CORNER_BOX_TARGET;
+                let ceiling = holding >= AwaitedRestart::CORNER_SETUP_CEILING;
+                if !box_full && !ceiling {
+                    // No `TakeMe`: he is standing over the ball, not
+                    // running at it, and the nudge would restart a chase
+                    // he has already finished.
+                    await_state.awarded_tick = now;
+                    self.awaiting_restart = Some(await_state);
+                    return;
+                }
+                #[cfg(feature = "match-logs")]
+                RestartCensus::note_corner_setup_wait(holding, ceiling && !box_full);
+            }
+        }
+
         if !arrived && waited < await_state.patience_ticks {
             // Keep sending him. `run_for_ball` is a no-op for a player who
             // is already chasing, so this cannot restart his chase clock;
@@ -620,50 +700,95 @@ impl DeadBall {
 /// along, so the twenty walk into it under `CornerHold` instead of being
 /// written there.
 ///
-/// ⚠ **OFF BY DEFAULT, and the measurement is why.** `OF_CORNER_WALK=on`
-/// arms it. The corner carries its own calibration — the routine chooser,
-/// the discrete aerial contest and the box-occupancy census all key off a
-/// shape that used to be exact and instantaneous — and 60 matches an arm
-/// say the walk is not yet worth what it costs:
+/// # ⚠ ON BY DEFAULT since 2026-08-21. `OF_CORNER_WALK=off` restores the
+/// placed corner.
+///
+/// It was off, and the reasons were measured and real: the attacking box
+/// at the delivery read **3.0 against a placed corner's 5.4**, and **44% of
+/// corners never completed the fetch**, falling back to the backstop
+/// teleport this exists to remove. Four separate faults were behind those
+/// two numbers, none of them the walk itself. Each is documented at its own
+/// site; together they are why the trade has changed:
+///
+/// * **The corner arc was inset 2 u, not [`AwaitedRestart::SPOT_INSET`].**
+///   Its spot sat exactly on `IN_PLAY_CLEARANCE`, so the arrival gate
+///   refused a taker standing on it. That is the whole of the "44% never
+///   complete the fetch": 6.98 legs a match timed out **a mean of 0.3 m
+///   short**. Now 0.13/match. See `Ball::check_wide_of_goal`.
+/// * **`CornerHold` imposed a velocity without an effort floor**, so the
+///   twenty were steered to their stations at the speed cap of whatever
+///   low-intensity state they were drifting in — `Standing` is `Recovery`,
+///   0.12 of top speed. See `CornerHold::apply`.
+/// * **`is_team_attacking_corner` answered FALSE during the whole set-up**,
+///   because it asks who last touched the ball and the last toucher at a
+///   corner is by definition an opponent. `DefenderAttackingCornerState`
+///   bails to `Returning` on that, so the two pushed-up centre-backs turned
+///   round and ran back the tick the corner was awarded. Invisible while
+///   corners were placed — they were teleported into the box 50 ms later.
+/// * **The kick was taken the moment the TAKER was ready**, not when the
+///   box was. See [`AwaitedRestart::settled_tick`].
+///
+/// Measured after all four, **3 runs × 100 matches an arm**:
 ///
 /// | per match | placed | walked |
 /// |---|---|---|
-/// | box at the kick, defenders | 7.0 (worst 7) | 6.5 (worst 2) |
-/// | box at the kick, **attackers** | **5.4** (real 5-7) | **3.0** |
-/// | corners | 8.9 (real ~10.4) | 7.8 |
-/// | ball dead | 287 s | 400 s |
-/// | goals | 2.67 | 2.62 |
+/// | goals | 2.56 | 2.60 |
+/// | shots / team | 12.83 | 12.90 |
+/// | saves / on-target | 67.3% | 66.5% |
+/// | corners | 7.57 | 7.30 |
+/// | box at the kick, defenders | 7.0 | 7.0 |
+/// | box at the kick, **attackers** | **5.43** | **4.93** |
 ///
-/// Two things have to land before it can be the default, and both are
-/// visible in that table:
+/// Everything but the last row is inside run-to-run noise (the placed arm's
+/// own corner rate spans 7.2-8.1 across its three runs). The last row is the
+/// honest cost: half a body.
 ///
-/// * **The attacking box does not fill.** The stations are planned and the
-///   men are released to walk to them, but the kick is taken the moment
-///   the TAKER is ready — which for a short fetch is a couple of seconds,
-///   nowhere near long enough for five runners to arrive. A real taker
-///   waits for the box. The kick already waits for one man; it has to wait
-///   for the shape.
-/// * **44% of corners never complete the fetch** and fall back to the
-///   backstop teleport, which is the artefact this exists to remove.
-///   Raising the bound from 12 s to 30 s
-///   ([`AwaitedRestart::CORNER_CEILING`]) barely moved it, so the takers
-///   are not running out of clock — and `corner_setup_tests::
-///   the_taker_actually_runs_at_the_ball` shows one sprinting to the ball
-///   and setting it down well inside budget, so it is not the mechanism
-///   either. The next instrument is a corner-specific taker-state
-///   histogram at timeout, the same one that solved the goal kick
-///   ([[goal-kick-restart-teleport]]).
+/// **What it buys.** A placed corner writes the ball 16.4 m onto the arc,
+/// teleports the taker onto it, and writes **seventeen other players a mean
+/// of 30.3 m each** — worst case 84 m — all on one tick. Measured over 12
+/// matches that is ~4,950 m of visible relocation per match against the
+/// ball's own ~270 m for the entire rest of the engine. The corner is not
+/// merely the largest teleport in the match; it is larger than everything
+/// else put together, by a factor of eighteen, and the ball is 2.5% of it.
+///
+/// Half an attacker in the box is worth that — and the 5.43 the placed arm
+/// posts is not a quality the simulation earned, it is seventeen men being
+/// written into position.
+/// The A/B arm for walking the taker to a free kick or a penalty.
+///
+/// The foul restart was the last one in the engine still handing its taker
+/// the ball on the spot and teleporting him onto it — every other restart
+/// (throw-in, goal kick, corner, offside free kick) awards an
+/// [`AwaitedRestart`] and sends him to walk. Armed, so does this one.
+///
+/// It carries its own switch because it is the one restart conversion that
+/// changes how long the ball is DEAD, and dead time is upstream of fouls,
+/// shots and the save rate. `OF_FOUL_WALK=off` restores the teleport.
+pub struct FoulWalk;
+
+impl FoulWalk {
+    /// False only when `OF_FOUL_WALK=off`.
+    pub fn armed() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| {
+            std::env::var("OF_FOUL_WALK")
+                .map(|v| v != "off" && v != "0")
+                .unwrap_or(true)
+        })
+    }
+}
+
 pub struct CornerWalk;
 
 impl CornerWalk {
-    /// True only when `OF_CORNER_WALK=on`. Off, the ball, the taker and
-    /// the shape are all placed, exactly as they always were.
+    /// False only when `OF_CORNER_WALK=off` — the ball, the taker and the
+    /// shape are all placed again, exactly as they used to be.
     pub fn armed() -> bool {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *ON.get_or_init(|| {
             std::env::var("OF_CORNER_WALK")
-                .map(|v| v == "on" || v == "1")
-                .unwrap_or(false)
+                .map(|v| v != "off" && v != "0")
+                .unwrap_or(true)
         })
     }
 }

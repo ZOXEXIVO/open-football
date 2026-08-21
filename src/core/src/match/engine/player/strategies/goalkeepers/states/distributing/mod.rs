@@ -49,6 +49,10 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
 
         // Try to find the best pass option
         if let Some(teammate) = self.find_best_pass_option(ctx) {
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperReleaseDiag::note_short(
+                (teammate.position - ctx.player.position).norm(),
+            );
             // Execute the pass and transition to returning to goal
             return Some(StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::ReturningToGoal,

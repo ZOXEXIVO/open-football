@@ -58,10 +58,42 @@ impl<'b> BallOperationsImpl<'b> {
     /// centre-backs push up to attack the delivery. Keys off the
     /// current-or-last owner being a teammate so it stays true during the
     /// cross flight (when the ball is briefly unowned).
+    ///
+    /// # ⚠ While the corner is being SET UP, ask the restart, not the ball
+    ///
+    /// The current-or-last-owner test below cannot answer this during the
+    /// set-up, and it does not fail neutrally — it answers **false**. The
+    /// ball is dead, so `tick_awaited_restart` strips `current_owner`
+    /// every tick, and the last man to touch it is by definition an
+    /// OPPONENT: he is the reason it is a corner.
+    ///
+    /// `DefenderAttackingCornerState` bails straight to `Returning` on
+    /// this being false, so the two pushed-up centre-backs turned round
+    /// and ran back to their own half the tick the corner was awarded.
+    /// While corners were PLACED that was invisible — the cross left the
+    /// taker's boot 50 ms after the award and they had already been
+    /// teleported into the box — but it is the whole of why the walked
+    /// corner's box would not fill: measured with `OF_CORNER_WALK=on`,
+    /// **3.6 attackers in the box at the delivery against a placed
+    /// corner's 5.4**, and a per-player probe at the kick showed the
+    /// stationed men standing ON their stations (a mean 3 u away) with
+    /// the centre-backs missing entirely, in `Covering` and `HoldingLine`.
+    ///
+    /// A pending corner restart taken by one of my own team IS my team
+    /// attacking a corner. That is what the set-up is.
     pub fn is_team_attacking_corner(&self) -> bool {
         use crate::r#match::PassOriginRestart;
         if self.ctx.tick_context.ball.pass_origin_restart != PassOriginRestart::Corner {
             return false;
+        }
+        if let Some(taker) = self.ctx.tick_context.ball.restart_taker {
+            return self
+                .ctx
+                .context
+                .players
+                .by_id(taker)
+                .map(|p| p.team_id == self.ctx.player.team_id)
+                .unwrap_or(false);
         }
         let owner = self.ctx.tick_context.ball.current_owner.or(self
             .ctx

@@ -1,3 +1,4 @@
+use crate::r#match::engine::flow::field::ResetReason;
 use crate::r#match::engine::goal::assign_kickoff;
 use crate::r#match::{
     MatchContext, MatchField, MatchState, PlayMatchStateResult, PlayerSide, Score, TeamsTactics,
@@ -89,17 +90,20 @@ impl StateManager {
             MatchState::FirstHalf => {
                 Self::play_rest_time(field);
 
-                field.reset_players_positions();
+                // ⚠ Overwritten ten milliseconds later by the `HalfTime`
+                // arm below, after `swap_squads`, and never sampled in
+                // between — see [`ResetReason::PeriodDead`].
+                field.reset_players_positions(ResetReason::PeriodDead);
                 field.ball.reset();
             }
             MatchState::HalfTime => {
                 // Half-time finished - reset time for second half
                 context.reset_period_time();
-                field.reset_players_positions();
+                field.reset_players_positions(ResetReason::Period);
                 field.ball.reset();
                 // Second half kicks off — Away team (now playing Left
                 // after the halftime swap) takes it.
-                assign_kickoff(field, PlayerSide::Left);
+                assign_kickoff(field, PlayerSide::Left, None);
             }
             MatchState::SecondHalf => {
                 // Second half finished. If the tie rolls to extra time the
@@ -107,10 +111,10 @@ impl StateManager {
                 if context.is_knockout && context.score.is_tied() {
                     Self::play_rest_time(field);
                     context.reset_period_time();
-                    field.reset_players_positions();
+                    field.reset_players_positions(ResetReason::Period);
                     field.ball.reset();
                     // Extra time kicks off — pick Left by convention.
-                    assign_kickoff(field, PlayerSide::Left);
+                    assign_kickoff(field, PlayerSide::Left, None);
                 }
             }
             MatchState::ExtraTime => {

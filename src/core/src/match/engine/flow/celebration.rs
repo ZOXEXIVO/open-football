@@ -41,6 +41,7 @@
 
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::engine::ball::ball::net::GoalNet;
+use crate::r#match::engine::flow::field::ResetReason;
 use crate::r#match::{MatchContext, MatchField, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
 
@@ -312,7 +313,9 @@ impl GoalCelebration {
     /// `false` once the restart has been performed and the goal is over.
     pub fn advance(&mut self, field: &mut MatchField, context: &MatchContext) -> bool {
         if context.total_match_time >= self.restart_at_ms {
-            Self::restart(field, self.kickoff_side);
+            // The retriever is standing on the centre spot with the ball —
+            // he takes it. See `assign_kickoff`.
+            Self::restart(field, self.kickoff_side, self.retriever_id);
             return false;
         }
 
@@ -326,15 +329,21 @@ impl GoalCelebration {
     /// at, and it leaves exactly the state it always did: everybody on their
     /// formation spot, the ball on the centre spot, the conceding side
     /// standing over it.
-    pub fn restart(field: &mut MatchField, kickoff_side: PlayerSide) {
-        field.reset_players_positions();
+    pub fn restart(field: &mut MatchField, kickoff_side: PlayerSide, taker: Option<u32>) {
+        // Only leave him standing if he is the man who takes it — the
+        // retriever is sometimes the beaten goalkeeper, who is not.
+        // `can_take_kickoff` is the one test, asked here and again inside
+        // `assign_kickoff`, so the two cannot disagree and strand a player
+        // off his spot with somebody else on the ball.
+        let keep = taker.filter(|id| super::goal::can_take_kickoff(field, kickoff_side, *id));
+        field.reset_players_positions(ResetReason::Restart { keep });
         for player in field.players.iter_mut() {
             // Nobody restarts mid-leap.
             player.height = 0.0;
             player.vertical_speed = 0.0;
         }
         field.ball.reset();
-        super::goal::assign_kickoff(field, kickoff_side);
+        super::goal::assign_kickoff(field, kickoff_side, keep);
     }
 
     /// Where the celebration happens: infield of the corner flag nearest to
@@ -475,6 +484,32 @@ impl GoalCelebration {
                 // The man with the ball keeps going whatever the clock says:
                 // the restart needs it back on the centre spot. A side that
                 // is behind runs it there.
+                //
+                // ⚠ **And he stays there, holding it, until the restart.**
+                //
+                // He should not: `pick_retriever` sends the GOALKEEPER
+                // unless the side is chasing, and a keeper cannot take the
+                // kickoff — so `GoalCelebration::restart` sends him back to
+                // his line, which the player census reports as 0.3 players
+                // a restart at a suspiciously tight **400 u mean, 50 m**
+                // (the centre spot to a goalkeeper's slot, almost exactly).
+                // 33 m/match.
+                //
+                // Walking him home instead was tried and reverted, and the
+                // reason is worth keeping: while `collected` is up,
+                // `move_ball` parks the ball **on the carrier's own
+                // coordinate every tick** — that is the signal the replay
+                // reads a carried ball by. So the instant he walks anywhere
+                // the ball goes with him, and releasing it costs a jump of
+                // up to a metre on the grass, caught immediately by
+                // `the_ball_is_picked_out_of_the_net_rather_than_snapping_
+                // into_his_hands`. Trading 33 m of player relocation for a
+                // new ball one is not a trade.
+                //
+                // The fix that would work is a put-down eased like
+                // `PICKUP_MS` is (a `putdown_from` / `putdown_at_ms` pair,
+                // mirroring the pick-up), after which he is free to walk.
+                // Left for whoever picks this up next.
                 Role::Retriever if self.collected => {
                     (centre, if self.chasing { Self::RUN } else { Self::JOG })
                 }
@@ -633,6 +668,8 @@ impl GoalCelebration {
         // inside the mesh's give, and a keeper who can only reach the back
         // bar can never quite get to it.
         let reach_behind = GoalNet::DEPTH + GoalNet::GIVE_BACK;
+        #[cfg(feature = "match-logs")]
+        let before = player.position;
         player.position.x = player
             .position
             .x
@@ -640,6 +677,15 @@ impl GoalCelebration {
         player.position.y = player.position.y.clamp(
             Self::TOUCHLINE_MARGIN,
             field_height - Self::TOUCHLINE_MARGIN,
+        );
+        // The celebration's own boundary, booked against the same
+        // `boundary_clamp` control row as the match one: it can only undo
+        // the step that took him out, so it should never appear either.
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::ball::ball::teleport::PlayerTeleportCensus::note(
+            crate::r#match::engine::ball::ball::teleport::PSITE_BOUNDARY,
+            before,
+            player.position,
         );
     }
 

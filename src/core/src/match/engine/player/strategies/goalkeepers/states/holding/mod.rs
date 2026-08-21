@@ -1,11 +1,9 @@
-use crate::PlayerFieldPositionGroup;
 use crate::r#match::engine::ball::ball::HandlingVerdict;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision, KeeperSetPosition,
+    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision, KeeperRelease, KeeperSetPosition,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
-use crate::r#match::teamplay::coach::CoachInstruction;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -32,15 +30,6 @@ use nalgebra::Vector3;
 /// his gloves for 27.9% of the match against a real 3-6%.
 const MIN_HOLDING_DURATION: u64 = 100;
 const MAX_HOLDING_DURATION: u64 = 275;
-
-/// Furthest a keeper can realistically throw. Beyond this the ball has
-/// to be kicked.
-const THROW_RANGE: f32 = 110.0;
-/// Radius used to judge whether a short outlet is actually free.
-const MARKING_RADIUS: f32 = 18.0;
-/// How far up the pitch we look for an opponent when deciding whether
-/// our own third is being pressed.
-const PRESS_RADIUS: f32 = 140.0;
 
 /// How the keeper puts the ball back into play once it is in their hands.
 ///
@@ -185,11 +174,11 @@ impl GoalkeeperHoldingState {
         // Composure under pressure gates whether playing out is sane.
         let composure = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
 
-        let free_short = Self::free_outlets(ctx, THROW_RANGE * 0.45);
-        let free_throw = Self::free_outlets(ctx, THROW_RANGE);
-        let press = Self::press_pressure(ctx);
-        let counter = Self::counter_opportunity(ctx);
-        let directness = Self::directness(ctx);
+        let free_short = KeeperRelease::free_outlets(ctx, KeeperRelease::SHORT_RANGE);
+        let free_throw = KeeperRelease::free_outlets(ctx, KeeperRelease::THROW_RANGE);
+        let press = KeeperRelease::press_pressure(ctx);
+        let counter = KeeperRelease::counter_opportunity(ctx);
+        let directness = KeeperRelease::directness(ctx);
 
         // Short build-up: needs a free nearby outlet AND the composure to
         // use it. The press directly suppresses it — that is the whole
@@ -217,91 +206,5 @@ impl GoalkeeperHoldingState {
         } else {
             DistributionChoice::Kick
         }
-    }
-
-    /// Fraction (0..1) of nearby teammates inside `range` who are not
-    /// tightly marked. This is "have I got someone to give it to?", the
-    /// question that decides whether playing out is on at all.
-    fn free_outlets(ctx: &StateProcessingContext, range: f32) -> f32 {
-        let mut total = 0u32;
-        let mut free = 0u32;
-        for teammate in ctx.players().teammates().nearby(range) {
-            total += 1;
-            if ctx
-                .tick_context
-                .grid
-                .opponents(teammate.id, MARKING_RADIUS)
-                .next()
-                .is_none()
-            {
-                free += 1;
-            }
-        }
-        if total == 0 {
-            return 0.0;
-        }
-        // Three free outlets is a comfortable picture; more adds nothing.
-        (free as f32 / 3.0).min(1.0)
-    }
-
-    /// How aggressively the opposition is squeezing our own third (0..1).
-    /// Counts opponents who have committed into the area the keeper would
-    /// have to play through.
-    fn press_pressure(ctx: &StateProcessingContext) -> f32 {
-        let committed = ctx.players().opponents().nearby(PRESS_RADIUS).count();
-        // Two opponents pressing high is normal; four-plus is a full press.
-        ((committed as f32 - 1.0) / 3.0).clamp(0.0, 1.0)
-    }
-
-    /// How exposed the opposition is right now (0..1) — the trigger for a
-    /// fast throw. Reads how many of our runners are ahead of the ball
-    /// against how many opponents are back, which is what a keeper
-    /// actually sees after claiming a cross against a committed attack.
-    fn counter_opportunity(ctx: &StateProcessingContext) -> f32 {
-        let Some(side) = ctx.player.side else {
-            return 0.0;
-        };
-        let field_width = ctx.context.field_size.width as f32;
-
-        let upfield_teammates = ctx
-            .players()
-            .teammates()
-            .all()
-            .filter(|t| {
-                !matches!(
-                    t.tactical_positions.position_group(),
-                    PlayerFieldPositionGroup::Goalkeeper
-                ) && side.attacking_progress_x(t.position.x, field_width) > 0.45
-            })
-            .count();
-        let recovering_opponents = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|o| side.attacking_progress_x(o.position.x, field_width) < 0.55)
-            .count();
-
-        // A break is on when our runners aren't outnumbered ahead of the
-        // ball. Two spare bodies is a full counter.
-        let spare = upfield_teammates as f32 - recovering_opponents as f32;
-        ((spare + 1.0) / 3.0).clamp(0.0, 1.0)
-    }
-
-    /// How direct the manager wants the side to be (0..1). A side told to
-    /// push forward or chase the game bypasses midfield; one told to slow
-    /// down or keep the ball plays out.
-    fn directness(ctx: &StateProcessingContext) -> f32 {
-        let from_instruction = match ctx.team().coach_instruction() {
-            CoachInstruction::AllOutAttack => 0.90,
-            CoachInstruction::PushForward => 0.60,
-            CoachInstruction::ParkTheBus => 0.55,
-            CoachInstruction::Normal => 0.30,
-            CoachInstruction::SlowDown => 0.10,
-            CoachInstruction::WasteTime => 0.0,
-        };
-        // Patient build-up sides go long less often regardless of the
-        // in-game instruction.
-        let patience = ctx.team().build_up_patience().clamp(0.0, 1.0);
-        (from_instruction * (1.0 - patience * 0.5)).clamp(0.0, 1.0)
     }
 }

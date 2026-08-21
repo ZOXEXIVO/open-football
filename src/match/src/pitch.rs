@@ -204,39 +204,74 @@ impl Pitch {
     /// readers, no chance of them disagreeing.
     pub const SUN: Vec3 = Vec3::new(-0.4, -1.0, 0.35);
 
+    /// The pitch as the mower left it: the shade the grass lies in going away
+    /// from the roller, and the shade of the same grass lying back toward it.
+    ///
+    /// Sampled off broadcast football rather than picked off a colour wheel.
+    /// Real grass on camera is a YELLOW-green — red comfortably ahead of blue —
+    /// and considerably less saturated than people expect, because a stadium is
+    /// lit flat and the camera is looking at dust, wear and seed heads as much
+    /// as at leaf. A blue-shifted green is snooker baize or AstroTurf, which is
+    /// what the first pair here (0.17 / 0.44 / 0.20) came out as.
+    ///
+    /// The two are the same grass mown in opposite directions and NOT two
+    /// different greens. Leaf bent away from you reflects more sky and looks
+    /// lighter and slightly cooler; leaf bent toward you shows its shadowed
+    /// side and looks darker and a touch greyer. So the pair differs by about
+    /// 16% in luminance — the real figure for mowing stripes — and only
+    /// slightly in hue. Making them differ by brightness alone is what makes
+    /// stripes look painted on.
+    ///
+    /// Both are a third off the pair they replace (#497434 / #3A6230), which
+    /// were lit like a midday friendly.
+    ///
+    /// A third off the ALBEDO is nothing like a third off the picture, and the
+    /// gap is worth knowing before reaching in here: the scene is tonemapped,
+    /// and the tonemapper spends most of a change this size compressing it.
+    /// Measured on the same broadcast frame, four patches of turf, with the
+    /// upper stand and the hoarding as controls (both moved under 0.3%, so
+    /// there is no exposure shift hiding in this):
+    ///
+    /// - a quarter off the albedo — the first attempt — moved the rendered
+    ///   turf by 12%, which does not read as a darker pitch. It reads as the
+    ///   same pitch.
+    /// - a third off, which is what is here, moves it by 19%.
+    ///
+    ///   mown  #325223    against  #284620   (16% darker, a shade greyer)
+    pub(crate) const MOWN: Color = Color::srgb(0.196, 0.323, 0.137);
+    const AGAINST: Color = Color::srgb(0.156, 0.273, 0.126);
+
+    /// How much pitch one tile of [`Textures::turf`] covers, in metres.
+    ///
+    /// Two, which against that texture's 1024 texels is 512 to the metre. Any
+    /// larger and the blades go soft before the camera is down on the deck
+    /// (`CameraFlight::HEIGHT` lets it to 0.6 m); any smaller and the tile
+    /// repeats often enough that the eye can start hunting for the period.
+    const TURF_TILE: f32 = 2.0;
+
+    /// The surround, as a fraction of the pitch's own light in the space the
+    /// shader multiplies in.
+    ///
+    /// The grass beyond the touchlines is the same turf, unlit and in the
+    /// shadow of the stand, so it keeps the pitch's hue and simply loses most
+    /// of its value — it was a near-black blue-green (0.05 / 0.13 / 0.07) that
+    /// belonged to nothing else in the scene, and a surround in a different hue
+    /// family from the pitch reads as a hole cut in the world rather than as
+    /// ground. A fraction rather than a colour of its own for the same reason
+    /// the stripes are: it now carries the same blade texture, so the only
+    /// thing that may differ is the light falling on it, and darkening the
+    /// pitch has to darken this with it or the hole comes back.
+    ///
+    /// Blue held up against red, because a shadow outdoors is lit by sky.
+    const SHADOW: Color = Color::linear_rgb(0.165, 0.139, 0.232);
+
     pub fn spawn(
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
         mut images: ResMut<Assets<Image>>,
     ) {
-        // The grass beyond the touchlines: the same turf, unlit and in the
-        // shadow of the stand, so it keeps the pitch's yellow-green hue and
-        // simply loses most of its value. It was a near-black blue-green
-        // (0.05 / 0.13 / 0.07) that belonged to nothing else in the scene,
-        // and a surround in a different hue family from the pitch reads as
-        // a hole cut in the world rather than as ground.
-        let surround = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.106, 0.169, 0.086),
-            perceptual_roughness: 1.0,
-            ..default()
-        });
-        // ⚠ **Set 1 cm below the turf, not 5.** It only ever had to clear
-        // the turf's own z-fighting, and 5 cm was free while nothing was
-        // ever drawn out here — the ball was snapped back onto the pitch
-        // the instant it crossed a line. It is not free now: a ball put out
-        // of play runs into this strip and comes to rest on it (`RunOff`),
-        // and the engine puts it at height zero, so at −0.05 it floated a
-        // visible finger's width above the ground with its contact shadow
-        // (pinned at +0.02) hanging under it. The fetching player's boots
-        // did the same.
-        commands.spawn((
-            Mesh3d(meshes.add(Plane3d::default().mesh().size(320.0, 260.0))),
-            MeshMaterial3d(surround),
-            Transform::from_xyz(0.0, -0.01, 0.0),
-        ));
-
-        Self::spawn_turf(&mut commands, &mut meshes, &mut materials);
+        Self::spawn_turf(&mut commands, &mut meshes, &mut materials, &mut images);
         Self::spawn_markings(&mut commands, &mut meshes, &mut materials);
         // Frame and netting both. The netting is no longer scenery — it is
         // deformable, and `Netting::ripple` drives it from the ball.
@@ -264,54 +299,97 @@ impl Pitch {
         ));
     }
 
+    /// The ground itself: the grass inside the touchlines, and the grass
+    /// outside them.
+    ///
+    /// One texture for all of it. The blades are painted in [`Self::MOWN`], and
+    /// every surface here is that same grass under a different light — the
+    /// stripe lying the other way, the shadow of the stand — so each is a TINT
+    /// on the one sheet rather than a colour of its own. Which is the point: a
+    /// second green written down anywhere in here is a green that can drift
+    /// away from the first, and a pitch whose stripes are two different greens
+    /// is a pitch with stripes painted on it.
     fn spawn_turf(
         commands: &mut Commands,
         meshes: &mut Assets<Mesh>,
         materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
     ) {
-        // Turf colour, sampled off broadcast football rather than picked
-        // off a colour wheel.
-        //
-        // The old pair had MORE BLUE THAN RED (0.17 / 0.44 / 0.20), which
-        // is what made it read as synthetic: a blue-shifted green is
-        // snooker baize or AstroTurf. Real grass on camera is a
-        // yellow-green — red comfortably ahead of blue — and considerably
-        // less saturated than people expect, because a stadium is lit flat
-        // and the camera is looking at dust, wear and seed heads as much
-        // as at leaf.
-        //
-        // The two shades are the same grass mown in opposite directions,
-        // NOT two different greens. Leaf bent away from you reflects more
-        // sky and looks lighter and slightly cooler; leaf bent toward you
-        // shows its shadowed side and looks darker and a touch greyer. So
-        // the pair differs by ~15% in luminance (the real figure for
-        // mowing stripes) and only slightly in hue. Making them differ by
-        // brightness alone is what makes stripes look painted on.
-        //
-        //   light  #497434    dark  #3A6230   (16% darker, a shade greyer)
-        let shades = [
-            materials.add(StandardMaterial {
-                base_color: Color::srgb(0.286, 0.455, 0.204),
-                perceptual_roughness: 1.0,
-                ..default()
-            }),
-            materials.add(StandardMaterial {
-                base_color: Color::srgb(0.228, 0.385, 0.188),
-                perceptual_roughness: 1.0,
-                ..default()
-            }),
-        ];
+        let grass = Textures::turf(images, Self::MOWN);
+
+        // The second stripe, as a fraction of the first channel by channel, in
+        // the LINEAR space the shader multiplies in. Derived from the pair
+        // rather than written down, so the 16% is the 16% and cannot be typed
+        // in twice.
+        let mown = LinearRgba::from(Self::MOWN);
+        let against = LinearRgba::from(Self::AGAINST);
+        let turned = Color::linear_rgb(
+            against.red / mown.red,
+            against.green / mown.green,
+            against.blue / mown.blue,
+        );
 
         let stripe_length = Field::LENGTH / Self::STRIPES as f32;
+        // One tile of grass to every `TURF_TILE` metres, on both axes, so the
+        // blades come out square on the ground instead of combed by the shape
+        // of whichever quad is carrying them.
+        //
+        // Every stripe starts the tile at the same phase, which is only
+        // harmless because the texture holds nothing bigger than a leaf: there
+        // is no feature at 7 m for the repeat to make visible, and the seam
+        // between one stripe and the next already has a change of shade across
+        // it. Put anything larger in that texture and this needs a per-stripe
+        // offset — and a material per stripe to carry it.
+        //
+        // White for the first: the sheet is already painted in `MOWN`, so the
+        // stripe the mower left going away is the grass exactly as drawn.
+        let stripes = [Color::WHITE, turned].map(|tint| {
+            materials.add(StandardMaterial {
+                base_color: tint,
+                base_color_texture: Some(grass.clone()),
+                uv_transform: Affine2::from_scale(Vec2::new(
+                    stripe_length / Self::TURF_TILE,
+                    Field::WIDTH / Self::TURF_TILE,
+                )),
+                perceptual_roughness: 1.0,
+                ..default()
+            })
+        });
+
         let stripe = meshes.add(Plane3d::default().mesh().size(stripe_length, Field::WIDTH));
         for index in 0..Self::STRIPES {
             let centre = -Field::HALF_LENGTH + stripe_length * (index as f32 + 0.5);
             commands.spawn((
                 Mesh3d(stripe.clone()),
-                MeshMaterial3d(shades[index % 2].clone()),
+                MeshMaterial3d(stripes[index % 2].clone()),
                 Transform::from_xyz(centre, 0.0, 0.0),
             ));
         }
+
+        // Beyond the touchlines. Same grass at the same scale, so the pitch
+        // does not stop at a change of texture as well as a change of light.
+        const SURROUND: Vec2 = Vec2::new(320.0, 260.0);
+        let surround = materials.add(StandardMaterial {
+            base_color: Self::SHADOW,
+            base_color_texture: Some(grass),
+            uv_transform: Affine2::from_scale(SURROUND / Self::TURF_TILE),
+            perceptual_roughness: 1.0,
+            ..default()
+        });
+        // ⚠ **Set 1 cm below the turf, not 5.** It only ever had to clear
+        // the turf's own z-fighting, and 5 cm was free while nothing was
+        // ever drawn out here — the ball was snapped back onto the pitch
+        // the instant it crossed a line. It is not free now: a ball put out
+        // of play runs into this strip and comes to rest on it (`RunOff`),
+        // and the engine puts it at height zero, so at −0.05 it floated a
+        // visible finger's width above the ground with its contact shadow
+        // (pinned at +0.02) hanging under it. The fetching player's boots
+        // did the same.
+        commands.spawn((
+            Mesh3d(meshes.add(Plane3d::default().mesh().size(SURROUND.x, SURROUND.y))),
+            MeshMaterial3d(surround),
+            Transform::from_xyz(0.0, -0.01, 0.0),
+        ));
     }
 
     fn spawn_markings(

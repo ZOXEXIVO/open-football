@@ -1,5 +1,7 @@
 use crate::r#match::events::Event;
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperRelease,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
@@ -22,6 +24,10 @@ impl StateProcessingHandler for GoalkeeperThrowingState {
 
         // 2. Find the best teammate to throw the ball to
         if let Some((teammate, _reason)) = self.find_best_pass_option(ctx) {
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperReleaseDiag::note_throw(
+                (teammate.position - ctx.player.position).norm(),
+            );
             return Some(StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::Standing,
                 Event::PlayerEvent(PlayerEvent::PassTo(
@@ -63,7 +69,15 @@ impl GoalkeeperThrowingState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<(MatchPlayerLite, &'static str)> {
-        // Throwing has limited range, but still prefer longer throws
-        PassEvaluator::find_best_pass_option(ctx, 150.0)
+        // Throwing has limited range, but still prefer longer throws.
+        //
+        // The search radius was a private 150u — 18.75 m — while the
+        // decision to throw at all was taken against a 110u "throw range"
+        // in `HoldingBall`. Neither was in metres and neither matched the
+        // other. A keeper's throw reaches the best part of forty metres,
+        // which is the whole reason it competes with a kick; measured at
+        // 150u the average throw travelled **9.5 m**, a roll to the nearest
+        // full-back. One shared range now decides both.
+        PassEvaluator::find_best_pass_option(ctx, KeeperRelease::THROW_RANGE)
     }
 }

@@ -1,6 +1,8 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::events::Event;
-use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
+use crate::r#match::goalkeepers::states::common::{
+    ActivityIntensity, GoalkeeperCondition, KeeperPunt,
+};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -10,6 +12,26 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
+/// The goalkeeper's long ball.
+///
+/// Two things reach this state and they are struck differently:
+///
+/// * **From his gloves** — the punt. He drops it and hits it, and it is
+///   aimed at a channel at his own kicking range rather than at a man's
+///   feet. [`KeeperPunt`] owns the whole model, including why this cannot
+///   be a `PassTo`.
+/// * **From the floor** — a long goal kick, still resolved as a pass at a
+///   chosen receiver, because a dead ball struck off the deck is aimed
+///   rather than launched.
+///
+/// Before the punt existed this state ran the pass search for both, and
+/// the search's distance bands were written in units while its comments
+/// read them as metres. Its "extreme kick" tier needed a distribution
+/// composite over 0.62 against a population value of 0.34, so for almost
+/// every keeper in the game the top-scoring option was a midfielder
+/// 100-200u — twelve to twenty-five METRES — away. A state entered around
+/// ten times a keeper a match, named `Kicking`, played a short pass every
+/// single time.
 #[derive(Default, Clone)]
 pub struct GoalkeeperKickingState {}
 
@@ -22,8 +44,31 @@ impl StateProcessingHandler for GoalkeeperKickingState {
             ));
         }
 
-        // 2. Find the best teammate to kick the ball to
+        // 2. In his hands — punt it. No receiver, no lead, no claim
+        //    privilege: a ball dropped on the halfway line belongs to
+        //    whoever gets up highest.
+        if KeeperPunt::from_hands(ctx) {
+            if let Some(plan) = KeeperPunt::plan(ctx) {
+                #[cfg(feature = "match-logs")]
+                crate::mid_run_diag::KeeperReleaseDiag::note_punt(
+                    plan.is_drop_kick(),
+                    (plan.target - ctx.player.position).norm(),
+                    plan.apex,
+                    plan.target_man.is_some(),
+                );
+                return Some(StateChangeResult::with_goalkeeper_state_and_event(
+                    GoalkeeperState::ReturningToGoal,
+                    Event::PlayerEvent(PlayerEvent::ClearBall(plan.velocity)),
+                ));
+            }
+        }
+
+        // 3. Off the deck: find the best teammate to kick the ball to
         if let Some((teammate, _reason)) = self.find_best_pass_option(ctx) {
+            #[cfg(feature = "match-logs")]
+            crate::mid_run_diag::KeeperReleaseDiag::note_goal_kick(
+                (teammate.position - ctx.player.position).norm(),
+            );
             return Some(StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::Standing,
                 Event::PlayerEvent(PlayerEvent::PassTo(
@@ -59,24 +104,40 @@ impl StateProcessingHandler for GoalkeeperKickingState {
 }
 
 impl GoalkeeperKickingState {
+    /// Target search for a long GOAL KICK — a placed ball struck off the
+    /// floor at a chosen man. The punt does not come through here.
     fn find_best_pass_option<'a>(
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<(MatchPlayerLite, &'static str)> {
         // Kicking range scales with the unified distribution profile —
-        // weak keepers can't reliably reach 300m, so cap the search.
+        // weak keepers can't reliably reach the far end, so cap the
+        // search. `field_width` is 840u = 105 m, so the band runs roughly
+        // 126 m for the weakest keeper to 294 m for the best — well past
+        // the pitch either way, which is deliberate: the SCORING below is
+        // what decides how far he actually looks.
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
         let max_distance = ctx.context.field_size.width as f32 * (1.2 + prof.distribution * 1.6);
 
         let vision_skill = ctx.player.skills.mental.vision / 20.0;
         let kicking_skill = ctx.player.skills.goalkeeping.kicking / 20.0;
 
+        // How far up the pitch this keeper can put a goal kick, in UNITS.
+        // A goal kick off the deck carries a little less than a punt from
+        // the hands; `KeeperPunt` owns the range model and this is a
+        // fraction of it, so the two cannot drift apart.
+        //
+        // Every band below used to be a raw literal — 60 / 100 / 200 /
+        // 300 units — annotated in metres, which put the "long kick" band
+        // at 7.5-12.5 m and the "extreme" one at 37.5. Expressed against
+        // the keeper's own reach they mean what they say.
+        let reach = KeeperPunt::goal_kick_reach(ctx, &prof);
+
         // Extreme-kick capability is now the unified distribution
         // composite — concentration / decisions / composure already
         // baked in.
         let extreme_capability = prof.distribution;
-        let can_attempt_extreme = extreme_capability > 0.62;
-        let prefers_extreme = extreme_capability > 0.78;
+        let prefers_extreme = extreme_capability > 0.62;
 
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
@@ -113,62 +174,45 @@ impl GoalkeeperKickingState {
                 _ => 0.4,
             };
 
-            // Distance-based scoring with vision weighting
-            let distance_score = if distance > 300.0 {
-                // Extreme long kicks (300m+)
-                if !can_attempt_extreme {
-                    0.2 // Very poor option without skills
-                } else if prefers_extreme && is_forward {
-                    // Elite kicker targeting forward - spectacular play
-                    let extreme_bonus = (extreme_capability - 0.8) * 10.0; // 0.0 to 2.0
-                    3.5 + extreme_bonus
-                } else if is_forward {
-                    2.5 + (extreme_capability * 1.5)
+            // Distance scoring against WHAT THIS KEEPER CAN HIT. A ball at
+            // the very end of his range is his best long option; past it
+            // he cannot reach, and well short of it he is wasting the kick.
+            let of_reach = distance / reach.max(1.0);
+            let distance_score = if of_reach > 1.15 {
+                // Beyond the leg. Only a keeper who really can strike one
+                // should be tempted, and even then it is a poor option.
+                if prefers_extreme && is_forward {
+                    0.9 + (extreme_capability - 0.62) * 3.0
                 } else {
-                    1.0 // Avoid extreme passes to non-forwards
+                    0.2
                 }
-            } else if distance > 200.0 {
-                // Ultra-long kicks (200-300m)
-                if extreme_capability > 0.75 {
-                    if is_forward {
-                        3.0 + (vision_skill * 2.0) // Vision helps spot forwards
-                    } else {
-                        1.8
-                    }
-                } else if extreme_capability > 0.6 {
-                    2.0 + (kicking_skill * 1.5)
-                } else {
-                    1.2
-                }
-            } else if distance > 100.0 {
-                // Very long kicks (100-200m)
+            } else if of_reach > 0.75 {
+                // The proper long goal kick — landing where he meant it.
                 if is_forward {
-                    2.5 + (vision_skill * 1.0)
+                    3.0 + vision_skill * 1.5
                 } else {
-                    1.8
+                    2.2 + kicking_skill * 0.8
                 }
-            } else if distance > 60.0 {
-                // Long kicks (60-100m)
-                2.0
+            } else if of_reach > 0.40 {
+                // Into midfield. Fine, but it is not what this state is.
+                if is_forward { 2.0 } else { 1.6 }
             } else {
-                // Short kicks - less ideal for kicking state
-                0.8
+                // Short. `Distributing` is the state for this.
+                0.6
             };
 
             // Position bonus
             let position_bonus = match teammate.tactical_positions.position_group() {
                 PlayerFieldPositionGroup::Forward => {
-                    if distance > 300.0 && prefers_extreme {
-                        2.5 // Extreme clearance to striker
-                    } else if distance > 200.0 {
-                        2.0 // Ultra-long to striker
+                    if of_reach > 0.75 {
+                        2.2 // The target man at the end of the kick
                     } else {
                         1.5
                     }
                 }
                 PlayerFieldPositionGroup::Midfielder => {
-                    if distance > 200.0 {
-                        0.7 // Avoid ultra-long to midfield
+                    if of_reach > 1.15 {
+                        0.7 // Don't over-hit it past midfield
                     } else {
                         1.2
                     }

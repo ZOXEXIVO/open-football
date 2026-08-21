@@ -1012,8 +1012,22 @@ impl MatchPlayer {
         };
 
         // Clamp position to field boundaries
+        #[cfg(feature = "match-logs")]
+        let before = self.position;
         self.position.x = self.position.x.clamp(min_x, max_x);
         self.position.y = self.position.y.clamp(min_y, max_y);
+        // The control row. A clamp can only undo the step that took him
+        // out, so it is bounded by a tick's travel (~0.6 u) and should
+        // never appear in the census at all. If it does, somebody has put
+        // a player outside the pitch by assignment — the sentinel a
+        // sent-off player is stashed at, most likely, dragged back onto
+        // the corner flag.
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::ball::ball::teleport::PlayerTeleportCensus::note(
+            crate::r#match::engine::ball::ball::teleport::PSITE_BOUNDARY,
+            before,
+            self.position,
+        );
 
         // Only stop velocity if player is trying to move OUT of bounds
         // Allow velocity that moves them back into the field
@@ -1295,6 +1309,16 @@ impl MatchPlayer {
         // external code paths), reset to the player's tactical start
         // position. The player briefly teleports rather than vanishing.
         if !self.position.x.is_finite() || !self.position.y.is_finite() {
+            // Counted, and it must read ZERO. A salvage is a teleport of
+            // arbitrary size, but it only ever fires on a position that is
+            // already NaN — so a non-zero row here is not a relocation
+            // problem, it is the alarm that some velocity path is
+            // producing non-finite numbers.
+            #[cfg(feature = "match-logs")]
+            {
+                use crate::r#match::engine::ball::ball::teleport as tc;
+                tc::PlayerTeleportCensus::note_firing(tc::PSITE_NAN_SALVAGE);
+            }
             self.position = self.start_position;
             self.velocity = Vector3::zeros();
         }

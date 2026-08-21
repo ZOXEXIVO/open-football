@@ -5,6 +5,9 @@ use crate::r#match::PassOriginRestart;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::engine::ball::ball::CornerWalk;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::teleport as tc;
+use crate::r#match::engine::ball::ball::{AerialDelivery, AerialOutcome};
 use crate::r#match::engine::corner_shape::{CornerRole, CornerShape};
 use crate::r#match::engine::player::events::players::FoulResolver;
 use crate::r#match::engine::set_pieces::{CORNER_DELIVERY_REFERENCE, CornerRoutine};
@@ -20,6 +23,54 @@ use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
 use std::time::Instant;
+
+/// Carries the ball's position from one census checkpoint to the next
+/// through a tick.
+///
+/// It exists so the call sites in the tick loop read as one line each.
+/// Nothing between two checkpoints integrates the ball — see
+/// [`teleport`](crate::r#match::engine::ball::ball::teleport) — so the
+/// probe holds the position and the velocity either side of `Ball::update`
+/// and needs nothing else.
+#[cfg(feature = "match-logs")]
+struct TeleportProbe {
+    pos: Vector3<f32>,
+    entry_velocity: Vector3<f32>,
+    dead: bool,
+}
+
+#[cfg(feature = "match-logs")]
+impl TeleportProbe {
+    fn open(field: &MatchField) -> Self {
+        tc::TeleportCensus::note_tick();
+        Self {
+            pos: field.ball.position,
+            entry_velocity: field.ball.velocity,
+            // Sampled at the top of the tick: a relocation on a ball that
+            // was already dead when the tick began is a dead-ball leak,
+            // whereas a restart AWARDED during the tick legitimately
+            // places one. Reading the flag afterwards would confuse them.
+            dead: field.ball.awaiting_restart.is_some(),
+        }
+    }
+
+    /// A checkpoint after `Ball::update`, where no travel is explained.
+    fn at(&mut self, field: &MatchField, stage: usize) {
+        self.pos = tc::TeleportCensus::checkpoint(stage, self.pos, field.ball.position, self.dead);
+    }
+
+    /// The ball's own pass, whose travel its velocity does explain.
+    fn ball_update(&mut self, field: &MatchField, stage: usize) {
+        self.pos = tc::TeleportCensus::note_ball_update(
+            stage,
+            self.pos,
+            field.ball.position,
+            self.entry_velocity,
+            field.ball.velocity,
+            self.dead,
+        );
+    }
+}
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     // ───────────────────────────────────────────────────────────────────────
@@ -54,13 +105,22 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let prof_t = PhaseProf::enabled().then(Instant::now);
 
+        #[cfg(feature = "match-logs")]
+        let mut relocation = TeleportProbe::open(field);
+
         field.ball.update_light(context, &field.players, events);
+        #[cfg(feature = "match-logs")]
+        relocation.ball_update(field, tc::STAGE_L_BALL_UPDATE);
         Self::apply_pending_set_piece_teleport(field);
+        #[cfg(feature = "match-logs")]
+        relocation.at(field, tc::STAGE_L_SET_PIECE);
         // A corner can become takeable on a light tick too, and a census
         // that only watched the full ones lost half its sample.
         #[cfg(feature = "match-logs")]
         Self::note_corner_setup_box_if_taken(field);
         Self::apply_pending_save_credit(field);
+        #[cfg(feature = "match-logs")]
+        relocation.at(field, tc::STAGE_L_SAVE_CREDIT);
 
         // Shot-flight GK reactivity: normally light ticks skip player
         // AI to save CPU, but during a shot the keeper needs continuous
@@ -74,6 +134,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             tick_ctx.update_for_goalkeeper_shot(field, &context.players);
             Self::play_goalkeepers(field, context, tick_ctx, events);
         }
+        #[cfg(feature = "match-logs")]
+        relocation.at(field, tc::STAGE_L_GOALKEEPERS);
 
         // Skip sent-off players: they've been stashed at (-500, -500). A
         // boundary clamp here would drag them to (0, 0) — the pitch's
@@ -129,8 +191,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             player.trace_motion(context, ball_pos, ball_vel);
         }
 
+        #[cfg(feature = "match-logs")]
+        relocation.at(field, tc::STAGE_L_PLAYER_MOVE);
+
         if events.has_events() {
             EventDispatcher::dispatch(events, field, context, match_data, true);
+            #[cfg(feature = "match-logs")]
+            relocation.at(field, tc::STAGE_L_DISPATCH);
             // Before `handle_goal_reset`, which is what clears the flag. A
             // goals-only recording keeps the seconds either side of this
             // instant and drops the rest of the match (`mark_goal`).
@@ -138,9 +205,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 match_data.mark_goal(context.total_match_time);
             }
             handle_goal_reset(field, context);
+            #[cfg(feature = "match-logs")]
+            relocation.at(field, tc::STAGE_L_GOAL_RESET);
             // Dispatch is where free kicks, penalties and offsides are
             // awarded, and each stages a teleport — see the full tick.
             Self::apply_pending_set_piece_teleport(field);
+            #[cfg(feature = "match-logs")]
+            relocation.at(field, tc::STAGE_L_SET_PIECE2);
         }
 
         if let Some(t) = prof_t {
@@ -183,18 +254,37 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
         }
 
+        // Whole-tick relocation census. Every checkpoint below closes the
+        // window on the function named above it; nothing between them
+        // integrates the ball, so any movement they book is a write. See
+        // [`teleport`](crate::r#match::engine::ball::ball::teleport).
+        #[cfg(feature = "match-logs")]
+        let mut relocation = TeleportProbe::open(field);
+
         let t = prof_on.then(Instant::now);
         Self::play_ball(field, context, tick_ctx, events);
+        #[cfg(feature = "match-logs")]
+        relocation.ball_update(field, tc::STAGE_BALL_UPDATE);
         Self::apply_pending_set_piece_teleport(field);
+        #[cfg(feature = "match-logs")]
+        relocation.at(field, tc::STAGE_SET_PIECE);
         #[cfg(feature = "match-logs")]
         Self::note_corner_setup_box_if_taken(field);
         Self::apply_pending_save_credit(field);
+        #[cfg(feature = "match-logs")]
+        relocation.at(field, tc::STAGE_SAVE_CREDIT);
         Self::resolve_corner_contest(field, context);
+        #[cfg(feature = "match-logs")]
+        relocation.at(field, tc::STAGE_CORNER_CONTEST);
         Self::resolve_cross_contest(field, context);
+        #[cfg(feature = "match-logs")]
+        relocation.at(field, tc::STAGE_CROSS_CONTEST);
         // Resolve any deferred-foul / advantage state. Cheap (one
         // Option read in the dominant no-advantage case) so we run it
         // every full tick rather than waiting for the next event.
         FoulResolver::tick_advantage(field, context);
+        #[cfg(feature = "match-logs")]
+        relocation.at(field, tc::STAGE_FOUL_ADVANTAGE);
         // Ownership may have changed inside play_ball (new claim, pass
         // target receive, etc.). Refresh the ball view so player state
         // dispatch sees the current owner — without this, the
@@ -212,18 +302,24 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let t = prof_on.then(Instant::now);
         Self::play_players(field, context, tick_ctx, events);
+        #[cfg(feature = "match-logs")]
+        relocation.at(field, tc::STAGE_PLAY_PLAYERS);
         if let Some(t) = t {
             PhaseProf::add(PhaseProf::P_PLAYERS, t.elapsed().as_nanos() as u64);
         }
 
         let t = prof_on.then(Instant::now);
         EventDispatcher::dispatch(events, field, context, match_data, true);
+        #[cfg(feature = "match-logs")]
+        relocation.at(field, tc::STAGE_DISPATCH);
         // See the light tick: this has to read the flag before
         // `handle_goal_reset` takes it down.
         if Self::is_a_goal_worth_keeping(field) {
             match_data.mark_goal(context.total_match_time);
         }
         handle_goal_reset(field, context);
+        #[cfg(feature = "match-logs")]
+        relocation.at(field, tc::STAGE_GOAL_RESET);
         // ⚠ DRAIN AFTER DISPATCH TOO, NOT ONLY AFTER `play_ball`.
         //
         // The drain above catches the set pieces the BALL awards inside
@@ -243,6 +339,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // always described the failure it exists to prevent; it was simply
         // never called after the phase that stages most of them.
         Self::apply_pending_set_piece_teleport(field);
+        #[cfg(feature = "match-logs")]
+        relocation.at(field, tc::STAGE_SET_PIECE_POST);
         if let Some(t) = t {
             PhaseProf::add(PhaseProf::P_DISPATCH, t.elapsed().as_nanos() as u64);
         }
@@ -278,9 +376,42 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         if let Some((player_id, ball_pos)) = field.ball.pending_set_piece_teleport.take() {
             if let Some(idx) = field.player_index(player_id) {
                 let p = &mut field.players[idx];
+                #[cfg(feature = "match-logs")]
+                {
+                    tc::PlayerTeleportCensus::note_firing(tc::PSITE_SET_PIECE);
+                    tc::PlayerTeleportCensus::note(tc::PSITE_SET_PIECE, p.position, ball_pos);
+                }
                 p.position = ball_pos;
                 p.velocity = Vector3::zeros();
                 p.in_state_time = 0;
+            }
+        }
+
+        // A delivery has reached the man who won the duel for it: put him
+        // into his role's heading state so he strikes it.
+        //
+        // Drained here, with `&mut field.players` in hand, because the
+        // ball decides the arrival and `Ball::update` holds the players
+        // immutably — the same reason as the set-piece teleport above.
+        // See `AerialDelivery::force_heading` for why this happens on
+        // arrival rather than at the strike.
+        if let Some(player_id) = field.ball.pending_aerial_strike.take() {
+            if let Some(idx) = field.player_index(player_id) {
+                let p = &mut field.players[idx];
+                let next = if p.tactical_position.current_position.is_forward() {
+                    PlayerState::Forward(ForwardState::Heading)
+                } else if p.tactical_position.current_position.is_midfielder() {
+                    PlayerState::Midfielder(MidfielderState::Heading)
+                } else {
+                    PlayerState::Defender(DefenderState::Heading)
+                };
+                // `AttackingCorner` owns its own header — it has a
+                // reach and a shot path of its own, and it is what the
+                // corner contest's winners are usually in. Overriding it
+                // here would take the corner's own heading route away.
+                if p.state != PlayerState::Defender(DefenderState::AttackingCorner) {
+                    p.transition_to(next, TransitionSource::EventHandler);
+                }
             }
         }
 
@@ -308,11 +439,21 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // before a real one. Writing the positions on top of that is the
         // last of the corner's three teleports.
         if !field.ball.pending_corner_teleports.is_empty() {
+            #[cfg(feature = "match-logs")]
+            if !CornerWalk::armed() {
+                tc::PlayerTeleportCensus::note_firing(tc::PSITE_CORNER_STATION);
+            }
             let stations = std::mem::take(&mut field.ball.pending_corner_teleports);
             for station in stations {
                 if let Some(idx) = field.player_index(station.player_id) {
                     let p = &mut field.players[idx];
                     if !CornerWalk::armed() {
+                        #[cfg(feature = "match-logs")]
+                        tc::PlayerTeleportCensus::note(
+                            tc::PSITE_CORNER_STATION,
+                            p.position,
+                            station.position,
+                        );
                         // `OF_CORNER_WALK=off`: written, not walked.
                         p.position = station.position;
                         p.velocity = Vector3::zeros();
@@ -417,6 +558,46 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
         }
         SetPieceDiag::note_corner_setup_box(defenders, attackers);
+        // ⚠ **Per-player probe, `OF_CORNER_PROBE=1`.** The aggregate says
+        // how many are in the box; only this says WHY the ones that are
+        // not are not — and the two answers need opposite fixes. It is
+        // what solved the walked corner: every stationed man read
+        // `st 3u him=IN station=IN` (standing on his station, arrived),
+        // while the two pushed-up centre-backs read `NO-STATION
+        // Defender(Covering)`. Nobody was slow; two men had left.
+        //
+        // Kept because the corner shape has three independent ways to
+        // fail — a station outside the box, a man who never arrives, and
+        // a man whose state walked him out of it — and the box count
+        // cannot tell them apart.
+        if std::env::var("OF_CORNER_PROBE").is_ok() {
+            let mut line = String::new();
+            for p in field.players.iter() {
+                if p.side != attacking_side || p.tactical_position.current_position.is_goalkeeper()
+                {
+                    continue;
+                }
+                let inbox = CornerShape::is_in_penalty_area(p.position, goal_x, field_height);
+                let where_he_is = if inbox { "IN" } else { "out" };
+                match p.set_piece_station {
+                    Some(s) => line.push_str(&format!(
+                        " [{} st {:.0}u him={where_he_is} station={}]",
+                        p.id,
+                        (p.position - s).xy().magnitude(),
+                        if CornerShape::is_in_penalty_area(s, goal_x, field_height) {
+                            "IN"
+                        } else {
+                            "out"
+                        }
+                    )),
+                    None => line.push_str(&format!(
+                        " [{} NO-STATION {:?} {where_he_is}]",
+                        p.id, p.state
+                    )),
+                }
+            }
+            println!("CORNERPROBE att_in_box={attackers}{line}");
+        }
     }
 
     /// Release the corner shape once the corner is over.
@@ -533,6 +714,26 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// whatever is happening by then is open play with the restart flag
     /// left up.
     const CORNER_SHAPE_MAX_TICKS: u64 = 250;
+
+    /// Apex of a corner delivery, in metres. A normal in-swinger: 5 m up
+    /// puts about 1.7 s between the strike and the header, which is what
+    /// a real one takes and comfortably inside
+    /// [`CORNER_SHAPE_MAX_TICKS`](Self::CORNER_SHAPE_MAX_TICKS) so the
+    /// set-piece shape holds for the whole flight.
+    const CORNER_APEX: f32 = 5.0;
+
+    /// Apex of an open-play cross, in metres. Shorter than a corner
+    /// because it is played from further forward and has to beat a moving
+    /// line rather than a set one.
+    const CROSS_APEX: f32 = 4.0;
+
+    /// How far short of the winner a corner is aimed, in units.
+    const CORNER_DROP_BEHIND: f32 = 2.0;
+
+    /// The same for an open-play cross. 1.2u (15 cm) sits inside every
+    /// role's heading reach, including the midfielder's 2.0u, which the
+    /// corner's own 2.0u sits exactly on the boundary of.
+    const CROSS_DROP_BEHIND: f32 = 1.2;
 
     /// Discrete corner aerial contest — fires once, the instant the corner
     /// cross is airborne. A played-out lofted corner can't thread the
@@ -748,13 +949,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // band and within reach for ~3 ticks — enough for ANY
             // winner's state machine to strike, which is what the
             // contest already decided should happen.
-            let winner_pos = field.players[att_idx].position;
-            let to_goal = attacked_goal - winner_pos;
-            let dir = if to_goal.magnitude() > 0.01 {
-                to_goal.normalize()
-            } else {
-                Vector3::new(1.0, 0.0, 0.0)
-            };
             //
             // Restated for the metres-per-tick vertical axis: −0.02 m/tick
             // is 2 m/s of descent, which walks the ball down through the
@@ -763,26 +957,26 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // them. The old (−0.35, 1.8) pair was written when the vertical
             // axis carried unit-scale speeds and would now fall through the
             // band in three ticks while drifting 60u out of reach.
-            let winner_id = field.players[att_idx].id;
-            let b = &mut field.ball;
-            b.position = Vector3::new(winner_pos.x - dir.x * 2.0, winner_pos.y - dir.y * 2.0, 2.5);
-            b.velocity = Vector3::new(dir.x * 0.12, dir.y * 0.12, -0.02);
-            b.current_owner = None;
-            b.previous_owner = taker;
-            b.flags.in_flight_state = 1;
-            // Name the winner, exactly as `resolve_cross_contest` does.
             //
-            // Every heading state already reads this to take a
-            // clean-contact roll instead of re-deciding the duel — and
-            // the corner contest was the one that never wrote it, so the
-            // man it elected was treated as if nothing had been decided.
-            // That went unnoticed while the box was empty, because the
-            // election almost always fell to a pushed-up centre-back and
-            // `AttackingCorner` carves the double-jeopardy out for
-            // itself. Load the box properly and the best header in it is
-            // often a forward or a midfielder instead, and those two
-            // paths are exactly the ones that need this flag.
-            b.aerial_contest_winner = Some(winner_id);
+            // ⚠ **The ball is no longer WRITTEN onto his head.** All of the
+            // above still happens; it happens when the delivery gets
+            // there. The cross now actually flies the twenty-five metres
+            // from the flag — see [`Self::deliver_to_winner`] and
+            // [`AerialDelivery`] — which is the corner half of the "ball
+            // teleports" report. `CORNER_APEX` is a normal in-swinger:
+            // 5 m up, about 1.7 s in the air, comfortably inside
+            // `CORNER_SHAPE_MAX_TICKS` so the shape still holds for the
+            // whole flight.
+            Self::deliver_to_winner(
+                field,
+                att_idx,
+                attacked_goal,
+                taker,
+                Self::CORNER_DROP_BEHIND,
+                Self::CORNER_APEX,
+                true,
+                false,
+            );
         } else if let Some(clearer) = best_def {
             // **The repeat corner.** The defending side wins the header,
             // and the man it falls to — standing in his own six-yard area
@@ -798,10 +992,27 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // constantly — it is why sides win three and four in a row —
             // and the corner-source census had the whole "defender puts a
             // delivery behind" family at 4% of supply against a real ~35%.
+            //
+            // ⚠ This branch was the bigger half of the corner teleport,
+            // not the attacking one — `att_win` is clamped at 0.36, so
+            // most corners come here. It used to hook the ball behind
+            // FROM THE CLEARER'S FEET while the ball was still at the
+            // flag, which wrote it the full width of the box in one tick.
+            // Now the delivery flies to him and is hooked when it
+            // arrives, through the same [`AerialDelivery`] machinery the
+            // attacking branch uses.
             let from = field.players[clearer].position;
             if Self::heads_it_behind(from, attacked_goal, field.size.width as f32, context) {
-                Self::hook_it_behind(field, from, attacked_goal);
-                field.ball.previous_owner = taker;
+                Self::deliver_to_winner(
+                    field,
+                    clearer,
+                    attacked_goal,
+                    taker,
+                    Self::CORNER_DROP_BEHIND,
+                    Self::CORNER_APEX,
+                    false,
+                    false,
+                );
             }
         }
         // Otherwise the cross plays out — the keeper claims or a defender
@@ -1133,12 +1344,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let mut bodies = 0u64;
         let mut contested = false;
+        // Nearest defender to the carrier, for the closing census below.
+        let mut nearest: Option<(f32, &MatchPlayer)> = None;
         for d in field.players.iter() {
             if d.team_id == attacking_team || d.tactical_position.current_position.is_goalkeeper() {
                 continue;
             }
             DuelDiag::note_cooldown(!d.can_attempt_tackle());
             let gap = (d.position - carrier.position).magnitude();
+            if nearest.is_none_or(|(best, _)| gap < best) {
+                nearest = Some((gap, d));
+            }
             if gap <= SURROUND_RADIUS {
                 bodies += 1;
             }
@@ -1184,6 +1400,83 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
         if in_box {
             DuelDiag::note_box_carry(bodies, contested);
+        }
+
+        // ── IS HE ACTUALLY GETTING ANY CLOSER? ────────────────────────
+        //
+        // See the note on `mid_run_diag::CLOSE_SAMPLES`. Everything above
+        // buckets a defender by whether he is ALLOWED to challenge; this
+        // asks whether the man nearest the carrier is converging on him or
+        // merely travelling alongside, which is the difference the report
+        // is about and which no other counter here can see.
+        //
+        // Only sampled while the carrier is genuinely moving — a defender
+        // holding his ground against a man shielding the ball is
+        // jockeying, and counting that as a failure to close would bury
+        // the signal under correct defending.
+        let carrier_v = carrier.velocity;
+        let carrier_speed = carrier_v.magnitude();
+        if carrier_speed > 0.05 {
+            if let Some((gap, d)) = nearest {
+                if gap > 0.5 && gap <= 200.0 {
+                    let to_carrier = (carrier.position - d.position) / gap;
+                    // Closing rate: how fast the gap shrinks. The carrier's
+                    // own motion counts — running at a man who is running
+                    // away is not closing on him.
+                    let rate = (d.velocity - carrier_v).dot(&to_carrier);
+                    let d_speed = d.velocity.magnitude();
+                    let align = if d_speed > 0.01 {
+                        d.velocity.dot(&carrier_v) / (d_speed * carrier_speed)
+                    } else {
+                        0.0
+                    };
+                    let own_goal_x = if defending_side == PlayerSide::Left {
+                        0.0
+                    } else {
+                        context.field_size.width as f32
+                    };
+                    // ── GOAL-SIDE SHADOWING IS NOT THE DEFECT ─────────
+                    //
+                    // A defender jockeying a carrier who is running at
+                    // goal retreats in front of him: same heading, gap
+                    // held, closing rate ~0. That is textbook defending
+                    // and the naive "same heading and not closing" test
+                    // counts every second of it as a failure — which is
+                    // why the first cut of this census read a flat 50%
+                    // whatever was changed underneath it.
+                    //
+                    // What the report describes is the other one: a
+                    // defender LEVEL WITH or BEHIND the man, matching his
+                    // speed shoulder to shoulder, with the goal open past
+                    // him. So the parallel test is restricted to a
+                    // defender who is not goal-side — the ball is already
+                    // nearer his goal than he is.
+                    let goal_side =
+                        (d.position.x - own_goal_x).abs() < (carrier.position.x - own_goal_x).abs();
+                    let parallel = align > 0.5 && rate < carrier_speed * 0.10 && !goal_side;
+                    let gaining = rate > carrier_speed * 0.10;
+                    let deep = (carrier.position.x - own_goal_x).abs()
+                        < context.field_size.width as f32 / 3.0;
+                    let state = match d.state {
+                        PlayerState::Defender(DefenderState::Tackling)
+                        | PlayerState::Midfielder(MidfielderState::Tackling)
+                        | PlayerState::Forward(ForwardState::Tackling) => 0,
+                        PlayerState::Defender(DefenderState::Pressing)
+                        | PlayerState::Midfielder(MidfielderState::Pressing)
+                        | PlayerState::Forward(ForwardState::Pressing) => 1,
+                        PlayerState::Defender(DefenderState::Marking)
+                        | PlayerState::Midfielder(MidfielderState::Guarding) => 2,
+                        PlayerState::Defender(DefenderState::Covering) => 3,
+                        PlayerState::Defender(DefenderState::Running)
+                        | PlayerState::Midfielder(MidfielderState::Running)
+                        | PlayerState::Forward(ForwardState::Running) => 4,
+                        PlayerState::Defender(DefenderState::HoldingLine) => 5,
+                        PlayerState::Defender(DefenderState::TrackingBack) => 6,
+                        _ => 7,
+                    };
+                    DuelDiag::note_closing(rate, align, gap, deep, parallel, gaining, state);
+                }
+            }
         }
     }
 
@@ -1368,9 +1661,30 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // Leave the ball live and low in front of the keeper — his own
             // claim/catch model in the GK state machine takes it from
             // here, so the save/gather accounting stays on one path.
+            //
+            // ⚠ **Brought DOWN, not put down.** This used to be
+            // `b.position.z = 0.6`, and a cross the keeper comes for is
+            // two to three metres up — so the ball fell as much as 2.4 m
+            // in a single 10 ms tick with its x/y untouched. On the
+            // whole-tick relocation census that was the entire residue of
+            // the `cross_contest` row: 1.3 a match, and **every one of
+            // them purely vertical**, which is the axis a replay shows
+            // most plainly. Height is the one axis `flight_diag` has
+            // never measured — its `StageProbe` is `sqrt(dx² + dy²)` — so
+            // this had no counter until now.
+            //
+            // A descent rate instead of a height gets the ball to the
+            // same place in an eighth of a second, which is a keeper
+            // taking the pace off a cross rather than the ball blinking.
             let b = &mut field.ball;
-            b.position.z = 0.6;
-            b.velocity = Vector3::new(b.velocity.x * 0.25, b.velocity.y * 0.25, 0.0);
+            /// Ticks the ball takes to come down to the keeper's hands.
+            /// 12 (0.12 s) is fast enough that his claim model sees a low
+            /// ball on the same approach it always did, and slow enough
+            /// that the descent is drawn.
+            const SETTLE_TICKS: f32 = 12.0;
+            const CLAIM_HEIGHT: f32 = 0.6;
+            let drop = ((b.position.z - CLAIM_HEIGHT) / SETTLE_TICKS).max(0.0);
+            b.velocity = Vector3::new(b.velocity.x * 0.25, b.velocity.y * 0.25, -drop);
             b.pass_target_player_id = None;
             b.clear_pending_pass_metadata();
             b.cross_contest_resolved = true;
@@ -1392,46 +1706,33 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // 0.12 u/tick of drift keeps it inside header reach for all of
             // them — so ANY winner's state machine gets a valid tick, not
             // just one that happened to already be in a heading state.
-            let winner_pos = field.players[att_idx].position;
-            let to_goal = attacked_goal - winner_pos;
-            let dir = if to_goal.magnitude() > 0.01 {
-                to_goal.normalize()
-            } else {
-                Vector3::new(1.0, 0.0, 0.0)
-            };
-            let winner_id = field.players[att_idx].id;
-            // Force the winner into his heading state, exactly as the
-            // corner set-up forces `AttackingCorner` and for the same
-            // documented reason: "not all of them carry the entry hook".
-            // A cross winner may have been in any of a dozen states when
-            // the delivery arrived, and the running-state entry gate that
-            // would normally hand off to `Heading` has its own range and
-            // ball-angle conditions. Leaving the transition to chance is
-            // why the contest could be won 307 times and produce zero
-            // headers — the contest decided a duel nobody then took.
-            {
-                let winner = &mut field.players[att_idx];
-                let next = if winner.tactical_position.current_position.is_forward() {
-                    PlayerState::Forward(ForwardState::Heading)
-                } else if winner.tactical_position.current_position.is_midfielder() {
-                    PlayerState::Midfielder(MidfielderState::Heading)
-                } else {
-                    PlayerState::Defender(DefenderState::Heading)
-                };
-                winner.transition_to(next, TransitionSource::EventHandler);
-            }
-            let b = &mut field.ball;
-            // 1.2u (15 cm) behind the winner — inside every role's heading
-            // reach, including the midfielder's 2.0u, which the corner
-            // contest's 2.0u drop sits exactly on the boundary of.
-            b.position = Vector3::new(winner_pos.x - dir.x * 1.2, winner_pos.y - dir.y * 1.2, 2.5);
-            b.velocity = Vector3::new(dir.x * 0.12, dir.y * 0.12, -0.02);
-            b.current_owner = None;
-            b.previous_owner = crosser;
-            b.flags.in_flight_state = 1;
-            // The contest already decided this duel — tell the winner's
-            // heading state not to roll it again.
-            b.aerial_contest_winner = Some(winner_id);
+            // The winner is forced into his heading state — "not all of
+            // them carry the entry hook", and leaving the transition to
+            // chance is why the contest could be won 307 times and produce
+            // zero headers. That is still true; what changed is WHEN. The
+            // transition now rides on the delivery and fires when the ball
+            // reaches him, because a heading state does not survive the
+            // 1.5 s the ball is now in the air. See
+            // `AerialDelivery::force_heading`.
+            //
+            // The cross flies to him rather than being written onto his
+            // head — the same change, and the same reasons, as the corner
+            // contest above. This one moved the ball a mean of 1.1 m
+            // against the corner's 25 m, but it fires on every lofted
+            // cross rather than on corners alone, and 80% of its
+            // relocations were a VERTICAL snap: the ball dropping to
+            // 2.5 m from wherever the delivery had climbed to, which is
+            // the most visible axis there is.
+            Self::deliver_to_winner(
+                field,
+                att_idx,
+                attacked_goal,
+                crosser,
+                Self::CROSS_DROP_BEHIND,
+                Self::CROSS_APEX,
+                true,
+                true,
+            );
         } else {
             // Headed clear. This is the majority outcome and it is what
             // feeds the second-ball phase — but a defensive header is a
@@ -1497,7 +1798,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             .unwrap_or(clear_dir);
 
             let b = &mut field.ball;
-            b.position.z = 2.2;
+            // ⚠ No height write. This used to be `b.position.z = 2.2`,
+            // which is a snap of up to 0.7 m on the one axis a replay
+            // shows most plainly — and it is redundant: the guard at the
+            // top of this function only lets the contest fire on a ball
+            // already inside `[CONTEST_FLOOR, CONTEST_CEILING]` and
+            // already coming down, so it is at heading height by
+            // construction. He heads it from where it is.
             b.velocity = Vector3::new(dir.x * speed, dir.y * speed, vz);
             b.current_owner = None;
             b.flags.in_flight_state = 1;
@@ -1528,32 +1835,144 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// both need the same hooked, high, short trajectory, and both need it
     /// to finish OUTSIDE the posts — a clearance across the face of goal
     /// is an own goal, not a clearance.
+    /// Send a decided aerial contest's ball to the man who won it — by
+    /// flying it there, not by writing it onto his head.
+    ///
+    /// # The teleport this replaces
+    ///
+    /// Both contests used to finish with `b.position = winner_pos - dir *
+    /// n`. Measured over 40 matches at level 14 with the whole-tick
+    /// relocation census, `resolve_corner_contest` alone was **1.9
+    /// relocations a match at a mean of 25 m, every one of them large
+    /// enough for a replay to show** — the largest thing left in the
+    /// engine moving the ball with no flight under it that is not a
+    /// restart placing a dead ball on its spot. That is the "the ball
+    /// teleports on corners" report, exactly.
+    ///
+    /// The duel stays where it was. What changes is that its result is
+    /// now delivered by [`Ball::ballistic_launch_arriving_at`], which
+    /// solves the arc that puts the ball on the winner's head at
+    /// `arrival_height` **on the way down**, and the outcome is applied
+    /// when the ball gets there. See [`AerialDelivery`].
+    ///
+    /// `behind` is how far short of the winner the ball is aimed, in
+    /// units — the two contests use different values and the difference
+    /// is load-bearing (a midfielder's heading reach is 2.0u, which the
+    /// corner's own 2.0u drop sat exactly on the boundary of).
+    fn deliver_to_winner(
+        field: &mut MatchField,
+        winner_idx: usize,
+        attacked_goal: Vector3<f32>,
+        previous_owner: Option<u32>,
+        behind: f32,
+        apex: f32,
+        outcome_is_header: bool,
+        force_heading: bool,
+    ) {
+        /// Head height, in metres. One tick above the intercept window,
+        /// which is what the corner path's own comment sized it at.
+        const HEADING_HEIGHT: f32 = 2.5;
+        /// Ticks of slack past the solved flight before the delivery is
+        /// abandoned. Half a second: the winner is running while the ball
+        /// is in the air, so the arrival test has to tolerate him being a
+        /// stride from where the arc was solved to.
+        const GRACE_TICKS: u64 = 50;
+
+        let winner_pos = field.players[winner_idx].position;
+        let winner_id = field.players[winner_idx].id;
+        let to_goal = attacked_goal - winner_pos;
+        let dir = if to_goal.magnitude() > 0.01 {
+            to_goal.normalize()
+        } else {
+            Vector3::new(1.0, 0.0, 0.0)
+        };
+        let target = Vector3::new(
+            winner_pos.x - dir.x * behind,
+            winner_pos.y - dir.y * behind,
+            HEADING_HEIGHT,
+        );
+        // The calibrated hang, unchanged: −0.02 m/tick walks the ball down
+        // through the [1.4, 2.5] heading band over ~40 ticks and 0.12
+        // u/tick of goalward drift keeps it inside the 6u header reach for
+        // all of them, so ANY winner's state machine gets a valid tick.
+        let outcome = if outcome_is_header {
+            AerialOutcome::Header {
+                drift: Vector3::new(dir.x * 0.12, dir.y * 0.12, -0.02),
+            }
+        } else {
+            AerialOutcome::HookedBehind {
+                attacked_goal,
+                field_height: field.size.height as f32,
+            }
+        };
+
+        let b = &mut field.ball;
+        b.current_owner = None;
+        b.previous_owner = previous_owner;
+        if outcome_is_header {
+            // Every heading state reads this to take a clean-contact roll
+            // instead of re-deciding the duel. Set at the strike rather
+            // than on arrival because the winner's own state machine uses
+            // it to decide to go and attack the ball in the first place.
+            b.aerial_contest_winner = Some(winner_id);
+        }
+
+        match Ball::ballistic_launch_arriving_at(b.position, target, apex) {
+            Some((velocity, ticks)) => {
+                #[cfg(feature = "match-logs")]
+                tc::TeleportCensus::note_delivery_armed(ticks);
+                b.velocity = velocity;
+                // Hold the loose-ball machinery off for the whole flight:
+                // `in_flight_state > 0` is what keeps `check_ball_ownership`
+                // from handing a travelling delivery to whoever is nearest.
+                b.flags.in_flight_state = ticks as usize + GRACE_TICKS as usize;
+                b.aerial_delivery = Some(AerialDelivery {
+                    winner_id,
+                    target,
+                    outcome,
+                    arrival_height: HEADING_HEIGHT,
+                    deadline_tick: b.current_tick_cached + ticks as u64 + GRACE_TICKS,
+                    force_heading,
+                });
+            }
+            None => {
+                // The ball is already standing on the target — there is no
+                // arc to solve and nothing to fly. Apply the outcome now;
+                // the "relocation" is under a unit.
+                b.velocity = match outcome {
+                    AerialOutcome::Header { drift } => drift,
+                    AerialOutcome::HookedBehind {
+                        attacked_goal,
+                        field_height,
+                    } => Ball::hook_behind_velocity(b.position, attacked_goal, field_height),
+                };
+                b.flags.in_flight_state = 1;
+                // There is no delivery to carry the heading transition, so
+                // it is stashed straight away — the arrival is now.
+                if force_heading {
+                    b.pending_aerial_strike = Some(winner_id);
+                }
+            }
+        }
+    }
+
     fn hook_it_behind(field: &mut MatchField, from: Vector3<f32>, attacked_goal: Vector3<f32>) {
         #[cfg(feature = "match-logs")]
         crate::mid_run_diag::HEADED_BEHIND_FIRED.fetch_add(1, Ordering::Relaxed);
         let field_height = field.size.height as f32;
-        // Wide of the post, on the side he is already on.
-        const CLEAR_OF_POST: f32 = 55.0;
-        let out_y = if from.y >= attacked_goal.y {
-            (attacked_goal.y + CLEAR_OF_POST).min(field_height - 6.0)
-        } else {
-            (attacked_goal.y - CLEAR_OF_POST).max(6.0)
-        };
-        // Just past the goal line, on the far side of it.
-        let goal_line_dir = (attacked_goal.x - from.x).signum();
-        let out_x = attacked_goal.x + goal_line_dir * 18.0;
-        let target = Vector3::new(out_x, out_y, 0.0);
-        let to_target = target - from;
-        let dist = to_target.magnitude().max(0.1);
-        // A hooked header is high and short — it only has to cross the line.
-        let vz = Ball::launch_speed_for_apex(5.0);
-        let hang = Ball::hang_ticks(vz).max(1.0);
-        let speed = ((dist / hang) * 1.5).clamp(0.30, 2.6);
-        let dir = to_target / dist;
+        // The geometry lives on `Ball` so this and the arrival of an
+        // `AerialDelivery` that resolved to `HookedBehind` strike the
+        // same clearance. See `Ball::hook_behind_velocity`.
+        let velocity = Ball::hook_behind_velocity(from, attacked_goal, field_height);
 
         let b = &mut field.ball;
-        b.position = Vector3::new(from.x, from.y, 2.2);
-        b.velocity = Vector3::new(dir.x * speed, dir.y * speed, vz);
+        // ⚠ NO POSITION WRITE. The only caller left passes the BALL's own
+        // position as `from` (`resolve_cross_contest`'s cleared branch),
+        // so the header happens where the ball is. The corner contest used
+        // to pass the CLEARER's position with the ball still at the flag,
+        // which wrote it the width of the box in one tick; that path now
+        // flies the delivery to him first.
+        b.velocity = velocity;
         b.current_owner = None;
         b.flags.in_flight_state = 1;
         b.pass_target_player_id = None;

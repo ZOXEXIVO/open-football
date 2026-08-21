@@ -1,5 +1,6 @@
 use crate::PlayerFieldPositionGroup;
 use crate::club::player::PlayerTrait;
+use crate::r#match::engine::ball::ball::AwaitedRestart;
 use crate::r#match::engine::ball::ball::interactions::SaveModel;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::interactions::block_diag::BlockDiag;
@@ -553,6 +554,46 @@ pub enum PlayerEvent {
     TakeBall(u32),
 }
 
+#[cfg(feature = "match-logs")]
+impl PlayerEvent {
+    /// Index into the ball-relocation census's per-event table.
+    ///
+    /// Written out rather than derived from the discriminant so that
+    /// adding a variant cannot silently renumber the existing rows — the
+    /// labels live in
+    /// [`teleport::EVENT_LABELS`](crate::r#match::engine::ball::ball::teleport::EVENT_LABELS)
+    /// and the two lists have to agree.
+    pub fn census_slot(&self) -> usize {
+        match self {
+            PlayerEvent::Goal(..) => 0,
+            PlayerEvent::Assist(..) => 1,
+            PlayerEvent::BallCollision(..) => 2,
+            PlayerEvent::TacklingBall(..) => 3,
+            PlayerEvent::BallOwnerChange(..) => 4,
+            PlayerEvent::PassTo(..) => 5,
+            PlayerEvent::ClearBall(..) => 6,
+            PlayerEvent::RushOut(..) => 7,
+            PlayerEvent::Shoot(..) => 8,
+            PlayerEvent::MovePlayer(..) => 9,
+            PlayerEvent::Leap(..) => 10,
+            PlayerEvent::StayInGoal(..) => 11,
+            PlayerEvent::MoveBall(..) => 12,
+            PlayerEvent::CommunicateMessage(..) => 13,
+            PlayerEvent::OfferSupport(..) => 14,
+            PlayerEvent::ClaimBall(..) => 15,
+            PlayerEvent::GainBall(..) => 16,
+            PlayerEvent::CaughtBall(..) => 17,
+            PlayerEvent::ParriedBall(..) => 18,
+            PlayerEvent::CommitFoul(..) => 19,
+            PlayerEvent::Offside(..) => 20,
+            PlayerEvent::RequestHeading(..) => 21,
+            PlayerEvent::RequestShot(..) => 22,
+            PlayerEvent::RequestBallReceive(..) => 23,
+            PlayerEvent::TakeBall(..) => 24,
+        }
+    }
+}
+
 /// Foul / advantage / direct free-kick wall logic. Groups the
 /// behaviours that the dispatcher used to host as scattered statics:
 /// card-probability computation, advantage window resolution, deferred
@@ -787,7 +828,36 @@ impl FoulResolver {
 pub struct PlayerEventDispatcher;
 
 impl PlayerEventDispatcher {
+    /// Handle one player event, and book whatever it did to the ball
+    /// against the event's own name.
+    ///
+    /// The player layer runs after `Ball::update` in the same tick and
+    /// writes the ball directly, so the ball's own per-stage census cannot
+    /// see any of it — the whole-tick census books one `dispatch` row, and
+    /// this is what splits that row by handler. See
+    /// [`teleport`](crate::r#match::engine::ball::ball::teleport).
     pub fn dispatch(
+        event: PlayerEvent,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        match_data: &mut ResultMatchPositionData,
+    ) -> Vec<Event> {
+        #[cfg(feature = "match-logs")]
+        let census = (event.census_slot(), field.ball.position);
+        let out = Self::dispatch_one(event, field, context, match_data);
+        #[cfg(feature = "match-logs")]
+        {
+            use crate::r#match::engine::ball::ball::teleport::TeleportCensus;
+            let (slot, before) = census;
+            TeleportCensus::note_event(
+                slot,
+                TeleportCensus::magnitude(before, field.ball.position),
+            );
+        }
+        out
+    }
+
+    fn dispatch_one(
         event: PlayerEvent,
         field: &mut MatchField,
         context: &mut MatchContext,
@@ -3315,9 +3385,45 @@ impl PlayerEventDispatcher {
             crate::r#match::engine::ball::ball::ownership::reception_diag::SHOT_CLAIMED
                 .fetch_add(1, Ordering::Relaxed);
         }
+        // ⚠ **The ball is not moved to him. He is given a ball he can
+        // reach, and it comes to him.**
+        //
+        // This used to be an unconditional `ball.position = player.position;
+        // z = 0`, and it is the chokepoint every tackle, gain-ball and
+        // owner-change goes through — so it was the single most FREQUENT
+        // relocation in the engine. Measured over 40 matches at level 14
+        // on the whole-tick census: **41 a match at a mean of 1.1 m**,
+        // 1176 of them large enough for a replay to show, split
+        // `TacklingBall` 29/match, `GainBall` 8.6/match, `CommitFoul`
+        // 3.4/match. Nothing before now could see it: the ball's own
+        // per-stage census is closed by the time the player layer runs.
+        //
+        // Nothing has to be written, because two pieces of machinery
+        // already do the job between them:
+        //
+        // * `Ball::move_to` draws an owned ball to its owner at
+        //   `BALL_TRACK_SPEED` (1.5 u/tick), so a typical 6u tackle gap
+        //   closes in four ticks — 40 ms, and drawn every frame of it;
+        // * `check_ball_ownership`'s "owner too far" test only strips
+        //   possession from a ball that is MOVING (`ball_speed_sq >
+        //   MIN_VELOCITY_FOR_DISTANCE_CHECK`) and moving AWAY, and the
+        //   line below zeroes the velocity. So the settle window this
+        //   needs already exists; the snap was hiding it.
+        //
+        // Beyond `MAX_OWNER_TRACK_DISTANCE` the tracking gives up and
+        // disowns instead — the stranded-ball failure — so the far tail
+        // keeps the write. That is a grant to somebody who was never at
+        // the ball, which is its own bug and stays visible as one.
         if let Some(player) = field.players.iter().find(|p| p.id == player_id) {
-            field.ball.position = player.position;
-            field.ball.position.z = 0.0;
+            let gap = (player.position.x - field.ball.position.x)
+                .hypot(player.position.y - field.ball.position.y);
+            if gap > crate::r#match::engine::ball::ball::MAX_OWNER_TRACK_DISTANCE {
+                #[cfg(feature = "match-logs")]
+                crate::r#match::engine::ball::ball::ownership::reception_diag::SECURE_OUT_OF_REACH
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                field.ball.position = player.position;
+                field.ball.position.z = 0.0;
+            }
         }
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
@@ -5156,6 +5262,12 @@ impl PlayerEventDispatcher {
         // Stale event ids (sent-off player, halftime swap mid-tick)
         // are no-ops rather than crashes.
         if let Some(player) = field.get_player_mut(player_id) {
+            #[cfg(feature = "match-logs")]
+            {
+                use crate::r#match::engine::ball::ball::teleport as tc;
+                tc::PlayerTeleportCensus::note_firing(tc::PSITE_MOVE_PLAYER);
+                tc::PlayerTeleportCensus::note(tc::PSITE_MOVE_PLAYER, player.position, position);
+            }
             player.position = position;
         }
     }
@@ -5594,6 +5706,16 @@ impl PlayerEventDispatcher {
                 player.velocity = Vector3::zeros();
                 // Stash them well beyond the sideline. Physics updates
                 // still run but no one is close enough to interact.
+                #[cfg(feature = "match-logs")]
+                {
+                    use crate::r#match::engine::ball::ball::teleport as tc;
+                    tc::PlayerTeleportCensus::note_firing(tc::PSITE_SENT_OFF);
+                    tc::PlayerTeleportCensus::note(
+                        tc::PSITE_SENT_OFF,
+                        player.position,
+                        Vector3::new(-500.0, -500.0, 0.0),
+                    );
+                }
                 player.position = Vector3::new(-500.0, -500.0, 0.0);
             }
 
@@ -5938,6 +6060,21 @@ impl PlayerEventDispatcher {
             }
         }
 
+        // **Was this ball in a goalkeeper's hands a moment ago?**
+        //
+        // Read BEFORE the release below, which lowers the flag. A ball
+        // struck out of the gloves is distribution — the punt, the
+        // drop-kick, the long kick a keeper picks when nobody is on — and
+        // it is not a defensive clearance however hard it is hit. The ball
+        // was dead in his hands; there was nothing to clear.
+        //
+        // It matters beyond bookkeeping: `clearances` is a rating input
+        // (`RatingMath::sat(clearances, 6.0)`), so counting ten punts a
+        // match as clearances would saturate every goalkeeper's defensive
+        // term every week regardless of how he played — the volume-pays
+        // failure the keeper rating model exists to avoid.
+        let from_the_gloves = field.ball.held_in_hands;
+
         // A clearance is a release: it ends any hold and, for a keeper,
         // arms Law 12's second-touch bar until somebody else plays it.
         if let Some(clearer_id) = field.ball.current_owner {
@@ -5953,7 +6090,7 @@ impl PlayerEventDispatcher {
         // so the shot-save branch is excluded here. Outfielders and a
         // GK doing routine sweeper work both get clearance credit + the
         // zone classification.
-        if !is_gk_shot_save {
+        if !is_gk_shot_save && !from_the_gloves {
             if let Some(clearer_id) = field.ball.current_owner {
                 let ball_pos = field.ball.position;
                 if let Some(clearer) = field.get_player_mut(clearer_id) {
@@ -6024,6 +6161,26 @@ impl PlayerEventDispatcher {
         field: &mut MatchField,
         context: &mut MatchContext,
     ) {
+        // ⚠ **The ball is already dead, waiting for a different restart.**
+        //
+        // Play is stopped: a throw-in, a corner or a goal kick has been
+        // awarded and its taker is walking to it. A foul off the ball
+        // during that is a real thing and the CARD for it is real — that
+        // is settled by `handle_commit_foul_event` before this is called,
+        // and is untouched. What cannot happen is the restart changing:
+        // the ball is not in play, so there is nothing to stop and nothing
+        // to move.
+        //
+        // Measured on the whole-tick relocation census, this was
+        // **2.1 relocations a match at a mean of 3.4 m, of which 193 of
+        // 212 were on a ball that was already dead** — the last row of the
+        // `dispatch` census with any weight in it. Same defect as the one
+        // [`DeadBall`](crate::r#match::engine::ball::ball::DeadBall)
+        // removed from the ball-touching events, reached through a door it
+        // does not guard: a foul is not a touch.
+        if field.ball.awaiting_restart.is_some() {
+            return;
+        }
         // Resolve fouler + side; the victim is everyone on the OTHER side.
         let (fouler_side, fouler_team_id) = match field
             .players
@@ -6127,23 +6284,67 @@ impl PlayerEventDispatcher {
 
         // Tell the engine to teleport the taker onto the ball next tick.
         let ball = &mut field.ball;
-        ball.position = restart_pos;
+        // ⚠ **x and y only.** `restart_pos.z` is 0, and a foul is
+        // whistled on a ball that is very often in the air — so writing
+        // the whole vector dropped the ball to the grass in one 10 ms
+        // tick. Measured on the whole-tick relocation census: `CommitFoul`
+        // was 3.3 relocations a match at a mean of 2.9 m, and the mean is
+        // 2.9 m *because* it is the drop — 23u is exactly a ball at head
+        // height being put on the floor.
+        //
+        // The height needs nothing written: the taker owns the ball from
+        // here, and `move_to`'s `carry_toward` walks it down at 10 cm a
+        // tick. Same rule, same reason, as `Ball::award_goal_kick`, whose
+        // doc-comment records the identical mistake on the identical axis.
+        ball.position.x = restart_pos.x;
+        ball.position.y = restart_pos.y;
         ball.velocity = Vector3::zeros();
         ball.previous_owner = ball.current_owner;
-        ball.current_owner = Some(taker_id);
+        // ⚠ **NOBODY OWNS IT AND THE TAKER WALKS.**
+        //
+        // This used to hand the taker the ball on the spot and stage a
+        // `pending_set_piece_teleport` to put him on it next tick — the
+        // last restart in the engine still doing that. Every other one was
+        // converted: the throw-in, the goal kick, the corner and the
+        // OFFSIDE free kick all award an `AwaitedRestart` and send the
+        // taker with `TakeMe`, and he runs there under ordinary AI.
+        //
+        // The offside free kick is the exact template — same restart, same
+        // `take_from: None` (a foul is committed on the pitch, so the ball
+        // is dead where it lies and taken from where it lies), same
+        // `settled: true`. See `Ball::award_offside`.
+        //
+        // Measured on the player-relocation census: `set_piece:taker` was
+        // **27.7 firings a match at a mean of 6.1 m**, and fouls are ~11.4
+        // of them.
+        let walked = crate::r#match::engine::ball::ball::FoulWalk::armed();
+        ball.current_owner = if walked { None } else { Some(taker_id) };
         ball.ownership_duration = 0;
-        ball.claim_cooldown = if in_penalty_area { 200 } else { 90 };
-        ball.flags.in_flight_state = if in_penalty_area { 200 } else { 60 };
+        ball.claim_cooldown = if walked {
+            0
+        } else if in_penalty_area {
+            200
+        } else {
+            90
+        };
+        ball.flags.in_flight_state = if walked {
+            0
+        } else if in_penalty_area {
+            200
+        } else {
+            60
+        };
         ball.contested_claim_count = 0;
         ball.pass_target_player_id = None;
         ball.recent_passers.clear();
         ball.cached_shot_target = None;
         ball.offside_snapshot = None;
-        ball.pass_origin_restart = if in_penalty_area {
+        let origin = if in_penalty_area {
             PassOriginRestart::Penalty
         } else {
             PassOriginRestart::DirectFreeKick
         };
+        ball.pass_origin_restart = origin;
         let team_id = field
             .players
             .iter()
@@ -6154,7 +6355,36 @@ impl PlayerEventDispatcher {
         field
             .ball
             .record_touch(taker_id, team_id, context.current_tick(), true);
-        field.ball.pending_set_piece_teleport = Some((taker_id, restart_pos));
+        if !walked {
+            // `OF_FOUL_WALK=off`: he is handed the ball and placed on it.
+            field.ball.pending_set_piece_teleport = Some((taker_id, restart_pos));
+            return;
+        }
+        field.ball.awaiting_restart = Some(AwaitedRestart {
+            take_from: None,
+            settled: true,
+            carrying: false,
+            taker_id,
+            spot: restart_pos,
+            origin,
+            awarded_tick: context.current_tick(),
+            // A penalty taker is chosen for his penalties, not for where
+            // he happens to be standing, so he can be the length of the
+            // pitch away — the same argument `patience_ticks` makes for
+            // the goalkeeper at a goal kick. Sized off the walk.
+            patience_ticks: field
+                .players
+                .iter()
+                .find(|p| p.id == taker_id)
+                .map(|p| AwaitedRestart::patience_for((p.position - restart_pos).magnitude()))
+                .unwrap_or(AwaitedRestart::PATIENCE_TICKS),
+            settled_tick: None,
+        });
+        // No explicit `TakeMe` here, and none is needed: this handler has
+        // no `EventCollection`, and `tick_awaited_restart`'s own nudge
+        // fires on `waited % NUDGE_TICKS == 0` — which is true on the
+        // restart's very first tick. He is sent before he could have
+        // moved anyway.
     }
 
     fn pick_penalty_taker(field: &MatchField, victim_side: PlayerSide) -> Option<u32> {

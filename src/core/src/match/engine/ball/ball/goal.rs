@@ -462,6 +462,7 @@ impl Ball {
             // distance once the ball comes to rest, because until it does
             // this is measured against a spot the ball is not on.
             patience_ticks: AwaitedRestart::patience_for(walk),
+            settled_tick: None,
         });
         events.add_ball_event(BallEvent::TakeMe(gk_id));
     }
@@ -715,9 +716,31 @@ impl Ball {
         if is_corner {
             // Attacking team gets a corner. Place ball at the nearest corner
             // flag and hand it to the attacking team's best corner taker.
+            //
+            // ⚠ **The inset is `SPOT_INSET`, not 2 u, and the difference
+            // is what made the walked corner fail.**
+            //
+            // `AwaitedRestart::SPOT_INSET` was raised from 2 u to 6 u
+            // precisely because a taker steered to a point 2 u inside the
+            // line comes to rest around a unit the WRONG side of it —
+            // `SteeringBehavior::Arrive` stops braking 3 u short, in
+            // whatever direction he approached from — and the arrival gate
+            // then refuses a restart taken off the pitch. The corner was
+            // the one restart that kept its own hard-coded 2 u, on BOTH
+            // axes, which put its spot exactly on `IN_PLAY_CLEARANCE`: the
+            // taker could only pass the gate by standing strictly inside a
+            // point that was already the minimum.
+            //
+            // Measured, `OF_CORNER_WALK=on` over 60 matches at level 14:
+            // **6.98 corner legs a match timed out with a mean of 0.3 m
+            // still to go** — a man standing on the arc being told he had
+            // not arrived, and taking the backstop teleport for it. That
+            // is the "44% of corners never complete the fetch" the walk was
+            // switched off over, and it was never a walking problem.
+            let inset = AwaitedRestart::SPOT_INSET;
             let corner_x = match side {
-                GoalSide::Home => 2.0,
-                GoalSide::Away => field_width - 2.0,
+                GoalSide::Home => inset,
+                GoalSide::Away => field_width - inset,
             };
             let field_height = context.field_size.height as f32;
             // Pick the near corner from where the ball CROSSED the byline,
@@ -734,7 +757,11 @@ impl Ball {
                 .map(|p| p.y)
                 .unwrap_or(self.position.y);
             let near_top = exit_y < field_height * 0.5;
-            let corner_y = if near_top { 2.0 } else { field_height - 2.0 };
+            let corner_y = if near_top {
+                inset
+            } else {
+                field_height - inset
+            };
 
             // Find the attacking team's designated corner taker via the
             // shared `score_corner_taker` blend (corners 0.45 / crossing
@@ -978,6 +1005,7 @@ impl Ball {
                         origin: PassOriginRestart::Corner,
                         awarded_tick: context.current_tick(),
                         patience_ticks: AwaitedRestart::corner_patience_for(fetch),
+                        settled_tick: None,
                     });
                     events.add_ball_event(BallEvent::TakeMe(taker_id));
                 } else {

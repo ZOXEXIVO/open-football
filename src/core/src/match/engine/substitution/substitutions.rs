@@ -270,6 +270,17 @@ impl Substitutions {
             p.tactical_position.current_position = PlayerPositionType::Goalkeeper;
             p.tactical_position.regenerate_waypoints(side);
             if let Some(gs) = goal_start {
+                // An outfielder going in goal after the keeper is sent off
+                // or injured with no substitutions left. Legitimate — but
+                // counted, because it is a position write and an
+                // uncounted position write is a hole in the census rather
+                // than an absence of one.
+                #[cfg(feature = "match-logs")]
+                {
+                    use crate::r#match::engine::ball::ball::teleport as tc;
+                    tc::PlayerTeleportCensus::note_firing(tc::PSITE_EMERGENCY_KEEPER);
+                    tc::PlayerTeleportCensus::note(tc::PSITE_EMERGENCY_KEEPER, p.position, gs);
+                }
                 p.start_position = gs;
                 p.position = gs;
             }

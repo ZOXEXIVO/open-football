@@ -25,6 +25,36 @@ use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
 use std::sync::atomic::Ordering;
 
+/// The A/B arm for "a contact resolves where the BALL is".
+///
+/// Three resolvers used to finish by writing the ball onto the man who
+/// made the contact — `Ball::try_block_shot`'s block, `Ball::try_intercept`
+/// and `Ball::apply_failed_first_touch` — in the same way
+/// `secure_ball_for` did before it, and for the same reason: the outcome
+/// was decided first and the ball was moved to it. Armed (the default),
+/// each of them leaves the ball where it was and lets the existing
+/// machinery close the gap: `move_to` draws an owned ball in at 1.5
+/// u/tick, and [`Ball::sink_to_ground`] gives a knocked-down one a descent
+/// instead of an assignment.
+///
+/// It carries a switch of its own, separately from the corner's, because
+/// it is the one part of this work that touches the numbers the second-ball
+/// model is calibrated on — where a blocked or mis-controlled ball lands
+/// decides who gets it next. `OF_TOUCH_IN_PLACE=off` restores the writes.
+pub struct ContactInPlace;
+
+impl ContactInPlace {
+    /// False only when `OF_TOUCH_IN_PLACE=off`.
+    pub fn armed() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| {
+            std::env::var("OF_TOUCH_IN_PLACE")
+                .map(|v| v != "off" && v != "0")
+                .unwrap_or(true)
+        })
+    }
+}
+
 /// The physics-layer shot-stopping curve.
 ///
 /// Kept on a struct rather than inline in [`Ball::try_save_shot`] so the
@@ -889,6 +919,15 @@ impl Ball {
         if self.current_owner.is_some() || self.held_in_hands || self.flags.in_flight_state == 0 {
             return;
         }
+        // A delivery whose aerial contest is already decided is not up for
+        // interception on the way. The contest priced every defender in
+        // the box and the keeper's command of his area before the ball
+        // left the boot; rolling for a cut-out on top of that is the same
+        // double jeopardy the heading states carve out for
+        // `aerial_contest_winner`. See [`AerialDelivery`].
+        if self.aerial_delivery.is_some() {
+            return;
+        }
 
         // HEIGHT IS A DIFFICULTY, NOT A DOOR.
         //
@@ -1142,7 +1181,15 @@ impl Ball {
                 self.flags.in_flight_state = 0;
                 self.claim_cooldown = 15;
                 self.velocity = Vector3::zeros();
-                self.position.z = 0.0;
+                // No height write. The interceptor owns the ball from this
+                // line, so `move_to`'s `carry_toward` walks it down to his
+                // carry height at 10 cm/tick — the machinery that exists
+                // for exactly this. `position.z = 0.0` here was a snap of
+                // up to 3.1 m (the gate's own ceiling) in one tick, and
+                // `flight_diag` is blind to the axis, so it never showed.
+                if !ContactInPlace::armed() {
+                    self.position.z = 0.0;
+                }
                 // Interception ends any in-flight shot — a defender taking
                 // control downfield extinguishes the shot. Without this,
                 // the next time the keeper grabs a moving ball from an
@@ -1583,10 +1630,32 @@ impl Ball {
             blocker_pos.x - self.position.x,
             blocker_pos.y - self.position.y,
         );
-        if blocker_in_reach {
-            self.position = blocker_pos;
+        // ⚠ **Neither axis is written any more.**
+        //
+        // Horizontally, this is the same argument as `secure_ball_for` and
+        // `apply_failed_first_touch`, and it lands the same way: the block
+        // happens where the ball is. `blocker_in_reach` is
+        // `CONTROL_DISTANCE`, so the write was up to 1.5 m of ball moving
+        // with nothing touching it, and where it mattered — the clean
+        // block, where the defender takes possession — `move_to` draws the
+        // ball to him at 1.5 u/tick anyway, well inside
+        // `MAX_OWNER_TRACK_DISTANCE`. `blocker_in_reach` now decides only
+        // the *controlled* branch, which is what its name says.
+        //
+        // Vertically, `position.z = 0.0` dropped a ball from as high as
+        // `MAX_BLOCK_HEIGHT` (2.2 m) onto the grass in one tick. Its
+        // sibling `try_save_shot` has captured `contact_z` and restored it
+        // per branch for exactly this reason since the save-contact work;
+        // the block path never got the same treatment. The deflection
+        // branches below now `sink_to_ground` instead of zeroing `vz`, and
+        // the controlled branch needs nothing — the owner's `carry_toward`
+        // has it.
+        if !ContactInPlace::armed() {
+            if blocker_in_reach {
+                self.position = blocker_pos;
+            }
+            self.position.z = 0.0;
         }
-        self.position.z = 0.0;
         self.previous_owner = self.current_owner.or(self.previous_owner);
         self.pass_target_player_id = None;
         self.cached_shot_target = None;
@@ -1663,7 +1732,7 @@ impl Ball {
             let speed = (ball_velocity_2d * 0.6).clamp(3.0, 6.0);
             self.velocity.x = (dx / dist) * speed;
             self.velocity.y = (dy / dist) * speed;
-            self.velocity.z = 0.0;
+            self.settle_or_flatten();
             self.current_owner = None;
             self.flags.in_flight_state = 30;
             // Hold off re-claims so the deflection crosses the byline before
@@ -1685,7 +1754,7 @@ impl Ball {
             };
             self.velocity.x = -shot_dir_y * sign * safe_speed;
             self.velocity.y = shot_dir_x * sign * safe_speed;
-            self.velocity.z = 0.0;
+            self.settle_or_flatten();
             self.current_owner = None;
             self.flags.in_flight_state = 25;
             self.claim_cooldown = 0;
@@ -1707,7 +1776,7 @@ impl Ball {
             let loose_speed = (ball_velocity_2d * 0.30).clamp(1.0, 2.8);
             self.velocity.x = rev_x * loose_speed;
             self.velocity.y = rev_y * loose_speed;
-            self.velocity.z = 0.0;
+            self.settle_or_flatten();
             self.current_owner = None;
             self.flags.in_flight_state = 20;
             self.claim_cooldown = 0;
@@ -1724,7 +1793,7 @@ impl Ball {
         let unlucky_speed = (ball_velocity_2d * 0.50).clamp(1.5, 3.5);
         self.velocity.x = shot_dir_x * unlucky_speed * 0.7;
         self.velocity.y = shot_dir_y * unlucky_speed * 0.7;
-        self.velocity.z = 0.0;
+        self.settle_or_flatten();
         self.current_owner = None;
         self.flags.in_flight_state = 25;
         self.claim_cooldown = 0;

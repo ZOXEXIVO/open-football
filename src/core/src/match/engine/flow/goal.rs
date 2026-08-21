@@ -1,5 +1,6 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::GoalSide;
+use crate::r#match::engine::flow::field::ResetReason;
 use crate::r#match::field::MatchField;
 use crate::r#match::flow::celebration::GoalCelebration;
 use crate::r#match::{MatchContext, PlayerSide, TransitionSource};
@@ -74,25 +75,65 @@ impl GoalPosition {
 /// — once `in_flight_state` expires nobody is close enough to keep
 /// it, ownership gets nulled, and the period stalls for ~14 seconds
 /// until the emergency chaser-override fires.
-pub fn assign_kickoff(field: &mut MatchField, side: PlayerSide) {
-    let ball_pos = field.ball.position;
-    let kickoff_player_id = field
-        .players
-        .iter()
-        .filter(|p| p.side == Some(side))
-        .filter(|p| {
-            p.tactical_position.current_position.position_group()
+/// Could this man take the kickoff for `side`?
+///
+/// Shared with `GoalCelebration::restart`, which has to answer the same
+/// question BEFORE it resets the formation: it leaves the taker where he
+/// is, and that is only right if he is going to be the taker. The
+/// celebration's retriever often is — he carried the ball to the centre
+/// spot — but he can also be the beaten goalkeeper, who cannot, and
+/// keeping him in place then strands one man off his formation spot for
+/// the kickoff with somebody else on the ball.
+pub fn can_take_kickoff(field: &MatchField, side: PlayerSide, id: u32) -> bool {
+    field.players.iter().any(|p| {
+        p.id == id
+            && !p.is_sent_off
+            && p.side == Some(side)
+            && p.tactical_position.current_position.position_group()
                 != PlayerFieldPositionGroup::Goalkeeper
-        })
-        .min_by(|a, b| {
-            let da = (a.position - ball_pos).norm_squared();
-            let db = (b.position - ball_pos).norm_squared();
-            da.partial_cmp(&db).unwrap_or(Ordering::Equal)
-        })
-        .map(|p| p.id);
+    })
+}
+
+pub fn assign_kickoff(field: &mut MatchField, side: PlayerSide, preferred: Option<u32>) {
+    let ball_pos = field.ball.position;
+    // ⚠ **The man who carried the ball here takes it.**
+    //
+    // `preferred` is the celebration's retriever: he fetched the ball out
+    // of the net, walked it to the centre spot and is standing on it. He
+    // is from the conceding side, which is the side kicking off, so he is
+    // also the correct taker by the laws. Picking "nearest to the ball"
+    // instead sounds equivalent and is not — the position reset runs
+    // first, so by the time the search happens he has been sent back to
+    // his formation slot and the nearest man is somebody else, who is
+    // then teleported onto the ball. Two relocations, 166 m/match between
+    // them, to hand the ball to a different player for no reason.
+    let kickoff_player_id = preferred
+        .filter(|id| can_take_kickoff(field, side, *id))
+        .or_else(|| {
+            field
+                .players
+                .iter()
+                .filter(|p| p.side == Some(side) && !p.is_sent_off)
+                .filter(|p| {
+                    p.tactical_position.current_position.position_group()
+                        != PlayerFieldPositionGroup::Goalkeeper
+                })
+                .min_by(|a, b| {
+                    let da = (a.position - ball_pos).norm_squared();
+                    let db = (b.position - ball_pos).norm_squared();
+                    da.partial_cmp(&db).unwrap_or(Ordering::Equal)
+                })
+                .map(|p| p.id)
+        });
 
     if let Some(player_id) = kickoff_player_id {
         if let Some(kicker) = field.players.iter_mut().find(|p| p.id == player_id) {
+            #[cfg(feature = "match-logs")]
+            {
+                use crate::r#match::engine::ball::ball::teleport as tc;
+                tc::PlayerTeleportCensus::note_firing(tc::PSITE_KICKOFF_TAKER);
+                tc::PlayerTeleportCensus::note(tc::PSITE_KICKOFF_TAKER, kicker.position, ball_pos);
+            }
             kicker.position = ball_pos;
             kicker.velocity = Vector3::zeros();
             kicker.set_default_state(TransitionSource::Reset);
@@ -159,7 +200,7 @@ pub fn handle_goal_reset(field: &mut MatchField, context: &mut MatchContext) {
     let Some(side) = kickoff_side else {
         // No conceding side could be resolved — nothing to restart toward.
         // Put the world back the way the old path did and move on.
-        field.reset_players_positions();
+        field.reset_players_positions(ResetReason::Restart { keep: None });
         field.ball.reset();
         return;
     };
@@ -200,6 +241,8 @@ pub fn advance_goal_celebration(field: &mut MatchField, context: &mut MatchConte
 /// period boundary settles it.
 pub fn finish_goal_celebration(field: &mut MatchField, context: &mut MatchContext) {
     if let Some(celebration) = context.goal_celebration.take() {
-        GoalCelebration::restart(field, celebration.kickoff_side);
+        // A period boundary follows immediately and will re-form both
+        // sides anyway, so there is no taker worth keeping in place.
+        GoalCelebration::restart(field, celebration.kickoff_side, None);
     }
 }

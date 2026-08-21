@@ -222,7 +222,6 @@ impl SpinModel {
 
 impl Ball {
     pub fn update_velocity(&mut self) {
-        const BALL_MASS: f32 = 0.43;
         const STOPPING_THRESHOLD: f32 = 0.05; // Lower threshold for smoother final stop
         // Football bounce retention on grass is ~25-35%. The previous
         // 0.6 produced trampoline bounces where a lofted clearance
@@ -254,9 +253,12 @@ impl Ball {
         const MAX_APEX_METRES: f32 = 40.0;
         let max_vertical = super::Ball::launch_speed_for_apex(MAX_APEX_METRES);
 
-        // Physics constants for realistic ball behavior
-        // Air drag: affects aerial balls (proportional to v²)
-        const AIR_DRAG_COEFFICIENT: f32 = 0.04; // Reduced for more realistic air resistance
+        // Air drag: affects aerial balls (proportional to v²). Lives on
+        // the ball module beside gravity and rolling friction so the
+        // trajectory SOLVERS can invert the same number the physics
+        // applies — see `super::AIR_DRAG_PER_TICK`, which folds the
+        // coefficient, the mass and the sub-step into one decay.
+        const AIR_DRAG_PER_TICK: f32 = super::AIR_DRAG_PER_TICK;
 
         // Velocity-proportional rolling decay per 10ms tick. The value now
         // lives on the ball module so the physics and the pass-weighting
@@ -402,19 +404,14 @@ impl Ball {
                 // + Magnus. Air drag is gentler than ground friction for
                 // realistic flight.
 
-                // Air drag force: F = -0.5 * C * v² * direction
-                let air_drag_force = if velocity_norm > 0.1 {
-                    -AIR_DRAG_COEFFICIENT * velocity_norm * self.velocity
-                } else {
-                    Vector3::zeros()
-                };
-
-                // Drag is integrated over the same sub-step the drag
-                // coefficient was fitted against; gravity comes from the
+                // Air drag: F = -C·|v|·v, integrated over the sub-step the
+                // coefficient was fitted against. Gravity comes from the
                 // shared per-tick constant so the pass solver and the
                 // landing projection cannot drift away from the physics
                 // (see `super::GRAVITY_PER_TICK`).
-                self.velocity += (air_drag_force / BALL_MASS) * 0.016;
+                if velocity_norm > super::AIR_DRAG_FLOOR {
+                    self.velocity -= (AIR_DRAG_PER_TICK * velocity_norm) * self.velocity;
+                }
                 self.velocity.z -= GRAVITY_PER_TICK;
 
                 // The only force here that is not parallel to travel —
@@ -475,6 +472,52 @@ impl Ball {
     fn carry_toward(&mut self, carry: f32) {
         const CARRY_RATE: f32 = 0.10;
         self.position.z += (carry - self.position.z).clamp(-CARRY_RATE, CARRY_RATE);
+    }
+
+    /// Put the ball on the grass by giving it a descent, not by writing
+    /// `position.z = 0.0`.
+    ///
+    /// The sibling of [`carry_toward`](Self::carry_toward) for a ball
+    /// nobody has taken control of: a block off a shin, a mis-controlled
+    /// first touch, a deflection. Those all end with the ball on the deck,
+    /// and every one of them used to get there by assignment — from as
+    /// high as 2.8 m, in a single 10 ms tick, on the axis a replay shows
+    /// most plainly.
+    ///
+    /// ⚠ **`flight_diag` cannot see any of this.** Its `StageProbe`
+    /// measures `sqrt(dx² + dy²)` and drops `z` entirely, so a two-metre
+    /// vertical snap has always read as a relocation of zero. The
+    /// whole-tick census
+    /// ([`teleport`](crate::r#match::engine::ball::ball::teleport)) folds
+    /// height in at 8 u/m and reports these in its `vertical` column.
+    ///
+    /// The rate is deliberately quicker than `CARRY_RATE`: this is a ball
+    /// knocked down, not gathered, and everything that reads the height —
+    /// the block window, `is_aerial`, the receiver ceiling — must see what
+    /// it always saw. An eighth of a second is under every one of their
+    /// sampling windows and still draws as a fall.
+    #[inline]
+    pub(crate) fn sink_to_ground(&mut self) {
+        /// Ticks a knocked-down ball takes to reach the grass.
+        const SETTLE_TICKS: f32 = 12.0;
+        self.velocity.z = -(self.position.z.max(0.0) / SETTLE_TICKS);
+    }
+
+    /// [`sink_to_ground`](Self::sink_to_ground), or the flat `vz = 0` it
+    /// replaced when the arm is off.
+    ///
+    /// The two are not the same even though both end with the ball on the
+    /// deck: `vz = 0` on a ball that was two metres up leaves it hanging
+    /// there under gravity alone, which is why every call site paired it
+    /// with a `position.z = 0.0` assignment. See
+    /// [`ContactInPlace`](super::interactions::ContactInPlace).
+    #[inline]
+    pub(crate) fn settle_or_flatten(&mut self) {
+        if super::interactions::ContactInPlace::armed() {
+            self.sink_to_ground();
+        } else {
+            self.velocity.z = 0.0;
+        }
     }
 
     pub(super) fn move_to(&mut self, tick_context: &GameTickContext) {

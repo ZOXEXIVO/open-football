@@ -33,7 +33,7 @@ pub mod net;
 pub mod motion;
 pub mod ownership;
 mod restart;
-pub use restart::{CornerWalk, DeadBall, ThrowIn};
+pub use restart::{CornerWalk, DeadBall, FoulWalk, ThrowIn};
 // `pub` for `RunOff` — the player layer reads the same rectangle when it
 // decides how far off the pitch a restart taker may go, and the two must
 // be one constant or the taker is pinned short of the ball he is fetching.
@@ -42,6 +42,11 @@ pub use runoff::{Perimeter, RunOff};
 // `pub` for `dead_ball_diag` — the stall attribution counters are read by
 // the dev harness, same as `ownership::reception_diag`.
 pub mod stall;
+// The whole-tick relocation census. `flight_diag` below only sees
+// `Ball::update`; this one sees the resolvers and the player layer that
+// run after it, which is where the set pieces live.
+#[cfg(feature = "match-logs")]
+pub mod teleport;
 
 use crate::r#match::engine::ball::ball::net::BallInNet;
 use crate::r#match::engine::ball::events::BallEvent;
@@ -217,6 +222,28 @@ pub struct AwaitedRestart {
     /// the keeper still **15.1 m** short, and a timeout is the teleport
     /// this whole mechanism exists to avoid. See [`Self::patience_for`].
     pub patience_ticks: u64,
+    /// The tick the taker got to the spot with nothing left to do but
+    /// wait for his team-mates. `None` until he arrives.
+    ///
+    /// # Why a corner needs a leg the other restarts do not
+    ///
+    /// Every other restart is ready when the taker is: a throw-in needs a
+    /// thrower and a ball, a goal kick needs a keeper. A CORNER needs five
+    /// runners in the box, and they are 60-80 m away when it is awarded.
+    ///
+    /// Taking the kick the moment the taker was ready is what kept the
+    /// walked corner switched off: measured over 60 matches at level 14,
+    /// the attacking box at the delivery read **3.5 against a placed
+    /// corner's 5.4** and a real 5-7, and the defending box's worst case
+    /// fell from 7 to 2. The taker was ready in a couple of seconds after
+    /// a short fetch, which is nowhere near long enough for the shape to
+    /// arrive — so the kick was struck into an empty box.
+    ///
+    /// A real taker stands over the ball and waits, and that is all this
+    /// is: the arrival test is satisfied, the ball is on the arc, and the
+    /// restart holds until [`Self::CORNER_BOX_TARGET`] attackers are in
+    /// the penalty area or [`Self::CORNER_SETUP_CEILING`] expires.
+    pub settled_tick: Option<u64>,
 }
 
 impl AwaitedRestart {
@@ -246,6 +273,35 @@ impl AwaitedRestart {
     ///
     /// [`SteeringBehavior::Arrive`]: crate::r#match::SteeringBehavior::Arrive
     pub const SPOT_INSET: f32 = 6.0;
+
+    /// Attackers in the penalty area a corner taker waits for before he
+    /// puts his foot through it. Excludes him and the keeper.
+    ///
+    /// Real deliveries go in with 5-7 attacking bodies in the box, and the
+    /// placed corner this replaces measured 5.4. Four is deliberately
+    /// under that: it is the number the taker *waits* for, and the last
+    /// runner or two arrive during the flight, which is also what happens
+    /// on a real corner. Asking for the full five made the ceiling do the
+    /// work instead of the condition.
+    pub const CORNER_BOX_TARGET: usize = 4;
+
+    /// Longest a corner may be held on the arc waiting for the box, in
+    /// engine ticks. 6 s.
+    ///
+    /// Real corners take 20-30 s from award to delivery and this engine
+    /// has no stoppage clock, so this is not a realism bound — it is a
+    /// backstop, and it does not bind: measured over 60 matches at level
+    /// 14 the box fills in a **mean of 1.19 s and 0% of corners reach
+    /// this ceiling**.
+    ///
+    /// ⚠ It was not always so, and the difference is diagnostic. While
+    /// `is_team_attacking_corner` answered false during the set-up (see
+    /// its docs) half of all corners hit the ceiling and raising it from
+    /// 6 s to 10 s to 20 s moved the box occupancy by 0.1 — which is what
+    /// said the constraint was never time. A ceiling that starts binding
+    /// again means somebody has stopped arriving, not that it is too
+    /// tight; read `set-up wait` in the corner census before touching it.
+    pub const CORNER_SETUP_CEILING: u64 = 600;
 
     /// How far inside the line the carrier has to be before the restart is
     /// handed to him, in game units. 2 u = 25 cm.
@@ -864,6 +920,33 @@ pub const GROUND_FRICTION: f32 = 0.0016;
 /// in three different unit systems.
 pub const GRAVITY_PER_TICK: f32 = 9.81 * 0.01 * 0.01;
 
+/// Quadratic air drag on an airborne ball: each tick its velocity loses
+/// `AIR_DRAG_PER_TICK * |v| * v`.
+///
+/// The physics has always applied this — `-C·|v|·v / mass · 0.016` with
+/// `C = 0.04` and `mass = 0.43` — but as three private literals inside
+/// `update_velocity`, so **nothing that solves a trajectory could see
+/// it**. Every ballistic solver in the engine (the pass loft, the
+/// clearance, the landing projection) therefore inverts gravity alone and
+/// assumes the ball keeps its launch speed all the way down.
+///
+/// It does not, and the error is not small. Integrated against this
+/// constant, a ball struck to peak 20 m up travels **297u where the
+/// drag-free `distance / hang_ticks` answer promises 404u** — a 26%
+/// shortfall at a keeper's kicking speeds, rising past 40% for the
+/// hardest-struck long balls. A goalkeeper's hoof "aimed at the halfway
+/// line" from his own six-yard box lands around the edge of his own
+/// centre circle.
+///
+/// [`Ball::launch_for_range`] inverts the real thing. Shared as a
+/// constant for the same reason [`GRAVITY_PER_TICK`] is: the physics and
+/// anything that inverts the physics must not be able to drift apart.
+pub const AIR_DRAG_PER_TICK: f32 = 0.04 * 0.016 / 0.43;
+
+/// Below this speed the physics stops applying drag at all — mirrored
+/// here so the solver's flight and the real one agree tick for tick.
+const AIR_DRAG_FLOOR: f32 = 0.1;
+
 impl Ball {
     /// Vertical launch speed (m/tick) that peaks at `apex` metres.
     ///
@@ -889,6 +972,198 @@ impl Ball {
     #[inline]
     pub fn apex_for_launch(vertical_speed: f32) -> f32 {
         vertical_speed * vertical_speed / (2.0 * GRAVITY_PER_TICK)
+    }
+
+    /// Ground covered, in units, by a ball struck at `horizontal` u/tick
+    /// and `vertical` m/tick from `launch_height` metres up, before it
+    /// first comes back down to the turf.
+    ///
+    /// Integrates the same drag-then-gravity-then-step sequence
+    /// `update_velocity` and `apply_movement` run, so the answer is what
+    /// the ball will actually do rather than what a drag-free parabola
+    /// says it will do. No spin term: the sites that need this solve for
+    /// an unspun ball, and a Magnus force that curls the flight would
+    /// make "the range" a function of the aim direction.
+    pub fn ballistic_range(horizontal: f32, vertical: f32, launch_height: f32) -> f32 {
+        /// Long enough for the highest legal ball in football (a 40 m apex
+        /// hangs ~5.7 s) and a hard stop on a caller asking for nonsense.
+        const MAX_TICKS: u32 = 900;
+        let mut vx = horizontal.max(0.0);
+        let mut vz = vertical;
+        let mut x = 0.0f32;
+        let mut z = launch_height.max(0.0);
+        for _ in 0..MAX_TICKS {
+            let speed = (vx * vx + vz * vz).sqrt();
+            if speed > AIR_DRAG_FLOOR {
+                let decay = AIR_DRAG_PER_TICK * speed;
+                vx -= decay * vx;
+                vz -= decay * vz;
+            }
+            vz -= GRAVITY_PER_TICK;
+            x += vx;
+            z += vz;
+            if z <= 0.0 {
+                return x;
+            }
+        }
+        x
+    }
+
+    /// Horizontal launch speed (u/tick) that drops the ball `range` units
+    /// away, given how high it is going and where it is struck from.
+    ///
+    /// The inverse of [`Ball::ballistic_range`], found by bisection: range
+    /// is monotone in the launch speed, so this needs no derivative and no
+    /// starting guess, and it is deterministic — which matters, because
+    /// every trajectory in this engine has to replay identically.
+    ///
+    /// Saturates at [`Self::MAX_BALLISTIC_HORIZONTAL`]. A range nobody can
+    /// physically kick that far comes back as the hardest strike available,
+    /// which lands short — the honest answer, and the one that keeps a
+    /// weak keeper's punt shorter than a strong one's instead of quietly
+    /// solving him a rocket.
+    pub fn launch_for_range(range: f32, vertical: f32, launch_height: f32) -> f32 {
+        let target = range.max(0.0);
+        let (mut lo, mut hi) = (0.0f32, Self::MAX_BALLISTIC_HORIZONTAL);
+        // 14 halvings of a 4 u/tick bracket resolve to 0.0002 u/tick,
+        // three orders of magnitude finer than any speed difference that
+        // means anything on the pitch.
+        for _ in 0..14 {
+            let mid = 0.5 * (lo + hi);
+            if Self::ballistic_range(mid, vertical, launch_height) < target {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    }
+
+    /// Upper bound of the bisection bracket — 4 u/tick is 50 m/s, harder
+    /// than any human strikes a football, so the solver can never be the
+    /// thing that limits a realistic kick.
+    const MAX_BALLISTIC_HORIZONTAL: f32 = 4.0;
+
+    /// Ground covered, and ticks taken, before a ball struck at
+    /// `horizontal` u/tick and `vertical` m/tick from `launch_height`
+    /// first comes back **down** through `arrival_height`.
+    ///
+    /// # Why this and not [`ballistic_range`](Self::ballistic_range)
+    ///
+    /// `ballistic_range` answers "where does it land", which is the right
+    /// question for a clearance and the wrong one for a delivery that is
+    /// supposed to meet somebody's head. A cross aimed to land at a
+    /// forward's feet passes over his head a stride earlier and arrives
+    /// at his boots travelling down hard; a cross aimed to ARRIVE at
+    /// 2.5 m is the one he can attack. Same integration, different exit
+    /// condition — see [`Self::ballistic_launch_arriving_at`].
+    ///
+    /// Returns `(range_units, ticks)`. A ball launched below
+    /// `arrival_height` and never reaching it returns its full range.
+    pub fn ballistic_arrival(
+        horizontal: f32,
+        vertical: f32,
+        launch_height: f32,
+        arrival_height: f32,
+    ) -> (f32, u32) {
+        /// Same bound as `ballistic_range`, and for the same reason.
+        const MAX_TICKS: u32 = 900;
+        let mut vx = horizontal.max(0.0);
+        let mut vz = vertical;
+        let mut x = 0.0f32;
+        let mut z = launch_height.max(0.0);
+        let floor = arrival_height.max(0.0);
+        for tick in 0..MAX_TICKS {
+            let speed = (vx * vx + vz * vz).sqrt();
+            if speed > AIR_DRAG_FLOOR {
+                let decay = AIR_DRAG_PER_TICK * speed;
+                vx -= decay * vx;
+                vz -= decay * vz;
+            }
+            vz -= GRAVITY_PER_TICK;
+            x += vx;
+            z += vz;
+            // Descending only: a ball climbing THROUGH head height on its
+            // way up has not arrived anywhere.
+            if vz <= 0.0 && z <= floor {
+                return (x, tick + 1);
+            }
+            if z <= 0.0 {
+                return (x, tick + 1);
+            }
+        }
+        (x, MAX_TICKS)
+    }
+
+    /// The horizontal speed that puts [`Self::ballistic_arrival`] at
+    /// `range`. Bisection over the same bracket as
+    /// [`launch_for_range`](Self::launch_for_range).
+    pub fn launch_for_arrival(
+        range: f32,
+        vertical: f32,
+        launch_height: f32,
+        arrival_height: f32,
+    ) -> f32 {
+        let target = range.max(0.0);
+        let (mut lo, mut hi) = (0.0f32, Self::MAX_BALLISTIC_HORIZONTAL);
+        for _ in 0..14 {
+            let mid = 0.5 * (lo + hi);
+            if Self::ballistic_arrival(mid, vertical, launch_height, arrival_height).0 < target {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    }
+
+    /// The launch vector that carries the ball from `origin` to `target`'s
+    /// x/y **arriving at `target.z` on the way down**, peaking `apex`
+    /// metres above where it was struck — plus how many ticks that flight
+    /// takes.
+    ///
+    /// This is what a resolver should use instead of writing a decided
+    /// outcome's position into the ball. The contest still picks the
+    /// winner at the instant the delivery is struck; the ball then
+    /// actually travels to him, and the header happens when it gets
+    /// there. See `FootballEngine::resolve_corner_contest`.
+    pub fn ballistic_launch_arriving_at(
+        origin: Vector3<f32>,
+        target: Vector3<f32>,
+        apex: f32,
+    ) -> Option<(Vector3<f32>, u32)> {
+        let to_target = Vector3::new(target.x - origin.x, target.y - origin.y, 0.0);
+        let direction = to_target.try_normalize(1.0e-4)?;
+        let vertical = Self::launch_speed_for_apex(apex);
+        let range = to_target.norm();
+        let horizontal = Self::launch_for_arrival(range, vertical, origin.z, target.z);
+        let (_, ticks) = Self::ballistic_arrival(horizontal, vertical, origin.z, target.z);
+        Some((
+            Vector3::new(direction.x * horizontal, direction.y * horizontal, vertical),
+            ticks,
+        ))
+    }
+
+    /// The whole launch vector that drops the ball on `target`, peaking
+    /// `apex` metres up, struck from `launch_height` metres.
+    ///
+    /// Returns `None` when origin and target coincide — there is no
+    /// direction to launch along.
+    pub fn ballistic_launch(
+        origin: Vector3<f32>,
+        target: Vector3<f32>,
+        apex: f32,
+        launch_height: f32,
+    ) -> Option<Vector3<f32>> {
+        let to_target = Vector3::new(target.x - origin.x, target.y - origin.y, 0.0);
+        let direction = to_target.try_normalize(1.0e-4)?;
+        let vertical = Self::launch_speed_for_apex(apex);
+        let horizontal = Self::launch_for_range(to_target.norm(), vertical, launch_height);
+        Some(Vector3::new(
+            direction.x * horizontal,
+            direction.y * horizontal,
+            vertical,
+        ))
     }
 }
 
@@ -1271,6 +1546,18 @@ pub struct Ball {
     /// corner path documents and works around with a clean-contact
     /// floor). Cleared on the next touch or when the ball settles.
     pub aerial_contest_winner: Option<u32>,
+    /// A decided aerial contest whose ball is still on its way to the
+    /// winner. See [`AerialDelivery`] — this is what lets the corner and
+    /// cross contests keep their duel and lose their teleport.
+    pub aerial_delivery: Option<AerialDelivery>,
+    /// The man an [`AerialDelivery`] has just reached, waiting to be put
+    /// into his heading state.
+    ///
+    /// Stashed rather than applied because `Ball::update` holds the
+    /// players immutably — the same reason, and the same shape, as
+    /// [`Self::pending_set_piece_teleport`]. Drained by
+    /// `FootballEngine::apply_pending_aerial_strike`.
+    pub pending_aerial_strike: Option<u32>,
     /// Counter for "ball is owned but nothing is happening" stalls.
     /// The unowned-stall warning can't see these because ownership is
     /// set, but visually the ball sits with a player who isn't moving,
@@ -1640,6 +1927,89 @@ pub struct ShotTarget {
     pub struck_from: Vector3<f32>,
 }
 
+/// What a decided aerial contest does to the ball once it gets there.
+///
+/// The contest picks the outcome at the strike, because that is where the
+/// skill comparison belongs; the outcome is *applied* on arrival, because
+/// that is where the contact is. See [`AerialDelivery`].
+#[derive(Clone, Copy, Debug)]
+pub enum AerialOutcome {
+    /// The attacker won it. Hold the ball in the heading band, drifting
+    /// goalward, so his heading state gets valid ticks to strike it —
+    /// the calibrated hang the corner path documents at length.
+    Header { drift: Vector3<f32> },
+    /// The defender won it and puts it behind for another corner.
+    /// `attacked_goal` is the goal being attacked, i.e. the one he is
+    /// clearing over his own byline.
+    HookedBehind {
+        attacked_goal: Vector3<f32>,
+        field_height: f32,
+    },
+}
+
+/// A delivery whose aerial contest is already decided, in the air on its
+/// way to the man who won it.
+///
+/// # The defect this exists to remove
+///
+/// `resolve_corner_contest` and `resolve_cross_contest` elect a winner the
+/// instant the delivery is struck, and used to finish the job by writing
+/// the ball onto his head. Measured over 40 matches at level 14 that was
+/// **1.9 relocations a match at a mean of 25 m**, every one of them large
+/// enough for a replay to show — comfortably the largest thing in the
+/// engine still moving the ball without a flight, and exactly the "the
+/// ball teleports on corners" report.
+///
+/// The duel is not the problem: resolving one skill-weighted contest at
+/// the strike is what stops twenty-two state machines settling a crowded
+/// box by whoever's `process` runs first, and its win rate carries the
+/// corner's whole calibration. What was wrong is that the OUTCOME was
+/// applied by moving the ball. So the contest now solves a real arc to the
+/// winner ([`Ball::ballistic_launch_arriving_at`]) and parks its result
+/// here; the ball flies the twenty-five metres, and the outcome is applied
+/// when it arrives.
+///
+/// # Why the flight is exempt from the loose-ball machinery
+///
+/// The contest has *already* priced every defender in the box and the
+/// keeper's command of his area. Letting `try_intercept` roll again on the
+/// way is the same double jeopardy the heading states carve out for
+/// `aerial_contest_winner`, and it would quietly re-tune corner conversion
+/// as a side effect of a rendering fix. So while this is armed the
+/// delivery is nobody's but the winner's — which leaves the arm
+/// behaviour-identical to the teleport it replaces, with a flight in the
+/// middle.
+#[derive(Clone, Copy, Debug)]
+pub struct AerialDelivery {
+    /// Who the contest awarded it to.
+    pub winner_id: u32,
+    /// Where the arc was solved to arrive, at heading height.
+    pub target: Vector3<f32>,
+    /// What happens when it gets there.
+    pub outcome: AerialOutcome,
+    /// Height the ball is being delivered to, in metres.
+    pub arrival_height: f32,
+    /// Tick past which the delivery is abandoned and the ball becomes an
+    /// ordinary loose one. A solved flight plus a margin: without it a
+    /// delivery whose winner is tackled, substituted or sent off would
+    /// hold the ball out of play indefinitely.
+    pub deadline_tick: u64,
+    /// Put the winner into his role's heading state when the ball gets to
+    /// him.
+    ///
+    /// ⚠ **On arrival, not at the strike.** `resolve_cross_contest` used
+    /// to force the transition the instant it elected him, which was
+    /// right when the ball was written onto his head on the same tick and
+    /// is wrong now that it flies for 1.5 s first: the heading state has
+    /// its own exit conditions and does not survive a second and a half
+    /// of the ball being nowhere near. Measured, the cross contest went
+    /// `attacker-won 21 → 28` and `headers on goal 10 → 0` — it kept
+    /// winning duels and stopped producing headers, which is the exact
+    /// failure its own doc-comment records ("the contest decided a duel
+    /// nobody then took").
+    pub force_heading: bool,
+}
+
 #[derive(Default, Clone)]
 pub struct BallFlags {
     pub in_flight_state: usize,
@@ -1703,6 +2073,8 @@ impl Ball {
             cross_contest_resolved: true,
             pending_cross_type: None,
             aerial_contest_winner: None,
+            aerial_delivery: None,
+            pending_aerial_strike: None,
             owned_stuck_ticks: 0,
             #[cfg(feature = "match-logs")]
             takeball_owned_last_tick: false,
@@ -1884,6 +2256,140 @@ impl Ball {
         Some(releaser)
     }
 
+    /// Carry a decided aerial contest through its flight, and apply its
+    /// outcome the tick the ball actually gets there.
+    ///
+    /// See [`AerialDelivery`] for why the outcome is applied here rather
+    /// than at the strike. Three things end a delivery:
+    ///
+    /// * **it arrives** — the ball is inside the winner's heading reach
+    ///   and has come down into the band, so the hold that the old code
+    ///   wrote along with the position is applied to the VELOCITY alone
+    ///   and the ball is handed to his heading state exactly as before;
+    /// * **the deadline passes** — the winner never got there (tackled,
+    ///   substituted, sent off, or simply beaten to the spot), and the
+    ///   delivery becomes an ordinary loose ball;
+    /// * **somebody touches it** — handled by `record_touch`.
+    ///
+    /// Nothing here writes `position`. That is the whole point.
+    fn tick_aerial_delivery(&mut self, players: &[MatchPlayer]) {
+        let Some(delivery) = self.aerial_delivery else {
+            return;
+        };
+        if self.current_tick_cached >= delivery.deadline_tick {
+            self.aerial_delivery = None;
+            #[cfg(feature = "match-logs")]
+            teleport::TeleportCensus::note_delivery_lost();
+            // The grant goes with it: a contest whose ball never arrived
+            // did not award anybody anything, and leaving the flag up
+            // would let the winner head a ball he had to chase down.
+            self.aerial_contest_winner = None;
+            self.flags.in_flight_state = 0;
+            return;
+        }
+        if players.iter().all(|p| p.id != delivery.winner_id) {
+            self.aerial_delivery = None;
+            self.aerial_contest_winner = None;
+            #[cfg(feature = "match-logs")]
+            teleport::TeleportCensus::note_delivery_lost();
+            return;
+        }
+        // Still climbing, or still above head height: not there yet.
+        if self.velocity.z > 0.0 || self.position.z > delivery.arrival_height {
+            return;
+        }
+        /// How far off its aim point a delivery may be and still count as
+        /// having arrived, in game units. 24 u is 3 m.
+        ///
+        /// # ⚠ Measured against the TARGET, not against the winner
+        ///
+        /// It used to be a 6 u radius around the winner himself, on the
+        /// reasoning that the outcome should be applied where the contact
+        /// happens. That reasoning is right and the test was wrong, for a
+        /// reason the delivery census made obvious the moment it existed:
+        /// **26% of deliveries reached the winner and 64% timed out.** A
+        /// man attacking a corner is running while the ball is in the air
+        /// — that is what attacking a corner is — so an arc solved to
+        /// where he stood 1.85 s ago does not land on him, and a duel the
+        /// contest had already awarded was quietly being thrown away
+        /// along with `aerial_contest_winner`. `CB header chances` fell
+        /// 9 → 1 per 60 matches on exactly this.
+        ///
+        /// A cross does not home. It is aimed at a spot and the attacker
+        /// runs onto it, which is what the aim point is: his position at
+        /// the strike. So the delivery arrives when it reaches the SPOT,
+        /// the hold then keeps it in the heading band for ~40 ticks
+        /// (`AerialOutcome::Header`'s −0.02 m/tick), and the winner —
+        /// whose own state is steering him at the ball throughout — has
+        /// that long to meet it. The radius is a sanity guard against
+        /// applying the outcome to a ball something deflected on the way,
+        /// not a gate the honest case has to squeeze through.
+        const ARRIVAL_RADIUS: f32 = 24.0;
+        let gap = (delivery.target.x - self.position.x).hypot(delivery.target.y - self.position.y);
+        if gap > ARRIVAL_RADIUS {
+            return;
+        }
+        // Arrived. Apply the outcome on the VELOCITY only — the position
+        // is wherever the flight put it, which is the whole difference
+        // between this and the write it replaces.
+        #[cfg(feature = "match-logs")]
+        teleport::TeleportCensus::note_delivery_arrived(gap);
+        if delivery.force_heading {
+            self.pending_aerial_strike = Some(delivery.winner_id);
+        }
+        self.velocity = match delivery.outcome {
+            AerialOutcome::Header { drift } => drift,
+            AerialOutcome::HookedBehind {
+                attacked_goal,
+                field_height,
+            } => {
+                // He heads it over his own byline. The grant belongs to
+                // nobody now — this is a clearance, not a chance.
+                self.aerial_contest_winner = None;
+                self.pass_target_player_id = None;
+                self.clear_pending_pass_metadata();
+                Self::hook_behind_velocity(self.position, attacked_goal, field_height)
+            }
+        };
+        self.aerial_delivery = None;
+    }
+
+    /// The velocity of a defensive header put behind for a corner, struck
+    /// from `from`.
+    ///
+    /// Extracted from `FootballEngine::hook_it_behind` so the two callers
+    /// that need it — the tick-engine resolver, and
+    /// [`tick_aerial_delivery`](Self::tick_aerial_delivery) applying a
+    /// contest whose ball has just arrived — read one piece of geometry.
+    ///
+    /// A hooked header is high and short: it only has to cross the line,
+    /// and it has to finish OUTSIDE the posts, because a clearance across
+    /// the face of goal is an own goal rather than a clearance.
+    pub fn hook_behind_velocity(
+        from: Vector3<f32>,
+        attacked_goal: Vector3<f32>,
+        field_height: f32,
+    ) -> Vector3<f32> {
+        /// Wide of the post, on the side he is already on.
+        const CLEAR_OF_POST: f32 = 55.0;
+        let out_y = if from.y >= attacked_goal.y {
+            (attacked_goal.y + CLEAR_OF_POST).min(field_height - 6.0)
+        } else {
+            (attacked_goal.y - CLEAR_OF_POST).max(6.0)
+        };
+        // Just past the goal line, on the far side of it.
+        let goal_line_dir = (attacked_goal.x - from.x).signum();
+        let out_x = attacked_goal.x + goal_line_dir * 18.0;
+        let target = Vector3::new(out_x, out_y, 0.0);
+        let to_target = target - from;
+        let dist = to_target.magnitude().max(0.1);
+        let vz = Self::launch_speed_for_apex(5.0);
+        let hang = Self::hang_ticks(vz).max(1.0);
+        let speed = ((dist / hang) * 1.5).clamp(0.30, 2.6);
+        let dir = to_target / dist;
+        Vector3::new(dir.x * speed, dir.y * speed, vz)
+    }
+
     /// Record a meaningful touch. Drives restart resolution. `controlled`
     /// distinguishes a clean reception from a deflection / failed save.
     pub fn record_touch(&mut self, player_id: u32, team_id: u32, tick: u64, controlled: bool) {
@@ -1936,8 +2442,10 @@ impl Ball {
         self.last_touch_was_deliberate_kick = false;
         // A touch ends whatever aerial contest awarded the ball: the
         // planted header has been struck, or somebody else got there
-        // first. Either way the "don't re-roll the duel" grant is spent.
+        // first. Either way the "don't re-roll the duel" grant is spent —
+        // and so is the delivery that was carrying it to him.
         self.aerial_contest_winner = None;
+        self.aerial_delivery = None;
         // A foot or a chest kills the rotation. Whatever the ball was
         // doing in the air, the next kick decides what it does now.
         self.spin = Vector3::zeros();
@@ -2100,6 +2608,98 @@ impl Ball {
             return Err("held_in_hands with no owner");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod ballistic_solver_tests {
+    use super::*;
+
+    /// A punt-shaped ball: 20 m apex, struck from a keeper's chest.
+    const PUNT_APEX: f32 = 20.0;
+    const HAND_HEIGHT: f32 = 1.15;
+
+    /// The whole reason the solver exists. `distance / hang_ticks` is the
+    /// drag-free answer every ballistic site in the engine used, and the
+    /// ball is not drag-free — so the ball landed a quarter short of every
+    /// aim point.
+    #[test]
+    fn ignoring_air_drag_lands_the_ball_a_quarter_short() {
+        let vertical = Ball::launch_speed_for_apex(PUNT_APEX);
+        let hang = Ball::hang_ticks(vertical);
+        // What the old solver would fire to "cover 404u in the hang time".
+        let naive_horizontal = 404.0 / hang;
+        let actually_travelled = Ball::ballistic_range(naive_horizontal, vertical, HAND_HEIGHT);
+        assert!(
+            actually_travelled < 404.0 * 0.80,
+            "drag-free solve should fall well short, travelled {actually_travelled}u of 404u"
+        );
+    }
+
+    #[test]
+    fn solved_launch_lands_where_it_was_aimed() {
+        let vertical = Ball::launch_speed_for_apex(PUNT_APEX);
+        for range in [200.0f32, 340.0, 480.0, 540.0] {
+            let horizontal = Ball::launch_for_range(range, vertical, HAND_HEIGHT);
+            let landed = Ball::ballistic_range(horizontal, vertical, HAND_HEIGHT);
+            assert!(
+                (landed - range).abs() < 4.0,
+                "aimed {range}u, landed {landed}u"
+            );
+        }
+    }
+
+    #[test]
+    fn a_range_beyond_any_human_leg_saturates_instead_of_solving_a_rocket() {
+        let vertical = Ball::launch_speed_for_apex(PUNT_APEX);
+        let horizontal = Ball::launch_for_range(5_000.0, vertical, HAND_HEIGHT);
+        assert!(
+            horizontal <= Ball::MAX_BALLISTIC_HORIZONTAL,
+            "solver must not exceed its own bracket, got {horizontal}"
+        );
+    }
+
+    /// The solver and the physics are two descriptions of one flight. If
+    /// they can disagree, every aim point in the engine is a guess — so
+    /// fly a real `Ball` through `update_velocity` / `apply_movement` and
+    /// require it to come down where the solver said it would.
+    #[test]
+    fn the_solver_agrees_with_the_physics_it_inverts() {
+        let vertical = Ball::launch_speed_for_apex(PUNT_APEX);
+        let horizontal = Ball::launch_for_range(480.0, vertical, HAND_HEIGHT);
+
+        let mut ball = Ball::with_coord(840.0, 545.0);
+        ball.position = Vector3::new(100.0, 272.0, HAND_HEIGHT);
+        ball.velocity = Vector3::new(horizontal, 0.0, vertical);
+        ball.spin = Vector3::zeros();
+
+        let start_x = ball.position.x;
+        let mut flown = 0.0;
+        for _ in 0..900 {
+            ball.update_velocity();
+            ball.apply_movement();
+            if ball.position.z <= 0.0 {
+                flown = ball.position.x - start_x;
+                break;
+            }
+        }
+        assert!(
+            (flown - 480.0).abs() < 8.0,
+            "solver promised 480u, the physics flew {flown}u"
+        );
+    }
+
+    /// Struck from the hands the ball gets a free fall the same kick off
+    /// the deck has to buy back, so a punt out-carries a goal kick.
+    #[test]
+    fn a_ball_struck_from_the_hands_carries_further_than_one_off_the_floor() {
+        let vertical = Ball::launch_speed_for_apex(PUNT_APEX);
+        let from_hands = Ball::ballistic_range(1.6, vertical, HAND_HEIGHT);
+        let off_the_deck = Ball::ballistic_range(1.6, vertical, 0.0);
+        assert!(
+            from_hands > off_the_deck,
+            "hands {from_hands}u vs deck {off_the_deck}u"
+        );
     }
 }
 
@@ -2453,6 +3053,12 @@ impl Ball {
         let held_at_entry = self.held_in_hands;
         #[cfg(feature = "match-logs")]
         let spell_at_entry = self.ownership_duration;
+        // The ball's own pass, split three ways for the whole-tick
+        // relocation census. Both early returns below sit above the point
+        // `flight_diag`'s `StageProbe` starts booking, so the netting and
+        // the entire restart machinery have never been in a census.
+        #[cfg(feature = "match-logs")]
+        let census = teleport::BallPass::open(self);
         #[cfg(feature = "match-logs")]
         {
             use std::sync::atomic::Ordering;
@@ -2472,6 +3078,8 @@ impl Ball {
         // directly.
         if self.in_net.is_some() {
             self.tick_net(&context.goal_positions);
+            #[cfg(feature = "match-logs")]
+            census.close(self, teleport::STAGE_BALL_NET);
             return;
         }
 
@@ -2519,11 +3127,14 @@ impl Ball {
             self.tick_awaited_restart(context, players, events);
             if self.awaiting_restart.is_some() {
                 self.update_landing_cache();
+                #[cfg(feature = "match-logs")]
+                census.close(self, teleport::STAGE_BALL_RESTART);
                 return;
             }
         }
 
         self.update_velocity();
+        self.tick_aerial_delivery(players);
 
         self.try_intercept(context, players, events);
         #[cfg(feature = "match-logs")]
@@ -2624,6 +3235,9 @@ impl Ball {
         );
         self.expire_offside_snapshot(context);
         self.update_landing_cache();
+
+        #[cfg(feature = "match-logs")]
+        census.close(self, teleport::STAGE_BALL_LIVE);
 
         #[cfg(feature = "match-logs")]
         {
@@ -2998,10 +3612,17 @@ impl Ball {
         #[cfg(feature = "match-logs")]
         self.trace_tick(self.current_tick_cached, players);
         self.current_tick_cached = context.current_tick();
+        // See `Ball::update`. `update_light` carries no `StageProbe` at
+        // all, so before this the light tick — about half of them — was
+        // outside every relocation census there was.
+        #[cfg(feature = "match-logs")]
+        let census = teleport::BallPass::open(self);
 
         // See `Ball::update` — the netting owns a ball that has gone in.
         if self.in_net.is_some() {
             self.tick_net(&context.goal_positions);
+            #[cfg(feature = "match-logs")]
+            census.close(self, teleport::STAGE_BALL_NET);
             return;
         }
 
@@ -3026,11 +3647,14 @@ impl Ball {
             self.tick_awaited_restart(context, players, events);
             if self.awaiting_restart.is_some() {
                 self.update_landing_cache();
+                #[cfg(feature = "match-logs")]
+                census.close(self, teleport::STAGE_BALL_RESTART);
                 return;
             }
         }
 
         self.update_velocity();
+        self.tick_aerial_delivery(players);
         self.try_intercept(context, players, events);
         self.try_block_shot(context, players, events);
         self.try_save_shot(context, players, events);
@@ -3047,6 +3671,9 @@ impl Ball {
         self.check_boundary_collision(context);
         self.expire_offside_snapshot(context);
         self.update_landing_cache();
+
+        #[cfg(feature = "match-logs")]
+        census.close(self, teleport::STAGE_BALL_LIVE);
 
         #[cfg(feature = "match-logs")]
         {

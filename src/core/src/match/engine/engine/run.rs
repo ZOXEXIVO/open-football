@@ -184,7 +184,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // starts the game with possession on the centre spot. Without
         // this the ball sits at centre until the emergency chaser
         // override fires, producing a ~14-second dead patch.
-        assign_kickoff(&mut field, PlayerSide::Left);
+        assign_kickoff(&mut field, PlayerSide::Left, None);
 
         while let Some(state) = state_manager.next(&context.score, context.is_knockout) {
             context.state.set(state);
