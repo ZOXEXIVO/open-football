@@ -55,6 +55,23 @@ pub struct GoalkeeperSkillProfile {
     pub parry_control: f32,
     /// High-ball / cross command.
     pub aerial_command: f32,
+    /// **How much of the ground in front of his goal he owns.**
+    ///
+    /// `command_of_area` is the attribute whose whole meaning is the size
+    /// of a keeper's territory, and until this field existed every site
+    /// that wanted it read `skills.goalkeeping.command_of_area / 20.0`
+    /// RAW — no fatigue band, no [`MatchStandard`] shift — while every
+    /// other keeper read in the game went through both. A keeper's
+    /// willingness to own his box was the one thing about him that never
+    /// tired and never got priced against the division he was playing in.
+    ///
+    /// Deliberately NOT put through `keeper_curve`. The curves are convex
+    /// because EXECUTION is convex — a slightly quicker keeper saves a lot
+    /// more shots. This is a tendency, like [`Self::eccentricity`]: it
+    /// says how much space he claims, not how well he covers it, and a
+    /// tendency is linear in the attribute. Curving it would also silently
+    /// move every depth the rest model gives him.
+    pub command_of_area: f32,
     /// Sweeper / coming-out execution.
     pub rushing_out_profile: f32,
     /// Risk appetite (0..1) from `goalkeeping.eccentricity` — a
@@ -411,6 +428,20 @@ impl GoalkeeperSkillProfile {
             + keeper_curve(positioning01) * 0.10)
             .clamp(0.0, 1.0);
 
+        // How much of the space in front of his goal he claims as his.
+        // Linear in the attribute — see the field note. `communication`
+        // and `bravery` are here because owning a box is shouting a back
+        // four into place and going through a crowd to punch, and
+        // `decisions` / `anticipation` because the keeper who comes for
+        // everything and the one who comes for nothing are both wrong.
+        let command_of_area = ((command_of_area01 * 0.40
+            + communication01 * 0.15
+            + bravery01 * 0.15
+            + decisions01 * 0.15
+            + anticipation01 * 0.15)
+            * decision_mult)
+            .clamp(0.0, 1.0);
+
         let concentration = keeper_curve(concentration01).clamp(0.0, 1.0);
 
         // Effective ranges in game units. The legacy code used fixed
@@ -453,6 +484,7 @@ impl GoalkeeperSkillProfile {
             handling_profile,
             parry_control,
             aerial_command,
+            command_of_area,
             rushing_out_profile,
             eccentricity,
             one_v_one,

@@ -7515,6 +7515,138 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         }
     }
 
+    // ── KEEPER TWO-CYCLE CENSUS ────────────────────────────────────────
+    // WHICH two states are arguing. The scalar churn number in the motion
+    // census has twice been the loudest thing in these diagnostics without
+    // saying which pair produced it, and a two-cycle is always two specific
+    // gates disagreeing about one condition.
+    {
+        use core::mid_run_diag::KeeperPairDiag;
+        let p = KeeperPairDiag::snapshot();
+        let n = KeeperPairDiag::STATES;
+        let total: u64 = p[..n * n].iter().sum();
+        if total > 0 {
+            let keeper_matches = (n_matches * 2) as f64;
+            let mut rows: Vec<(u64, u64, usize, usize)> = Vec::new();
+            for from in 0..n {
+                for to in 0..n {
+                    let count = p[from * n + to];
+                    if count > 0 {
+                        rows.push((count, p[400 + from * n + to], from, to));
+                    }
+                }
+            }
+            rows.sort_by(|a, b| b.0.cmp(&a.0));
+            let quick: u64 = p[400..400 + n * n].iter().sum();
+            println!();
+            println!(
+                "--- KEEPER TWO-CYCLE CENSUS ({:.0} transitions/keeper/match, {:.0}% inside 300 ms) ---",
+                total as f64 / keeper_matches,
+                quick as f64 * 100.0 / total as f64
+            );
+            println!("  from -> to                                  per match   inside 300ms");
+            for (count, fast, from, to) in rows.iter().take(12) {
+                println!(
+                    "  {:<20} -> {:<20} {:>9.0}   {:>10.0}%",
+                    StateNames::of(100 + *from as u16),
+                    StateNames::of(100 + *to as u16),
+                    *count as f64 / keeper_matches,
+                    *fast as f64 * 100.0 / (*count).max(1) as f64
+                );
+            }
+        }
+    }
+
+    // ── KEEPER EXCURSION CENSUS ────────────────────────────────────────
+    // How far from his goal he goes, on BOTH axes. Every other keeper
+    // block — and every gate in the state machine that bounds him —
+    // measures `|keeper.x - goal.x|`, the depth axis alone, so a keeper
+    // level with his six-yard box and standing on the touchline reads
+    // there as being on his goal line. "He chases the ball to the corner"
+    // is invisible in all of them by construction.
+    {
+        use core::mid_run_diag::KeeperExcursionDiag;
+        let x = KeeperExcursionDiag::snapshot();
+        if x[0] > 0 {
+            let ticks = x[0] as f64;
+            println!();
+            println!("--- KEEPER EXCURSION CENSUS (every keeper tick; radial = from his goal centre) ---");
+            println!(
+                "  mean radial {:.1} m (max {:.1})   mean lateral {:.1} m (max {:.1})",
+                x[1] as f64 / 100.0 / ticks * 0.125,
+                x[2] as f64 / 100.0 * 0.125,
+                x[3] as f64 / 100.0 / ticks * 0.125,
+                x[4] as f64 / 100.0 * 0.125
+            );
+            println!("  radial band          time%");
+            for (i, label) in [
+                "on his line <6 m",
+                "his box 6-11 m",
+                "edge of it 11-16.5 m",
+                "16.5-25 m",
+                "25-32 m",
+                "beyond 32 m",
+            ]
+            .iter()
+            .enumerate()
+            {
+                println!(
+                    "  {:<20} {:>6.2}%",
+                    label,
+                    x[5 + i] as f64 * 100.0 / ticks
+                );
+            }
+            println!(
+                "  wider than his own area {:.2}%   outside it on either axis {:.2}%   \
+                 CORNER COUNTRY (>25 m AND wide) {:.3}%",
+                x[11] as f64 * 100.0 / ticks,
+                x[12] as f64 * 100.0 / ticks,
+                x[13] as f64 * 100.0 / ticks
+            );
+            let far: u64 = (14..=19).map(|i| x[i]).sum();
+            if far > 0 {
+                println!(
+                    "  beyond 25 m ({:.0}/keeper/match): ComingOut {:.0}%  Standing {:.0}%  \
+                     Walking {:.0}%  Returning {:.0}%  PreparingForSave {:.0}%  other {:.0}%",
+                    far as f64 / (n_matches * 2) as f64,
+                    x[14] as f64 * 100.0 / far as f64,
+                    x[15] as f64 * 100.0 / far as f64,
+                    x[16] as f64 * 100.0 / far as f64,
+                    x[17] as f64 * 100.0 / far as f64,
+                    x[18] as f64 * 100.0 / far as f64,
+                    x[19] as f64 * 100.0 / far as f64
+                );
+                println!(
+                    "  …and the ball then: loose {:.0}%   at an opponent's feet {:.0}%   \
+                     itself wider than his area {:.0}%",
+                    x[23] as f64 * 100.0 / far as f64,
+                    x[24] as f64 * 100.0 / far as f64,
+                    x[25] as f64 * 100.0 / far as f64
+                );
+                // A keeper fetching a ball that ran out for his own goal
+                // kick is entitled to walk wherever it went. Read the two
+                // rows above net of this one.
+                println!(
+                    "  …of which the ball was DEAD (his own restart to take) {:.0}%   \
+                     and of the corner-country ticks, {:.0}%",
+                    x[26] as f64 * 100.0 / far as f64,
+                    if x[13] > 0 {
+                        x[27] as f64 * 100.0 / x[13] as f64
+                    } else {
+                        0.0
+                    }
+                );
+            }
+            if x[21] > 0 {
+                println!(
+                    "  while ComingOut: mean radial {:.1} m, furthest {:.1} m",
+                    x[20] as f64 / 100.0 / x[21] as f64 * 0.125,
+                    x[22] as f64 / 100.0 * 0.125
+                );
+            }
+        }
+    }
+
     // ── GOALKEEPER ACTION CENSUS ───────────────────────────────────────
     // How often the keeper actually does each of the things a keeper does,
     // counted at the moment he commits rather than at the moment a stat is

@@ -1,9 +1,10 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision, KeeperSmother,
+    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision, KeeperSmother, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::common::states::LooseBallChase;
+use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -78,6 +79,32 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
             ));
         }
 
+        // **THE BALL HAS LEFT THE GROUND HE DEFENDS — it is somebody
+        // else's now.**
+        //
+        // This state had no bound of any kind. It is a bare `Seek` at the
+        // ball's live position, entered by the dispatcher's loose-ball
+        // override for anything unowned within 60 u of him, and it held
+        // him for up to 200 AI ticks — four seconds of following a ball
+        // wherever it rolled. Every sibling state that can take him off
+        // his line carries an excursion test; this one, the only one that
+        // is a pure chase, did not, and it is the state most able to take
+        // him to the corner flag.
+        //
+        // ⚠ NOT for the taker of a restart. A goal kick may be lying four
+        // metres behind his own goal line, which is outside every
+        // territory there is, and he is the only man on the pitch allowed
+        // to touch it — the same exemption the two timeouts below carry,
+        // and for the same reason.
+        if ctx.tick_context.ball.restart_taker != Some(ctx.player.id) {
+            let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+            if !KeeperSweepLimit::covers(ctx, ctx.tick_context.positions.ball.position, &prof) {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::ReturningToGoal,
+                ));
+            }
+        }
+
         // ⚠ **Neither timeout applies to the taker of a restart.**
         //
         // Both were written for a keeper who has come off his line after a
@@ -117,7 +144,17 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Use Seek for full-speed approach - no slowing when chasing a loose ball
+        // …but never past the edge of his own ground. `process` decides
+        // when the chase is over; this is what stops him overrunning it
+        // and then having to sprint back, which is the version of the same
+        // bug that shows from the stands as a keeper with his back to the
+        // play. The restart taker is exempt for the reason given there.
         let target = ctx.tick_context.positions.ball.position;
+        let target = if ctx.tick_context.ball.restart_taker == Some(ctx.player.id) {
+            target
+        } else {
+            KeeperSweepLimit::contain(ctx, target, &GoalkeeperSkillProfile::from_ctx(ctx))
+        };
 
         // A keeper sprinting off their line to claim a loose ball moves
         // like one rushing out, not like one shuffling along the six-yard

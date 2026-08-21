@@ -3,10 +3,9 @@ use crate::r#match::goalkeepers::states::common::{
     KeeperSmother,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
-    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior,
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -112,15 +111,6 @@ impl GoalkeeperReturningGoalState {
     /// He recovers to the same place every other keeper state wants him:
     /// [`KeeperRestPosition`]. Recovering IS repositioning, at speed.
     fn recovery_point(ctx: &StateProcessingContext) -> Vector3<f32> {
-        KeeperRestPosition::point(
-            ctx.ball().direction_to_own_goal(),
-            ctx.tick_context.positions.ball.position,
-            ctx.tick_context.positions.ball.velocity,
-            ctx.player.side.unwrap_or(PlayerSide::Left),
-            ctx.team().tactical().defensive_line_x,
-            ctx.context.field_size.width as f32,
-            ctx.player.skills.goalkeeping.command_of_area / 20.0,
-            GoalkeeperSkillProfile::from_ctx(ctx).positioning,
-        )
+        KeeperRestPosition::for_keeper(ctx)
     }
 }

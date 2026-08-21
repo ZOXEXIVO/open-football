@@ -1643,6 +1643,43 @@ pub mod mid_run_diag {
     /// wasted motion.
     pub static GK_MOTION: [AtomicU64; 21] = [const { AtomicU64::new(0) }; 21];
 
+    /// **How far from his goal does he actually GO — on BOTH axes.**
+    ///
+    /// Every keeper diagnostic in this file measures an excursion as
+    /// `|keeper.x - goal.x|`, and so does the gate that bounds one
+    /// (`KeeperSweepLimit::distance_off_line`). That is the DEPTH axis
+    /// alone, which means a keeper standing on the touchline level with
+    /// his own six-yard box reads as **nought metres out of position**,
+    /// and a keeper who has chased a loose ball into the corner reads as
+    /// exactly the same excursion as one who has come five yards to the
+    /// edge of his area.
+    ///
+    /// The reported behaviour — *"he comes far too far out and chases the
+    /// ball almost to the corner flag"* — is therefore invisible to all of
+    /// them by construction. This samples the RADIAL distance from the
+    /// centre of his goal and the LATERAL component separately, once per
+    /// keeper per AI tick, unconditionally.
+    ///
+    /// 0 ticks, 1 SUM radial x100, 2 max radial x100, 3 SUM |lateral| x100,
+    /// 4 max |lateral| x100.
+    /// 5-10 radial band ticks: on his line (<6 m), his box (6-11 m), the
+    /// edge of it (11-16.5 m), 16.5-25 m, 25-32 m, beyond 32 m.
+    /// 11 ticks wider than his own penalty area, 12 ticks outside that
+    /// area on either axis, 13 **CORNER COUNTRY** — beyond 25 m radial AND
+    /// wider than his own area, which is the reported picture and has no
+    /// legitimate reading.
+    /// 14-19 split the ticks beyond 25 m by the state he was in:
+    /// ComingOut, Standing, Walking, ReturningToGoal, PreparingForSave,
+    /// anything else.
+    /// 20 SUM radial x100 over ComingOut ticks, 21 those ticks, 22 max
+    /// radial x100 in ComingOut, 23 of the beyond-25 m ticks how many had
+    /// the ball LOOSE, 24 how many had it at an opponent's feet, 25 how
+    /// many had the ball itself wider than his own penalty area. 26 is the
+    /// subset of the beyond-25 m ticks with a RESTART of his own pending —
+    /// a keeper fetching a dead ball goes wherever it went, and is
+    /// entitled to — and 27 the same subset of corner country.
+    pub static GK_EXCURSION: [AtomicU64; 32] = [const { AtomicU64::new(0) }; 32];
+
     /// **The same save outcome, split by HOW FAR THE SHOT WAS STRUCK FROM.**
     ///
     /// `KEEPER GUARD CENSUS` says how often a shot arrives beyond the
@@ -2049,6 +2086,76 @@ pub mod mid_run_diag {
         pub fn snapshot() -> [u64; 26] {
             let mut out = [0u64; 26];
             for (slot, c) in out.iter_mut().zip(GK_GUARD.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
+    /// **Which two states are arguing.**
+    ///
+    /// `GK_MOTION` counts transitions and how many reversed inside 300 ms,
+    /// and that number has twice now been the loudest thing in the keeper
+    /// diagnostics — 53% of 1673 a match at one measurement, 91% of 17101
+    /// at the next — without saying which PAIR of gates was producing it.
+    /// A two-cycle is always two specific states disagreeing about one
+    /// condition, so the matrix is the diagnostic and the scalar never was.
+    ///
+    /// `from * 20 + to` over [`GoalkeeperState`]'s compact index, counted
+    /// on real transitions only (a self-return is a hold, not a change of
+    /// mind), plus the same again in the second half of the array for the
+    /// subset that happened within 300 ms of entering `from`.
+    pub static GK_PAIRS: [AtomicU64; 800] = [const { AtomicU64::new(0) }; 800];
+
+    pub struct KeeperPairDiag;
+
+    impl KeeperPairDiag {
+        pub const STATES: usize = 20;
+
+        pub fn note(from: usize, to: usize, quick: bool) {
+            if from >= Self::STATES || to >= Self::STATES {
+                return;
+            }
+            let slot = from * Self::STATES + to;
+            GK_PAIRS[slot].fetch_add(1, Ordering::Relaxed);
+            if quick {
+                GK_PAIRS[400 + slot].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 800] {
+            let mut out = [0u64; 800];
+            for (slot, c) in out.iter_mut().zip(GK_PAIRS.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
+    pub struct KeeperExcursionDiag;
+
+    impl KeeperExcursionDiag {
+        pub fn note(slot: usize) {
+            if slot < GK_EXCURSION.len() {
+                GK_EXCURSION[slot].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn add(slot: usize, n: u64) {
+            if slot < GK_EXCURSION.len() {
+                GK_EXCURSION[slot].fetch_add(n, Ordering::Relaxed);
+            }
+        }
+
+        pub fn peak(slot: usize, n: u64) {
+            if slot < GK_EXCURSION.len() {
+                GK_EXCURSION[slot].fetch_max(n, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 32] {
+            let mut out = [0u64; 32];
+            for (slot, c) in out.iter_mut().zip(GK_EXCURSION.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
             out

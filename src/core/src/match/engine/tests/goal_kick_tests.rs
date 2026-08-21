@@ -478,6 +478,7 @@ fn the_election_stands_down_while_the_ball_is_out_of_play() {
         !PlayerFieldPositionGroup::should_force_takeball(
             mate.tactical_position.current_position.position_group(),
             mate,
+            &context,
             &tick_context
         ),
         "a player who is not the taker was sent at a ball he may not touch"

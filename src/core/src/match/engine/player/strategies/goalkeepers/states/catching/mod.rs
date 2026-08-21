@@ -150,8 +150,8 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
         // document.
         if ctx.ball().distance() > Self::RELEASE_DISTANCE {
             // If already far from goal, return rather than chasing further
-            let sweeper = GoalkeeperSkillProfile::from_ctx(ctx).rushing_out_profile;
-            if !KeeperSweepLimit::is_within(ctx, sweeper) {
+            let sweeper = GoalkeeperSkillProfile::from_ctx(ctx);
+            if !KeeperSweepLimit::is_within(ctx, &sweeper) {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::ReturningToGoal,
                 ));

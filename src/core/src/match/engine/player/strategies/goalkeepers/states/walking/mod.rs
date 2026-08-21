@@ -1,5 +1,6 @@
 use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperOneOnOne, KeeperRestPosition, KeeperSmother,
+    KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -7,7 +8,7 @@ use crate::r#match::player::strategies::processor::StateChangeResult;
 use crate::r#match::player::strategies::processor::{
     StateProcessingContext, StateProcessingHandler,
 };
-use crate::r#match::{ConditionContext, PlayerSide, SteeringBehavior, VectorExtensions};
+use crate::r#match::{ConditionContext, SteeringBehavior, VectorExtensions};
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
@@ -69,8 +70,18 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
             ));
         }
 
-        // Notification system: if ball system notified us to take the ball, act immediately
-        if ctx.ball().should_take_ball_immediately() {
+        // Notification system: if ball system notified us to take the ball,
+        // act immediately — but only for a ball in the ground he defends.
+        // `GoalkeeperTakeBallState` gives up on exactly that condition, so
+        // without it here the two are a two-cycle: measured, 88 entries a
+        // match through this door and 100% of them reversed inside 300 ms.
+        if ctx.ball().should_take_ball_immediately()
+            && KeeperSweepLimit::covers(
+                ctx,
+                ctx.tick_context.positions.ball.position,
+                &GoalkeeperSkillProfile::from_ctx(ctx),
+            )
+        {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::TakeBall,
             ));
@@ -88,15 +99,40 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
 
         // Check ball proximity and threat level
         let ball_distance = ctx.ball().distance();
-        let ball_on_own_side = ctx.ball().on_own_side();
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
 
         // Improved threat assessment using goalkeeper skills
         let threat_level = self.assess_threat_level(ctx);
 
-        // Ball on own side while walking — switch to Standing so the
-        // threat logic can drive a PreparingForSave transition. Attentive
-        // was a redundant mid-state between Walking and PreparingForSave.
-        if ball_on_own_side {
+        // **He is where he wants to be: stand there.**
+        //
+        // ⚠ THIS BRANCH USED TO READ `if ball_on_own_side { Standing }` —
+        // unconditionally, above everything below it. Against `Standing`'s
+        // own "more than 12.5 m from your kickoff dot → Walking", which the
+        // rest model makes permanently true, that is a two-cycle at tick
+        // resolution: 1673 transitions per keeper per match, 53% of them
+        // reversing inside 300 ms. See the note in `GoalkeeperStandingState`.
+        //
+        // It also made most of this state unreachable. Every branch below
+        // sat underneath it, so `should_come_out_advanced`,
+        // `is_significantly_out_of_position` and the threat test were only
+        // ever consulted with the ball in the OPPONENT'S half — the one
+        // situation none of them is about.
+        //
+        // The two states differ in one thing and it is not where the ball
+        // is: `Walking` is the keeper repositioning, `Standing` is the
+        // keeper set. So he hands back when he has ARRIVED — the same
+        // anisotropic, concentration-scaled test `velocity` uses to decide
+        // whether to move at all — while `Standing` sends him here only
+        // once he is `REPOSITION_MARGIN` times further out than that. The
+        // band between the two is what stops the pair oscillating.
+        if KeeperRestPosition::is_set_with(
+            ctx.player.position,
+            self.calculate_intelligent_position(ctx),
+            prof.concentration,
+            ball_distance,
+            ctx.context.field_size.width as f32,
+        ) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,
             ));
@@ -104,9 +140,12 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
 
         // Check if ball is coming directly at goalkeeper
         if ctx.ball().is_towards_player_with_angle(0.85) && ball_distance < 200.0 {
-            // Use anticipation skill to determine response timing
-            let anticipation_factor = ctx.player.skills.mental.anticipation / 20.0;
-            let reaction_distance = 250.0 + (anticipation_factor * 100.0); // Better anticipation = earlier reaction
+            // How early he sets himself for a ball coming at him is READING
+            // the play, which is the positioning composite — `anticipation`
+            // is its second-heaviest term and the profile bands it for
+            // fatigue and prices it against the standard of the match, both
+            // of which a raw attribute read skips.
+            let reaction_distance = 250.0 + (prof.positioning * 100.0);
 
             if ball_distance < reaction_distance {
                 return Some(StateChangeResult::with_goalkeeper_state(
@@ -187,8 +226,14 @@ impl GoalkeeperWalkingState {
     fn assess_threat_level(&self, ctx: &StateProcessingContext) -> f32 {
         let mut threat = 0.0;
 
-        // Use reflexes to assess multiple threats
-        let concentration_factor = ctx.player.skills.goalkeeping.reflexes / 20.0;
+        // Reading the danger is a READING skill — positioning,
+        // anticipation, decisions, concentration, which is exactly the
+        // profile's `positioning` composite. This read `reflexes`, under a
+        // variable named `concentration_factor`: reflexes are how fast he
+        // moves once he has seen it, not how early he sees it, and the two
+        // come apart in precisely the keeper this is about.
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+        let concentration_factor = prof.positioning;
 
         // Check for opponents with ball
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
@@ -212,9 +257,8 @@ impl GoalkeeperWalkingState {
         // times the engine's shot cap, so this term never once fired and
         // a ball travelling at the keeper contributed nothing to his read
         // of the danger.
-        let anticipation_factor = ctx.player.skills.mental.anticipation / 20.0;
         if ball_speed > 1.5 && ctx.ball().is_towards_player_with_angle(0.6) {
-            threat += 0.4 * anticipation_factor;
+            threat += 0.4 * prof.positioning;
         }
 
         threat.min(1.0)
@@ -223,32 +267,29 @@ impl GoalkeeperWalkingState {
     /// Advanced decision for coming out using goalkeeper skills
     fn should_come_out_advanced(&self, ctx: &StateProcessingContext) -> bool {
         let ball_distance = ctx.ball().distance();
-        let goalkeeper_skills = &ctx.player.skills;
 
-        // Key skills for coming out decisions
-        let decision_skill = goalkeeper_skills.mental.decisions / 20.0;
-        let rushing_out = goalkeeper_skills.goalkeeping.rushing_out / 20.0;
-        let command_of_area = goalkeeper_skills.goalkeeping.command_of_area / 20.0;
-        let anticipation = goalkeeper_skills.mental.anticipation / 20.0;
-
-        // Combined skill factor for coming out
-        let coming_out_ability =
-            (decision_skill + rushing_out + command_of_area + anticipation) / 4.0;
+        // Key skills for coming out decisions. Four attributes read raw and
+        // averaged; the profile already blends the same four (and pace,
+        // composure, one-on-ones, bravery) into the two composites that
+        // mean "how far he comes" and "how much ground he owns", with the
+        // fatigue band and the match-standard shift the raw reads skipped.
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+        let coming_out_ability = (prof.rushing_out_profile + prof.command_of_area) * 0.5;
 
         // Base threshold adjusted by skills
         let base_threshold = 100.0;
         let skill_adjusted_threshold = base_threshold * (0.6 + coming_out_ability * 0.8); // Range: 60-140
 
-        // Check if ball is loose and in dangerous area
+        // Check if ball is loose and in dangerous area — and in the ground
+        // he defends, which is a different question from how far it is
+        // from HIM. See [`KeeperSweepLimit`].
         let ball_loose = !ctx.ball().is_owned();
-        let ball_in_danger_zone = ball_distance < skill_adjusted_threshold;
+        let ball_in_danger_zone = ball_distance < skill_adjusted_threshold
+            && KeeperSweepLimit::covers(ctx, ctx.tick_context.positions.ball.position, &prof);
 
         // Check if goalkeeper can reach ball first
         if ball_loose && ball_in_danger_zone {
-            // Use acceleration and agility for reach calculation
-            let reach_ability = (goalkeeper_skills.physical.acceleration
-                + goalkeeper_skills.physical.agility)
-                / 40.0;
+            let reach_ability = prof.rushing_out_profile;
 
             // Check if any opponent is closer
             for opponent in ctx.players().opponents().nearby(150.0) {
@@ -268,14 +309,22 @@ impl GoalkeeperWalkingState {
         false
     }
 
-    /// Check if significantly out of position using positioning skill
+    /// Far enough off his spot that he jogs back rather than strolls.
+    ///
+    /// Reads the positioning COMPOSITE rather than `mental.positioning`
+    /// raw: the composite is the one place in the keeper model that says
+    /// how well he reads where he ought to be, it blends anticipation,
+    /// decisions and concentration with it, and — unlike a raw attribute —
+    /// it is banded for fatigue and priced against the standard of the
+    /// match. Centred on `POPULATION_READ` so this is a spread across
+    /// keepers and not a re-levelling of every keeper in the game.
     fn is_significantly_out_of_position(&self, ctx: &StateProcessingContext) -> bool {
         let optimal_position = self.calculate_intelligent_position(ctx);
         let current_distance = ctx.player.position.distance_to(&optimal_position);
 
-        // Use positioning skill to determine tolerance
-        let positioning_skill = ctx.player.skills.mental.positioning / 20.0;
-        let tolerance = 120.0 - (positioning_skill * 40.0); // Better positioning = tighter tolerance (80-120)
+        let read = GoalkeeperSkillProfile::from_ctx(ctx).positioning;
+        let tolerance =
+            100.0 - (read - GoalkeeperSkillProfile::POPULATION_READ) * 80.0;
 
         current_distance > tolerance
     }
@@ -289,16 +338,7 @@ impl GoalkeeperWalkingState {
     /// were wrong the same way: the whole depth range came to a couple of
     /// metres, so he never left his line. See `KeeperRestPosition`.
     fn calculate_intelligent_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        KeeperRestPosition::point(
-            ctx.ball().direction_to_own_goal(),
-            ctx.tick_context.positions.ball.position,
-            ctx.tick_context.positions.ball.velocity,
-            ctx.player.side.unwrap_or(PlayerSide::Left),
-            ctx.team().tactical().defensive_line_x,
-            ctx.context.field_size.width as f32,
-            ctx.player.skills.goalkeeping.command_of_area / 20.0,
-            GoalkeeperSkillProfile::from_ctx(ctx).positioning,
-        )
+        KeeperRestPosition::for_keeper(ctx)
     }
 
     // NB the old `limit_to_penalty_area` helper is gone. It clamped the

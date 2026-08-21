@@ -100,10 +100,8 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         // kickoff dot, measured as a radius, so a keeper who had swept out
         // to the edge of his area could not enter `Catching` for a shot at
         // all. See [`KeeperSweepLimit`].
-        let within_his_space = KeeperSweepLimit::is_within(
-            ctx,
-            GoalkeeperSkillProfile::from_ctx(ctx).rushing_out_profile,
-        );
+        let within_his_space =
+            KeeperSweepLimit::is_within(ctx, &GoalkeeperSkillProfile::from_ctx(ctx));
 
         // Shot in flight: enter Catching immediately — we need to be
         // moving toward the intercept line every tick, not waiting for

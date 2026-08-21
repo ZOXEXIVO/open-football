@@ -984,6 +984,36 @@ impl Actors {
     /// without a switch: the course rotates continuously, so there is no
     /// frame at which the gait changes.
     pub(crate) const SQUARE_UP: (f32, f32) = (1.1, 2.8);
+    /// How far round from the ball a keeper will ever turn while it is
+    /// live and near his goal, in radians. 1.75 = 100°.
+    ///
+    /// Past this he has turned his BACK on it, and a goalkeeper does not
+    /// do that — not while recovering to his line, not while getting back
+    /// for a ball played over him with the play still in front. He runs
+    /// side-on and looks over his shoulder; [`Actors::NECK`] reaches 60° of
+    /// the 100°, so at the limit the ball is at the very edge of his
+    /// vision, which is what that looks like.
+    ///
+    /// It is the ceiling on the opening, not a replacement for it: a
+    /// keeper whose run and ball are the same way never reaches it.
+    ///
+    /// ⚠ It is also what makes [`Actors::KEEPER_OPEN_UP`] necessary. Once
+    /// his chest is held at 100° his course is nearly all lateral, and
+    /// drawn as a side-step at four metres a second that is a man bounding
+    /// sideways with his feet two metres apart. The legs have to open onto
+    /// the run even though the chest does not — which is a crossover run,
+    /// and is precisely how a keeper recovers.
+    pub(crate) const SHOULDER: f32 = 1.75;
+    /// Where a KEEPER's legs open onto his course, in metres a second —
+    /// [`Actors::OPEN_UP`] for everybody else.
+    ///
+    /// It starts where his shuffle ends ([`Actors::SQUARE_UP`]), because
+    /// that is the same claim about the same gait seen from two sides: up
+    /// to 2.8 m/s a lateral step is a shuffle and his feet stay square; past
+    /// it they cannot, and he crosses them. The width of the band is the
+    /// outfielder's, since it is the same body.
+    pub(crate) const KEEPER_OPEN_UP: (f32, f32) =
+        (Self::SQUARE_UP.1, Self::SQUARE_UP.1 + (Self::OPEN_UP.1 - Self::OPEN_UP.0));
     /// How far ahead of the playhead a keeper's save is read, in seconds of
     /// match time, and at what interval.
     ///
@@ -1585,13 +1615,33 @@ impl Actors {
     /// feet (an outfielder under [`Actors::MOVING`] faces the ball, which is
     /// where most of these courses come from at all).
     ///
-    /// ⚠ **Nothing for a goalkeeper**, and that is not an exception, it is
-    /// the definition. He stays square to the play and shuffles because that
-    /// is his job; [`Actors::SQUARE_UP`] is where he opens up, and it does it
-    /// by turning his whole HEADING, which leaves nothing here to do.
+    /// ⚠ **A goalkeeper opens up LATER, not never**, and the difference is
+    /// the whole of how he recovers.
+    ///
+    /// This returned zero for him flat, on the reasoning that he stays
+    /// square and shuffles because that is his job and
+    /// [`Actors::SQUARE_UP`] does his opening by turning his whole HEADING.
+    /// That was true while the heading went all the way round: at 2.8 m/s
+    /// he was simply pointed at his run, his course was straight ahead, and
+    /// there was nothing lateral left to draw.
+    ///
+    /// It stopped being true with [`Actors::SHOULDER`], which is there
+    /// because turning his whole heading meant turning his BACK on the ball
+    /// — the reported bug. His chest now holds at 100° off the run, so his
+    /// course stays nearly all lateral at any speed, and a lateral course
+    /// drawn with square feet at four metres a second is a man bounding
+    /// sideways.
+    ///
+    /// A keeper recovering at pace does what anybody does: he crosses his
+    /// legs and runs, and keeps his chest and his eyes on the ball. So the
+    /// legs open exactly as everybody else's do, from
+    /// [`Actors::KEEPER_OPEN_UP`] — which begins where his shuffle ends, so
+    /// the keeper on his line and the jockeying defender both keep every
+    /// lateral term untouched, and only the man who is genuinely running
+    /// crosses over.
     pub(crate) fn opening(speed: f32, course: Vec2, keeper: bool) -> f32 {
         let length = course.length();
-        if keeper || length < 1e-4 {
+        if length < 1e-4 {
             return 0.0;
         }
         let bearing = course.x.atan2(course.y);
@@ -1605,8 +1655,12 @@ impl Actors {
         let square = Self::ease(
             (bearing.abs() - Self::SQUARE_ON.0) / (Self::SQUARE_ON.1 - Self::SQUARE_ON.0),
         );
-        let strolling =
-            1.0 - Self::ease((speed - Self::OPEN_UP.0) / (Self::OPEN_UP.1 - Self::OPEN_UP.0));
+        let band = if keeper {
+            Self::KEEPER_OPEN_UP
+        } else {
+            Self::OPEN_UP
+        };
+        let strolling = 1.0 - Self::ease((speed - band.0) / (band.1 - band.0));
         // Going backwards he backpedals instead — and this is also what
         // makes `bearing` safe to read at all, since it reaches zero, flat,
         // exactly where the bearing wraps. See [`Actors::OPEN_BACKING`].
@@ -2371,11 +2425,10 @@ impl Actors {
         } else if actor.is_goalkeeper
             && ball.on_pitch
             && !unwatched
-            && actor.speed < Self::SQUARE_UP.1
             && position.distance(ball.position) < Self::SET_RANGE.1
         {
             // **A goalkeeper stays square to the play, and opens up as he
-            // gets going.**
+            // gets going — but he never turns his back on the ball.**
             //
             // Everybody else turns to face his run, and should: an
             // outfielder covering ground is going somewhere. A keeper
@@ -2394,6 +2447,21 @@ impl Actors {
             // Above the run branch rather than below it, because the run
             // branch is exactly what it is overruling. Measured, this is 87%
             // of his frames. See [`Actors::SQUARE_UP`].
+            //
+            // ⚠ **THIS BRANCH USED TO SWITCH OFF ABOVE `SQUARE_UP.1`** —
+            // 2.8 m/s — and everything past it fell through to "face your
+            // run". So a keeper recovering to his line at anything above a
+            // jog was drawn with his back to the attacking team, which is
+            // the reported bug, and it is worst in exactly the situation it
+            // matters: the ball in front of him and play coming on.
+            //
+            // A real keeper does not do that, at any speed, while the ball
+            // is live in front of him. He goes side-on and cross-steps, head
+            // over his shoulder. So the opening does not stop at a speed, it
+            // stops at an ANGLE: he turns as far onto his run as
+            // [`Actors::SHOULDER`] and no further. Where the run and the
+            // ball are the same way — a keeper sprinting out to a
+            // through-ball — the clamp does not bind and nothing changes.
             let watching = ball.position - position;
             let travel = Vec3::new(actor.travel.x, 0.0, actor.travel.z);
             match (
@@ -2409,7 +2477,9 @@ impl Actors {
                     );
                     let square = watching.x.atan2(watching.z);
                     let along = going.x.atan2(going.z);
-                    let turned = square + (((along - square + PI).rem_euclid(TAU)) - PI) * opening;
+                    let swing = ((along - square + PI).rem_euclid(TAU)) - PI;
+                    let turned =
+                        square + (swing * opening).clamp(-Self::SHOULDER, Self::SHOULDER);
                     Vec3::new(turned.sin(), 0.0, turned.cos())
                 }
                 _ => watching,
@@ -4882,10 +4952,18 @@ mod ground {
         }
     }
 
-    /// …but a defender jockeying still side-steps, and a goalkeeper always
-    /// does. Both are the point: the opening is not "stop drawing the
+    /// …but a defender jockeying still side-steps, and so does a goalkeeper
+    /// on his line. Both are the point: the opening is not "stop drawing the
     /// shuffle", it is "stop drawing it for the twenty men who are not doing
     /// it".
+    ///
+    /// The keeper half of this used to read "at any speed at all", because
+    /// [`Actors::SQUARE_UP`] turned his whole heading onto his run and left
+    /// him nothing lateral to draw. [`Actors::SHOULDER`] ended that — he now
+    /// holds his chest on the ball rather than turning his back on it, so
+    /// his course stays lateral while he runs, and a lateral course drawn
+    /// with square feet at four metres a second is a man bounding sideways.
+    /// He crosses over instead, from where his shuffle ends.
     #[test]
     fn square_and_slow_is_still_a_side_step() {
         assert_eq!(
@@ -4893,13 +4971,85 @@ mod ground {
             0.0,
             "a defender jockeying at a walk has opened his hips up"
         );
-        for speed in [1.0_f32, 2.0, 3.0, 4.5, 6.0] {
+        // A keeper set, and a keeper shuffling across his line: square feet.
+        for speed in [0.5_f32, 1.0, 2.0, Actors::SQUARE_UP.1] {
             assert_eq!(
                 Actors::opening(speed, Vec2::X, true),
                 0.0,
                 "a goalkeeper has stopped shuffling at {speed:.1} m/s"
             );
         }
+        // …and a keeper genuinely running across himself crosses over, as
+        // far as anybody else does.
+        let running = Actors::opening(6.0, Vec2::X, true);
+        assert!(
+            (running - Actors::opening(6.0, Vec2::X, false)).abs() < 1e-4,
+            "a keeper at a sprint is drawn with a different gait from every \
+             other body on the pitch: {running:.3}"
+        );
+        assert!(
+            running > 1.0,
+            "he sprints across himself with his feet still square: {running:.3}"
+        );
+        // Continuous through the band, and monotone: no frame at which the
+        // gait changes.
+        let mut previous = 0.0;
+        for step in 0..=20 {
+            let speed = Actors::SQUARE_UP.1
+                + (Actors::KEEPER_OPEN_UP.1 - Actors::SQUARE_UP.1) * step as f32 / 20.0;
+            let open = Actors::opening(speed, Vec2::X, true);
+            assert!(
+                open >= previous - 1e-6 && open - previous < 0.25,
+                "his legs jump from {previous:.3} to {open:.3} at {speed:.2} m/s"
+            );
+            previous = open;
+        }
+    }
+
+    /// **And he never turns his back on a live ball near his goal.**
+    ///
+    /// The reported bug: a keeper recovering to his line at anything above
+    /// a jog fell through the square-up branch entirely and was drawn
+    /// facing his run — which, retreating, is directly away from the play.
+    #[test]
+    fn a_keeper_recovering_keeps_the_ball_in_front_of_him() {
+        let ball = BallState {
+            on_pitch: true,
+            position: Vec3::new(0.0, 0.0, 12.0),
+            ..Default::default()
+        };
+        // Him on his line at the origin, the ball 12 m in front, and his
+        // run straight backwards into his own goal.
+        for speed in [1.5_f32, 2.9, 4.0, 6.0] {
+            let mut keeper = PlayerActor::new(1, true, true);
+            keeper.speed = speed;
+            keeper.travel = Vec3::new(0.0, 0.0, -speed);
+            let facing = Actors::facing(&keeper, &ball, Vec3::ZERO, Vec3::ZERO, false);
+            let flat = Vec3::new(facing.x, 0.0, facing.z)
+                .try_normalize()
+                .expect("a heading");
+            let to_ball = Vec3::new(0.0, 0.0, 1.0);
+            let off = flat.dot(to_ball).clamp(-1.0, 1.0).acos();
+            assert!(
+                off <= Actors::SHOULDER + 1e-3,
+                "retreating at {speed:.1} m/s he is {:.0}deg off the ball — his back \
+                 is to the play",
+                off.to_degrees()
+            );
+        }
+        // …and coming the other way, at a ball he is running AT, nothing
+        // is clamped: he faces it, which is also his run.
+        let mut charging = PlayerActor::new(1, true, true);
+        charging.speed = 6.0;
+        charging.travel = Vec3::new(0.0, 0.0, 6.0);
+        let facing = Actors::facing(&charging, &ball, Vec3::ZERO, Vec3::ZERO, false);
+        let flat = Vec3::new(facing.x, 0.0, facing.z)
+            .try_normalize()
+            .expect("a heading");
+        assert!(
+            flat.z > 0.999,
+            "he is not looking at the ball he is sprinting out to: {flat:?}"
+        );
     }
 
     /// …and going backwards he backpedals rather than turning round, which

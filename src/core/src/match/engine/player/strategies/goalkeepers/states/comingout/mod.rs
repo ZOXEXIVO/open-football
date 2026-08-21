@@ -121,7 +121,7 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         // and was then forbidden from picking it up. See
         // [`KeeperSweepLimit`].
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
-        let within_his_space = KeeperSweepLimit::is_within(ctx, prof.rushing_out_profile);
+        let within_his_space = KeeperSweepLimit::is_within(ctx, &prof);
 
         // Only a LOOSE ball can be claimed. Same defect `PreparingForSave`
         // carried: reaching the ball was tested on distance alone, so a
@@ -261,16 +261,46 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         // than its own give-up condition — see [`KeeperSweepLimit`] and
         // `MAX_COMING_OUT_DISTANCE` above.
         //
-        // Now measured along the goal-to-goal axis, at 15 m for a line
-        // keeper and 32 m for a sweeper: strictly beyond any distance at
-        // which he enters the state, so once he commits he actually goes.
-        if !KeeperSweepLimit::is_within(ctx, prof.rushing_out_profile) {
+        // Now bounded by the territory itself: 15 m deep for a line keeper
+        // and 32 m for a sweeper, 11 m to 21 m across, strictly beyond any
+        // distance at which he enters the state, so once he commits he
+        // actually goes — and he stops where a keeper stops.
+        if !KeeperSweepLimit::is_within(ctx, &prof) {
             // Getting far from goal - only continue if ball is very close and loose
             if !ctx.ball().is_owned() && ball_distance < 15.0 {
                 return None; // Ball very close and loose, commit!
             } else {
                 #[cfg(feature = "match-logs")]
                 KeeperSweepDiag::note_exit(8);
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::ReturningToGoal,
+                ));
+            }
+        }
+
+        // **And he does not set off for a ball he is not prepared to go
+        // to.** Everything above is a give-up test on where he ALREADY is,
+        // and a give-up test alone is a two-cycle by construction: he
+        // commits to a ball out in the channel, runs at it, crosses his own
+        // boundary, turns round, comes back inside it and commits again.
+        // Measured on the baseline, 53% of all his state transitions
+        // reversed inside 300 ms.
+        //
+        // The ball being outside his ground is not by itself a reason to
+        // stop — it may be rolling back into it, and a keeper does start
+        // moving for those. What settles it is whether it is coming his
+        // way: `velocity` steers to the containment point regardless, so
+        // a ball on its way in finds him already moving to meet it, and
+        // one going away is somebody else's.
+        let goal = ctx.ball().direction_to_own_goal();
+        let ball_at = ctx.tick_context.positions.ball.position;
+        if !KeeperSweepLimit::covers(ctx, ball_at, &prof) {
+            let ball_velocity = ctx.tick_context.positions.ball.velocity;
+            let coming_back = ball_velocity.norm() > 0.05
+                && (ball_at - goal).normalize().dot(&ball_velocity.normalize()) < -0.2;
+            if !coming_back {
+                #[cfg(feature = "match-logs")]
+                KeeperSweepDiag::note_exit(5);
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::ReturningToGoal,
                 ));
@@ -324,6 +354,18 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         } else {
             ball_position
         };
+        // …and he only ever runs to a point inside the ground he defends.
+        //
+        // This is the difference between a bound and a leash. The gates in
+        // `process` say when he must turn round; on their own they let him
+        // aim at the corner flag, sprint until he crosses his own boundary,
+        // and turn round there — so the further out the ball was, the
+        // further out he got before anything stopped him, and every one of
+        // those excursions ended in a recovery sprint with his back to the
+        // play. Steering to the CONTAINED point instead, he runs as far as
+        // a keeper runs and then he is simply there, facing it.
+        let target_position = KeeperSweepLimit::contain(ctx, target_position, &prof);
+        let ball_distance = (target_position - ctx.player.position).magnitude();
 
         // Decide steering behavior based on distance
         if ball_distance < 5.0 {

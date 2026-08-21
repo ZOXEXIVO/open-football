@@ -3,6 +3,7 @@ use crate::r#match::common_states::CommonInjuredState;
 use crate::r#match::defenders::states::{DefenderState, DefenderStrategies};
 use crate::r#match::events::{Event, EventCollection};
 use crate::r#match::forwarders::states::{ForwardState, ForwardStrategies};
+use crate::r#match::goalkeepers::states::common::KeeperSweepLimit;
 use crate::r#match::goalkeepers::states::state::{GoalkeeperState, GoalkeeperStrategies};
 use crate::r#match::midfielders::states::{MidfielderState, MidfielderStrategies};
 use crate::r#match::player::memory::PlayerMemory;
@@ -136,7 +137,7 @@ impl PlayerFieldPositionGroup {
             use std::sync::atomic::Ordering;
             if Self::should_yield_takeball(*self, player, tick_context) {
                 chase_diag::YIELD.fetch_add(1, Ordering::Relaxed);
-            } else if Self::should_force_takeball(*self, player, tick_context) {
+            } else if Self::should_force_takeball(*self, player, context, tick_context) {
                 chase_diag::FORCE.fetch_add(1, Ordering::Relaxed);
                 if tick_context.ball.is_in_flight_state > 0 {
                     chase_diag::FORCE_IN_FLIGHT.fetch_add(1, Ordering::Relaxed);
@@ -149,7 +150,7 @@ impl PlayerFieldPositionGroup {
                 TransitionSource::LooseBallOverride,
             );
             0
-        } else if Self::should_force_takeball(*self, player, tick_context) {
+        } else if Self::should_force_takeball(*self, player, context, tick_context) {
             player.redirect_to_fresh(
                 Self::takeball_state_for(*self),
                 TransitionSource::LooseBallOverride,
@@ -158,7 +159,6 @@ impl PlayerFieldPositionGroup {
         } else {
             in_state_time
         };
-        let _ = context; // all needed state lives in player + tick_context
 
         let player_state = player.state;
         let state_processor =
@@ -400,6 +400,7 @@ impl PlayerFieldPositionGroup {
     pub(crate) fn should_force_takeball(
         group: PlayerFieldPositionGroup,
         player: &MatchPlayer,
+        context: &MatchContext,
         tick_context: &GameTickContext,
     ) -> bool {
         // Mid-action — a keeper already committed to a dive, a header
@@ -499,6 +500,29 @@ impl PlayerFieldPositionGroup {
             }
             let gk_dist_sq = (ball_pos - player.position).norm_squared();
             if gk_dist_sq > 60.0 * 60.0 {
+                return false;
+            }
+            // **…AND ONLY FOR A BALL INSIDE THE GROUND A KEEPER DEFENDS.**
+            //
+            // The test above is purely relative to HIM: 60 u of anywhere on
+            // the pitch. So a keeper who had correctly pushed up to sweep
+            // was forced onto a loose ball seven metres away and thirty
+            // metres from his own goal out by the touchline — and
+            // `GoalkeeperTakeBallState` is a bare `Seek` at the ball with a
+            // four-second timeout and no territory of its own, so from there
+            // he simply followed it. Measured over 200 matches, states other
+            // than the sweep and the recovery accounted for 17% of every
+            // tick he spent beyond 25 m from his goal.
+            //
+            // The bound here is the NARROWEST territory any keeper has, so
+            // that the state he is forced into — which applies his own,
+            // wider one — never hands him straight back. See
+            // [`KeeperSweepLimit::innermost`].
+            let goal = match player.side {
+                Some(PlayerSide::Right) => context.goal_positions.right,
+                Some(PlayerSide::Left) | None => context.goal_positions.left,
+            };
+            if KeeperSweepLimit::strain(goal, ball_pos, KeeperSweepLimit::innermost()) > 1.0 {
                 return false;
             }
         }
@@ -661,6 +685,7 @@ impl<'p> StateProcessor<'p> {
             );
             Self::note_keeper_guard(&processing_ctx, moving);
             Self::note_keeper_motion(&processing_ctx, result.velocity);
+            Self::note_keeper_excursion(&processing_ctx);
         }
 
         if let Some(change) = handler.process(&processing_ctx) {
@@ -678,14 +703,23 @@ impl<'p> StateProcessor<'p> {
             // event fires and `in_state_time` keeps running) and counting
             // those would drown the signal.
             #[cfg(feature = "match-logs")]
-            if matches!(processing_ctx.player.state, PlayerState::Goalkeeper(_))
-                && change
+            if let PlayerState::Goalkeeper(from) = processing_ctx.player.state {
+                if let Some(PlayerState::Goalkeeper(to)) =
+                    change.state.filter(|s| *s != processing_ctx.player.state)
+                {
+                    let quick = processing_ctx.in_state_time <= 15;
+                    crate::mid_run_diag::KeeperMotionDiag::note_transition(quick);
+                    // …and WHICH two states, because the scalar above has
+                    // never once been enough to act on. See `KeeperPairDiag`.
+                    crate::mid_run_diag::KeeperPairDiag::note(from as usize, to as usize, quick);
+                } else if change
                     .state
                     .is_some_and(|s| s != processing_ctx.player.state)
-            {
-                crate::mid_run_diag::KeeperMotionDiag::note_transition(
-                    processing_ctx.in_state_time <= 15,
-                );
+                {
+                    crate::mid_run_diag::KeeperMotionDiag::note_transition(
+                        processing_ctx.in_state_time <= 15,
+                    );
+                }
             }
             // Fold the handler's result in. `merge_state_change` moves the
             // events across WHETHER OR NOT a transition occurred — an
@@ -729,6 +763,99 @@ impl<'p> StateProcessor<'p> {
                 let cos = (v.normalize().dot(&prev.normalize())).clamp(-1.0, 1.0);
                 KeeperMotionDiag::note_heading(cos.acos());
             }
+        }
+    }
+
+    /// One EXCURSION sample per keeper per AI tick, unconditionally — see
+    /// [`KeeperExcursionDiag`]. Separate from [`Self::note_keeper_motion`]
+    /// because that one, like every gate it was written alongside, measures
+    /// the excursion on the DEPTH axis only: a keeper at the corner flag
+    /// registers there as being on his goal line.
+    #[cfg(feature = "match-logs")]
+    fn note_keeper_excursion(ctx: &StateProcessingContext) {
+        use crate::mid_run_diag::KeeperExcursionDiag as D;
+
+        let PlayerState::Goalkeeper(gk_state) = ctx.player.state else {
+            return;
+        };
+        let goal = ctx.ball().direction_to_own_goal();
+        let keeper = ctx.player.position;
+        let radial = (keeper - goal).magnitude();
+        let lateral = (keeper.y - goal.y).abs();
+        let depth = (keeper.x - goal.x).abs();
+        // Half the width of a penalty area, in engine units: 40.32 m at
+        // 8 units to the metre, halved.
+        const HALF_AREA_WIDTH: f32 = 161.28;
+        const AREA_DEPTH: f32 = 132.0;
+
+        D::note(0);
+        D::add(1, (radial * 100.0) as u64);
+        D::peak(2, (radial * 100.0) as u64);
+        D::add(3, (lateral * 100.0) as u64);
+        D::peak(4, (lateral * 100.0) as u64);
+
+        let band = if radial < 48.0 {
+            0
+        } else if radial < 88.0 {
+            1
+        } else if radial < 132.0 {
+            2
+        } else if radial < 200.0 {
+            3
+        } else if radial < 256.0 {
+            4
+        } else {
+            5
+        };
+        D::note(5 + band);
+
+        let wide = lateral > HALF_AREA_WIDTH;
+        if wide {
+            D::note(11);
+        }
+        if wide || depth > AREA_DEPTH {
+            D::note(12);
+        }
+
+        if radial > 200.0 {
+            if wide {
+                D::note(13);
+            }
+            // …and was the ball even in play? A keeper fetching a ball that
+            // has run out for his own goal kick walks wherever it went,
+            // including to the corner flag, and he is entitled to: it is a
+            // dead ball and nobody may touch it but him. Counted separately
+            // so the residual in this census can be read for what it is
+            // rather than as the behaviour the census was added to catch.
+            if ctx.tick_context.ball.restart_taker.is_some() {
+                D::note(26);
+                if wide {
+                    D::note(27);
+                }
+            }
+            D::note(match gk_state {
+                GoalkeeperState::ComingOut => 14,
+                GoalkeeperState::Standing => 15,
+                GoalkeeperState::Walking => 16,
+                GoalkeeperState::ReturningToGoal => 17,
+                GoalkeeperState::PreparingForSave => 18,
+                _ => 19,
+            });
+            if !ctx.ball().is_owned() {
+                D::note(23);
+            } else if ctx.players().opponents().with_ball().next().is_some() {
+                D::note(24);
+            }
+            let ball = ctx.tick_context.positions.ball.position;
+            if (ball.y - goal.y).abs() > HALF_AREA_WIDTH {
+                D::note(25);
+            }
+        }
+
+        if matches!(gk_state, GoalkeeperState::ComingOut) {
+            D::add(20, (radial * 100.0) as u64);
+            D::note(21);
+            D::peak(22, (radial * 100.0) as u64);
         }
     }
 

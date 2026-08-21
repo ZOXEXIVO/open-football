@@ -281,6 +281,40 @@ impl KeeperRestPosition {
         )
     }
 
+    /// Where this keeper wants to stand, right now — the ONE call every
+    /// resting state makes.
+    ///
+    /// `Standing`, `Walking` and `ReturningToGoal` each assembled the
+    /// eight arguments to [`Self::point`] themselves, and two of the three
+    /// differences between those copies mattered. All three read
+    /// `skills.goalkeeping.command_of_area / 20.0` raw, bypassing the
+    /// fatigue band and the [`MatchStandard`] shift that every other
+    /// keeper read goes through; and only `Standing` bounded the result,
+    /// with a lateral clamp of its own to the width of the penalty area —
+    /// so a keeper walking or recovering had no lateral bound at all and
+    /// the same keeper wanted two different places depending on his state,
+    /// which is the defect `KeeperRestPosition` was created to end.
+    ///
+    /// Contained to [`KeeperSweepLimit`], which is the same territory the
+    /// sweep gates use. Resting outside the ground you are willing to
+    /// defend is a contradiction, and while it was possible the rest model
+    /// could hand him a target the sweep model would immediately send him
+    /// back from.
+    pub fn for_keeper(ctx: &StateProcessingContext) -> Vector3<f32> {
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+        let point = Self::point(
+            ctx.ball().direction_to_own_goal(),
+            ctx.tick_context.positions.ball.position,
+            ctx.tick_context.positions.ball.velocity,
+            ctx.player.side.unwrap_or(PlayerSide::Left),
+            ctx.team().tactical().defensive_line_x,
+            ctx.context.field_size.width as f32,
+            prof.command_of_area,
+            prof.positioning,
+        );
+        KeeperSweepLimit::contain(ctx, point, &prof)
+    }
+
     /// How far out of position he will tolerate being before he does
     /// something about it, across the goal.
     ///
@@ -351,7 +385,63 @@ impl KeeperRestPosition {
         ball_distance: f32,
         field_width: f32,
     ) -> bool {
-        let slack = Self::distance_slack(ball_distance, field_width);
+        Self::within(keeper, target, concentration, ball_distance, field_width, 1.0)
+    }
+
+    /// …and is he far enough off it to be worth CHANGING STATE for?
+    ///
+    /// # Why the two questions cannot share a threshold
+    ///
+    /// `Standing` and `Walking` are the same keeper doing the same thing —
+    /// same rest point, same steering, same deadzone inside `velocity` —
+    /// and the only difference between them is whether he has arrived.
+    /// Transitioning on exactly that boolean, in both directions, is a
+    /// two-cycle by construction: the target moves with the ball every
+    /// tick, so a keeper parked on the boundary crosses it repeatedly and
+    /// each crossing is a state change. Measured, **17,374 transitions per
+    /// keeper per match, 91% of them reversing inside 300 ms, and 15,804
+    /// of them this one pair.**
+    ///
+    /// It is the same invariant this engine has now broken six times, in
+    /// its mirror image: there, an entry condition WIDER than its own
+    /// give-up condition; here, an entry and a give-up that are exact
+    /// complements, which is the degenerate case of the same thing.
+    /// `COMMIT < DISENGAGE` needs a gap between them.
+    ///
+    /// So: he starts walking when he is [`Self::REPOSITION_MARGIN`] times
+    /// further out than the tolerance he stops at. In between he stays in
+    /// whichever state he is in and keeps moving — `velocity` is bounded
+    /// by `is_set_with` in both states, so the band costs nothing.
+    pub fn needs_repositioning(
+        keeper: Vector3<f32>,
+        target: Vector3<f32>,
+        concentration: f32,
+        ball_distance: f32,
+        field_width: f32,
+    ) -> bool {
+        !Self::within(
+            keeper,
+            target,
+            concentration,
+            ball_distance,
+            field_width,
+            Self::REPOSITION_MARGIN,
+        )
+    }
+
+    /// How much further out than "set" he has to be before it is worth
+    /// changing state over. See [`Self::needs_repositioning`].
+    const REPOSITION_MARGIN: f32 = 2.5;
+
+    fn within(
+        keeper: Vector3<f32>,
+        target: Vector3<f32>,
+        concentration: f32,
+        ball_distance: f32,
+        field_width: f32,
+        margin: f32,
+    ) -> bool {
+        let slack = Self::distance_slack(ball_distance, field_width) * margin;
         (keeper.y - target.y).abs() < Self::lateral_tolerance(concentration) * slack
             && (keeper.x - target.x).abs() < Self::SET_DEADZONE * slack
     }
@@ -399,9 +489,9 @@ impl KeeperRestPosition {
 ///
 /// # The model
 ///
-/// An excursion is measured **along the goal-to-goal axis**, because that
-/// is the axis it happens on, and it is bounded by how far this keeper
-/// dares leave his goal:
+/// # The model, and why one axis was not enough
+///
+/// An excursion is bounded by how far this keeper dares leave his goal:
 ///   * a line-keeper defends to about the penalty spot — 15 m;
 ///   * a sweeper defends the space behind his back four — 32 m.
 ///
@@ -409,6 +499,44 @@ impl KeeperRestPosition {
 /// sweep, and strictly beyond the depth `KeeperRestPosition` gives him
 /// while his goal is under threat (measured at 4.7 m), so neither the
 /// entry nor the resting position can trip it.
+///
+/// ⚠ **THAT BOUND USED TO BE MEASURED ALONG THE GOAL-TO-GOAL AXIS ALONE**,
+/// on the reasoning that the axis an excursion happens on is the axis it
+/// should be measured on. It is not, and the omission has a name: a keeper
+/// standing on his own touchline level with his six-yard box was
+/// **nought metres out of position** by this test, and a keeper who had
+/// chased a loose ball into the channel spent exactly the same allowance
+/// as one who had come five yards to the edge of his area. Nothing
+/// anywhere in the keeper's state machine bounded him ACROSS the pitch:
+/// `Standing` clamped its resting target to the width of the penalty area
+/// and every other state — `ComingOut`, `TakeBall`, `Catching`,
+/// `PreparingForSave` — was free to take him to the corner flag.
+///
+/// Measured over 200 matches (`KEEPER EXCURSION CENSUS`, added with this
+/// fix because no existing diagnostic could see it — every one of them
+/// measures the depth axis too): he was more than 25 m from his own goal
+/// for **1.8 seconds a minute**, reached **80.9 m** from it at the
+/// extreme and **36.5 m** across — wider than the pitch is half-wide, so
+/// off it — and spent **34.7 seconds a match beyond 25 m AND wider than
+/// his own penalty area**, which has no legitimate reading at all. That
+/// is the reported behaviour: he comes out far too far, and chases the
+/// ball almost to the corner.
+///
+/// # The territory
+///
+/// A keeper defends the space in FRONT of his goal, and that space is
+/// longer than it is wide: the angles that matter converge on the goal, so
+/// the further upfield he goes the narrower the ground worth owning. A
+/// sweeper-keeper 25 m out is central, covering the space behind his back
+/// line; he is never 25 m out *and* 25 m across, because a ball out there
+/// cannot be shot into the net he has left.
+///
+/// So the territory is an ELLIPSE centred on his goal — [`Self::off_line`]
+/// deep, [`Self::off_centre`] wide — and [`Self::is_within`] is one test
+/// against it rather than two independent ones. Both semi-axes are the
+/// keeper's own: how far he comes is `rushing_out`, how wide he ranges is
+/// `command_of_area`, which is the attribute whose entire meaning is the
+/// size of the area he claims.
 pub struct KeeperSweepLimit;
 
 impl KeeperSweepLimit {
@@ -417,19 +545,116 @@ impl KeeperSweepLimit {
     /// …and how much further a sweeper goes, out to 32 m.
     const SWEEPER: f32 = 136.0;
 
+    /// ACROSS the goal, for a keeper who owns nothing. 88u = 11 m — a
+    /// stride wider than his six-yard box, which is as far as a keeper who
+    /// does not command his area ever gets from the middle of his goal.
+    const LINE_KEEPER_WIDTH: f32 = 88.0;
+    /// …and how much wider one who commands his box ranges: out to 168u
+    /// (21 m), the corner of his own penalty area.
+    ///
+    /// NB this is the semi-axis, so it is only reached at zero depth. At
+    /// the depth of the penalty spot the same keeper is held to about
+    /// 17 m, which is what makes a corner — deep AND wide — unreachable
+    /// for every keeper in the game while leaving the corner of the
+    /// six-yard box comfortably inside for one who comes for crosses.
+    const SWEEPER_WIDTH: f32 = 80.0;
+
     /// How far off his line this keeper is willing to be.
     pub fn off_line(rushing_out_profile: f32) -> f32 {
         Self::LINE_KEEPER + rushing_out_profile.clamp(0.0, 1.0) * Self::SWEEPER
     }
 
-    /// How far off his line he currently is.
+    /// …and how far across it, which is a different question and a
+    /// different attribute. See the note on the struct.
+    pub fn off_centre(command_of_area: f32) -> f32 {
+        Self::LINE_KEEPER_WIDTH + command_of_area.clamp(0.0, 1.0) * Self::SWEEPER_WIDTH
+    }
+
+    /// How far off his line he currently is, along the goal-to-goal axis.
     pub fn distance_off_line(ctx: &StateProcessingContext) -> f32 {
         (ctx.player.position.x - ctx.ball().direction_to_own_goal().x).abs()
     }
 
+    /// The two semi-axes of this keeper's territory: how deep, how wide.
+    pub fn axes(prof: &GoalkeeperSkillProfile) -> (f32, f32) {
+        (
+            Self::off_line(prof.rushing_out_profile),
+            Self::off_centre(prof.command_of_area),
+        )
+    }
+
+    /// The widest territory ANY keeper in the game has.
+    pub fn outermost() -> (f32, f32) {
+        (Self::off_line(1.0), Self::off_centre(1.0))
+    }
+
+    /// …and the narrowest, which is the one an outside caller wants.
+    ///
+    /// The dispatcher's loose-ball override runs before a
+    /// `StateProcessingContext` exists, so it cannot read the keeper's
+    /// profile, and it FORCES a state — `GoalkeeperTakeBallState`, which
+    /// then applies the keeper's own territory and hands him straight back
+    /// if the ball is outside it.
+    ///
+    /// ⚠ So the bound here has to be inside every keeper's own, not
+    /// outside it: `COMMIT < DISENGAGE` for the seventh time. Measured
+    /// with [`Self::outermost`] here instead, the override forced him into
+    /// `TakeBall` 338 times a match and **99% of those reversed inside
+    /// 300 ms** — the two gates disagreeing about the same ball.
+    ///
+    /// A keeper who genuinely wants a ball in the outer part of his own
+    /// ground does not need this override to get it; the doors in
+    /// `Standing` and `ComingOut` are his, and they read his attributes.
+    /// This is the safety net for a ball nobody is going for, and a safety
+    /// net should be the conservative one.
+    pub fn innermost() -> (f32, f32) {
+        (Self::off_line(0.0), Self::off_centre(0.0))
+    }
+
+    /// How far out of the territory a point is, as a fraction of the way
+    /// to its edge: 0 at the centre of his goal, 1 exactly on the
+    /// boundary, above 1 outside it. The continuous form, so a caller can
+    /// ask *how far* out he is rather than only whether he is.
+    pub fn strain(goal: Vector3<f32>, at: Vector3<f32>, axes: (f32, f32)) -> f32 {
+        let along = (at.x - goal.x) / axes.0.max(1.0);
+        let across = (at.y - goal.y) / axes.1.max(1.0);
+        (along * along + across * across).sqrt()
+    }
+
     /// Is he still inside the space he is prepared to defend?
-    pub fn is_within(ctx: &StateProcessingContext, rushing_out_profile: f32) -> bool {
-        Self::distance_off_line(ctx) <= Self::off_line(rushing_out_profile)
+    pub fn is_within(ctx: &StateProcessingContext, prof: &GoalkeeperSkillProfile) -> bool {
+        Self::covers(ctx, ctx.player.position, prof)
+    }
+
+    /// …and the same question about a point he is thinking of going to.
+    pub fn covers(
+        ctx: &StateProcessingContext,
+        point: Vector3<f32>,
+        prof: &GoalkeeperSkillProfile,
+    ) -> bool {
+        Self::strain(ctx.ball().direction_to_own_goal(), point, Self::axes(prof)) <= 1.0
+    }
+
+    /// `point`, pulled back onto the boundary of his territory if it lies
+    /// outside — the nearest place he is prepared to stand that is still
+    /// on the line to where he wanted to go.
+    ///
+    /// This is what makes the give-up test a bound rather than a
+    /// two-cycle: a keeper who is merely FORBIDDEN to be somewhere sets
+    /// off for it anyway, trips the test, turns round, and does it again.
+    /// One who is steered to the edge of his own ground simply stops
+    /// there — which is also what a keeper looks like.
+    pub fn contain(
+        ctx: &StateProcessingContext,
+        point: Vector3<f32>,
+        prof: &GoalkeeperSkillProfile,
+    ) -> Vector3<f32> {
+        let goal = ctx.ball().direction_to_own_goal();
+        let strain = Self::strain(goal, point, Self::axes(prof));
+        if strain <= 1.0 {
+            return point;
+        }
+        goal + (point - goal) / strain
     }
 }
 
@@ -1596,12 +1821,22 @@ impl KeeperOneOnOne {
     }
 
     /// Where he stands: on the goal→ball line, a stand-off short of the ball.
+    ///
+    /// Bounded twice, and the two bounds are different shapes: `stand`
+    /// caps the DEPTH of the closing point, and [`KeeperSweepLimit`] then
+    /// contains it inside the whole territory. A man running at goal down
+    /// the touchline is still a duel, and without the second bound the
+    /// keeper came to meet him out by the corner flag.
     pub fn point(ctx: &StateProcessingContext, prof: &GoalkeeperSkillProfile) -> Vector3<f32> {
-        Self::stand(
-            ctx.ball().direction_to_own_goal(),
-            ctx.tick_context.positions.ball.position,
-            Self::standoff(prof),
-            KeeperSweepLimit::off_line(prof.rushing_out_profile),
+        KeeperSweepLimit::contain(
+            ctx,
+            Self::stand(
+                ctx.ball().direction_to_own_goal(),
+                ctx.tick_context.positions.ball.position,
+                Self::standoff(prof),
+                KeeperSweepLimit::off_line(prof.rushing_out_profile),
+            ),
+            prof,
         )
     }
 
@@ -2569,6 +2804,92 @@ mod tests {
             KeeperSweepLimit::off_line(1.0) > KeeperSweepLimit::off_line(0.0),
             "and a sweeper must go further than a line-keeper"
         );
+    }
+
+    /// **The corner flag is not in any keeper's territory, and his own
+    /// six-yard box is in every keeper's.**
+    ///
+    /// The reported bug, as an assertion. Before the territory had a
+    /// second axis, `is_within` asked `|keeper.x − goal.x| <= off_line`,
+    /// which the corner flag satisfies exactly — it is ON the goal line.
+    #[test]
+    fn no_keeper_defends_the_corner_flag_and_every_keeper_defends_his_six_yard_box() {
+        let goal = Vector3::new(0.0, 272.5, 0.0);
+        // Both flags at his end, and the two "deep and wide" points that
+        // the census caught him standing at.
+        let outside = [
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(0.0, 545.0, 0.0),
+            Vector3::new(200.0, 60.0, 0.0),
+            Vector3::new(240.0, 480.0, 0.0),
+        ];
+        // …and the corners of his own six-yard box, which he must always
+        // be able to come to: 5.5 m deep, 9.16 m either side.
+        let inside = [
+            Vector3::new(44.0, 272.5 - 73.3, 0.0),
+            Vector3::new(44.0, 272.5 + 73.3, 0.0),
+        ];
+
+        for rushing in [0.0f32, 0.5, 1.0] {
+            for command in [0.0f32, 0.5, 1.0] {
+                let axes = (
+                    KeeperSweepLimit::off_line(rushing),
+                    KeeperSweepLimit::off_centre(command),
+                );
+                for point in outside {
+                    let strain = KeeperSweepLimit::strain(goal, point, axes);
+                    assert!(
+                        strain > 1.0,
+                        "a keeper at rushing {rushing} / command {command} defends \
+                         ({}, {}) — strain {strain:.2}, which is the corner of the pitch",
+                        point.x,
+                        point.y
+                    );
+                }
+                for point in inside {
+                    let strain = KeeperSweepLimit::strain(goal, point, axes);
+                    assert!(
+                        strain <= 1.0,
+                        "a keeper at rushing {rushing} / command {command} will not come \
+                         to the corner of his own six-yard box — strain {strain:.2}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A sweeper's ground strictly contains a line-keeper's, on both axes,
+    /// and containment lands a point on the boundary rather than somewhere
+    /// else on the pitch.
+    #[test]
+    fn the_territory_grows_with_the_keeper_and_containment_lands_on_its_edge() {
+        let goal = Vector3::new(0.0, 272.5, 0.0);
+        assert!(KeeperSweepLimit::off_line(1.0) > KeeperSweepLimit::off_line(0.0));
+        assert!(KeeperSweepLimit::off_centre(1.0) > KeeperSweepLimit::off_centre(0.0));
+
+        let axes = (
+            KeeperSweepLimit::off_line(0.4),
+            KeeperSweepLimit::off_centre(0.4),
+        );
+        for point in [
+            Vector3::new(400.0, 272.5, 0.0),
+            Vector3::new(0.0, 40.0, 0.0),
+            Vector3::new(300.0, 500.0, 0.0),
+        ] {
+            let strain = KeeperSweepLimit::strain(goal, point, axes);
+            assert!(strain > 1.0, "test point is already inside");
+            let held = goal + (point - goal) / strain;
+            assert!(
+                (KeeperSweepLimit::strain(goal, held, axes) - 1.0).abs() < 1e-3,
+                "containment did not land on the boundary"
+            );
+            // On the same line out of the goal, and never further than the
+            // point it is holding him back from.
+            let out = (point - goal).normalize();
+            let back = (held - goal).normalize();
+            assert!(out.dot(&back) > 0.999, "containment changed his bearing");
+            assert!((held - goal).magnitude() < (point - goal).magnitude());
+        }
     }
 
     /// Across the goal and along it are not the same tolerance. The goal

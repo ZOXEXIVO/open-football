@@ -48,11 +48,9 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
                 return None;
             }
             return Some(StateChangeResult::with_goalkeeper_state(
-                // Off his line and out of the space he defends → jog back;
-                // otherwise he is already where he wants to be. Measured on
-                // the goal axis, like every other keeper excursion — see
-                // [`KeeperSweepLimit`].
-                if KeeperSweepLimit::is_within(ctx, prof.rushing_out_profile) {
+                // Out of the space he defends → jog back; otherwise he is
+                // already where he wants to be. See [`KeeperSweepLimit`].
+                if KeeperSweepLimit::is_within(ctx, &prof) {
                     GoalkeeperState::Standing
                 } else {
                     GoalkeeperState::ReturningToGoal
