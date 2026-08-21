@@ -2,9 +2,9 @@
 //! safety nets, the standing-ball notification dance, and the per-tick
 //! ownership claim that decides who is on the ball.
 
-use super::{AerialReach, AwaitedRestart, Ball};
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
+use crate::r#match::engine::ball::ball::{AerialReach, AwaitedRestart, Ball};
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::EventCollection;
@@ -251,7 +251,7 @@ pub mod reception_diag {
     /// Somebody took control of the ball while the shot was still live.
     pub static SHOT_CLAIMED: AtomicU64 = AtomicU64::new(0);
     /// `secure_ball_for` granted possession to a player further from the
-    /// ball than [`MAX_OWNER_TRACK_DISTANCE`](super::super::MAX_OWNER_TRACK_DISTANCE),
+    /// ball than [`MAX_OWNER_TRACK_DISTANCE`](crate::r#match::engine::ball::ball::MAX_OWNER_TRACK_DISTANCE),
     /// so the ball had to be written to his feet rather than tracked in.
     ///
     /// A tackle or an interception is something you do to a ball at your
@@ -479,7 +479,7 @@ impl Ball {
     /// True when the current delivery has stopped being one: on the deck
     /// and slower than a walking pace. See the call site in
     /// [`Ball::process_ownership`].
-    pub(super) fn is_delivery_spent(&self) -> bool {
+    pub(in crate::r#match::engine::ball::ball) fn is_delivery_spent(&self) -> bool {
         /// 2.5 m/s. Below this the ball is trickling, not travelling — the
         /// same physical meaning `MIN_INTERCEPTABLE_SPEED` carries.
         const SPENT_SPEED: f32 = 0.20;
@@ -660,7 +660,7 @@ impl Ball {
         // descent rate puts it there inside an eighth of a second instead
         // — quick enough that the block window, `is_aerial` and the
         // receiver ceiling see what they always saw, slow enough to draw.
-        if !super::interactions::ContactInPlace::armed() {
+        if !crate::r#match::engine::ball::ball::interactions::ContactInPlace::armed() {
             self.position = receiver_position;
             self.position.z = 0.0;
         }
@@ -828,7 +828,8 @@ impl Ball {
                 // bought completion events rather than completed passes.
                 // See `CONTROL_DISTANCE` for the full measurement.
                 const RECEIVER_CLAIM_DISTANCE_SQ: f32 =
-                    super::CONTROL_DISTANCE * super::CONTROL_DISTANCE;
+                    crate::r#match::engine::ball::ball::CONTROL_DISTANCE
+                        * crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
                 const RECEIVER_MAX_HEIGHT: f32 = 2.8;
 
                 if dist_sq < RECEIVER_CLAIM_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT {
@@ -1067,7 +1068,7 @@ impl Ball {
 
     /// Deadlock resolution: Force the nearest player to claim the ball if it's been sitting unowned for too long
     /// Uses progressive radius - starts strict, expands if stuck to ensure game never deadlocks
-    pub(super) fn force_claim_if_deadlock(
+    pub(in crate::r#match::engine::ball::ball) fn force_claim_if_deadlock(
         &mut self,
         players: &[MatchPlayer],
         events: &mut EventCollection,
@@ -1187,7 +1188,7 @@ impl Ball {
 
     /// Unconditional safety net: if ball has been unowned for too long (regardless of speed/height),
     /// force the nearest player from each team into TakeBall state.
-    pub(super) fn force_takeball_if_unowned_too_long(
+    pub(in crate::r#match::engine::ball::ball) fn force_takeball_if_unowned_too_long(
         &mut self,
         players: &[MatchPlayer],
         events: &mut EventCollection,
@@ -1253,7 +1254,7 @@ impl Ball {
         }
     }
 
-    pub(super) fn notify_nearest_player(
+    pub(in crate::r#match::engine::ball::ball) fn notify_nearest_player(
         &self,
         players: &[MatchPlayer],
         events: &mut EventCollection,
@@ -1461,7 +1462,8 @@ impl Ball {
                 // `pass_target_player_id` is set, but taking control still
                 // needs the ball to be within reach.
                 const RECEIVER_PRIORITY_DISTANCE_SQ: f32 =
-                    super::CONTROL_DISTANCE * super::CONTROL_DISTANCE;
+                    crate::r#match::engine::ball::ball::CONTROL_DISTANCE
+                        * crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
                 const RECEIVER_MAX_HEIGHT: f32 = 2.8;
 
                 if dist_sq < RECEIVER_PRIORITY_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT

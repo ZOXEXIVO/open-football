@@ -65,9 +65,9 @@
 //! and leaves the vertical alone — the ball finishes falling, bounces
 //! out on the spot, and settles.
 //!
-//! [`AwaitedRestart::CEILING`]: super::AwaitedRestart
+//! [`AwaitedRestart::CEILING`]: crate::r#match::engine::ball::ball::AwaitedRestart
 
-use super::{AwaitedRestart, Ball};
+use crate::r#match::engine::ball::ball::{AwaitedRestart, Ball};
 use crate::r#match::engine::goal::GOAL_WIDTH;
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::RestartCensus;
@@ -141,7 +141,7 @@ impl RunOff {
     /// [`AwaitedRestart::REACH`] is 12 u, so a ball against the boards is
     /// still comfortably inside the arm of a man held a metre short.
     ///
-    /// [`AwaitedRestart::REACH`]: super::AwaitedRestart::REACH
+    /// [`AwaitedRestart::REACH`]: crate::r#match::engine::ball::ball::AwaitedRestart::REACH
     pub const PLAYER_INSET: f32 = 8.0;
 
     /// Below this the ball has stopped rolling, in units per tick.
@@ -176,8 +176,8 @@ impl RunOff {
     /// False when `OF_RUN_OUT=off` — every restart is written onto its
     /// spot on the crossing tick, exactly as it used to be.
     ///
-    /// The A/B is the same shape as [`DeadBall`](super::DeadBall) and
-    /// [`CornerWalk`](super::CornerWalk), and for the same reason: the
+    /// The A/B is the same shape as [`DeadBall`](crate::r#match::engine::ball::ball::DeadBall) and
+    /// [`CornerWalk`](crate::r#match::engine::ball::ball::CornerWalk), and for the same reason: the
     /// harness has to be able to measure the arm without a rebuild.
     pub fn armed() -> bool {
         static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -322,7 +322,11 @@ impl Ball {
     ///   did not cross on it — it was already out.
     ///
     /// Every caller falls back to the position it used before.
-    pub(super) fn line_crossing(&self, axis: ExitAxis, bound: f32) -> Option<Vector3<f32>> {
+    pub(in crate::r#match::engine::ball::ball) fn line_crossing(
+        &self,
+        axis: ExitAxis,
+        bound: f32,
+    ) -> Option<Vector3<f32>> {
         if self.current_owner.is_some() {
             return None;
         }
@@ -354,7 +358,11 @@ impl Ball {
     /// Returns true once the ball has come to rest, at which point the
     /// restart's `spot` is final and the caller may start measuring the
     /// taker against it.
-    pub(super) fn tick_run_out(&mut self, await_state: &mut AwaitedRestart, now: u64) -> bool {
+    pub(in crate::r#match::engine::ball::ball) fn tick_run_out(
+        &mut self,
+        await_state: &mut AwaitedRestart,
+        now: u64,
+    ) -> bool {
         self.update_velocity();
         self.apply_movement();
         let perimeter = RunOff::contain(
@@ -475,7 +483,7 @@ impl Ball {
         // carries a note, and this one is exactly the kind it exists to
         // tell apart from a bug.
         #[cfg(feature = "match-logs")]
-        super::frame_trace::FrameTrace::note(format!(
+        crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
             "run-out: nobody can fetch it — fresh ball on ({:.1}, {:.1})",
             await_state.spot.x, await_state.spot.y
         ));
@@ -484,8 +492,8 @@ impl Ball {
 
 #[cfg(test)]
 mod tests {
-    use super::super::AwaitedRestart;
     use super::{GOAL_WIDTH, Perimeter, RunOff};
+    use crate::r#match::engine::ball::ball::AwaitedRestart;
     use nalgebra::Vector3;
 
     /// The engine's run-off and the viewer's hoardings are the same wall.

@@ -2,7 +2,7 @@
 //!
 //! # Why the ball used to stop dead on the goal line
 //!
-//! [`Ball::check_goal`](super::Ball::check_goal) detected the goal and
+//! [`Ball::check_goal`](crate::r#match::engine::ball::ball::Ball::check_goal) detected the goal and
 //! immediately called `Ball::reset()` — the ball was teleported to the centre
 //! spot on the same tick it crossed the line, and the engine loop then skipped
 //! 45-75 s of ticks for the post-goal dead time without recording anything.
@@ -32,7 +32,7 @@
 //! ## Units
 //!
 //! `x`/`y` are game units (1u = 0.125 m) and `z` is metres — see
-//! [`GRAVITY_PER_TICK`](super::GRAVITY_PER_TICK). Every constant here is
+//! [`GRAVITY_PER_TICK`](crate::r#match::engine::ball::ball::GRAVITY_PER_TICK). Every constant here is
 //! annotated with the axis it lives on. The drags
 //! ([`GoalNet::DRAG_SLACK`], [`GoalNet::DRAG_TAUT`],
 //! [`GoalNet::DRAG_RELEASE`]) are pure fractions and read the same on
@@ -41,8 +41,8 @@
 //! twin. One constant serving both axes made the roof net shove eight
 //! times harder than the back one.
 
-use super::Ball;
 use crate::r#match::ball::events::GoalSide;
+use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH, GoalPosition};
 use nalgebra::Vector3;
 
@@ -231,10 +231,11 @@ impl GoalNet {
     /// it the ball settles with its CENTRE on the netting and half of it
     /// drawn outside the goal — measured resting at exactly
     /// `(centre_y + GOAL_WIDTH, DEPTH)`, the back corner, on two of three
-    /// captured goals. Read off [`GoalFrame`](super::frame::GoalFrame) so
+    /// captured goals. Read off [`GoalFrame`](crate::r#match::engine::ball::ball::frame::GoalFrame) so
     /// the woodwork and the netting can never disagree about how big a
     /// football is.
-    const BALL_RADIUS_UNITS: f32 = super::frame::GoalFrame::BALL_RADIUS * 8.0;
+    const BALL_RADIUS_UNITS: f32 =
+        crate::r#match::engine::ball::ball::frame::GoalFrame::BALL_RADIUS * 8.0;
 
     /// Contact with the mesh scrubs rotation off almost completely.
     const SPIN_RETAINED: f32 = 0.45;
@@ -352,7 +353,7 @@ impl GoalNet {
 
         // Roof netting, sloping back from the crossbar.
         let roof_plane = self.roof_at(self.depth_at(ball.position.x).max(0.0))
-            - super::frame::GoalFrame::BALL_RADIUS;
+            - crate::r#match::engine::ball::ball::frame::GoalFrame::BALL_RADIUS;
         let over_roof = ball.position.z - roof_plane;
         let on_roof = over_roof > -Self::CONTACT_SKIN_METRES;
         if over_roof > 0.0 {
@@ -450,10 +451,15 @@ impl Ball {
     /// not been dispatched against yet (`last_shot_xgot`, the pending error
     /// and failed-claim charges), which the goal handler reads a few
     /// microseconds later.
-    pub(super) fn enter_net(&mut self, side: GoalSide, scorer_id: u32, auto_goal: bool) {
+    pub(in crate::r#match::engine::ball::ball) fn enter_net(
+        &mut self,
+        side: GoalSide,
+        scorer_id: u32,
+        auto_goal: bool,
+    ) {
         #[cfg(feature = "match-logs")]
-        if super::frame_trace::FrameTrace::captures_goals() {
-            super::frame_trace::FrameTrace::open(format!(
+        if crate::r#match::engine::ball::ball::frame_trace::FrameTrace::captures_goals() {
+            crate::r#match::engine::ball::ball::frame_trace::FrameTrace::open(format!(
                 "=== INTO THE NET ({side:?}) at ({:.2}, {:.2}, {:.2})  v ({:.2}, {:.2}, {:.2}) ===",
                 self.position.x,
                 self.position.y,

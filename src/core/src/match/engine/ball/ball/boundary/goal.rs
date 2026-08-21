@@ -3,10 +3,10 @@
 //! flow stages the set-piece teleport via `pending_set_piece_teleport`
 //! since the ball can't move other players' positions itself.
 
-use super::runoff::ExitAxis;
-use super::{AwaitedRestart, Ball, CornerWalk, RunOff};
 use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
+use crate::r#match::engine::ball::ball::runoff::ExitAxis;
+use crate::r#match::engine::ball::ball::{AwaitedRestart, Ball, CornerWalk, RunOff};
 use crate::r#match::engine::corner_shape::{CornerShape, CornerShapeHold};
 use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::engine::set_pieces::{
@@ -143,10 +143,10 @@ impl Ball {
                         && current_tick.saturating_sub(self.last_shot_struck_tick) < 400;
                     if !recent_shot && !shot_in_flight && !ball_came_from_a_shot {
                         #[cfg(feature = "match-logs")]
-                        super::ownership::reception_diag::GOAL_REJECTED
+                        crate::r#match::engine::ball::ball::ownership::reception_diag::GOAL_REJECTED
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         #[cfg(feature = "match-logs")]
-                        super::frame_trace::FrameTrace::note(
+                        crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(
                             "check_goal: crossed the line, REFUSED (no shot behind it)",
                         );
                         // Not a shot — treat as ball out of play, not a goal.
@@ -242,7 +242,7 @@ impl Ball {
                 // the line. The restart puts it back on the centre spot
                 // once the celebration is over.
                 #[cfg(feature = "match-logs")]
-                super::frame_trace::FrameTrace::note(format!(
+                crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
                     "check_goal: GOAL ({goal_side:?}) credited to {final_scorer} -> enter_net"
                 ));
                 self.enter_net(goal_side, final_scorer, final_is_auto_goal);
@@ -503,7 +503,7 @@ impl Ball {
 
         #[cfg(feature = "match-logs")]
         if self.cached_shot_target.is_some() {
-            super::ownership::reception_diag::SHOT_OVER
+            crate::r#match::engine::ball::ball::ownership::reception_diag::SHOT_OVER
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
 
@@ -536,8 +536,9 @@ impl Ball {
                 .unwrap_or(self.position.y);
             let spot = self.goal_kick_spot(over_side, exit_y);
             #[cfg(feature = "match-logs")]
-            if super::frame_trace::FrameTrace::captures_over_the_bar() {
-                super::frame_trace::FrameTrace::open(format!(
+            if crate::r#match::engine::ball::ball::frame_trace::FrameTrace::captures_over_the_bar()
+            {
+                crate::r#match::engine::ball::ball::frame_trace::FrameTrace::open(format!(
                     "OVER THE BAR at ({:.1}, {:.1}, {:.2}) v({:.2},{:.2},{:.3}) -> goal kick from ({:.1}, {:.1})",
                     self.position.x,
                     self.position.y,
@@ -550,7 +551,7 @@ impl Ball {
                 ));
             }
             #[cfg(feature = "match-logs")]
-            super::frame_trace::FrameTrace::note(format!(
+            crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
                 "check_over_goal: over the bar at ({:.1}, {:.1}, {:.2}) -> goal kick, GK {} takes it from ({:.1}, {:.1})",
                 self.position.x, self.position.y, self.position.z, gk.id, spot.x, spot.y
             ));
@@ -646,7 +647,7 @@ impl Ball {
 
         #[cfg(feature = "match-logs")]
         if self.cached_shot_target.is_some() {
-            super::ownership::reception_diag::SHOT_WIDE
+            crate::r#match::engine::ball::ball::ownership::reception_diag::SHOT_WIDE
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
 
@@ -800,7 +801,7 @@ impl Ball {
                 let taker_id = taker.id;
                 let taker_team = taker.team_id;
                 #[cfg(feature = "match-logs")]
-                super::frame_trace::FrameTrace::note(format!(
+                crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
                     "check_wide_of_goal: CORNER, ball ({:.1}, {:.1}, {:.2}) dies there; taker {taker_id} fetches it and carries it to ({corner_x:.1}, {corner_y:.1})",
                     self.position.x, self.position.y, self.position.z
                 ));
@@ -1052,8 +1053,9 @@ impl Ball {
             // stadium. It has hit the net, so it stops where it hit it.
             let runs_out = RunOff::armed() && outside_posts;
             #[cfg(feature = "match-logs")]
-            if super::frame_trace::FrameTrace::captures_over_the_bar() {
-                super::frame_trace::FrameTrace::open(format!(
+            if crate::r#match::engine::ball::ball::frame_trace::FrameTrace::captures_over_the_bar()
+            {
+                crate::r#match::engine::ball::ball::frame_trace::FrameTrace::open(format!(
                     "ENDLINE GOAL KICK at ({:.1}, {:.1}, {:.2}) v({:.2},{:.2},{:.3}) outside_posts={outside_posts} runs_out={runs_out} -> from ({:.1}, {:.1})",
                     self.position.x,
                     self.position.y,
@@ -1066,7 +1068,7 @@ impl Ball {
                 ));
             }
             #[cfg(feature = "match-logs")]
-            super::frame_trace::FrameTrace::note(format!(
+            crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
                 "check_wide_of_goal: GOAL KICK, ball ({:.1}, {:.1}, {:.2}) {}; GK {gk_id} takes it from ({:.1}, {:.1})",
                 self.position.x,
                 self.position.y,

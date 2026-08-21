@@ -2,8 +2,8 @@
 //!
 //! # Why this exists when `flight_diag` already counts jumps
 //!
-//! [`flight_diag`](super::flight_diag)'s `StageProbe` is opened inside
-//! [`Ball::update`](super::Ball::update) and closed when it returns. That is
+//! [`flight_diag`](crate::r#match::engine::ball::ball::flight_diag)'s `StageProbe` is opened inside
+//! [`Ball::update`](crate::r#match::engine::ball::ball::Ball::update) and closed when it returns. That is
 //! about a third of a tick. The rest of a full tick —
 //!
 //! ```text
@@ -140,7 +140,7 @@ pub static MAX_X100: [AtomicU64; N] = [const { AtomicU64::new(0) }; N];
 pub static VISIBLE_JUMPS: [AtomicU64; N] = [const { AtomicU64::new(0) }; N];
 /// Of the relocations booked, how many happened while the ball was DEAD
 /// (a restart pending). Those are a different bug from the same row: a
-/// dead ball being dragged is [`DeadBall`](super::restart::DeadBall)
+/// dead ball being dragged is [`DeadBall`](crate::r#match::engine::ball::ball::DeadBall)
 /// leaking, a live one being dragged is a resolver taking a short cut.
 pub static DEAD_JUMPS: [AtomicU64; N] = [const { AtomicU64::new(0) }; N];
 /// Of the relocations booked, how many were purely VERTICAL — the ball
@@ -394,7 +394,7 @@ pub static DELIVERIES: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 
 /// Splits the ball's own pass into its three exits.
 ///
-/// [`Ball::update`](super::Ball::update) returns early twice — for a ball
+/// [`Ball::update`](crate::r#match::engine::ball::ball::Ball::update) returns early twice — for a ball
 /// in the netting and for a ball waiting on a restart — and both returns
 /// are above the point `flight_diag`'s probe starts booking.
 /// `update_light` has no probe at all. So this opens at the top of both
@@ -407,7 +407,7 @@ pub struct BallPass {
 }
 
 impl BallPass {
-    pub fn open(ball: &super::Ball) -> Self {
+    pub fn open(ball: &crate::r#match::engine::ball::ball::Ball) -> Self {
         Self {
             pos: ball.position,
             entry_velocity: ball.velocity,
@@ -417,7 +417,7 @@ impl BallPass {
 
     /// Book this pass against the exit it took. Consumes nothing — the
     /// three exits are mutually exclusive by construction.
-    pub fn close(&self, ball: &super::Ball, stage: usize) {
+    pub fn close(&self, ball: &crate::r#match::engine::ball::ball::Ball, stage: usize) {
         TeleportCensus::note_ball_update(
             stage,
             self.pos,

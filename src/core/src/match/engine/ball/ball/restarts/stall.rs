@@ -4,7 +4,7 @@
 //! anchor advances naturally during normal play; only a genuinely
 //! stuck region trips the safety net and force-kicks the ball clear.
 
-use super::Ball;
+use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::{MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
 
@@ -373,7 +373,10 @@ impl Ball {
     /// owned/unowned counters) but the ball physically stays put.
     /// The anchor resets whenever the ball travels outside the radius,
     /// so normal play keeps advancing the anchor every few ticks.
-    pub(super) fn detect_position_stall(&mut self, players: &[MatchPlayer]) {
+    pub(in crate::r#match::engine::ball::ball) fn detect_position_stall(
+        &mut self,
+        players: &[MatchPlayer],
+    ) {
         // Raised thresholds so normal possession play doesn't trigger.
         // A team can legitimately keep the ball in a 15-unit zone for
         // 8-10 seconds during sideline passing or defensive possession;
@@ -549,7 +552,10 @@ impl Ball {
     /// pattern built ~23 intermediate Strings per capture, and captures
     /// fire on every owned→unowned transition.
     #[cfg(feature = "match-logs")]
-    pub(super) fn format_stall_snapshot(&self, players: &[MatchPlayer]) -> String {
+    pub(in crate::r#match::engine::ball::ball) fn format_stall_snapshot(
+        &self,
+        players: &[MatchPlayer],
+    ) -> String {
         use std::fmt::Write;
 
         let mut out = String::with_capacity(2048);

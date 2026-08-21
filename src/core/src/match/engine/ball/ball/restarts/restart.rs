@@ -9,11 +9,11 @@
 //! if even that is missing, we leave the boundary inset as the safety
 //! net for `check_boundary_collision`.
 
-use super::runoff::ExitAxis;
-use super::{AwaitedRestart, Ball, RunOff};
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::BallEvent;
+use crate::r#match::engine::ball::ball::runoff::ExitAxis;
+use crate::r#match::engine::ball::ball::{AwaitedRestart, Ball, RunOff};
 use crate::r#match::engine::corner_shape::CornerShape;
 use crate::r#match::events::EventCollection;
 use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
@@ -42,7 +42,7 @@ impl Ball {
         // still in the goal from the last one — or it is already out of
         // play and running out past the line, in which case awarding it
         // again on every tick of the run-out would keep resetting the
-        // patience clock. See [`RunOff`](super::RunOff).
+        // patience clock. See [`RunOff`](crate::r#match::engine::ball::ball::RunOff).
         if self.goal_scored || self.in_net.is_some() || self.awaiting_restart.is_some() {
             return;
         }
@@ -145,7 +145,7 @@ impl Ball {
         // [`RunOff`]; `OF_RUN_OUT=off` restores the snap.
         let runs_out = RunOff::armed();
         #[cfg(feature = "match-logs")]
-        super::frame_trace::FrameTrace::note(format!(
+        crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
             "check_throw_in: THROW-IN, ball ({:.1}, {:.1}, {:.2}) {} ({:.1}, {:.1}) taker {thrower_id}",
             self.position.x,
             self.position.y,
@@ -584,7 +584,10 @@ impl Ball {
     /// Drop the offside snapshot once its lifetime expires. Real-world
     /// passes that don't reach a receiver should end the offside
     /// pretence — anything older than ~220 ticks is stale.
-    pub(super) fn expire_offside_snapshot(&mut self, context: &MatchContext) {
+    pub(in crate::r#match::engine::ball::ball) fn expire_offside_snapshot(
+        &mut self,
+        context: &MatchContext,
+    ) {
         const OFFSIDE_LIFETIME_TICKS: u64 = 220;
         if let Some(snap) = self.offside_snapshot {
             let now = context.current_tick();

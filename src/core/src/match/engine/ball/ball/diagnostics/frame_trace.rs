@@ -2,7 +2,7 @@
 //!
 //! # Why a dedicated trace and not the existing counters
 //!
-//! [`flight_diag`](super::flight_diag) answers "did any stage move the ball
+//! [`flight_diag`](crate::r#match::engine::ball::ball::flight_diag) answers "did any stage move the ball
 //! further than its velocity allows", aggregated over a match. That is the
 //! right shape for a census and the wrong shape for a woodwork report,
 //! because what a viewer reports is a SEQUENCE — the ball comes off the

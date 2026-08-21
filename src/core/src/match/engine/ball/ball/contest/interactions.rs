@@ -3,9 +3,9 @@
 //! unowned balls with `in_flight_state > 0` so routine possession
 //! play isn't disturbed.
 
-use super::{AerialReach, Ball};
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
+use crate::r#match::engine::ball::ball::{AerialReach, Ball};
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
@@ -1154,7 +1154,7 @@ impl Ball {
                         .iter()
                         .find(|p| p.id == interceptor_id)
                         .is_some_and(|p| p.is_airborne());
-                    super::flight_diag::FlightDiag::note_intercept(
+                    crate::r#match::engine::ball::ball::flight_diag::FlightDiag::note_intercept(
                         self.position.z,
                         AerialReach::STANDING,
                         airborne || leap > 0.0,
@@ -1568,7 +1568,7 @@ impl Ball {
         // `move_to` would drop it again on the next tick as an
         // unreachable owner.
         let blocker_gap = (blocker_pos.x - self.position.x).hypot(blocker_pos.y - self.position.y);
-        let blocker_in_reach = blocker_gap <= super::CONTROL_DISTANCE;
+        let blocker_in_reach = blocker_gap <= crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
         let controlled_block_prob = if blocker_in_reach {
             (0.06 + composure * 0.05 + technique * 0.04 + ball_speed_low_bonus).clamp(0.06, 0.30)
         } else {
@@ -1854,7 +1854,7 @@ impl Ball {
         }
         let ticks = (gap / self.velocity.x).clamp(0.0, 120.0);
         let z = self.position.z + self.velocity.z * ticks
-            - 0.5 * super::GRAVITY_PER_TICK * ticks * ticks;
+            - 0.5 * crate::r#match::engine::ball::ball::GRAVITY_PER_TICK * ticks * ticks;
         (self.position.y + self.velocity.y * ticks, z.max(0.0))
     }
 
@@ -2010,8 +2010,8 @@ impl Ball {
         let off_frame_wide = (frame_y - goal_y).abs() > GOAL_WIDTH + 1.0;
         if off_frame_high || off_frame_wide {
             #[cfg(feature = "match-logs")]
-            if super::frame_trace::FrameTrace::captures_misses() {
-                super::frame_trace::FrameTrace::open(format!(
+            if crate::r#match::engine::ball::ball::frame_trace::FrameTrace::captures_misses() {
+                crate::r#match::engine::ball::ball::frame_trace::FrameTrace::open(format!(
                     "MISS {} crossing y={:+.1}u past the post, z={:.2} m; gk at gap {:.1}u ({:.2} m)",
                     if off_frame_wide { "WIDE" } else { "OVER" },
                     (frame_y - goal_y).abs() - GOAL_WIDTH,

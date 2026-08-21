@@ -49,7 +49,7 @@
 //! recoverable as `position - velocity` because the frame check runs
 //! immediately after the move.
 
-use super::Ball;
+use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH, GoalPosition};
 use nalgebra::Vector3;
 
@@ -363,7 +363,10 @@ impl Ball {
     /// line, gone over the bar or gone out — it is still in play, and every
     /// one of those resolvers would claim it. Returns the contact so the
     /// caller can raise the event.
-    pub(super) fn check_goal_frame(&mut self, goals: &GoalPosition) -> Option<FrameHit> {
+    pub(in crate::r#match::engine::ball::ball) fn check_goal_frame(
+        &mut self,
+        goals: &GoalPosition,
+    ) -> Option<FrameHit> {
         // Only a loose ball. A carried one is being dribbled and its
         // position is written by `move_to` from the carrier's, so the
         // segment below is not a flight and reflecting it would tear the
@@ -372,7 +375,7 @@ impl Ball {
         // …and not one that is out of play. A ball running out behind the
         // goal passes the frame from the wrong side every time, and a
         // rebound off it would put a dead ball back on the pitch. See
-        // [`RunOff`](super::RunOff).
+        // [`RunOff`](crate::r#match::engine::ball::ball::RunOff).
         if self.current_owner.is_some()
             || self.in_net.is_some()
             || self.awaiting_restart.is_some()
@@ -411,7 +414,7 @@ impl Ball {
     /// `previous_owner`: nobody played the ball, so the second-ball race is
     /// open to both sides on the same terms as any other loose ball in the
     /// six-yard box.
-    pub(super) fn check_frame_rebound(
+    pub(in crate::r#match::engine::ball::ball) fn check_frame_rebound(
         &mut self,
         context: &crate::r#match::MatchContext,
         events: &mut crate::r#match::events::EventCollection,
@@ -424,9 +427,9 @@ impl Ball {
         #[cfg(feature = "match-logs")]
         crate::mid_run_diag::FrameDiag::note(hit.part);
         #[cfg(feature = "match-logs")]
-        super::frame_trace::FrameTrace::note_hit();
+        crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note_hit();
         #[cfg(feature = "match-logs")]
-        super::frame_trace::FrameTrace::open(format!(
+        crate::r#match::engine::ball::ball::frame_trace::FrameTrace::open(format!(
             "=== {:?} at ({:.2}, {:.2}, {:.2})  in ({:.2}, {:.2}, {:.2}) -> out ({:.2}, {:.2}, {:.2})  travel {:.2} ===",
             hit.part,
             hit.position.x,

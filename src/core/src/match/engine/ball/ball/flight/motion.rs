@@ -4,7 +4,7 @@
 //! that pushes the ball back inside the field after it crosses a
 //! touchline.
 
-use super::{Ball, GRAVITY_PER_TICK};
+use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK};
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
 use nalgebra::Vector3;
 
@@ -251,21 +251,23 @@ impl Ball {
         // binds on a legitimate strike, and it is a hard ceiling on how
         // wrong a future unit slip can go.
         const MAX_APEX_METRES: f32 = 40.0;
-        let max_vertical = super::Ball::launch_speed_for_apex(MAX_APEX_METRES);
+        let max_vertical =
+            crate::r#match::engine::ball::ball::Ball::launch_speed_for_apex(MAX_APEX_METRES);
 
         // Air drag: affects aerial balls (proportional to v²). Lives on
         // the ball module beside gravity and rolling friction so the
         // trajectory SOLVERS can invert the same number the physics
-        // applies — see `super::AIR_DRAG_PER_TICK`, which folds the
+        // applies — see `crate::r#match::engine::ball::ball::AIR_DRAG_PER_TICK`, which folds the
         // coefficient, the mass and the sub-step into one decay.
-        const AIR_DRAG_PER_TICK: f32 = super::AIR_DRAG_PER_TICK;
+        const AIR_DRAG_PER_TICK: f32 = crate::r#match::engine::ball::ball::AIR_DRAG_PER_TICK;
 
         // Velocity-proportional rolling decay per 10ms tick. The value now
         // lives on the ball module so the physics and the pass-weighting
         // that inverts it cannot drift apart — see `GROUND_FRICTION` for
         // the derivation from the real 15%-per-second figure, and for why
         // the previous 0.006 forced the pass-overshoot hack.
-        const GROUND_FRICTION_COEFFICIENT: f32 = super::GROUND_FRICTION;
+        const GROUND_FRICTION_COEFFICIENT: f32 =
+            crate::r#match::engine::ball::ball::GROUND_FRICTION;
 
         // CRITICAL: Global velocity sanity check - prevent cosmic-speed balls
         // Check for NaN or infinity and reset to zero
@@ -408,8 +410,10 @@ impl Ball {
                 // coefficient was fitted against. Gravity comes from the
                 // shared per-tick constant so the pass solver and the
                 // landing projection cannot drift away from the physics
-                // (see `super::GRAVITY_PER_TICK`).
-                if velocity_norm > super::AIR_DRAG_FLOOR {
+                // (see `crate::r#match::engine::ball::ball::GRAVITY_PER_TICK`).
+                if velocity_norm
+                    > crate::r#match::engine::ball::ball::flight::ballistics::AIR_DRAG_FLOOR
+                {
                     self.velocity -= (AIR_DRAG_PER_TICK * velocity_norm) * self.velocity;
                 }
                 self.velocity.z -= GRAVITY_PER_TICK;
@@ -510,23 +514,27 @@ impl Ball {
     /// deck: `vz = 0` on a ball that was two metres up leaves it hanging
     /// there under gravity alone, which is why every call site paired it
     /// with a `position.z = 0.0` assignment. See
-    /// [`ContactInPlace`](super::interactions::ContactInPlace).
+    /// [`ContactInPlace`](crate::r#match::engine::ball::ball::interactions::ContactInPlace).
     #[inline]
     pub(crate) fn settle_or_flatten(&mut self) {
-        if super::interactions::ContactInPlace::armed() {
+        if crate::r#match::engine::ball::ball::interactions::ContactInPlace::armed() {
             self.sink_to_ground();
         } else {
             self.velocity.z = 0.0;
         }
     }
 
-    pub(super) fn move_to(&mut self, tick_context: &GameTickContext) {
+    pub(in crate::r#match::engine::ball::ball) fn move_to(
+        &mut self,
+        tick_context: &GameTickContext,
+    ) {
         // Clear notified players only when ball state changes significantly:
         // 1. Ball starts moving (not stopped anymore)
         // 2. Ball has an owner (claimed)
         // Maximum distance owner can be from ball - must match deadlock claim distances
         // This allows deadlock resolution while preventing truly absurd teleports
-        const MAX_OWNER_TELEPORT_DISTANCE: f32 = super::MAX_OWNER_TRACK_DISTANCE;
+        const MAX_OWNER_TELEPORT_DISTANCE: f32 =
+            crate::r#match::engine::ball::ball::MAX_OWNER_TRACK_DISTANCE;
         const MAX_OWNER_TELEPORT_DISTANCE_SQUARED: f32 =
             MAX_OWNER_TELEPORT_DISTANCE * MAX_OWNER_TELEPORT_DISTANCE;
 
@@ -594,11 +602,11 @@ impl Ball {
                 // would hand a caught shot straight back to the six-yard box.
                 #[cfg(feature = "match-logs")]
                 {
-                    super::ownership::reception_diag::OWNER_TOO_FAR
+                    crate::r#match::engine::ball::ball::ownership::reception_diag::OWNER_TOO_FAR
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     // Split it by distance / gather / shot / already-dead so
                     // the granting site can be identified — see `too_far`.
-                    super::ownership::reception_diag::too_far::note(
+                    crate::r#match::engine::ball::ball::ownership::reception_diag::too_far::note(
                         distance_squared.sqrt(),
                         self.held_in_hands,
                         self.cached_shot_target.is_some(),
@@ -636,7 +644,8 @@ impl Ball {
     // how the ball gets into a keeper's hands. Same reason `check_goal` is.
     pub(crate) fn move_to_with_players(&mut self, players: &[MatchPlayer]) {
         const MAX_OWNER_TELEPORT_DISTANCE_SQUARED: f32 =
-            super::MAX_OWNER_TRACK_DISTANCE * super::MAX_OWNER_TRACK_DISTANCE;
+            crate::r#match::engine::ball::ball::MAX_OWNER_TRACK_DISTANCE
+                * crate::r#match::engine::ball::ball::MAX_OWNER_TRACK_DISTANCE;
         const BALL_TRACK_SPEED: f32 = 1.5;
         const SNAP_DISTANCE_SQUARED: f32 = 2.0 * 2.0;
 
@@ -667,9 +676,9 @@ impl Ball {
                 } else {
                     #[cfg(feature = "match-logs")]
                     {
-                        super::ownership::reception_diag::OWNER_TOO_FAR
+                        crate::r#match::engine::ball::ball::ownership::reception_diag::OWNER_TOO_FAR
                             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        super::ownership::reception_diag::too_far::note(
+                        crate::r#match::engine::ball::ball::ownership::reception_diag::too_far::note(
                             dist_sq.sqrt(),
                             self.held_in_hands,
                             self.cached_shot_target.is_some(),
@@ -689,7 +698,10 @@ impl Ball {
         }
     }
 
-    pub(super) fn check_boundary_collision(&mut self, context: &MatchContext) {
+    pub(in crate::r#match::engine::ball::ball) fn check_boundary_collision(
+        &mut self,
+        context: &MatchContext,
+    ) {
         // A ball in the goal is BEHIND the endline by design and the netting
         // owns it (see `net.rs`). Clamping it back onto the pitch here is
         // exactly the bug this whole path used to have — the ball reappeared
@@ -708,7 +720,7 @@ impl Ball {
         //
         // Same stand-down as `in_net` directly above, and for the same
         // reason: the ball is somewhere this function was never told
-        // about, and something else owns it there. See [`RunOff`](super::RunOff).
+        // about, and something else owns it there. See [`RunOff`](crate::r#match::engine::ball::ball::RunOff).
         if self.awaiting_restart.is_some() {
             return;
         }
@@ -735,7 +747,7 @@ impl Ball {
                 context.goal_positions.right.y
             };
             if (self.position.y - goal_center_y).abs() <= crate::r#match::engine::goal::GOAL_WIDTH {
-                super::ownership::reception_diag::ENDLINE_CLAMPED_IN_MOUTH
+                crate::r#match::engine::ball::ball::ownership::reception_diag::ENDLINE_CLAMPED_IN_MOUTH
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }
@@ -746,7 +758,7 @@ impl Ball {
             || self.position.y <= 0.0
             || self.position.y >= field_height
         {
-            super::frame_trace::FrameTrace::note(format!(
+            crate::r#match::engine::ball::ball::frame_trace::FrameTrace::note(format!(
                 "check_boundary_collision: CLAMP from ({:.1}, {:.1}, {:.2}) owner {:?}",
                 self.position.x, self.position.y, self.position.z, self.current_owner
             ));
