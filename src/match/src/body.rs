@@ -260,6 +260,27 @@ impl Sculptor {
         out
     }
 
+    /// Two parts as one mesh, for a pair that never move relative to each
+    /// other and are painted the same colour.
+    ///
+    /// Not a modelling convenience — a cost one. Every mesh on a player is an
+    /// entity, and the viewer's frame is spent almost entirely per-entity:
+    /// measured on a machine where the pitch renders identically at 720p and
+    /// at 4K, twenty-two players cost 2.3 ms of a 3.9 ms frame and the whole
+    /// of that is Bevy walking, extracting and submitting their seven hundred
+    /// parts. Anything rigidly fixed to its parent and wearing its parent's
+    /// material is therefore an entity bought for nothing, and belongs in the
+    /// parent's buffer instead — see the joint balls in [`BodyParts::new`],
+    /// which is what this exists for.
+    ///
+    /// Both sides come out of [`Self::build`], so they carry the same
+    /// attributes in the same order and the merge cannot fail.
+    fn joined(mut base: Mesh, fixed: Mesh) -> Mesh {
+        base.merge(&fixed)
+            .expect("every sculpted part carries position, normal and UV");
+        base
+    }
+
     /// A rounded lump — a hand, a boot, the ball of a joint — sized on each
     /// axis.
     ///
@@ -681,10 +702,6 @@ pub struct BodyParts {
     /// itself with the stubble drawn onto the face texture.
     hair: [Option<Handle<Mesh>>; 4],
     upper_arm: Handle<Mesh>,
-    /// The two joints that bend far enough to open a gap between the tapers
-    /// either side of them.
-    elbow: Handle<Mesh>,
-    knee: Handle<Mesh>,
     sleeve: Handle<Mesh>,
     /// The band round the end of a sleeve, in the trim colour.
     cuff: Handle<Mesh>,
@@ -991,15 +1008,8 @@ impl BodyParts {
             // was wider than the arm it hangs off and the join showed as a
             // step right round the elbow — a hinge, on every player, at the
             // one place a limb is supposed to look continuous.
-            forearm: meshes.add(Sculptor::part(&[
-                Ring::round(0.014, 0.033),
-                Ring::round(-0.014, 0.042),
-                Ring::round(-0.055, 0.046),
-                Ring::round(-0.140, 0.038),
-                Ring::round(-0.215, 0.031),
-                Ring::round(-0.245, 0.028),
-                Ring::round(-0.262, 0.024),
-            ])),
+            // The forearm, with the ball of the elbow already in it.
+            //
             // A ball at each of the two joints that bend, filling the gap the
             // two tapers leave between them when they do. Without it an arm
             // bent through a right angle opens a wedge at the outside of the
@@ -1009,8 +1019,23 @@ impl BodyParts {
             // straight — the thigh is 0.056 across two centimetres above the
             // knee and the sock 0.060 — so a standing player never shows one,
             // and a bent one shows nothing else.
-            elbow: meshes.add(Sculptor::ellipsoid(Vec3::splat(0.038))),
-            knee: meshes.add(Sculptor::ellipsoid(Vec3::splat(0.048))),
+            //
+            // Both used to be entities of their own, hung off the limb they
+            // fill at an identity transform and painted out of the same
+            // material — which is four entities a player, eighty-eight over a
+            // match, bought for nothing. See [`Sculptor::joined`].
+            forearm: meshes.add(Sculptor::joined(
+                Sculptor::part(&[
+                    Ring::round(0.014, 0.033),
+                    Ring::round(-0.014, 0.042),
+                    Ring::round(-0.055, 0.046),
+                    Ring::round(-0.140, 0.038),
+                    Ring::round(-0.215, 0.031),
+                    Ring::round(-0.245, 0.028),
+                    Ring::round(-0.262, 0.024),
+                ]),
+                Sculptor::ellipsoid(Vec3::splat(0.038)),
+            )),
             hand: meshes.add(Sculptor::ellipsoid(Vec3::new(0.035, 0.050, 0.028))),
             // Cuff, back of the hand, then the padded palm out to the
             // fingertips. Half again as long as a bare hand and nearly twice
@@ -1130,7 +1155,11 @@ impl BodyParts {
                 Ring::set(-0.420, 0.059, 0.059, 0.000),
                 Ring::set(-0.455, 0.053, 0.053, 0.000),
             ])),
-            shin: meshes.add(Sculptor::part(&Self::SHIN)),
+            // The shin, with the ball of the knee in it — see `forearm` above.
+            shin: meshes.add(Sculptor::joined(
+                Sculptor::part(&Self::SHIN),
+                Sculptor::ellipsoid(Vec3::splat(0.048)),
+            )),
             // The turnover at the top of the sock, in the shorts colour — the
             // one piece of kit detail that survives at this distance.
             //
@@ -4469,14 +4498,6 @@ impl Footballer {
                                 Flesh { actor: root },
                                 Transform::from_translation(elbow),
                             ))
-                            .with_child((
-                                // The ball of the joint, filling what the two
-                                // tapers leave open when the arm bends.
-                                Mesh3d(parts.elbow.clone()),
-                                MeshMaterial3d(outfit.skin.clone()),
-                                Flesh { actor: root },
-                                Transform::default(),
-                            ))
                             .with_children(|forearm| {
                                 if keeper {
                                     forearm.spawn((
@@ -4573,11 +4594,6 @@ impl Footballer {
                         Transform::from_translation(knee),
                     ))
                     .with_children(|shin| {
-                        shin.spawn((
-                            Mesh3d(parts.knee.clone()),
-                            MeshMaterial3d(outfit.socks.clone()),
-                            Transform::default(),
-                        ));
                         shin.spawn((
                             Mesh3d(parts.sock_top.clone()),
                             MeshMaterial3d(outfit.shorts.clone()),
@@ -5138,7 +5154,6 @@ pub(crate) mod preview {
 
             let fore = arm * skeleton::step(Limb::Elbow, side, elbow, gait);
             draw(&parts.forearm, fore, SKIN);
-            draw(&parts.elbow, fore, SKIN);
             if keeper {
                 draw(&parts.sleeve_forearm, fore, SHIRT);
                 draw(&parts.cuff_forearm, fore, TRIM);
@@ -5183,7 +5198,6 @@ pub(crate) mod preview {
 
             let lower = leg * skeleton::step(Limb::Knee, side, knee, gait);
             draw(&parts.shin, lower, SHORTS);
-            draw(&parts.knee, lower, SHORTS);
             draw(&parts.sock_top, lower, TRIM);
             let foot = lower * skeleton::step(Limb::Ankle, side, Physique::ANKLE, gait);
             draw(&parts.boot, foot, BOOTS);
@@ -7560,8 +7574,6 @@ mod tests {
             + parts.hair.iter().flatten().map(count).max().unwrap_or(0);
         let paired = [
             &parts.upper_arm,
-            &parts.elbow,
-            &parts.knee,
             &parts.sleeve,
             &parts.cuff,
             &parts.forearm,

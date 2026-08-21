@@ -2,6 +2,7 @@ use crate::actors::BallState;
 use crate::camera::{CameraFlight, CameraOrbit, CameraRig, CameraZoom};
 use crate::config::ViewerConfig;
 use crate::loader::ChunkLoader;
+use crate::perf::FrameCost;
 use crate::playback::{Playback, RecordedSpans};
 use crate::textures::Textures;
 use crate::typeface::Faces;
@@ -76,6 +77,12 @@ pub struct Chip {
 
 #[derive(Component)]
 pub struct ZoomLabel;
+
+/// The frame-cost readout that sits beside the zoom. Debug overlay only, and
+/// the reason it is on the bar at all rather than in the console: the numbers
+/// that matter are the ones you can watch change while flying the camera.
+#[derive(Component)]
+pub struct CostLabel;
 
 /// What the debug overlay is showing. Only meaningful when the page asked for
 /// it; in the game itself nothing ever reads or flips this.
@@ -494,6 +501,31 @@ impl Timeline {
                                 ..default()
                             },
                         ));
+
+                        // What the frame costs, and where. Reads
+                        // `<fps> <frame ms> u<our systems> m<all of Bevy's
+                        // main world> o<render + browser> <drawn>/<meshes>`
+                        // — see `perf`, which explains what each of those
+                        // three points at.
+                        bar.spawn((
+                            CostLabel,
+                            Text::new(""),
+                            TextFont {
+                                font_size: FontSize::Px(11.0),
+                                ..default()
+                            },
+                            TextColor(Self::INK_MUTED),
+                            TextLayout {
+                                linebreak: LineBreak::NoWrap,
+                                ..default()
+                            },
+                            Node {
+                                width: px(216),
+                                flex_shrink: 0.0,
+                                justify_content: JustifyContent::Center,
+                                ..default()
+                            },
+                        ));
                     }
 
                     bar.spawn((
@@ -857,6 +889,10 @@ impl Timeline {
         mut states: Query<&mut Chip, With<StatesButton>>,
         zoom: Res<CameraZoom>,
         mut readout: Query<&mut Text, With<ZoomLabel>>,
+        cost: Res<FrameCost>,
+        time: Res<Time>,
+        mut due: Local<f32>,
+        mut costs: Query<&mut Text, (With<CostLabel>, Without<ZoomLabel>)>,
     ) {
         if let Ok(mut chip) = states.single_mut() {
             // `set_if_neq` on the component, not the colour: `paint_chips`
@@ -868,6 +904,22 @@ impl Timeline {
         }
         if let Ok(mut text) = readout.single_mut() {
             let wanted = format!("{:.2}x", zoom.factor);
+            if text.as_str() != wanted {
+                **text = wanted;
+            }
+        }
+
+        // Four times a second, not every frame. A rolling median moves on
+        // every sample, so writing it out unconditionally would re-shape a
+        // line of text on each frame — which is a real cost, on the very
+        // measurement it would then be inflating.
+        *due -= time.delta_secs();
+        if *due > 0.0 {
+            return;
+        }
+        *due = 0.25;
+        if let Ok(mut text) = costs.single_mut() {
+            let wanted = cost.strip();
             if text.as_str() != wanted {
                 **text = wanted;
             }
@@ -891,11 +943,19 @@ impl Timeline {
         mut notice: Query<(&mut Visibility, &mut Text), (With<LoadingNotice>, Without<ClockLabel>)>,
     ) {
         let progress = playback.progress() * 100.0;
-        if let Ok(mut node) = fill.single_mut() {
+        if let Ok(mut node) = fill.single_mut()
+            && node.width != percent(progress)
+        {
             node.width = percent(progress);
         }
         if let Ok(mut node) = knob.single_mut() {
-            node.left = percent(progress);
+            // Guarded for the same reason as the knob's size below: a paused
+            // replay, or one waiting on its first chunk, is a replay whose bar
+            // does not move, and it should not be relaying out the UI to say
+            // so.
+            if node.left != percent(progress) {
+                node.left = percent(progress);
+            }
             // The knob swells under the pointer. Sized here rather than in a
             // hover system because the track carries the cursor position and
             // the knob is a sibling with no interaction of its own — it is the
@@ -906,14 +966,29 @@ impl Timeline {
             } else {
                 Self::KNOB_SIZE
             };
-            node.width = px(size);
-            node.height = px(size);
-            node.top = px((Self::TRACK_HEIGHT - size) * 0.5);
-            node.margin = UiRect::left(px(-size * 0.5));
-            node.border_radius = BorderRadius::all(px(size * 0.5));
+            // Only when it actually changes, which is when the pointer arrives
+            // and when it leaves. `Node` is change-detected and the layout
+            // pass reruns for the whole tree when any node in it is touched,
+            // so five unconditional writes here put the knob's hover state on
+            // the bill of every frame of the match.
+            if node.width != px(size) {
+                node.width = px(size);
+                node.height = px(size);
+                node.top = px((Self::TRACK_HEIGHT - size) * 0.5);
+                node.margin = UiRect::left(px(-size * 0.5));
+                node.border_radius = BorderRadius::all(px(size * 0.5));
+            }
         }
         if let Ok(mut text) = clock.single_mut() {
-            **text = playback.clock_label(&config.labels);
+            // Compared before writing, like every other label on this bar.
+            // The clock reads to the minute and this system runs on every
+            // frame, so an unconditional write re-shaped a line of text three
+            // thousand times for each time it changed — and text shaping is
+            // the most expensive thing the UI does.
+            let wanted = playback.clock_label(&config.labels);
+            if text.as_str() != wanted {
+                **text = wanted;
+            }
         }
         if let Ok(mut node) = icon.single_mut() {
             let wanted = if playback.playing {

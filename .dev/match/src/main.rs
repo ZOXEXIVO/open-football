@@ -2988,6 +2988,15 @@ fn main() {
             let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
             run_over_the_bar(n, lvl);
         }
+        // The same trace, triggered on the ball climbing through
+        // `FrameTrace::SKY_HEIGHT`. Answers "what launched it and what
+        // brought it back down" for a ball that never goes near the frame
+        // or a line. See `run_skied`.
+        "sky" => {
+            let n = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(2usize);
+            let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
+            run_skied(n, lvl);
+        }
         // The same trace, triggered on the goalkeeper taking the ball into
         // his hands. Answers "how did it get there" — the ticks before the
         // gather carry the shot, and the keeper's own gap / height / state
@@ -10667,6 +10676,50 @@ fn run_over_the_bar(matches: usize, level: u8) {
     println!(
         "  windows that ended with the ball still in the goal: {}",
         s.rested_in_net
+    );
+    for capture in &captures {
+        println!();
+        println!("{capture}");
+    }
+}
+
+/// **Where does a ball that goes UP end up.**
+///
+/// The same trace as [`run_over_the_bar`], triggered on the ball climbing
+/// through `FrameTrace::SKY_HEIGHT` instead of on a line crossing. The
+/// report it answers — *"the ball flies upward, hits an invisible obstacle
+/// at a height and flies back down"* — names no resolver and no restart,
+/// so the height is the only thing that can open the window.
+fn run_skied(matches: usize, level: u8) {
+    unsafe { std::env::set_var("OF_FRAME_TRACE", "sky") };
+    core::frame_trace::FrameTrace::reset();
+
+    for m in 0..matches {
+        MatchRuntime::set_events_mode(true);
+        let (home, _) = make_squad_viewer(1, HOME_TEAM_NAME, level, 0);
+        let (away, _) = make_squad_viewer(2, AWAY_TEAM_NAME, level, 11);
+        let _ = FootballEngine::<840, 545>::play(home, away, true, false, false);
+        eprintln!("  sky: match {}/{} played", m + 1, matches);
+    }
+
+    let (_, captures) = core::frame_trace::FrameTrace::report();
+    let s = core::frame_trace::FrameTrace::summary();
+    println!();
+    println!("=== SKIED-BALL TRACE ({matches} matches, level {level}) ===");
+    println!("  {} captures", captures.len());
+    println!(
+        "  a '*' row travelled further than its own velocity explains — somebody relocated the ball"
+    );
+    println!();
+    println!("  mesh jumps (netting PULLED the ball) : {}", s.mesh_jumps);
+    println!("  loose jumps (open play, unclaimed)   : {}", s.loose_jumps);
+    println!(
+        "  worst unexplained jump               : {} cm",
+        s.worst_jump_cm
+    );
+    println!(
+        "  ground snaps (z collapsed, no fall)  : {}",
+        s.ground_snaps
     );
     for capture in &captures {
         println!();

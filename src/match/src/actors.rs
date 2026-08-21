@@ -1133,8 +1133,14 @@ impl Actors {
                     color: Color::srgba(0.0, 0.0, 0.0, 0.85),
                 },
                 TextLayout::justify(Justify::Center),
+                // Width and alignment belong here rather than in
+                // [`Self::place_labels`], which only ever wrote the same two
+                // constants back over themselves — and a `Node` written on
+                // every frame is a UI layout pass on every frame.
                 Node {
                     position_type: PositionType::Absolute,
+                    width: Val::Px(88.0),
+                    justify_content: JustifyContent::Center,
                     ..default()
                 },
                 Visibility::Hidden,
@@ -2553,13 +2559,24 @@ impl Actors {
         // along the bearing than across it.
         let stretch = (1.0 + throw.length_squared()).sqrt();
 
+        // Written only on a change, all three times below. `Visibility` is
+        // change-detected and every write feeds the propagation pass, so
+        // twenty-two shadows saying "still visible" on every frame is
+        // twenty-two entities dirtied for nothing — the same trap
+        // [`Bank::cull`] documents.
+        let settle = |visibility: &mut Visibility, wanted: Visibility| {
+            if *visibility != wanted {
+                *visibility = wanted;
+            }
+        };
+
         for (mark, mut transform, mut visibility) in &mut shadows {
             let Ok((actor, body, shown)) = actors.get(mark.actor) else {
-                *visibility = Visibility::Hidden;
+                settle(&mut visibility, Visibility::Hidden);
                 continue;
             };
             if *shown == Visibility::Hidden {
-                *visibility = Visibility::Hidden;
+                settle(&mut visibility, Visibility::Hidden);
                 continue;
             }
             // A body's shadow is the smear between the shadow of its boots and
@@ -2580,7 +2597,7 @@ impl Actors {
             // is most of what a keeper half a metre up needs from it.
             let spread = Self::FOOTPRINT * 0.86 * (1.0 + 0.30 * actor.lift().min(1.2));
             transform.scale = Vec3::new(spread, 1.0, spread * stretch);
-            *visibility = Visibility::Inherited;
+            settle(&mut visibility, Visibility::Inherited);
         }
     }
 
@@ -2635,13 +2652,23 @@ impl Actors {
         let (camera, camera_transform) = *camera;
         let camera_transform = GlobalTransform::from(*camera_transform);
 
+        // Same rule as the contact shadows: touch neither the visibility nor
+        // the node unless the value actually moved. A `Node` write reruns the
+        // layout pass over the WHOLE UI tree, so a plate that has not moved
+        // must not write itself.
+        let settle = |visibility: &mut Visibility, wanted: Visibility| {
+            if *visibility != wanted {
+                *visibility = wanted;
+            }
+        };
+
         for (label, mut node, mut visibility) in &mut labels {
             let Ok((actor_transform, actor_visibility)) = actors.get(label.actor) else {
-                *visibility = Visibility::Hidden;
+                settle(&mut visibility, Visibility::Hidden);
                 continue;
             };
             if *actor_visibility == Visibility::Hidden {
-                *visibility = Visibility::Hidden;
+                settle(&mut visibility, Visibility::Hidden);
                 continue;
             }
             // Project the player twice — once at the boots, once at the crown —
@@ -2653,18 +2680,32 @@ impl Actors {
                 camera.world_to_viewport(&camera_transform, boots),
                 camera.world_to_viewport(&camera_transform, crown),
             ) else {
-                *visibility = Visibility::Hidden;
+                settle(&mut visibility, Visibility::Hidden);
                 continue;
             };
 
             // The plate is centred by hand: UI nodes are positioned by their
             // top-left corner and the text width is not known here.
+            //
+            // Rounded to the pixel it will be drawn at, so a player standing
+            // still — before kickoff, at a restart, through half time — stops
+            // writing his plate's node at all. Sub-pixel positions on a UI
+            // node buy nothing: `bevy_ui` rounds them for the draw anyway, and
+            // the only thing the extra precision was doing was guaranteeing a
+            // relayout of the bar and twenty-two plates on every frame.
+            //
+            // Width and alignment are set once, where the plate is spawned:
+            // they are constants, and writing a constant into a
+            // change-detected component every frame is the same relayout by
+            // another route.
             let stature = (boots.y - crown.y).abs().max(6.0);
-            node.left = Val::Px(boots.x - 44.0);
-            node.top = Val::Px(boots.y + stature * Self::LABEL_GAP);
-            node.width = Val::Px(88.0);
-            node.justify_content = JustifyContent::Center;
-            *visibility = Visibility::Inherited;
+            let left = Val::Px((boots.x - 44.0).round());
+            let top = Val::Px((boots.y + stature * Self::LABEL_GAP).round());
+            if node.left != left || node.top != top {
+                node.left = left;
+                node.top = top;
+            }
+            settle(&mut visibility, Visibility::Inherited);
         }
     }
 

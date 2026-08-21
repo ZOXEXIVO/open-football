@@ -455,6 +455,24 @@ impl Pitch {
         commands.spawn((Mesh3d(meshes.add(lines.build())), MeshMaterial3d(paint)));
     }
 
+    /// Folds one piece of scenery into a buffer that is accumulating others,
+    /// seeding the buffer if it is the first.
+    ///
+    /// The whole stadium is static: not one vertex of it moves for the length
+    /// of a match, and nothing in it is ever culled except the bank the lens
+    /// has walked into. So its natural unit is the buffer, not the entity —
+    /// and the entity is what this viewer pays for. Measured on a machine
+    /// where the scene renders in the same 3.9 ms at 1280x720 and at
+    /// 3840x2160, so the pixels are free and the walk is not.
+    fn gather(buffer: &mut Option<Mesh>, piece: Mesh) {
+        match buffer {
+            Some(gathered) => gathered
+                .merge(&piece)
+                .expect("the stadium is built out of cuboids and rectangles"),
+            None => *buffer = Some(piece),
+        }
+    }
+
     /// The ground the pitch sits in: advertising hoardings around the touchlines
     /// and the low bowl of a stand behind them.
     ///
@@ -508,6 +526,12 @@ impl Pitch {
 
         let along = Field::HALF_LENGTH + END_MARGIN;
         let across = Field::HALF_WIDTH + SIDE_MARGIN;
+        // The perimeter, accumulated rather than spawned: one buffer for the
+        // boards, one for the lit strip along their tops, and one per distinct
+        // advert repeat.
+        let mut boards: Option<Mesh> = None;
+        let mut trims: Option<Mesh> = None;
+        let mut adverts: Vec<(f32, Mesh)> = Vec::new();
         // `turn` points a panel at the pitch: a `Rectangle` faces +Z, and
         // rotating about Y by `turn` carries that onto `(sin, 0, cos)`.
         for (size, position, length, turn) in [
@@ -536,16 +560,21 @@ impl Pitch {
                 FRAC_PI_2,
             ),
         ] {
-            commands.spawn((
-                Mesh3d(meshes.add(Cuboid::new(size.x, size.y, size.z))),
-                MeshMaterial3d(board.clone()),
-                Transform::from_translation(position + Vec3::Y * HOARDING_HEIGHT * 0.5),
-            ));
-            commands.spawn((
-                Mesh3d(meshes.add(Cuboid::new(size.x, 0.07, size.z + 0.04))),
-                MeshMaterial3d(trim.clone()),
-                Transform::from_translation(position + Vec3::Y * HOARDING_HEIGHT),
-            ));
+            // The four sides go into two buffers rather than eight entities.
+            // Same reasoning as the terraces below: a perimeter board is
+            // scenery that never moves and is never culled apart from its
+            // neighbours, so an entity each buys nothing and costs a walk, an
+            // extract and a submit apiece on every frame.
+            Self::gather(
+                &mut boards,
+                Mesh::from(Cuboid::new(size.x, size.y, size.z))
+                    .translated_by(position + Vec3::Y * HOARDING_HEIGHT * 0.5),
+            );
+            Self::gather(
+                &mut trims,
+                Mesh::from(Cuboid::new(size.x, 0.07, size.z + 0.04))
+                    .translated_by(position + Vec3::Y * HOARDING_HEIGHT),
+            );
 
             // The advert itself, as a face hung a few millimetres in front of
             // the board rather than as a texture on the box. The box is a
@@ -557,10 +586,31 @@ impl Pitch {
             // between two words instead of through the middle of one. The
             // two sides of a ground are different lengths, hence a material
             // each — the repeat count is the only thing that differs.
+            //
+            // The two long sides carry the same repeat as each other and so do
+            // the two ends, so this is two meshes and two materials for four
+            // faces rather than four of each.
             let panels = (length / AD_PANEL).round().max(1.0);
             let facing = Quat::from_rotation_y(turn);
+            let face = Mesh::from(Rectangle::new(length, HOARDING_HEIGHT)).transformed_by(
+                Transform::from_translation(
+                    position
+                        + Vec3::Y * HOARDING_HEIGHT * 0.5
+                        + facing * Vec3::Z * (HOARDING_DEPTH * 0.5 + 0.006),
+                )
+                .with_rotation(facing),
+            );
+            match adverts.iter_mut().find(|(repeat, _)| *repeat == panels) {
+                Some((_, gathered)) => gathered
+                    .merge(&face)
+                    .expect("every face is the same rectangle"),
+                None => adverts.push((panels, face)),
+            }
+        }
+
+        for (panels, face) in adverts {
             commands.spawn((
-                Mesh3d(meshes.add(Rectangle::new(length, HOARDING_HEIGHT).mesh().build())),
+                Mesh3d(meshes.add(face)),
                 MeshMaterial3d(materials.add(StandardMaterial {
                     base_color: Color::WHITE,
                     base_color_texture: Some(advert.clone()),
@@ -582,13 +632,14 @@ impl Pitch {
                     perceptual_roughness: 0.55,
                     ..default()
                 })),
-                Transform::from_translation(
-                    position
-                        + Vec3::Y * HOARDING_HEIGHT * 0.5
-                        + facing * Vec3::Z * (HOARDING_DEPTH * 0.5 + 0.006),
-                )
-                .with_rotation(facing),
             ));
+        }
+
+        if let Some(mesh) = boards {
+            commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(board)));
+        }
+        if let Some(mesh) = trims {
+            commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(trim.clone())));
         }
 
         // Four banks of seating. Empty: no crowd, just the structure, and
@@ -698,8 +749,33 @@ impl Pitch {
         let riser = rise / rows;
         let rows = rows as usize;
 
-        // One mesh, reused for every row of every stand.
-        let step = meshes.add(Cuboid::new(length, riser * 1.9, TREAD * 0.96));
+        // Every row of this bank, in ONE buffer.
+        //
+        // They used to be an entity each — twenty-one to a touchline bank,
+        // nineteen to an end, eighty-four across the ground — sharing a mesh
+        // and a material and differing only in where they sat. That is exactly
+        // the shape of thing this viewer cannot afford: the frame is spent
+        // per-entity, not per-pixel (the scene renders in the same 3.9 ms at
+        // 1280x720 and at 3840x2160), so eighty-four rows cost eighty-four
+        // times the walk, the extract and the submit for one flight of steps.
+        //
+        // Nothing is lost by merging. A stand is stepped concrete that never
+        // moves, and it is culled as a unit anyway — `Bank::cull` hides the
+        // whole bank or none of it, and no row was ever in shot without the
+        // rows either side of it.
+        let mut terrace = Mesh::from(Cuboid::new(length, riser * 1.9, TREAD * 0.96));
+        for row in 1..rows {
+            let up = riser * row as f32;
+            let back = TREAD * row as f32;
+            terrace
+                .merge(&Mesh::from(Cuboid::new(
+                    length,
+                    riser * 1.9,
+                    TREAD * 0.96,
+                )).translated_by(Vec3::new(0.0, up, back)))
+                .expect("every row is the same cuboid");
+        }
+        let terrace = meshes.add(terrace);
 
         // The bank's own extent, so `Bank::cull` can tell whether the
         // lens has walked into this one. A metre of slack either side of the
@@ -719,15 +795,13 @@ impl Pitch {
             .id();
 
         commands.entity(anchor).with_children(|bank| {
-            for row in 0..rows {
-                let up = riser * (row as f32 + 0.5);
-                let back = from + TREAD * (row as f32 + 0.5);
-                bank.spawn((
-                    Mesh3d(step.clone()),
-                    MeshMaterial3d(seating.clone()),
-                    Transform::from_xyz(0.0, up, back),
-                ));
-            }
+            // The merged flight, placed where its first row used to sit — the
+            // rest are built off that one inside the mesh.
+            bank.spawn((
+                Mesh3d(terrace.clone()),
+                MeshMaterial3d(seating.clone()),
+                Transform::from_xyz(0.0, riser * 0.5, from + TREAD * 0.5),
+            ));
 
             // The walkway that splits the tiers. Deliberately not along the
             // crest — the camera looks UP at these from below their top, so a

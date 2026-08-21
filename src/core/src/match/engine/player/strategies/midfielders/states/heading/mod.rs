@@ -1,3 +1,4 @@
+use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
@@ -38,6 +39,27 @@ const HEADER_SHOT_CAP: u32 = 4;
 /// knock-down to a teammate; closer than this it's an emergency
 /// clearance away from danger.
 const DEFENSIVE_CLEARANCE_RANGE: f32 = 120.0;
+
+/// How high a knock-down loops ABOVE the contact, in metres, worst
+/// technique first.
+///
+/// A cushioned nod sits down a metre in front of the man; a poor contact
+/// balloons and gives everyone time to react. Both are apexes because the
+/// vertical axis is metric and a kick is described by the height it
+/// reaches — see [`Ball::launch_speed_for_apex`], and see the note on
+/// [`MidfielderHeadingState::knock_down_velocity`] for what writing a raw
+/// `z` here did instead.
+const KNOCK_DOWN_APEX_M: (f32, f32) = (2.8, 1.0);
+
+/// …and how far it carries, in game units, worst technique first. 80 u is
+/// 10 m and 144 u is 18 m — the space in front of a midfield runner,
+/// which is what a knock-down is for.
+const KNOCK_DOWN_RANGE_U: (f32, f32) = (80.0, 144.0);
+
+/// Sideways scatter on the nod, as a fraction of the forward component.
+/// 0.25 is about fourteen degrees either way — a header is aimed with the
+/// forehead, not passed with the laces.
+const KNOCK_DOWN_SCATTER: f32 = 0.25;
 
 /// Midfield aerial duel — the knock-down, the flick-on, the headed
 /// clearance from a goal kick dropping on the halfway line.
@@ -216,17 +238,75 @@ impl MidfielderHeadingState {
     /// direction, low and short. A knock-down travels a few metres —
     /// this is a controlled cushion, not a clearance, so the receiving
     /// teammate has a genuine chance to win the second ball.
+    ///
+    /// # ⚠ This was the last kick in the engine writing a raw `z`
+    ///
+    /// `x`/`y` are game units a tick (1 u = 12.5 cm) and `z` is METRES a
+    /// tick, so the two axes share no scale. The pair here used to be
+    /// `power = 1.6 + control` and `lift = 1.4 - control * 0.5` — a
+    /// vertical launch of **0.9 to 1.4 m/tick, i.e. 90 to 140 m/s**, an
+    /// implied apex of up to **620 metres**. Every other kick site was
+    /// converted when gravity went metric (see
+    /// `DefenderClearingState`, `Ball::break_stall`, the keeper's punch);
+    /// this one was missed because a midfielder only wins a middle-third
+    /// header a couple of times a match.
+    ///
+    /// What it looked like: nothing about it read as a knock-down at all.
+    /// `Ball::update_velocity`'s `MAX_APEX_METRES` guard trimmed the
+    /// launch to a 40 m apex — which is what that guard is for, and it
+    /// held — so instead of 620 m the "controlled cushion" went up **28
+    /// metres and hung for five seconds**, coming down fifty metres away
+    /// or in the stand. Traced in `dev_match sky`:
+    ///
+    /// ```text
+    ///   181451   696.73  296.26   1.63   v(-1.11, 0.65, 0.12)   loose, dropping
+    /// * 181452   695.62  296.90   1.75   v(-2.20, 0.43, 1.10)   headed — 110 m/s UP
+    ///   181453   693.43  297.34   2.03   v(-2.19, 0.43, 0.28)   trimmed to the ceiling
+    ///   ...
+    ///   181659   350.66  365.15  27.81   v(-1.30, 0.26, 0.00)   apex, 4.4 m up the stand
+    /// ```
+    ///
+    /// The engine's own census had been reporting it the whole time —
+    /// `dev_match stats`, "worst apex 693.7 m … a kick site is still
+    /// writing a raw z instead of solving an apex" — but its
+    /// `ABSURD_BY_STATE` attribution reads the striker's state on the
+    /// tick the ball's speed changes, and this state has already returned
+    /// to `Running` by then, so the row that names the site was blank.
+    ///
+    /// Solved from an apex now, like every other kick: pick how high the
+    /// nod loops, which fixes its hang time, and the pace follows from
+    /// how far it has to carry.
     fn knock_down_velocity(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
-        let control = sc::aerial_outfield_attacker(ctx.player, minute);
+        let control = sc::aerial_outfield_attacker(ctx.player, minute).clamp(0.0, 1.0);
         let forward_x = ctx.player.side.map_or(1.0, |side| side.forward_dir_x());
 
         // Better aerial technique = a flatter, more purposeful knock-down;
         // a poor one loops up and gives everyone time to react.
-        let power = 1.6 + control * 1.0;
-        let lift = 1.4 - control * 0.5;
-        let y_drift: f32 = ctx.context.rng.random_range(-0.5..0.5);
+        let (loop_apex, cushion_apex) = KNOCK_DOWN_APEX_M;
+        let apex = loop_apex + (cushion_apex - loop_apex) * control;
+        let vz = Ball::launch_speed_for_apex(apex);
 
-        Vector3::new(forward_x * power, y_drift, lift)
+        // …and reaches further, because he has got over it. Solved
+        // against the height it is actually headed from — the drop is
+        // most of a knock-down's carry, and `HEADING_HEIGHT_THRESHOLD`
+        // alone is a metre and a half of it.
+        let (short, long) = KNOCK_DOWN_RANGE_U;
+        let range = short + (long - short) * control;
+        let struck_from = ctx.tick_context.positions.ball.position.z.max(0.0);
+        let speed = Ball::launch_for_range(range, vz, struck_from);
+
+        // Scatter turns the AIM, so it costs the nod direction rather
+        // than pace — a header pulled across the pitch does not also
+        // travel further for it, which is what adding a raw `y` did.
+        let drift = ctx
+            .context
+            .rng
+            .random_range(-KNOCK_DOWN_SCATTER..KNOCK_DOWN_SCATTER);
+        let aim = Vector3::new(forward_x, drift, 0.0)
+            .try_normalize(1.0e-4)
+            .unwrap_or_else(|| Vector3::new(forward_x, 0.0, 0.0));
+
+        Vector3::new(aim.x * speed, aim.y * speed, vz)
     }
 }

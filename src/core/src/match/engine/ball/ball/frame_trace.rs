@@ -193,6 +193,29 @@ impl FrameTrace {
         })
     }
 
+    /// Whether a ball CLIMBING PAST [`Self::SKY_HEIGHT`] opens a capture
+    /// (`OF_FRAME_TRACE=sky`).
+    ///
+    /// The trigger for *"the ball flies upward, hits something invisible
+    /// and drops back down"*. None of the triggers above can see it: the
+    /// report is about a ball that is nowhere near the frame and may never
+    /// leave the pitch at all, so the only thing identifying the passage
+    /// is the height itself. Fires on the RISING edge, so one flight opens
+    /// one window.
+    pub fn captures_skied() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| {
+            std::env::var("OF_FRAME_TRACE")
+                .map(|v| v.contains("sky"))
+                .unwrap_or(false)
+        })
+    }
+
+    /// Above the crossbar and above any header, in metres — a ball up
+    /// here was launched at something, and the launch is what the report
+    /// is about.
+    pub const SKY_HEIGHT: f32 = 12.0;
+
     fn with<R>(f: impl FnOnce(&mut Store) -> R) -> Option<R> {
         if !Self::armed() {
             return None;

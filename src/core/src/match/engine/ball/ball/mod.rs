@@ -3024,6 +3024,32 @@ impl Ball {
                 (gap, p.height, p.state.compact_id())
             })
             .min_by(|a, b| a.0.total_cmp(&b.0));
+        // A ball on its way UP through `SKY_HEIGHT`. Latched so one flight
+        // opens one window rather than one a tick for the whole climb, and
+        // read off the sample rather than off any launch site because the
+        // report does not say which site launched it.
+        if frame_trace::FrameTrace::captures_skied() {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            static ALOFT: AtomicBool = AtomicBool::new(false);
+            let aloft = self.position.z > frame_trace::FrameTrace::SKY_HEIGHT;
+            if aloft && !ALOFT.swap(true, Ordering::Relaxed) {
+                frame_trace::FrameTrace::open(format!(
+                    "SKIED through {:.0} m at ({:.1}, {:.1}, {:.2}) v({:.2},{:.2},{:.3}) owner {:?} held {} awaiting {}",
+                    frame_trace::FrameTrace::SKY_HEIGHT,
+                    self.position.x,
+                    self.position.y,
+                    self.position.z,
+                    self.velocity.x,
+                    self.velocity.y,
+                    self.velocity.z,
+                    self.current_owner,
+                    self.held_in_hands,
+                    self.awaiting_restart.is_some(),
+                ));
+            } else if !aloft {
+                ALOFT.store(false, Ordering::Relaxed);
+            }
+        }
         frame_trace::FrameTrace::note_tick(frame_trace::Sample {
             tick,
             pos: self.position,

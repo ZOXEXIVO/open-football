@@ -1,6 +1,8 @@
 use crate::config::ViewerConfig;
+use crate::perf::FrameCost;
 use crate::playback::{Playback, RecordedSpans};
 use crate::replay::{ChunkPayload, RecordingMetadata, ReplayTracks};
+use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -204,11 +206,25 @@ impl ChunkLoader {
         }
         let inbox = Arc::clone(&self.inbox);
         let url = config.chunk_url(index);
+        let debug = config.debug;
         spawn_local(async move {
             let delivery = match Self::get(url).await.and_then(|body| {
-                serde_json::from_str::<ChunkPayload>(&body)
+                // Timed, because this is the one piece of work in the viewer
+                // that can stop the page dead. A chunk is five minutes of
+                // twenty-three tracks and it is parsed HERE — on the browser's
+                // only thread, between two animation frames, with the replay
+                // running. Nothing else in the frame is within two orders of
+                // magnitude of it, so when a viewer reports a freeze this is
+                // the first number to ask for. See `perf`.
+                let started = Instant::now();
+                let parsed = serde_json::from_str::<ChunkPayload>(&body)
                     .inspect_err(|error| error!("bad chunk {index}: {error}"))
-                    .ok()
+                    .ok();
+                if debug {
+                    let spent = (Instant::now() - started).as_secs_f32() * 1000.0;
+                    FrameCost::announce_chunk(index, body.len(), spent);
+                }
+                parsed
             }) {
                 Some(payload) => Delivery::Chunk(index, payload),
                 None => Delivery::ChunkFailed(index),

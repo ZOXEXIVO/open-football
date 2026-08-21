@@ -15,6 +15,7 @@ mod field;
 mod kit;
 mod loader;
 mod net;
+mod perf;
 mod pitch;
 mod playback;
 mod portrait;
@@ -31,6 +32,7 @@ use crate::camera::{CameraFlight, CameraOrbit, CameraZoom, TvCamera};
 use crate::config::ViewerConfig;
 use crate::loader::ChunkLoader;
 use crate::net::Netting;
+use crate::perf::FrameCost;
 use crate::pitch::{Bank, Pitch};
 use crate::playback::{EventLog, Playback, RecordedSpans};
 use crate::portrait::Portraits;
@@ -121,6 +123,11 @@ impl MatchViewer {
             .init_resource::<BallState>()
             .init_resource::<Aftermath>()
             .init_resource::<DebugOverlay>()
+            // Always collected, never in the way: two clock reads a frame and
+            // a mesh census every fifteenth. It is only *shown* when the page
+            // asked for the debug overlay — see `perf`, which is the thing
+            // that turns "laggy" into a number worth acting on.
+            .init_resource::<FrameCost>()
             .init_resource::<CameraZoom>()
             // `TvCamera::follow_play` takes `Res<CameraOrbit>` and
             // `CameraOrbit::handle_drag` takes `ResMut<CameraOrbit>`, but
@@ -165,6 +172,10 @@ impl MatchViewer {
                 // whole thing end to end, so the ordering notes below mean
                 // exactly what they say across the boundary.
                 (
+                    // The clock either side of the whole chain, so what the
+                    // readout calls `update` is exactly this crate's own
+                    // systems and nothing of Bevy's.
+                    FrameCost::enter_update,
                     (
                         ChunkLoader::pump,
                         // Beside the chunk loader because it is the same kind
@@ -257,9 +268,16 @@ impl MatchViewer {
                         Timeline::paint_play,
                         Playback::end_frame,
                     ),
+                    FrameCost::leave_update,
                 )
                     .chain(),
             )
+            // Either end of the frame itself. `First` is ahead of everything
+            // Bevy runs on this thread and `Last` is behind it, so what falls
+            // outside the pair is the render sub-app and the browser — which
+            // is the split that says whether a slow frame is ours or the GPU's.
+            .add_systems(First, FrameCost::open)
+            .add_systems(Last, FrameCost::close)
             // The engine-facing overlays only exist when the page asked for
             // them, so their systems are only registered then.
             .add_systems(
