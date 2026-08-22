@@ -1,3 +1,20 @@
+//! The match engine itself: [`FootballEngine`], the type every simulated
+//! match runs through, and the standalone types it produces. The engine
+//! is stateless — it carries no fields — so everything below is either an
+//! `impl FootballEngine` split by concern, or plain data.
+//!
+//! | Group             | Concern                                                        |
+//! |-------------------|----------------------------------------------------------------|
+//! | `types`           | The plain data: pitch, player store, clock, outcome            |
+//! | `run`             | One match start to finish: `play()`, the shootout, the result  |
+//! | `tick`            | One tick: the driver, its sub-phases, the plan refresh         |
+//! | `resolve`         | What the tick does to the ball between those phases            |
+//! | `diagnostics`     | The profiler and the `match-logs` censuses                     |
+//!
+//! Only the flat type names and `phase_prof` are re-exported below; the
+//! groups themselves stay private, so the engine root's `pub use
+//! engine::*` surfaces exactly what it did before the grouping.
+
 use crate::r#match::PlayerSide;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::context::SubstitutionRecord;
@@ -252,7 +269,7 @@ impl SkillAccumulator {
 /// site less error-prone (no positional confusion between xg_for /
 /// xg_against and the like).
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct RollingMetricsInput {
+pub(in crate::r#match::engine::engine) struct RollingMetricsInput {
     pub cum_xg_for: f32,
     pub cum_xg_against: f32,
     pub cum_shots_for: u32,
@@ -270,16 +287,26 @@ impl<const W: usize, const H: usize> Default for FootballEngine<W, H> {
     }
 }
 
-pub mod phase_prof;
-mod positions;
+mod diagnostics;
+mod resolve;
 mod run;
-mod shape;
-mod shootout;
 mod tick;
 mod types;
 
+// `phase_prof` was a public child of this module before the grouping, and
+// the engine root re-exports this module with a glob, so it has to stay
+// reachable as `crate::r#match::phase_prof`.
+pub use diagnostics::phase_prof;
+
+// The flat type surface. Listed rather than globbed so that the names the
+// engine root carries onward are visible here — and so that no group
+// module name leaks into that root namespace alongside them.
+pub use types::{
+    BallSide, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MATCH_TIME_MS, MatchEvent, MatchFieldSize,
+    MatchPlayerCollection, MatchTime, PlayMatchStateResult, PlayerEntry, TeamsTactics,
+};
+
 use crate::r#match::TeamSkillAggregates;
-pub use types::*;
 
 #[cfg(test)]
 mod tests;
