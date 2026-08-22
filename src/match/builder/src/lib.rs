@@ -65,10 +65,52 @@ impl MatchViewer {
     ///
     /// `staging` is scratch space for the raw wasm-bindgen output — put it
     /// under `OUT_DIR`.
+    ///
+    /// Cheap when nothing moved. The nested cargo build settles in well under a
+    /// second once its target dir is warm, but wasm-bindgen and a level-9 gzip
+    /// over ~30 MB of Bevy cost seconds every time, and the build script re-runs
+    /// for reasons that have nothing to do with the viewer — a stylesheet edit
+    /// is enough. So the compiled wasm is fingerprinted and the rest of the
+    /// pipeline is skipped whole when that fingerprint matches what is already
+    /// staged.
     pub fn stage(crate_dir: &Path, staging: &Path, assets_dir: &Path) -> Result<(), String> {
         let wasm = Self::compile(crate_dir)?;
+        let fingerprint = Self::fingerprint(&wasm)?;
+
+        if Self::staged(assets_dir) && Self::stamp(staging).as_deref() == Some(&fingerprint) {
+            return Ok(());
+        }
+
         Self::bindgen(&wasm, staging)?;
-        Self::compress(staging, assets_dir)
+        Self::compress(staging, assets_dir)?;
+        Self::stamp_write(staging, &fingerprint)
+    }
+
+    /// Content hash of the compiled wasm, used as the staging cache key.
+    fn fingerprint(wasm: &Path) -> Result<String, String> {
+        let bytes = fs::read(wasm)
+            .map_err(|error| format!("could not read {}: {}", wasm.display(), error))?;
+        let mut hasher = DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        Ok(format!("{:x}", hasher.finish()))
+    }
+
+    fn stamp_path(staging: &Path) -> PathBuf {
+        staging.join("input-fingerprint")
+    }
+
+    fn stamp(staging: &Path) -> Option<String> {
+        fs::read_to_string(Self::stamp_path(staging))
+            .ok()
+            .map(|stamp| stamp.trim().to_string())
+    }
+
+    /// Written last, so a run that dies half way through re-does the work
+    /// rather than declaring a partial staging directory good.
+    fn stamp_write(staging: &Path, fingerprint: &str) -> Result<(), String> {
+        let path = Self::stamp_path(staging);
+        fs::write(&path, fingerprint)
+            .map_err(|error| format!("could not write {}: {}", path.display(), error))
     }
 
     /// Creates empty stand-ins so a consumer that reaches for the staged files
@@ -220,12 +262,16 @@ impl MatchViewer {
     /// servers pass the bytes through untouched under `Content-Encoding: gzip`
     /// — nothing ever holds the inflated copy.
     fn compress(staging: &Path, assets_dir: &Path) -> Result<(), String> {
-        // Cleared rather than overwritten: anything left behind here gets
-        // embedded, and an earlier build's uncompressed copy would double the
-        // binary for nothing.
-        let _ = fs::remove_dir_all(assets_dir);
         fs::create_dir_all(assets_dir)
             .map_err(|error| format!("could not create {}: {}", assets_dir.display(), error))?;
+
+        let staged = [Self::script_file(), Self::wasm_file()];
+
+        // Anything else in here gets embedded too, and an earlier build's
+        // uncompressed copy would double the binary for nothing. Swept rather
+        // than solved with `remove_dir_all` so the two files that belong here
+        // keep their timestamps — see `write_if_changed`.
+        Self::sweep(assets_dir, &staged);
 
         for name in [
             format!("{}.js", Self::OUT_NAME),
@@ -241,11 +287,44 @@ impl MatchViewer {
                 .and_then(|()| encoder.finish())
                 .map_err(|error| format!("could not compress {}: {}", name, error))
                 .and_then(|compressed| {
-                    fs::write(assets_dir.join(format!("{}.gz", name)), compressed)
+                    Self::write_if_changed(&assets_dir.join(format!("{}.gz", name)), &compressed)
                         .map_err(|error| format!("could not stage {}: {}", name, error))
                 })?;
         }
         Ok(())
+    }
+
+    /// Deletes everything in `dir` that is not one of `keep`.
+    fn sweep(dir: &Path, keep: &[String]) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if keep.iter().any(|kept| name == kept.as_str()) {
+                continue;
+            }
+            let path = entry.path();
+            let _ = if path.is_dir() {
+                fs::remove_dir_all(&path)
+            } else {
+                fs::remove_file(&path)
+            };
+        }
+    }
+
+    /// Writes only when the bytes actually differ.
+    ///
+    /// These files are embedded by `rust-embed`, which puts them in the
+    /// consuming crate's dependency list. Rewriting one with identical
+    /// contents still moves its mtime, and that alone is enough to recompile
+    /// the web crate and re-link the binary behind it — two minutes of LTO to
+    /// arrive back at the same bytes.
+    fn write_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+        if fs::read(path).is_ok_and(|existing| existing == bytes) {
+            return Ok(());
+        }
+        fs::write(path, bytes)
     }
 
     fn target_installed() -> bool {

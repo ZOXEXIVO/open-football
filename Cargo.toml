@@ -37,6 +37,19 @@ match-stub = ["simulator_core/match-stub", "web/match-stub"]
 lto = true
 codegen-units = 1
 
+# Build scripts and proc macros are compiled unoptimized by default, in every
+# profile — and this project runs real work in one. `src/web/build.rs` gzips a
+# 25 MB WebAssembly viewer at level 9 and pushes it through wasm-bindgen; at
+# `opt-level = 0` the gzip alone takes 3.1s, against 0.7s once flate2 is
+# optimized, for byte-identical output. `1` is enough: `2` and `3` measured no
+# faster here and cost more to compile. The same knob covers `askama`'s and
+# `serde`'s derive macros, which run once per template and per type.
+[profile.release.build-override]
+opt-level = 1
+
+[profile.dev.build-override]
+opt-level = 1
+
 # Optimized build that keeps full debug info + symbols so a sampling
 # profiler (samply) can resolve stacks. `inherits = "release"` ⇒ same
 # opt-level/LTO as production, so the trace reflects real hot paths.

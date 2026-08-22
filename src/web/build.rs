@@ -15,15 +15,18 @@ fn main() {
         .join("assets")
         .join("static")
         .join("css");
-    let output_file = Path::new(&manifest_dir)
-        .join("assets")
-        .join("static")
-        .join("css")
-        .join("styles.min.css");
+    let output_file = css_dir.join("styles.min.css");
 
-    // Watch for changes in CSS directory (use absolute path)
-    println!("cargo:rerun-if-changed={}", css_dir.display());
-    // Also watch the build script itself
+    // Watched file by file, never as a directory. `styles.min.css` is written
+    // back into `css_dir` a few lines below, and cargo takes a watched
+    // directory's timestamp to be the newest timestamp anywhere inside it — so
+    // watching the folder made this script dirty the moment it finished
+    // running. Every `cargo build` from then on re-ran it, recompiled `web` and
+    // re-linked the binary under fat LTO: two minutes to produce byte-identical
+    // output. The inputs are the two files in `css_files`, and they are all
+    // this needs to know about.
+    //
+    // Also watch the build script itself.
     println!(
         "cargo:rerun-if-changed={}",
         Path::new(&manifest_dir).join("build.rs").display()
@@ -79,7 +82,7 @@ fn main() {
     }
 
     // Write the combined CSS file
-    if let Err(e) = fs::write(&output_file, &combined_css) {
+    if let Err(e) = write_if_changed(&output_file, combined_css.as_bytes()) {
         println!("cargo:warning=Failed to write combined CSS: {}", e);
     } else {
         println!(
@@ -109,7 +112,21 @@ fn main() {
          pub const CSS_VERSION: &str = \"{}\";\n",
         css_hash, short_version
     );
-    fs::write(&hash_file, hash_content).expect("Failed to write css_hash.rs");
+    write_if_changed(&hash_file, hash_content.as_bytes()).expect("Failed to write css_hash.rs");
+}
+
+/// Writes only when the bytes actually differ.
+///
+/// Everything this script generates is either embedded by `rust-embed` or
+/// pulled in with `include!`, which lands it in the web crate's dependency
+/// list. Rewriting one with identical contents still moves its mtime, and that
+/// alone recompiles `web` and re-links the binary behind it under fat LTO. The
+/// read costs microseconds; the write it avoids costs two minutes.
+fn write_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if fs::read(path).is_ok_and(|existing| existing == bytes) {
+        return Ok(());
+    }
+    fs::write(path, bytes)
 }
 
 /// Stages the Bevy replay viewer (`src/match`) into `assets/static/viewer/`,
@@ -156,7 +173,7 @@ impl MatchViewerAsset {
             MatchViewer::staged(&assets_dir),
             MatchViewer::version(&assets_dir),
         );
-        fs::write(out_dir.join("match_viewer.rs"), contents)
+        write_if_changed(&out_dir.join("match_viewer.rs"), contents.as_bytes())
             .expect("Failed to write match_viewer.rs");
     }
 }

@@ -1,4 +1,9 @@
-arget
+# Build output. `target` was misspelt `arget` here, which quietly sent every
+# cargo artefact in the tree — tens of gigabytes on a machine that has built
+# the project — to the daemon as build context on every `docker build`.
+target
+**/target
+
 Dockerfile
 .dockerignore
 .git
@@ -7,4 +12,11 @@ dist
 node_modules
 bin
 obj
+
+# Simulated match archives: written by the running app, never an input to it.
 matches
+match_results
+
+.idea
+.claude
+.DS_Store
