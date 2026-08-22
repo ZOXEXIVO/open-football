@@ -26,6 +26,14 @@ shared = { path = "../shared" }
 # faces the web UI uses — see `fonts/README.md`.
 bevy = { version = "0.19", default-features = false, features = [
     "async_executor",
+    # FXAA, and only FXAA of the four it carries. It is what stands in for
+    # multisampling on hardware that cannot pay for multisampling — see
+    # `quality`, which explains why the choice is between two kinds of
+    # antialiasing rather than between having it and not. Costs a handful of
+    # kilobytes: SMAA's lookup tables are behind their own `smaa_luts` feature
+    # and are deliberately not taken, and TAA and DLSS compile to nothing
+    # without their components on a camera.
+    "bevy_anti_alias",
     "bevy_asset",
     "bevy_camera",
     "bevy_color",
@@ -86,6 +94,11 @@ web-sys = { version = "0.3", features = [
     "ImageData",
     "MouseEvent",
     "WheelEvent",
+    # Asking the browser what it is about to draw with, before anything is
+    # drawn — see `quality::Quality::probe`. A throwaway context on a
+    # throwaway canvas; the viewer's own canvas belongs to wgpu.
+    "WebGl2RenderingContext",
+    "WebglDebugRendererInfo",
     "KeyboardEvent",
     "AddEventListenerOptions",
     "Document",

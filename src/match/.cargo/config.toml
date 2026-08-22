@@ -2,5 +2,30 @@
 # browser backend has to be opted into with a cfg flag. The web crate's
 # build script runs cargo with this directory as its cwd, which is how
 # cargo discovers this file.
+#
+# `+simd128` turns on WebAssembly's 128-bit vector instructions, which is
+# what `glam` needs before it will use its own vector paths — `Quat`
+# multiplication, `Mat4` composition and `Vec3A` are all written twice in
+# that crate, and without this flag every one of them compiles to the scalar
+# version. They are also exactly the arithmetic this viewer spends its frame
+# on: six hundred joints posed per frame, each a quaternion and a
+# translation, and then Bevy's own transform propagation composing a matrix
+# for every one of the thousand-odd meshes hanging off them.
+#
+# It is free in both directions that usually cost something:
+#
+# - **Size.** The artefact came out 600 KB SMALLER — 29.18 MB to 28.58 MB.
+#   At `opt-level = "z"` a vectorised routine is genuinely shorter than the
+#   scalar loop it replaces, so this does not trade against the profile
+#   below; it agrees with it.
+# - **Reach.** SIMD is not an extension any more: Chrome has had it since 91,
+#   Firefox since 89 (both mid-2021) and Safari since 16.4 (early 2023). It
+#   is baseline in every browser that can run a Bevy application at all — the
+#   WebGL2 and `SharedArrayBuffer` floors are both higher.
 [target.wasm32-unknown-unknown]
-rustflags = ["--cfg", "getrandom_backend=\"wasm_js\""]
+rustflags = [
+    "--cfg",
+    "getrandom_backend=\"wasm_js\"",
+    "-C",
+    "target-feature=+simd128",
+]

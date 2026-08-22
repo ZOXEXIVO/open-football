@@ -19,6 +19,7 @@ mod perf;
 mod pitch;
 mod playback;
 mod portrait;
+mod quality;
 mod replay;
 mod sky;
 mod textures;
@@ -36,6 +37,7 @@ use crate::perf::FrameCost;
 use crate::pitch::{Bank, Pitch};
 use crate::playback::{EventLog, Playback, RecordedSpans};
 use crate::portrait::Portraits;
+use crate::quality::Quality;
 use crate::replay::ReplayTracks;
 use crate::sky::Sky;
 use crate::timeline::{DebugOverlay, Timeline};
@@ -82,6 +84,10 @@ impl MatchViewer {
         // otherwise scroll the page under it.
         CameraFlight::claim_flight_keys(&config.canvas);
 
+        // Before anything is drawn, so the camera can be built already
+        // carrying the answer.
+        let quality = Quality::probe();
+
         App::new()
             .add_plugins(
                 DefaultPlugins
@@ -115,6 +121,12 @@ impl MatchViewer {
             // the lens and covers the frame. Held at the gradient's zenith so
             // that if it ever does show, it shows as more sky.
             .insert_resource(ClearColor(Color::srgb(0.030, 0.048, 0.098)))
+            // Asked BEFORE the app is built and inserted here rather than
+            // initialised as a system, because `TvCamera::spawn` reads it: a
+            // tier settled on the first frame costs nothing to adopt, where
+            // one settled on the tenth costs a pipeline recompile. See
+            // `quality`.
+            .insert_resource(quality)
             .insert_resource(config)
             .insert_resource(Playback::new(duration_ms))
             .init_resource::<ReplayTracks>()
@@ -266,6 +278,13 @@ impl MatchViewer {
                         // pointer into the colours actually drawn.
                         Timeline::paint_chips,
                         Timeline::paint_play,
+                        // After the bar, because it is the last thing that
+                        // reads a settled frame and the first that would
+                        // interrupt one: a tier that steps down here does it
+                        // between two frames rather than in the middle of
+                        // drawing one. See `quality`, which explains why this
+                        // may fire exactly once.
+                        Quality::relent,
                         Playback::end_frame,
                     ),
                     FrameCost::leave_update,

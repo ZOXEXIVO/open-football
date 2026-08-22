@@ -200,6 +200,17 @@ impl FrameCost {
         }
     }
 
+    /// The median whole-frame time over the last window, in milliseconds.
+    ///
+    /// The one number outside this module that anything else reads. `Quality`
+    /// decides on the median rather than on the 95th percentile deliberately:
+    /// the question it is asking is "is this machine keeping up", and a
+    /// hundred-and-twentieth percentile spike is a chunk landing, which
+    /// nothing about the render tier would have helped with.
+    pub fn typical_frame_ms(&self) -> f32 {
+        self.frame.spread().0
+    }
+
     /// What one chunk of the recording cost to parse, and how big it was.
     ///
     /// Reported from [`crate::loader`] rather than measured here, because it

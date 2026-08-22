@@ -2346,12 +2346,47 @@ impl Actors {
             actor.pose = actor.gait();
         }
 
+        // **Where the rig actually gets posed**, and the one loop in the
+        // viewer whose cost is the SQUAD size rather than the eleven on the
+        // pitch. The page hands over both team sheets — starters and
+        // substitutes, thirty-six men — and every one of them is assembled at
+        // startup, so this walks some six hundred joints where at most three
+        // hundred and seventy belong to anybody currently on the field.
+        //
+        // Two guards, and they are not the same guard:
+        //
+        // **The first** skips a man who is not on the pitch. His gait was left
+        // untouched by the loop above (which returns early on a hidden actor),
+        // so posing him writes last-known angles over identical last-known
+        // angles — some two hundred and fifty entities dirtied for a picture
+        // nobody is being shown. It is also wrong in the small way that matters here:
+        // `Transform` is change-detected, and a write feeds transform
+        // propagation whether or not the value moved.
+        //
+        // **The second** is the same point made about a man who IS on the
+        // pitch and is standing still. `Joint::pose` is a pure function of the
+        // gait, so an unchanged gait produces bit-identical angles — and a
+        // paused replay, a stopped player, half time and the seconds before
+        // kickoff are all cases where the whole squad's joints reduce to a
+        // comparison. Against a `Vec3` and a `Quat` that is seven floats
+        // against the propagation pass, the `GlobalTransform` write and the
+        // per-entity uniform this frame would otherwise re-upload for each of
+        // them.
         for (joint, mut transform) in &mut joints {
-            let Ok((actor, _, _)) = actors.get(joint.owner) else {
+            let Ok((actor, _, visibility)) = actors.get(joint.owner) else {
                 continue;
             };
-            transform.rotation = joint.pose(actor.pose);
-            transform.translation = joint.place(actor.pose);
+            if *visibility == Visibility::Hidden {
+                continue;
+            }
+            let rotation = joint.pose(actor.pose);
+            let translation = joint.place(actor.pose);
+            if transform.rotation != rotation {
+                transform.rotation = rotation;
+            }
+            if transform.translation != translation {
+                transform.translation = translation;
+            }
         }
     }
 
@@ -2375,7 +2410,15 @@ impl Actors {
                 continue;
             };
             let (pitch, roll) = actor.topple();
-            *transform = Carriage::placed(pitch, roll, actor.lift());
+            // Written only on a change, for the reason the joint loop in
+            // [`Self::animate`] gives at length: a carriage is the root of a man's whole body,
+            // so dirtying one dirties the twenty-odd meshes hanging off it —
+            // and for all but a handful of players on any given frame the
+            // value being written is the value already there.
+            let placed = Carriage::placed(pitch, roll, actor.lift());
+            if *transform != placed {
+                *transform = placed;
+            }
         }
     }
 

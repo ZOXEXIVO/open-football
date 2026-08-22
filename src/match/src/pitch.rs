@@ -711,10 +711,24 @@ impl Pitch {
         // Beyond the touchlines. Same grass at the same scale, so the pitch
         // does not stop at a change of texture as well as a change of light.
         const SURROUND: Vec2 = Vec2::new(320.0, 260.0);
+        // Same sheet, same scale, and deliberately WITHOUT the relief the
+        // playing surface carries.
+        //
+        // A normal map earns its place by shading: it is what stops a lit
+        // plane returning one value everywhere. Out here there is no light to
+        // shade with — `SHADOW` puts this ground at about a sixth of the
+        // pitch's value, because it is in the lee of a stand — so the term the
+        // second sheet contributes is a sixth of a shading difference that was
+        // subtle at full brightness, which is to say nothing anybody has ever
+        // seen. What it costs is not nothing: this quad is eleven times the
+        // area of the pitch and, by the note on `Sward::rough`, half of every
+        // low shot, so dropping it takes a full anisotropic texture fetch and
+        // the whole tangent-space path out of the fragment shader over most of
+        // the lower frame. The blades stay — that is the albedo, and it is
+        // what keeps the surround from reading as a hole cut in the world.
         let surround = materials.add(StandardMaterial {
             base_color: Self::SHADOW,
             base_color_texture: Some(grass.albedo),
-            normal_map_texture: Some(grass.relief),
             perceptual_roughness: 1.0,
             ..default()
         });

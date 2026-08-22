@@ -73,6 +73,13 @@ impl Sky {
         lens: Single<&Transform, (With<Camera3d>, Without<Sky>)>,
         mut dome: Single<&mut Transform, (With<Sky>, Without<Camera3d>)>,
     ) {
-        dome.translation = lens.translation;
+        // Only on a change. The dome is a 1,536-triangle shell and the write
+        // is cheap, but the write is not what costs: `Transform` is
+        // change-detected, so an unconditional one puts the sky through
+        // transform propagation and re-uploads its uniform on every frame of
+        // a replay watched from a camera that has not moved since kickoff.
+        if dome.translation != lens.translation {
+            dome.translation = lens.translation;
+        }
     }
 }

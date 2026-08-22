@@ -1085,7 +1085,10 @@ impl Textures {
             }
         }
 
-        let mut image = Self::image(WIDTH, HEIGHT, data);
+        // Chained for the same reason the seating is: these ring the pitch and
+        // are seen almost edge-on from a low rig, where a repeated wordmark
+        // undersampled along its own length is a row of sparkling confetti.
+        let mut image = Self::mipped(WIDTH, HEIGHT, data);
         // Tiled along boards of two different lengths, so the repeat lives in
         // the sampler and the count in each board's `uv_transform`.
         if let ImageSampler::Descriptor(descriptor) = &mut image.sampler {
@@ -1459,6 +1462,30 @@ impl Textures {
         /// and nothing less would reach it.
         const ALONG_THE_PITCH: u16 = 16;
 
+        /// …and how far the RELIEF is asked to survive, which is not the same
+        /// number and should never have been.
+        ///
+        /// The note above is an argument about the albedo: blade detail that
+        /// washes out to the mean is a pitch that has gone back to being a
+        /// green rectangle, and only a long anisotropic footprint reaches the
+        /// far touchline with any of it left. None of that transfers. A normal
+        /// map is not a picture, it is three signed numbers per texel that the
+        /// shader turns into a lighting term, and beyond a few metres the sward
+        /// it describes is finer than a pixel — so what sixteen taps recover
+        /// there is per-leaf shading at sub-pixel scale, which does not read as
+        /// grass. It reads as sparkle, and sparkle that re-rolls as the camera
+        /// pans is precisely the crawling this is supposed to prevent.
+        ///
+        /// Four taps is where the relief stops being undersampled and starts
+        /// being oversampled, and the saving is not small: this is the second
+        /// of TWO anisotropic fetches on a surface that covers most of the
+        /// frame, so the pitch's sampler cost falls by about a third. On a
+        /// discrete card that is a rounding error. On an integrated part,
+        /// where the texture units and the memory bus are shared with
+        /// everything else in the machine, it is one of the two largest costs
+        /// in the frame — see `quality`, which handles the other one.
+        const ACROSS_A_LEAF: u16 = 4;
+
         Turf {
             albedo: images.add(Self::tiled(
                 Self::mipped(SIZE, SIZE, data),
@@ -1466,7 +1493,7 @@ impl Textures {
             )),
             relief: images.add(Self::tiled(
                 Self::mipped_linear(SIZE, SIZE, Self::relief(SIZE, &lit)),
-                ALONG_THE_PITCH,
+                ACROSS_A_LEAF,
             )),
         }
     }
@@ -1680,7 +1707,17 @@ impl Textures {
             }
         }
 
-        images.add(Self::image(WIDTH, HEIGHT, data))
+        // Mip-chained, for the reason [`Self::mipped_netting`] is: the ball is
+        // the one object on the pitch the eye tracks, and it is also the
+        // SMALLEST — 22 cm across at up to a hundred and fifty metres, which is
+        // a couple of pixels wrapped in a sheet a hundred and twenty-eight
+        // texels wide. Undersampled that badly, a panel either lands under the
+        // sample point or it does not, so the ball flickers between white and
+        // black from frame to frame as it flies. The chain converges to the
+        // leather and the panels averaged in their true proportion, which is a
+        // light grey — and a light grey is exactly what a football looks like
+        // from the far end of a ground.
+        images.add(Self::mipped(WIDTH, HEIGHT, data))
     }
 
     /// A run of empty seats, for the face of a row of terracing.
@@ -1749,7 +1786,16 @@ impl Textures {
             }
         }
 
-        images.add(Self::image(WIDTH, HEIGHT, data))
+        // Chained. Two hundred and fifty-six seats across a bank two hundred
+        // metres wide is a texture that is at about one texel to the pixel from
+        // the broadcast gantry and nowhere else: the rig flies (`CameraFlight`
+        // lets it to 130 m) and orbits to behind a goal, and from either the
+        // far bank is minified several times over. Unchained, the seats there
+        // do not blur — they SWIM, resampling to a different set of them on
+        // every frame the camera moves, and the banks are the largest thing in
+        // frame after the pitch. Which is the whole of what "the camera does
+        // not move smoothly" is made of, as much as any frame rate.
+        images.add(Self::mipped(WIDTH, HEIGHT, data))
     }
 
     /// The gradient the sky dome is skinned with, read top to bottom: zenith at

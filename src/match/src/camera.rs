@@ -2,6 +2,7 @@ use crate::actors::BallState;
 use crate::config::ViewerConfig;
 use crate::field::Field;
 use crate::playback::Playback;
+use crate::quality::Quality;
 use crate::touch::TouchDrive;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::pbr::{DistanceFog, FogFalloff};
@@ -698,7 +699,7 @@ impl TvCamera {
         Self::HEIGHT.hypot(Self::rest_reach())
     }
 
-    pub fn spawn(mut commands: Commands) {
+    pub fn spawn(mut commands: Commands, quality: Res<Quality>) {
         let sideline = -Self::rest_reach();
         commands.spawn((
             TvCamera { focus: Vec3::ZERO },
@@ -707,6 +708,14 @@ impl TvCamera {
                 fov: Self::FOV,
                 ..default()
             }),
+            // How the edges in this scene are resolved, and the one setting
+            // here that is decided by the machine rather than by taste. Bevy's
+            // default is four samples and nothing ever said otherwise, which
+            // on an integrated part is four times the attachment bandwidth of
+            // the whole frame — see `quality`, which explains what replaces
+            // them and why the swap is not a downgrade of the scene.
+            quality.msaa(),
+            quality.fxaa(),
             // Carries the fill for the whole scene — see the note on the
             // directional light in `Pitch::spawn`.
             AmbientLight {

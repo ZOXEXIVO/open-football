@@ -4,6 +4,7 @@ use crate::config::ViewerConfig;
 use crate::loader::ChunkLoader;
 use crate::perf::FrameCost;
 use crate::playback::{Playback, RecordedSpans};
+use crate::quality::{Quality, Tier};
 use crate::textures::Textures;
 use crate::typeface::Faces;
 use bevy::ecs::relationship::RelatedSpawnerCommands;
@@ -890,6 +891,7 @@ impl Timeline {
         zoom: Res<CameraZoom>,
         mut readout: Query<&mut Text, With<ZoomLabel>>,
         cost: Res<FrameCost>,
+        quality: Res<Quality>,
         time: Res<Time>,
         mut due: Local<f32>,
         mut costs: Query<&mut Text, (With<CostLabel>, Without<ZoomLabel>)>,
@@ -919,7 +921,18 @@ impl Timeline {
         }
         *due = 0.25;
         if let Ok(mut text) = costs.single_mut() {
-            let wanted = cost.strip();
+            // The tier rides along on the same line, because the first
+            // question asked of a slow frame here is which of the two
+            // pictures produced it — and the answer may have changed since
+            // the replay started. See `Quality::relent`.
+            let wanted = format!(
+                "{} {}",
+                cost.strip(),
+                match quality.tier() {
+                    Tier::Multisampled => "msaa4",
+                    Tier::PostProcessed => "fxaa",
+                }
+            );
             if text.as_str() != wanted {
                 **text = wanted;
             }
