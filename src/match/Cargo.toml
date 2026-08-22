@@ -109,7 +109,11 @@ web-sys = { version = "0.3", features = [
     "FocusOptions",
 ] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `raw_value` so a chunk can be opened in two passes: the envelope now, each
+# player's samples a few frames later. See `ChunkPayload`, which explains why a
+# megabyte and a half of JSON parsed between two animation frames is the single
+# worst thing that happens in this viewer.
+serde_json = { version = "1", features = ["raw_value"] }
 console_error_panic_hook = "0.1"
 
 # `opt-level = "z"` over `3`: the replay viewer is not compute bound (a few

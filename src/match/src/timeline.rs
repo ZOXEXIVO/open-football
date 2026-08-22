@@ -5,6 +5,7 @@ use crate::loader::ChunkLoader;
 use crate::perf::FrameCost;
 use crate::playback::{Playback, RecordedSpans};
 use crate::quality::{Quality, Tier};
+use crate::stage::Stage;
 use crate::textures::Textures;
 use crate::typeface::Faces;
 use bevy::ecs::relationship::RelatedSpawnerCommands;
@@ -892,6 +893,7 @@ impl Timeline {
         mut readout: Query<&mut Text, With<ZoomLabel>>,
         cost: Res<FrameCost>,
         quality: Res<Quality>,
+        stage: Res<Stage>,
         time: Res<Time>,
         mut due: Local<f32>,
         mut costs: Query<&mut Text, (With<CostLabel>, Without<ZoomLabel>)>,
@@ -926,12 +928,13 @@ impl Timeline {
             // pictures produced it — and the answer may have changed since
             // the replay started. See `Quality::relent`.
             let wanted = format!(
-                "{} {}",
+                "{} {} {}",
                 cost.strip(),
                 match quality.tier() {
                     Tier::Multisampled => "msaa4",
                     Tier::PostProcessed => "fxaa",
-                }
+                },
+                stage.readout(),
             );
             if text.as_str() != wanted {
                 **text = wanted;

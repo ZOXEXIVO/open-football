@@ -1,7 +1,8 @@
 use crate::field::Field;
-use bevy::prelude::Resource;
+use bevy::prelude::{Resource, error};
 use serde::de::{Error as DeError, IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
+use serde_json::value::RawValue;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -158,17 +159,54 @@ impl StateTrack {
     }
 }
 
-/// One chunk of a recording as served by `/api/match/{id}/chunk/{n}`.
+/// One chunk of a recording as served by `/api/match/{id}/chunk/{n}`, with the
+/// players left as they arrived.
+///
+/// # Why the players are not parsed here
+///
+/// A chunk is five minutes of twenty-three tracks — a megabyte and a half of
+/// JSON — and it is parsed on the browser's only thread, between two animation
+/// frames, with the replay running. `perf` names it as the thing that reads as
+/// "laggy" without ever showing up as a low frame rate: not a slow sixtieth of
+/// a second, one frame in a thousand that takes half of one.
+///
+/// So the document is opened in two passes. This one reads the envelope and
+/// leaves each player's samples as a [`RawValue`] — bytes serde has confirmed
+/// are a well-formed JSON value and has otherwise not looked inside. That
+/// costs a scan for the closing bracket, where the full parse costs a number
+/// converted and a vector grown for every one of some hundred thousand
+/// samples. The second pass is [`Self::open`], and
+/// [`crate::loader::ChunkLoader::pump`] runs it a few players at a time
+/// against a millisecond budget, so the cost lands as a handful of ordinary
+/// frames instead of one stall.
+///
+/// The ball is deliberately NOT deferred with them. It is one track against
+/// twenty-two, the camera follows it, and nothing can be shown until it is
+/// there — a chunk whose ball arrives three frames after its envelope is a
+/// replay that starts by looking at the centre spot.
 #[derive(Deserialize)]
 pub struct ChunkPayload {
     #[serde(default)]
     pub ball: Vec<Sample>,
     #[serde(default)]
-    pub players: HashMap<u32, Vec<Sample>>,
+    pub players: HashMap<u32, Box<RawValue>>,
     #[serde(default)]
     pub events: Vec<MatchEvent>,
     #[serde(default)]
     pub states: HashMap<u32, Vec<StateEntry>>,
+}
+
+impl ChunkPayload {
+    /// Reads one player's samples out of the bytes the envelope kept.
+    ///
+    /// A malformed track is dropped rather than taken as a malformed chunk:
+    /// the other twenty-two are still a replay, where returning an error here
+    /// would throw the whole five minutes away over one player.
+    pub fn open(samples: &RawValue) -> Vec<Sample> {
+        serde_json::from_str::<Vec<Sample>>(samples.get())
+            .inspect_err(|error| error!("unreadable player track: {error}"))
+            .unwrap_or_default()
+    }
 }
 
 /// Recording metadata as served by `/api/match/{id}/metadata`.
@@ -289,6 +327,16 @@ impl Track {
 
     /// Interpolated position at `time_ms`, or `None` when the entity has no
     /// data anywhere near that instant.
+    /// When this entity first appears in the recording, or `None` while
+    /// nothing of it has been downloaded yet.
+    ///
+    /// Read by [`crate::actors::Actors::take_the_field`] to know when a man on
+    /// the bench is about to be needed. `&self` and no cursor: it is the front
+    /// of the track, not a lookup into it.
+    pub fn opens_at(&self) -> Option<f64> {
+        self.samples.first().map(|sample| sample.t as f64)
+    }
+
     pub fn position_at(&mut self, time_ms: f64) -> Option<[f32; 3]> {
         let mut cursor = self.cursor;
         let position = self.sample(time_ms, &mut cursor);
@@ -410,11 +458,15 @@ pub struct ReplayTracks {
 }
 
 impl ReplayTracks {
-    pub fn absorb(&mut self, chunk: ChunkPayload) {
+    /// Folds in everything of a chunk that is not a player's samples, and
+    /// hands back the players still unread.
+    ///
+    /// The split is the whole point — see [`ChunkPayload`]. What is taken here
+    /// is one track, a handful of state lines and the event log; what is
+    /// handed back is the hundred thousand samples that would otherwise stop
+    /// the page.
+    pub fn absorb(&mut self, chunk: ChunkPayload) -> HashMap<u32, Box<RawValue>> {
         self.ball.merge(chunk.ball);
-        for (player_id, samples) in chunk.players {
-            self.players.entry(player_id).or_default().merge(samples);
-        }
         for (player_id, entries) in chunk.states {
             self.states.entry(player_id).or_default().merge(entries);
         }
@@ -422,6 +474,100 @@ impl ReplayTracks {
             self.events.extend(chunk.events);
             self.events.sort_by_key(|event| event.timestamp);
         }
+        chunk.players
+    }
+
+    /// One of those players, read and merged.
+    pub fn absorb_player(&mut self, player_id: u32, samples: &RawValue) {
+        self.players
+            .entry(player_id)
+            .or_default()
+            .merge(ChunkPayload::open(samples));
+    }
+}
+
+/// The two-pass read of a chunk, which is the thing standing between a viewer
+/// and a third of a second of frozen page — see [`ChunkPayload`].
+#[cfg(test)]
+mod chunks {
+    use super::*;
+
+    const DOCUMENT: &str = r#"{
+        "ball": [[0, 1.0, 2.0, 3.0]],
+        "players": {
+            "7": [[0, 10.0, 0.0], [100, 11.0, 0.5, 1.5]],
+            "9": [[0, 20.0, 0.0]]
+        },
+        "events": [],
+        "states": {}
+    }"#;
+
+    /// The envelope comes out whole and the players come out unread — which is
+    /// the entire trick, so it is worth asserting rather than assuming.
+    #[test]
+    fn the_envelope_arrives_without_the_players() {
+        let chunk: ChunkPayload = serde_json::from_slice(DOCUMENT.as_bytes())
+            .expect("the document is well-formed");
+        assert_eq!(chunk.ball.len(), 1, "the ball is read with the envelope");
+        assert_eq!(chunk.players.len(), 2, "both players are accounted for");
+
+        let mut tracks = ReplayTracks::default();
+        let deferred = tracks.absorb(chunk);
+        assert_eq!(
+            tracks.ball.opens_at(),
+            Some(0.0),
+            "the ball is on the pitch as soon as the envelope is in"
+        );
+        assert!(
+            tracks.players.is_empty(),
+            "nobody's samples were read on the envelope's frame"
+        );
+        assert_eq!(deferred.len(), 2, "both are handed back to be read later");
+    }
+
+    /// …and reading one of them later puts exactly the samples it held onto
+    /// the pitch, third component and all.
+    #[test]
+    fn a_deferred_track_reads_back_whole() {
+        let chunk: ChunkPayload = serde_json::from_slice(DOCUMENT.as_bytes())
+            .expect("the document is well-formed");
+        let mut tracks = ReplayTracks::default();
+        let deferred = tracks.absorb(chunk);
+
+        for (id, samples) in &deferred {
+            tracks.absorb_player(*id, samples);
+        }
+
+        let seven = tracks.players.get_mut(&7).expect("player 7 was read");
+        assert_eq!(seven.opens_at(), Some(0.0));
+        assert_eq!(
+            seven.position_at(100.0),
+            Some([11.0, 0.5, 1.5]),
+            "a four-element sample keeps its height"
+        );
+        assert_eq!(
+            tracks
+                .players
+                .get_mut(&9)
+                .expect("player 9 was read")
+                .position_at(0.0),
+            Some([20.0, 0.0, 0.0]),
+            "a three-element sample defaults its height to the ground"
+        );
+    }
+
+    /// One unreadable track must not cost the other twenty-two their chunk.
+    #[test]
+    fn a_bad_track_is_dropped_rather_than_the_chunk() {
+        let raw = serde_json::from_str::<Box<RawValue>>(r#"["nonsense"]"#).expect("valid JSON");
+        assert!(ChunkPayload::open(&raw).is_empty());
+    }
+
+    /// Nothing downloaded is not the same as never plays, and
+    /// `Actors::take_the_field` tells them apart by this.
+    #[test]
+    fn a_track_with_nothing_in_it_opens_nowhere() {
+        assert_eq!(Track::default().opens_at(), None);
     }
 }
 

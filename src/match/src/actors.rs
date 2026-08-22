@@ -13,6 +13,7 @@ use crate::timeline::DebugOverlay;
 use crate::typeface::Faces;
 use bevy::prelude::*;
 use bevy::text::FontSource;
+use bevy::window::PrimaryWindow;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 /// A player on the pitch: the root of one footballer's rig, carrying where they
@@ -207,6 +208,13 @@ pub struct BallActor;
 /// place on the turf from a broadcast angle.
 #[derive(Component)]
 pub struct BallShadow;
+
+/// A player who has a place on the team sheet but no body yet.
+///
+/// Removed by [`Actors::take_the_field`] on the frame it builds him, and never
+/// put back: going off does not undress a man.
+#[derive(Component)]
+pub struct Undressed;
 
 /// One player's shadow on the turf.
 ///
@@ -531,6 +539,25 @@ impl Actors {
     /// No footballer covers ground this fast. Anything quicker is a seek, a
     /// substitution or a restart, and has to be cut to rather than run.
     const TELEPORT: f32 = 25.0;
+
+    /// How far ahead of a man's first recorded sample he is built, in
+    /// milliseconds of MATCH time. See [`Self::take_the_field`].
+    ///
+    /// Fifteen seconds. Long enough that the ordinary case — a substitution
+    /// the recording announces by simply starting to carry him — has hundreds
+    /// of frames of slack at any speed the transport offers, short enough that
+    /// a bench nobody uses stays on the bench.
+    const DRESSING_LEAD: f32 = 15_000.0;
+
+    /// And how many may be built on one frame.
+    ///
+    /// Three. A kickoff wants twenty-two of them and a scrub into the middle
+    /// of the match wants however many are on at the time, and either as one
+    /// lump is a visible stall — a face is a 256-square sheet painted texel by
+    /// texel. Spread three to a frame, a full pitch takes eight frames to
+    /// arrive, which is under a sixth of a second and is already inside the
+    /// pause a seek takes to fetch its chunk.
+    const DRESSING_ROOM: usize = 3;
     /// And the same for the ball, which is struck rather than run and needs a
     /// higher bar. Measured over a real match, the hardest strike in the
     /// recording is about 40 m/s and the next population up starts at 50 —
@@ -1068,17 +1095,11 @@ impl Actors {
         faces: Res<Faces>,
     ) {
         let parts = BodyParts::new(&mut meshes);
-        let wardrobe = Wardrobe::new(
-            &mut materials,
-            &mut images,
-            &config,
-            &BodyParts::face_layout(),
-        );
-        // Every player takes the field wearing the face this crate painted
-        // for him, and the real ones are sent for now: a photograph that
-        // arrives in the third minute is repainted onto the head he is
-        // already wearing. See [`crate::portrait`].
-        commands.insert_resource(Portraits::fetch(&config, &wardrobe));
+        let wardrobe = Wardrobe::new(&mut materials, &mut images, &config);
+        // Empty, and filled a man at a time by [`Self::take_the_field`]. See
+        // [`crate::portrait::Portraits`], which explains why the send has to
+        // follow the body rather than lead it.
+        commands.insert_resource(Portraits::waiting(&wardrobe));
 
         let patch = meshes.add(Plane3d::default().mesh().size(1.0, 1.0));
 
@@ -1095,6 +1116,8 @@ impl Actors {
                         Complexion::build(player.id),
                     )),
                     Visibility::Hidden,
+                    // Nobody is built here. See [`Self::take_the_field`].
+                    Undressed,
                 ))
                 .id();
 
@@ -1106,13 +1129,6 @@ impl Actors {
                 Transform::from_xyz(0.0, 0.018, 0.0),
                 Visibility::Hidden,
             ));
-            Footballer::assemble(
-                &mut commands,
-                actor,
-                &parts,
-                &wardrobe.outfit(player),
-                player.is_goalkeeper(),
-            );
 
             let mut plate = commands.spawn((
                 PlayerLabel { actor },
@@ -1185,6 +1201,109 @@ impl Actors {
             Transform::from_xyz(0.0, 0.02, 0.0),
             Visibility::Hidden,
         ));
+
+        // Both kept for the whole match rather than dropped here, because the
+        // squad is no longer assembled here.
+        commands.insert_resource(parts);
+        commands.insert_resource(wardrobe);
+    }
+
+    /// Builds a man's body the first time the match has any use for it.
+    ///
+    /// **The squad is thirty-six and the pitch holds twenty-two.** The page
+    /// sends both full team sheets — eleven and seven a side — and every one
+    /// of them used to be assembled at startup: twenty-seven mesh entities, a
+    /// painted face, a printed number, a printed name and a fetch for his
+    /// photograph, for fourteen men who may sit down for ninety minutes. On
+    /// the browser's main thread, before the first frame, next to the two turf
+    /// sheets and their mip chains. It is a good part of why the replay takes
+    /// a moment to appear.
+    ///
+    /// Three things keep it from simply moving that cost to the moment of a
+    /// substitution, which would be worse — a hitch in the middle of the match
+    /// against a slow start:
+    ///
+    /// - **The lead.** A man is dressed when the playhead comes within
+    ///   [`Self::DRESSING_LEAD`] of his first recorded sample, not when he
+    ///   appears. That is fifteen seconds of match time — thirty seconds at
+    ///   half speed, a second at 16x — and it is measured against the same
+    ///   clock the recording is in, so it means the same thing at every speed.
+    /// - **The budget.** At most [`Self::DRESSING_ROOM`] a frame, so a kickoff
+    ///   asking for twenty-two at once is spread over a handful of frames
+    ///   rather than stalling one — and with the lead above, the ordinary case
+    ///   has hundreds of frames to use. Lifted entirely on the frame a seek
+    ///   lands: see the note in the body for why a cut is the one place the
+    ///   whole cost belongs.
+    /// - **The order.** Assembled first, sent for second — see
+    ///   [`crate::portrait::Portraits`], whose whole correctness rests on a
+    ///   picture never arriving before the body it belongs to.
+    ///
+    /// A man is dressed once. Going off does not undress him: he keeps his
+    /// materials, so coming back on costs nothing and does not move him out of
+    /// the batch every player sharing his complexion is drawn in.
+    pub fn take_the_field(
+        mut commands: Commands,
+        playback: Res<Playback>,
+        config: Res<ViewerConfig>,
+        tracks: Res<ReplayTracks>,
+        parts: Res<BodyParts>,
+        mut wardrobe: ResMut<Wardrobe>,
+        mut portraits: ResMut<Portraits>,
+        mut materials: ResMut<Assets<StandardMaterial>>,
+        mut images: ResMut<Assets<Image>>,
+        waiting: Query<(Entity, &PlayerActor), With<Undressed>>,
+    ) {
+        // In match time, so the lead is the same stretch of football however
+        // fast it is being watched.
+        let horizon = playback.time_ms + f64::from(Self::DRESSING_LEAD * playback.speed.max(0.1));
+        let layout = BodyParts::face_layout();
+        let mut dressed = 0;
+
+        // **A cut has no budget.** Most recordings are not a film of the match
+        // — the game keeps the goals and throws the rest away — so the normal
+        // way a pitch fills is a jump from an empty stretch into the start of
+        // a clip, and the frame that lands on is already the dearest in the
+        // replay: a chunk parsed, the camera re-framed, every follower cutting
+        // rather than gliding. Two dozen men appearing three to a frame across
+        // that is a squad fading in, which reads as a fault. Everyone who is
+        // needed is built on the one frame that was going to cost something
+        // anyway, and it happens once — the second time the playhead lands
+        // there they are all still dressed.
+        let budget = if playback.seeked {
+            usize::MAX
+        } else {
+            Self::DRESSING_ROOM
+        };
+
+        for (entity, actor) in &waiting {
+            if dressed >= budget {
+                return;
+            }
+            // No samples yet means either that he never plays or that his part
+            // of the recording is still in flight. Either way there is nothing
+            // to dress him for.
+            let Some(opens) = tracks.players.get(&actor.id).and_then(Track::opens_at) else {
+                continue;
+            };
+            if opens > horizon {
+                continue;
+            }
+            let Some(player) = config.players.iter().find(|player| player.id == actor.id) else {
+                continue;
+            };
+
+            let outfit = wardrobe.outfit(player, &mut materials, &mut images, &layout);
+            portraits.send_for(player, outfit.face.clone());
+            Footballer::assemble(
+                &mut commands,
+                entity,
+                &*parts,
+                &outfit,
+                player.is_goalkeeper(),
+            );
+            commands.entity(entity).remove::<Undressed>();
+            dressed += 1;
+        }
     }
 
     /// Drives every player and the ball from the recording at the current
@@ -1196,7 +1315,12 @@ impl Actors {
         loader: Res<ChunkLoader>,
         mut tracks: ResMut<ReplayTracks>,
         mut ball_state: ResMut<BallState>,
-        mut players: Query<(&mut PlayerActor, &mut Transform, &mut Visibility)>,
+        mut players: Query<(
+            &mut PlayerActor,
+            &mut Transform,
+            &mut Visibility,
+            Has<Undressed>,
+        )>,
         mut ball: Query<(&mut Transform, &mut Visibility), (With<BallActor>, Without<PlayerActor>)>,
         mut shadow: Query<
             (&mut Transform, &mut Visibility),
@@ -1236,7 +1360,7 @@ impl Actors {
         let mut holder: Option<(u32, Vec3)> = None;
         let mut nearest: Option<(u32, f32)> = None;
         let mut striker: Option<(u32, f32)> = None;
-        for (mut actor, mut transform, mut visibility) in &mut players {
+        for (mut actor, mut transform, mut visibility, undressed) in &mut players {
             let position = tracks
                 .players
                 .get_mut(&actor.id)
@@ -1253,7 +1377,20 @@ impl Actors {
                     // leaking into the ground speed `animate` reads out of
                     // consecutive positions.
                     actor.height = world.y;
-                    *visibility = Visibility::Inherited;
+                    // A man with no body yet stays off the pitch, whatever the
+                    // recording says about where he is standing. Everything
+                    // that draws something for a player reads this flag — his
+                    // contact shadow, his name plate — so revealing him a few
+                    // frames before [`Self::take_the_field`] gets to him would
+                    // put a shadow on the grass with nobody casting it. He is
+                    // shown on the frame after he is built, which at a kickoff
+                    // is within a tenth of a second of the first chunk landing
+                    // and is inside the pause that landing already costs.
+                    *visibility = if undressed {
+                        Visibility::Hidden
+                    } else {
+                        Visibility::Inherited
+                    };
                 }
                 None if covered => *visibility = Visibility::Hidden,
                 None => {}
@@ -2689,11 +2826,30 @@ impl Actors {
     /// instead of trailing a frame behind the pan.
     pub fn place_labels(
         camera: Single<(&Camera, &Transform), With<Camera3d>>,
+        window: Single<&Window, With<PrimaryWindow>>,
         actors: Query<(&Transform, &Visibility), With<PlayerActor>>,
         mut labels: Query<(&PlayerLabel, &mut Node, &mut Visibility), Without<PlayerActor>>,
     ) {
         let (camera, camera_transform) = *camera;
         let camera_transform = GlobalTransform::from(*camera_transform);
+
+        // **The plates are not in the same space the projection lands in.**
+        //
+        // `world_to_viewport` answers in the coordinates of whatever the camera
+        // is pointed at, and this one is pointed at an image that is sized in
+        // physical pixels and may be smaller than the window on purpose — see
+        // `stage`. `bevy_ui` lays out in the window's LOGICAL pixels. So the
+        // two differ by the display's own scale factor and by whichever rung
+        // of the resolution ladder is in force, and a plate placed without
+        // this correction sits in the top-left corner at a fraction of the
+        // distance out to the player it belongs to.
+        //
+        // Read off the camera rather than from `Stage`, so it cannot disagree
+        // with the projection it is correcting: on the frame a resize lands,
+        // the camera's own idea of its target is what the projection above
+        // used, and the resource has already moved on.
+        let projected = camera.logical_viewport_size().unwrap_or(Vec2::ONE);
+        let to_plate = Vec2::new(window.width(), window.height()) / projected.max(Vec2::ONE);
 
         // Same rule as the contact shadows: touch neither the visibility nor
         // the node unless the value actually moved. A `Node` write reruns the
@@ -2741,6 +2897,8 @@ impl Actors {
             // they are constants, and writing a constant into a
             // change-detected component every frame is the same relayout by
             // another route.
+            let boots = boots * to_plate;
+            let crown = crown * to_plate;
             let stature = (boots.y - crown.y).abs().max(6.0);
             let left = Val::Px((boots.x - 44.0).round());
             let top = Val::Px((boots.y + stature * Self::LABEL_GAP).round());

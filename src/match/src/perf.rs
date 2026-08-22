@@ -220,7 +220,7 @@ impl FrameCost {
     /// recording or the renderer.
     pub fn announce_chunk(index: usize, bytes: usize, milliseconds: f32) {
         Self::announce(&format!(
-            "match viewer — chunk {index} parsed: {:.1} MB of JSON in {milliseconds:.0} ms",
+            "match viewer — chunk {index} opened: {:.1} MB of JSON, envelope in {milliseconds:.0} ms",
             bytes as f32 / (1024.0 * 1024.0),
         ));
     }

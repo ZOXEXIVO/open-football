@@ -153,6 +153,14 @@ impl Quality {
         self.tier
     }
 
+    /// Whether the tier has stopped moving.
+    ///
+    /// Read by [`crate::stage::Stage::fit`], which holds its own ladder until
+    /// this is true so that one slow stretch does not get answered twice.
+    pub fn settled(&self) -> bool {
+        self.settled
+    }
+
     /// The sample count this tier renders at.
     ///
     /// Only 1 and 4 exist on the web — WebGL2 offers no two-sample target —

@@ -3,6 +3,7 @@ use crate::config::ViewerConfig;
 use crate::field::Field;
 use crate::playback::Playback;
 use crate::quality::Quality;
+use crate::stage::Stage;
 use crate::touch::TouchDrive;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::pbr::{DistanceFog, FogFalloff};
@@ -699,11 +700,18 @@ impl TvCamera {
         Self::HEIGHT.hypot(Self::rest_reach())
     }
 
-    pub fn spawn(mut commands: Commands, quality: Res<Quality>) {
+    pub fn spawn(mut commands: Commands, quality: Res<Quality>, stage: Res<Stage>) {
         let sideline = -Self::rest_reach();
         commands.spawn((
             TvCamera { focus: Vec3::ZERO },
             Camera3d::default(),
+            // Not the canvas. The replay is drawn into an image that may be
+            // smaller than the window, and a second camera puts that image on
+            // the window with the transport bar over it — see `stage`, which
+            // explains why the pixels have to come from here rather than from
+            // the window's own scale factor, and why the bar is better off for
+            // it.
+            stage.target(),
             Projection::from(PerspectiveProjection {
                 fov: Self::FOV,
                 ..default()

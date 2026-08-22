@@ -384,6 +384,12 @@ struct Kit {
 /// Sharing them is what keeps a pitch full of footballers down to a couple of
 /// dozen draw calls: the renderer batches by mesh and material, and there are
 /// only ever four strips and a handful of appearances on the field.
+///
+/// A resource, and kept for the whole match rather than dropped at the end of
+/// the spawn: a substitute is dressed on the way onto the pitch and not
+/// before — see [`crate::actors::Actors::take_the_field`] — so this has to
+/// still be here in the sixtieth minute.
+#[derive(Resource)]
 pub struct Wardrobe {
     kits: [Kit; 4],
     skin: Vec<Handle<StandardMaterial>>,
@@ -391,10 +397,21 @@ pub struct Wardrobe {
     boots: Vec<Handle<StandardMaterial>>,
     gloves: Handle<StandardMaterial>,
     shadow: Handle<StandardMaterial>,
+    /// The ink each of the four strips prints in, kept because the prints are
+    /// no longer all made at once and the strips they come off are otherwise
+    /// long gone by the time a substitute needs one.
+    prints: [Color; 4],
     /// The three materials that cannot be shared, because what makes them
     /// differ is baked into a texture: a printed number, a printed name and a
-    /// face. Twenty-two of each is a rounding error against the draw calls
-    /// they save everywhere else.
+    /// face.
+    ///
+    /// **Filled as men take the field, not up front.** The page sends both
+    /// full team sheets — eleven and seven a side, thirty-six men — and the
+    /// fourteen on the benches are three pictures each that nobody may ever
+    /// see. A face is the expensive one: a 256-square sheet painted texel by
+    /// texel through [`crate::textures::Painter`] and then mip-chained, on the
+    /// browser's main thread, before the first frame. Fourteen of those is
+    /// most of a second of the load spent on men who are sitting down.
     numbers: Vec<(u32, Handle<StandardMaterial>)>,
     names: Vec<(u32, Handle<StandardMaterial>)>,
     faces: Vec<(u32, Handle<StandardMaterial>)>,
@@ -426,7 +443,6 @@ impl Wardrobe {
         materials: &mut Assets<StandardMaterial>,
         images: &mut Assets<Image>,
         config: &ViewerConfig,
-        face: &FaceLayout,
     ) -> Self {
         // One material per entry of the shared ramps rather than per player:
         // twelve tones and ten hair colours cover any twenty-two men who
@@ -460,44 +476,15 @@ impl Wardrobe {
             trim: Self::cloth(materials, strips[index].trim, 0.70),
         });
 
-        let numbers = config
-            .players
-            .iter()
-            .filter(|player| player.shirt_number > 0)
-            .map(|player| {
-                let texture = Textures::number(images, player.shirt_number);
-                (
-                    player.id,
-                    Self::printed(materials, strips[Self::strip_index(player)].print, texture),
-                )
-            })
-            .collect();
-        let names = config
-            .players
-            .iter()
-            .filter_map(|player| {
-                let texture = Textures::name(images, &player.last_name)?;
-                Some((
-                    player.id,
-                    Self::printed(materials, strips[Self::strip_index(player)].print, texture),
-                ))
-            })
-            .collect();
-        let faces = config
-            .players
-            .iter()
-            .map(|player| {
-                let texture = Textures::face(images, face, &Complexion::face(player));
-                (player.id, Self::flesh_texture(materials, texture))
-            })
-            .collect();
-
         let blob = Textures::blob(images);
         Wardrobe {
+            prints: [0, 1, 2, 3].map(|index| strips[index].print),
             kits,
-            numbers,
-            names,
-            faces,
+            // Empty. Every one of these is painted the first time the man it
+            // belongs to is dressed — see the note on the fields.
+            numbers: Vec::new(),
+            names: Vec::new(),
+            faces: Vec::new(),
             skin,
             hair,
             boots,
@@ -510,16 +497,6 @@ impl Wardrobe {
                 ..default()
             }),
         }
-    }
-
-    /// The face materials, by player.
-    ///
-    /// The one thing in a wardrobe that is not final: a real picture of this
-    /// man's head may still turn up while the match is running, and when it
-    /// does his face material is handed a freshly painted sheet. See
-    /// [`crate::portrait::Portraits`], which is what holds these afterwards.
-    pub fn face_materials(&self) -> Vec<(u32, Handle<StandardMaterial>)> {
-        self.faces.clone()
     }
 
     /// The shared skin ramp itself, one material per entry. Handed over for
@@ -542,7 +519,22 @@ impl Wardrobe {
 
     /// What this player is wearing. The strip comes off the team sheet, the
     /// rest from who they are.
-    pub fn outfit(&self, player: &PlayerInfo) -> Outfit {
+    ///
+    /// Takes the asset stores because the three materials that are his alone
+    /// are painted HERE, on the first call for him, rather than up front for a
+    /// squad of thirty-six — see the note on those fields. Every call after
+    /// the first hands back what the first one made, so a player who goes off
+    /// and comes back on is not repainted and, more to the point, does not
+    /// leave the batch his old material was in.
+    pub fn outfit(
+        &mut self,
+        player: &PlayerInfo,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        layout: &FaceLayout,
+    ) -> Outfit {
+        self.paint(player, materials, images, layout);
+
         let kit = &self.kits[Self::strip_index(player)];
         let skin = self.skin[Complexion::skin(player)].clone();
         let own = |table: &Vec<(u32, Handle<StandardMaterial>)>| {
@@ -572,6 +564,39 @@ impl Wardrobe {
             number: own(&self.numbers),
             name: own(&self.names),
         }
+    }
+
+    /// Paints this player's number, name and face, once.
+    ///
+    /// Split out of [`Self::outfit`] because it is the only part of dressing a
+    /// man that is expensive, and because the early return is the whole
+    /// contract: called twice for the same player it must do nothing the
+    /// second time, or he changes material and drops out of every batch he
+    /// was sharing.
+    fn paint(
+        &mut self,
+        player: &PlayerInfo,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+        layout: &FaceLayout,
+    ) {
+        if self.faces.iter().any(|(id, _)| *id == player.id) {
+            return;
+        }
+        let ink = self.prints[Self::strip_index(player)];
+
+        if player.shirt_number > 0 {
+            let texture = Textures::number(images, player.shirt_number);
+            let printed = Self::printed(materials, ink, texture);
+            self.numbers.push((player.id, printed));
+        }
+        if let Some(texture) = Textures::name(images, &player.last_name) {
+            let printed = Self::printed(materials, ink, texture);
+            self.names.push((player.id, printed));
+        }
+        let texture = Textures::face(images, layout, &Complexion::face(player));
+        let painted = Self::flesh_texture(materials, texture);
+        self.faces.push((player.id, painted));
     }
 
     pub fn shadow(&self) -> Handle<StandardMaterial> {
@@ -621,6 +646,39 @@ impl Wardrobe {
     /// Lettering on a shirt: the glyphs come out of the texture's alpha and
     /// the ink colour off the strip, so black-on-white and white-on-black are
     /// the same material with two arguments.
+    ///
+    /// # Why these are not blended
+    ///
+    /// A print is a cutout — every texel is either ink or shirt, and the only
+    /// texels between the two are the handful the rasteriser softened at a
+    /// glyph's edge. That is not what `AlphaMode::Blend` is for, and asking for
+    /// it was costing a good deal more than it looked:
+    ///
+    /// **Blended materials go into the sorted transparent phase.** Forty-four
+    /// of them — a number and a name per player, each with a texture of its
+    /// own and so a material of its own — are depth-sorted every frame and
+    /// submitted one at a time. Worse, they sort INTO the twenty-three contact
+    /// shadows, which share one mesh and one material and would otherwise
+    /// batch into a single draw: a player and the shadow at his feet are the
+    /// same distance from the lens, so the sorted phase came out as shadow,
+    /// name, number, shadow, name, number all the way down the pitch, and
+    /// every one of those alternations breaks the batch. Twenty-odd draw calls
+    /// a frame, spent on nothing, in the phase that also blends rather than
+    /// tests its way past the depth buffer.
+    ///
+    /// **Alpha to coverage is the same picture in the opaque phase.** With
+    /// multisampling on — see [`crate::quality`] — the hardware turns the
+    /// glyph's alpha into sample coverage, which for a cutout is what blending
+    /// was approximating in the first place; the print is binned rather than
+    /// sorted, it is drawn front to back, and it gets the depth buffer's early
+    /// rejection like everything else on the man. With multisampling off Bevy
+    /// falls back to a discard at 0.5 and the edge hardens by a texel — on a
+    /// number that lands twenty pixels wide, under an FXAA pass whose whole
+    /// job is high-contrast edges exactly like this one.
+    ///
+    /// The print floats four millimetres off the cloth (`BodyParts::
+    /// PRINT_LIFT`), so writing depth from the opaque phase orders it against
+    /// the shirt correctly rather than fighting it.
     fn printed(
         materials: &mut Assets<StandardMaterial>,
         ink: Color,
@@ -630,7 +688,7 @@ impl Wardrobe {
         materials.add(StandardMaterial {
             base_color: Color::srgba(ink.red, ink.green, ink.blue, 1.0),
             base_color_texture: Some(texture),
-            alpha_mode: AlphaMode::Blend,
+            alpha_mode: AlphaMode::AlphaToCoverage,
             perceptual_roughness: 0.85,
             ..default()
         })

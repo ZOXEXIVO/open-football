@@ -680,6 +680,7 @@ impl Physique {
 
 /// Every mesh a footballer is made of, built once and shared by all
 /// twenty-two: only the materials differ from player to player.
+#[derive(Resource)]
 pub struct BodyParts {
     torso: Handle<Mesh>,
     /// The neck of the shirt, in the club's trim colour. Derived from the

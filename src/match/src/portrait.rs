@@ -15,7 +15,7 @@
 
 use crate::actors::PlayerActor;
 use crate::body::{BodyParts, Flesh, Thatch};
-use crate::config::ViewerConfig;
+use crate::config::{PlayerInfo, ViewerConfig};
 use crate::kit::{Complexion, Wardrobe};
 use crate::textures::{Portrait, Textures};
 use bevy::prelude::*;
@@ -596,14 +596,23 @@ impl Silhouette {
 
 /// The face materials, and the mailbox pictures land in.
 ///
-/// Built by [`crate::actors::Actors::spawn`], which is the one place that has
-/// the wardrobe: the loads are already in flight by the time this is inserted.
+/// Built empty by [`crate::actors::Actors::spawn`] and filled a man at a time
+/// by [`crate::actors::Actors::take_the_field`], which is what dresses him.
+/// **That order is the contract**, and it is why the send is not done here for
+/// the whole squad at once: [`Self::attach`] repaints the face material and
+/// then reaches for the man's `Flesh` and `Thatch` — the limbs to move onto
+/// the complexion in the picture, and the cap of hair to take off over it —
+/// and those are components on a body. A picture that landed before the body
+/// was built would repaint a material nothing was wearing yet and leave him to
+/// walk on in the wrong skin under hair he does not have. Asking only once he
+/// has been assembled makes that unreachable rather than unlikely: the network
+/// cannot answer sooner than the frame the request was made on.
 #[derive(Resource)]
 pub struct Portraits {
-    /// One per player, in team-sheet order. The material rather than the
-    /// texture, because repainting means handing the material a NEW sheet:
-    /// the old one is only ever held by the material itself, so it goes when
-    /// it is replaced.
+    /// The material each man's picture will be painted into, as he is dressed.
+    /// The material rather than the texture, because repainting means handing
+    /// the material a NEW sheet: the old one is only ever held by the material
+    /// itself, so it goes when it is replaced.
     faces: Vec<(u32, Handle<StandardMaterial>)>,
     /// The shared skin ramp, one material per entry. A picture moves a
     /// player from one entry to another — it never gives him a material of
@@ -617,46 +626,54 @@ pub struct Portraits {
 }
 
 impl Portraits {
-    /// Start every load and hand back the mailbox they will arrive in.
-    pub fn fetch(config: &ViewerConfig, wardrobe: &Wardrobe) -> Portraits {
-        let faces = wardrobe.face_materials();
-        let inbox: Arc<Mutex<Vec<(u32, Portrait)>>> = Arc::new(Mutex::new(Vec::new()));
-        for player in &config.players {
-            // In the page's own order: the photograph of him if the game has
-            // one, and the portrait it draws for him if it has not — or if
-            // the photograph cannot be had, which on a machine serving the
-            // game from somewhere other than the picture library is what
-            // happens to every one of them.
-            let sources: Vec<(String, Framing)> = [
-                (player.photo.clone(), Framing::PHOTOGRAPH),
-                (player.face.clone(), Framing::DRAWN),
-            ]
-            .into_iter()
-            .filter_map(|(url, framing)| url.map(|url| (url, framing)))
-            .collect();
-            if sources.is_empty() {
-                continue;
-            }
-
-            let id = player.id;
-            let inbox = inbox.clone();
-            spawn_local(async move {
-                for (url, framing) in sources {
-                    if let Some(picture) = Self::picture(&url, framing).await {
-                        if let Ok(mut inbox) = inbox.lock() {
-                            inbox.push((id, picture));
-                        }
-                        return;
-                    }
-                }
-            });
-        }
-
+    /// An empty mailbox and the ramp to move players along it.
+    pub fn waiting(wardrobe: &Wardrobe) -> Portraits {
         Portraits {
-            faces,
+            faces: Vec::new(),
             complexions: wardrobe.complexions(),
-            inbox,
+            inbox: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Send for one man's picture, now that there is a body to put it on.
+    ///
+    /// Idempotent, because the thing calling it is a system: a second call for
+    /// a player already sent for does nothing rather than starting a second
+    /// fetch of the same head.
+    pub fn send_for(&mut self, player: &PlayerInfo, face: Handle<StandardMaterial>) {
+        if self.faces.iter().any(|(id, _)| *id == player.id) {
+            return;
+        }
+        self.faces.push((player.id, face));
+
+        // In the page's own order: the photograph of him if the game has one,
+        // and the portrait it draws for him if it has not — or if the
+        // photograph cannot be had, which on a machine serving the game from
+        // somewhere other than the picture library is what happens to every
+        // one of them.
+        let sources: Vec<(String, Framing)> = [
+            (player.photo.clone(), Framing::PHOTOGRAPH),
+            (player.face.clone(), Framing::DRAWN),
+        ]
+        .into_iter()
+        .filter_map(|(url, framing)| url.map(|url| (url, framing)))
+        .collect();
+        if sources.is_empty() {
+            return;
+        }
+
+        let id = player.id;
+        let inbox = self.inbox.clone();
+        spawn_local(async move {
+            for (url, framing) in sources {
+                if let Some(picture) = Self::picture(&url, framing).await {
+                    if let Ok(mut inbox) = inbox.lock() {
+                        inbox.push((id, picture));
+                    }
+                    return;
+                }
+            }
+        });
     }
 
     /// Fold whatever has come back into the faces on the pitch.

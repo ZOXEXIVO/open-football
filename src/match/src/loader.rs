@@ -4,7 +4,8 @@ use crate::playback::{Playback, RecordedSpans};
 use crate::replay::{ChunkPayload, RecordingMetadata, ReplayTracks};
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
-use std::collections::HashSet;
+use serde_json::value::RawValue;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
@@ -19,6 +20,16 @@ enum Delivery {
     MetadataMissing,
     Chunk(usize, ChunkPayload),
     ChunkFailed(usize),
+}
+
+/// A chunk whose envelope is in and whose players are not.
+///
+/// See [`crate::replay::ChunkPayload`] for why they are separated at all, and
+/// [`ChunkLoader::PARSE_BUDGET_MS`] for how much of a frame reading them is
+/// allowed to cost.
+struct Unread {
+    index: usize,
+    players: Vec<(u32, Box<RawValue>)>,
 }
 
 /// How long to wait before asking again for a recording that is not ready.
@@ -36,6 +47,9 @@ pub struct ChunkLoader {
     /// hole in the recording rather than a blip, and the loader stops asking —
     /// the alternative is one request per frame for the rest of the match.
     failed: HashSet<usize>,
+    /// Chunks part-way through being read, oldest first. Normally empty, and
+    /// never more than the read-ahead deep.
+    unread: VecDeque<Unread>,
     chunk_count: usize,
     chunk_duration_ms: f64,
     metadata_in_flight: bool,
@@ -51,6 +65,7 @@ impl Default for ChunkLoader {
             requested: HashSet::new(),
             loaded: HashSet::new(),
             failed: HashSet::new(),
+            unread: VecDeque::new(),
             chunk_count: 0,
             chunk_duration_ms: 300_000.0,
             metadata_in_flight: false,
@@ -61,6 +76,16 @@ impl Default for ChunkLoader {
 }
 
 impl ChunkLoader {
+    /// How much of a frame reading player tracks may take, in milliseconds.
+    ///
+    /// Three. A sixtieth of a second is 16.7 and this crate's own systems want
+    /// a few of those to themselves, so this is about a fifth of the budget —
+    /// enough that a whole chunk is in within a handful of frames, small
+    /// enough that none of them misses the display. The number that matters is
+    /// not this one but the one it replaces: a chunk parsed whole took a
+    /// third of a second, in one frame, with nothing else able to run.
+    const PARSE_BUDGET_MS: f32 = 3.0;
+
     /// Kicks off the metadata request that everything else waits on.
     pub fn bootstrap(mut loader: ResMut<ChunkLoader>, config: Res<ViewerConfig>) {
         loader.request_metadata(&config);
@@ -118,11 +143,19 @@ impl ChunkLoader {
                     loader.retry_in = METADATA_RETRY_SECONDS;
                 }
                 Delivery::Chunk(index, payload) => {
-                    tracks.absorb(payload);
-                    loader.loaded.insert(index);
+                    // The ball, the states and the event log now; the players
+                    // over the next few frames — see `Self::read_on`.
+                    let players = tracks.absorb(payload).into_iter().collect();
+                    loader.unread.push_back(Unread { index, players });
                     // Whichever chunk lands first is what puts players on the
                     // pitch — normally chunk 0, but a viewer who scrubbed
                     // before it arrived is watching from somewhere else.
+                    //
+                    // Said on the envelope rather than on the last player: the
+                    // ball is in, which is what the camera and the transport
+                    // bar have been waiting on, and holding the replay for
+                    // twenty-two tracks that are arriving anyway would put the
+                    // stall back that splitting them took out.
                     if !loader.ready {
                         loader.ready = true;
                         playback.playing = true;
@@ -135,6 +168,8 @@ impl ChunkLoader {
                 }
             }
         }
+
+        loader.read_on(&mut tracks);
 
         if loader.chunk_count == 0 {
             if loader.retry_in > 0.0 {
@@ -172,6 +207,32 @@ impl ChunkLoader {
         }
     }
 
+    /// Reads as many of the waiting players' tracks as a frame can afford.
+    ///
+    /// A chunk is only marked loaded once the last of its players is in.
+    /// [`Self::covers`] is what tells [`crate::actors::Actors::follow_playhead`]
+    /// that a player with no samples is genuinely off the pitch rather than
+    /// still in flight, so calling a half-read chunk loaded would take the
+    /// whole squad off the field for as many frames as the read takes.
+    fn read_on(&mut self, tracks: &mut ReplayTracks) {
+        let started = Instant::now();
+        while let Some(chunk) = self.unread.front_mut() {
+            while let Some((player_id, samples)) = chunk.players.pop() {
+                tracks.absorb_player(player_id, &samples);
+                // Checked after one track rather than before it, so a frame
+                // always makes progress: a budget consulted first can be
+                // spent by the time it is read and leave the queue standing
+                // forever.
+                if (Instant::now() - started).as_secs_f32() * 1000.0 >= Self::PARSE_BUDGET_MS {
+                    return;
+                }
+            }
+            let index = chunk.index;
+            self.unread.pop_front();
+            self.loaded.insert(index);
+        }
+    }
+
     fn chunk_index(&self, time_ms: f64) -> usize {
         (time_ms.max(0.0) / self.chunk_duration_ms) as usize
     }
@@ -189,7 +250,7 @@ impl ChunkLoader {
         let url = config.metadata_url();
         spawn_local(async move {
             let delivery = match Self::get(url).await.and_then(|body| {
-                serde_json::from_str::<RecordingMetadata>(&body)
+                serde_json::from_slice::<RecordingMetadata>(&body)
                     .inspect_err(|error| error!("bad recording metadata: {error}"))
                     .ok()
             }) {
@@ -209,15 +270,22 @@ impl ChunkLoader {
         let debug = config.debug;
         spawn_local(async move {
             let delivery = match Self::get(url).await.and_then(|body| {
-                // Timed, because this is the one piece of work in the viewer
-                // that can stop the page dead. A chunk is five minutes of
-                // twenty-three tracks and it is parsed HERE — on the browser's
-                // only thread, between two animation frames, with the replay
-                // running. Nothing else in the frame is within two orders of
-                // magnitude of it, so when a viewer reports a freeze this is
-                // the first number to ask for. See `perf`.
+                // Timed, because this used to be the one piece of work in the
+                // viewer that could stop the page dead. It happens HERE — on
+                // the browser's only thread, between two animation frames,
+                // with the replay running — and a chunk is five minutes of
+                // twenty-three tracks.
+                //
+                // What is left of it is the ENVELOPE: the ball, the state
+                // lines, the event log, and a scan past each player's samples
+                // to find where they end. The samples themselves are read a
+                // few frames later against a budget — see `ChunkPayload` and
+                // `ChunkLoader::read_on`. This number is what says whether the
+                // split is holding: it should now be a small fraction of the
+                // figure the same line printed before, and the rest of it
+                // should have turned into ordinary frames.
                 let started = Instant::now();
-                let parsed = serde_json::from_str::<ChunkPayload>(&body)
+                let parsed = serde_json::from_slice::<ChunkPayload>(&body)
                     .inspect_err(|error| error!("bad chunk {index}: {error}"))
                     .ok();
                 if debug {
@@ -240,8 +308,18 @@ impl ChunkLoader {
     }
 
     /// The chunks are stored gzipped and served with `Content-Encoding: gzip`,
-    /// so the browser hands back plain text here.
-    async fn get(url: String) -> Option<String> {
+    /// so the browser has already inflated them by the time this sees them.
+    ///
+    /// **Bytes rather than text**, which is not a detail at a megabyte and a
+    /// half. `Response::text` hands back a JavaScript string, and a JavaScript
+    /// string is UTF-16: the browser transcodes the UTF-8 it just inflated on
+    /// the way out, and `as_string` transcodes it back on the way into
+    /// WebAssembly's memory. Two passes over the whole document, both of them
+    /// on the main thread, to arrive at the bytes that were already there.
+    /// `array_buffer` skips both — what comes back is copied into wasm as a
+    /// straight `memcpy` — and `serde_json` is as happy reading a slice as a
+    /// string.
+    async fn get(url: String) -> Option<Vec<u8>> {
         let window = web_sys::window()?;
         let response: Response = JsFuture::from(window.fetch_with_str(&url))
             .await
@@ -251,9 +329,7 @@ impl ChunkLoader {
         if !response.ok() {
             return None;
         }
-        JsFuture::from(response.text().ok()?)
-            .await
-            .ok()?
-            .as_string()
+        let buffer = JsFuture::from(response.array_buffer().ok()?).await.ok()?;
+        Some(js_sys::Uint8Array::new(&buffer).to_vec())
     }
 }

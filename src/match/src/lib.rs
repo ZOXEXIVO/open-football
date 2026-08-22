@@ -22,6 +22,7 @@ mod portrait;
 mod quality;
 mod replay;
 mod sky;
+mod stage;
 mod textures;
 mod timeline;
 mod touch;
@@ -40,6 +41,7 @@ use crate::portrait::Portraits;
 use crate::quality::Quality;
 use crate::replay::ReplayTracks;
 use crate::sky::Sky;
+use crate::stage::Stage;
 use crate::timeline::{DebugOverlay, Timeline};
 use crate::touch::{FlightPad, TouchControls, TouchDevice, TouchDrive, TouchGesture};
 use crate::typeface::Typeface;
@@ -140,6 +142,10 @@ impl MatchViewer {
             // asked for the debug overlay — see `perf`, which is the thing
             // that turns "laggy" into a number worth acting on.
             .init_resource::<FrameCost>()
+            // Before `Startup`, because `TvCamera::spawn` is pointed at the
+            // image this owns and startup systems have no order between them
+            // worth relying on. See `stage`.
+            .init_resource::<Stage>()
             .init_resource::<CameraZoom>()
             // `TvCamera::follow_play` takes `Res<CameraOrbit>` and
             // `CameraOrbit::handle_drag` takes `ResMut<CameraOrbit>`, but
@@ -165,6 +171,10 @@ impl MatchViewer {
                     Pitch::spawn,
                     Sky::spawn,
                     TvCamera::spawn,
+                    // The window camera and the sheet the replay is shown on,
+                    // which is not the same camera that draws it — see
+                    // `stage`.
+                    Stage::spawn,
                     Actors::spawn,
                     Timeline::spawn,
                     ChunkLoader::bootstrap,
@@ -189,6 +199,10 @@ impl MatchViewer {
                     // systems and nothing of Bevy's.
                     FrameCost::enter_update,
                     (
+                        // First of everything, so a window resize or a step
+                        // down the resolution ladder lands on the frame it was
+                        // decided rather than being drawn once at the old size.
+                        Stage::fit,
                         ChunkLoader::pump,
                         // Beside the chunk loader because it is the same kind
                         // of thing: a fetch that started when the page did,
@@ -211,6 +225,13 @@ impl MatchViewer {
                         Playback::handle_keyboard,
                         Playback::advance,
                         Actors::follow_playhead,
+                        // Straight after it, because it is what decides who is
+                        // on: a man is built when the playhead comes within a
+                        // few seconds of his first recorded sample, so the
+                        // thirty-six on the two team sheets are not all
+                        // assembled before the first frame. See
+                        // `Actors::take_the_field`.
+                        Actors::take_the_field,
                         // Between the playhead moving and the bodies being
                         // posed off it: `animate` reads the mood, and reading
                         // last frame's would leave every reaction a frame
