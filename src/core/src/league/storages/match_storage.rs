@@ -2,6 +2,7 @@ use crate::r#match::MatchResult;
 use chrono::Duration;
 use chrono::NaiveDate;
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 /// Default retention window — three completed seasons. Long enough for anyrt
 /// realistic UI lookup (historical results, head-to-head, player career
@@ -9,9 +10,26 @@ use std::collections::{BTreeMap, HashMap};
 /// on multi-decade saves.
 pub const DEFAULT_RETENTION_DAYS: i64 = 365 * 3 + 1;
 
+/// Entries are `Arc`-shared rather than owned outright, and that is a
+/// memory decision, not an aliasing one. The whole `SimulatorData` graph is
+/// deep-cloned every time the holiday runner publishes a snapshot (see
+/// `ProcessingRun::publish_progress` in the web crate) so readers can keep
+/// serving the last world while the sim mutates a private copy. Owned
+/// entries made that clone scale with elapsed simulation time: a stored
+/// result drags `player_stats`, `physical_snapshots`, `chances` and both
+/// `FieldSquad`s along, so a year-long holiday grew the per-publish copy
+/// from ~1.3 GB into the tens of GB and pushed the process into swap —
+/// which surfaced as the web app timing out mid-holiday. Behind an `Arc`
+/// the clone is one pointer bump per entry, the payload is shared with the
+/// published snapshot instead of duplicated, and the copy stays flat as the
+/// save ages.
+///
+/// Nothing here hands out `&mut MatchResult`, so the sharing is invisible
+/// to callers: every read below still borrows, and the two mutators replace
+/// whole values.
 #[derive(Debug, Clone)]
 pub struct MatchStorage {
-    results: HashMap<String, MatchResult>,
+    results: HashMap<String, Arc<MatchResult>>,
     /// Secondary index: date → match ids recorded that day. Used to drop
     /// old entries without walking the main HashMap.
     by_date: BTreeMap<NaiveDate, Vec<String>>,
@@ -43,7 +61,7 @@ impl MatchStorage {
     /// current simulation date; undated inserts would defeat rotation.
     pub fn push(&mut self, match_result: MatchResult, date: NaiveDate) {
         let id = match_result.id.clone();
-        self.results.insert(id.clone(), match_result);
+        self.results.insert(id.clone(), Arc::new(match_result));
         self.by_date.entry(date).or_default().push(id);
     }
 
@@ -63,7 +81,7 @@ impl MatchStorage {
     /// entry was replaced.
     pub fn replace_if_present(&mut self, match_result: MatchResult) -> bool {
         if let Some(slot) = self.results.get_mut(&match_result.id) {
-            *slot = match_result;
+            *slot = Arc::new(match_result);
             true
         } else {
             false
@@ -74,7 +92,7 @@ impl MatchStorage {
     where
         M: AsRef<str>,
     {
-        self.results.get(match_id.as_ref())
+        self.results.get(match_id.as_ref()).map(Arc::as_ref)
     }
 
     pub fn len(&self) -> usize {
@@ -97,7 +115,7 @@ impl MatchStorage {
         self.by_date
             .range(start..end)
             .flat_map(|(_, ids)| ids.iter())
-            .filter_map(move |id| self.results.get(id))
+            .filter_map(move |id| self.results.get(id).map(Arc::as_ref))
     }
 
     /// Borrowed walk over every stored result, regardless of date. Use
@@ -105,7 +123,7 @@ impl MatchStorage {
     /// stores are reset on season-start, so "all stored" already means
     /// "this season").
     pub fn iter(&self) -> impl Iterator<Item = &MatchResult> {
-        self.results.values()
+        self.results.values().map(Arc::as_ref)
     }
 
     /// Drop every match recorded before `today − retention_days`. O(K log N)
