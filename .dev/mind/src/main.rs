@@ -19,6 +19,12 @@
 //! gates S5's remaining conversions on: appointment rate, tenure, and the
 //! sack-versus-resign split.
 //!
+//! Every parity line prints the **raw distribution of both sides** next
+//! to it, and that is not decoration. A bias of +48 reads identically
+//! whether the parallel run is high or the layer it shadows is low, and
+//! the two want opposite fixes — the first census here mis-attributed
+//! exactly that and cost a rebuild to find out.
+//!
 //! Everything here reads public world state after a real tick, so it
 //! measures the shipping minds rather than a parallel model of them.
 //!
@@ -235,6 +241,11 @@ struct MindCensus {
     morale: Agreement,
     /// How much of a player the five faculties can actually read.
     coverage: Vec<f32>,
+    /// The two raw readings behind the parity lines, so a disagreement
+    /// can be attributed. "The mind is high" and "the legacy layer is
+    /// low" produce the same bias and want opposite fixes.
+    raw_morale: Spread,
+    raw_mind_morale: Spread,
 
     // ── What a manager's mind holds ───────────────────────────────────
     mgr_episodes: Spread,
@@ -248,6 +259,8 @@ struct MindCensus {
     /// S4b: `job_satisfaction` against `StaffMoodProfile`.
     satisfaction: Agreement,
     mgr_coverage: Vec<f32>,
+    raw_job_satisfaction: Spread,
+    raw_mind_satisfaction: Spread,
 
     // ── Manager market (§10) ──────────────────────────────────────────
     /// Tenure in months, from the manager's own record of taking the job.
@@ -354,6 +367,8 @@ impl MindCensus {
         self.coverage.push(profile.coverage());
         self.morale
             .push(profile.as_morale(), player.happiness.morale);
+        self.raw_morale.push(player.happiness.morale.round() as u32);
+        self.raw_mind_morale.push(profile.as_morale().round() as u32);
     }
 
     fn collect_staff(&mut self, staff: &Staff, today: NaiveDate) {
@@ -397,6 +412,10 @@ impl MindCensus {
         self.mgr_coverage.push(profile.coverage());
         self.satisfaction
             .push(profile.as_satisfaction(), staff.job_satisfaction);
+        self.raw_job_satisfaction
+            .push(staff.job_satisfaction.round() as u32);
+        self.raw_mind_satisfaction
+            .push(profile.as_satisfaction().round() as u32);
 
         self.tenure_months
             .push(staff.mind.ambition.months_in_the_job(ctx.day()) as u32);
@@ -487,6 +506,8 @@ impl ReportPrinter {
             census.pressing.neither,
         );
         println!("{}", census.morale.line("MoodProfile vs morale (4b)"));
+        println!("{}", census.raw_morale.line("  …morale, raw"));
+        println!("{}", census.raw_mind_morale.line("  …MoodProfile, raw"));
         println!(
             "  {:<28} mean={:.2}  ← how much of a player the faculties can read",
             "faculty coverage",
@@ -513,9 +534,15 @@ impl ReportPrinter {
         println!("\n── parallel run: staff ──");
         println!(
             "{}",
-            census
-                .satisfaction
-                .line("StaffMood vs job_satisfaction")
+            census.satisfaction.line("StaffMood vs job_satisfaction")
+        );
+        println!(
+            "{}",
+            census.raw_job_satisfaction.line("  …job_satisfaction, raw")
+        );
+        println!(
+            "{}",
+            census.raw_mind_satisfaction.line("  …StaffMood, raw")
         );
         println!(
             "  {:<28} mean={:.2}",

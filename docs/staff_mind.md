@@ -869,26 +869,68 @@ on: the departure is filed against the club he was still at.
 mind-only cases are the only place the stack would demand where the sim
 does not — 0.1% of the population. Switching the transfer path over
 could only ever *reduce* transfer requests, never invent them, which is
-the direction a swap-over wants.
+the direction a swap-over wants. Three independent runs landed on
+99.1 / 99.2 / 99.1, so the figure is the model rather than the seed.
 
-**3. Phase 4b's gap is coverage, not calibration.** `MoodProfile`
-against morale: bias −10.1, mean |error| 14.8, 44.6% inside ±10 — with
-**faculty coverage at 0.15**. The five faculties can read fifteen per
-cent of a player, so the profile sits near its neutral 50 while real
-morale sits higher. Re-tuning the mood formula would be tuning noise;
-the fix is the taps in (1), and the next run measures whether they move
-it.
+**3. The two parity checks, attributed.** The first pass reported only
+the *difference* between each parallel run and the layer it shadows. A
+bias of +48 reads identically whether the parallel run is high or the
+legacy layer is low, and the two want opposite fixes — so the census now
+prints the raw distribution of both sides beside every parity line. That
+change was worth a rebuild on its own, because both answers turned out
+to be about the raw values rather than about the gap.
 
-**4. S4b's gap *was* calibration — a real bug.** `StaffMoodProfile`
-against `job_satisfaction`: bias **+46.8**, mean |error| 46.8, **2.1%**
-inside ±10, on healthy coverage of 0.57. That is what a saturated scale
-looks like, and it was: `as_satisfaction` read `net()` as a *mean* and
-multiplied by 2.5. `net()` is a **sum** of five contributions each
-bounded at ±10, so its range is ±50 and `50 + net` covers exactly
-0..100. Both accessors are now one-to-one. Nothing in the live sim read
-either, so the blast radius was the census itself — which is precisely
-the argument for running a parallel layer against a population before
-switching anything onto it.
+**S4b — the layer being shadowed is pinned at the floor.**
+
+```
+StaffMood vs job_satisfaction   bias=+47.67  within±10=2.5%
+  …job_satisfaction, raw        mean=1.78   p50=0   p90=0   max=62
+  …StaffMood, raw               mean=49.45  p50=49  p90=51  max=52
+```
+
+`job_satisfaction` is **zero for more than ninety per cent of staff
+after sixty days.** It is not a distribution with a low mean; it is a
+population sitting on the floor. `update_job_satisfaction` runs daily,
+sums four terms and applies them at half weight — and has **no
+restoring force at all**, so any staff member who is underpaid or tired
+loses 0.75 a day from a starting 50 and is at zero inside seventy. §2.4
+called this layer "four terms and a die roll". The four terms are a
+one-way ratchet, and every consumer downstream of it — the `LowMorale`
+warning, `likely_to_leave`, the +0.3 resignation term — has been reading
+a saturated input.
+
+That is a defect in the shipping simulation, not in the mind, and
+fixing it changes staff behaviour broadly. It is reported rather than
+quietly repaired.
+
+Note what it does **not** say: it does not vindicate `StaffMoodProfile`.
+Raw mean 49.45, p50 49, p90 51 — the mind reads every manager in the
+world as almost exactly neutral. Coverage of 0.57 says the faculties are
+confident; the values they are confident about have barely moved off
+zero in sixty days, because that is how long the drifts take. **Neither
+side is currently a usable model**, and S4b cannot be closed by picking
+one.
+
+**4b — the parallel run has never produced a reading.**
+
+```
+MoodProfile vs morale           bias=-10.07  within±10=45.1%
+  …morale, raw                  mean=60.06  p50=59  p90=82  max=100
+  …MoodProfile, raw             mean=50.00  p50=50  p90=50  max=50
+```
+
+`max=50`. Not "close to 50" — **exactly 50, for all 42 227 seniors**.
+`MoodProfile::net()` is identically zero across the entire population:
+the five faculties have never contributed a non-zero value in the live
+simulation. The earlier reading of this as "a coverage problem" was
+right in direction and far too gentle in degree. There is nothing to
+calibrate against morale yet, because there is no signal at all — and
+that follows directly from finding (1): faculties reflect on a
+situation, but what moves their internal state is episodes, and until
+now there were none.
+
+The honest status of 4b is therefore not "needs tuning" but **"not yet
+measurable"**, and the thing that unblocks it is emit-site coverage.
 
 **And one thing that is simply working.** The escalation ladder, on a
 real population rather than a fixture:
@@ -916,9 +958,10 @@ non-coaching staff is a real saving if the number ever matters.
 
 | Item | Why it is not done |
 |---|---|
-| Numeric parity between `StaffMoodProfile` and `job_satisfaction` (S4b) | Diagnosed and half-fixed: the ×2.5 scale bug is gone. What is left is a re-run to see where the residual sits |
-| Numeric parity on the player side (4b) | Diagnosed as a **coverage** problem, not a calibration one. Blocked on emit-site taps, not on tuning |
-| The rest of phase 1b's emit sites | The transfer chokepoint is wired. Debuts, match events and season events each still need a club id plumbed to the site |
+| Numeric parity between `StaffMoodProfile` and `job_satisfaction` (S4b) | Open, and **neither side is usable yet**. `job_satisfaction` is measured at zero for >90% of staff (a daily ratchet with no restoring force); `StaffMoodProfile` reads every manager at 49–51. Nothing to reconcile until one of them carries signal |
+| Numeric parity on the player side (4b) | **Not yet measurable.** `MoodProfile` is measured at exactly 50 for all 42 227 seniors — `net()` is identically zero. Blocked on emit-site coverage, not on tuning |
+| The rest of phase 1b's emit sites | **The blocker for 4b.** The transfer chokepoint is wired; debuts, match events and season events each still need a club id plumbed to the site |
+| `update_job_satisfaction` is a one-way ratchet | Found by the census, outside both plans' scope. Daily, four terms, no restoring force ⇒ the floor. Reported rather than repaired: every consumer of staff morale changes behaviour when it is fixed |
 | The remaining five deliberation sites (S5) | Each needs its own before/after census. `candidate_accepts_terms` and `check_resignation_triggers` are converted; `.dev/mind`'s manager-market section is the gate for the rest |
 | Non-coach staff | `StaffMind` already works for a scout with an empty judgement store — it simply has less to say. Deliberately out of scope |
 | i18n entries for the 54 new keys | Nothing renders them yet. The keys are declared and guarded (uniqueness, cross-catalog collisions, namespacing); locale rows land with the view that shows them, which is the same position the player mind is in |

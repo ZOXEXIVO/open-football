@@ -949,11 +949,23 @@ forty-two thousand are the only ones where the stack would demand and
 the sim does not. A swap-over could only reduce transfer requests, never
 invent them.
 
-**Phase 4b's gap is coverage, not calibration.** Bias −10.1, mean
-|error| 14.8, 44.6% inside ±10 — on **faculty coverage of 0.15**. The
-five faculties can read fifteen per cent of a player, so the profile
-sits near its neutral 50 while morale sits higher. Re-tuning the formula
-would be tuning noise; the fix is the taps above.
+**Phase 4b is not yet measurable.** Printing the raw distributions
+beside the parity line — which the first census did not do, and which
+cost a rebuild to learn — gives:
+
+```
+  …morale, raw          mean=60.06  p50=59  p90=82  max=100
+  …MoodProfile, raw     mean=50.00  p50=50  p90=50  max=50
+```
+
+`max=50`. Not near 50 — **exactly 50, for all 42 227 seniors**.
+`MoodProfile::net()` is identically zero across the whole population:
+the five faculties have never contributed a non-zero value in the live
+simulation. That follows directly from the finding above — a faculty
+reflects on a situation, but what moves its internal state is episodes,
+and until the transfer tap there were none. There is nothing to
+calibrate against morale yet, and the thing that unblocks it is emit-site
+coverage rather than tuning.
 
 **The ladder works on a population.** Latent 34.1% · Active 61.4% ·
 Voiced 3.9% · Pressing 0.5%. Most wants silent, few said out loud,
