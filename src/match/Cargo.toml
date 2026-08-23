@@ -104,6 +104,11 @@ web-sys = { version = "0.3", features = [
     "Document",
     "Element",
     "EventTarget",
+    # How the viewer tells the page how far along its bring-up is: a
+    # `match-viewer-progress` event on the document, which the match page's
+    # loading overlay listens for. See `bringup.rs`.
+    "CustomEvent",
+    "CustomEventInit",
     # Focusing the canvas on load, so the flight keys answer the first press.
     "HtmlElement",
     "FocusOptions",

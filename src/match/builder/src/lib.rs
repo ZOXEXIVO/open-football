@@ -136,6 +136,29 @@ impl MatchViewer {
             .all(|name| fs::metadata(assets_dir.join(name)).is_ok_and(|meta| meta.len() > 0))
     }
 
+    /// How many bytes the staged wasm inflates to.
+    ///
+    /// Read off the gzip trailer rather than by inflating: the last four bytes
+    /// of a gzip stream are the uncompressed length, and thirty megabytes is a
+    /// long way inside the four gigabytes that field can hold. Zero when
+    /// nothing is staged.
+    ///
+    /// The match page needs it because the browser hands JavaScript the
+    /// INFLATED bytes as they arrive while `Content-Length` describes the
+    /// compressed ones — so a download bar drawn from the response's own
+    /// numbers reaches a hundred per cent about a fifth of the way through.
+    pub fn inflated_bytes(assets_dir: &Path) -> u64 {
+        let Ok(bytes) = fs::read(assets_dir.join(Self::wasm_file())) else {
+            return 0;
+        };
+        let Some(trailer) = bytes.len().checked_sub(4).map(|at| &bytes[at..]) else {
+            return 0;
+        };
+        u64::from(u32::from_le_bytes([
+            trailer[0], trailer[1], trailer[2], trailer[3],
+        ]))
+    }
+
     /// Short content hash of the staged viewer, for cache busting. `"none"`
     /// when nothing is staged.
     pub fn version(assets_dir: &Path) -> String {

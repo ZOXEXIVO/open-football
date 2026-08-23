@@ -9,6 +9,7 @@
 mod actors;
 mod aftermath;
 mod body;
+mod bringup;
 mod camera;
 mod config;
 mod field;
@@ -30,6 +31,7 @@ mod typeface;
 
 use crate::actors::{Actors, BallState};
 use crate::aftermath::Aftermath;
+use crate::bringup::Bringup;
 use crate::camera::{CameraFlight, CameraOrbit, CameraZoom, TvCamera};
 use crate::config::ViewerConfig;
 use crate::loader::ChunkLoader;
@@ -165,10 +167,10 @@ impl MatchViewer {
             .init_resource::<TouchDrive>()
             .init_resource::<TouchGesture>()
             .init_resource::<FlightPad>()
+            .init_resource::<Bringup>()
             .add_systems(
                 Startup,
                 (
-                    Pitch::spawn,
                     Sky::spawn,
                     TvCamera::spawn,
                     // The window camera and the sheet the replay is shown on,
@@ -187,6 +189,30 @@ impl MatchViewer {
                     CameraFlight::focus_canvas,
                 ),
             )
+            // The stadium, a course per frame rather than all of it on the
+            // first one. Each of these queues a render pipeline the browser
+            // then blocks for seconds compiling, and running them on separate
+            // frames is what gives the page the main thread back in between —
+            // to repaint, to answer a click, and to move its own loading
+            // readout on. See `bringup`, which has the measurements.
+            .add_systems(
+                Update,
+                (
+                    Pitch::lay_turf.run_if(Bringup::on(1)),
+                    Pitch::lay_surround.run_if(Bringup::on(2)),
+                    Pitch::paint_markings.run_if(Bringup::on(3)),
+                    Pitch::raise_goals.run_if(Bringup::on(4)),
+                    Pitch::build_stands.run_if(Bringup::on(5)),
+                )
+                    .chain()
+                    .run_if(Bringup::building)
+                    // Ahead of the replay's own systems, so the course laid
+                    // this frame is drawn this frame.
+                    .before(FrameCost::enter_update),
+            )
+            // Behind everything, so the phase the page is told about is the
+            // one that has just finished rather than the one about to start.
+            .add_systems(Update, Bringup::pump.after(FrameCost::leave_update))
             .add_systems(
                 Update,
                 // Split into two nested groups purely to stay inside

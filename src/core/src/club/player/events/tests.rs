@@ -7,6 +7,7 @@
 //! would duplicate ~50 lines of boilerplate per file with no payoff.
 
 use super::types::{MatchOutcome, MatchParticipation, MatchTeamRef};
+use crate::club::mind::organs::memory::ActorRef;
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::condition::InjuryRiskInputs;
 use crate::club::player::player::Player;
@@ -131,6 +132,7 @@ fn outcome<'a>(
         opponent_team_id: Some(999),
         opponent_club_id: None,
         played_for: None,
+        club_id: 7,
         match_season_year: 0,
         date: d(2026, 9, 1),
     }
@@ -159,6 +161,124 @@ fn seed_home(p: &mut Player, slug: &str, league_slug: &str) {
 }
 
 // ── Per-team league attribution (borrowed across two club teams) ──
+
+// ── What a match leaves in his memory ───────────────────────────────
+//
+// Phase 1b of `docs/player_mind.md`. The `.dev/mind` census measured
+// `MoodProfile` at exactly 50 for all 42 227 seniors — `net()`
+// identically zero — because faculty state moves on episodes and the
+// only live emit site in the simulation was a promise coming due.
+//
+// The taps sit at the gates the happiness layer already trusts, so a
+// memory and a mood event are the same night read two ways rather than
+// two models that can disagree about whether it happened.
+
+#[test]
+fn a_man_of_the_match_display_is_remembered_not_just_felt() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.made_senior_debut = true;
+    let s = stats(7.5, 1, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        8.4,
+        false,
+        false,
+        true,
+        false,
+        2,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+
+    assert!(
+        p.mind.census().episodes > 0,
+        "the night is in his memory, not only in his mood"
+    );
+    let ctx = p.mind_context(o.date, Some(o.club_id));
+    assert!(
+        p.mind.club_sentiment(o.club_id, &ctx) > 0.0,
+        "and it is filed against the club he played for"
+    );
+}
+
+#[test]
+fn a_friendly_is_not_a_memory() {
+    // Pre-season minutes carry none of the weight the catalog assigns
+    // these kinds, and a 32-slot store would evict real nights for them.
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.made_senior_debut = true;
+    let s = stats(7.5, 2, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        9.0,
+        true,
+        false,
+        true,
+        false,
+        3,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+
+    assert_eq!(p.mind.census().episodes, 0);
+}
+
+#[test]
+fn a_debut_is_a_flashbulb_and_happens_once() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    let s = stats(7.5, 0, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        6.5,
+        false,
+        false,
+        false,
+        false,
+        1,
+        0,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+    assert_eq!(
+        p.mind.census().flashbulbs,
+        1,
+        "a senior debut is a career landmark"
+    );
+
+    p.on_match_played(&o);
+    assert_eq!(
+        p.mind.census().flashbulbs,
+        1,
+        "and a man only makes one of them"
+    );
+}
+
+#[test]
+fn a_derby_is_remembered_against_the_crowd_that_was_there() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    p.made_senior_debut = true;
+    let s = stats(7.5, 0, 0, 0, PlayerFieldPositionGroup::Forward);
+    let o = outcome(
+        &s,
+        6.6,
+        false,
+        false,
+        false,
+        true,
+        0,
+        2,
+        MatchParticipation::Starter,
+    );
+    p.on_match_played(&o);
+
+    let ctx = p.mind_context(o.date, Some(o.club_id));
+    assert!(
+        p.mind.standing_with(ActorRef::fans(o.club_id), &ctx).abs() > 0.0,
+        "losing a derby is something the supporters were part of"
+    );
+}
 
 #[test]
 fn borrowed_appearance_books_to_secondary_team_not_home() {
@@ -193,6 +313,7 @@ fn borrowed_appearance_books_to_secondary_team_not_home() {
             league_slug: "russian-premier-league",
             league_name: "Premier League",
         }),
+        club_id: 7,
         match_season_year: 2026,
         date: d(2026, 9, 1),
     };
@@ -246,6 +367,7 @@ fn home_appearance_books_to_player_statistics() {
             league_slug: "russian-second-division-b-group-2",
             league_name: "Second Division B2",
         }),
+        club_id: 7,
         match_season_year: 2026,
         date: d(2026, 9, 1),
     };

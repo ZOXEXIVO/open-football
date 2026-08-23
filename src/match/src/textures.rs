@@ -289,6 +289,12 @@ impl Portrait {
 /// same rasterised blades the colour is — and they have to be handed out
 /// together, since a material carrying one without the other is either a flat
 /// picture of grass or grass with no colour in it.
+///
+/// A resource as well as a return value: the playing surface and the ground
+/// beyond the touchlines are laid on consecutive frames (see
+/// [`crate::bringup`]) and the second of them has to find the sheets the
+/// first generated rather than generate a second pair.
+#[derive(Resource)]
 pub struct Turf {
     /// What the grass looks like: blades in the shade it was asked for.
     pub albedo: Handle<Image>,

@@ -64,6 +64,7 @@ use bevy::camera::{ImageRenderTarget, RenderTarget};
 use bevy::image::{ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureFormat};
+use bevy::render::renderer::RenderDevice;
 use bevy::render::view::Msaa;
 use bevy::window::PrimaryWindow;
 
@@ -81,6 +82,11 @@ pub struct Stage {
     /// The size the image currently is, so a frame that changed nothing does
     /// not reallocate it.
     size: UVec2,
+    /// The share of the canvas [`Self::size`] came out at, which is the rung
+    /// unless [`Self::BUDGET`] or the device had to cut into it. Kept only so
+    /// [`Self::readout`] reports the picture on screen rather than the one
+    /// that was asked for.
+    drawn: f32,
     /// Seconds left before the frame cost is consulted again.
     review: f32,
 }
@@ -126,14 +132,39 @@ impl Stage {
     /// stretch.
     const REVIEW: f32 = 2.5;
 
-    /// The largest render target that will be asked for, on a side.
+    /// The most pixels a render target will be asked for.
     ///
     /// Not a quality limit — a memory one. `fit_canvas_to_parent` plus a
     /// fullscreen button plus a 4K panel at 200% scaling would otherwise ask
-    /// for a 7680-pixel target and the multisampled colour and depth
+    /// for a 33-megapixel target and the multisampled colour and depth
     /// attachments behind it, which is a browser tab falling over rather than
     /// a replay looking better.
-    const LIMIT: u32 = 3840;
+    ///
+    /// **Stated as an area, because area is what an attachment costs.** It
+    /// used to be a length capped per axis, and that is exactly how it went
+    /// wrong: a canvas over the cap on ONE axis came back a different SHAPE,
+    /// and [`Backdrop`] stretches whatever it is handed across the whole
+    /// window — so a 5120x1440 panel was drawing every player a third too
+    /// wide. See [`Self::wanted`], which now has one factor for both axes.
+    ///
+    /// 3840x2160 worth of it: a 4K panel at its own resolution, and the
+    /// largest frame this viewer has been measured on. A super-ultrawide
+    /// comes in UNDER it — 5120x1440 is 7.4 megapixels against 8.3 — and so
+    /// keeps every one of its pixels, which is the right answer. It is not a
+    /// bigger frame to draw, only a differently shaped one.
+    const BUDGET: u32 = 3840 * 2160;
+
+    /// The longest side to allow before the renderer has said what it can
+    /// actually allocate.
+    ///
+    /// WebGL2 guarantees only 2048, and a device that means it would refuse
+    /// the texture rather than draw a soft one. In practice nothing reaches
+    /// here: [`Self::fit`] reads the real figure off the device — which
+    /// exists before the first frame, `RenderPlugin::finish` puts it in the
+    /// main world before any schedule runs — and desktop parts report 8192 or
+    /// 16384. This is what the tests use, and what one frame would fall back
+    /// to if that ever stopped being true.
+    const GUARANTEED_SIDE: u32 = 2048;
 
     fn scale(&self) -> f32 {
         Self::SCALES[self.step]
@@ -142,28 +173,58 @@ impl Stage {
     /// Which rung the ladder has settled on, for the debug strip. The size
     /// alongside it, because "75%" of what is the question a reader of a
     /// resolution actually has.
+    ///
+    /// The percentage is what was actually drawn rather than the rung that
+    /// was asked for. On a canvas the budget has to cut into, the two are not
+    /// the same number, and the one worth reading is the picture on screen.
     pub fn readout(&self) -> String {
-        format!(
-            "{:.0}%={}x{}",
-            self.scale() * 100.0,
-            self.size.x,
-            self.size.y
-        )
+        format!("{:.0}%={}x{}", self.drawn * 100.0, self.size.x, self.size.y)
     }
 
-    /// The size the image should be for this window and this rung, rounded to
-    /// an even number of pixels on both axes.
+    /// The size the image should be for this window and this rung: the same
+    /// SHAPE as the canvas, within the budget, and never a side longer than
+    /// the device will allocate.
     ///
-    /// Even because a multisampled attachment and its resolve are happier on
-    /// one, and because it keeps a one-pixel window jitter from reallocating
-    /// the target on alternate frames.
-    fn wanted(&self, window: &Window) -> UVec2 {
-        let physical = UVec2::new(window.physical_width(), window.physical_height());
-        let scaled = physical.as_vec2() * self.scale();
-        UVec2::new(
-            ((scaled.x as u32) & !1).clamp(2, Self::LIMIT),
-            ((scaled.y as u32) & !1).clamp(2, Self::LIMIT),
+    /// **One factor, both axes.** Every reason this target might be smaller
+    /// than the canvas — the rung, the budget, the hardware — multiplies into
+    /// a single scale, and none of them may touch one axis without the other.
+    /// The replay is drawn into this image and then stretched across the
+    /// window by [`Backdrop`]; a target of a different shape from the window
+    /// is not a smaller picture, it is a WRONG one, and it lands as players
+    /// too wide or too tall by exactly the ratio between the two shapes.
+    ///
+    /// Rounded to an even number of pixels on both axes: a multisampled
+    /// attachment and its resolve are happier on one, and it keeps a one-pixel
+    /// window jitter from reallocating the target on alternate frames. That
+    /// rounding is itself a shape error, and the only one tolerated here — a
+    /// pixel on each side of the ratio, which is a fraction of a percent at
+    /// any size worth drawing into and three orders of magnitude below a
+    /// stretch anybody could see.
+    fn wanted(&self, window: &Window, longest_side: u32) -> UVec2 {
+        let canvas = Vec2::new(
+            window.physical_width() as f32,
+            window.physical_height() as f32,
         )
+        .max(Vec2::splat(2.0));
+
+        let mut shrink = self.scale();
+        // Memory: the budget is an area, so the factor that meets it is a
+        // square root — halving both sides is what quarters an attachment.
+        let affordable = Self::BUDGET as f32 / (canvas.x * canvas.y);
+        if affordable < shrink * shrink {
+            shrink = affordable.sqrt();
+        }
+        // Hardware: nothing may ask for a texture the device will not make.
+        shrink = shrink.min(longest_side as f32 / canvas.max_element());
+
+        let scaled = canvas * shrink.clamp(0.0, 1.0);
+        // To the NEAREST even number rather than down to one. Truncating puts
+        // the whole of the rounding error on one side of the shape, and it is
+        // a whole pixel of it on a side that a rung has already made short:
+        // 1280x720 at 0.65 landed 832x466 against the 832x468 it wanted, which
+        // is four times the shape error of rounding the same figure properly.
+        let even = (scaled / 2.0).round() * 2.0;
+        UVec2::new(even.x as u32, even.y as u32).max(UVec2::splat(2))
     }
 
     /// The image the camera should be pointed at.
@@ -245,6 +306,14 @@ impl Stage {
         quality: Res<Quality>,
         cost: Res<FrameCost>,
         time: Res<Time>,
+        // Asked rather than assumed. The largest texture a device will make is
+        // 2048 by the WebGL2 guarantee and 8192 or 16384 on anything with a
+        // desktop part in it, and the difference decides whether a very wide
+        // canvas is drawn at its own resolution or at two thirds of it. Held
+        // as an `Option` for the same reason the size starts at 2x2: this is
+        // one system that would rather return a frame late than not compile
+        // for want of a resource that was always going to be there.
+        device: Option<Res<RenderDevice>>,
     ) {
         // Ahead of the resize, so a rung taken this frame is applied this
         // frame rather than costing a second reallocation on the next one.
@@ -272,7 +341,10 @@ impl Stage {
             }
         }
 
-        let wanted = stage.wanted(&window);
+        let longest_side = device
+            .map(|device| device.limits().max_texture_dimension_2d)
+            .unwrap_or(Self::GUARANTEED_SIDE);
+        let wanted = stage.wanted(&window, longest_side);
         if wanted == stage.size {
             return;
         }
@@ -285,6 +357,7 @@ impl Stage {
             depth_or_array_layers: 1,
         });
         stage.size = wanted;
+        stage.drawn = wanted.x as f32 / window.physical_width().max(1) as f32;
     }
 }
 
@@ -324,6 +397,7 @@ impl FromWorld for Stage {
             // says what `fit` has been told about, so leaving them equal would
             // have the first frame decide there was nothing to do.
             size: UVec2::ZERO,
+            drawn: Self::SCALES[0],
             review: Self::REVIEW,
         }
     }
@@ -333,21 +407,44 @@ impl FromWorld for Stage {
 mod tests {
     use super::*;
 
+    /// What a desktop part reports, and what every test below assumes unless
+    /// it is the one asking what happens when the device is smaller than the
+    /// canvas.
+    const DESKTOP: u32 = 8192;
+
     fn stage(step: usize) -> Stage {
         Stage {
             canvas: Handle::default(),
             step,
             size: UVec2::ZERO,
+            drawn: Stage::SCALES[step],
             review: 0.0,
         }
     }
 
     fn canvas(width: u32, height: u32) -> Window {
         let mut window = Window::default();
+        window.resolution.set_physical_resolution(width, height);
         window
-            .resolution
-            .set_physical_resolution(width, height);
-        window
+    }
+
+    /// How far the target's shape sits from the canvas's, as a share.
+    fn misshapen(window: &Window, target: UVec2) -> f32 {
+        let canvas = window.physical_width() as f32 / window.physical_height() as f32;
+        let drawn = target.x as f32 / target.y as f32;
+        (drawn / canvas - 1.0).abs()
+    }
+
+    /// …and how far it is ALLOWED to, which is not a number anybody chose.
+    ///
+    /// Each side is rounded to an even number of pixels, so the ratio carries
+    /// up to a pixel of slack on each of its two terms and no more. Deriving
+    /// the bound rather than writing one down is the point: a constant loose
+    /// enough for the smallest rung would be loose enough to hide a real
+    /// stretch on the largest, and a stretch anybody can see is tens of
+    /// percent — two orders of magnitude above the worst this allows.
+    fn quantisation(target: UVec2) -> f32 {
+        1.0 / target.x as f32 + 1.0 / target.y as f32
     }
 
     /// The top rung has to be the canvas itself and nothing less. A viewer on
@@ -356,7 +453,52 @@ mod tests {
     #[test]
     fn the_first_rung_is_the_canvas() {
         assert_eq!(Stage::SCALES[0], 1.0);
-        assert_eq!(stage(0).wanted(&canvas(1600, 900)), UVec2::new(1600, 900));
+        assert_eq!(
+            stage(0).wanted(&canvas(1600, 900), DESKTOP),
+            UVec2::new(1600, 900)
+        );
+    }
+
+    /// **The invariant this file exists to keep.** The replay is drawn into
+    /// this target and then stretched across the window, so the target has to
+    /// be the window's SHAPE at every rung, on every panel, whichever cap is
+    /// biting — or players come out too wide.
+    ///
+    /// The super-ultrawides are the ones that broke it, and they are here by
+    /// name: 5120x1440 came back 3840x1440 under a per-axis clamp and drew
+    /// everybody a third too wide.
+    #[test]
+    fn the_target_is_always_the_shape_of_the_canvas() {
+        let panels = [
+            (1280, 720),   // a laptop
+            (1920, 1080),  // the common case
+            (3840, 2160),  // 4K, exactly on the budget
+            (7680, 4320),  // 4K at 200%, well over it
+            (3440, 1440),  // ultrawide
+            (5120, 1440),  // super-ultrawide, under the budget on area
+            (5120, 2160),  // super-ultrawide at 4K height, over it
+            (2560, 2880),  // and one taller than it is wide
+        ];
+        for (width, height) in panels {
+            let window = canvas(width, height);
+            for step in 0..Stage::SCALES.len() {
+                for side in [DESKTOP, 4096, 2048] {
+                    let wanted = stage(step).wanted(&window, side);
+                    let error = misshapen(&window, wanted);
+                    assert!(
+                        error <= quantisation(wanted),
+                        "{width}x{height} at rung {step} on a {side} device came back \
+                         {wanted}, off shape by {:.2}%",
+                        error * 100.0
+                    );
+                    // And the bound itself has to stay somewhere near a pixel.
+                    // Without this the assertion above would pass on a target
+                    // small enough for its own quantisation to swallow a
+                    // visible stretch.
+                    assert!(error < 0.01, "{wanted} is off shape by {:.2}%", error * 100.0);
+                }
+            }
+        }
     }
 
     /// Every rung is smaller than the one above it, on both axes. The ladder
@@ -365,9 +507,9 @@ mod tests {
     #[test]
     fn every_rung_is_smaller_than_the_one_above() {
         let window = canvas(1600, 900);
-        let mut previous = stage(0).wanted(&window);
+        let mut previous = stage(0).wanted(&window, DESKTOP);
         for step in 1..Stage::SCALES.len() {
-            let wanted = stage(step).wanted(&window);
+            let wanted = stage(step).wanted(&window, DESKTOP);
             assert!(
                 wanted.x < previous.x && wanted.y < previous.y,
                 "rung {step} came out at {wanted} against {previous}"
@@ -382,8 +524,8 @@ mod tests {
     #[test]
     fn a_target_is_always_an_even_number_of_pixels() {
         for step in 0..Stage::SCALES.len() {
-            for (width, height) in [(1601, 901), (1023, 767), (2, 2)] {
-                let wanted = stage(step).wanted(&canvas(width, height));
+            for (width, height) in [(1601, 901), (1023, 767), (2, 2), (5121, 1441)] {
+                let wanted = stage(step).wanted(&canvas(width, height), DESKTOP);
                 assert_eq!(wanted.x % 2, 0, "{wanted} is odd across");
                 assert_eq!(wanted.y % 2, 0, "{wanted} is odd down");
             }
@@ -394,15 +536,50 @@ mod tests {
     /// it — must still produce a target something can be rendered into.
     #[test]
     fn a_canvas_with_no_size_still_gets_a_target() {
-        let wanted = stage(0).wanted(&canvas(0, 0));
-        assert!(wanted.x >= 2 && wanted.y >= 2, "{wanted} cannot be rendered into");
+        let wanted = stage(0).wanted(&canvas(0, 0), DESKTOP);
+        assert!(
+            wanted.x >= 2 && wanted.y >= 2,
+            "{wanted} cannot be rendered into"
+        );
     }
 
-    /// And a wall-sized one is capped, because the attachments behind it are
-    /// what actually costs — see `Stage::LIMIT`.
+    /// And a wall-sized one is cut back, because the attachments behind it are
+    /// what actually costs — see [`Stage::BUDGET`].
     #[test]
-    fn an_enormous_canvas_is_capped() {
-        let wanted = stage(0).wanted(&canvas(7680, 4320));
-        assert_eq!(wanted, UVec2::new(Stage::LIMIT, Stage::LIMIT.min(4320)));
+    fn an_enormous_canvas_is_cut_back_to_the_budget() {
+        let wanted = stage(0).wanted(&canvas(7680, 4320), DESKTOP);
+        assert!(
+            wanted.x * wanted.y <= Stage::BUDGET,
+            "{wanted} is over the budget"
+        );
+        // Cut back to it rather than past it: this is a 4K panel at 200%
+        // scaling and it should still be drawing a 4K picture.
+        assert_eq!(wanted, UVec2::new(3840, 2160));
+    }
+
+    /// A super-ultrawide is a differently shaped frame, not a bigger one, and
+    /// must not be charged for pixels it never asked for. 5120x1440 is 7.4
+    /// megapixels against a 4K panel's 8.3, so it keeps all of them.
+    #[test]
+    fn a_super_ultrawide_keeps_its_pixels() {
+        assert_eq!(
+            stage(0).wanted(&canvas(5120, 1440), DESKTOP),
+            UVec2::new(5120, 1440)
+        );
+    }
+
+    /// Nothing is ever asked of the device that the device has said it cannot
+    /// do — and the refusal costs shape on neither axis.
+    #[test]
+    fn no_side_is_longer_than_the_device_allows() {
+        for side in [2048, 4096] {
+            let window = canvas(5120, 1440);
+            let wanted = stage(0).wanted(&window, side);
+            assert!(
+                wanted.x <= side && wanted.y <= side,
+                "{wanted} is longer than the {side} this device allows"
+            );
+            assert!(misshapen(&window, wanted) <= quantisation(wanted));
+        }
     }
 }

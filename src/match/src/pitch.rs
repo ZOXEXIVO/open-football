@@ -1,6 +1,6 @@
 use crate::field::Field;
 use crate::net::Netting;
-use crate::textures::Textures;
+use crate::textures::{Textures, Turf};
 use bevy::asset::RenderAssetUsages;
 use bevy::math::Affine2;
 use bevy::mesh::Indices;
@@ -624,18 +624,25 @@ impl Pitch {
     /// Blue held up against red, because a shadow outdoors is lit by sky.
     const SHADOW: Color = Color::linear_rgb(0.165, 0.139, 0.232);
 
-    pub fn spawn(
+    /// The playing surface and the light that falls on it — the first course
+    /// of the bring-up.
+    ///
+    /// Split from the rest of the stadium on purpose: this is one of the four
+    /// materials whose shader takes about six seconds to link in a browser
+    /// that has not seen it before, and a course per frame is what gives the
+    /// page the thread back between them. See [`crate::bringup`].
+    pub fn lay_turf(
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
         mut images: ResMut<Assets<Image>>,
     ) {
-        Self::spawn_turf(&mut commands, &mut meshes, &mut materials, &mut images);
-        Self::spawn_markings(&mut commands, &mut meshes, &mut materials);
-        // Frame and netting both. The netting is no longer scenery — it is
-        // deformable, and `Netting::ripple` drives it from the ball.
-        Netting::spawn(&mut commands, &mut meshes, &mut materials, &mut images);
-        Self::spawn_ground(&mut commands, &mut meshes, &mut materials, &mut images);
+        let grass = Textures::turf(&mut images, Self::MOWN);
+        Self::spawn_playing_surface(&mut commands, &mut meshes, &mut materials, &grass);
+        // Kept for the surround, which is laid on the next frame off the same
+        // sheet — generating it twice would cost a second 1024-square texture
+        // and its mip chain for a picture nobody could tell apart.
+        commands.insert_resource(grass);
 
         // A stadium is lit from four corners at once, so almost nothing on the
         // pitch falls into true shadow. One directional light standing in for
@@ -668,14 +675,12 @@ impl Pitch {
     /// second green written down anywhere in here is a green that can drift
     /// away from the first, and a pitch whose stripes are two different greens
     /// is a pitch with stripes painted on it.
-    fn spawn_turf(
+    fn spawn_playing_surface(
         commands: &mut Commands,
         meshes: &mut Assets<Mesh>,
         materials: &mut Assets<StandardMaterial>,
-        images: &mut Assets<Image>,
+        grass: &Turf,
     ) {
-        let grass = Textures::turf(images, Self::MOWN);
-
         // The second stripe, as a fraction of the first channel by channel, in
         // the LINEAR space the shader multiplies in. Derived from the pair
         // rather than written down, so the 16% is the 16% and cannot be typed
@@ -707,9 +712,23 @@ impl Pitch {
             Mesh3d(meshes.add(Sward::mow(turned, Self::TURF_TILE))),
             MeshMaterial3d(playing_surface),
         ));
+    }
 
-        // Beyond the touchlines. Same grass at the same scale, so the pitch
-        // does not stop at a change of texture as well as a change of light.
+    /// The grass beyond the touchlines — the second course of the bring-up.
+    ///
+    /// A frame of its own rather than a few lines under the playing surface,
+    /// and for one reason: it is the same vertex layout with a DIFFERENT
+    /// shader — see the note on the relief below — so it is a second program
+    /// for the driver to compile, and the two of them next to each other are
+    /// what made the first frame of a match twelve seconds long.
+    pub fn lay_surround(
+        mut commands: Commands,
+        mut meshes: ResMut<Assets<Mesh>>,
+        mut materials: ResMut<Assets<StandardMaterial>>,
+        grass: Res<Turf>,
+    ) {
+        // Same grass at the same scale, so the pitch does not stop at a change
+        // of texture as well as a change of light.
         const SURROUND: Vec2 = Vec2::new(320.0, 260.0);
         // Same sheet, same scale, and deliberately WITHOUT the relief the
         // playing surface carries.
@@ -728,7 +747,7 @@ impl Pitch {
         // what keeps the surround from reading as a hole cut in the world.
         let surround = materials.add(StandardMaterial {
             base_color: Self::SHADOW,
-            base_color_texture: Some(grass.albedo),
+            base_color_texture: Some(grass.albedo.clone()),
             perceptual_roughness: 1.0,
             ..default()
         });
@@ -746,6 +765,37 @@ impl Pitch {
             MeshMaterial3d(surround),
             Transform::from_xyz(0.0, -0.01, 0.0),
         ));
+    }
+
+    /// The paint — the third course of the bring-up.
+    pub fn paint_markings(
+        mut commands: Commands,
+        mut meshes: ResMut<Assets<Mesh>>,
+        mut materials: ResMut<Assets<StandardMaterial>>,
+    ) {
+        Self::spawn_markings(&mut commands, &mut meshes, &mut materials);
+    }
+
+    /// Both goals, frame and netting — the fourth course. The netting is not
+    /// scenery: it is deformable, and [`Netting::ripple`] drives it from the
+    /// ball.
+    pub fn raise_goals(
+        mut commands: Commands,
+        mut meshes: ResMut<Assets<Mesh>>,
+        mut materials: ResMut<Assets<StandardMaterial>>,
+        mut images: ResMut<Assets<Image>>,
+    ) {
+        Netting::spawn(&mut commands, &mut meshes, &mut materials, &mut images);
+    }
+
+    /// Hoardings, stands and the ground they stand on — the last course.
+    pub fn build_stands(
+        mut commands: Commands,
+        mut meshes: ResMut<Assets<Mesh>>,
+        mut materials: ResMut<Assets<StandardMaterial>>,
+        mut images: ResMut<Assets<Image>>,
+    ) {
+        Self::spawn_ground(&mut commands, &mut meshes, &mut materials, &mut images);
     }
 
     fn spawn_markings(

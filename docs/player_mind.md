@@ -675,30 +675,67 @@ move. Verify with `dev_match` on the standard n ≥ 400 corpus.
    housekeeping pass. It now takes the semantic store. Guarded by
    `pruning_never_deletes_an_account_a_conviction_is_holding_up`.
 
-### Phase 1b — emit-site taps 🟡
+### Phase 1b — emit-site taps 🟢
 
-Wired:
+The census made this the priority rather than a residual: `MoodProfile`
+measured at exactly 50 for all 42 227 seniors, because faculty state
+moves on episodes and there was effectively one live emit site in the
+whole simulation.
 
-- `Player::verify_promises` → `ManagerPromiseKept` / `ManagerPromiseBroken`
-  against `made_by_staff_id`, with the promise's importance × credibility
-  × public weighting carried into `relevance`. This is the betrayal path
-  and the one that exercises every organ: episode → ledger → conviction →
-  a grudge that outlives its evidence.
+**The plumbing that was blocking it.** `MatchOutcome` carried `date` and
+`played_for: Option<MatchTeamRef>`, and `MatchTeamRef` has a slug and a
+reputation but no club id. A memory that is not tagged with a club
+cannot be brought back by walking into that club a decade later, and the
+club cue is most of what the organ is for. `MatchOutcome` now carries
+`club_id`, resolved at the league-result pipeline the same way
+`opponent_club_id` already was.
 
-Not yet wired (each needs a club id plumbed to the site):
+**Wired:**
 
-- `record_senior_debut` → `SeniorDebut`. `MatchOutcome` carries `date`
-  and `played_for: Option<MatchTeamRef>`, but `MatchTeamRef` has no club
-  id — that is the plumbing to add.
-- Transfer events → `SignedForClub`, `SoldAgainstWill`, `ReleasedByClub`.
-- Match events → `DerbyWin`, `CostlyError`, `ManOfTheMatch`, `SentOff`.
-- Team season events → `Relegated`, `Promoted`, `WonLeagueTitle`.
+| Site | Episode |
+|---|---|
+| `Player::verify_promises` | `ManagerPromiseKept` · `ManagerPromiseBroken` |
+| `Player::complete_transfer` | `SoldAgainstWill` · `SignedForClub`, plus `PlayerMind::on_club_change` |
+| `record_senior_debut` | `SeniorDebut` |
+| man of the match | `ManOfTheMatch` |
+| first competitive goal at a club | `FirstGoalForClub` |
+| decisive goal | `DecisiveGoal` |
+| costly mistake | `CostlyError` |
+| red card | `SentOff` |
+| derby win / defeat | `DerbyWin` · `DerbyDefeat` (against that club's supporters) |
+| fan praise / criticism | `FansAdoration` · `FansHostility` |
+| media praise | `MediaPraise` |
+
+**Every tap sits at a gate that already existed.** Man of the match, a
+red card, a costly error, a derby — the happiness layer already has a
+condition for each, trusted and calibrated. Inventing a second, slightly
+different bar for "was it memorable" would be two models of the same
+night that could disagree about whether it happened.
+
+What the two layers do with it is where they differ, and that difference
+is the point: the happiness event fades on a cooldown and is gone inside
+a month, while the episode is encoded against **what he currently
+wants** and then either consolidates into a conviction that never decays
+or fades on the power-law curve. The same night, remembered two ways.
+
+One gate is the taps' own: **a friendly is not a memory.** Pre-season
+minutes carry none of the weight the catalog assigns these kinds, and
+letting them through would evict real nights from a 32-slot store.
+
+**Also fixed, and not a tap.** `PlayerMind::on_club_change` had **no**
+live caller at all — it existed and was tested and nothing in the
+simulation ever called it, so a player carried his belonging and his
+read of the old manager into his new club. It runs at the transfer
+chokepoint now, in the right order: the departure is filed against the
+club he was still at, and only then does the spell close.
+
+Not yet wired: team season events → `Relegated`, `Promoted`,
+`WonLeagueTitle`, and `ReleasedByClub`. Those live on the season
+boundary rather than the match path and need their own club-id read.
 
 Memory is strictly additive at every tap: the existing `HappinessEvent`
 still fires unchanged, asserted by
 `a_promise_from_nobody_in_particular_still_registers_but_files_against_no_one`.
-
-
 ### Phase 3 — the goals organ ✅
 
 `mind/organs/goals/` — 2 993 lines, 78 tests. Mind module total: 8 669
@@ -974,3 +1011,35 @@ evidence of it outside a fixture.
 
 **Footprint, measured:** `PlayerMind` 1 964 B ⇒ 112 MB across 60 000
 players.
+
+### What the taps moved, measured 🔬
+
+Same 60 days, same world, twelve emit sites later:
+
+| | before | after |
+|---|---|---|
+| episodes, mean | 0.03 | **0.85** |
+| episodes, p90 / max | 0 / 3 | **3 / 25** |
+| ledger accounts, mean | 0.03 | **0.29** |
+| empty minds | 29.8% | **22.1%** |
+| faculty coverage | 0.15 | **0.18** |
+| `MoodProfile` raw, max | 50.00 | **56** |
+| bias vs morale | −10.07 | −10.11 |
+
+**The organ is alive** — episodes up twenty-eight fold, convictions and
+standing accounts forming on real data for the first time.
+
+**And the mood profile did not move.** Feeding memory was necessary and
+not sufficient, which is worth having learned by measurement rather than
+by adding taps until the number came right.
+
+It is structural. Over a season `MoodProfile` spans about ±6 where
+morale spans ±30 (mean 60, p90 82, max 100). Morale is a fast,
+event-driven mood — 204 event types firing match to match. The five
+faculties are a slow, situational read whose scalars shift ~0.14 per
+observation. Sixty days moves them a little because they are calibrated
+for a career.
+
+So **4b will not close by adding emit sites**, and phase 4's own text
+was right to claim only *directional* agreement. See
+`docs/staff_mind.md` §12 for the two ways forward.

@@ -1,5 +1,6 @@
 use crate::aftermath::Aftermath;
 use crate::body::{BodyParts, Carriage, Footballer, Gait, Joint, Physique};
+use crate::bringup::Bringup;
 use crate::config::{PlayerInfo, ViewerConfig};
 use crate::field::Field;
 use crate::kit::{Complexion, Wardrobe};
@@ -1243,6 +1244,7 @@ impl Actors {
     /// the batch every player sharing his complexion is drawn in.
     pub fn take_the_field(
         mut commands: Commands,
+        mut bringup: ResMut<Bringup>,
         playback: Res<Playback>,
         config: Res<ViewerConfig>,
         tracks: Res<ReplayTracks>,
@@ -1302,6 +1304,11 @@ impl Actors {
                 player.is_goalkeeper(),
             );
             commands.entity(entity).remove::<Undressed>();
+            // The kit, the boots and the face are the last materials in the
+            // scene, and the shader they need is the last one the browser has
+            // to stop and compile. The page's loading overlay is held until a
+            // frame has been drawn past it — see [`Bringup::pump`].
+            bringup.squad_took_the_field();
             dressed += 1;
         }
     }

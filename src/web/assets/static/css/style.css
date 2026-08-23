@@ -6278,8 +6278,9 @@ a:active {
 }
 
 /* The viewer's canvas resizes itself to this box, so the box is what pins the
-   aspect ratio. The placeholder sits behind the canvas and is simply painted
-   over once the first frame lands — no script has to clear it.
+   aspect ratio. The loading state sits OVER the canvas and is taken off by
+   script when the viewer says there is football to watch — see
+   `.match-loader`, and `src/match/src/bringup.rs` for what it is waiting on.
    The whole pitch has to be on screen when the page opens, so the stage gives
    up width before it gives up being wholly above the fold: the column width is
    only its upper bound, and what is left of the viewport under the chrome sets
@@ -6296,17 +6297,175 @@ a:active {
     background: #080c12;
 }
 
-.match-stage-placeholder {
+/* The loading state, drawn OVER the canvas.
+
+   It has to be over it rather than behind it because the viewer starts drawing
+   long before there is anything to watch: the first frame lands with an empty
+   pitch and the stadium is not finished for several more, so a placeholder
+   that relied on being painted over would vanish at the least useful moment.
+
+   ⚠ Everything that MOVES in here moves by transform or opacity, and that is
+   load-bearing rather than tidy. Linking one of Bevy's PBR shaders blocks the
+   main thread for about four seconds (see `src/match/src/bringup.rs`), and an
+   animation the compositor owns is the only kind that keeps running through
+   that — anything driven by layout or by script simply stops, which is what
+   made the old spinner read as a hung page. */
+.match-loader {
     position: absolute;
     inset: 0;
+    z-index: 2;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 10px;
+    gap: 14px;
+    padding: 0 24px;
     color: #8a9bb5;
     font-size: 13px;
     text-align: center;
+    /* Not flat black: the stage's own ground with a little lift, so the fade
+       at the end reveals the pitch rather than brightening into it. */
+    background: radial-gradient(circle at 50% 45%, #101823 0%, #080c12 70%);
+    opacity: 1;
+    transition: opacity 0.35s ease;
+}
+
+.match-loader-gone {
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* The stadium is built and only the recording is outstanding — which for a
+   match that is still being simulated can be minutes, since the viewer keeps
+   asking until the chunks exist. There is a ground to look at by then, so the
+   cover comes off and what is left is a status line along the bottom that
+   does not take the pointer: the camera works, the replay just has nothing in
+   it yet. */
+.match-loader-clear {
+    justify-content: flex-end;
+    gap: 8px;
+    padding-bottom: 16px;
+    pointer-events: none;
+    background: linear-gradient(
+        to top,
+        rgba(8, 12, 18, 0.88) 0%,
+        rgba(8, 12, 18, 0.55) 26%,
+        rgba(8, 12, 18, 0) 52%
+    );
+}
+
+.match-loader-clear .match-loader-ring {
+    width: 18px;
+    height: 18px;
+    border-width: 2px;
+}
+
+.match-loader-clear .match-loader-note {
+    display: none;
+}
+
+/* One ring turning at a constant rate. It says nothing about progress — the
+   bar below does that — and is here purely so the frame is never still. */
+.match-loader-ring {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.12);
+    border-top-color: #4a9eff;
+    will-change: transform;
+    animation: match-loader-spin 0.9s linear infinite;
+}
+
+@keyframes match-loader-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.match-loader-phase {
+    margin: 0;
+    color: #c6d3e4;
+    font-size: 14px;
+}
+
+.match-loader-track {
+    position: relative;
+    width: min(280px, 60%);
+    height: 4px;
+    border-radius: 2px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+/* The bar's width is written from script, so it does NOT move during a stall.
+   It steps between them, which is the truth about a shader link: nothing is
+   known about how far along it is until it is over. The sweep inside it is
+   what covers the stall. */
+.match-loader-fill {
+    position: relative;
+    width: 0;
+    height: 100%;
+    border-radius: 2px;
+    background: #4a9eff;
+    transition: width 0.3s ease;
+    overflow: hidden;
+}
+
+.match-loader-fill::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0) 0%,
+        rgba(255, 255, 255, 0.45) 50%,
+        rgba(255, 255, 255, 0) 100%
+    );
+    will-change: transform;
+    animation: match-loader-sweep 1.1s linear infinite;
+}
+
+@keyframes match-loader-sweep {
+    from {
+        transform: translateX(-100%);
+    }
+    to {
+        transform: translateX(100%);
+    }
+}
+
+.match-loader-note {
+    max-width: 34em;
+    margin: 0;
+    color: #6c7c93;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+/* Nothing is coming. The ring stops turning rather than spinning over a dead
+   viewer, and the bar goes the colour of the message. */
+.match-loader-failed .match-loader-ring {
+    animation: none;
+    border-top-color: #d9534f;
+}
+
+/* Neither of these means anything any more: a bar cannot report progress
+   toward something that is not going to happen, and the note is about a wait
+   that is over. */
+.match-loader-failed .match-loader-track,
+.match-loader-failed .match-loader-note {
+    display: none;
+}
+
+.match-loader-failed .match-loader-phase {
+    color: #e79a97;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .match-loader-ring,
+    .match-loader-fill::after {
+        animation: none;
+    }
 }
 
 .match-canvas {

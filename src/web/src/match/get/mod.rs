@@ -1,7 +1,8 @@
 pub mod routes;
 
 use crate::common::default_handler::{
-    COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION, MATCH_VIEWER_AVAILABLE, MATCH_VIEWER_VERSION,
+    COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION, MATCH_VIEWER_AVAILABLE, MATCH_VIEWER_BYTES,
+    MATCH_VIEWER_VERSION,
 };
 use crate::common::slug::player_history_slug;
 use crate::face::skin::CountrySkin;
@@ -60,6 +61,11 @@ pub struct MatchGetTemplate {
     pub viewer_config_json: String,
     pub match_viewer_available: bool,
     pub match_viewer_version: &'static str,
+    /// What the viewer's wasm inflates to, so the loading bar can be drawn
+    /// against a real total. The browser reports `Content-Length` for the
+    /// COMPRESSED transfer and hands the script the inflated bytes, so a bar
+    /// drawn from the response alone finishes a fifth of the way in.
+    pub match_viewer_bytes: u64,
     pub player_of_the_match_id: u32,
     pub player_of_the_match_slug: String,
     pub player_of_the_match_name: String,
@@ -660,6 +666,7 @@ pub async fn match_get_action(
         viewer_config_json: viewer_config.to_script_literal(),
         match_viewer_available: MATCH_VIEWER_AVAILABLE,
         match_viewer_version: MATCH_VIEWER_VERSION,
+        match_viewer_bytes: MATCH_VIEWER_BYTES,
         player_of_the_match_id: motm_id.unwrap_or(0),
         player_of_the_match_slug: motm_slug,
         player_of_the_match_name: motm_name,

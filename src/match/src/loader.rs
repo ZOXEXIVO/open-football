@@ -56,6 +56,11 @@ pub struct ChunkLoader {
     retry_in: f32,
     /// True once the first chunk is on the pitch.
     pub ready: bool,
+    /// True when the recording kept nothing at all — a goalless match under
+    /// goal clipping. Read by [`crate::bringup::Bringup`], which would
+    /// otherwise hold the loading overlay over an empty pitch waiting for a
+    /// squad that is never coming.
+    nothing: bool,
 }
 
 impl Default for ChunkLoader {
@@ -71,6 +76,7 @@ impl Default for ChunkLoader {
             metadata_in_flight: false,
             retry_in: 0.0,
             ready: false,
+            nothing: false,
         }
     }
 }
@@ -85,6 +91,11 @@ impl ChunkLoader {
     /// not this one but the one it replaces: a chunk parsed whole took a
     /// third of a second, in one frame, with nothing else able to run.
     const PARSE_BUDGET_MS: f32 = 3.0;
+
+    /// Whether this recording has anything in it to play at all.
+    pub fn nothing_to_play(&self) -> bool {
+        self.nothing
+    }
 
     /// Kicks off the metadata request that everything else waits on.
     pub fn bootstrap(mut loader: ResMut<ChunkLoader>, config: Res<ViewerConfig>) {
@@ -127,6 +138,7 @@ impl ChunkLoader {
                         // grey end to end and that is the whole story.
                         if spans.nothing_recorded() {
                             loader.ready = true;
+                            loader.nothing = true;
                         }
                         // Open on the first goal rather than on kickoff, which
                         // is now a part of the match nobody recorded.

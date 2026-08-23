@@ -121,11 +121,44 @@
                         </span>
                     </p>
                     <div class="match-stage" id="match-stage">
-                        <div class="match-stage-placeholder">
-                            <i class="fas fa-spinner fa-spin fa-2x"></i>
-                            <p>{{ i18n.t("loading_match") }}</p>
-                        </div>
                         <canvas id="match-canvas" class="match-canvas"></canvas>
+                        {# The loading state, OVER the canvas rather than behind
+                           it. Behind it was enough while the placeholder only
+                           had to be painted over by the first frame; it is not
+                           enough now that the wait has phases, because the
+                           canvas is opaque from the first frame the viewer
+                           draws and the stadium is not finished for several
+                           more.
+
+                           Everything that moves in here moves by `transform`
+                           or `opacity`, which is not decoration: linking one
+                           of Bevy's shaders blocks the main thread for the
+                           better part of four seconds, and an animation the
+                           compositor owns is the only kind that keeps running
+                           through that. The bar's own width is driven from
+                           script and therefore does NOT move during a stall —
+                           it steps between them, which is the truth.
+
+                           The phrases are attributes rather than script
+                           literals so the translations stay in the template
+                           and out of the JavaScript. #}
+                        <div class="match-loader" id="match-loader"
+                             data-total-bytes="{{ match_viewer_bytes }}"
+                             data-phase-download="{{ i18n.t("match_loading_download") }}"
+                             data-phase-starting="{{ i18n.t("match_loading_starting") }}"
+                             data-phase-building="{{ i18n.t("match_loading_stadium") }}"
+                             data-phase-recording="{{ i18n.t("match_loading_recording") }}"
+                             data-phase-squad="{{ i18n.t("match_loading_teams") }}"
+                             data-phase-failed="{{ i18n.t("match_loading_failed") }}">
+                            <div class="match-loader-ring" aria-hidden="true"></div>
+                            <p class="match-loader-phase" id="match-loader-phase"
+                               role="status" aria-live="polite">{{ i18n.t("match_loading_download") }}</p>
+                            <div class="match-loader-track" id="match-loader-track"
+                                 role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                                <div class="match-loader-fill" id="match-loader-fill"></div>
+                            </div>
+                            <p class="match-loader-note">{{ i18n.t("match_loading_note") }}</p>
+                        </div>
                         <button type="button" id="match-fullscreen" class="match-fullscreen"
                                 title="{{ i18n.t("match_fullscreen") }}"
                                 aria-label="{{ i18n.t("match_fullscreen") }}"
@@ -403,11 +436,170 @@
 <script type="module">
     // Everything the replay does lives in the WebAssembly viewer built from
     // `src/match`; this hands it the canvas and the fixture, and steps back.
+    //
+    // What it does NOT step back from is the wait. Opening a match for the
+    // first time in a browser session costs about thirty megabytes of
+    // WebAssembly and then four Bevy shader programs, each of which takes the
+    // browser the better part of four seconds to link — synchronously, on the
+    // one thread this page has. That wait cannot be removed here (see
+    // `src/match/src/bringup.rs` for the measurements and for how it is at
+    // least broken into pieces the page can be repainted between); what it can
+    // be is legible. So the download is read off the stream as it arrives, and
+    // the viewer announces every course of the stadium it lays.
     import init, { MatchViewer } from "/static/viewer/match_viewer.js?v={{ match_viewer_version }}";
 
-    init({ module_or_path: "/static/viewer/match_viewer_bg.wasm?v={{ match_viewer_version }}" })
-        .then(() => MatchViewer.start(JSON.stringify({{ viewer_config_json|safe }})))
-        .catch((error) => console.error("match viewer failed to start", error));
+    const loader = document.getElementById("match-loader");
+    const phase = document.getElementById("match-loader-phase");
+    const track = document.getElementById("match-loader-track");
+    const fill = document.getElementById("match-loader-fill");
+
+    // What each stretch of the wait is worth, end to end. The download is the
+    // only one with a real fraction inside it; the rest advance a step at a
+    // time, which is honest — a shader link reports nothing at all until it
+    // is over.
+    const DOWNLOAD_SHARE = 0.35;
+    const STARTING_AT = 0.45;
+    const BUILDING_FROM = 0.5;
+    const BUILDING_TO = 0.86;
+    const RECORDING_AT = 0.9;
+    const SQUAD_AT = 0.95;
+
+    let done = false;
+    let shown = -1;
+
+    // Once the stadium is up there is something worth looking at behind this,
+    // and the recording may be minutes away — a match that is still being
+    // simulated has no recording to fetch yet, and the viewer keeps asking. So
+    // the cover comes off at that point and what is left is a status line
+    // along the bottom that does not take the pointer.
+    function standAside() {
+        if (loader) {
+            loader.classList.add("match-loader-clear");
+        }
+    }
+
+    function show(name, fraction) {
+        if (done || !loader) {
+            return;
+        }
+        const text = loader.dataset["phase" + name.charAt(0).toUpperCase() + name.slice(1)];
+        if (text && phase.textContent !== text) {
+            phase.textContent = text;
+        }
+        // Whole percents only. The download calls this once per chunk of the
+        // response — some hundreds of times — and every one of those would
+        // otherwise be a style write for a bar that has not visibly moved.
+        const percent = Math.max(0, Math.min(100, Math.round(fraction * 100)));
+        if (percent === shown) {
+            return;
+        }
+        shown = percent;
+        fill.style.width = percent + "%";
+        track.setAttribute("aria-valuenow", String(percent));
+    }
+
+    function finish() {
+        if (done || !loader) {
+            return;
+        }
+        done = true;
+        fill.style.width = "100%";
+        track.setAttribute("aria-valuenow", "100");
+        loader.classList.add("match-loader-gone");
+        // After the fade, so the canvas is not left under a transparent box
+        // that still eats nothing but is still in the layer tree.
+        window.setTimeout(() => loader.remove(), 400);
+    }
+
+    function fail() {
+        if (done || !loader) {
+            return;
+        }
+        // Before `done`, or the message it is being set for never lands.
+        show("failed", 0);
+        loader.classList.add("match-loader-failed");
+        done = true;
+    }
+
+    // The viewer's own progress. Registered before `init` so the first course
+    // cannot be laid before anybody is listening.
+    document.addEventListener("match-viewer-progress", (event) => {
+        const detail = event.detail || {};
+        if (detail.phase === "ready") {
+            finish();
+            return;
+        }
+        if (detail.phase === "building") {
+            const through = detail.total ? detail.done / detail.total : 0;
+            show("building", BUILDING_FROM + (BUILDING_TO - BUILDING_FROM) * through);
+            return;
+        }
+        if (detail.phase === "recording") {
+            standAside();
+            show("recording", RECORDING_AT);
+            return;
+        }
+        if (detail.phase === "squad") {
+            standAside();
+            show("squad", SQUAD_AT);
+            return;
+        }
+        show("starting", STARTING_AT);
+    });
+
+    // The wasm, with the bytes counted on the way past.
+    //
+    // The stream is rebuilt rather than drained into a buffer so the browser
+    // still compiles it AS it arrives — `WebAssembly.instantiateStreaming`
+    // takes a `Response`, and it is handed one whose body is this pump. The
+    // total comes from the page and not from `Content-Length`, because the
+    // file is stored gzipped and served that way: the header describes the
+    // compressed transfer while every chunk read here has already been
+    // inflated, so the two are a factor of five apart.
+    async function counted(url) {
+        const response = await fetch(url);
+        const total = Number(loader && loader.dataset.totalBytes) || 0;
+        // Any of these missing and the count cannot be trusted, so the
+        // response is handed over untouched: a bar that does not move is a
+        // great deal better than a replay that does not start.
+        if (!response.ok || !response.body || !total || typeof ReadableStream !== "function") {
+            return response;
+        }
+        try {
+            const reader = response.body.getReader();
+            let seen = 0;
+            const body = new ReadableStream({
+                async pull(controller) {
+                    const chunk = await reader.read();
+                    if (chunk.done) {
+                        controller.close();
+                        return;
+                    }
+                    seen += chunk.value.byteLength;
+                    show("download", Math.min(seen / total, 1) * DOWNLOAD_SHARE);
+                    controller.enqueue(chunk.value);
+                },
+                cancel(reason) {
+                    return reader.cancel(reason);
+                },
+            });
+            return new Response(body, { headers: { "Content-Type": "application/wasm" } });
+        } catch (error) {
+            console.warn("match viewer: download progress unavailable", error);
+            return response;
+        }
+    }
+
+    counted("/static/viewer/match_viewer_bg.wasm?v={{ match_viewer_version }}")
+        .then((response) => init({ module_or_path: response }))
+        .then(() => {
+            show("starting", STARTING_AT);
+            MatchViewer.start(JSON.stringify({{ viewer_config_json|safe }}));
+        })
+        .catch((error) => {
+            console.error("match viewer failed to start", error);
+            fail();
+        });
 </script>
 {% endif %}
 {% endblock %}

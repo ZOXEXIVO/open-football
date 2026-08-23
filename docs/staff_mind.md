@@ -954,13 +954,71 @@ every physio and every scout, and 1 348 B of it is a judgement store
 they will never fill — roughly 25 MB of empty organ. Boxing it for
 non-coaching staff is a real saving if the number ever matters.
 
+
+### What the taps moved, measured 🔬
+
+Same 60 days, same world, twelve emit sites later:
+
+| | before | after |
+|---|---|---|
+| episodes, mean | 0.03 | **0.85** |
+| episodes, p90 / max | 0 / 3 | **3 / 25** |
+| ledger accounts, mean | 0.03 | **0.29** |
+| empty minds | 29.8% | **22.1%** |
+| faculty coverage | 0.15 | **0.18** |
+| `MoodProfile` raw, max | 50.00 | **56** |
+| `MoodProfile` raw, mean | 50.00 | 50.05 |
+| bias vs morale | −10.07 | −10.11 |
+
+**The organ is alive.** Episodes up twenty-eight fold, a p90 of three
+and a busiest player on twenty-five, convictions and standing accounts
+forming for the first time, and nearly a third fewer players holding
+nothing at all. Everything the memory organ was built to do, it is now
+doing on real data.
+
+**And the mood profile did not move.** Mean 50.00 → 50.05, bias −10.07 →
+−10.11. Feeding the memory organ was necessary and it was not
+sufficient, which is worth having found out by measurement rather than
+by adding taps until the number came right.
+
+**Why, and it is structural.** Over a real season `MoodProfile` spans
+about ±6 while morale spans ±30 (mean 60, p90 82, max 100). They are not
+the same instrument. Morale is a fast, event-driven mood: 204 event
+types firing match to match, each with a magnitude and a cooldown. The
+five faculties are a slow, situational read — scalars that shift ~0.14
+per observation and are then multiplied by a coefficient and a
+confidence. Sixty days moves them a little because sixty days is
+*supposed* to move them a little; they are calibrated for a career.
+
+So **4b will not close by adding emit sites**, and phase 4's own text
+was right to claim only *directional* agreement. Numeric parity between
+these two is not a calibration target so much as a category question,
+and it has to be answered before more work goes into it:
+
+- **Give the faculties a fast channel.** The episode store already holds
+  recent valence and retention; "how he has been feeling lately" is
+  genuinely part of mood and is one read away. That makes `MoodProfile`
+  comparable to morale — and makes it partly a re-implementation of it.
+- **Re-scope 4b.** `MoodProfile` supplements morale rather than
+  replacing it: a slow, explainable, five-axis read of *why* a player is
+  where he is, sitting beside a fast number that says how he feels
+  today. Nothing is swapped, and `coverage()` stays the honest statement
+  that a flat `morale = 50` cannot make.
+
+**One number not to trust yet.** The whole-world tick reads 39.8 s here
+against 21.2 s on the earlier run. Both were measured on a machine
+concurrently running `cargo test` and release builds, so the difference
+is at least partly contention and possibly all of it. A real figure
+needs an idle box, and the ≤2 ms/day attribution needs an A/B against a
+build with the mind compiled out. Recorded, not claimed.
+
 ### Outstanding
 
 | Item | Why it is not done |
 |---|---|
 | Numeric parity between `StaffMoodProfile` and `job_satisfaction` (S4b) | Open, and **neither side is usable yet**. `job_satisfaction` is measured at zero for >90% of staff (a daily ratchet with no restoring force); `StaffMoodProfile` reads every manager at 49–51. Nothing to reconcile until one of them carries signal |
-| Numeric parity on the player side (4b) | **Not yet measurable.** `MoodProfile` is measured at exactly 50 for all 42 227 seniors — `net()` is identically zero. Blocked on emit-site coverage, not on tuning |
-| The rest of phase 1b's emit sites | **The blocker for 4b.** The transfer chokepoint is wired; debuts, match events and season events each still need a club id plumbed to the site |
+| Numeric parity on the player side (4b) | **Blocked on a design question, not on work.** Twelve taps moved episodes 28× and the profile by 0.05. `MoodProfile` spans ±6 over a season where morale spans ±30 — different instruments. Either give the faculties a fast channel off episode valence, or re-scope 4b to supplement rather than replace |
+| The rest of phase 1b's emit sites | The transfer and match chokepoints are wired (`MatchOutcome` now carries `club_id`). Team season events — `Relegated`, `Promoted`, `WonLeagueTitle` — live on the season boundary and need their own club-id read |
 | `update_job_satisfaction` is a one-way ratchet | Found by the census, outside both plans' scope. Daily, four terms, no restoring force ⇒ the floor. Reported rather than repaired: every consumer of staff morale changes behaviour when it is fixed |
 | The remaining five deliberation sites (S5) | Each needs its own before/after census. `candidate_accepts_terms` and `check_resignation_triggers` are converted; `.dev/mind`'s manager-market section is the gate for the rest |
 | Non-coach staff | `StaffMind` already works for a scout with an empty judgement store — it simply has less to say. Deliberately out of scope |

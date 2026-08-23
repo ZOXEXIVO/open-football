@@ -2249,6 +2249,10 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
         .and_then(|tid| data.team(tid))
         .map(|t| t.club_id);
 
+    // …and this side's club, resolved the same way. Everything the
+    // player mind lays down about a match is cued by it.
+    let player_club_id = data.team(side.team_id).map(|t| t.club_id).unwrap_or(0);
+
     for (pid, participation) in all_ids {
         let stats = match details.player_stats.get(&pid) {
             Some(s) => s,
@@ -2296,6 +2300,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
                 ),
                 match_season_year,
                 date: today_date,
+                club_id: player_club_id,
             });
             coach_observations.push(CoachObservationBuilder::build(
                 player,
@@ -2356,6 +2361,7 @@ fn dispatch_match_outcomes<D: LeagueProcessAccess>(
             played_for: None,
             match_season_year: 0,
             date: today_date,
+            club_id: player_club_id,
         }
         .big_match_kind();
 

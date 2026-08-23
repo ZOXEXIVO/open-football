@@ -10,6 +10,7 @@
 use super::scaling;
 use super::types::{MatchOutcome, MatchParticipation};
 use crate::Person;
+use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::player::Player;
 use crate::{
@@ -271,6 +272,49 @@ impl Player {
         }
     }
 
+    /// Lay a match event down in memory alongside the mood event it
+    /// already fires.
+    ///
+    /// Deliberately placed at the *existing* gates rather than given
+    /// thresholds of its own. Every one of these moments already has a
+    /// condition the happiness layer trusts — man of the match, a red
+    /// card, a costly error, a derby — and inventing a second, slightly
+    /// different bar for "was it memorable" would be two models of the
+    /// same night that could disagree.
+    ///
+    /// Mood and memory are not the same thing and this is where the
+    /// difference shows: the happiness event fades on a cooldown and is
+    /// gone in a month, while the episode is encoded against what he
+    /// currently *wants* and either consolidates into a conviction or
+    /// fades on the forgetting curve. The same night, remembered two
+    /// ways.
+    fn remember_match(&mut self, kind: EpisodeKind, who: ActorRef, o: &MatchOutcome<'_>) {
+        // A friendly is not a memory. Pre-season minutes carry none of
+        // the weight the catalog assigns these kinds, and letting them
+        // through would evict real nights out of a 32-slot store.
+        if o.is_friendly {
+            return;
+        }
+        let club = if o.club_id == 0 {
+            None
+        } else {
+            Some(o.club_id)
+        };
+        let ctx = self.mind_context(o.date, club);
+        self.mind.remember(kind, who, &ctx);
+    }
+
+    /// The supporters or the press, as an actor, when the club is known.
+    /// `ActorRef::NONE` otherwise — a memory about nobody is still a
+    /// memory, but it must not be filed against club zero.
+    fn crowd(o: &MatchOutcome<'_>) -> ActorRef {
+        if o.club_id == 0 {
+            ActorRef::NONE
+        } else {
+            ActorRef::fans(o.club_id)
+        }
+    }
+
     fn record_match_events(&mut self, o: &MatchOutcome<'_>) {
         if !o.is_friendly {
             // Rolling starter-share tracking — drives the WonStartingPlace /
@@ -283,6 +327,7 @@ impl Player {
         if o.is_motm {
             self.happiness
                 .add_event_default(HappinessEventType::PlayerOfTheMatch);
+            self.remember_match(EpisodeKind::ManOfTheMatch, ActorRef::NONE, o);
         }
 
         // Friendlies don't generate the rest of the football-life events —
@@ -320,6 +365,7 @@ impl Player {
                 None,
                 happiness_ctx,
             );
+            self.remember_match(EpisodeKind::SentOff, ActorRef::NONE, o);
         }
 
         // First competitive goal at this club. Stats are reset on club
@@ -354,6 +400,7 @@ impl Player {
                     None,
                     happiness_ctx,
                 );
+                self.remember_match(EpisodeKind::FirstGoalForClub, ActorRef::NONE, o);
             }
         }
 
@@ -474,6 +521,7 @@ impl Player {
                     None,
                     happiness_ctx,
                 );
+                self.remember_match(EpisodeKind::CostlyError, ActorRef::NONE, o);
             } else if o.effective_rating < 6.3 {
                 let mag = -(2.0 + (6.3 - o.effective_rating).clamp(0.0, 0.8));
                 let recent_mgr_criticism = self.happiness.recent_events.iter().any(|e| {
@@ -593,6 +641,7 @@ impl Player {
             let mag = cfg.catalog.decisive_goal * pressure_mul * scene_mul * rep_mul;
             self.happiness
                 .add_event_with_cooldown(HappinessEventType::DecisiveGoal, mag, 14);
+            self.remember_match(EpisodeKind::DecisiveGoal, ActorRef::NONE, o);
         }
 
         // FanPraise — supporters latch onto a stand-out display. Triggered
@@ -601,6 +650,7 @@ impl Player {
         let fan_praise_trigger =
             o.is_motm || o.effective_rating >= 8.0 || (o.team_won && had_contribution);
         if fan_praise_trigger {
+            self.remember_match(EpisodeKind::FansAdoration, Self::crowd(o), o);
             let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
             let scene_mul = if o.is_cup || o.is_derby { 1.2 } else { 1.0 };
             let mag = cfg.catalog.fan_praise * rep_mul * scene_mul;
@@ -621,6 +671,7 @@ impl Player {
             || o.effective_rating < 5.7
             || (o.team_lost && o.effective_rating < 6.2);
         if fan_criticism_trigger {
+            self.remember_match(EpisodeKind::FansHostility, Self::crowd(o), o);
             let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
             let provoke_mul = scaling::criticism_amplifier(
                 self.attributes.controversy,
@@ -659,6 +710,7 @@ impl Player {
             || (o.is_motm && (o.is_cup || o.is_derby))
             || exceptional_gk_shutout;
         if media_praise_trigger {
+            self.remember_match(EpisodeKind::MediaPraise, ActorRef::NONE, o);
             let rep_mul = scaling::reputation_amplifier(self.player_attributes.current_reputation);
             let mag = cfg.catalog.media_praise * rep_mul;
             let mfctx = MediaFanEventContext::new(
@@ -711,6 +763,10 @@ impl Player {
                     self.happiness
                         .add_event_default(HappinessEventType::DerbyWin);
                 }
+                // Both branches are the same night to him — the catalog
+                // already prices a derby win, and standing out in one is
+                // a mood bonus rather than a different memory.
+                self.remember_match(EpisodeKind::DerbyWin, Self::crowd(o), o);
             } else if o.team_lost {
                 // Squad-wide base hit, with extra for poor performers /
                 // red cards. Base around -3 (catalog), extra up to -3.0
@@ -727,11 +783,12 @@ impl Player {
                     HappinessEventType::DerbyDefeat,
                     cfg.catalog.derby_defeat - extra,
                 );
+                self.remember_match(EpisodeKind::DerbyDefeat, Self::crowd(o), o);
             }
         }
     }
 
-    fn record_senior_debut(&mut self, _o: &MatchOutcome<'_>) {
+    fn record_senior_debut(&mut self, o: &MatchOutcome<'_>) {
         if self.made_senior_debut {
             return;
         }
@@ -746,6 +803,7 @@ impl Player {
         self.made_senior_debut = true;
         self.happiness
             .add_event_default(HappinessEventType::SeniorDebut);
+        self.remember_match(EpisodeKind::SeniorDebut, ActorRef::NONE, o);
     }
 
     /// Track competitive scoring drought for forwards/midfielders. Updates

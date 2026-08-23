@@ -90,6 +90,15 @@ pub struct MatchOutcome<'a> {
     /// Calendar date the match was played. Drives age reads in the
     /// appearance-milestone handlers (senior debut).
     pub date: NaiveDate,
+    /// The club the player turned out for. 0 when the caller could not
+    /// resolve it.
+    ///
+    /// `MatchTeamRef` carries a slug and a reputation but no club id,
+    /// which is what phase 1b of `docs/player_mind.md` was blocked on:
+    /// a memory that is not tagged with a club cannot be brought back by
+    /// walking into that club a decade later, and the club cue is most
+    /// of what the memory organ is for.
+    pub club_id: u32,
 }
 
 impl<'a> MatchOutcome<'a> {

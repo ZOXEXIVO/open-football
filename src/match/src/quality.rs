@@ -77,9 +77,11 @@ pub struct Quality {
     /// Set once the tier has been lowered by measurement, or once the window
     /// in which that may happen has closed. A tier is never raised.
     settled: bool,
-    /// When the app started. The measurement is not consulted before
-    /// [`Self::SETTLE_AFTER`], because the frames either side of the first
-    /// chunk arriving are not the frames this is trying to judge.
+    /// When the scene finished being built and the recording started playing.
+    /// The measurement is not consulted before [`Self::SETTLE_AFTER`] past
+    /// this, because the frames either side of the first chunk arriving are
+    /// not the frames this is trying to judge — and neither are the ones the
+    /// browser spent compiling shaders. Written once by [`Self::start`].
     started: Option<Instant>,
 }
 
@@ -104,6 +106,16 @@ impl Quality {
     /// lands as one JSON document and is parsed here. `FrameCost`'s window is
     /// two seconds wide, so this has to be at least that much past the last of
     /// them or the median is measuring the load and not the scene.
+    ///
+    /// ⚠ Measured from [`Self::start`], which is the end of the bring-up and
+    /// NOT the first frame. It used to be the first frame, and that was wrong
+    /// by an order of magnitude: opening a match compiles four PBR shaders and
+    /// the browser blocks four to six seconds inside each of them, so by the
+    /// time this clock read six the frame window held nothing but those
+    /// stalls. An RTX 3080 Ti measured 440 ms "typical" frames and docked
+    /// itself to one sample for the rest of the match — the exact false
+    /// positive the module note says must not happen, fired by every discrete
+    /// card there is.
     const SETTLE_AFTER: f32 = 6.0;
 
     /// And how long the door stays open. Past this the tier is what it is: a
@@ -189,6 +201,15 @@ impl Quality {
         }
     }
 
+    /// Starts the clock the measurement runs against.
+    ///
+    /// Called once, by [`crate::bringup::Bringup`], when the stadium is up
+    /// and the recording is playing — which is the first moment a frame time
+    /// means what this file thinks it means.
+    pub fn start(&mut self) {
+        self.started.get_or_insert_with(Instant::now);
+    }
+
     /// Lowers the tier if the frame says it has to be lowered.
     ///
     /// Runs every frame and does nothing on almost all of them: the whole body
@@ -202,8 +223,14 @@ impl Quality {
         if quality.settled {
             return;
         }
+        // Nothing to judge until there is football on the screen. `start` is
+        // called by the bring-up when the last course is laid; until then the
+        // frame window is full of shader compiles, which no render tier would
+        // have helped with and which are over by the time this reads them.
+        let Some(started) = quality.started else {
+            return;
+        };
         let now = Instant::now();
-        let started = *quality.started.get_or_insert(now);
         let age = (now - started).as_secs_f32();
         if age < Self::SETTLE_AFTER {
             return;
