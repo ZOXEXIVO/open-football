@@ -8,6 +8,7 @@ use super::NationalTeam;
 use super::types::{NationalSelectionPolicy, NationalTeamLevel, SQUAD_SIZE, SYNTHETIC_POSITIONS};
 use crate::club::player::interaction::ManagerInteractionLog;
 use crate::club::player::load::PlayerLoad;
+use crate::club::player::mind::PlayerMind;
 use crate::club::player::rapport::PlayerRapport;
 use crate::shared::FullName;
 use crate::utils::IntegerUtils;
@@ -264,6 +265,7 @@ impl NationalTeam {
             cup_statistics_by_competition: Vec::new(),
             statistics_history: PlayerStatisticsHistory::new(),
             decision_history: PlayerDecisionHistory::new(),
+            mind: PlayerMind::new(),
             individual_training: None,
             languages: Vec::new(),
             last_transfer_date: None,

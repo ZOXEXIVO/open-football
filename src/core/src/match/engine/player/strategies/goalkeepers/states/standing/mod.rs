@@ -179,8 +179,8 @@ impl StateProcessingHandler for GoalkeeperStandingState {
             // 200u = 25 m for an ordinary keeper, out to ~40 m for a
             // rushing, eccentric one — a Neuer, who genuinely defends
             // that space, against a line-keeper who does not.
-            let scan = SWEEP_SCAN_BASE
-                * (1.0 + prof.rushing_out_profile * 0.5 + prof.eccentricity * 0.5);
+            let scan =
+                SWEEP_SCAN_BASE * (1.0 + prof.rushing_out_profile * 0.5 + prof.eccentricity * 0.5);
 
             if opponent_distance < scan {
                 #[cfg(feature = "match-logs")]

@@ -1,4 +1,5 @@
 use crate::club::PersonBehaviour;
+use crate::club::staff::mind::StaffMind;
 use crate::club::staff::{CoachMemoryStore, CoachSquadPlan};
 use crate::shared::fullname::FullName;
 use crate::{
@@ -96,6 +97,7 @@ impl StaffStub {
             specialization_days: [0; 4],
             coach_memory: CoachMemoryStore::new(),
             squad_plan: CoachSquadPlan::new(),
+            mind: StaffMind::new(),
         };
         staff
     }

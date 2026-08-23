@@ -1,6 +1,7 @@
 use crate::club::player::interaction::ManagerInteractionLog;
 use crate::club::player::language::PlayerLanguage;
 use crate::club::player::load::PlayerLoad;
+use crate::club::player::mind::PlayerMind;
 use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::{PlayerTrait, generate_player_traits};
 use crate::club::{
@@ -251,6 +252,7 @@ impl PlayerBuilder {
             decision_history: self
                 .decision_history
                 .unwrap_or_else(PlayerDecisionHistory::new),
+            mind: PlayerMind::new(),
             languages: self.languages.unwrap_or_default(),
             last_transfer_date: self.last_transfer_date,
             plan: None,

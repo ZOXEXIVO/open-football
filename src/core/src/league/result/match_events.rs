@@ -3,6 +3,7 @@ use super::data_access::LeagueProcessAccess;
 use crate::HappinessEventType;
 use crate::PlayerFieldPositionGroup;
 use crate::PlayerPositionType;
+use crate::club::mind::organs::memory::ActorRef;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::contract::ContractBonusType;
 use crate::club::player::events::discipline::YELLOW_CARD_BAN_THRESHOLD;
@@ -2568,6 +2569,7 @@ impl CoachObservationBuilder {
     /// same person. Also runs the dormant-record decay so memory of
     /// players the coach hasn't seen recently softens.
     fn apply(team: &mut Team, observations: &[CoachMatchObservation]) {
+        let club_id = team.club_id;
         let Some(head_coach) = team.staffs.head_coach_mut() else {
             return;
         };
@@ -2577,6 +2579,34 @@ impl CoachObservationBuilder {
         }
         if let Some(latest) = observations.last() {
             head_coach.coach_memory.decay_inactive(latest.date);
+        }
+
+        // The judgements organ, fed from the same chokepoint and the
+        // same observations. It runs **in parallel** with the store
+        // above: `CoachMemory` keeps feeding selection untouched, while
+        // the organ accumulates a view that travels with the man
+        // between jobs — which is the property §5 of
+        // `docs/staff_mind.md` exists for and which nothing here has
+        // today.
+        for obs in observations {
+            let player = ActorRef::player(obs.player_id);
+            // What the coach thinks the player is worth, read off his
+            // own long-form baseline rather than any ground truth: 5.0
+            // is a passenger and 8.0 is a very good player. CA-blind by
+            // construction.
+            let read = head_coach
+                .coach_memory
+                .get(obs.player_id)
+                .map(|memory| ((memory.long_form_rating - 5.0) / 3.0).clamp(0.0, 1.0))
+                .unwrap_or(0.5);
+            let ctx = head_coach.mind_context(obs.date, club_id);
+            // Ceiling seeded at the level he sees. A coach who never
+            // looked past what a young player already was is exactly
+            // the coach `IWasWrongAboutHim` is for.
+            head_coach.mind.form_judgement(player, read, read, &ctx);
+            head_coach
+                .mind
+                .watched(player, obs.effective_rating, obs.is_big_match(), &ctx);
         }
     }
 }

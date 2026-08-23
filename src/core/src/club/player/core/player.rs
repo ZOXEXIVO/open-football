@@ -12,6 +12,9 @@ use crate::club::player::interaction::ManagerInteractionLog;
 use crate::club::player::language::PlayerLanguage;
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::mailbox::PlayerContractAsk;
+use crate::club::player::mind::{
+    ActorRef, EncodingInputs, EpisodeKind, MindSituation, MindTickContext, PlayerMind,
+};
 use crate::club::player::plan::PlayerPlan;
 use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::PlayerTrait;
@@ -131,6 +134,16 @@ pub struct Player {
     pub cup_statistics_by_competition: Vec<CompetitionStatistics>,
     pub statistics_history: PlayerStatisticsHistory,
     pub decision_history: PlayerDecisionHistory,
+
+    /// What he remembers, what he concluded from it, and where he stands
+    /// with everyone who has mattered.
+    ///
+    /// Unlike every other per-club field on this struct, the mind is
+    /// **not** reset by `reset_on_club_change` — a career is the one
+    /// thing a player carries between clubs, and the point of the organ
+    /// is that a return ten years later still means something. See
+    /// [`PlayerMind`] and `docs/player_mind.md`.
+    pub mind: PlayerMind,
 
     /// Personal development plan set by the coaching staff — position
     /// retraining toward a thin squad spot, a fitness block for the
@@ -846,7 +859,11 @@ impl Player {
     /// emits PromiseBroken. Magnitudes scale by importance & credibility:
     /// breaking a big, believable promise is the worst outcome; breaking
     /// a low-credibility one the player half-expected stings less.
-    pub fn verify_promises(&mut self, now: NaiveDate) {
+    /// `club_id` is the club he is at, for tagging the memory episodes a
+    /// kept or broken promise lays down. `None` when unresolved — the
+    /// episode is still recorded against the coach, it just carries no
+    /// club cue.
+    pub fn verify_promises(&mut self, now: NaiveDate, club_id: Option<u32>) {
         if self.promises.is_empty() {
             return;
         }
@@ -854,6 +871,12 @@ impl Player {
         let current_starts = self.statistics.played;
         let mut kept_weight: f32 = 0.0;
         let mut broken_weight: f32 = 0.0;
+        // Who made each promise that came due, and how much it mattered.
+        // The morale path only needs the aggregate weight; memory needs
+        // the person — a broken promise is not a bad week, it is a fact
+        // about a man, and it has to be filed against him.
+        let mut kept_by: Vec<(u32, f32)> = Vec::new();
+        let mut broken_by: Vec<(u32, f32)> = Vec::new();
 
         // Compute helpers needed across multiple variants. Captaincy is
         // tracked at squad/Relations level, not on the player, so we use
@@ -993,11 +1016,53 @@ impl Player {
             let weight = importance_w * (0.5 + credibility_w) * public_w;
             if kept {
                 kept_weight += weight;
+                if let Some(staff_id) = p.made_by_staff_id {
+                    kept_by.push((staff_id, weight));
+                }
             } else {
                 broken_weight += weight;
+                if let Some(staff_id) = p.made_by_staff_id {
+                    broken_by.push((staff_id, weight));
+                }
             }
             false
         });
+
+        // File the outcome against the man who gave his word.
+        //
+        // Importance carries straight into how deeply this lands: a
+        // promise the player cared about, broken, is one of the few
+        // things in a career he will still be able to tell you about a
+        // decade later. That is `relevance` doing its job — the same
+        // event against a promise he barely wanted barely registers.
+        if !kept_by.is_empty() || !broken_by.is_empty() {
+            let mind_ctx = self.mind_context(now, club_id);
+            for (staff_id, weight, kind) in kept_by
+                .iter()
+                .map(|(id, w)| (*id, *w, EpisodeKind::ManagerPromiseKept))
+                .chain(
+                    broken_by
+                        .iter()
+                        .map(|(id, w)| (*id, *w, EpisodeKind::ManagerPromiseBroken)),
+                )
+            {
+                let intensity = kind.spec().intensity;
+                self.mind.remember_with(
+                    kind,
+                    ActorRef::staff(staff_id),
+                    &mind_ctx,
+                    EncodingInputs {
+                        intensity,
+                        // `weight` folds importance × credibility × public;
+                        // 1.0 is an ordinary private promise, ~2.9 the most
+                        // loaded public one.
+                        relevance: (weight / 2.0).clamp(0.0, 1.0),
+                        surprise: 0.5,
+                    },
+                    None,
+                );
+            }
+        }
 
         if kept_weight > 0.0 {
             let mag = (4.0 * kept_weight).clamp(1.0, 14.0);
@@ -1047,6 +1112,71 @@ impl Player {
                 (self.happiness.factors.manager_relationship
                     - (4.0 * broken_weight).clamp(0.0, 12.0))
                 .clamp(-15.0, 15.0);
+        }
+    }
+
+    /// Inputs the mind needs, gathered from the player himself plus the
+    /// one thing he cannot know on his own — which club he is at.
+    ///
+    /// Kept on `Player` rather than built at each call site so every
+    /// emit site records episodes against the same personality and the
+    /// same club tag. `club_id` is `None` for a free agent; episodes
+    /// recorded then carry no club cue, which is correct — nothing that
+    /// happens to a clubless player belongs to a club's memory.
+    pub fn mind_context(&self, now: NaiveDate, club_id: Option<u32>) -> MindTickContext {
+        MindTickContext::new(
+            now,
+            club_id.unwrap_or(0),
+            &self.attributes,
+            self.happiness.morale,
+        )
+    }
+
+    /// The read-only picture of where he actually is, for the sub-minds
+    /// to reason over.
+    ///
+    /// Gathered here rather than inside the mind so no faculty ever
+    /// reaches back into `Player` for a field — every one of them stays
+    /// testable against a plain struct. `country_code` is used only to
+    /// decide whether he speaks the local language; pass `""` when it is
+    /// not known and he is read as at home.
+    pub fn mind_situation(&self, now: NaiveDate, country_code: &str) -> MindSituation {
+        let squad_status = self.contract.as_ref().map(|c| c.squad_status.clone());
+        let social = self.squad_social_view.as_ref();
+
+        MindSituation {
+            age: self.age(now),
+            ambition: self.attributes.ambition,
+            pressure: self.attributes.pressure,
+            adaptability: self.attributes.adaptability,
+            starter_ratio: self.happiness.starter_ratio,
+            apps_since_goal: self.happiness.apps_since_last_competitive_goal,
+            contract_days_left: self
+                .contract
+                .as_ref()
+                .map(|c| (c.expiration - now).num_days().clamp(0, u16::MAX as i64) as u16)
+                .unwrap_or(0),
+            days_at_club: self
+                .days_since_transfer(now)
+                .map(|d| d.clamp(0, u16::MAX as i64) as u16)
+                .unwrap_or(0),
+            // Through the existing table, so the mind and the happiness
+            // path never disagree about what a squad role implies.
+            expected_start_share: PlayingTimeFrustrationConfig::expected_start_share(
+                squad_status.as_ref(),
+            ),
+            // The manager is resolved by the caller that knows the staff;
+            // `None` until an emit site supplies it, which the
+            // professional mind reads as "no view".
+            manager: ActorRef::NONE,
+            club_reputation: 0.5,
+            is_abroad: !country_code.is_empty() && !self.speaks_local_language(country_code),
+            speaks_local_language: country_code.is_empty()
+                || self.speaks_local_language(country_code),
+            familiar_teammates: social
+                .map(|v| v.same_language_or_nationality())
+                .unwrap_or(0),
+            is_on_loan: self.is_on_loan(),
         }
     }
 
@@ -1115,12 +1245,22 @@ impl Player {
         // Player happiness & morale evaluation (weekly)
         let team_reputation = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);
         if ctx.simulation.is_week_beginning() {
+            // The mind's periodic think, before anything reads it. The
+            // five faculties reflect on where he actually is, the goal
+            // stack is reviewed, and the monthly consolidation banks
+            // what recent episodes meant while they are still there to
+            // learn from.
+            let mind_ctx = self.mind_context(now.date(), ctx.club.as_ref().map(|c| c.id));
+            let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
+            let mut situation = self.mind_situation(now.date(), country_code);
+            situation.club_reputation = (team_reputation / 10_000.0).clamp(0.0, 1.0);
+            self.mind.tick_with(&mind_ctx, &situation);
             // Decay interaction log so old talks don't keep the cooldown
             // gates cold past their useful window.
             self.interactions.decay(now.date());
             // Verify promises before happiness so kept/broken events feed
             // into the same weekly morale recalculation.
-            self.verify_promises(now.date());
+            self.verify_promises(now.date(), ctx.club.as_ref().map(|c| c.id));
             let season_state = TeamSeasonState {
                 league_position: ctx.club.as_ref().map(|c| c.league_position).unwrap_or(0),
                 league_size: ctx.club.as_ref().map(|c| c.league_size).unwrap_or(0),

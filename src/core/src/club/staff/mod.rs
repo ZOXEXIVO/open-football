@@ -11,6 +11,9 @@ pub mod perception;
 // translates a player's body of work into a coach-aware assessment
 // the selection / substitution layers can fold into their scoring.
 pub mod coach;
+// The manager's mind: shared memory / goal organs, a judgements organ
+// of its own, and five faculties over them.
+pub mod mind;
 
 pub use coach::*;
 pub use model::*;

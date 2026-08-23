@@ -410,12 +410,33 @@ impl DutyAssigner<'_> {
             use std::sync::atomic::Ordering as CensusOrd;
             for (d_id, duty) in previous.duties[..previous.len].iter() {
                 let Some(t_id) = duty.target() else { continue };
-                let Some(dpos) = self.field.players.iter().find(|p| p.id == *d_id).map(|p| p.position) else { continue };
-                let Some(tpos) = self.field.players.iter().find(|p| p.id == t_id).map(|p| p.position) else { continue };
+                let Some(dpos) = self
+                    .field
+                    .players
+                    .iter()
+                    .find(|p| p.id == *d_id)
+                    .map(|p| p.position)
+                else {
+                    continue;
+                };
+                let Some(tpos) = self
+                    .field
+                    .players
+                    .iter()
+                    .find(|p| p.id == t_id)
+                    .map(|p| p.position)
+                else {
+                    continue;
+                };
                 let gap = (dpos - tpos).magnitude();
                 let was_threat = threats[..threat_len].iter().any(|(id, _, _)| *id == t_id);
-                let new_duty = plan.duties[..plan.len].iter().find(|(id, _)| id == d_id).map(|(_, d)| *d);
-                let man_marked_by_other = plan.duties[..plan.len].iter().any(|(id, d)| id != d_id && d.target() == Some(t_id));
+                let new_duty = plan.duties[..plan.len]
+                    .iter()
+                    .find(|(id, _)| id == d_id)
+                    .map(|(_, d)| *d);
+                let man_marked_by_other = plan.duties[..plan.len]
+                    .iter()
+                    .any(|(id, d)| id != d_id && d.target() == Some(t_id));
                 MARK_CENSUS[0].fetch_add(1, CensusOrd::Relaxed);
                 if new_duty == Some(DefensiveDuty::Mark(t_id)) {
                     MARK_CENSUS[1].fetch_add(1, CensusOrd::Relaxed);
@@ -424,7 +445,10 @@ impl DutyAssigner<'_> {
                     if was_threat && gap <= Self::MARK_REACH {
                         MARK_CENSUS[3].fetch_add(1, CensusOrd::Relaxed);
                     }
-                } else if matches!(new_duty, Some(DefensiveDuty::Press) | Some(DefensiveDuty::Cover)) {
+                } else if matches!(
+                    new_duty,
+                    Some(DefensiveDuty::Press) | Some(DefensiveDuty::Cover)
+                ) {
                     MARK_CENSUS[4].fetch_add(1, CensusOrd::Relaxed);
                 } else if !was_threat {
                     MARK_CENSUS[5].fetch_add(1, CensusOrd::Relaxed);
@@ -443,7 +467,8 @@ impl DutyAssigner<'_> {
                 let tot = g(0).max(1) as f64;
                 eprintln!(
                     "MARKCENSUS refreshes={} prev_pairs={} retained={:.1}% steal_same_def={:.2}% (reachable {:.2}%) to_press_cover={:.2}% man_left_threatset={:.2}% out_of_reach={:.2}% dropped_idle={:.2}% man_to_other_def={:.2}%",
-                    n, g(0),
+                    n,
+                    g(0),
                     100.0 * g(1) as f64 / tot,
                     100.0 * g(2) as f64 / tot,
                     100.0 * g(3) as f64 / tot,

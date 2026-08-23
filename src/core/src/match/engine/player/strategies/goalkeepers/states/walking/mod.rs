@@ -323,8 +323,7 @@ impl GoalkeeperWalkingState {
         let current_distance = ctx.player.position.distance_to(&optimal_position);
 
         let read = GoalkeeperSkillProfile::from_ctx(ctx).positioning;
-        let tolerance =
-            100.0 - (read - GoalkeeperSkillProfile::POPULATION_READ) * 80.0;
+        let tolerance = 100.0 - (read - GoalkeeperSkillProfile::POPULATION_READ) * 80.0;
 
         current_distance > tolerance
     }

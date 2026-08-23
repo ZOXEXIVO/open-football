@@ -23,6 +23,8 @@ use crate::club::Club;
 use crate::club::StaffStub;
 use crate::club::Team;
 use crate::club::board::ClubBoard;
+use crate::club::mind::organs::memory::{ActorRef, EpisodeKind, FactClaim};
+use crate::club::mind::verdict::MindOption;
 use crate::club::news::ClubAffair;
 use crate::club::staff::free_pool;
 use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
@@ -163,6 +165,7 @@ impl ManagerSeat {
     /// caretaker was installed; `false` when no coaching staff are on
     /// the books (small clubs, dev fixtures).
     pub fn promote_best_caretaker(team: &mut Team, prior_salary: u32, today: NaiveDate) -> bool {
+        let club_id = team.club_id;
         let caretaker_id = team.staffs.best_coach_id(|s| {
             s.staff_attributes.coaching.tactical as u32
                 + s.staff_attributes.mental.man_management as u32
@@ -188,6 +191,15 @@ impl ManagerSeat {
             StaffPosition::CaretakerManager,
             StaffStatus::Active,
         ));
+        // A spell in charge he did not ask for and may not keep. It is
+        // still the first line of a manager's career for a great many
+        // of them, so it is worth remembering.
+        staff.remember(
+            EpisodeKind::CaretakerSpell,
+            ActorRef::club(club_id),
+            today,
+            club_id,
+        );
         info!("Promoted staff {} to caretaker manager", id);
         true
     }
@@ -615,9 +627,30 @@ impl ManagerCandidateScorer {
         source_confidence >= 80 && source_overperforming
     }
 
-    /// Personal-terms acceptance check. The candidate accepts if
-    /// EITHER the offered salary is materially above their current pay
-    /// OR the requesting club is materially more prestigious.
+    /// A memory firm enough to turn down terms the numbers say yes to.
+    ///
+    /// A manager who was starved at a club for four windows does not
+    /// walk back in because the money is 20% better.
+    pub const MEMORY_VETO: f32 = 0.35;
+
+    /// And a pull strong enough to take a job the numbers say no to —
+    /// unfinished business, or a place he built something.
+    pub const MEMORY_OVERRIDE: f32 = 0.55;
+
+    /// Personal-terms acceptance check.
+    ///
+    /// The numbers first: he accepts if the salary is materially above
+    /// his current pay, or the requesting club is materially more
+    /// prestigious, or he is ambitious enough to take a smaller step up.
+    ///
+    /// Then what he remembers about the place. This is the first of the
+    /// seven decision sites in `docs/staff_mind.md` §7 to be converted,
+    /// and it is deliberately conservative: a manager who holds no
+    /// conviction about the club — which is every manager in a fresh
+    /// world — produces an empty verdict and gets exactly the old
+    /// answer. The baseline is preserved by construction, and the
+    /// divergence only grows as careers accumulate, which is what makes
+    /// the manager-market census meaningful rather than a re-baseline.
     pub fn candidate_accepts_terms(data: &SimulatorData, approach: &ManagerApproach) -> bool {
         let Some(src) = data.club(approach.source_club_id) else {
             return false;
@@ -653,7 +686,24 @@ impl ManagerCandidateScorer {
         // coaches demand bigger ones.
         let ambition_bonus = ambition >= 14.0;
 
-        salary_uplift || prestige_uplift || (ambition_bonus && req_rep > current_rep)
+        let numbers = salary_uplift || prestige_uplift || (ambition_bonus && req_rep > current_rep);
+
+        // What he remembers about the place, and about the people in
+        // the boardroom — judged separately, because a change of
+        // chairman is a real reason to look at a club again.
+        let verdict = mgr
+            .mind
+            .deliberate(MindOption::TakeTheJob(approach.requesting_club_id));
+        if verdict.is_empty() {
+            return numbers;
+        }
+
+        let net = verdict.net();
+        if numbers {
+            net > -Self::MEMORY_VETO
+        } else {
+            net > Self::MEMORY_OVERRIDE
+        }
     }
 }
 
@@ -1145,6 +1195,12 @@ impl ManagerMarketTick {
                 let new_id = new_manager.id;
                 new_manager.contract = Some(ManagerSeat::build_manager_contract(salary, today));
                 new_manager.job_satisfaction = 70.0; // Fresh start: optimistic.
+                new_manager.remember(
+                    EpisodeKind::AppointedManager,
+                    ActorRef::club(club_id),
+                    today,
+                    club_id,
+                );
                 if let Some(main_team) = club.teams.main_mut() {
                     main_team.staffs.push(new_manager);
                     // Out of work when the club came for him: the
@@ -1169,6 +1225,15 @@ impl ManagerMarketTick {
                     let salary = staff.contract.as_ref().map(|c| c.salary).unwrap_or(0);
                     let id = staff.id;
                     staff.contract = Some(ManagerSeat::build_manager_contract(salary, today));
+                    // The man the club already had. He does not arrive,
+                    // so nothing about his standing resets — he simply
+                    // gets the job for keeps.
+                    staff.remember(
+                        EpisodeKind::PromotedFromWithin,
+                        ActorRef::club(club_id),
+                        today,
+                        club_id,
+                    );
                     // The caretaker keeps the job. Its own kind of story
                     // — the man the club already had, given it for keeps
                     // because nobody better would come.
@@ -1470,6 +1535,19 @@ impl ManagerApproach {
         staff.relations = Relations::new();
         staff.fatigue = 0.0;
         staff.job_satisfaction = 75.0; // Fresh job: optimistic.
+
+        // He leaves one place and arrives at another on the same
+        // morning, and the order matters: the spell is closed against
+        // the club he was at, and only then does he take the new job.
+        // Memory and his judgements of players travel with him; his
+        // standing with that board, room and crowd does not.
+        staff.leave_club(self.source_club_id);
+        staff.remember(
+            EpisodeKind::AppointedManager,
+            ActorRef::club(self.requesting_club_id),
+            today,
+            self.requesting_club_id,
+        );
 
         let mut signed = false;
         if let Some(req) = data.club_mut(self.requesting_club_id) {
@@ -2333,5 +2411,147 @@ mod tests {
         assert_eq!(count_head_coaches(&data, 1), 1);
         // Board opens its search.
         assert!(data.club(1).unwrap().board.manager_search_since.is_some());
+    }
+
+    // ── Personal terms, now with a memory ───────────────────────
+
+    /// The manager the approach is for, at the source club.
+    fn poachable(id: u32, today: NaiveDate, salary: u32) -> Staff {
+        coach_with_contract(id, today, StaffPosition::Manager, salary)
+    }
+
+    fn approach_for(staff_id: u32, offered_salary: u32) -> ManagerApproach {
+        let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
+        ManagerApproach {
+            requesting_club_id: 1,
+            source_club_id: 2,
+            staff_id,
+            state: ApproachState::CompensationAgreed,
+            offered_salary,
+            created_at: today,
+            last_action: today,
+        }
+    }
+
+    /// Source club 2 (the manager's current employer) and requesting
+    /// club 1, both at 3000 world reputation so prestige is a wash and
+    /// the salary is the only number in play.
+    fn market_with(manager: Staff) -> SimulatorData {
+        let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
+        let requesting = make_club_with_main(1, Vec::new());
+        let source = make_club_with_main(2, vec![manager]);
+        make_data(today, vec![requesting, source])
+    }
+
+    #[test]
+    fn a_manager_with_no_history_of_the_club_gets_exactly_the_old_answer() {
+        // The conservatism the conversion rests on: an empty verdict
+        // means the three booleans decide, unchanged. Every manager in
+        // a fresh world is this manager.
+        let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
+
+        let good_money = market_with(poachable(200, today, 100_000));
+        assert!(ManagerCandidateScorer::candidate_accepts_terms(
+            &good_money,
+            &approach_for(200, 200_000)
+        ));
+
+        let bad_money = market_with(poachable(200, today, 100_000));
+        assert!(!ManagerCandidateScorer::candidate_accepts_terms(
+            &bad_money,
+            &approach_for(200, 100_000)
+        ));
+    }
+
+    #[test]
+    fn a_manager_they_starved_turns_down_money_he_would_otherwise_take() {
+        let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
+        let mut manager = poachable(200, today, 100_000);
+
+        // Four windows of being told no at club 1, consolidated into
+        // the conviction a manager actually carries between jobs.
+        for window in 0..4 {
+            manager.remember(
+                EpisodeKind::BoardRefusedMyTarget,
+                ActorRef::board(1),
+                today - Duration::days(400 - window * 60),
+                1,
+            );
+        }
+        let ctx = manager.mind_context(today, 2);
+        manager.mind.memory_mut().maybe_consolidate(&ctx.memory());
+        assert!(
+            manager
+                .mind
+                .believes(FactClaim::TheyNeverBackedMe, ActorRef::club(1))
+                > 0.0,
+            "the conviction has to exist for the test to mean anything"
+        );
+
+        let data = market_with(manager);
+        // A 100% pay rise — the old check accepts this without a pause.
+        assert!(
+            !ManagerCandidateScorer::candidate_accepts_terms(&data, &approach_for(200, 200_000)),
+            "he has been there, and the money is not the point"
+        );
+    }
+
+    #[test]
+    fn a_club_that_sacked_him_is_a_job_he_turns_down() {
+        let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
+        let mut manager = poachable(200, today, 100_000);
+
+        manager.remember(
+            EpisodeKind::SackedByClub,
+            ActorRef::club(1),
+            today - Duration::days(700),
+            1,
+        );
+        manager.leave_club(1);
+        let ctx = manager.mind_context(today, 2);
+        manager.mind.memory_mut().maybe_consolidate(&ctx.memory());
+        assert!(
+            manager
+                .mind
+                .believes(FactClaim::TheySackedMe, ActorRef::club(1))
+                > 0.0
+        );
+
+        let data = market_with(manager);
+        assert!(
+            !ManagerCandidateScorer::candidate_accepts_terms(&data, &approach_for(200, 200_000)),
+            "a doubled salary does not buy back a sacking"
+        );
+    }
+
+    #[test]
+    fn a_place_he_built_something_takes_a_job_the_numbers_say_no_to() {
+        let today = NaiveDate::from_ymd_opt(2030, 6, 1).unwrap();
+        let mut manager = poachable(200, today, 100_000);
+
+        // He took them up. That is the one thing that outlives
+        // everything else about a spell.
+        manager.remember(
+            EpisodeKind::Promoted,
+            ActorRef::club(1),
+            today - Duration::days(1_400),
+            1,
+        );
+        manager.leave_club(1);
+        let ctx = manager.mind_context(today, 2);
+        manager.mind.memory_mut().maybe_consolidate(&ctx.memory());
+        assert!(
+            manager
+                .mind
+                .believes(FactClaim::IBuiltSomethingThere, ActorRef::club(1))
+                > 0.0
+        );
+
+        let data = market_with(manager);
+        // Flat salary, matched prestige: the three booleans say no.
+        assert!(
+            ManagerCandidateScorer::candidate_accepts_terms(&data, &approach_for(200, 100_000)),
+            "there is a reason to go back that no number expresses"
+        );
     }
 }

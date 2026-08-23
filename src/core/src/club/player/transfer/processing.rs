@@ -1,6 +1,7 @@
 use crate::club::player::adaptation::{AdaptationFailureSignals, AdaptationSquadContext};
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::core::player::TransferRequestReason;
+use crate::club::player::mind::{GoalBridge, GoalKind, MindClock};
 use crate::club::player::player::Player;
 use crate::club::player::transfer::big_stage_pull::{BigStagePull, BigStagePullContext};
 use crate::club::player::{RestlessnessInputs, StuckCareerScan};
@@ -797,6 +798,27 @@ impl Player {
 
         let wants_transfer = !active_reasons.is_empty();
 
+        // ── Parallel run: feed the goal stack ───────────────────
+        //
+        // Phase 3 of `docs/player_mind.md`. Every reason found above
+        // also reinforces the want behind it, while the legacy path
+        // above stays exactly as it is and remains the thing that sets
+        // `Req`. Nothing downstream reads the stack yet.
+        //
+        // The point is the equivalence check: the transfer suites here
+        // are calibrated, and swapping their input out in one step would
+        // invalidate a lot of them at once. Running both means the stack
+        // can be shown to reach the same verdict on the same corpus
+        // first — after which `TransferRequestReason` becomes a *view*
+        // over the stack rather than a separately-computed set.
+        //
+        // Note what the two models already disagree about, by design: a
+        // reason that stops firing clears `Req` the same day, while the
+        // matching goal *fades*. That difference is the whole reason for
+        // the migration, and it is why the switch-over needs its own
+        // phase rather than being folded in here.
+        self.feed_goals_from_reasons(&active_reasons, now);
+
         // Reasons drive the persisted state — used by Item 4's
         // "don't clear Req while any unresolved reason remains".
         self.transfer_request_reasons = active_reasons;
@@ -810,6 +832,74 @@ impl Player {
         } else if self.statuses.has(PlayerStatusType::Req) {
             // No active reason left — Req can finally clear.
             self.statuses.remove(PlayerStatusType::Req);
+        }
+    }
+
+    /// Translate this tick's live desire reasons into reinforcement for
+    /// the wants behind them.
+    ///
+    /// Two things the legacy set cannot express, both supplied here:
+    ///
+    /// * **A closing window.** `WantsFirstTeamFootball` and
+    ///   `SalaryUnresolved` press harder as a career burns down or a
+    ///   contract runs out. The reason enum has no room for that; the
+    ///   goal does, and urgency is what turns a long-held want into a
+    ///   demand.
+    /// * **A date he gave himself.** A player who has just started
+    ///   wanting first-team football gives it until the next window
+    ///   before he escalates — which is a thing a real player does and
+    ///   the current model has no way to represent at all.
+    fn feed_goals_from_reasons(&mut self, reasons: &[TransferRequestReason], now: NaiveDate) {
+        if reasons.is_empty() {
+            return;
+        }
+
+        let age = DateUtils::age(self.birth_date, now);
+        let today = MindClock::day(now);
+        // Prime years burning down: nothing at 24, total by the mid
+        // thirties. Continuous, so there is no birthday at which a
+        // player's outlook flips.
+        let career_urgency = ((age as f32 - 24.0) / 11.0).clamp(0.0, 1.0);
+
+        for reason in reasons {
+            let mapping = GoalBridge::from_transfer_request_reason(*reason);
+            let newly_formed = self.mind.organs.goals.pursue(
+                mapping.goal,
+                mapping.origin,
+                mapping.evidence,
+                mapping.weight,
+                today,
+            );
+
+            match mapping.goal {
+                // A man running out of career presses sooner.
+                GoalKind::PlayFirstTeamFootball | GoalKind::StepUpToABiggerClub => {
+                    if career_urgency > 0.0 {
+                        self.mind
+                            .organs
+                            .goals
+                            .set_urgency(mapping.goal, career_urgency);
+                    }
+                    // The first time he wants to play, he gives it until
+                    // the next window rather than demanding on the spot.
+                    if newly_formed {
+                        self.mind
+                            .organs
+                            .goals
+                            .commit_until(mapping.goal, today.saturating_add(180));
+                    }
+                }
+                // A wage grievance presses as the deal runs down — the
+                // leverage is in the last year, and he knows it.
+                GoalKind::BePaidWhatImWorth => {
+                    if let Some(contract) = self.contract.as_ref() {
+                        let days_left = (contract.expiration - now).num_days().max(0) as f32;
+                        let urgency = (1.0 - days_left / 730.0).clamp(0.0, 1.0);
+                        self.mind.organs.goals.set_urgency(mapping.goal, urgency);
+                    }
+                }
+                _ => {}
+            }
         }
     }
 

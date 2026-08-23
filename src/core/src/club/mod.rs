@@ -4,6 +4,7 @@ pub mod club;
 pub mod context;
 pub mod facilities;
 pub mod finance;
+pub mod mind;
 pub mod mood;
 pub mod news;
 pub mod person;

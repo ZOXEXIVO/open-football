@@ -2,6 +2,7 @@ use crate::club::StaffPosition;
 use crate::club::board::manager_market;
 use crate::club::board::{BoardDecision, BoardFacility, BoardMoodState};
 use crate::club::facilities::FacilityLevel;
+use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::news::ClubAffair;
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::league::result::LeagueProcessAccess;
@@ -60,6 +61,12 @@ pub struct BoardResult {
     /// "the board said there would be money" is a story, and it is one
     /// no persistent field can put a day on.
     pub promises_broken: u8,
+    /// Promises the board delivered on this tick. Counted out for the
+    /// same reason `promises_broken` is: the trust reward is applied
+    /// inside the board, but only the club can put a day on it — and
+    /// the manager's own read of whether these people keep their word
+    /// is built out of dated events, not a running total.
+    pub promises_kept: u8,
     /// A takeover the club had been living under fell through this tick.
     pub takeover_collapsed: bool,
 }
@@ -86,7 +93,32 @@ impl BoardResult {
             manager_meeting: None,
             decisions: Vec::new(),
             promises_broken: 0,
+            promises_kept: 0,
             takeover_collapsed: false,
+        }
+    }
+
+    /// Tell the manager something the board did, `times` over.
+    ///
+    /// Wrapped rather than repeated at each site so a tap is one line
+    /// and cannot forget the club id, which is what makes the episode
+    /// cue-able by club a decade later.
+    fn tell_the_manager(club: &mut Club, today: NaiveDate, times: u8, kind: EpisodeKind) {
+        if times == 0 {
+            return;
+        }
+        let club_id = club.id;
+        let Some(main_team) = club.teams.main_mut() else {
+            return;
+        };
+        let Some(mgr) = main_team
+            .staffs
+            .find_mut_by_position(StaffPosition::Manager)
+        else {
+            return;
+        };
+        for _ in 0..times {
+            mgr.remember(kind, ActorRef::board(club_id), today, club_id);
         }
     }
 
@@ -130,6 +162,23 @@ impl BoardResult {
             for _ in 0..self.promises_broken {
                 club.record_affair(ClubAffair::PromiseBroken, today);
             }
+
+            // The manager's side of the same morning. `PromiseLedger`
+            // has always recorded what the board pledged; nothing until
+            // now recorded whether the man they pledged it to still
+            // believes them.
+            Self::tell_the_manager(
+                club,
+                today,
+                self.promises_broken,
+                EpisodeKind::BoardBrokeItsPromise,
+            );
+            Self::tell_the_manager(
+                club,
+                today,
+                self.promises_kept,
+                EpisodeKind::BoardKeptItsPromise,
+            );
             if self.takeover_collapsed {
                 club.record_affair(ClubAffair::TakeoverCollapsed, today);
             }
@@ -152,6 +201,7 @@ impl BoardResult {
             }
 
             if let Some(meeting) = self.manager_meeting {
+                let club_id = self.club_id;
                 if let Some(main_team) = club.teams.main_mut() {
                     if let Some(mgr) = main_team
                         .staffs
@@ -163,6 +213,20 @@ impl BoardResult {
                             BoardManagerMeeting::Crisis => StaffEventType::Conflict,
                         };
                         mgr.add_event(event);
+
+                        // A public backing is not a kindness. In football
+                        // it is what a board says on the way to sacking
+                        // someone, and a manager who has been sacked
+                        // before reads it that way immediately — see
+                        // `AmbitionMind::cynicism`.
+                        if matches!(meeting, BoardManagerMeeting::Backing) {
+                            mgr.remember(
+                                EpisodeKind::GivenAVoteOfConfidence,
+                                ActorRef::board(club_id),
+                                today,
+                                club_id,
+                            );
+                        }
                     }
                 }
             }
@@ -175,6 +239,8 @@ impl BoardResult {
             // to genuinely be at risk (≤18 months out).
             if self.offer_manager_renewal && !self.manager_sacked {
                 let mut extended: Option<u32> = None;
+                let club_id = self.club_id;
+                let club_name = club.name.clone();
                 if let Some(main_team) = club.teams.main_mut() {
                     if let Some(mgr) = main_team
                         .staffs
@@ -197,9 +263,15 @@ impl BoardResult {
                                 mgr.job_satisfaction =
                                     (mgr.job_satisfaction + 10.0).clamp(0.0, 100.0);
                                 extended = Some(mgr.id);
+                                mgr.remember(
+                                    EpisodeKind::ContractRenewed,
+                                    ActorRef::board(club_id),
+                                    today,
+                                    club_id,
+                                );
                                 info!(
                                     "Board offered renewal (+2y, +15% salary) to manager {} at {}",
-                                    mgr.id, club.name
+                                    mgr.id, club_name
                                 );
                             }
                         }
@@ -218,9 +290,21 @@ impl BoardResult {
             // collapse sacks the manager the same tick.
             if self.manager_ultimatum_announced && !self.manager_sacked {
                 let mut warned: u32 = 0;
+                let club_id = self.club_id;
                 if let Some(main_team) = club.teams.main_mut() {
                     let coach_id = main_team.staffs.head_coach().id;
                     warned = coach_id;
+                    // Being put on final warning in public. The squad
+                    // reacts below; this is the manager's own record of
+                    // the morning.
+                    if let Some(mgr) = main_team.staffs.head_coach_mut() {
+                        mgr.remember(
+                            EpisodeKind::ChairmanUndercutMePublicly,
+                            ActorRef::board(club_id),
+                            today,
+                            club_id,
+                        );
+                    }
                     let cfg = HappinessConfig::default();
                     for player in main_team.players.players.iter_mut() {
                         let bond = player
@@ -262,7 +346,9 @@ impl BoardResult {
                 let mut caretaker: Option<u32> = None;
                 if let Some(main_team) = club.teams.main_mut() {
                     let mut sacked_salary: u32 = 0;
-                    if let Some(staff) = main_team.staffs.take_by_position(StaffPosition::Manager) {
+                    if let Some(mut staff) =
+                        main_team.staffs.take_by_position(StaffPosition::Manager)
+                    {
                         let id = staff.id;
                         if let Some(c) = &staff.contract {
                             sacked_salary = c.salary;
@@ -271,6 +357,22 @@ impl BoardResult {
                             "Board sacked manager (staff id {}) at {} — confidence {}",
                             id, club_name, self.confidence
                         );
+
+                        // The flashbulb of a manager's career. Recorded
+                        // before the spell is closed out, so it is filed
+                        // against the club he was still at — which is
+                        // what makes `TheySackedMe` about the right
+                        // badge a decade later. It also forms
+                        // `ProveThemWrong`, the one want in the catalog
+                        // that only exists because memory does.
+                        staff.remember(
+                            EpisodeKind::SackedByClub,
+                            ActorRef::club(self.club_id),
+                            today,
+                            self.club_id,
+                        );
+                        staff.leave_club(self.club_id);
+
                         dismissed = Some(id);
                         sacked_staff = Some(staff);
                     }

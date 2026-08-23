@@ -1,8 +1,8 @@
 //! The pitch as the engine sees it: how big it is, which half the ball is
 //! in, and the tactics each end is playing.
 
-use crate::r#match::field::MatchField;
 use crate::Tactics;
+use crate::r#match::field::MatchField;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum BallSide {

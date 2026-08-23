@@ -1,5 +1,7 @@
 // Assuming rand is available
 extern crate rand;
+use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
+use crate::club::staff::mind::{StaffMind, StaffTickContext};
 use crate::club::staff::{CoachMemoryStore, CoachSquadPlan};
 use crate::club::{PersonBehaviour, StaffClubContract, StaffPosition, StaffStatus};
 use crate::context::GlobalContext;
@@ -94,6 +96,17 @@ pub struct Staff {
     /// Empty by default, and every consumer falls back to its previous
     /// behaviour on an empty plan.
     pub squad_plan: CoachSquadPlan,
+
+    /// His mind: what he remembers, what he wants, what he thinks of
+    /// every player he has coached, and the five faculties that reason
+    /// over them.
+    ///
+    /// Entirely inline and `Copy` — no allocation at construction and
+    /// none on insert, so adding it costs a `Staff::clone` a memcpy
+    /// rather than a pointer chase. Runs **alongside** `job_satisfaction`
+    /// and `coach_memory` rather than replacing them; see
+    /// `docs/staff_mind.md` for what each phase switches over.
+    pub mind: StaffMind,
 }
 
 #[derive(Debug, Clone)]
@@ -516,6 +529,7 @@ impl Staff {
             specialization_days: [0; 4],
             coach_memory: CoachMemoryStore::new(),
             squad_plan: CoachSquadPlan::new(),
+            mind: StaffMind::new(),
         }
     }
 
@@ -686,6 +700,52 @@ impl Staff {
         self.recent_events.retain(|e| e.days_ago <= 60);
     }
 
+    // ── The mind ────────────────────────────────────────────────
+    //
+    // Three small doors onto `StaffMind`, so emit sites never have to
+    // build a tick context by hand. Everything here runs alongside
+    // `job_satisfaction` and `coach_memory`; see `docs/staff_mind.md`.
+
+    /// Everything the mind needs from the world this tick, gathered in
+    /// one place. `club_id` is 0 for a man between jobs, which is a real
+    /// state rather than a missing one.
+    pub fn mind_context(&self, today: NaiveDate, club_id: u32) -> StaffTickContext {
+        StaffTickContext::new(today, club_id, &self.attributes, self.job_satisfaction)
+    }
+
+    /// Record something that happened to him. The entry point every
+    /// emit site uses.
+    pub fn remember(&mut self, kind: EpisodeKind, who: ActorRef, today: NaiveDate, club_id: u32) {
+        let ctx = self.mind_context(today, club_id);
+        self.mind.remember(kind, who, &ctx);
+    }
+
+    /// He has left a club. Memory and his judgements of players travel
+    /// with him; his standing with that board, room and crowd does not.
+    ///
+    /// Call **after** recording the episode that ended the spell, so the
+    /// sacking is filed against the club he was still at.
+    pub fn leave_club(&mut self, club_id: u32) {
+        self.mind.on_club_change(club_id);
+    }
+
+    /// His own standing in the game, 0..1.
+    ///
+    /// `Staff` carries no explicit reputation field, so this mirrors the
+    /// inference [`ManagerCandidateScorer::score_free_agent`] already
+    /// makes from composite coaching skill — deliberately the same
+    /// formula, so a manager's read of himself and the market's read of
+    /// him cannot disagree.
+    ///
+    /// [`ManagerCandidateScorer::score_free_agent`]: crate::club::board::manager_market::ManagerCandidateScorer::score_free_agent
+    pub fn manager_standing(&self) -> f32 {
+        let skill = self.staff_attributes.coaching.tactical as u32
+            + self.staff_attributes.mental.man_management as u32
+            + self.staff_attributes.mental.motivating as u32
+            + self.staff_attributes.coaching.mental as u32
+            + self.staff_attributes.knowledge.tactical_knowledge as u32;
+        (skill as f32 / 100.0).clamp(0.0, 1.0)
+    }
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> StaffResult {
         let now = ctx.simulation.date;
         let mut result = StaffResult::new(self.id);
@@ -731,6 +791,15 @@ impl Staff {
 
         // Scouting duties for scouts
         self.process_scouting(&ctx, &mut result);
+
+        // The mind's quiet pass: the weekly goal review and the monthly
+        // consolidation that banks what recent episodes meant before
+        // they fade. Deliberately situationless — the faculties only
+        // reflect where the board and the squad are both in hand, which
+        // is `Club::run_manager_mind`. A neutral situation is not a
+        // neutral input.
+        let club_id = ctx.club.as_ref().map(|club| club.id).unwrap_or(0);
+        self.mind.tick(&self.mind_context(now.date(), club_id));
 
         result
     }

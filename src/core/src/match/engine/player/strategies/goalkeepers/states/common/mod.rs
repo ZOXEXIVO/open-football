@@ -385,7 +385,14 @@ impl KeeperRestPosition {
         ball_distance: f32,
         field_width: f32,
     ) -> bool {
-        Self::within(keeper, target, concentration, ball_distance, field_width, 1.0)
+        Self::within(
+            keeper,
+            target,
+            concentration,
+            ball_distance,
+            field_width,
+            1.0,
+        )
     }
 
     /// …and is he far enough off it to be worth CHANGING STATE for?

@@ -1423,6 +1423,7 @@ impl ClubBoard {
     fn resolve_promises(&mut self, ctx: &BoardContext, today: NaiveDate, result: &mut BoardResult) {
         let phase = SeasonPhase::classify(ctx.matches_played, ctx.total_matches);
         let mut reward = 0i32;
+        let mut kept = 0u8;
 
         // Decision-driven fulfilment: the board delivered what it pledged.
         let delivered_funds = result
@@ -1432,6 +1433,7 @@ impl ClubBoard {
         if delivered_funds {
             if let Some(r) = self.promises.fulfil(PromiseType::TransferBudget) {
                 reward += r as i32;
+                kept += 1;
             }
         }
         let upgraded_facility = result
@@ -1441,6 +1443,7 @@ impl ClubBoard {
         if upgraded_facility {
             if let Some(r) = self.promises.fulfil(PromiseType::FacilityImprovement) {
                 reward += r as i32;
+                kept += 1;
             }
         }
 
@@ -1448,6 +1451,7 @@ impl ClubBoard {
         if ctx.academy_graduates_this_season > 0 || ctx.u21_minutes_share >= 0.25 {
             if let Some(r) = self.promises.fulfil(PromiseType::YouthMinutes) {
                 reward += r as i32;
+                kept += 1;
             }
         }
 
@@ -1456,16 +1460,19 @@ impl ClubBoard {
             if ctx.distance_to_relegation > 0 {
                 if let Some(r) = self.promises.fulfil(PromiseType::Survival) {
                     reward += r as i32;
+                    kept += 1;
                 }
             }
             if ctx.distance_to_europe_or_playoff <= 0 {
                 if let Some(r) = self.promises.fulfil(PromiseType::ContinentalQualification) {
                     reward += r as i32;
+                    kept += 1;
                 }
             }
             if ctx.league_position <= 2 {
                 if let Some(r) = self.promises.fulfil(PromiseType::TitleChallenge) {
                     reward += r as i32;
+                    kept += 1;
                 }
             }
         }
@@ -1484,6 +1491,7 @@ impl ClubBoard {
         if reward != 0 {
             self.relationship.adjust_communication(reward);
         }
+        result.promises_kept = result.promises_kept.saturating_add(kept);
     }
 
     /// Refresh the pressure gauges from this month's context: decay, then

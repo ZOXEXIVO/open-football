@@ -11,6 +11,7 @@ pub mod injury;
 pub mod lifecycle;
 pub mod mailbox;
 pub mod maturation;
+pub mod mind;
 pub mod personality;
 pub mod squad;
 pub mod statistics;
@@ -25,6 +26,12 @@ pub use contract::agent;
 pub use core::{builder, collection, context, player, result, utils};
 pub use events::{
     AwardReputationInput, AwardReputationKind, AwardTimelineEntry, PlayerAwardsCount,
+};
+pub use mind::{
+    ActorAccount, ActorKind, ActorRef, AttributionLedger, ConsolidationReport, EncodingInputs,
+    EpisodeDomain, EpisodeKind, EpochDay, FactClaim, MemoryCensus, MemoryContext, MindClock,
+    MindEpisode, MindMemory, MindOrgans, MindTickContext, MindTickReport, PlayerMind,
+    RecallContext, RecallCue, RecallResult, SemanticFact,
 };
 pub use personality::{adaptation, behaviour_config, decisions, interaction, language, rapport};
 pub use squad::{plan, status};
