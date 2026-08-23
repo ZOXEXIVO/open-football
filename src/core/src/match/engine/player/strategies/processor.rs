@@ -552,12 +552,9 @@ impl PlayerFieldPositionGroup {
             Some(s) => s,
             None => return false,
         };
-        let result = match tick_context.chase.best_other(my_side, player.id) {
-            Some(best) => {
-                !(best.dist_sq < my_dist_sq || (best.dist_sq == my_dist_sq && best.id < player.id))
-            }
-            None => true,
-        };
+        let result = tick_context
+            .chase
+            .is_designated(my_side, player.id, my_dist_sq);
         debug_assert_eq!(
             result,
             Self::force_takeball_scan(player, tick_context, ball_pos, my_dist_sq, my_side),

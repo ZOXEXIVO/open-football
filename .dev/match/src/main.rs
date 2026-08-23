@@ -8821,7 +8821,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 println!(
                     "    where the CHALLENGER is standing: inside contact (1.2m) {:.0}%  \
                      out to 2m {:.0}%  out to 3m {:.0}%  beyond {:.0}%   \
-                     (an attempt is only ever rolled in the first band)",
+                     (band 1 is the block tackle; band 2 is `RecoveryChallenge`, and only for a defender the man has gone PAST — beyond that nobody rolls anything)",
                     pct(reach[0], reach_total),
                     pct(reach[1], reach_total),
                     pct(reach[2], reach_total),
@@ -8862,6 +8862,59 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     })
                     .collect();
                 println!("    what he was doing: {}", labels.join("  ·  "));
+            }
+            // What the beaten defender did about it — see
+            // `mid_run_diag::RECOV_DECISIONS`. A challenge he could not
+            // make before this existed at all.
+            {
+                use core::mid_run_diag::RecoveryDiag;
+                let (rd, rp, ra, rwon, rfoul, rgap, rlead) = RecoveryDiag::totals();
+                if rd > 0 {
+                    println!(
+                        "  RECOVERY CHALLENGE ({rd} decisions at mean p={rp:.3}) — {:.2} attempts/match\n    \
+                         reaching {:.2} m with the man {:.2} m past him  →  won it {:.0}%, fouled {:.0}%, missed {:.0}%",
+                        ra as f64 / n_matches as f64,
+                        rgap / 8.0,
+                        -rlead / 8.0,
+                        rwon * 100.0,
+                        rfoul * 100.0,
+                        (1.0 - rwon - rfoul).max(0.0) * 100.0,
+                    );
+                }
+            }
+            // "A pass into the box where there are only defenders — they
+            // don't go for it, they run at their own goal." Neither
+            // census above can see that population; see
+            // `mid_run_diag::BOXBALL_SAMPLES`.
+            {
+                use core::mid_run_diag::BoxBallDiag;
+                let (bn, btb, btg, bgap, bgoal, batb, bours, boursg) = BoxBallDiag::picture();
+                if bn > 0 {
+                    println!(
+                        "  BOX-DELIVERY CENSUS ({bn} ticks with a LOOSE ball in the defending side's own box)\n    \
+                         nearest defender {:.2} m off the drop — heading cos: at the BALL {btb:+.2}, at his OWN GOAL {btg:+.2}\n    \
+                         →  running GOALWARD rather than at the ball {:.0}%, genuinely attacking it {:.0}%",
+                        bgap / 8.0,
+                        bgoal * 100.0,
+                        batb * 100.0,
+                    );
+                    println!(
+                        "    …and on the {:.0}% of those where OUR man was nearest the drop (no attacker closer): goalward {:.0}%",
+                        bours * 100.0,
+                        boursg * 100.0,
+                    );
+                    let rows: Vec<String> = BoxBallDiag::by_state()
+                        .iter()
+                        .map(|(l, c, g)| {
+                            format!(
+                                "{l} {:.0}%/{:.0}% goalward",
+                                *c as f64 / bn as f64 * 100.0,
+                                g * 100.0
+                            )
+                        })
+                        .collect();
+                    println!("    what he was doing: {}", rows.join("  ·  "));
+                }
             }
             // "Defenders with TakeBall don't intercept — they run parallel
             // with the ball." A different population from the closing

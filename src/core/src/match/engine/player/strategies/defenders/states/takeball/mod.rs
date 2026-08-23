@@ -79,7 +79,6 @@ impl StateProcessingHandler for DefenderTakeBallState {
         // the target is essentially perfectly stable and any instability
         // is generated on the player side.
         let (target, mut arrive_velocity) = LooseBallChase::aim(ctx);
-        let (target, mut arrive_velocity) = LooseBallChase::aim(ctx);
 
         // Add separation force to prevent player stacking
         // Reduce separation when approaching ball, but keep minimum to prevent clustering

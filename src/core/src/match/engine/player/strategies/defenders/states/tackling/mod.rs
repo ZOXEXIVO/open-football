@@ -3,7 +3,7 @@ use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondi
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
-use crate::r#match::player::strategies::common::states::TackleDecision;
+use crate::r#match::player::strategies::common::states::{RecoveryChallenge, TackleDecision};
 use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
@@ -55,6 +55,68 @@ impl StateProcessingHandler for DefenderTacklingState {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Pressing,
                 ));
+            }
+
+            // BEATEN, BUT STILL IN REACH.
+            //
+            // Above contact range the state used to have exactly one
+            // answer — keep closing — and for a defender the carrier has
+            // already gone past, "keep closing" is a run at a goal-side
+            // contain point he cannot reach (see
+            // `RecoveryChallenge`). Measured, that is 47% of the nearest
+            // defenders to a moving carrier travelling PARALLEL to him at
+            // 2.66 m, rolling nothing for the whole carry.
+            //
+            // A real defender in that position throws a leg at it. This
+            // is that challenge, and it is deliberately the ONLY thing
+            // that changes here: a defender who is still goal-side keeps
+            // closing exactly as before, because from in front the block
+            // tackle is the right challenge and the jockey model already
+            // prices it.
+            let lead = RecoveryChallenge::lead(ctx, opponent.position);
+            if RecoveryChallenge::is_available(ctx, distance_to_opponent, lead)
+                && TackleEngagement::may_engage_carrier(ctx)
+                && RecoveryChallenge::is_decision_tick(ctx)
+                && ctx
+                    .context
+                    .rng
+                    .bernoulli(RecoveryChallenge::commit_probability(
+                        ctx,
+                        distance_to_opponent,
+                        lead,
+                    ))
+            {
+                #[cfg(feature = "match-logs")]
+                crate::tackle_stats::DEF_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+                let def_profile = DefenderSkillProfile::from_ctx(ctx);
+                let (won, fouled, severity) = RecoveryChallenge::resolve(
+                    ctx,
+                    def_profile.tackle_profile,
+                    def_profile.discipline,
+                    self.carry_score(ctx, &opponent),
+                    distance_to_opponent,
+                    lead,
+                );
+                let mut result = if won {
+                    #[cfg(feature = "match-logs")]
+                    crate::tackle_stats::DEF_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+                    StateChangeResult::with_defender_state_and_event(
+                        DefenderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
+                    )
+                } else if fouled {
+                    StateChangeResult::with_defender_state_and_event(
+                        DefenderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, severity)),
+                    )
+                } else {
+                    // He missed and the man is gone. Pressing is where a
+                    // beaten defender goes to get back into the picture,
+                    // the same exit a missed block tackle takes.
+                    StateChangeResult::with_defender_state(DefenderState::Pressing)
+                };
+                result.start_tackle_cooldown = true;
+                return Some(result);
             }
 
             // Committed but not yet in contact range: keep closing. The
@@ -302,22 +364,9 @@ impl DefenderTacklingState {
         let def_profile = DefenderSkillProfile::from_ctx(ctx);
         let aggression01 = (ctx.player.skills.mental.aggression / 20.0).clamp(0.0, 1.0);
 
-        // Opponent carry score — composite-led for registered attackers,
-        // skill blend fallback when the opponent is missing from the
-        // registry.
-        let attacker_score = if let Some(att) = ctx.context.players.by_id(opponent.id) {
-            sc::dribble_attack(att, minute)
-        } else {
-            let dribbling;
-            let agility;
-            {
-                let players = ctx.player();
-                let s = players.skills(opponent.id);
-                dribbling = sc::n(s.technical.dribbling);
-                agility = sc::n(s.physical.agility);
-            }
-            (dribbling + agility) * 0.5
-        };
+        // Opponent carry score — see `carry_score`, shared with the
+        // recovery challenge so the two never disagree about the man.
+        let attacker_score = self.carry_score(ctx, opponent);
 
         // Logistic success: tackle_profile vs attacker carry.
         // Sigmoid 3.2 → 2.4 and upper clamp 0.72 → 0.55 trim the
@@ -443,6 +492,30 @@ impl DefenderTacklingState {
         };
 
         (tackle_success, committed_foul, severity)
+    }
+
+    /// How dangerous this man is with the ball at his feet.
+    ///
+    /// Composite-led for a registered attacker, a skill blend when the
+    /// opponent is missing from the registry. Factored out of
+    /// [`Self::attempt_sliding_tackle`] so the block tackle and
+    /// [`RecoveryChallenge`] weigh the same opponent the same way — two
+    /// challenges on one carrier must not disagree about who he is.
+    fn carry_score(&self, ctx: &StateProcessingContext, opponent: &MatchPlayerLite) -> f32 {
+        let minute = sc::minute_from_ms(ctx.context.total_match_time);
+        if let Some(att) = ctx.context.players.by_id(opponent.id) {
+            sc::dribble_attack(att, minute)
+        } else {
+            let dribbling;
+            let agility;
+            {
+                let players = ctx.player();
+                let s = players.skills(opponent.id);
+                dribbling = sc::n(s.technical.dribbling);
+                agility = sc::n(s.physical.agility);
+            }
+            (dribbling + agility) * 0.5
+        }
     }
 
     fn exists_nearby(&self, ctx: &StateProcessingContext) -> bool {

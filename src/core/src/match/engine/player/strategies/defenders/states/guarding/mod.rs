@@ -1,6 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, DefenderCondition, Interception,
+    ActivityIntensity, DefenderCondition, Interception, StationKeeping,
 };
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::{
@@ -215,8 +215,13 @@ impl StateProcessingHandler for DefenderGuardingState {
             let distance = to_desired.magnitude();
 
             if distance < 2.0 {
-                // Close enough — mirror opponent movement gently
-                return Some(opponent_velocity * 0.5 + ctx.player().separation_velocity() * 0.3);
+                // On the guard point — hold station on a MOVING man.
+                // This returned `opponent_velocity * 0.5`; see
+                // [`StationKeeping`].
+                return Some(
+                    StationKeeping::hold(opponent_velocity, to_desired)
+                        + ctx.player().separation_velocity() * 0.3,
+                );
             }
 
             let direction = to_desired.normalize();

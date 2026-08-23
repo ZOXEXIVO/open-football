@@ -2943,8 +2943,16 @@ a:active {
     flex-direction: column;
 }
 
+/* Panels take their content height and never shrink. `flex: 1` gave every panel
+   a 0 basis, so a column holding several of them split the height evenly and the
+   tallest one lost its last rows to the overflow:hidden on .fm-panel. Only the
+   last panel absorbs the leftover height, so the two columns still finish level. */
 .fm-personal-col > .fm-panel {
-    flex: 1;
+    flex: 0 0 auto;
+}
+
+.fm-personal-col > .fm-panel:last-child {
+    flex: 1 0 auto;
 }
 
 .fm-personal-section {

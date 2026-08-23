@@ -1,6 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
-    ActivityIntensity, DefenderCondition, DefensiveLine, Interception,
+    ActivityIntensity, DefenderCondition, DefensiveLine, Interception, StationKeeping,
 };
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::players::DefensiveRole;
@@ -263,9 +263,17 @@ impl StateProcessingHandler for DefenderCoveringState {
                 let distance = to_target.magnitude();
 
                 if distance < 2.0 {
-                    // At cover point — track carrier velocity with a bias
-                    // so we don't freeze while they reposition.
-                    return Some(opp_velocity * 0.4 + ctx.player().separation_velocity() * 0.3);
+                    // At the cover point — hold station on a MOVING man.
+                    //
+                    // This returned `opp_velocity * 0.4`: run the way he
+                    // is running, at 40% of his speed. See
+                    // [`StationKeeping`] for why that is a defender being
+                    // left behind by construction, and why it is the
+                    // reported behaviour written down.
+                    return Some(
+                        StationKeeping::hold(opp_velocity, to_target)
+                            + ctx.player().separation_velocity() * 0.3,
+                    );
                 }
 
                 let direction = to_target.normalize();

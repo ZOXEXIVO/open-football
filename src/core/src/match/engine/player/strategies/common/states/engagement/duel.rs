@@ -1,4 +1,5 @@
 use super::distances::TackleEngagement;
+use crate::r#match::engine::ball::ball::MAX_OWNER_TRACK_DISTANCE;
 use crate::r#match::engine::context::PenaltyArea;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::player::events::FoulSeverity;
@@ -493,6 +494,302 @@ impl TackleDecision {
             .try_normalize(0.01)
             .unwrap_or_else(|| Vector3::new(1.0, 0.0, 0.0));
         carrier + to_goal * TackleEngagement::CONTACT * 0.8
+    }
+}
+
+/// The challenge a BEATEN defender makes — the poke, the stretch, the
+/// slide across from behind.
+///
+/// # Why this exists
+///
+/// The engine had exactly one challenge: the block tackle, made front-on
+/// from a goal-side jockey position inside [`TackleEngagement::CONTACT`]
+/// (1.25 m). Every defender who was not in front of the carrier had
+/// nothing at all to do about him.
+///
+/// [`TackleDecision::contain_position`] sends him at
+/// `carrier + toward_own_goal x 1 m`, and for a man who is LEVEL WITH or
+/// BEHIND the carrier that point is *past the carrier*: reaching it means
+/// overtaking, and a defender's speed edge over a man on the ball is
+/// about two per cent. So he runs at a point he can never arrive at, on a
+/// heading that necessarily parallels the carrier's, and rolls nothing
+/// for as long as the carry lasts.
+///
+/// Measured over 120 fixtures at L14 (CLOSING CENSUS,
+/// `mid_run_diag::CLOSE_SAMPLES`): the nearest defender to a moving
+/// carrier sits **2.66 m** off him and is running PARALLEL on **47%** of
+/// samples — and the worst state on the pitch for it is `Tackling`, 51%
+/// of the samples at 56% parallel, the one state whose whole job is to
+/// win the ball. The CHALLENGE GATE CENSUS says the same thing from the
+/// other side: of the players in a `Tackling` state, only **49% are
+/// inside contact range**, the only band in which an attempt is ever
+/// rolled. 22% are at 2 m, 12% at 3 m.
+///
+/// Those men are not out of position. Two and a half metres from a
+/// carrier is where a real defender makes a real challenge — he throws a
+/// leg at it. He just cannot do it front-on, so it is a different action
+/// with a different risk: longer reach, a far worse chance of winning it
+/// cleanly, and a far better chance of taking the man. That is where a
+/// large share of real yellow cards come from.
+///
+/// # What it is NOT
+///
+/// It is not a licence to lunge. A defender who is GOAL-SIDE of the
+/// carrier keeps doing what he does now — he jockeys, closes to contact,
+/// and blocks — because from in front the stretch is the wrong choice and
+/// modelling it would re-open the "defenders lunge at everything" defect
+/// the jockey model was built to close. The two bands are disjoint by
+/// construction: inside `CONTACT` only [`TackleDecision`] fires, outside
+/// it only this does, and only to a man who has been gone past.
+pub struct RecoveryChallenge;
+
+impl RecoveryChallenge {
+    /// How far a defender reaches when he stretches for it.
+    ///
+    /// **The distance at which a player can kick a ball** —
+    /// [`MAX_OWNER_TRACK_DISTANCE`], which is also `KICKABLE_DISTANCE`,
+    /// and the engine's own answer to "close enough to play it". A poke
+    /// tackle is a kick, so it is the same number, and using anything
+    /// wider would let a defender win a ball the ownership layer then has
+    /// to TELEPORT to him: `secure_ball_for` draws an owned ball to its
+    /// owner over a few ticks below this distance and snaps it beyond,
+    /// which its own note calls "a grant to somebody who was never at the
+    /// ball".
+    ///
+    /// A real slide covers more ground than this, because the defender's
+    /// body travels with it — but this engine resolves a challenge as an
+    /// instant, and a model that wins the ball from further than a man
+    /// can reach is not a slide, it is a teleport with a name.
+    pub const REACH: f32 = MAX_OWNER_TRACK_DISTANCE;
+
+    /// Per-DECISION commitment for an ordinary recovery, before the
+    /// situational terms.
+    ///
+    /// Lower than [`TackleDecision::BASE`] would suggest for the same
+    /// dwell, and deliberately: most of what a beaten defender does is
+    /// keep running and hope. The stretch is the exception, not the rule
+    /// — but it has to be POSSIBLE, and before this it was not.
+    const BASE: f32 = 0.085;
+
+    /// How often the decision is taken, in AI ticks — one real second,
+    /// the same cadence [`TackleDecision`] uses and for the same reason.
+    /// One AI tick is 20 ms (see `ai_tick_is_20ms`).
+    const DECISION_INTERVAL_TICKS: u16 = 50;
+
+    /// Is this tick one on which the beaten defender decides?
+    ///
+    /// Keyed to [`MatchPlayer::stretch_ticks`], which counts dwell inside
+    /// [`Self::REACH`] rather than inside `CONTACT`. A defender running
+    /// at the carrier's shoulder two metres off him accrues no contact at
+    /// all, so `TackleDecision`'s clock never starts for him — which is
+    /// the whole reason this population rolls nothing today.
+    pub fn is_decision_tick(ctx: &StateProcessingContext) -> bool {
+        let t = ctx.player.stretch_ticks;
+        t > 0 && (t - 1) % Self::DECISION_INTERVAL_TICKS == 0
+    }
+
+    /// How far the carrier has got past this defender, in units, along
+    /// the line to the goal being defended.
+    ///
+    /// Positive means the defender is goal-side — in front of the man,
+    /// where the block tackle belongs. Zero is shoulder to shoulder.
+    /// Negative means he has been gone past.
+    pub fn lead(ctx: &StateProcessingContext, carrier: Vector3<f32>) -> f32 {
+        let own_goal = ctx.ball().direction_to_own_goal();
+        match (own_goal - carrier).try_normalize(0.01) {
+            Some(to_goal) => (ctx.player.position - carrier).dot(&to_goal),
+            None => 0.0,
+        }
+    }
+
+    /// How comprehensively the man has gone past, 0 to 1.
+    ///
+    /// Scaled on [`TackleEngagement::DISENGAGE`] — the distance at which
+    /// a defender gives the carrier up — because that is what "past me"
+    /// means in this engine. Scaling it on `CONTACT` instead saturates:
+    /// measured, a recovery challenge is made with the man a mean 1.26 m
+    /// past his defender, which is already a full `CONTACT`, so every
+    /// challenge in the census took the maximum of every term this
+    /// multiplies and the model had no gradient left where all its
+    /// samples live.
+    fn beaten(lead: f32) -> f32 {
+        (-lead / TackleEngagement::DISENGAGE).clamp(0.0, 1.0)
+    }
+
+    /// Can this defender stretch for it at all?
+    ///
+    /// Outside block-tackle range, inside his own reach, off cooldown,
+    /// and not in front of the man. The goal-side test is `lead <= 0`
+    /// with no slack: a defender with any of the carrier's body between
+    /// him and the goal is jockeying, and jockeying is right.
+    pub fn is_available(ctx: &StateProcessingContext, distance: f32, lead: f32) -> bool {
+        !Self::legacy()
+            && distance > TackleEngagement::CONTACT
+            && distance <= Self::REACH
+            && lead <= 0.0
+            && ctx.player.can_attempt_tackle()
+    }
+
+    /// Probability this defender throws a leg at it now.
+    ///
+    /// Shares the football [`TackleDecision`] already prices — a defender
+    /// dives in because of who he is and because of what it costs not to
+    /// — and adds the one term that is specific to this action: **how
+    /// beaten he is**. A man who is a stride behind still believes he can
+    /// get across and stays on his feet. One who has been gone past has
+    /// nothing left but the stretch, and takes it.
+    pub fn commit_probability(ctx: &StateProcessingContext, distance: f32, lead: f32) -> f32 {
+        let shift = MatchStandard::shift(ctx.context);
+        let peer = |v: f32| (v / 20.0 - shift).clamp(0.0, 1.0);
+        let skills = &ctx.player.skills;
+        let aggression = peer(skills.mental.aggression);
+        let decisions = peer(skills.mental.decisions);
+        let tackling = peer(skills.technical.tackling);
+        // Same shape and same centring as `TackleDecision`'s temperament,
+        // so how readily a given defender goes is one property of the
+        // player rather than two unrelated numbers.
+        let temperament =
+            (0.55 + aggression * 0.90 - decisions * 0.30 + (tackling - 0.70) * 1.10).max(0.12);
+
+        // How beaten am I — see [`Self::beaten`].
+        let beaten = Self::beaten(lead);
+        let desperation = 0.55 + beaten * 1.10;
+
+        // Reach. At the edge of a full stretch this is a hopeful lunge;
+        // just outside block range it is a poke he expects to make.
+        let over = ((distance - TackleEngagement::CONTACT)
+            / (Self::REACH - TackleEngagement::CONTACT))
+            .clamp(0.0, 1.0);
+        let stretch = 1.0 - over * 0.65;
+
+        // Necessity, exactly as the block tackle prices it: the cost of
+        // NOT engaging rises toward your own goal, and this is the
+        // challenge last-ditch defending is made of.
+        let own_goal = ctx.ball().direction_to_own_goal();
+        let ball_to_goal = (ctx.tick_context.positions.ball.position - own_goal).magnitude();
+        let danger = (1.0 - ball_to_goal / 240.0).clamp(0.0, 1.0);
+        let necessity = 1.0 + danger * 1.9;
+
+        let p = (Self::BASE
+            * temperament
+            * desperation
+            * stretch
+            * necessity
+            * TackleDecision::box_restraint(ctx))
+        .clamp(0.0, 0.45);
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::RecoveryDiag::note_decision(p);
+        p
+    }
+
+    /// Resolve the stretch: `(won the ball, fouled, severity)`.
+    ///
+    /// # The three ways it ends
+    ///
+    /// A recovery challenge is a much worse bet than a block tackle and
+    /// the model says so on both axes. He is reaching round or through a
+    /// man who is moving away from him, so he wins it cleanly far less
+    /// often, and when he does not the odds are he has taken the man
+    /// rather than simply missed. `beaten` and the reach drive both: a
+    /// poke at the shoulder is a fair challenge, a slide across a man who
+    /// is already past is where the cards come from.
+    pub fn resolve(
+        ctx: &StateProcessingContext,
+        tackle_profile: f32,
+        discipline: f32,
+        attacker_score: f32,
+        distance: f32,
+        lead: f32,
+    ) -> (bool, bool, FoulSeverity) {
+        let rng = &ctx.context.rng;
+        let aggression = (ctx.player.skills.mental.aggression / 20.0).clamp(0.0, 1.0);
+        let beaten = Self::beaten(lead);
+        let over = ((distance - TackleEngagement::CONTACT)
+            / (Self::REACH - TackleEngagement::CONTACT))
+            .clamp(0.0, 1.0);
+
+        // Winning it. The duel is the same contest of ability the block
+        // tackle scores — `tackle_profile` against the carry — handicapped
+        // by the two things that make this challenge hard: he is behind,
+        // and he is at full stretch. The ceiling is well under the block
+        // tackle's 0.55 because from here even a good defender is mostly
+        // hoping.
+        let handicap = 0.55 + beaten * 0.85 + over * 0.55;
+        let raw_diff = tackle_profile - attacker_score - handicap * 0.45;
+        let success = (1.0 / (1.0 + (-raw_diff * 2.4).exp())).clamp(0.05, 0.40);
+        let won = rng.random::<f32>() < success;
+
+        // Fouling. A block tackle that misses often just misses; a
+        // stretch that misses has usually caught the man, which is the
+        // whole reason a beaten defender hesitates before making it.
+        //
+        // ⚠ RE-FITTED AGAINST THE CENSUS, 0.30 BASE → 0.13.
+        //
+        // The first cut of this model produced **63% fouls, 12% wins,
+        // 25% misses** over 4.85 challenges a match (RECOVERY CHALLENGE
+        // census, 300 fixtures at L14). A defender who takes the man two
+        // times in three every time he stretches is not a footballer, he
+        // is a booking generator: it carried team fouls 15.9 → 16.4 and
+        // yellows 4.83 → 5.01 a match against a real 3.5-4.5.
+        //
+        // The cause was saturation rather than the base — `beaten` was
+        // scaled on `CONTACT` and the mean challenge is made with the man
+        // 1.26 m past, so every sample took the maximum of every term.
+        // [`Self::beaten`] now scales on `DISENGAGE` and the terms below
+        // are re-fitted over the range that actually occurs. The target
+        // shape is a genuinely bad option that is still worth taking when
+        // the alternative is letting him go: roughly a third fouls, a
+        // quarter wins, the rest an honest miss.
+        let mut foul = 0.13 + aggression * 0.20 - discipline * 0.12;
+        if !won {
+            foul *= 1.25 + beaten * 0.55;
+        }
+        foul *= 1.0 + over * 0.35;
+        // The same own-box restraint the block tackle applies, and for
+        // the same reason: inside your own area the downside of catching
+        // him is a spot kick, and real defenders visibly stop doing it.
+        // See `DefenderTacklingState::attempt_sliding_tackle`.
+        if PenaltyRisk::applies(ctx) {
+            foul *= 0.06;
+        }
+        if ctx.player.yellow_cards > 0 {
+            foul *= 0.70;
+        }
+        let fouled = rng.random::<f32>() < foul.clamp(0.006, 0.70);
+
+        // Severity. A challenge from behind on a man going away from you
+        // is the professional foul, and it carries a heavier tail than a
+        // front-on miss — but violence is still a once-in-many-matches
+        // event, so the top band stays as thin as the block tackle's.
+        let severity = if !fouled {
+            FoulSeverity::Normal
+        } else if aggression > 0.75 && !won && rng.random::<f32>() < 0.008 {
+            FoulSeverity::Violent
+        } else if !won && rng.random::<f32>() < 0.10 + beaten * 0.16 {
+            FoulSeverity::Reckless
+        } else {
+            FoulSeverity::Normal
+        };
+
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::RecoveryDiag::note_attempt(won, fouled, distance, lead);
+        (won, fouled, severity)
+    }
+
+    /// Diagnostic switch: with `OF_NO_RECOVERY_TACKLE` set, a beaten
+    /// defender has no challenge available again and the engine reverts
+    /// to the block tackle as its only one.
+    ///
+    /// The A/B control for this work — it reaches every duel on every
+    /// tick, so the effect cannot be read off a diff, and it must not be
+    /// answered by checking out an older revision either, because the
+    /// working tree moves underneath you. Same pattern and purpose as
+    /// `LooseBallChase::tail_chase`; read once per process. Debug
+    /// infrastructure — do not remove.
+    pub fn legacy() -> bool {
+        use std::sync::OnceLock;
+        static LEGACY: OnceLock<bool> = OnceLock::new();
+        *LEGACY.get_or_init(|| std::env::var("OF_NO_RECOVERY_TACKLE").is_ok())
     }
 }
 

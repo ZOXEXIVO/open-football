@@ -1,7 +1,7 @@
 use crate::club::player::events::PositionLoad;
 use crate::club::player::traits::PlayerTrait;
 use crate::r#match::PlayerMatchEndStats;
-use crate::r#match::common_states::TackleEngagement;
+use crate::r#match::common_states::{RecoveryChallenge, TackleEngagement};
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::DefenderCondition;
 use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK, RunOff};
@@ -166,6 +166,12 @@ pub struct MatchPlayer {
     /// Counting CONTACT instead makes the roll happen on the tick he
     /// arrives, which is when a real defender either goes or does not.
     pub contact_ticks: u16,
+    /// Consecutive AI ticks within [`RecoveryChallenge::REACH`] of an
+    /// opposing carrier — the dwell a stretched challenge is a function
+    /// of, as `contact_ticks` is for a block tackle. See
+    /// [`Self::tick_contact_clock`] for why the two bands are separate
+    /// clocks rather than one widened one.
+    pub stretch_ticks: u16,
     /// Tagged reason for the next Shoot event. Set by each transition
     /// point that routes into the Shooting state (e.g. "FWD_RUN_PRIO05",
     /// "FWD_POINT_BLANK", "MID_POINT_BLANK_RUN"). The Shooting state
@@ -510,6 +516,7 @@ impl MatchPlayer {
             is_sent_off: false,
             tackle_cooldown: 0,
             contact_ticks: 0,
+            stretch_ticks: 0,
             pending_shot_reason: None,
             set_piece_station: None,
             is_force_match_selection: player.is_force_match_selection,
@@ -585,6 +592,7 @@ impl MatchPlayer {
             is_sent_off: false,
             tackle_cooldown: 0,
             contact_ticks: 0,
+            stretch_ticks: 0,
             pending_shot_reason: None,
             set_piece_station: None,
             is_force_match_selection,
@@ -755,10 +763,10 @@ impl MatchPlayer {
         self.tackle_cooldown == 0
     }
 
-    /// Advance [`Self::contact_ticks`]. Called once per AI tick from
-    /// `update()`, before the state machine runs, so a state asking
-    /// `TackleDecision::is_decision_tick` this tick sees a clock that
-    /// already includes it.
+    /// Advance [`Self::contact_ticks`] and [`Self::stretch_ticks`].
+    /// Called once per AI tick from `update()`, before the state machine
+    /// runs, so a state asking `TackleDecision::is_decision_tick` this
+    /// tick sees a clock that already includes it.
     ///
     /// "In contact" is deliberately the same question the `Tackling`
     /// states ask — an opposing carrier within
@@ -767,8 +775,28 @@ impl MatchPlayer {
     /// nominally `Marking` is in contact in every sense that matters, and
     /// keying the clock to a state would reset it on every hand-off
     /// between the states that share one duel.
+    ///
+    /// # Why there are two of them
+    ///
+    /// `CONTACT` is the reach of a BLOCK tackle — front-on, a metre and a
+    /// quarter, the challenge the engine has always modelled. A defender
+    /// who has been gone past does not make that challenge and cannot:
+    /// he stretches, pokes or slides, and a stretch reaches further than
+    /// a block. [`RecoveryChallenge`] owns that action and needs its own
+    /// dwell, because a defender travelling at the carrier's shoulder
+    /// two metres off him accrues no contact at all — which is exactly
+    /// the population the closing census measures running PARALLEL and
+    /// never rolling anything.
+    ///
+    /// The two bands are disjoint in use: inside `CONTACT` only the block
+    /// tackle fires, between `CONTACT` and [`RecoveryChallenge::REACH`]
+    /// only the recovery one. Two clocks rather than one widened clock,
+    /// because widening the existing one would move the block tackle's
+    /// first decision out to two and a half metres, where the state's own
+    /// distance guard discards it — the precise defect `contact_ticks`
+    /// was introduced to fix.
     fn tick_contact_clock(&mut self, tick_context: &GameTickContext) {
-        let in_contact = tick_context
+        let gap = tick_context
             .ball
             .current_owner
             // A keeper with it in his gloves cannot be challenged at all
@@ -780,11 +808,15 @@ impl MatchPlayer {
                     return None;
                 }
                 let holder = tick_context.positions.players.position(id);
-                Some((holder - self.position).magnitude() <= TackleEngagement::CONTACT)
-            })
-            .unwrap_or(false);
-        self.contact_ticks = if in_contact {
+                Some((holder - self.position).magnitude())
+            });
+        self.contact_ticks = if gap.is_some_and(|g| g <= TackleEngagement::CONTACT) {
             self.contact_ticks.saturating_add(1)
+        } else {
+            0
+        };
+        self.stretch_ticks = if gap.is_some_and(|g| g <= RecoveryChallenge::REACH) {
+            self.stretch_ticks.saturating_add(1)
         } else {
             0
         };
@@ -931,6 +963,7 @@ impl MatchPlayer {
         // standing would hand him a free decision the moment he is
         // processed again.
         self.contact_ticks = 0;
+        self.stretch_ticks = 0;
 
         let half_ms = MATCH_HALF_TIME_MS as f32;
         let full_ms = half_ms * 2.0;

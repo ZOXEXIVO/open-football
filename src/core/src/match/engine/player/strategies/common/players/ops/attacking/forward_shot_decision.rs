@@ -957,6 +957,244 @@ pub mod mid_run_diag {
         }
     }
 
+    /// ── THE RECOVERY-CHALLENGE CENSUS ─────────────────────────────────
+    ///
+    /// What the beaten defender actually does, now that he has something
+    /// to do. `RecoveryChallenge` is a second challenge with its own
+    /// reach and its own risk, and none of the tackle counters can tell
+    /// it apart from a block tackle — both land in `DEF_ATTEMPTS`, which
+    /// is the point (a challenge is a challenge) and useless for asking
+    /// whether the new one is firing at a sane rate.
+    pub static RECOV_DECISIONS: AtomicU64 = AtomicU64::new(0);
+    pub static RECOV_P_X10000: AtomicU64 = AtomicU64::new(0);
+    pub static RECOV_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+    pub static RECOV_WON: AtomicU64 = AtomicU64::new(0);
+    pub static RECOV_FOULED: AtomicU64 = AtomicU64::new(0);
+    /// Sum of the gap and of how far past him the man was, at the moment
+    /// he went — the two quantities that say what KIND of challenge these
+    /// are: a poke at the shoulder or a slide at a man already gone.
+    pub static RECOV_GAP_X100: AtomicU64 = AtomicU64::new(0);
+    pub static RECOV_LEAD_X100: AtomicI64 = AtomicI64::new(0);
+
+    pub struct RecoveryDiag;
+
+    impl RecoveryDiag {
+        pub fn note_decision(p: f32) {
+            RECOV_DECISIONS.fetch_add(1, Ordering::Relaxed);
+            RECOV_P_X10000.fetch_add((p * 10_000.0) as u64, Ordering::Relaxed);
+        }
+
+        pub fn note_attempt(won: bool, fouled: bool, gap: f32, lead: f32) {
+            RECOV_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+            RECOV_GAP_X100.fetch_add((gap * 100.0) as u64, Ordering::Relaxed);
+            RECOV_LEAD_X100.fetch_add((lead * 100.0) as i64, Ordering::Relaxed);
+            if won {
+                RECOV_WON.fetch_add(1, Ordering::Relaxed);
+            }
+            if fouled {
+                RECOV_FOULED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(decisions, mean p, attempts, won share, fouled share,
+        /// mean gap u, mean lead u)`
+        pub fn totals() -> (u64, f32, u64, f32, f32, f32, f32) {
+            let d = RECOV_DECISIONS.load(Ordering::Relaxed);
+            let a = RECOV_ATTEMPTS.load(Ordering::Relaxed);
+            let per = |v: u64| if a == 0 { 0.0 } else { v as f32 / a as f32 };
+            (
+                d,
+                if d == 0 {
+                    0.0
+                } else {
+                    RECOV_P_X10000.load(Ordering::Relaxed) as f32 / 10_000.0 / d as f32
+                },
+                a,
+                per(RECOV_WON.load(Ordering::Relaxed)),
+                per(RECOV_FOULED.load(Ordering::Relaxed)),
+                if a == 0 {
+                    0.0
+                } else {
+                    RECOV_GAP_X100.load(Ordering::Relaxed) as f32 / 100.0 / a as f32
+                },
+                if a == 0 {
+                    0.0
+                } else {
+                    RECOV_LEAD_X100.load(Ordering::Relaxed) as f32 / 100.0 / a as f32
+                },
+            )
+        }
+
+        pub fn reset() {
+            for c in [
+                &RECOV_DECISIONS,
+                &RECOV_P_X10000,
+                &RECOV_ATTEMPTS,
+                &RECOV_WON,
+                &RECOV_FOULED,
+                &RECOV_GAP_X100,
+            ] {
+                c.store(0, Ordering::Relaxed);
+            }
+            RECOV_LEAD_X100.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// ── THE BOX-DELIVERY CENSUS ───────────────────────────────────────
+    ///
+    /// Reported from the viewer: *"a pass is played into the penalty area
+    /// where there are only defenders. They don't try to get the ball,
+    /// they simply run towards the goal, and the opponent takes it and
+    /// scores."*
+    ///
+    /// Neither existing census can see that. [`DuelDiag`]'s closing
+    /// census only samples while somebody OWNS the ball, and a delivery
+    /// in flight is unowned. [`ChaseDiag`] samples only players already
+    /// in a `TakeBall` state, so a defender who never went for the ball
+    /// is invisible to it by construction — which is exactly the
+    /// population the report is about.
+    ///
+    /// So this samples every tick on which a LOOSE ball is inside (or
+    /// dropping into) the defending side's own penalty area, takes the
+    /// nearest defending outfielder, and asks the one question that
+    /// separates the two readings:
+    ///
+    ///   * `cos(his velocity, toward the ball)` — is he going to get it;
+    ///   * `cos(his velocity, toward his own goal)` — or is he running
+    ///     home.
+    ///
+    /// **GOALWARD** counts the samples where the second beats the first
+    /// while he is moving at all. That is the report, counted.
+    pub static BOXBALL_SAMPLES: AtomicU64 = AtomicU64::new(0);
+    pub static BOXBALL_TOBALL_X10000: AtomicI64 = AtomicI64::new(0);
+    pub static BOXBALL_TOGOAL_X10000: AtomicI64 = AtomicI64::new(0);
+    pub static BOXBALL_GAP_X100: AtomicU64 = AtomicU64::new(0);
+    /// Samples where he was pointed more at his own goal than at the ball.
+    pub static BOXBALL_GOALWARD: AtomicU64 = AtomicU64::new(0);
+    /// …and where he was genuinely running at it (cos to ball > 0.5).
+    pub static BOXBALL_ATBALL: AtomicU64 = AtomicU64::new(0);
+    /// Samples on which the nearest DEFENDER was closer to the ball than
+    /// the nearest attacker — the "only defenders there" case, which is
+    /// the one the report describes and the one a defence must not lose.
+    pub static BOXBALL_OURS: AtomicU64 = AtomicU64::new(0);
+    /// …of those, the ones where he was still running goalward.
+    pub static BOXBALL_OURS_GOALWARD: AtomicU64 = AtomicU64::new(0);
+    /// What the nearest defender was doing, and how many of those samples
+    /// were goalward. Indexed by [`BoxBallDiag::STATES`].
+    pub static BOXBALL_BY_STATE: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+    pub static BOXBALL_GOALWARD_BY_STATE: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+
+    pub struct BoxBallDiag;
+
+    impl BoxBallDiag {
+        /// Labels for [`BOXBALL_BY_STATE`], in index order.
+        pub const STATES: [&'static str; 8] = [
+            "TakeBall",
+            "Marking",
+            "Running",
+            "Standing",
+            "HoldingLine",
+            "Covering",
+            "playing-the-ball",
+            "other",
+        ];
+
+        pub fn note(
+            to_ball: f32,
+            to_goal: f32,
+            gap: f32,
+            goalward: bool,
+            at_ball: bool,
+            ours: bool,
+            state: usize,
+        ) {
+            BOXBALL_SAMPLES.fetch_add(1, Ordering::Relaxed);
+            BOXBALL_TOBALL_X10000.fetch_add((to_ball * 10_000.0) as i64, Ordering::Relaxed);
+            BOXBALL_TOGOAL_X10000.fetch_add((to_goal * 10_000.0) as i64, Ordering::Relaxed);
+            BOXBALL_GAP_X100.fetch_add((gap * 100.0) as u64, Ordering::Relaxed);
+            if goalward {
+                BOXBALL_GOALWARD.fetch_add(1, Ordering::Relaxed);
+            }
+            if at_ball {
+                BOXBALL_ATBALL.fetch_add(1, Ordering::Relaxed);
+            }
+            if ours {
+                BOXBALL_OURS.fetch_add(1, Ordering::Relaxed);
+                if goalward {
+                    BOXBALL_OURS_GOALWARD.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            let s = state.min(Self::STATES.len() - 1);
+            BOXBALL_BY_STATE[s].fetch_add(1, Ordering::Relaxed);
+            if goalward {
+                BOXBALL_GOALWARD_BY_STATE[s].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(samples, mean cos-to-ball, mean cos-to-goal, mean gap u,
+        /// goalward share, at-ball share, ours share, ours-goalward share)`
+        pub fn picture() -> (u64, f32, f32, f32, f32, f32, f32, f32) {
+            let n = BOXBALL_SAMPLES.load(Ordering::Relaxed);
+            if n == 0 {
+                return (0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+            }
+            let f = n as f32;
+            let ours = BOXBALL_OURS.load(Ordering::Relaxed);
+            (
+                n,
+                BOXBALL_TOBALL_X10000.load(Ordering::Relaxed) as f32 / 10_000.0 / f,
+                BOXBALL_TOGOAL_X10000.load(Ordering::Relaxed) as f32 / 10_000.0 / f,
+                BOXBALL_GAP_X100.load(Ordering::Relaxed) as f32 / 100.0 / f,
+                BOXBALL_GOALWARD.load(Ordering::Relaxed) as f32 / f,
+                BOXBALL_ATBALL.load(Ordering::Relaxed) as f32 / f,
+                ours as f32 / f,
+                if ours == 0 {
+                    0.0
+                } else {
+                    BOXBALL_OURS_GOALWARD.load(Ordering::Relaxed) as f32 / ours as f32
+                },
+            )
+        }
+
+        /// `(label, samples, goalward share)` per state, heaviest first.
+        pub fn by_state() -> Vec<(&'static str, u64, f32)> {
+            let mut rows: Vec<(&'static str, u64, f32)> = Self::STATES
+                .iter()
+                .enumerate()
+                .map(|(i, label)| {
+                    let n = BOXBALL_BY_STATE[i].load(Ordering::Relaxed);
+                    let g = BOXBALL_GOALWARD_BY_STATE[i].load(Ordering::Relaxed);
+                    (*label, n, if n == 0 { 0.0 } else { g as f32 / n as f32 })
+                })
+                .filter(|(_, n, _)| *n > 0)
+                .collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows
+        }
+
+        pub fn reset() {
+            for c in BOXBALL_BY_STATE
+                .iter()
+                .chain(BOXBALL_GOALWARD_BY_STATE.iter())
+            {
+                c.store(0, Ordering::Relaxed);
+            }
+            for c in [
+                &BOXBALL_SAMPLES,
+                &BOXBALL_GAP_X100,
+                &BOXBALL_GOALWARD,
+                &BOXBALL_ATBALL,
+                &BOXBALL_OURS,
+                &BOXBALL_OURS_GOALWARD,
+            ] {
+                c.store(0, Ordering::Relaxed);
+            }
+            for c in [&BOXBALL_TOBALL_X10000, &BOXBALL_TOGOAL_X10000] {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
     /// ── THE LOOSE-BALL CHASE CENSUS ───────────────────────────────────
     ///
     /// [`DuelDiag`]'s closing census only ever samples while somebody OWNS
@@ -2609,6 +2847,8 @@ pub mod mid_run_diag {
         PlanDiag::reset();
         DefenceDiag::reset();
         DuelDiag::reset();
+        BoxBallDiag::reset();
+        RecoveryDiag::reset();
         ChaseDiag::reset();
         ClearDiag::reset();
         EvasionDiag::reset();

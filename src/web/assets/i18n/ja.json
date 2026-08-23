@@ -755,7 +755,7 @@
   "match_hint_touch_fly": "スティックでピッチ上を移動",
   "match_hint_touch_zoom": "ピンチでズーム",
   "match_hint_zoom": "ホイールでズーム",
-  "match_loading_download": "3Dリプレイエンジンをダウンロード中",
+  "match_loading_download": "3Dマッチエンジンをダウンロード中",
   "match_loading_starting": "3Dエンジンを起動中",
   "match_loading_stadium": "スタジアムを構築中",
   "match_loading_recording": "試合記録を読み込み中",

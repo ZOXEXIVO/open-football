@@ -520,4 +520,105 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             ChaseDiag::note(rate, lead, align, gap, ball_speed, line);
         }
     }
+
+    /// WHAT DOES HE DO ABOUT A BALL DROPPING INTO HIS OWN BOX?
+    ///
+    /// The third of the closing censuses, for the situation neither of
+    /// the other two can see: a delivery into the defending side's own
+    /// penalty area, nobody in possession. See
+    /// `mid_run_diag::BOXBALL_SAMPLES` for the report this answers and
+    /// why `DuelDiag` and `ChaseDiag` are both blind to it.
+    ///
+    /// Sampled against the ball's LANDING position, because that is the
+    /// point anyone contesting a delivery is actually running to, and a
+    /// cross measured against its apex says nothing about who wins it.
+    #[cfg(feature = "match-logs")]
+    pub(in crate::r#match::engine::engine) fn sample_box_delivery(
+        field: &MatchField,
+        context: &MatchContext,
+    ) {
+        use crate::mid_run_diag::BoxBallDiag;
+
+        // Only a ball nobody has. A carried ball is the closing census's
+        // business and a held one is out of play.
+        if field.ball.current_owner.is_some() {
+            return;
+        }
+        // Where it can be played, not where it is: a ball in the air is
+        // contested at the drop.
+        let meet = field.ball.cached_landing_position;
+        // Whose box is it in? Both are tested because a loose ball
+        // belongs to whichever area contains it, and a match has two.
+        let defending_side = if context.penalty_area(true).contains(&meet) {
+            PlayerSide::Left
+        } else if context.penalty_area(false).contains(&meet) {
+            PlayerSide::Right
+        } else {
+            return;
+        };
+        let own_goal = Vector3::new(
+            if defending_side == PlayerSide::Left {
+                0.0
+            } else {
+                context.field_size.width as f32
+            },
+            context.field_size.height as f32 / 2.0,
+            0.0,
+        );
+
+        let mut nearest_def: Option<(f32, &MatchPlayer)> = None;
+        let mut nearest_att = f32::MAX;
+        for p in field.players.iter() {
+            if p.tactical_position.current_position.is_goalkeeper() {
+                continue;
+            }
+            let gap = (p.position - meet).magnitude();
+            if p.side == Some(defending_side) {
+                if nearest_def.is_none_or(|(best, _)| gap < best) {
+                    nearest_def = Some((gap, p));
+                }
+            } else if gap < nearest_att {
+                nearest_att = gap;
+            }
+        }
+        let Some((gap, d)) = nearest_def else {
+            return;
+        };
+
+        let speed = d.velocity.magnitude();
+        // A man standing still is not running anywhere — counting him as
+        // neither would bury both signals in the same bucket.
+        if speed < 0.02 || gap < 0.5 {
+            return;
+        }
+        let heading = d.velocity / speed;
+        let to_ball = ((meet - d.position) / gap).dot(&heading);
+        let to_goal = (own_goal - d.position)
+            .try_normalize(0.01)
+            .map(|u| u.dot(&heading))
+            .unwrap_or(0.0);
+
+        let state = match d.state {
+            PlayerState::Defender(DefenderState::TakeBall) => 0,
+            PlayerState::Defender(DefenderState::Marking) => 1,
+            PlayerState::Defender(DefenderState::Running) => 2,
+            PlayerState::Defender(DefenderState::Standing) => 3,
+            PlayerState::Defender(DefenderState::HoldingLine) => 4,
+            PlayerState::Defender(DefenderState::Covering) => 5,
+            PlayerState::Defender(DefenderState::Intercepting)
+            | PlayerState::Defender(DefenderState::Heading)
+            | PlayerState::Defender(DefenderState::Clearing)
+            | PlayerState::Defender(DefenderState::Tackling) => 6,
+            _ => 7,
+        };
+        BoxBallDiag::note(
+            to_ball,
+            to_goal,
+            gap,
+            to_goal > to_ball,
+            to_ball > 0.5,
+            gap < nearest_att,
+            state,
+        );
+    }
 }

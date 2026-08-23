@@ -6,7 +6,7 @@ use crate::r#match::engine::player::strategies::common::{
     ActivityIntensityConfig, ConditionProcessor, FIELD_PLAYER_JADEDNESS_INTERVAL,
     JADEDNESS_INCREMENT, LOW_CONDITION_THRESHOLD,
 };
-use crate::r#match::player::strategies::common::states::TackleEngagement;
+use crate::r#match::player::strategies::RestartHold;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use nalgebra::Vector3;
 
@@ -46,6 +46,46 @@ use nalgebra::Vector3;
 ///
 /// Naturally inert whenever the ball is upfield of the defender, which
 /// is every possession spent in the opposition half.
+
+/// Holding a position that is itself moving.
+///
+/// # Why this exists
+///
+/// `DefenderCoveringState` and `DefenderGuardingState` both end their
+/// steering with a special case for "I have arrived", and both wrote it
+/// as `opponent_velocity * 0.4` / `* 0.5` — travel the way my man is
+/// travelling, at half his speed.
+///
+/// That is a defender being left behind, by construction. Whatever gap he
+/// had at the moment he arrived grows at half the carrier's speed for as
+/// long as he holds the point, and no amount of arriving correctly
+/// survives it. It is also, exactly, the thing reported from the viewer:
+/// *"they run parallel to the movement and don't try to take the ball"* —
+/// written into two states as their terminal behaviour.
+///
+/// A man holding station on a moving one matches his velocity and
+/// corrects whatever error is left. The correction is a gain on the error
+/// itself, so it vanishes as he settles and there is no distance at which
+/// his velocity changes character; the engine-wide speed clamp is the
+/// only ceiling it needs.
+pub struct StationKeeping;
+
+impl StationKeeping {
+    /// How hard the residual error is corrected, per tick.
+    ///
+    /// The error here is bounded by the states' own 2u arrival radius, so
+    /// this contributes at most 0.3 u/tick — the same order as a
+    /// defender's top speed (0.28-0.63) and therefore able to close the
+    /// last stride, while being negligible once he is on the point.
+    const GAIN: f32 = 0.15;
+
+    /// The velocity that keeps a defender on a point moving with `man`.
+    /// `error` is the vector from the defender to where he wants to be.
+    pub fn hold(man_velocity: Vector3<f32>, error: Vector3<f32>) -> Vector3<f32> {
+        man_velocity + error * Self::GAIN
+    }
+}
+
 pub struct DefensiveRecovery;
 
 /// Is there a ball here that could actually be intercepted?
@@ -214,11 +254,46 @@ impl DefensiveRecovery {
         // is that man; the legacy geometric `Primary` stays as the
         // fallback for the ticks where no plan is live (a loose ball with
         // no carrier, the first refresh of a possession).
+        //
+        // ⚠ …AND UNTIL NOW THAT SENTENCE WAS ONLY TRUE OF A BALL SOMEBODY
+        // WAS CARRYING.
+        //
+        // Both tests above are silent on a LOOSE ball.
+        // `compute_defensive_role_for_ball_carrier` opens with
+        // `let Some(ball_carrier) = opponents().with_ball().next() else {
+        // return DefensiveRole::Hold }`, and `DutyAssigner` nominates a
+        // `Press` against a live point of attack. So for every delivery
+        // in flight, every rebound and every ball dropping into our own
+        // area — the half of a match nobody owns the ball — NOBODY was
+        // exempt, including the one man the loose-ball election had just
+        // sent to win it. His state steers him at the meeting point, this
+        // rule then overwrote the DEPTH half of that with a sprint at his
+        // own goal, and what survived was the lateral half: he tracked
+        // across to the ball's line and slid past it toward the goal.
+        //
+        // Reported from the viewer exactly that way — *"a pass is played
+        // into the penalty area where there are only defenders; they
+        // don't try to get the ball, they simply run towards the goal,
+        // and the opponent takes it and scores"* — and measured with the
+        // BOX-DELIVERY CENSUS (`mid_run_diag::BOXBALL_SAMPLES`), 120
+        // fixtures at L14: with a loose ball in our own area the nearest
+        // defender is 3.4 m off the drop and is pointed more at his own
+        // goal than at the ball on **41% of ticks**, rising to **47%** on
+        // the samples where he is the nearest man to it and no attacker
+        // is closer. **71% of those samples are a defender in `TakeBall`**
+        // — the state whose entire job is to go and get it — running
+        // goalward on 45% of them.
+        //
+        // Note what the rule points at: `cover_x` is 24u GOAL-SIDE of the
+        // ball. For a man who is going to win it, "three metres past it
+        // toward my own goal" is not a cover point, it is the wrong side
+        // of the ball.
         if matches!(ctx.team().my_duty(), DefensiveDuty::Press)
             || matches!(
                 ctx.player().defensive().defensive_role_for_ball_carrier(),
                 DefensiveRole::Primary
             )
+            || Self::is_going_for_a_loose_ball(ctx)
         {
             return None;
         }
@@ -239,6 +314,121 @@ impl DefensiveRecovery {
             to_goal * Self::RECOVERY_SPEED * pace * profile.recovery_run_mult,
             weight,
         ))
+    }
+
+    /// Am I the man my side has sent after a ball nobody has?
+    ///
+    /// The same lexicographic election `should_force_takeball` uses to
+    /// redirect exactly one player per side into `TakeBall`, asked
+    /// through the one shared predicate ([`LooseBallChase::is_designated`])
+    /// so the two cannot drift apart. Measured against the ball's LANDING
+    /// position for the same reason that election is: a delivery is
+    /// contested at the drop, not at its apex.
+    ///
+    /// Deliberately the ELECTION and not the `TakeBall` state. Exempting
+    /// the state outright is recorded as tried and reverted — it is
+    /// long-lived, so the goal-side rule switched off for most of a
+    /// defender's match (goal-side presence per shot 1.05 → 0.82,
+    /// clearances 1.64 → 8.14 against a real ~3.5). The election is one
+    /// man, only while the ball is genuinely loose, and it lapses on the
+    /// tick somebody claims it.
+    ///
+    /// The restart guard mirrors `should_force_takeball`'s: a ball out of
+    /// play may only be touched by its taker, so nobody else is "going
+    /// for it" however near he is standing.
+    ///
+    /// ⚠ AND IT HAS TO BE **THEIR** BALL.
+    ///
+    /// Nothing in this rule asks whose possession it is — it fires
+    /// whenever the ball is goal-side of a defender, our own build-up
+    /// included. That is pre-existing, and the whole population is
+    /// calibrated on top of it, so widening the exemption to a pass
+    /// between two of our own defenders changes something this report is
+    /// not about. Measured over 120 fixtures: exempting the receiver of
+    /// our own pass took **pass accuracy 85.5% → 95.8%** and passes
+    /// 920 → 1 195 a team, because a centre-half receiving a square ball
+    /// had been running away from it. That is a real defect and a
+    /// separate piece of work; it is not this one.
+    ///
+    /// The report is about winning a ball BACK, so the exemption is
+    /// scoped to a ball whose last touch was not one of ours.
+    fn is_going_for_a_loose_ball(ctx: &StateProcessingContext) -> bool {
+        if Self::loose_recovery_legacy() {
+            return false;
+        }
+        if ctx.tick_context.ball.is_owned {
+            return false;
+        }
+        let theirs = ctx.tick_context.ball.last_owner.is_none_or(|id| {
+            ctx.context
+                .players
+                .by_id(id)
+                .is_none_or(|p| p.team_id != ctx.player.team_id)
+        });
+        if !theirs {
+            return false;
+        }
+        let Some(side) = ctx.player.side else {
+            return false;
+        };
+        if let Some(taker) = RestartHold::taker(ctx.tick_context) {
+            return taker == ctx.player.id;
+        }
+        let drop = ctx.tick_context.positions.ball.landing_position;
+        let my_dist_sq = (drop - ctx.player.position).norm_squared();
+        if !ctx
+            .tick_context
+            .chase
+            .is_designated(side, ctx.player.id, my_dist_sq)
+        {
+            return false;
+        }
+        // …AND IT HAS TO BE A BALL HE CAN ACTUALLY WIN.
+        //
+        // Being my side's nearest man is not the same as being the
+        // nearest man. If an opponent is going to get there first I am
+        // not going for the ball at all, I am defending the space behind
+        // it — which is precisely what this rule is for, so it must keep
+        // running.
+        //
+        // Without this the exemption fires on every pass in flight
+        // anywhere on the pitch, because somebody on the defending side
+        // is always the nearest of his eleven. Measured over 3×300
+        // fixtures against `OF_LOOSE_RECOVERY_LEGACY`, that unscoped
+        // version reads as a faster, looser match on every axis — goals
+        // 2.52 → 2.82, shots 13.5 → 15.2 a team, pass accuracy 85.5% →
+        // 89.2% — with the defensive geometry itself barely moving
+        // (goal-side at the strike 2.82 → 2.71, back line 123u → 123u).
+        // It was not costing compactness; it was taking a defender out
+        // of shape 60 m from a ball he was never going to reach.
+        //
+        // The striker gamble in [`LooseBallChase::chase_dist_sq`] is on
+        // both sides of this comparison, which is right: a forward really
+        // does read a rebound earlier, and a defender who knows the
+        // striker will beat him to it should be dropping off.
+        let theirs_closer = ctx
+            .tick_context
+            .chase
+            .best(side.opposite())
+            .is_some_and(|best| best.dist_sq < my_dist_sq);
+        !theirs_closer
+    }
+
+    /// Diagnostic switch: with `OF_LOOSE_RECOVERY_LEGACY` set, the
+    /// goal-side rule reverts to overriding the depth of the man his side
+    /// has sent after a loose ball — the behaviour the BOX-DELIVERY
+    /// CENSUS measured at 41% goalward.
+    ///
+    /// This is the A/B control for that work. It reaches every loose ball
+    /// on every tick, so the effect cannot be read off a diff, and it must
+    /// not be answered by checking out an older revision either — the
+    /// working tree moves underneath you. Same pattern and purpose as
+    /// `LooseBallChase::tail_chase` and `MovementEffort::chase_legacy`;
+    /// read once per process. Debug infrastructure — do not remove.
+    pub fn loose_recovery_legacy() -> bool {
+        use std::sync::OnceLock;
+        static LEGACY: OnceLock<bool> = OnceLock::new();
+        *LEGACY.get_or_init(|| std::env::var("OF_LOOSE_RECOVERY_LEGACY").is_ok())
     }
 }
 

@@ -457,7 +457,47 @@ impl LooseBallChase {
             None => None,
         }
     }
+
+    /// The side's designated chaser, whoever he is.
+    ///
+    /// [`Self::best_other`] answers "is somebody ELSE nearer than me",
+    /// which is the question a player asks about his own team. This one
+    /// is for asking it about the OTHER side: whether the opposition has
+    /// a man closer to the drop than we do decides whether a loose ball
+    /// is ours to win or theirs to collect.
+    #[inline]
+    pub fn best(&self, side: PlayerSide) -> Option<ChaseEntry> {
+        match side {
+            PlayerSide::Left => self.left[0],
+            PlayerSide::Right => self.right[0],
+        }
+    }
+
+    /// Is this player his side's designated chaser for a loose ball at
+    /// `my_dist_sq` from him?
+    ///
+    /// The lexicographic `(dist_sq, id)` minimum over the side's
+    /// chase-eligible entries — one man, deterministically, with no
+    /// ability weighting beyond the striker gamble already baked into
+    /// [`Self::chase_dist_sq`]. `my_dist_sq` is deliberately the caller's
+    /// RAW distance: only the team-mates being weighed against him carry
+    /// the gamble.
+    ///
+    /// Shared so the two questions that must agree cannot drift apart —
+    /// `PlayerFieldPositionGroup::should_force_takeball`, which sends him
+    /// after it, and `DefensiveRecovery::depth_override`, which must not
+    /// then turn him round and run him at his own goal.
+    #[inline]
+    pub fn is_designated(&self, side: PlayerSide, id: u32, my_dist_sq: f32) -> bool {
+        match self.best_other(side, id) {
+            Some(best) => {
+                !(best.dist_sq < my_dist_sq || (best.dist_sq == my_dist_sq && best.id < id))
+            }
+            None => true,
+        }
+    }
 }
+
 
 impl Default for LooseBallChase {
     fn default() -> Self {

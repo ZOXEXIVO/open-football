@@ -249,6 +249,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         Self::sample_duel_gates(field, context);
         #[cfg(feature = "match-logs")]
         Self::sample_loose_chase(field);
+        #[cfg(feature = "match-logs")]
+        Self::sample_box_delivery(field, context);
 
         let t = prof_on.then(Instant::now);
         Self::play_players(field, context, tick_ctx, events);

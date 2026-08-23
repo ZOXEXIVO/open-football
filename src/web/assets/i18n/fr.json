@@ -755,7 +755,7 @@
   "match_hint_touch_fly": "Joystick pour survoler le terrain",
   "match_hint_touch_zoom": "Pincer pour zoomer",
   "match_hint_zoom": "Molette pour zoomer",
-  "match_loading_download": "Téléchargement du moteur de replay 3D",
+  "match_loading_download": "Téléchargement du moteur de match 3D",
   "match_loading_starting": "Démarrage du moteur 3D",
   "match_loading_stadium": "Construction du stade",
   "match_loading_recording": "Chargement de l'enregistrement",
