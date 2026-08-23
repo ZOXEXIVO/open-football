@@ -539,6 +539,23 @@ impl MoodProfile {
                     .unwrap_or(Ordering::Equal)
             })
     }
+
+    /// The same reading on the 0..100 scale `PlayerHappiness::morale`
+    /// uses, so the parallel run can be compared without a conversion at
+    /// every call site. 50 is neutral.
+    ///
+    /// One-to-one, and that is not arbitrary: [`Self::net`] is a **sum**
+    /// of five contributions each bounded at ±10, so its own range is
+    /// ±50 and `50 + net` covers exactly 0..100. An earlier ×2.5 here
+    /// read `net` as a mean and saturated the whole staff-side parity
+    /// check against the ceiling — see `docs/staff_mind.md` §12.
+    ///
+    /// **Not a replacement for morale.** It is the left-hand side of the
+    /// phase-4b parity check and nothing reads it in the live sim; see
+    /// [`MoodProfile`] for why the swap is gated on a population census.
+    pub fn as_morale(&self) -> f32 {
+        (50.0 + self.net()).clamp(0.0, 100.0)
+    }
 }
 
 /// What one mind tick did.

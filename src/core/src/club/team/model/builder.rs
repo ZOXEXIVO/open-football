@@ -1,7 +1,7 @@
 use crate::club::news::TeamNewsroom;
-use crate::club::team::TeamFixtureWindow;
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::squad_life::social_snapshot::TeamSocialSnapshot;
+use crate::club::team::{TeamFixtureWindow, TeamLeagueHistory};
 use crate::{
     MatchHistory, PlayerCollection, StaffCollection, Tactics, Team, TeamReputation, TeamType,
     TrainingSchedule, Transfers,
@@ -129,6 +129,8 @@ impl TeamBuilder {
             // it. Stays empty until the side's first press run.
             newsroom: TeamNewsroom::for_team(id),
             league_reputation: 0,
+            league_history: TeamLeagueHistory::default(),
+            previous_league_id: None,
         })
     }
 }

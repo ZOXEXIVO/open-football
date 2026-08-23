@@ -1,8 +1,11 @@
 use super::types::{DeferredTransfer, can_club_accept_player};
 use crate::club::Person;
+use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
+use crate::club::mind::verdict::MindOption;
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::events::{LoanCompletion, TransferCompletion};
 use crate::club::player::language::Language;
+use crate::club::staff::mind::StaffSubMind;
 use crate::simulator::SimulatorData;
 use crate::transfers::TransferRoutePolicy;
 use crate::transfers::TransferWindowManager;
@@ -75,6 +78,53 @@ impl TransferExecution {
         if let Some(team) = club.teams.teams.get_mut(idx) {
             team.players.add(player);
         }
+    }
+
+    /// A player has *joined* this club's senior squad — as distinct from
+    /// being put back after a rollback, which is what the bare
+    /// [`Self::add_to_main_team`] also serves.
+    ///
+    /// The difference matters to exactly one reader: the man in the
+    /// dugout. This is where a manager's squad becomes his own, one
+    /// signing at a time, and where he finds out whether the club bought
+    /// him a player he rated.
+    pub(crate) fn sign_into_main_team(club: &mut Club, player: Player, date: NaiveDate) {
+        let player_id = player.id;
+        Self::add_to_main_team(club, player);
+
+        let club_id = club.id;
+        let Some(manager) = club
+            .teams
+            .main_mut()
+            .and_then(|team| team.staffs.head_coach_mut())
+        else {
+            return;
+        };
+        if manager.id == 0 {
+            return;
+        }
+
+        // Every arrival under him is a piece of the squad becoming his,
+        // whatever he thought of it.
+        manager.mind.ambition.signings = manager.mind.ambition.signings.saturating_add(1);
+
+        // Whether he *wanted* him is a question only his judgement organ
+        // can answer, and only about a player he has already formed a
+        // view of. No view, no episode — a manager has no opinion to
+        // record about a man he has never watched.
+        let verdict = manager
+            .mind
+            .judgement
+            .weigh(MindOption::SignThisPlayer(player_id), &manager.mind.organs);
+        if verdict.is_empty() {
+            return;
+        }
+        let kind = if verdict.net() >= 0.0 {
+            EpisodeKind::SignedAPlayerIWanted
+        } else {
+            EpisodeKind::SignedAPlayerIDidNotWant
+        };
+        manager.remember(kind, ActorRef::player(player_id), date, club_id);
     }
 
     /// Upfront cash portion of a permanent transfer fee after carving out
@@ -909,7 +959,7 @@ pub(crate) fn execute_transfer_within_country(
                 }
             }
         }
-        TransferExecution::add_to_main_team(buying_club, player);
+        TransferExecution::sign_into_main_team(buying_club, player, date);
 
         SquadReactionPass::arrival_reception(
             buying_club,
@@ -1144,7 +1194,7 @@ fn execute_loan_within_country(
         };
 
         buying_club.finance.pay_loan_fee(loan_fee);
-        TransferExecution::add_to_main_team(buying_club, player);
+        TransferExecution::sign_into_main_team(buying_club, player, date);
         // The borrowing dressing room reacts to a loan arrival like
         // any other signing — this path used to install him silently.
         SquadReactionPass::arrival_reception(
@@ -1490,7 +1540,7 @@ fn execute_transfer_across_countries(
                 }
             }
         }
-        TransferExecution::add_to_main_team(buying_club, player);
+        TransferExecution::sign_into_main_team(buying_club, player, date);
 
         // Compatriot integration pass — same shape as the within-country
         // path, but the player has just stepped off a flight rather than
@@ -1787,7 +1837,7 @@ fn execute_loan_across_countries(
         // `complete_loan` ran and nothing since resizes `clubs`.
         let buying_club = &mut buying_country.clubs[buying_club_index];
         buying_club.finance.pay_loan_fee(loan_fee);
-        TransferExecution::add_to_main_team(buying_club, player);
+        TransferExecution::sign_into_main_team(buying_club, player, date);
         // A foreign loanee's new dressing room reacts too — compatriot
         // integration matters MOST on a cross-border loan.
         SquadReactionPass::arrival_reception(

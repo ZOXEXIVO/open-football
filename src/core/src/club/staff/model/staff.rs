@@ -1,6 +1,9 @@
 // Assuming rand is available
 extern crate rand;
+use crate::club::mind::organs::goals::GoalKind;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
+use crate::club::mind::verdict::{MindOption, ReasonSet};
+use crate::club::staff::mind::organs::judgements::CoachDecisionState;
 use crate::club::staff::mind::{StaffMind, StaffTickContext};
 use crate::club::staff::{CoachMemoryStore, CoachSquadPlan};
 use crate::club::{PersonBehaviour, StaffClubContract, StaffPosition, StaffStatus};
@@ -96,6 +99,21 @@ pub struct Staff {
     /// Empty by default, and every consumer falls back to its previous
     /// behaviour on an empty plan.
     pub squad_plan: CoachSquadPlan,
+
+    /// His running impressions of the squad he works with, and the two
+    /// accumulators that go with them — emotional heat and trigger
+    /// pressure.
+    ///
+    /// Lived on `TeamCollection` until S2 of `docs/staff_mind.md`, where
+    /// it was rebuilt from nothing every time the head-coach id changed.
+    /// Two accumulators that exist precisely to have history, attached
+    /// to the club rather than the man. It belongs here, beside
+    /// [`Staff::coach_memory`] — the two are one organ.
+    ///
+    /// [`CoachDecisionState::unbound`] for everyone who never takes a
+    /// dugout; bound on the first `ensure_coach_state` that finds him
+    /// in the seat.
+    pub decision_state: CoachDecisionState,
 
     /// His mind: what he remembers, what he wants, what he thinks of
     /// every player he has coached, and the five faculties that reason
@@ -529,6 +547,7 @@ impl Staff {
             specialization_days: [0; 4],
             coach_memory: CoachMemoryStore::new(),
             squad_plan: CoachSquadPlan::new(),
+            decision_state: CoachDecisionState::unbound(),
             mind: StaffMind::new(),
         }
     }
@@ -993,23 +1012,98 @@ impl Staff {
         }
     }
 
+    /// Net argument at or above which he has decided to go.
+    ///
+    /// Reachable only by a man several faculties agree is finished:
+    /// security below [`AmbitionMind::DOOMED`], a dressing room he has
+    /// lost, or strain that has outlasted his appetite. A settled
+    /// manager produces no argument at all.
+    ///
+    /// [`AmbitionMind::DOOMED`]: crate::club::staff::mind::AmbitionMind::DOOMED
+    const WALKS_AWAY: f32 = 0.60;
+
+    /// And below which he has decided to stay, and does not need a die
+    /// roll on a bad week to tell him otherwise.
+    const STAYS: f32 = -0.20;
+
     fn check_resignation_triggers(&self, result: &mut StaffResult) {
-        // Multiple factors can trigger resignation consideration
+        // What he actually thinks about walking away.
+        //
+        // This is the site §2.4 of `docs/staff_mind.md` is about: a
+        // manager leaving used to be `job_satisfaction` moving on four
+        // step-functions and then `rand::random::<f32>() < prob`. A man
+        // walking away is the end of a process, and the process is the
+        // strain, the appetite and the read of his own position that
+        // `WelfareMind` and `AmbitionMind` have been accumulating all
+        // season.
+        //
+        // Conservative by construction, like `candidate_accepts_terms`:
+        // a member of staff whose faculties have no view produces an
+        // **empty** verdict and gets the old path untouched. That is
+        // every physio, every scout, and every manager whose job is
+        // going fine — so the baseline is preserved where nothing is
+        // wrong, and the mind only speaks where something is.
+        let verdict = self.mind.deliberate(MindOption::Resign);
+        if verdict.is_empty() {
+            self.roll_for_resignation(result);
+            return;
+        }
+
+        let net = verdict.net();
+        if net >= Self::WALKS_AWAY {
+            result.resignation_risk = true;
+            result.resigned = true;
+            result.resignation_reason = Some(self.resignation_reason(&verdict));
+            return;
+        }
+        if net <= Self::STAYS {
+            // Reasons to stay — supporters behind him, a build he is in
+            // the middle of — and no roll at all. The old path had no way
+            // to express this: every tick was another chance to quit.
+            return;
+        }
+        self.roll_for_resignation(result);
+    }
+
+    /// The legacy path, kept whole for everyone the mind has nothing to
+    /// say about.
+    fn roll_for_resignation(&self, result: &mut StaffResult) {
         let resignation_probability = self.calculate_resignation_probability();
 
-        if resignation_probability > 0.0 {
-            if rand::random::<f32>() < resignation_probability {
-                result.resignation_risk = true;
+        if resignation_probability > 0.0 && rand::random::<f32>() < resignation_probability {
+            result.resignation_risk = true;
 
-                if resignation_probability > 0.5 {
-                    // Actually submit resignation
-                    result.resigned = true;
-                    result.resignation_reason = Some(self.determine_resignation_reason());
-                }
+            if resignation_probability > 0.5 {
+                result.resigned = true;
+                result.resignation_reason = Some(self.determine_resignation_reason());
             }
         }
     }
 
+    /// Why he went, read off the loudest thing he was arguing.
+    ///
+    /// Falls back to the legacy thresholds when the strongest reason
+    /// maps to nothing — so the reason is never less specific than it
+    /// used to be.
+    fn resignation_reason(&self, verdict: &ReasonSet) -> ResignationReason {
+        let Some(loudest) = verdict.strongest() else {
+            return self.determine_resignation_reason();
+        };
+        match loudest.goal {
+            GoalKind::RetireFromTheGame => ResignationReason::Retirement,
+            GoalKind::GetABiggerJob | GoalKind::TakeANationalJob => {
+                ResignationReason::BetterOpportunity
+            }
+            GoalKind::RestoreOrderInTheRoom => ResignationReason::PersonalReasons,
+            GoalKind::GetOutOfHere if self.mind.welfare.is_burnt_out() => {
+                ResignationReason::Burnout
+            }
+            GoalKind::GetOutOfHere | GoalKind::BeBackedInTheMarket | GoalKind::KeepThisJob => {
+                ResignationReason::LowSatisfaction
+            }
+            _ => self.determine_resignation_reason(),
+        }
+    }
     fn process_relationships(&mut self, ctx: &GlobalContext<'_>, result: &mut StaffResult) {
         if ctx.simulation.date.hour() == 12 {
             // Small random relationship events
@@ -1429,7 +1523,7 @@ pub enum StaffMoraleEvent {
     ExcellentPerformance,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResignationReason {
     LowSatisfaction,
     Burnout,
@@ -1501,6 +1595,9 @@ impl StaffClubContract {
 mod tests {
     use super::*;
     use crate::StaffStatus;
+    use crate::club::mind::organs::memory::{ActorRef, EpisodeKind, MindEpisode};
+    use crate::club::mind::verdict::MindOption;
+    use crate::club::staff::mind::{StaffSubMind, WelfareMind};
 
     fn make_contracted_staff(id: u32, position: StaffPosition) -> Staff {
         let mut staff = StaffStub::default();
@@ -1613,5 +1710,114 @@ mod tests {
         let collection = StaffCollection::new(vec![coach]);
         let chosen = collection.get_by_position(StaffPosition::Manager);
         assert_eq!(chosen.id, 0);
+    }
+
+    // ── Resignation: the die roll, and what replaced it ─────────────
+    //
+    // `docs/staff_mind.md` §2.4. The old path was four step-functions on
+    // `job_satisfaction` and then `rand::random::<f32>() < prob`. What
+    // follows pins the three zones the mind introduced, and the one that
+    // matters most is the first: where the mind is silent, nothing about
+    // the old behaviour changed.
+
+    /// A contented manager: nothing for `calculate_resignation_probability`
+    /// to add up, and nothing for any faculty to say.
+    fn settled_manager() -> Staff {
+        let mut staff = make_contracted_staff(1, StaffPosition::Manager);
+        staff.job_satisfaction = 70.0;
+        staff.fatigue = 10.0;
+        staff
+    }
+
+    #[test]
+    fn a_manager_with_nothing_wrong_never_resigns_and_never_hears_from_his_mind() {
+        let staff = settled_manager();
+        assert!(
+            staff.mind.deliberate(MindOption::Resign).is_empty(),
+            "an untroubled mind has no argument to make"
+        );
+
+        // The old path, unchanged: probability 0, so the roll can never
+        // fire however many times it is taken.
+        for _ in 0..200 {
+            let mut result = StaffResult::new(staff.id);
+            staff.check_resignation_triggers(&mut result);
+            assert!(!result.resigned);
+            assert!(!result.resignation_risk);
+        }
+    }
+
+    #[test]
+    fn a_finished_manager_walks_without_a_die_roll() {
+        // Burnt out, out of appetite, and reading his own position as
+        // hopeless — three faculties agreeing. This is the process the
+        // coin flip was standing in for.
+        let mut staff = settled_manager();
+        staff.mind.welfare = WelfareMind::default();
+        for _ in 0..40 {
+            staff.mind.welfare.observe(
+                &MindEpisode::new(
+                    EpisodeKind::LostTheDressingRoom,
+                    ActorRef::club(7),
+                    7,
+                    1_000,
+                    -0.9,
+                    0.9,
+                ),
+                &mut staff.mind.organs,
+            );
+        }
+        assert!(staff.mind.welfare.is_burnt_out());
+
+        // Deterministic: the same input, two hundred times, one answer.
+        for _ in 0..200 {
+            let mut result = StaffResult::new(staff.id);
+            staff.check_resignation_triggers(&mut result);
+            assert!(result.resigned, "he has decided, and it is not a coin flip");
+            assert_eq!(
+                result.resignation_reason,
+                Some(ResignationReason::Burnout),
+                "and the reason is the loudest thing he was arguing"
+            );
+        }
+    }
+
+    #[test]
+    fn reasons_to_stay_stop_the_roll_a_bad_week_used_to_win() {
+        // Low satisfaction, so the legacy probability is non-zero and the
+        // old path would keep rolling every single tick. But the
+        // supporters are with him and he is not finished — the third
+        // zone, which the old path had no way to express.
+        let mut staff = settled_manager();
+        staff.job_satisfaction = 15.0;
+        assert!(
+            staff.calculate_resignation_probability() > 0.0,
+            "the legacy path would be rolling here"
+        );
+
+        for _ in 0..30 {
+            staff.mind.authority.observe(
+                &MindEpisode::new(
+                    EpisodeKind::SupportersSangMyName,
+                    ActorRef::fans(7),
+                    7,
+                    1_000,
+                    0.8,
+                    0.8,
+                ),
+                &mut staff.mind.organs,
+            );
+        }
+        let verdict = staff.mind.deliberate(MindOption::Resign);
+        assert!(!verdict.is_empty() && verdict.net() <= Staff::STAYS);
+
+        for _ in 0..200 {
+            let mut result = StaffResult::new(staff.id);
+            staff.check_resignation_triggers(&mut result);
+            assert!(
+                !result.resigned,
+                "a man with the crowd behind him does not quit on a bad week"
+            );
+        }
     }
 }

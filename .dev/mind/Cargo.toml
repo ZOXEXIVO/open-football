@@ -1,0 +1,41 @@
+[package]
+name = "dev_mind"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Mind telemetry harness. Ticks the whole world exactly like
+# `.dev/simulate` and then walks every player and every member of staff,
+# reporting what their minds actually hold — and, crucially, how far the
+# two parallel runs have drifted from the layers they are shadowing.
+#
+# The two censuses `docs/player_mind.md` (3b, 4b) and
+# `docs/staff_mind.md` (§10) gate their remaining phases on live here.
+# Neither can be answered by a unit test: both ask what a *population*
+# does over a season, not what one contrived fixture does once.
+#
+# NB: like `.dev/transfers` this does NOT default to `match-stub`. The
+# mind is fed by played matches — episodes, form, coach observations, the
+# situation every faculty reflects on — so a stubbed 0-0 world would
+# report a mind that cannot exist.
+core = { path = "../../src/core" }
+database = { path = "../../src/database" }
+chrono = "0.4"
+log = "0.4"
+env_logger = "0.11"
+mimalloc = "0.1"
+
+[features]
+default = []
+match-stub = ["core/match-stub"]
+
+# Match the optimized production profile: a season of world ticks with
+# the real engine is only tractable under release codegen.
+[profile.release]
+lto = true
+codegen-units = 1
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false

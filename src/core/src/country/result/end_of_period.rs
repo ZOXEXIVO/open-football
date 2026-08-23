@@ -2431,7 +2431,7 @@ impl CountryResult {
                         "⬇️ Relegation: team {} ({}) moves to league {}",
                         team.name, team.id, tier2_id
                     );
-                    team.league_id = Some(tier2_id);
+                    team.move_to_league(tier2_id);
                     new_main_league_id = Some(tier2_id);
                     // Year-defining wound — emit per player. The promo
                     // counterpart already ran in season_awards via the
@@ -2471,7 +2471,7 @@ impl CountryResult {
                         "⬆️ Promotion: team {} ({}) moves to league {}",
                         team.name, team.id, tier1_id
                     );
-                    team.league_id = Some(tier1_id);
+                    team.move_to_league(tier1_id);
                     new_main_league_id = Some(tier1_id);
                     // Symmetric to the relegation hooks above —
                     // PromotionWageIncrease bumps salary; players
@@ -2583,7 +2583,7 @@ impl CountryResult {
                             TeamType::U23 => 140000,
                             _ => 200000, // B/Reserve teams use generic friendly league
                         };
-                        team.league_id = Some(new_league_id + type_offset);
+                        team.move_to_league(new_league_id + type_offset);
                     }
                 }
             }

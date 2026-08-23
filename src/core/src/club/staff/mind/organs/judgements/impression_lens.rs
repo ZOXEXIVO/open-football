@@ -1,10 +1,20 @@
+//! The perception half of an impression: how one coach's lens distorts
+//! what he is looking at.
+//!
+//! Moved out of `staff/perception/` together with
+//! [`CoachDecisionState`], so a type's inherent impl is not split across
+//! two folders. What stays behind is the lens itself — `CoachProfile`,
+//! `PerceptionLens`, `PlayerBias`, `PlayerImpression` and the
+//! estimators — which is what this reads *through*.
+//!
+//! [`CoachDecisionState`]: super::impressions::CoachDecisionState
+
 use crate::utils::DateUtils;
 use crate::{Player, TeamType};
 use chrono::NaiveDate;
 
-use super::bias::PlayerBias;
-use super::state::CoachDecisionState;
-use super::utils::date_to_week;
+use super::impressions::CoachDecisionState;
+use crate::club::staff::perception::{PlayerBias, date_to_week};
 
 impl CoachDecisionState {
     /// Lens-weighted skill composite using the coach's perception lens

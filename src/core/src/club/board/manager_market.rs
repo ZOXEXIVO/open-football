@@ -23,7 +23,7 @@ use crate::club::Club;
 use crate::club::StaffStub;
 use crate::club::Team;
 use crate::club::board::ClubBoard;
-use crate::club::mind::organs::memory::{ActorRef, EpisodeKind, FactClaim};
+use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::mind::verdict::MindOption;
 use crate::club::news::ClubAffair;
 use crate::club::staff::free_pool;
@@ -1646,6 +1646,7 @@ mod tests {
     use super::*;
     use crate::club::BoardResult;
     use crate::club::StaffStub;
+    use crate::club::mind::organs::memory::FactClaim;
 
     fn coach(id: u32, age: u8, today: NaiveDate, skill: u8) -> Staff {
         let mut s = StaffStub::default();

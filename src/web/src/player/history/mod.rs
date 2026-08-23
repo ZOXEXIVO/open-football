@@ -98,6 +98,37 @@ struct TeamLocationInfo {
     pub country_slug: String,
     pub league_name: String,
     pub league_slug: String,
+    /// The side's division season by season, oldest first, resolved to
+    /// display labels. Read through [`TeamLocationInfo::league_for_season`]
+    /// so a row for a season the club spent in another division is never
+    /// labelled with the one it sits in today.
+    pub league_by_season: Vec<(u16, String, String)>,
+    /// Most recent season the record above closed; past it it is silent.
+    pub last_recorded_season: Option<u16>,
+}
+
+impl TeamLocationInfo {
+    /// The division to print against a season. The recorded spell wins for
+    /// any season the record covers; `league_name` / `league_slug` (the
+    /// side's CURRENT division) answers outside it — correct for the
+    /// campaign in progress, and the best available answer for a season
+    /// older than the record.
+    fn league_for_season(&self, season_start_year: u16) -> (String, String) {
+        if self
+            .last_recorded_season
+            .is_some_and(|last| last >= season_start_year)
+        {
+            if let Some((_, name, slug)) = self
+                .league_by_season
+                .iter()
+                .rev()
+                .find(|(year, _, _)| *year <= season_start_year)
+            {
+                return (name.clone(), slug.clone());
+            }
+        }
+        (self.league_name.clone(), self.league_slug.clone())
+    }
 }
 
 fn find_team_location(simulator_data: &SimulatorData, team_slug: &str) -> Option<TeamLocationInfo> {
@@ -122,12 +153,30 @@ fn find_team_location(simulator_data: &SimulatorData, team_slug: &str) -> Option
                             .map(|l| (l.name.clone(), l.slug.clone()))
                             .unwrap_or_default();
 
+                        let league_by_season = t
+                            .league_history
+                            .spells()
+                            .iter()
+                            .filter_map(|spell| {
+                                country
+                                    .leagues
+                                    .leagues
+                                    .iter()
+                                    .find(|l| l.id == spell.league_id)
+                                    .map(|l| {
+                                        (spell.season_start_year, l.name.clone(), l.slug.clone())
+                                    })
+                            })
+                            .collect();
+
                         return Some(TeamLocationInfo {
                             country_code: country.code.clone(),
                             country_name: country.name.clone(),
                             country_slug: country.slug.clone(),
                             league_name,
                             league_slug,
+                            league_by_season,
+                            last_recorded_season: t.league_history.last_recorded_season(),
                         });
                     }
                 }
@@ -374,14 +423,33 @@ pub async fn player_history_action(
                 item.team_slug.clone(),
                 item.league_slug.clone(),
             );
-            // Every season row gets a breakdown so the dropdown icon
-            // and accordion render consistently. When the projection
-            // doesn't have one (synthetic gap-fill rows from
-            // fill_career_gaps, or a key mismatch we haven't seen
-            // before), synthesise a single League line from the
-            // row's own stats so the expansion still shows the row's
-            // numbers under a labelled competition.
-            let fallback_league_slug = item.league_slug.clone();
+            // The row's own stamp wins: it was written from the spell,
+            // which recorded the division when the spell opened — during
+            // the season, so it is that season's division even for a
+            // borrower on a loan row. Only when the row carries no stamp
+            // does the club's own record answer, and it answers PER SEASON.
+            //
+            // The old fallback was the club's league *today*, which is
+            // right exactly until the club is promoted or relegated — after
+            // that every earlier season on every one of its players' pages
+            // silently re-labels itself to the new division. A club moves
+            // between divisions; its history must not move with it.
+            let (league_name, league_slug) = if !item.league_name.is_empty() {
+                (item.league_name, item.league_slug)
+            } else {
+                location
+                    .map(|l| l.league_for_season(item.season.start_year))
+                    .unwrap_or_default()
+            };
+
+            // Every season row gets a breakdown so the dropdown icon and
+            // accordion render consistently. When the projection doesn't
+            // have one (synthetic gap-fill rows from fill_career_gaps, or a
+            // key mismatch we haven't seen before), synthesise a single
+            // League line from the row's own stats so the expansion still
+            // shows the row's numbers under a labelled competition — under
+            // the season's OWN division, resolved just above.
+            let fallback_league_slug = league_slug.clone();
             let breakdown = breakdown_index
                 .get(&breakdown_key)
                 .cloned()
@@ -394,15 +462,6 @@ pub async fn player_history_action(
                         stats: to_history_stats(&item.statistics),
                     }]
                 });
-
-            // If league name is empty, fall back to team's current league
-            let (league_name, league_slug) = if !item.league_name.is_empty() {
-                (item.league_name, item.league_slug)
-            } else {
-                location
-                    .map(|l| (l.league_name.clone(), l.league_slug.clone()))
-                    .unwrap_or_default()
-            };
 
             PlayerHistorySeasonItem {
                 season: item.season.display,

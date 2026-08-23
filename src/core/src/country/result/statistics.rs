@@ -122,6 +122,16 @@ impl CountryResult {
             .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
             .collect();
 
+        // The division a side played the CLOSING season in — which is not
+        // `team.league_id` once promotion / relegation has run, because
+        // that swap fires on the 1st of the month after the last league
+        // finishes and this snapshot fires weeks later on the season-start
+        // regen. `previous_league_id` is the hand-off the swap leaves
+        // behind; without it every player row for the season just played
+        // would be filed under the division the club is moving INTO.
+        let ended_league_of =
+            |team: &crate::Team| -> Option<u32> { team.previous_league_id.or(team.league_id) };
+
         country.clubs.par_iter_mut().for_each(|club| {
             // Resolve the main-team identity once per club so non-senior
             // squads (Reserve, U18..U23) can alias under it. The player
@@ -130,8 +140,7 @@ impl CountryResult {
             // non-owning teams never appear under their own slug, but
             // the player still belongs to the parent club's main team.
             let main_team_info: Option<TeamInfo> = club.teams.main().map(|t| {
-                let (league_name, league_slug) = t
-                    .league_id
+                let (league_name, league_slug) = ended_league_of(t)
                     .and_then(|lid| league_lookup.get(&lid))
                     .cloned()
                     .unwrap_or_default();
@@ -145,6 +154,24 @@ impl CountryResult {
             });
 
             for team in &mut club.teams.teams {
+                // Record the closing season's division on the side itself
+                // before anything reads it, so every surface that needs
+                // "which league in season N" has a recorded answer instead
+                // of re-deriving one from where the club sits today.
+                let ended_league_id = ended_league_of(team);
+                if let Some(league_id) = ended_league_id {
+                    team.league_history
+                        .record(ended_season.start_year, league_id);
+                }
+                // Spend the hand-off on the target year only. Older
+                // catch-up years are placeholder seasons we have no better
+                // information for, so they attribute the same pre-swap
+                // division; the target year is the one the swap was
+                // actually about, and after it the side has arrived.
+                if drain_live_stats {
+                    team.previous_league_id = None;
+                }
+
                 let keeps_own_identity = team.team_type.is_own_team();
 
                 if !keeps_own_identity {
@@ -159,8 +186,7 @@ impl CountryResult {
                         Some(info) => info.clone(),
                         None => continue,
                     };
-                    let (youth_league_name, youth_league_slug) = team
-                        .league_id
+                    let (youth_league_name, youth_league_slug) = ended_league_id
                         .and_then(|lid| league_lookup.get(&lid))
                         .cloned()
                         .unwrap_or_default();
@@ -187,8 +213,7 @@ impl CountryResult {
                     continue;
                 }
 
-                let (league_name, league_slug) = team
-                    .league_id
+                let (league_name, league_slug) = ended_league_id
                     .and_then(|lid| league_lookup.get(&lid))
                     .cloned()
                     .unwrap_or_default();
@@ -1248,5 +1273,100 @@ mod tests {
                 "missed-year placeholder must not absorb target-year stats"
             );
         }
+    }
+
+    /// A club that goes up (or down) must not drag its players' earlier
+    /// seasons into the new division. Promotion / relegation rewrites
+    /// `Team::league_id` on the 1st of the month after the last league
+    /// finishes; the season-end snapshot runs weeks later on the
+    /// season-start regen. A snapshot that read `league_id` would file the
+    /// whole just-played campaign under the division the club is moving
+    /// INTO — the reported "history shows the current club league" case.
+    #[test]
+    fn a_promoted_clubs_closing_season_is_filed_under_the_division_it_played_in() {
+        let player = make_player(1, 30, 5);
+        let mut main_team = make_team(
+            10,
+            100,
+            "Palermo",
+            "palermo",
+            TeamType::Main,
+            Some(2), // second tier — where the closing season was played
+            vec![player],
+        );
+        // Promotion has already run this off-season, exactly as the real
+        // pipeline orders it: the side now belongs to tier 1.
+        main_team.move_to_league(1);
+        assert_eq!(main_team.league_id, Some(1));
+        assert_eq!(main_team.previous_league_id, Some(2));
+
+        let club = make_club(100, "Palermo", vec![main_team]);
+        let mut country = make_country(
+            vec![club],
+            vec![
+                make_league(1, "Serie A", "serie-a", false),
+                make_league(2, "Serie B", "serie-b", false),
+            ],
+        );
+
+        CountryResult::snapshot_country(&mut country, make_date(2029, 7, 1));
+
+        let team = &country.clubs[0].teams.teams[0];
+        // The side itself now carries the record, and it names the
+        // division actually played, not the one just joined.
+        assert_eq!(
+            team.league_history.league_for_season(2028),
+            Some(2),
+            "the closing season must be recorded under the pre-promotion division"
+        );
+        // The hand-off is spent, so next season resolves to the new one.
+        assert_eq!(team.previous_league_id, None);
+        assert_eq!(team.league_for_season(2029), Some(1));
+
+        // And the player's frozen row is stamped with it.
+        let player = &team.players.players[0];
+        let row = player
+            .statistics_history
+            .season_ledger
+            .iter()
+            .find(|e| e.season_start_year == 2028 && e.team_slug == "palermo")
+            .expect("2028 Palermo row missing");
+        assert_eq!(
+            row.league_slug, "serie-b",
+            "the season played in Serie B must not be labelled Serie A"
+        );
+    }
+
+    /// The counterpart: a club that never moves keeps one record entry and
+    /// every season resolves to its one division.
+    #[test]
+    fn a_settled_club_records_one_spell_for_every_season() {
+        let player = make_player(1, 30, 5);
+        let main_team = make_team(
+            10,
+            100,
+            "Juventus",
+            "juventus",
+            TeamType::Main,
+            Some(1),
+            vec![player],
+        );
+        let club = make_club(100, "Juventus", vec![main_team]);
+        let mut country = make_country(
+            vec![club],
+            vec![make_league(1, "Serie A", "serie-a", false)],
+        );
+
+        CountryResult::snapshot_country(&mut country, make_date(2029, 7, 1));
+        CountryResult::snapshot_country(&mut country, make_date(2030, 7, 1));
+
+        let team = &country.clubs[0].teams.teams[0];
+        assert_eq!(
+            team.league_history.spells().len(),
+            1,
+            "an unmoved side must not grow one entry per season"
+        );
+        assert_eq!(team.league_for_season(2028), Some(1));
+        assert_eq!(team.league_for_season(2029), Some(1));
     }
 }

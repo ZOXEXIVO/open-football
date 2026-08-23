@@ -185,10 +185,9 @@ impl Club {
             situation.season_progress = (table.played as f32 / table.total as f32).clamp(0.0, 1.0);
         }
         // The dressing room, as the coach's own decision state already
-        // measures it. One of the two accumulators §2.6 of
-        // `docs/staff_mind.md` wants re-homed onto the man — read here
-        // rather than moved, because moving it changes selection.
-        if let Some(state) = &self.teams.coach_state {
+        // measures it. It lives on the man since S2, so this is now the
+        // manager reading his own state rather than the club's.
+        if let Some(state) = self.teams.head_coach_decision_state() {
             situation.dressing_room = state.squad_satisfaction.clamp(0.0, 1.0);
         }
 
@@ -213,6 +212,7 @@ impl Club {
         let Some(main) = self.teams.main_mut() else {
             return;
         };
+        let squad_size = main.players.players.len();
         let Some(manager) = main.staffs.head_coach_mut() else {
             return;
         };
@@ -240,13 +240,17 @@ impl Club {
         situation.months_in_the_job = months;
         situation.trophies_here = manager.mind.ambition.honours_here;
 
-        // How much of the side is his. A proxy on tenure rather than a
-        // signings counter: squads turn over at roughly a quarter a
-        // year, so four seasons is a squad a manager built. Marked as a
-        // proxy on purpose — a real per-manager signings count belongs
-        // on the transfer pipeline, and until it exists a proxy that is
-        // right on average beats a field that is always 0.5.
-        situation.squad_is_his = (months as f32 / 48.0).clamp(0.0, 1.0);
+        // How much of the side is his: the players he has actually
+        // signed, over the size of the squad he picks from. Counted at
+        // the arrival chokepoint (`TransferExecution::sign_into_main_team`)
+        // rather than inferred from tenure, so a manager backed in two
+        // windows reads as further along than one given four quiet
+        // seasons — which is the difference the counterweight is for.
+        situation.squad_is_his = if squad_size == 0 {
+            0.0
+        } else {
+            (manager.mind.ambition.signings as f32 / squad_size as f32).clamp(0.0, 1.0)
+        };
 
         manager.mind.tick_with(&context, &situation);
     }

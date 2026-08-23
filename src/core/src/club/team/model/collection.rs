@@ -1,5 +1,6 @@
 use crate::club::player::behaviour_config::HappinessConfig;
-use crate::club::staff::perception::{CoachDecisionState, date_to_week};
+use crate::club::staff::mind::organs::judgements::CoachDecisionState;
+use crate::club::staff::perception::{CoachProfile, date_to_week};
 use crate::club::team::squad::SquadSatisfaction;
 use crate::club::team::squad::{ContractRenewalManager, SquadManager};
 use crate::context::GlobalContext;
@@ -8,20 +9,27 @@ use crate::{HappinessEventType, PlayerStatusType, Team, TeamResult, TeamType};
 use chrono::NaiveDate;
 use rayon::iter::IntoParallelRefMutIterator;
 use rayon::iter::ParallelIterator;
+use std::mem;
 use std::slice::Iter;
 use std::slice::IterMut;
 
 #[derive(Debug, Clone)]
 pub struct TeamCollection {
     pub teams: Vec<Team>,
-    pub coach_state: Option<CoachDecisionState>,
+    /// Who was in the head-coach seat the last time the club looked.
+    ///
+    /// The decision state itself lives on the man (S2 of
+    /// `docs/staff_mind.md`); what stays here is the one genuinely
+    /// club-side fact — who the club last had — because that is what
+    /// tells it a manager has *changed* and the squad should react.
+    previous_head_coach_id: Option<u32>,
 }
 
 impl TeamCollection {
     pub fn new(teams: Vec<Team>) -> Self {
         TeamCollection {
             teams,
-            coach_state: None,
+            previous_head_coach_id: None,
         }
     }
 
@@ -165,26 +173,93 @@ impl TeamCollection {
 
     // ─── Coach state management ──────────────────────────────────────
 
+    /// The head coach's decision state — his impressions of the squad
+    /// and the three accumulators that go with them.
+    ///
+    /// It lives on the man (S2 of `docs/staff_mind.md`), so this walks
+    /// the same manager → caretaker → assistant chain `head_coach()`
+    /// does and returns `None` only when every seat is genuinely
+    /// vacant. Read through this rather than reaching for the field:
+    /// the S2 census in `staff/mind/organs/judgements/census.rs` guards
+    /// it, and it is the one place that knows where the state now is.
+    pub fn head_coach_decision_state(&self) -> Option<&CoachDecisionState> {
+        let coach = self.main()?.staffs.head_coach();
+        if coach.id == 0 {
+            return None;
+        }
+        Some(&coach.decision_state)
+    }
+
+    /// Lift the head coach's state out for the duration of a pass that
+    /// also needs the squads.
+    ///
+    /// The state lives *inside* `teams[main]` now, and every consumer
+    /// wants the squads at the same time. Taking it out and putting it
+    /// back is the only way to hold both — the same `Option::take`
+    /// dance this collection did before the state moved, one level
+    /// further down. Safe because no pass that borrows it moves staff
+    /// between teams; only players move.
+    fn take_coach_state(&mut self) -> Option<CoachDecisionState> {
+        let coach = self.main_mut()?.staffs.head_coach_mut()?;
+        if coach.id == 0 {
+            return None;
+        }
+        Some(mem::take(&mut coach.decision_state))
+    }
+
+    /// Put back what [`Self::take_coach_state`] lifted out.
+    fn restore_coach_state(&mut self, state: Option<CoachDecisionState>) {
+        let Some(state) = state else {
+            return;
+        };
+        let Some(coach) = self
+            .main_mut()
+            .and_then(|team| team.staffs.head_coach_mut())
+        else {
+            return;
+        };
+        coach.decision_state = state;
+    }
+
     /// Returns `true` when a genuine manager CHANGE was detected this
     /// call (a previous coach existed and the head-coach id moved) — the
     /// club-level caller uses that to open the new manager's squad
     /// review window on the transfer plan.
+    ///
+    /// Binding is now the whole of the work. Before S2 this rebuilt the
+    /// state from nothing at every change of manager; the state lives on
+    /// the man, so a new arrival simply brings his own — including what
+    /// he already thinks of any player he has coached before.
     pub fn ensure_coach_state(&mut self, date: NaiveDate) -> bool {
-        let main_team = match self.main() {
-            Some(t) => t,
-            None => return false,
+        let Some(main_team) = self.main() else {
+            return false;
         };
-
         let head_coach = main_team.staffs.head_coach();
         let coach_id = head_coach.id;
+        if coach_id == 0 {
+            return false;
+        }
+        let profile = CoachProfile::from_staff(head_coach);
+        let previously_bound = head_coach.decision_state.is_bound();
+        let same_man = head_coach.decision_state.coach_id == coach_id;
 
-        let previous_coach_id = self.coach_state.as_ref().map(|state| state.coach_id);
-        let needs_rebuild = previous_coach_id.map(|pid| pid != coach_id).unwrap_or(true);
+        // A change of manager is detected against the man in the seat,
+        // not against a club-side record: the seat changed if the coach
+        // now standing in it is holding a state bound to someone else,
+        // or none at all while the club has already run a coach before.
+        let manager_changed = self.previous_head_coach_id.is_some_and(|id| id != coach_id);
+        let previous_coach_id = self.previous_head_coach_id;
+        self.previous_head_coach_id = Some(coach_id);
 
-        let mut manager_changed = false;
-        if needs_rebuild {
-            self.coach_state = Some(CoachDecisionState::new(head_coach, date));
+        if let Some(coach) = self.main_mut().and_then(|t| t.staffs.head_coach_mut()) {
+            if !same_man || !previously_bound {
+                coach.decision_state.bind(coach_id, profile, date);
+            } else {
+                coach.decision_state.current_week = date_to_week(date);
+            }
+        }
 
+        if manager_changed {
             // Manager-change shock: only fire when there actually was a
             // previous coach (not on first-ever initialization). Players
             // who had a strong bond with the outgoing coach take a hit;
@@ -193,26 +268,20 @@ impl TeamCollection {
             if let Some(prev_id) = previous_coach_id {
                 Self::fire_manager_departure_events(&mut self.teams, prev_id);
                 Self::fire_new_manager_bounce_events(&mut self.teams);
-                manager_changed = true;
             }
-        }
-
-        if let Some(ref mut state) = self.coach_state {
-            state.current_week = date_to_week(date);
         }
 
         // Refresh the coach's squad-satisfaction read (size / performance /
         // quality spread / position coverage) — cheap, and it's the "how
-        // complete is my squad" signal recruitment urgency consumes. Split
-        // borrow: the team is read-only, the state is written.
+        // complete is my squad" signal recruitment urgency consumes. Lift
+        // the state out so the team can be read while the state is
+        // written; they share an owner now.
         if let Some(idx) = self.main_index() {
-            let sat = self
-                .coach_state
-                .as_ref()
-                .map(|state| SquadSatisfaction::compute(&self.teams[idx], state));
-            if let (Some(sat), Some(state)) = (sat, self.coach_state.as_mut()) {
-                state.squad_satisfaction = sat;
+            let mut state = self.take_coach_state();
+            if let Some(state) = state.as_mut() {
+                state.squad_satisfaction = SquadSatisfaction::compute(&self.teams[idx], state);
             }
+            self.restore_coach_state(state);
         }
         manager_changed
     }
@@ -251,7 +320,11 @@ impl TeamCollection {
     /// bounce. Everyone gets a small lift of fresh expectation; players
     /// the old regime had frozen out — low morale, formally unhappy, or
     /// club-listed — hope hardest, because the clean slate is real: the
-    /// new coach's selection memory starts empty.
+    /// incoming coach brings his own judgement organ, so nothing the
+    /// last man thought of them carries over.
+    ///
+    /// With one exception, and it is the right one: a coach who has
+    /// worked with a player before arrives still holding that view.
     fn fire_new_manager_bounce_events(teams: &mut [Team]) {
         let base = HappinessConfig::default().catalog.new_manager_bounce;
         for team in teams.iter_mut() {
@@ -276,9 +349,8 @@ impl TeamCollection {
 
     /// Updates impressions via Option::take(). Decays emotional heat once per cycle.
     pub fn update_all_impressions(&mut self, date: NaiveDate) {
-        let mut state = match self.coach_state.take() {
-            Some(s) => s,
-            None => return,
+        let Some(mut state) = self.take_coach_state() else {
+            return;
         };
 
         for team in self.teams.iter() {
@@ -290,7 +362,7 @@ impl TeamCollection {
         // Decay emotional heat once per update cycle (not per player)
         state.emotional_heat *= 0.80;
 
-        self.coach_state = Some(state);
+        self.restore_coach_state(Some(state));
     }
 
     /// Proactively offer contract renewals to valuable players whose
@@ -354,13 +426,15 @@ impl TeamCollection {
 
         self.ensure_coach_state(date);
 
+        let mut state = self.take_coach_state();
         SquadManager::manage_critical_moves(
             &mut self.teams,
-            &mut self.coach_state,
+            &mut state,
             main_idx,
             reserve_idx,
             date,
         );
+        self.restore_coach_state(state);
     }
 
     // ─── Helper functions ────────────────────────────────────────────
@@ -462,6 +536,13 @@ mod coach_change_tests {
             .unwrap()
     }
 
+    /// The same team with an empty dugout.
+    fn main_team_without_staff(players: Vec<Player>) -> Team {
+        let mut team = main_team(coach(1), players);
+        team.staffs = StaffCollection::new(Vec::new());
+        team
+    }
+
     fn count(player: &Player, kind: HappinessEventType) -> usize {
         player
             .happiness
@@ -499,5 +580,94 @@ mod coach_change_tests {
             1,
             "the new-manager bounce lands on the squad"
         );
+    }
+
+    #[test]
+    fn a_coach_takes_his_impressions_with_him() {
+        // The point of S2. A manager who has formed a view of a player
+        // at one club still holds it at the next — which is how managers
+        // sign the same players repeatedly, and what the club-side store
+        // made impossible.
+        let mut first_club = TeamCollection::new(vec![main_team(coach(1), vec![squad_player(7)])]);
+        let start = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        for week in 0..6i64 {
+            let date = start + chrono::Duration::days(week * 7);
+            first_club.ensure_coach_state(date);
+            first_club.update_all_impressions(date);
+        }
+        let formed = first_club
+            .head_coach_decision_state()
+            .expect("a bound coach has a state")
+            .impressions
+            .len();
+        assert!(formed > 0, "he formed a view of the squad");
+
+        // He is poached. The man moves; the state moves with him.
+        let moving = first_club.teams[0]
+            .staffs
+            .iter()
+            .find(|staff| staff.id == 1)
+            .cloned()
+            .expect("the coach is on the roster");
+
+        let mut second_club = TeamCollection::new(vec![main_team(moving, vec![squad_player(7)])]);
+        second_club.ensure_coach_state(NaiveDate::from_ymd_opt(2026, 8, 1).unwrap());
+
+        let carried = second_club
+            .head_coach_decision_state()
+            .expect("he is bound at the new club too");
+        assert_eq!(
+            carried.impressions.len(),
+            formed,
+            "what he thinks of players is not the old club's property"
+        );
+        assert_eq!(carried.coach_id, 1, "and it is still his");
+    }
+
+    #[test]
+    fn a_new_manager_inherits_nothing_from_his_predecessor() {
+        // The other half of the same rule. The state travels with the
+        // man, so the man who replaces him starts with his own — which
+        // is what makes the new-manager bounce a real clean slate.
+        let mut collection = TeamCollection::new(vec![main_team(coach(1), vec![squad_player(7)])]);
+        let first = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        collection.ensure_coach_state(first);
+        collection.update_all_impressions(first);
+        assert!(
+            !collection
+                .head_coach_decision_state()
+                .expect("bound")
+                .impressions
+                .is_empty()
+        );
+
+        collection.teams[0].staffs = StaffCollection::new(vec![coach(2)]);
+        let next = NaiveDate::from_ymd_opt(2026, 6, 8).unwrap();
+        assert!(collection.ensure_coach_state(next));
+
+        let state = collection.head_coach_decision_state().expect("bound");
+        assert_eq!(state.coach_id, 2, "the new man's own state is in play");
+        assert!(
+            state.impressions.is_empty(),
+            "he has not inherited a predecessor's opinions"
+        );
+    }
+
+    #[test]
+    fn a_club_with_no_coach_at_all_has_no_decision_state() {
+        // Before S2 a vacant club got a state bound to the internal stub
+        // (id 0) and quietly accumulated pressure nobody was feeling.
+        // Nobody in the dugout now means nobody deciding.
+        let mut collection =
+            TeamCollection::new(vec![main_team_without_staff(vec![squad_player(7)])]);
+        let date = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+
+        assert!(
+            !collection.ensure_coach_state(date),
+            "a vacant seat is not a manager change"
+        );
+        assert!(collection.head_coach_decision_state().is_none());
+        // And the passes that read it are no-ops rather than panics.
+        collection.update_all_impressions(date);
     }
 }

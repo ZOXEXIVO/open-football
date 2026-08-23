@@ -884,3 +884,81 @@ is untouched: `MindTickContext::memory()` tags `MindHolder::Player` and
 every player rule is exactly the rule described above.
 
 See `docs/staff_mind.md` for the staff side.
+
+### The `.dev/mind` harness ✅
+
+Phases 1b, 3b and 4b all stop at the same sentence — "needs a
+population census rather than unit tests". That census now exists:
+`.dev/mind`, built like `.dev/transfers`, driving the real daily tick
+and then walking every player and every member of staff.
+
+What it answers for the player side:
+
+- **Is the memory organ actually being fed?** Episode, flashbulb,
+  conviction and ledger-account spreads per senior, plus an
+  **empty-minds** count. A season where a large share of seniors still
+  hold nothing is phase 1b's remaining taps showing up as a number
+  rather than as a TODO.
+- **Phase 3b, as a confusion matrix.** `Req` against
+  `GoalStack::is_pressing`, reported *both* / *legacy only* / *mind
+  only* / *neither*. An agreement percentage would hide the direction of
+  the disagreement, which is the whole question: `mind-only` means the
+  stack would demand where the sim does not.
+- **Phase 4b, as bias and error.** `MoodProfile::as_morale` against
+  `PlayerHappiness::morale`, on the same 0..100 scale, split into signed
+  bias, mean absolute error, and the share inside ±10 / ±20. A run that
+  is systematically five points high is a constant to remove; one that
+  is unbiased and noisy is a model that disagrees. `as_morale` exists
+  for this and nothing in the live sim reads it.
+- **The goal ladder**, so a distribution collapsed onto one rung is
+  visible rather than inferred.
+
+`docs/staff_mind.md` §12 has the staff half of the same report.
+
+### The first census run 🔬
+
+60 days of the real engine over 42 202 senior players. The full report
+and the staff half are in `docs/staff_mind.md` §12; what it said about
+this document:
+
+**Phase 1b was worse than "some taps outstanding".** Zero episodes, zero
+convictions, zero ledger accounts across the whole senior population
+after two months. `PlayerMind::remember` had exactly **one** live emit
+site in the simulation — `verify_promises` — and
+`PlayerMind::on_club_change` had **none**, so a player carried his old
+belonging and his read of the old manager into his new club. The memory
+organ described above, with its forgetting curve and its consolidation
+rules and its 94 tests, was doing nothing because nothing spoke to it.
+
+Both are now wired at `Player::complete_transfer` — the one place that
+holds both club ids and the date, which is the plumbing 1b was waiting
+on. A move lays down `SoldAgainstWill` against the selling club when he
+was not asking to go, `SignedForClub` against the buying club, and
+closes the spell in between, in that order.
+
+**Phase 3b is answered, and the answer is yes.** `Req` against
+`GoalStack::is_pressing`:
+
+| | mind pressing | mind quiet |
+|---|---|---|
+| **`Req` set** | 177 | 321 |
+| **`Req` clear** | 40 | 41 664 |
+
+**99.1% agreement, erring conservative eight to one.** Forty players in
+forty-two thousand are the only ones where the stack would demand and
+the sim does not. A swap-over could only reduce transfer requests, never
+invent them.
+
+**Phase 4b's gap is coverage, not calibration.** Bias −10.1, mean
+|error| 14.8, 44.6% inside ±10 — on **faculty coverage of 0.15**. The
+five faculties can read fifteen per cent of a player, so the profile
+sits near its neutral 50 while morale sits higher. Re-tuning the formula
+would be tuning noise; the fix is the taps above.
+
+**The ladder works on a population.** Latent 34.1% · Active 61.4% ·
+Voiced 3.9% · Pressing 0.5%. Most wants silent, few said out loud,
+almost none demanded — the shape it was designed for, and the first
+evidence of it outside a fixture.
+
+**Footprint, measured:** `PlayerMind` 1 964 B ⇒ 112 MB across 60 000
+players.

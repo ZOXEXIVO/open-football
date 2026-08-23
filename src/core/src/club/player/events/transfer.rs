@@ -11,6 +11,7 @@ use chrono::{Duration, NaiveDate};
 use super::types::{LoanCompletion, TransferCompletion};
 use crate::TeamInfo;
 use crate::club::PlayerClubContract;
+use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::contract::contract::{
@@ -26,11 +27,69 @@ use crate::{
 };
 
 impl Player {
+    /// Lay the move down in memory, on both sides of it.
+    ///
+    /// A transfer is two events to the man it happens to: leaving one
+    /// place and arriving at another. Which of them brands itself on him
+    /// depends on whether he was asking to go — a player sold against
+    /// his will carries `WasSoldAgainstMyWill` about that club for the
+    /// rest of his career, while one who engineered the move carries
+    /// nothing against anybody.
+    ///
+    /// Ordering is the whole trick and it is the same rule the memory
+    /// organ is built on: the departure is filed against the club he was
+    /// still at, and only then does the spell close.
+    fn remember_the_move(&mut self, t: &TransferCompletion<'_>) {
+        if t.selling_club_id != 0 {
+            // He was not asking to leave. Statuses first — `Req` is the
+            // formal demand and `Lst` means the club put him up for sale
+            // — then what the goal stack says, which catches the wants
+            // he never said out loud.
+            let asked_to_go = self.statuses.has(PlayerStatusType::Req)
+                || self.statuses.has(PlayerStatusType::Lst)
+                || self.mind.wants_to_leave() >= Self::MOVE_WAS_HIS_IDEA;
+            if !asked_to_go {
+                let leaving = self.mind_context(t.date, Some(t.selling_club_id));
+                self.mind.remember(
+                    EpisodeKind::SoldAgainstWill,
+                    ActorRef::club(t.selling_club_id),
+                    &leaving,
+                );
+            }
+            // Memory keeps everything; belonging and the read of a
+            // manager do not travel. Never called from the live sim
+            // before this — a player carried his old dressing room into
+            // the new one.
+            self.mind.on_club_change(t.selling_club_id);
+        }
+
+        if t.buying_club_id != 0 {
+            let arriving = self.mind_context(t.date, Some(t.buying_club_id));
+            self.mind.remember(
+                EpisodeKind::SignedForClub,
+                ActorRef::club(t.buying_club_id),
+                &arriving,
+            );
+        }
+    }
+
+    /// Net pull out of a club at or above which a move reads as his own
+    /// doing, even with no formal request on file. Below it he is being
+    /// moved rather than moving.
+    const MOVE_WAS_HIS_IDEA: f32 = 0.45;
+
     /// React to a completed permanent transfer. Resets stats history,
     /// clears transient statuses and happiness, installs a fresh contract
     /// and signing plan, and stages a pending signing so the next sim
     /// tick can emit the shock / role-fit / promise events.
     pub fn complete_transfer(&mut self, t: TransferCompletion<'_>) {
+        // The move, as he will remember it. Recorded here because this
+        // is the one place that holds both club ids and the date, which
+        // is what phase 1b of `docs/player_mind.md` was waiting on — and
+        // recorded *first*, before `reset_on_club_change` wipes the
+        // state that decides whether he wanted to go.
+        self.remember_the_move(&t);
+
         let previous_salary = self.contract.as_ref().map(|c| c.salary);
         let desire_carry = self.snapshot_desire_carry();
         let source_club_reputation = t.from.reputation;
@@ -1006,5 +1065,95 @@ mod free_agent_source_aware_tests {
         p.complete_free_agent_signing(&FreeAgentFixtures::dest(5000), date, 42, 5000, Some(60_000));
 
         assert_eq!(MoveFixtures::dec_count(&p, "dec_free_agent_signed"), 1);
+    }
+
+    // ── What a move leaves in his memory ────────────────────────────
+    //
+    // Phase 1b of `docs/player_mind.md`. Until this tap the player mind
+    // had exactly one live emit site in the whole simulation, and the
+    // `.dev/mind` census read back zero episodes across sixty thousand
+    // players after a month.
+
+    #[test]
+    fn a_player_sold_against_his_will_remembers_which_club_did_it() {
+        let from = MoveFixtures::team("Old FC");
+        let to = MoveFixtures::team("New FC");
+        let date = FreeAgentFixtures::d(2026, 7, 1);
+        let mut player = FreeAgentFixtures::player(24, 12.0, 3000);
+
+        // He has not asked to go and nothing is pulling him out.
+        assert!(!player.statuses.has(PlayerStatusType::Req));
+        player.complete_transfer(MoveFixtures::completion(
+            &from,
+            &to,
+            5_000_000.0,
+            date,
+            true,
+        ));
+
+        let ctx = player.mind_context(date, Some(20));
+        assert!(
+            player.mind.club_sentiment(10, &ctx) < 0.0,
+            "the club that sold him is not remembered fondly"
+        );
+        assert!(
+            player.mind.census().episodes >= 2,
+            "leaving and arriving are two events, not one"
+        );
+        assert!(
+            player.mind.census().flashbulbs >= 1,
+            "being sold against your will is a career landmark"
+        );
+    }
+
+    #[test]
+    fn a_move_he_engineered_leaves_no_grudge_behind() {
+        let from = MoveFixtures::team("Old FC");
+        let to = MoveFixtures::team("New FC");
+        let date = FreeAgentFixtures::d(2026, 7, 1);
+        let mut player = FreeAgentFixtures::player(24, 12.0, 3000);
+        player.statuses.add(date, PlayerStatusType::Req);
+
+        player.complete_transfer(MoveFixtures::completion(
+            &from,
+            &to,
+            5_000_000.0,
+            date,
+            true,
+        ));
+
+        let ctx = player.mind_context(date, Some(20));
+        assert!(
+            player.mind.club_sentiment(10, &ctx) >= 0.0,
+            "he asked to leave; the club granting it is not a betrayal"
+        );
+        assert_eq!(
+            player.mind.census().flashbulbs,
+            0,
+            "and nothing about it is a landmark"
+        );
+    }
+
+    #[test]
+    fn arriving_somewhere_is_remembered_about_the_new_club() {
+        let from = MoveFixtures::team("Old FC");
+        let to = MoveFixtures::team("New FC");
+        let date = FreeAgentFixtures::d(2026, 7, 1);
+        let mut player = FreeAgentFixtures::player(24, 12.0, 3000);
+        player.statuses.add(date, PlayerStatusType::Req);
+
+        player.complete_transfer(MoveFixtures::completion(
+            &from,
+            &to,
+            5_000_000.0,
+            date,
+            true,
+        ));
+
+        let ctx = player.mind_context(date, Some(20));
+        assert!(
+            player.mind.club_sentiment(20, &ctx) > 0.0,
+            "signing for a club is a good day"
+        );
     }
 }

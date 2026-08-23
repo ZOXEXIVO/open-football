@@ -5,10 +5,16 @@ members = ["src/shared", "src/core", "src/database", "src/web"]
 # so it stays out of the host workspace. It shares `src/shared` with the
 # server by path — one crate, two targets, so a player's complexion is decided
 # by the same code whether it ends up in an SVG or on the pitch.
-exclude = [".dev/match", ".dev/simulate", ".dev/transfers", "src/match"]
+exclude = [
+    ".dev/match",
+    ".dev/mind",
+    ".dev/simulate",
+    ".dev/transfers",
+    "src/match",
+]
 
 [workspace.package]
-version = "1.7.350"
+version = "1.7.360"
 
 authors = ["Artemov Ivan (ZOXEXIVO) <zoxexivo@gmail.com>"]
 edition = "2024"

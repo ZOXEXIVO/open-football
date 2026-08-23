@@ -3,8 +3,8 @@ use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::{
     Achievement, CaptaincyAssigner, ChemistryContextBuilder, CompetitionType, MatchOutcome,
     MatchResultInfo, MentorshipProcessor, PreventiveRestPass, SquadSocialViewBuilder,
-    SquadStatusUpdater, TeamBuilder, TeamCoachingScores, TeamFixtureWindow, TeamSocialDebug,
-    TeamSocialSnapshot, TeamType,
+    SquadStatusUpdater, TeamBuilder, TeamCoachingScores, TeamFixtureWindow, TeamLeagueHistory,
+    TeamSocialDebug, TeamSocialSnapshot, TeamType,
 };
 use crate::context::GlobalContext;
 use crate::shared::CurrencyValue;
@@ -74,6 +74,24 @@ pub struct Team {
     /// for league-less squads (U18/U19, some reserves); consumers derive
     /// a fallback from the club's main league.
     pub league_reputation: u16,
+
+    /// Which division this side played in, season by season. Written by
+    /// the season-end snapshot; read by anything that needs the division
+    /// for a PAST season rather than the current one. See
+    /// [`TeamLeagueHistory`].
+    pub league_history: TeamLeagueHistory,
+
+    /// The division this side was in before promotion / relegation moved
+    /// it, held until the season-end snapshot consumes it.
+    ///
+    /// The two run on different ticks and in this order: the swap fires on
+    /// the 1st of the month after the last league finishes, the snapshot
+    /// on the season-start regen weeks later. By snapshot time
+    /// `league_id` is already NEXT season's division, so a snapshot that
+    /// read it would file the whole just-played campaign under the
+    /// division the club is moving into. This is the hand-off between the
+    /// two — set by [`Team::move_to_league`], cleared by the snapshot.
+    pub previous_league_id: Option<u32>,
 }
 
 impl Team {
@@ -81,10 +99,41 @@ impl Team {
         TeamBuilder::new()
     }
 
+    /// Move this side into another division, remembering the one it is
+    /// leaving so the season-end snapshot can still file the campaign it
+    /// just played under the division it played it in. The FIRST move of
+    /// an off-season wins — a club promoted and then re-drawn into a
+    /// different group must not lose the division it actually competed in.
+    ///
+    /// Every promotion / relegation path goes through here; assigning
+    /// `league_id` directly loses the hand-off and re-labels history.
+    pub fn move_to_league(&mut self, league_id: u32) {
+        if self.league_id == Some(league_id) {
+            return;
+        }
+        if self.previous_league_id.is_none() {
+            self.previous_league_id = self.league_id;
+        }
+        self.league_id = Some(league_id);
+    }
+
+    /// The division this side played in during `season_start_year` — the
+    /// recorded one when the record reaches back that far, else the
+    /// current `league_id`, which is both the right answer for the
+    /// in-progress campaign and the best available one for a season older
+    /// than the record.
+    pub fn league_for_season(&self, season_start_year: u16) -> Option<u32> {
+        self.league_history
+            .league_for_season(season_start_year)
+            .or(self.league_id)
+    }
+
     /// Lightweight `TeamInfo` for stats-history rows where the caller
-    /// has no league-lookup access. The web layer fills league info
-    /// back in by inspecting the team's current league at render time,
-    /// so leaving `league_name` / `league_slug` empty is correct.
+    /// has no league-lookup access. Storage backfills the league fields
+    /// from the player's own prior entry at the same team
+    /// (`resolve_league_for`), which preserves the division the spell was
+    /// opened in; the web layer resolves anything still missing through
+    /// [`Team::league_for_season`].
     pub fn history_info(&self) -> TeamInfo {
         TeamInfo {
             name: self.name.clone(),

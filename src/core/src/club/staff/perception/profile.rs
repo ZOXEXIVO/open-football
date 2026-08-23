@@ -74,6 +74,39 @@ pub struct CoachProfile {
 }
 
 impl CoachProfile {
+    /// A lens that distorts nothing, for a state not yet bound to a
+    /// coach. Never used to judge anybody — [`CoachDecisionState::bind`]
+    /// replaces it with the real man's lens before the first read.
+    pub fn neutral() -> Self {
+        CoachProfile {
+            judging_accuracy: 0.5,
+            potential_accuracy: 0.5,
+            risk_tolerance: 0.5,
+            stubbornness: 0.5,
+            trust_in_decisions: 0.5,
+            youth_preference: 0.5,
+            conservatism: 0.5,
+            man_management: 0.5,
+            coach_seed: 0,
+            perception_lens: PerceptionLens {
+                technical_weight: 0.35,
+                mental_weight: 0.35,
+                physical_weight: 0.30,
+                attacking_focus: 0.5,
+                creativity_focus: 0.5,
+                physicality_focus: 0.5,
+            },
+            confirmation_bias: 0.5,
+            negativity_bias: 0.5,
+            physical_bias_youth: 0.5,
+            readiness_intuition: 0.5,
+            attitude_weight: 0.5,
+            tactical_blindness: 0.5,
+            recency_bias: 0.5,
+            emotional_volatility: 0.5,
+        }
+    }
+
     pub fn from_staff(staff: &Staff) -> Self {
         let mental = &staff.staff_attributes.mental;
         let knowledge = &staff.staff_attributes.knowledge;

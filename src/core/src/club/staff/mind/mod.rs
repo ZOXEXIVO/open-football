@@ -47,12 +47,21 @@
 //!
 //! ## Status
 //!
-//! Everything here runs **alongside** the existing staff layers rather
+//! Most of this runs **alongside** the existing staff layers rather
 //! than replacing them, exactly as the player mind runs alongside
-//! `PlayerHappiness`. `job_satisfaction` still owns staff morale,
-//! `CoachMemoryStore` still feeds selection, and `CoachDecisionEngine`
-//! is not replaced by any of this — see `docs/staff_mind.md` for what
-//! each phase does and does not switch over.
+//! `PlayerHappiness`. `job_satisfaction` still owns staff morale and
+//! `CoachDecisionEngine` is not replaced by any of it — see
+//! `docs/staff_mind.md` for what each phase does and does not switch
+//! over.
+//!
+//! One thing is not parallel-run. Both of a coach's per-player stores
+//! now live in [`organs::judgements`], on the man: `CoachMemory` (which
+//! selection reads) and `CoachDecisionState` (which squad composition
+//! and the recruitment budget read). That move is guarded by a pinned
+//! before/after census rather than by a parallel run, because there is
+//! no sensible way to run two homes for one store at once.
+//!
+//! [`organs::judgements`]: organs::judgements
 //!
 //! [`club::mind::organs`]: crate::club::mind::organs
 
@@ -578,8 +587,14 @@ impl StaffMoodProfile {
     /// The same reading on the 0..100 scale `job_satisfaction` uses, so
     /// the parallel run can be compared without a conversion at every
     /// call site. 50 is neutral.
+    ///
+    /// One-to-one. [`Self::net`] sums five contributions each bounded at
+    /// ±10, so its range is ±50 and `50 + net` covers exactly 0..100. An
+    /// earlier ×2.5 here treated `net` as a mean; the `.dev/mind` census
+    /// read the result as +46.8 points high with only 2% of managers
+    /// inside ±10, which is what a saturated scale looks like.
     pub fn as_satisfaction(&self) -> f32 {
-        (50.0 + self.net() * 2.5).clamp(0.0, 100.0)
+        (50.0 + self.net()).clamp(0.0, 100.0)
     }
 }
 

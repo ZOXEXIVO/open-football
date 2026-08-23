@@ -959,9 +959,8 @@ impl PipelineProcessor {
         // (the previously-inert squad-satisfaction signal now has a consumer).
         let squad_satisfaction = club
             .teams
-            .coach_state
-            .as_ref()
-            .map(|s| s.squad_satisfaction)
+            .head_coach_decision_state()
+            .map(|state| state.squad_satisfaction)
             .unwrap_or(0.5);
         let discretionary_unit = if total_needs > 0 {
             budget_per_need

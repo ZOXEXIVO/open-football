@@ -20,7 +20,6 @@
 pub mod assessment;
 pub mod bond;
 pub mod engine;
-pub mod memory;
 pub mod plan;
 pub mod reason;
 pub mod snapshot;
@@ -28,6 +27,12 @@ pub mod strategy;
 
 #[cfg(test)]
 mod tests;
+
+// The per-player memory moved under the judgements organ — it is one of
+// the two things a coach thinks about a player, and it belongs beside
+// the other. Re-exported so `staff::coach::memory::…` and every
+// `crate::club::staff::CoachMemory` path resolve unchanged.
+pub use crate::club::staff::mind::organs::judgements::coach_memory as memory;
 
 pub use assessment::{CoachDecisionScore, CoachPlayerAssessment};
 pub use bond::{CoachPlayerBond, CoachPlayerBondBreakdown};

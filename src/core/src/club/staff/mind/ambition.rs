@@ -40,6 +40,11 @@ pub struct AmbitionMind {
     pub sackings: u8,
     /// Trophies won, across his whole career.
     pub honours: u8,
+    /// Players signed into the senior squad since he took this job.
+    /// Reset on appointment — it is the count of *his* work here, and
+    /// it is what makes `squad_is_his` a measurement rather than a
+    /// guess from tenure.
+    pub signings: u16,
     /// Seasons at this club, as whole seasons started.
     pub seasons_here: u8,
     /// The day he took this job. The mind is the only thing that knows
@@ -121,6 +126,7 @@ impl AmbitionMind {
         self.seasons_here = 0;
         self.investment_pct = 0;
         self.honours_here = 0;
+        self.signings = 0;
         self.appointed = today;
     }
 
@@ -134,6 +140,7 @@ impl AmbitionMind {
         self.seasons_here = 0;
         self.investment_pct = 0;
         self.honours_here = 0;
+        self.signings = 0;
         self.appointed = 0;
     }
 }
