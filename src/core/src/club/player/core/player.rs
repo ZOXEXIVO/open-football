@@ -13,7 +13,8 @@ use crate::club::player::language::PlayerLanguage;
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::mailbox::PlayerContractAsk;
 use crate::club::player::mind::{
-    ActorRef, EncodingInputs, EpisodeKind, MindSituation, MindTickContext, PlayerMind,
+    ActorRef, EncodingInputs, EpisodeKind, MindSituation, MindTickContext, NationalStanding,
+    PlayerMind,
 };
 use crate::club::player::plan::PlayerPlan;
 use crate::club::player::rapport::PlayerRapport;
@@ -75,6 +76,80 @@ impl SquadSocialView {
         self.same_nationality_teammates
             .saturating_add(self.same_language_teammates)
             .min(u8::MAX)
+    }
+}
+
+/// Where a player stands in his own dressing room.
+///
+/// The sibling of [`SquadSocialView`], and written by the same weekly
+/// team pre-tick, for the same reason: none of it can be worked out from
+/// inside a `Player`. Who picks the side, who else wants his shirt, how
+/// good that man is and how old — a player's whole read of his own
+/// prospects is a comparison against people, and `Player::simulate` only
+/// ever holds one player.
+///
+/// Everything here is **observable**: ranks come from
+/// [`AbilityEstimator::observable_level`], never from the hidden ability
+/// digit. A player is no better a judge of a teammate than a coach is.
+///
+/// Cleared on transfer — a new club rebuilds it on its next weekly pass.
+///
+/// [`AbilityEstimator::observable_level`]: crate::club::staff::perception::AbilityEstimator::observable_level
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SquadStandingView {
+    /// The man who picks the side. 0 when the bench is vacant.
+    pub head_coach_id: u32,
+    /// His place in the queue at his own position group, 1-based.
+    /// 1 = first choice on merit. 0 = unknown.
+    pub pecking_rank: u8,
+    /// How many others are in that queue.
+    pub rivals_at_position: u8,
+    /// The best of them — the man in his shirt, or the man chasing it.
+    /// 0 when he has the group to himself.
+    pub top_rival_id: u32,
+    /// That rival's age. A twenty-year-old behind a thirty-three-year-old
+    /// is waiting his turn; the same gap against a peer is a career
+    /// problem.
+    pub top_rival_age: u8,
+    /// His observable level minus that rival's, clamped to ±100.
+    /// Positive means he is the better player and is not being picked.
+    pub rival_gap: i8,
+    pub is_captain: bool,
+    pub is_vice_captain: bool,
+    /// Where he sits in the squad's pay order, 1-based. 0 = unknown.
+    pub wage_rank: u8,
+    /// How many players are in the pay order at all.
+    pub squad_size: u8,
+    /// What he looks like from outside — 1..200, from
+    /// `AbilityEstimator::observable_level`. 0 = unranked. Computed here
+    /// because the ranking needs it anyway, and read by the mind so a
+    /// player judges what the club can teach him against the player he
+    /// actually is.
+    pub observable_level: u8,
+    /// The best coaching the club can give him, 0–20: the strongest of
+    /// the technical / mental / fitness benches, or goalkeeping for a
+    /// keeper. What decides whether staying here is still teaching him
+    /// anything.
+    pub coaching_ceiling: u8,
+}
+
+impl SquadStandingView {
+    /// Is he first choice at his position on merit?
+    #[inline]
+    pub fn is_first_choice(&self) -> bool {
+        self.pecking_rank == 1
+    }
+
+    /// Where he sits in the pay order, 0..1 — 1.0 for the top earner,
+    /// 0.0 for the lowest. Neutral 0.5 when unknown, so a squad that has
+    /// never been ranked reads as "no view" rather than as poverty.
+    pub fn wage_standing(&self) -> f32 {
+        if self.wage_rank == 0 || self.squad_size <= 1 {
+            return 0.5;
+        }
+        let rank = (self.wage_rank - 1) as f32;
+        let last = (self.squad_size - 1) as f32;
+        (1.0 - rank / last).clamp(0.0, 1.0)
     }
 }
 
@@ -276,6 +351,12 @@ pub struct Player {
     /// persisted across saves and not cloned with the player on transfer.
     /// Cleared on transfer so a new club rebuilds it on its next tick.
     pub squad_social_view: Option<SquadSocialView>,
+
+    /// Snapshot of where he stands in his own squad — who picks the side,
+    /// who else wants his shirt, what the coaching here can still teach
+    /// him. Written by the same weekly team pre-tick as
+    /// `squad_social_view`, read by the mind. Cleared on transfer.
+    pub squad_standing_view: Option<SquadStandingView>,
 
     /// Active reasons sustaining a transfer request (`Req` status). Used
     /// by `process_transfer_desire` to avoid clearing `Req` while at
@@ -1143,12 +1224,20 @@ impl Player {
     pub fn mind_situation(&self, now: NaiveDate, country_code: &str) -> MindSituation {
         let squad_status = self.contract.as_ref().map(|c| c.squad_status.clone());
         let social = self.squad_social_view.as_ref();
+        // Where he stands among the other twenty-odd men, written by the
+        // team's weekly pass. Absent for a free agent, for a player whose
+        // side has not ticked since he arrived, and in every unit test
+        // that builds a lone player — all of which must read as no view.
+        let standing = self.squad_standing_view.unwrap_or_default();
 
         MindSituation {
             age: self.age(now),
             ambition: self.attributes.ambition,
             pressure: self.attributes.pressure,
             adaptability: self.attributes.adaptability,
+            loyalty: self.attributes.loyalty,
+            professionalism: self.attributes.professionalism,
+            temperament: self.attributes.temperament,
             starter_ratio: self.happiness.starter_ratio,
             apps_since_goal: self.happiness.apps_since_last_competitive_goal,
             contract_days_left: self
@@ -1165,10 +1254,14 @@ impl Player {
             expected_start_share: PlayingTimeFrustrationConfig::expected_start_share(
                 squad_status.as_ref(),
             ),
-            // The manager is resolved by the caller that knows the staff;
-            // `None` until an emit site supplies it, which the
-            // professional mind reads as "no view".
-            manager: ActorRef::NONE,
+            // The man who picks the side, from the squad pass. `NONE`
+            // while the bench is vacant or the side has not ticked yet,
+            // which the professional mind reads as "no view".
+            manager: if standing.head_coach_id == 0 {
+                ActorRef::NONE
+            } else {
+                ActorRef::staff(standing.head_coach_id)
+            },
             club_reputation: 0.5,
             is_abroad: !country_code.is_empty() && !self.speaks_local_language(country_code),
             speaks_local_language: country_code.is_empty()
@@ -1177,6 +1270,57 @@ impl Player {
                 .map(|v| v.same_language_or_nationality())
                 .unwrap_or(0),
             is_on_loan: self.is_on_loan(),
+
+            pecking_rank: standing.pecking_rank,
+            rivals_at_position: standing.rivals_at_position,
+            top_rival: if standing.top_rival_id == 0 {
+                ActorRef::NONE
+            } else {
+                ActorRef::player(standing.top_rival_id)
+            },
+            top_rival_age: standing.top_rival_age,
+            rival_gap: standing.rival_gap,
+            is_captain: standing.is_captain,
+            is_vice_captain: standing.is_vice_captain,
+            wage_standing: standing.wage_standing(),
+
+            coaching_ceiling: standing.coaching_ceiling as f32,
+            own_level: standing.observable_level,
+            training_performance: self.training.training_performance,
+            // The regressed season average rather than the raw one: nine
+            // good games in August do not make a man think he has
+            // arrived, and the regression is the model of exactly that.
+            recent_rating: self
+                .statistics
+                .average_rating_realistic(self.position().position_group()),
+
+            // The calendar is filled by the caller that has the country
+            // context; `u8::MAX` is "no tournament in view", which is
+            // further away than any real one.
+            months_to_tournament: u8::MAX,
+            national_standing: self.national_standing(),
+        }
+    }
+
+    /// How close he is to his country's side.
+    ///
+    /// Read from what the simulation already tracks: the `Int` status is
+    /// the current squad, and caps are the record. Held as a band rather
+    /// than a number because the thing that matters is not how many he
+    /// has — it is whether the next squad is something he is defending,
+    /// chasing, or has no business thinking about.
+    fn national_standing(&self) -> NationalStanding {
+        let caps = self.player_attributes.international_apps;
+        let in_the_squad = self.statuses.has(crate::club::PlayerStatusType::Int);
+        match (in_the_squad, caps) {
+            (true, c) if c >= 15 => NationalStanding::Established,
+            (true, _) => NationalStanding::InContention,
+            // Out of the current squad with a real record behind him: the
+            // man chasing his place back, and the one a tournament year
+            // presses hardest on.
+            (false, c) if c >= 10 => NationalStanding::InContention,
+            (false, c) if c >= 1 => NationalStanding::Fringe,
+            (false, _) => NationalStanding::Unknown,
         }
     }
 
@@ -1234,7 +1378,12 @@ impl Player {
             physio: ctx.club_medical_quality(),
             sports_science: ctx.club_sports_science_quality(),
         };
-        self.process_injury(&mut result, now.date(), &medical);
+        self.process_injury(
+            &mut result,
+            now.date(),
+            &medical,
+            ctx.club.as_ref().map(|c| c.id),
+        );
 
         // Natural condition recovery for non-injured players
         self.process_condition_recovery(now.date());
@@ -1254,6 +1403,16 @@ impl Player {
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
             let mut situation = self.mind_situation(now.date(), country_code);
             situation.club_reputation = (team_reputation / 10_000.0).clamp(0.0, 1.0);
+            situation.months_to_tournament = ctx
+                .country
+                .as_ref()
+                .map(|c| c.months_to_tournament)
+                .unwrap_or(u8::MAX);
+            // The week's mood, swept into memory before the faculties
+            // reflect on it — so a fallout with the manager on Thursday
+            // is already something he remembers when he thinks about his
+            // future on Monday, rather than a week later.
+            self.remember_recent_mood(ctx.club.as_ref().map(|c| c.id), now.date());
             self.mind.tick_with(&mind_ctx, &situation);
             // Decay interaction log so old talks don't keep the cooldown
             // gates cold past their useful window.

@@ -3128,6 +3128,97 @@ a:active {
     background: #e53935;
 }
 
+/* ── The mind panel ─────────────────────────────────────────────
+   What a player wants, and what he remembers about this club.
+   The 'unspoken' modifier is load-bearing rather than decorative: the
+   Latent and Active rungs of the goal ladder are the ones nobody has
+   heard him say, and a manager reading this page needs to be able to
+   tell a private want from a public one at a glance. */
+
+.fm-mind-wants,
+.fm-mind-memories {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.fm-mind-want {
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.fm-mind-want:last-child {
+    border-bottom: none;
+}
+
+.fm-mind-want-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.fm-mind-want-name {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.fm-mind-want-status {
+    font-size: 11px;
+    color: #757575;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.fm-mind-unspoken .fm-mind-want-name {
+    font-weight: 500;
+    font-style: italic;
+    opacity: 0.82;
+}
+
+.fm-mind-fill {
+    background: #5c6bc0;
+}
+
+.fm-mind-unspoken .fm-mind-fill {
+    background: #9fa8da;
+}
+
+.fm-mind-note {
+    font-size: 11px;
+    color: #757575;
+    margin-top: 3px;
+}
+
+.fm-mind-blocked {
+    color: #e53935;
+}
+
+.fm-mind-memory {
+    font-size: 13px;
+    padding: 3px 0 3px 14px;
+    position: relative;
+}
+
+.fm-mind-memory::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 10px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+}
+
+.fm-mind-warm::before {
+    background: #4caf50;
+}
+
+.fm-mind-sour::before {
+    background: #e53935;
+}
+
 .fm-rel-good {
     color: #4caf50;
 }
@@ -6303,6 +6394,44 @@ a:active {
     overflow: hidden;
     border-radius: 6px;
     background: #080c12;
+}
+
+/* The vignette, which until now the loading state was the only thing wearing.
+
+   It belongs to the STAGE rather than to the loader. The loader's own radial
+   ground is what puts weight in the corners while the wasm is coming down, and
+   it takes that with it when it fades — and then removes itself from the DOM
+   entirely — so the frame the eye had been reading around the picture went
+   with it at the exact moment there was finally a picture to frame. Kept here,
+   the edges stay soft afterwards and the replay settles INTO its box instead
+   of being cut off square at the border.
+
+   An inset shadow rather than a radial gradient, which is the difference
+   between a border and a lens: a radial follows an ellipse, so it is at its
+   heaviest in the corners and has already let go by the middle of each edge. A
+   shadow follows the rounded rectangle itself, so the band is the same depth
+   the whole way round — which is what "the edges are smoothed out" asks for.
+   Two stops rather than one: a firm rim right at the border and a wider,
+   fainter skirt behind it, so the falloff has no visible end to it. Between
+   them they reach about sixty pixels in, which is the size this was settled at
+   by eye — far enough to read as a frame, short of both the play and the
+   controls on the viewer's own transport bar along the bottom, which sit clear
+   of the band with only their dark slab in it.
+
+   Painted over the canvas but under the fullscreen button (z-index 3), and it
+   never takes the pointer: every drag in this box is a camera control. */
+.match-stage::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    pointer-events: none;
+    /* Matched to the stage, or the shadow squares off the corners the box has
+       rounded. */
+    border-radius: inherit;
+    box-shadow:
+        inset 0 0 18px 1px rgba(4, 7, 11, 0.75),
+        inset 0 0 50px 8px rgba(4, 7, 11, 0.45);
 }
 
 /* The loading state, drawn OVER the canvas.

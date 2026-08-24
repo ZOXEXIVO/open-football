@@ -68,6 +68,17 @@ impl<'gc> GlobalContext<'gc> {
         ctx
     }
 
+    /// Stamp the confederation's tournament clock onto an existing
+    /// country scope. Separate from [`Self::with_country_and_names`]
+    /// because the number belongs to the continent, is the same for every
+    /// country under it, and is worked out once above the fan-out.
+    pub fn with_country_tournament_clock(mut self, months: u8) -> Self {
+        if let Some(country) = self.country.take() {
+            self.country = Some(country.with_tournament_clock(months));
+        }
+        self
+    }
+
     pub fn with_league(
         &self,
         league_id: u32,

@@ -9,10 +9,12 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
+use chrono::NaiveDate;
 use core::Player;
 use core::PlayerStatusType;
 use core::SimulatorData;
 use core::StaffPosition;
+use core::club::player::mind;
 use core::utils::FormattingUtils;
 use serde::Deserialize;
 
@@ -62,6 +64,10 @@ pub struct PlayerPersonalTemplate {
     pub favorite_clubs: Vec<FavoriteClubDto>,
     pub player_info: PlayerInfoDto,
     pub reputation: ReputationDto,
+    /// What he wants, and what he remembers about this club. `None` for
+    /// a mind with nothing in it yet — a fresh save, or a player whose
+    /// side has not ticked since he arrived.
+    pub mind: Option<MindDto>,
 }
 
 pub struct FavoriteClubDto {
@@ -228,6 +234,13 @@ pub async fn player_personal_action(
         })
         .collect();
 
+    let mind = get_mind(
+        player,
+        team_opt.map(|t| t.club_id).unwrap_or(0),
+        simulator_data.date.date(),
+        &i18n,
+    );
+
     let player_info = get_player_info(player, &i18n);
     let reputation = get_reputation(player, &i18n);
 
@@ -302,6 +315,7 @@ pub async fn player_personal_action(
         favorite_clubs,
         player_info,
         reputation,
+        mind,
     }
     .into_response())
 }
@@ -731,4 +745,127 @@ mod factor_sentiment_tests {
         assert_eq!(FactorSentiment::i18n_key(3.0), "factor_positive");
         assert_eq!(FactorSentiment::i18n_key(6.0), "factor_strong_positive");
     }
+}
+
+/// One thing a player is currently after, as the profile page shows it.
+pub struct MindWantDto {
+    /// What he wants.
+    pub name: String,
+    /// How far along the ladder it has climbed — "shapes every decision",
+    /// "has said so", "demanding it".
+    pub status: String,
+    /// True while nobody has heard him say it. `Latent` and `Active` are
+    /// designed to be the silent rungs, and showing them as silent is
+    /// what makes the panel worth reading: a manager can see a want
+    /// forming a season before it becomes a transfer request.
+    pub unspoken: bool,
+    /// A date he has privately given it, when he has given one.
+    pub deadline: Option<String>,
+    /// Something is stopping him acting on it at all.
+    pub blocked: Option<String>,
+    /// 0..100 — how hard it presses, for the bar.
+    pub pressure: u8,
+}
+
+/// One conviction he holds about this club, as a sentence.
+pub struct MindMemoryDto {
+    pub text: String,
+    /// True for the ones he is glad about.
+    pub warm: bool,
+    /// 0..100 — how firmly held.
+    pub strength: u8,
+}
+
+/// What a player wants, and what he remembers about the place he is at.
+///
+/// The two halves of `PlayerMind` that are worth a reader's time: the
+/// goal stack, and a club-cued look at memory. Deliberately built with
+/// `PlayerMind::inspect` rather than `recall` — reading a man's memory
+/// on a web page must not rehearse it, or a player who happens to be
+/// popular would never forget anything.
+pub struct MindDto {
+    pub wants: Vec<MindWantDto>,
+    pub memories: Vec<MindMemoryDto>,
+    /// −100..100, how he feels about this club overall.
+    pub sentiment: i8,
+    pub sentiment_label: String,
+}
+
+fn get_mind(player: &Player, club_id: u32, today: NaiveDate, i18n: &I18n) -> Option<MindDto> {
+    let ctx = player.mind_context(today, Some(club_id).filter(|id| *id != 0));
+
+    let mut wants: Vec<MindWantDto> = player
+        .mind
+        .goals()
+        .live()
+        .filter(|goal| goal.kind != mind::GoalKind::None)
+        .map(|goal| MindWantDto {
+            name: i18n.t(goal.kind.as_i18n_key()).to_string(),
+            status: i18n.t(goal.status.as_i18n_key()).to_string(),
+            unspoken: matches!(
+                goal.status,
+                mind::GoalStatus::Latent | mind::GoalStatus::Active
+            ),
+            deadline: (goal.deadline > 0).then(|| {
+                i18n.t("mind_deadline").replace(
+                    "{date}",
+                    &mind::MindClock::date(goal.deadline)
+                        .format("%d.%m.%Y")
+                        .to_string(),
+                )
+            }),
+            blocked: goal
+                .blocked_by
+                .is_blocked()
+                .then(|| i18n.t(goal.blocked_by.as_i18n_key()).to_string()),
+            pressure: (goal.pressure() * 100.0).clamp(0.0, 100.0) as u8,
+        })
+        .collect();
+    // Loudest first — the want that is actually driving him leads.
+    wants.sort_by(|a, b| b.pressure.cmp(&a.pressure));
+
+    // Club 0 is not a club. Cueing on it would match every episode
+    // recorded while he had no club at all and present them as things he
+    // remembers about *this* place, which for a free agent is the whole
+    // set. He has no "here" to remember.
+    let recalled = if club_id == 0 {
+        Default::default()
+    } else {
+        player.mind.inspect(mind::RecallCue::Club(club_id), &ctx)
+    };
+    let memories: Vec<MindMemoryDto> = recalled
+        .facts
+        .iter()
+        .filter(|fact| fact.claim != mind::FactClaim::None)
+        .take(6)
+        .map(|fact| MindMemoryDto {
+            text: i18n.t(fact.claim.as_i18n_key()).to_string(),
+            warm: fact.claim.valence() >= 0.0,
+            strength: (fact.strength() * 100.0).clamp(0.0, 100.0) as u8,
+        })
+        .collect();
+
+    if wants.is_empty() && memories.is_empty() {
+        return None;
+    }
+
+    let sentiment = recalled.sentiment();
+    let sentiment_label = if sentiment > 0.35 {
+        "mind_sentiment_fond"
+    } else if sentiment > 0.1 {
+        "mind_sentiment_warm"
+    } else if sentiment < -0.35 {
+        "mind_sentiment_bitter"
+    } else if sentiment < -0.1 {
+        "mind_sentiment_cool"
+    } else {
+        "mind_sentiment_neutral"
+    };
+
+    Some(MindDto {
+        wants,
+        memories,
+        sentiment: (sentiment * 100.0).clamp(-100.0, 100.0) as i8,
+        sentiment_label: i18n.t(sentiment_label).to_string(),
+    })
 }

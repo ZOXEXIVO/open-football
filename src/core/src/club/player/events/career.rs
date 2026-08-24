@@ -9,6 +9,7 @@
 use chrono::NaiveDate;
 
 use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::mind::{ActorRef, EpisodeKind};
 use crate::club::player::player::Player;
 use crate::{
     ContractEventContext, ContractEventEvidence, ContractEventKind, HappinessEventCause,
@@ -320,6 +321,46 @@ impl Player {
             happiness_ctx,
             365,
         );
+    }
+
+    /// File a season outcome in memory, alongside the mood event.
+    ///
+    /// A season is the unit a career is actually remembered in — the
+    /// year they went up, the year they went down, the year they won it.
+    /// The mood event that fires beside this one fades inside a month;
+    /// the episode is encoded against what he wanted at the time and
+    /// consolidates into a conviction about the place.
+    ///
+    /// Every kind below already has a calibrated gate upstream. This
+    /// never invents a second bar for "was it memorable" — it taps the
+    /// one the happiness layer already decided, which is the rule phase
+    /// 1b of `docs/player_mind.md` is built on.
+    ///
+    /// `club_id` of 0 records nothing: a season outcome that cannot be
+    /// filed against a club is not one he can be reminded of by walking
+    /// back into the place.
+    pub fn remember_season_outcome(
+        &mut self,
+        event: &HappinessEventType,
+        club_id: u32,
+        now: NaiveDate,
+    ) {
+        if club_id == 0 {
+            return;
+        }
+        let kind = match event {
+            HappinessEventType::TrophyWon => EpisodeKind::WonLeagueTitle,
+            HappinessEventType::DomesticCupWon => EpisodeKind::WonDomesticCup,
+            HappinessEventType::PromotionCelebration => EpisodeKind::Promoted,
+            HappinessEventType::Relegated => EpisodeKind::Relegated,
+            // Qualifying for Europe is a fine season, not a night he
+            // will describe to his grandchildren. Deliberately absent,
+            // along with `CupFinalDefeat` — losing a final is already
+            // carried by `HeavyDefeat` from the match path.
+            _ => return,
+        };
+        let ctx = self.mind_context(now, Some(club_id));
+        self.mind.remember(kind, ActorRef::club(club_id), &ctx);
     }
 
     /// React to a team-level season / competition outcome. Magnitude is
@@ -710,5 +751,127 @@ impl Player {
             happiness_ctx,
             cooldown_days,
         )
+    }
+}
+
+impl Player {
+    /// Sweep the week's mood events into memory.
+    ///
+    /// The alternative was thirty separate taps at thirty emit sites,
+    /// most of which do not know which club the player is at — the
+    /// happiness layer is player-scoped and the mind is club-cued, and
+    /// that mismatch is what phase 1b kept running into. This reads the
+    /// *same gate* rather than a second one: an event is in the log
+    /// because the happiness layer already decided it happened, with its
+    /// own cooldowns and its own calibrated conditions. Nothing here
+    /// re-decides anything; it only chooses which of them a career
+    /// remembers.
+    ///
+    /// **The window is `1..=7`, not `0..=7`**, and that is what makes it
+    /// exactly-once rather than every-week-forever.
+    ///
+    /// `days_ago` does not tick daily — `PlayerHappiness::decay_events`
+    /// advances it by `decay_step_days` (7) once a week, so an event's
+    /// age reads 0, then 7, then 14, and never anything between. An
+    /// event therefore sits at 7 for exactly one weekly think, whenever
+    /// in the week it fired. Excluding 0 is what stops the same event
+    /// being filed on the tick it lands *and* again seven days later;
+    /// the cost is that a memory is banked one week after the mood, and
+    /// on a career-length forgetting curve that is nothing.
+    pub fn remember_recent_mood(&mut self, club_id: Option<u32>, now: NaiveDate) {
+        let Some(club) = club_id.filter(|id| *id != 0) else {
+            return;
+        };
+
+        // Collected first because recording borrows the mind mutably
+        // while the log lives on the same player.
+        let mut filed: Vec<(EpisodeKind, ActorRef)> = Vec::new();
+        for event in self.happiness.recent_events.iter() {
+            if event.days_ago == 0 || event.days_ago > 7 {
+                continue;
+            }
+            let teammate = event
+                .partner_player_id
+                .map(ActorRef::player)
+                .unwrap_or(ActorRef::NONE);
+            let coach = self
+                .squad_standing_view
+                .filter(|v| v.head_coach_id != 0)
+                .map(|v| ActorRef::staff(v.head_coach_id))
+                .unwrap_or_else(|| ActorRef::club(club));
+
+            let (kind, who) = match event.event_type {
+                // ── The paperwork ───────────────────────────────
+                HappinessEventType::ContractRenewal => {
+                    (EpisodeKind::ContractRenewed, ActorRef::club(club))
+                }
+                HappinessEventType::ContractTerminated => {
+                    (EpisodeKind::ReleasedByClub, ActorRef::club(club))
+                }
+                HappinessEventType::SalaryBoost => (EpisodeKind::BigPayRise, ActorRef::club(club)),
+                HappinessEventType::SalaryGapNoticed => {
+                    (EpisodeKind::WageBelowPeers, ActorRef::club(club))
+                }
+                HappinessEventType::RejectedContractOffer
+                | HappinessEventType::ContractTalksStalled => {
+                    (EpisodeKind::ClubRefusedTerms, ActorRef::club(club))
+                }
+
+                // ── The manager ─────────────────────────────────
+                HappinessEventType::ManagerPraise => (EpisodeKind::ManagerPublicPraise, coach),
+                HappinessEventType::ManagerCriticism => {
+                    (EpisodeKind::ManagerPublicCriticism, coach)
+                }
+                HappinessEventType::ManagerEncouragement => {
+                    (EpisodeKind::ManagerPrivateBacking, coach)
+                }
+                // Being told he is not in the plans is the one thing in
+                // this list that is not a bad week — it is a decision
+                // about him, and the goal machinery treats it as a
+                // different state from being benched.
+                HappinessEventType::ToldNotInPlans => (EpisodeKind::ManagerFrozenOut, coach),
+                HappinessEventType::UnhappyWithTacticalRole => (EpisodeKind::RoleDowngraded, coach),
+                HappinessEventType::TrustedInBigMatch => (EpisodeKind::StartedBigMatch, coach),
+                HappinessEventType::BenchedForBigMatch => (EpisodeKind::LeftOutOfBigMatch, coach),
+
+                // ── The room ────────────────────────────────────
+                HappinessEventType::SettledIntoSquad => {
+                    (EpisodeKind::WelcomedBySquad, ActorRef::club(club))
+                }
+                HappinessEventType::FeelingIsolated => (EpisodeKind::FeltIsolated, ActorRef::NONE),
+                HappinessEventType::TeammateBonding => (EpisodeKind::TeammateBefriended, teammate),
+                HappinessEventType::ConflictWithTeammate
+                | HappinessEventType::TrainingGroundBustUp => {
+                    (EpisodeKind::TeammateConflict, teammate)
+                }
+                HappinessEventType::SeniorMentorSupport
+                | HappinessEventType::LearningFromStarTeammate => {
+                    (EpisodeKind::MentorSupport, teammate)
+                }
+                HappinessEventType::ResiliencePraised => {
+                    (EpisodeKind::SquadBackedHim, ActorRef::club(club))
+                }
+                HappinessEventType::DressingRoomInquest => {
+                    (EpisodeKind::SquadTurnedOnHim, ActorRef::club(club))
+                }
+
+                // ── Standing outside the dressing room ──────────
+                HappinessEventType::MediaCriticism => (EpisodeKind::MediaAttack, ActorRef::NONE),
+                HappinessEventType::AppearanceMilestone => {
+                    (EpisodeKind::ClubServantMilestone, ActorRef::club(club))
+                }
+
+                _ => continue,
+            };
+            filed.push((kind, who));
+        }
+
+        if filed.is_empty() {
+            return;
+        }
+        let ctx = self.mind_context(now, Some(club));
+        for (kind, who) in filed {
+            self.mind.remember(kind, who, &ctx);
+        }
     }
 }

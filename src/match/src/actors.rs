@@ -5386,28 +5386,79 @@ mod keeper {
         let body = std::fs::read_to_string(path).expect("readable chunk");
         let chunk: ChunkPayload = serde_json::from_str(&body).expect("a chunk");
         let mut tracks = ReplayTracks::default();
-        tracks.absorb(chunk);
+        // `absorb` deliberately hands the player tracks BACK unread — the
+        // two-pass load is what keeps the first frame off the main thread
+        // (see `bringup`). A harness that drops them measures an empty world:
+        // every one of these modules silently reported zero frames until this
+        // line went in.
+        for (id, samples) in tracks.absorb(chunk) {
+            tracks.absorb_player(id, &samples);
+        }
         Some(tracks)
     }
 
-    /// Who the keepers are, inferred from the one thing that is true of them
-    /// and of nobody else: they spend the match on a goal line. The recording
-    /// carries states but the group prefix is stripped on the way in, so
-    /// "Goalkeeper: Standing" arrives as "Standing" and cannot be asked.
+    /// Who the keepers are.
+    ///
+    /// ⚠ **This used to take the two players who got FURTHEST from the
+    /// halfway line, and that is a winger.** A keeper stands 51 m from the
+    /// centre spot; a right-back overlapping to the byline reaches 52, and
+    /// the maximum over a minute is decided by whoever went to the corner
+    /// flag. Every number this module and [`census_keeper`] have ever
+    /// printed about a goalkeeper was measured on an outfielder.
+    ///
+    /// Two tests, in order of how much they prove:
+    ///
+    /// 1. **His STATES.** The recording carries them, and while the group
+    ///    prefix is stripped on the way in (`"Goalkeeper: Standing"` arrives
+    ///    as `"Standing"`) several of the names left over belong to nobody
+    ///    else on the pitch. `Preparing for Save` alone settles it.
+    /// 2. **Where he spends his time** — the MEAN distance from the halfway
+    ///    line rather than the worst. A keeper's whole match is at 45 m and
+    ///    a winger's is spent in midfield, so the average separates them by
+    ///    twenty metres where the maximum separates them by nothing.
     fn keepers(tracks: &mut ReplayTracks, start: f64) -> Vec<u32> {
+        /// States only a goalkeeper is ever in.
+        const HIS_ALONE: [&str; 6] = [
+            "Preparing for Save",
+            "Coming Out",
+            "Returning to Goal",
+            "Distributing",
+            "Holding Ball",
+            "Take Ball",
+        ];
         let ids: Vec<u32> = tracks.players.keys().copied().collect();
+        let named: Vec<u32> = ids
+            .iter()
+            .copied()
+            .filter(|id| {
+                let Some(states) = tracks.states.get_mut(id) else {
+                    return false;
+                };
+                (0..600).any(|step| {
+                    states
+                        .name_at(start + step as f64 * 500.0)
+                        .is_some_and(|name| HIS_ALONE.contains(&name))
+                })
+            })
+            .collect();
         let mut depth: Vec<(u32, f32)> = ids
             .into_iter()
             .filter_map(|id| {
+                let keeping = named.contains(&id);
                 let track = tracks.players.get_mut(&id)?;
-                let mut worst: f32 = 0.0;
-                for step in 0..60 {
+                let mut total = 0.0f32;
+                let mut seen = 0.0f32;
+                for step in 0..120 {
                     let at = start + step as f64 * 1000.0;
                     if let Some(p) = track.position_at(at) {
-                        worst = worst.max((p[0] - 420.0).abs());
+                        total += (p[0] - 420.0).abs();
+                        seen += 1.0;
                     }
                 }
-                Some((id, worst))
+                // A named keeper outranks the geometry outright; the mean
+                // depth is only there for a chunk in which neither of them
+                // did anything but stand.
+                Some((id, total / seen.max(1.0) + if keeping { 1_000.0 } else { 0.0 }))
             })
             .collect();
         depth.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -5551,6 +5602,303 @@ mod keeper {
             median(leads)
         );
     }
+
+    /// **What the rig actually DRAWS for a goalkeeper, frame by frame, over a
+    /// real recording.**
+    ///
+    /// [`measure_keeper`] answers what he is DOING — how much of his match is
+    /// spent moving, and which way. This answers the other half, which is the
+    /// half every report about him has been about: given that he is moving,
+    /// how much of his body is moving with him. It walks the same recording
+    /// through the same integrator, builds the real [`Gait`], and then reads
+    /// the real forward kinematics — so what it prints is the picture, not a
+    /// claim about the picture.
+    ///
+    /// The columns that matter:
+    ///
+    /// * **`swept`** — how far his boots travel in HIS OWN frame across a
+    ///   step, in centimetres. A man walking at 1 m/s takes ~0.6 m steps; a
+    ///   figure whose boots sweep 5 cm while the body covers a metre is being
+    ///   slid across the grass, and that is "moves without moving his legs"
+    ///   as a number.
+    /// * **`lift`** — how far the swing foot gets off the turf. Zero is a
+    ///   shuffle with both soles welded down.
+    /// * **`goalward`** — the share of frames in which his heading is inside
+    ///   a right angle of his own goal, i.e. he is drawn with his back to the
+    ///   pitch.
+    #[test]
+    #[ignore = "needs MATCH_REPLAY pointed at a decompressed recording chunk"]
+    fn census_keeper() {
+        let Some(mut tracks) = load() else {
+            panic!("set MATCH_REPLAY to a decompressed chunk");
+        };
+        let (start, until) = tracks.ball.span().expect("a recorded chunk");
+        let ids = keepers(&mut tracks, start);
+        let frame = 1.0f32 / 60.0;
+        println!("  keepers picked: {ids:?} of {} tracks", tracks.players.len());
+        let frames = ((until - start) / (frame as f64 * 1000.0)) as u32;
+
+        /// Speed bands, in metres a second, and what to call them.
+        const BANDS: [(f32, &str); 6] = [
+            (0.225, "still"),
+            (0.70, "creep"),
+            (1.50, "walk"),
+            (3.00, "jog"),
+            (5.00, "run"),
+            (f32::INFINITY, "sprint"),
+        ];
+        let mut in_band = [0u64; 6];
+        let mut swept = [0.0f64; 6];
+        let mut lifted = [0.0f64; 6];
+        let mut carried = [0.0f64; 6];
+        let mut running = [0.0f64; 6];
+        let mut goalward = [0u64; 6];
+        // And what the rest of him is doing while his legs do it.
+        let mut armed = [0.0f64; 6];
+        let mut turned = [0.0f64; 6];
+        let mut samples = 0u64;
+        // Airborne episodes: how high, and how long.
+        let mut flights: Vec<(f32, f32)> = Vec::new();
+        // And the pose at the top of each of them.
+        let mut apex_gait: Vec<Gait> = Vec::new();
+
+        for id in ids {
+            let mut actor = PlayerActor::new(id, true, true);
+            let mut previous: Option<Vec3> = None;
+            // His own goal is the one he stands in front of.
+            let mut post = 0.0f32;
+            let mut air: Option<(f32, f32)> = None;
+            // A short trailing window of boot positions, to measure the sweep
+            // across a step rather than between two frames.
+            // Boots, gloves and the yaw of his chest.
+            let mut trail: std::collections::VecDeque<(Vec3, Vec3, Vec3, f32)> =
+                std::collections::VecDeque::new();
+
+            for f in 0..frames {
+                let now = start + f as f64 * frame as f64 * 1000.0;
+                let Some(p) = tracks.players.get_mut(&id).and_then(|t| t.position_at(now)) else {
+                    previous = None;
+                    continue;
+                };
+                let position = Field::to_world(p[0], p[1], p[2]);
+                if post == 0.0 {
+                    post = if position.x < 0.0 { -1.0 } else { 1.0 };
+                }
+                let ball = tracks
+                    .ball
+                    .position_at(now)
+                    .map(|b| Field::to_world(b[0], b[1], b[2]));
+                let step = match previous {
+                    Some(prev) => position - prev,
+                    None => Vec3::ZERO,
+                };
+                previous = Some(position);
+                if f == 0 {
+                    continue;
+                }
+
+                // ——— the integrator, as `animate` runs it ———
+                let observed = step.length() / frame;
+                if observed > Actors::TELEPORT {
+                    continue;
+                }
+                actor.speed +=
+                    (observed - actor.speed) * (1.0 - (-frame / Actors::PACE_RESPONSE).exp());
+                let travelling = Vec3::new(step.x, 0.0, step.z) / frame;
+                let was = actor.travel;
+                actor.travel =
+                    was + (travelling - was) * (1.0 - (-frame / Actors::TRAVEL_RESPONSE).exp());
+                actor.height = position.y;
+                actor.track_flight(frame, actor.speed.max(observed), step.length(), false);
+
+                let mut state = BallState::default();
+                if let Some(b) = ball {
+                    state.on_pitch = true;
+                    state.position = b;
+                }
+                let want = Actors::facing(&actor, &state, position, step, false);
+                if let Some(want) = Vec3::new(want.x, 0.0, want.z).try_normalize() {
+                    let wanted = want.x.atan2(want.z);
+                    let swing = (wanted - actor.heading + PI).rem_euclid(TAU) - PI;
+                    let eased = (actor.speed / Actors::SPRINT).clamp(0.0, 1.0);
+                    let ceiling = (Actors::PIVOT_RATE.0
+                        + (Actors::PIVOT_RATE.1 - Actors::PIVOT_RATE.0) * eased)
+                        * frame;
+                    actor.heading += (swing * (1.0 - (-frame / Actors::TURN_RESPONSE).exp()))
+                        .clamp(-ceiling, ceiling);
+                }
+
+                let forward = Vec3::new(actor.heading.sin(), 0.0, actor.heading.cos());
+                let sideways = Vec3::new(actor.heading.cos(), 0.0, -actor.heading.sin());
+                let going = Vec3::new(actor.travel.x, 0.0, actor.travel.z);
+                let wanted_course = match going.try_normalize() {
+                    Some(way) if actor.speed > Actors::STEPPING * 0.5 => {
+                        Vec2::new(way.dot(sideways), way.dot(forward))
+                    }
+                    _ => Vec2::Y,
+                };
+                let settle = 1.0 - (-frame / Actors::COURSE_RESPONSE).exp();
+                let was = actor.course;
+                actor.course = (was + (wanted_course - was) * settle).clamp_length_max(1.0);
+                actor.open = Actors::opening(actor.speed, actor.course, true);
+                actor.underfoot = Actors::underfoot(actor.course, actor.open);
+                actor.idle = (actor.idle + frame * Actors::IDLE_RATE).rem_euclid(TAU);
+
+                let wanted_set = match ball {
+                    Some(b) => {
+                        let to_ball = b - position;
+                        let range = Vec3::new(to_ball.x, 0.0, to_ball.z).length();
+                        ((Actors::SET_RANGE.1 - range)
+                            / (Actors::SET_RANGE.1 - Actors::SET_RANGE.0))
+                            .clamp(0.0, 1.0)
+                    }
+                    None => 0.0,
+                };
+                actor.set +=
+                    (wanted_set - actor.set) * (1.0 - (-frame / Actors::PACE_RESPONSE).exp());
+
+                let (stride, carry_ground) =
+                    Actors::stride_of(actor.id, actor.speed, actor.underfoot);
+                actor.phase = (actor.phase + step.length() * PI / stride).rem_euclid(TAU);
+                actor.carry_ground = carry_ground;
+                let gait = actor.gait();
+
+                // ——— and what it draws ———
+                let torso = crate::body::skeleton::step(
+                    crate::body::Limb::Torso,
+                    0.0,
+                    Vec3::new(0.0, 1.0, 0.0),
+                    gait,
+                );
+                trail.push_back((
+                    crate::body::skeleton::boot(-1.0, gait),
+                    crate::body::skeleton::boot(1.0, gait),
+                    crate::body::skeleton::glove(1.0, gait),
+                    torso.rotation.to_euler(EulerRot::YXZ).0,
+                ));
+                // Half a stride is one `PI` of phase; at this cadence that is
+                // roughly this many frames. Bounded so a standing keeper does
+                // not accumulate a window an hour long.
+                let window = ((stride / step.length().max(1e-4)) as usize).clamp(4, 90);
+                while trail.len() > window {
+                    trail.pop_front();
+                }
+
+                let band = BANDS
+                    .iter()
+                    .position(|(top, _)| actor.speed < *top)
+                    .unwrap_or(5);
+                samples += 1;
+                in_band[band] += 1;
+                carried[band] += gait.carry_ground as f64;
+                running[band] += gait.run as f64;
+                let span = |axis: fn(&(Vec3, Vec3, Vec3, f32)) -> f32| {
+                    let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+                    for entry in &trail {
+                        let value = axis(entry);
+                        lo = lo.min(value);
+                        hi = hi.max(value);
+                    }
+                    hi - lo
+                };
+                // Whichever axis he is travelling on: a side-step's stride is
+                // across him and a run's is in front of him, and asking only
+                // about the sagittal one reports a shuffle as motionless.
+                let sagittal = span(|e| e.0.z).max(span(|e| e.1.z));
+                let lateral = span(|e| e.0.x).max(span(|e| e.1.x));
+                swept[band] += sagittal.max(lateral) as f64;
+                lifted[band] += span(|e| e.0.y).max(span(|e| e.1.y)) as f64;
+                // And the two halves of him that are not his legs: how far a
+                // glove travels across the same step, and how far his chest
+                // turns under him. Both are what tells a man walking from a
+                // pair of legs being driven along under a mannequin.
+                armed[band] += span(|e| e.2.z).max(span(|e| e.2.x)) as f64;
+                turned[band] += span(|e| e.3) as f64;
+
+                // His back to the play: the heading inside a right angle of
+                // the goal he is defending.
+                if forward.x * post > std::f32::consts::FRAC_1_SQRT_2 {
+                    goalward[band] += 1;
+                }
+
+                // Time off the turf, and the pose at the top of it.
+                match (position.y > Actors::AIRBORNE_FEET, &mut air) {
+                    (true, Some((apex, held))) => {
+                        *held += frame;
+                        if position.y > *apex {
+                            *apex = position.y;
+                            if apex_gait.len() < 400 {
+                                apex_gait.push(gait);
+                            }
+                        }
+                    }
+                    (true, None) => air = Some((position.y, frame)),
+                    (false, Some((apex, held))) => {
+                        flights.push((*apex, *held));
+                        air = None;
+                    }
+                    (false, None) => {}
+                }
+            }
+        }
+
+        let share = |n: u64, of: u64| 100.0 * n as f64 / of.max(1) as f64;
+        let mean = |sum: f64, n: u64| sum / n.max(1) as f64;
+        println!("KEEPER CENSUS over {samples} frames");
+        println!(
+            "  {:<8} {:>7} {:>9} {:>8} {:>9} {:>10} {:>7} {:>8} {:>9}",
+            "band",
+            "share",
+            "swept cm",
+            "lift cm",
+            "glove cm",
+            "chest deg",
+            "run",
+            "ground",
+            "goalward"
+        );
+        for (band, (_, name)) in BANDS.iter().enumerate() {
+            println!(
+                "  {:<8} {:>6.1}% {:>9.1} {:>8.1} {:>9.1} {:>10.1} {:>7.2} {:>8.3} {:>8.0}%",
+                name,
+                share(in_band[band], samples),
+                mean(swept[band], in_band[band]) * 100.0,
+                mean(lifted[band], in_band[band]) * 100.0,
+                mean(armed[band], in_band[band]) * 100.0,
+                mean(turned[band], in_band[band]).to_degrees(),
+                mean(running[band], in_band[band]),
+                mean(carried[band], in_band[band]),
+                share(goalward[band], in_band[band]),
+            );
+        }
+        let moving: u64 = in_band[1..].iter().sum();
+        let back: u64 = goalward[1..].iter().sum();
+        println!(
+            "  BACK TO THE PLAY on {:.0}% of his moving frames",
+            share(back, moving)
+        );
+
+        flights.sort_by(|a, b| b.0.total_cmp(&a.0));
+        println!(
+            "  OFF THE GROUND {} times: apex {:.2} m median, {:.2} m best; \
+             {} of them under half a metre",
+            flights.len(),
+            flights
+                .get(flights.len() / 2)
+                .map_or(f32::NAN, |(apex, _)| *apex),
+            flights.first().map_or(f32::NAN, |(apex, _)| *apex),
+            flights.iter().filter(|(apex, _)| *apex < 0.5).count(),
+        );
+        let jumps = apex_gait.len().max(1) as f32;
+        println!(
+            "  at the apex: dive {:.2}, stretch {:.2}, reach {:.2}, jump {:.2}, run {:.2}",
+            apex_gait.iter().map(|g| g.dive).sum::<f32>() / jumps,
+            apex_gait.iter().map(|g| g.stretch).sum::<f32>() / jumps,
+            apex_gait.iter().map(|g| g.reach).sum::<f32>() / jumps,
+            apex_gait.iter().map(|g| g.jump).sum::<f32>() / jumps,
+            apex_gait.iter().map(|g| g.run).sum::<f32>() / jumps,
+        );
+    }
 }
 
 /// **How much do the twenty-two actually turn?**
@@ -5581,7 +5929,14 @@ mod churn {
         let body = std::fs::read_to_string(path).expect("readable chunk");
         let chunk: ChunkPayload = serde_json::from_str(&body).expect("a chunk");
         let mut tracks = ReplayTracks::default();
-        tracks.absorb(chunk);
+        // `absorb` deliberately hands the player tracks BACK unread — the
+        // two-pass load is what keeps the first frame off the main thread
+        // (see `bringup`). A harness that drops them measures an empty world:
+        // every one of these modules silently reported zero frames until this
+        // line went in.
+        for (id, samples) in tracks.absorb(chunk) {
+            tracks.absorb_player(id, &samples);
+        }
         Some(tracks)
     }
 

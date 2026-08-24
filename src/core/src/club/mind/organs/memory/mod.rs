@@ -201,6 +201,16 @@ impl MindMemory {
         Recall::cue(&mut self.episodes, &self.semantic, &self.ledger, cue, ctx)
     }
 
+    /// Look at what a cue *would* bring back, without bringing it back.
+    ///
+    /// For readers rather than for the man himself: a profile page, a
+    /// scout report, the census. Reading a memory must never strengthen
+    /// it, or a player who happens to be looked at often would forget
+    /// nothing.
+    pub fn inspect(&self, cue: RecallCue, ctx: &RecallContext) -> RecallResult {
+        Recall::inspect(&self.episodes, &self.semantic, &self.ledger, cue, ctx)
+    }
+
     /// How he feels about a club, read-only. The question the transfer
     /// path asks about every option on the table; only an actual return
     /// ([`Self::recall`]) counts as remembering.

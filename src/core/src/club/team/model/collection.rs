@@ -1,4 +1,5 @@
 use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::mind::{ActorRef, EpisodeKind};
 use crate::club::staff::mind::organs::judgements::CoachDecisionState;
 use crate::club::staff::perception::{CoachProfile, date_to_week};
 use crate::club::team::squad::SquadSatisfaction;
@@ -266,8 +267,8 @@ impl TeamCollection {
             // those whose relationship had soured get a fresh-start bump.
             // Then the whole squad feels the new-manager bounce.
             if let Some(prev_id) = previous_coach_id {
-                Self::fire_manager_departure_events(&mut self.teams, prev_id);
-                Self::fire_new_manager_bounce_events(&mut self.teams);
+                Self::fire_manager_departure_events(&mut self.teams, prev_id, date);
+                Self::fire_new_manager_bounce_events(&mut self.teams, coach_id, date);
             }
         }
 
@@ -286,11 +287,12 @@ impl TeamCollection {
         manager_changed
     }
 
-    fn fire_manager_departure_events(teams: &mut [Team], outgoing_coach_id: u32) {
+    fn fire_manager_departure_events(teams: &mut [Team], outgoing_coach_id: u32, date: NaiveDate) {
         for team in teams.iter_mut() {
             if !matches!(team.team_type, TeamType::Main) {
                 continue;
             }
+            let club_id = team.club_id;
             for player in team.players.players.iter_mut() {
                 let magnitude = match player.relations.get_staff(outgoing_coach_id) {
                     Some(rel) => {
@@ -312,6 +314,15 @@ impl TeamCollection {
                 player
                     .happiness
                     .add_event(HappinessEventType::ManagerDeparture, magnitude);
+                // And in memory, filed against the man rather than the
+                // badge -- a grudge or a debt follows a coach to his
+                // next job, and the club he leaves behind owns neither.
+                let ctx = player.mind_context(date, Some(club_id));
+                player.mind.remember(
+                    EpisodeKind::ManagerLeftClub,
+                    ActorRef::staff(outgoing_coach_id),
+                    &ctx,
+                );
             }
         }
     }
@@ -325,12 +336,13 @@ impl TeamCollection {
     ///
     /// With one exception, and it is the right one: a coach who has
     /// worked with a player before arrives still holding that view.
-    fn fire_new_manager_bounce_events(teams: &mut [Team]) {
+    fn fire_new_manager_bounce_events(teams: &mut [Team], incoming_coach_id: u32, date: NaiveDate) {
         let base = HappinessConfig::default().catalog.new_manager_bounce;
         for team in teams.iter_mut() {
             if !matches!(team.team_type, TeamType::Main) {
                 continue;
             }
+            let club_id = team.club_id;
             for player in team.players.players.iter_mut() {
                 let frozen_out = player.happiness.morale < 40.0
                     || player.statuses.has(PlayerStatusType::Unh)
@@ -343,6 +355,14 @@ impl TeamCollection {
                 player
                     .happiness
                     .add_event(HappinessEventType::NewManagerBounce, magnitude);
+                if incoming_coach_id != 0 {
+                    let ctx = player.mind_context(date, Some(club_id));
+                    player.mind.remember(
+                        EpisodeKind::ManagerArrived,
+                        ActorRef::staff(incoming_coach_id),
+                        &ctx,
+                    );
+                }
             }
         }
     }

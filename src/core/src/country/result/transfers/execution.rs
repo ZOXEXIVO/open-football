@@ -93,6 +93,32 @@ impl TransferExecution {
         Self::add_to_main_team(club, player);
 
         let club_id = club.id;
+        let manager_id = club
+            .teams
+            .main()
+            .map(|team| team.staffs.head_coach().id)
+            .unwrap_or(0);
+        if manager_id == 0 {
+            return;
+        }
+
+        // Somebody argued for him in a room he was not in, and that man
+        // is now his sponsor. It matters later rather than now: a player
+        // whose champion is sacked in November loses every assumption
+        // underwriting his place, months before the successor has done
+        // anything at all. Recorded here because this is the only site
+        // that knows both the arrival and the man in the dugout.
+        if let Some(signing) = club
+            .teams
+            .main_mut()
+            .and_then(|team| team.players.players.iter_mut().find(|p| p.id == player_id))
+        {
+            signing
+                .mind
+                .professional
+                .on_signed_by(ActorRef::staff(manager_id));
+        }
+
         let Some(manager) = club
             .teams
             .main_mut()
@@ -293,6 +319,12 @@ impl SquadReactionPass {
         arrival: &ArrivalThreatProfile,
         date: NaiveDate,
     ) {
+        let club_id = buying_club.id;
+        let signed_by = buying_club
+            .teams
+            .main()
+            .map(|t| t.staffs.head_coach().id)
+            .unwrap_or(0);
         for team in &mut buying_club.teams.teams {
             for existing in team.players.iter_mut() {
                 if existing.id == arrival.player_id {
@@ -363,11 +395,40 @@ impl SquadReactionPass {
                 // A professional veteran meets his young replacement with a
                 // mentorship bond instead of a grievance — warm the relation
                 // toward the arrival so the adaptation mentor axis picks it up.
-                if existing.on_new_signing_threat(ctx) == RivalThreatResponse::Mentoring {
+                let response = existing.on_new_signing_threat(ctx);
+
+                // The manager has bought a man for his shirt. Filed
+                // against the *coach*, not the club and not the arrival:
+                // a player blames the man who decided he needed
+                // replacing, and it is that standing account a change of
+                // manager later wipes clean.
+                if signed_by != 0 {
+                    let mctx = existing.mind_context(date, Some(club_id));
+                    existing.mind.remember(
+                        EpisodeKind::ManagerSignedARival,
+                        ActorRef::staff(signed_by),
+                        &mctx,
+                    );
+                }
+
+                // A professional veteran meets his young replacement with a
+                // mentorship bond instead of a grievance — warm the relation
+                // toward the arrival so the adaptation mentor axis picks it up.
+                if response == RivalThreatResponse::Mentoring {
                     existing.relations.update_player_relationship(
                         arrival.player_id,
                         RelationshipChange::positive(ChangeType::MentorshipBond, 0.4),
                         date,
+                    );
+                    // And the boy remembers who helped him — the
+                    // generational loop the succession fork depends on.
+                    // Recorded on the older man's side as the choice he
+                    // made; the arrival's side is filed below.
+                    let mctx = existing.mind_context(date, Some(club_id));
+                    existing.mind.remember(
+                        EpisodeKind::MentorSupport,
+                        ActorRef::player(arrival.player_id),
+                        &mctx,
                     );
                 }
             }

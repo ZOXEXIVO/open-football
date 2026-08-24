@@ -14,7 +14,7 @@
 use super::organs::MindOrgans;
 use super::organs::goals::{GoalDomain, GoalEvidence, GoalKind, GoalOrigin};
 use super::organs::memory::{ActorRef, EpisodeKind, FactClaim, MindEpisode};
-use super::submind::{MindView, MoodContribution, SubMind};
+use super::submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind};
 
 /// His sense of what he is owed.
 #[derive(Debug, Clone, Copy, Default)]
@@ -179,6 +179,12 @@ impl SubMind for FinancialMind {
                 today,
             );
         }
+
+        self.consider_running_it_down(view, organs, broke_its_word);
+    }
+
+    fn weigh(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
+        self.weigh_option(option, organs)
     }
 
     fn appraise(&self, _organs: &MindOrgans) -> MoodContribution {
@@ -191,6 +197,98 @@ impl SubMind for FinancialMind {
             0.85
         };
         MoodContribution::new(GoalDomain::Financial, value, confidence)
+    }
+}
+
+impl FinancialMind {
+    /// Contract pressure past which running it down is a live option
+    /// rather than an idea. Roughly the last year of a deal — before
+    /// that the club still holds every card and he knows it.
+    pub const RUN_DOWN_WINDOW: f32 = 0.50;
+
+    /// The most deliberate decision a player ever makes, and the one
+    /// that looks from outside like doing nothing.
+    ///
+    /// He stops trying to be paid what he is worth here, plays out the
+    /// deal, and walks for nothing to a club of his choosing. It takes
+    /// three things together, which is what keeps it rare: a deal
+    /// genuinely running down, a reason not to re-sign, and enough
+    /// standing that he expects somebody to want him. A loyal man barely
+    /// entertains it; a man the club has already broken its word to
+    /// hardly needs the rest.
+    fn consider_running_it_down(
+        &mut self,
+        view: &MindView<'_>,
+        organs: &mut MindOrgans,
+        broke_its_word: f32,
+    ) {
+        let s = view.situation;
+        let today = view.today();
+
+        let pressure = s.contract_pressure();
+        if pressure < Self::RUN_DOWN_WINDOW {
+            return;
+        }
+
+        // Why he would not re-sign here. Any of the three on its own is
+        // a reason; together they are a decision.
+        let grievance = (self.grievance() * 0.5
+            + (self.refusals as f32 / 4.0).min(1.0) * 0.3
+            + broke_its_word * 0.4)
+            .clamp(0.0, 1.0);
+        if grievance < 0.25 {
+            return;
+        }
+
+        // Whether he thinks anybody would take him. Standing in the pay
+        // order is the honest proxy: a man his club already pays like a
+        // first-teamer is a man other clubs have noticed. Below the
+        // middle of a dressing room, running it down is not leverage —
+        // it is unemployment, and players know that.
+        let market_nerve = (s.wage_standing - 0.4).max(0.0) / 0.6;
+        // …and a career with time left in it. Nobody runs down a
+        // contract at thirty-six.
+        let nerve = market_nerve * s.career_runway();
+        if nerve < 0.2 {
+            return;
+        }
+
+        // Loyalty is what stops it. A club man re-signs on worse terms
+        // rather than do this, and that is most of what loyalty means in
+        // a contract negotiation.
+        let willing = (grievance * nerve * (1.0 - s.loyalty_drive() * 0.75)).clamp(0.0, 1.0);
+        if willing < 0.15 {
+            return;
+        }
+
+        let mut evidence = GoalEvidence::of(&[GoalEvidence::CONTRACT_RUNNING_DOWN]);
+        if self.refusals > 0 {
+            evidence.insert(GoalEvidence::TERMS_REFUSED);
+        }
+        if broke_its_word > 0.2 {
+            evidence.insert(GoalEvidence::PROMISE_BROKEN);
+        }
+        if self.fairness() < Self::AGGRIEVED {
+            evidence.insert(GoalEvidence::PAID_BELOW_HIS_PEERS);
+        }
+
+        organs.goals.pursue(
+            GoalKind::RunDownMyContract,
+            GoalOrigin::SelfDrive,
+            evidence,
+            willing,
+            today,
+        );
+        // It sharpens as the date approaches, because the leverage does.
+        organs
+            .goals
+            .set_urgency(GoalKind::RunDownMyContract, pressure);
+        // And having decided, he stops chasing the thing he decided
+        // against: asking this club for a better deal.
+        organs
+            .goals
+            .ease(GoalKind::BePaidWhatImWorth, willing * 0.5);
+        organs.goals.ease(GoalKind::SecureMyFuture, willing * 0.6);
     }
 }
 
@@ -419,5 +517,59 @@ mod tests {
         betrayed.observe(&episode(EpisodeKind::ClubBrokeWagePromise), &mut organs);
 
         assert!(betrayed.grievance() > refused.grievance());
+    }
+}
+
+impl FinancialMind {
+    /// What money says about a decision. Almost never the loudest voice,
+    /// and almost never silent.
+    pub(super) fn weigh_option(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
+        let mut reasons = ReasonSet::new();
+
+        match option {
+            MindOption::SignContract => {
+                // The decision that looks like doing nothing. A man who
+                // has decided to run it down is not weighing the offer —
+                // he has already answered it.
+                let running_down = organs.goals.pressure_of(GoalKind::RunDownMyContract);
+                if running_down > 0.1 {
+                    reasons.push(GoalKind::RunDownMyContract, -running_down);
+                }
+                if self.fairness() < Self::AGGRIEVED {
+                    reasons.push(GoalKind::BePaidWhatImWorth, self.fairness());
+                }
+                let security = organs.goals.pressure_of(GoalKind::SecureMyFuture);
+                if security > 0.1 {
+                    reasons.push(GoalKind::SecureMyFuture, security);
+                }
+            }
+
+            MindOption::JoinClub(club_id) => {
+                let broke_word = organs
+                    .memory
+                    .believes(FactClaim::ClubBrokeItsWord, ActorRef::club(club_id));
+                if broke_word > 0.1 {
+                    reasons.push(GoalKind::BePaidWhatImWorth, -broke_word * 0.8);
+                }
+                if self.grievance() > 0.2 {
+                    // Being underpaid where he is makes anywhere else
+                    // more attractive, whatever the new club offers.
+                    reasons.push(GoalKind::BePaidWhatImWorth, self.grievance() * 0.6);
+                }
+            }
+
+            MindOption::RequestTransfer => {
+                if self.refusals >= 2 {
+                    reasons.push(
+                        GoalKind::BeAllowedToLeave,
+                        (self.refusals as f32 / 4.0).min(1.0),
+                    );
+                }
+            }
+
+            _ => {}
+        }
+
+        reasons
     }
 }

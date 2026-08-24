@@ -14,7 +14,8 @@
 use super::organs::MindOrgans;
 use super::organs::goals::{GoalDomain, GoalEvidence, GoalKind, GoalOrigin};
 use super::organs::memory::{ActorRef, EpisodeKind, FactClaim, MindEpisode};
-use super::submind::{MindView, MoodContribution, SubMind};
+use super::situation::MindSituation;
+use super::submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind};
 
 /// His sense of belonging.
 #[derive(Debug, Clone, Copy, Default)]
@@ -199,16 +200,28 @@ impl SubMind for SocialMind {
         let spiritual_home = organs.memory.believes(FactClaim::SpiritualHome, here);
 
         if (long_service && self.belonging() > 0.2 && fondness > 0.0) || spiritual_home > 0.4 {
-            let attachment =
-                (self.belonging() * 0.5 + fondness * 0.3 + spiritual_home * 0.4).clamp(0.2, 1.0);
+            // Loyalty is what turns a happy spell into an attachment. A
+            // rootless man can enjoy a club for four years and still
+            // leave without a backward glance; a loyal one is anchored
+            // by the same four years.
+            let attachment = (self.belonging() * 0.5 + fondness * 0.3 + spiritual_home * 0.4)
+                .clamp(0.2, 1.0)
+                * (0.5 + s.loyalty_drive());
             organs.goals.pursue(
                 GoalKind::StayAtThisClub,
                 GoalOrigin::Attachment,
                 GoalEvidence::of(&[GoalEvidence::LONG_SERVICE, GoalEvidence::HERITAGE_PULL]),
-                attachment,
+                attachment.clamp(0.0, 1.0),
                 today,
             );
         }
+
+        self.consider_his_standing(view, organs);
+        self.consider_the_boy_behind_him(view, organs);
+    }
+
+    fn weigh(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
+        self.weigh_option(option, organs)
     }
 
     fn appraise(&self, _organs: &MindOrgans) -> MoodContribution {
@@ -221,6 +234,115 @@ impl SubMind for SocialMind {
             0.8
         };
         MoodContribution::new(GoalDomain::Social, value, confidence)
+    }
+}
+
+impl SocialMind {
+    /// The long server's want, and it is not money.
+    ///
+    /// A man who has given a club most of a career wants to be *treated*
+    /// like it: the armband, terms offered before he has to ask, being
+    /// spoken about as part of the place. It is the one grievance in the
+    /// catalog a club cannot buy its way out of, and it is why a club
+    /// legend handled badly leaves on a free at thirty-four having
+    /// refused three contracts.
+    fn consider_his_standing(&mut self, view: &MindView<'_>, organs: &mut MindOrgans) {
+        let s = view.situation;
+        let today = view.today();
+
+        if s.days_at_club < MindSituation::CLUB_SERVANT_DAYS || self.belonging() <= 0.0 {
+            return;
+        }
+
+        // The armband is the recognition itself. A captain has it and
+        // wants nothing; a long server passed over for a man who arrived
+        // last summer is where the grievance lives.
+        if s.is_captain {
+            organs.goals.advance(GoalKind::BecomeAClubLegend, 0.4);
+            return;
+        }
+
+        // Years beyond the five that made him a servant, saturating over
+        // another five.
+        let service =
+            ((s.days_at_club - MindSituation::CLUB_SERVANT_DAYS) as f32 / 1825.0).clamp(0.0, 1.0);
+        let want = (0.25 + service * 0.5) * (0.4 + s.loyalty_drive() * 0.8);
+
+        let mut evidence = GoalEvidence::of(&[
+            GoalEvidence::CLUB_SERVANT,
+            GoalEvidence::LONG_SERVICE,
+            GoalEvidence::HERITAGE_PULL,
+        ]);
+        if s.is_vice_captain {
+            // Close, and therefore worse: he can see the thing he wants.
+            evidence.insert(GoalEvidence::NOTHING_LEFT_TO_PROVE);
+        }
+
+        organs.goals.pursue(
+            GoalKind::BecomeAClubLegend,
+            GoalOrigin::Attachment,
+            evidence,
+            want.clamp(0.0, 1.0),
+            today,
+        );
+    }
+
+    /// Succession, from the older man's side.
+    ///
+    /// A veteran with a good young player coming for his shirt does one
+    /// of two things, and which one is the clearest thing character
+    /// decides about a footballer. The professional takes the boy under
+    /// his wing — and starts thinking about the bench rather than the
+    /// pitch. The one who is not takes it personally, and the dressing
+    /// room gets a fault line.
+    ///
+    /// The generational loop this closes is the point: a boy who was
+    /// mentored carries the memory of it, and a decade later is the man
+    /// deciding whether to do the same.
+    fn consider_the_boy_behind_him(&mut self, view: &MindView<'_>, organs: &mut MindOrgans) {
+        let s = view.situation;
+        let today = view.today();
+
+        // Only the man in possession, only against somebody genuinely
+        // younger, and only once his own career has enough behind it
+        // that a successor means something.
+        if !s.is_first_choice() || s.top_rival.is_none() || s.career_spent() < 0.35 {
+            return;
+        }
+        let younger = s.top_rival_age > 0 && (s.top_rival_age as i16) < s.age as i16 - 5;
+        if !younger {
+            return;
+        }
+
+        // Diligence and a level head make a mentor; neither makes a
+        // rival. Continuous, so there is no bar at which a man's
+        // character flips.
+        let generosity = (s.diligence() * 0.6 + (1.0 - s.volatility()) * 0.4).clamp(0.0, 1.0);
+
+        if generosity > 0.55 {
+            // He has started thinking of himself as the older man, which
+            // is the beginning of the end and the beginning of the next
+            // thing. `MentorSupport` in the other direction is emitted
+            // by the mentorship pass; what this owns is what it does to
+            // *him*.
+            self.shift(Self::SHIFT * 0.3);
+            organs.goals.pursue(
+                GoalKind::MoveIntoCoaching,
+                GoalOrigin::SelfDrive,
+                GoalEvidence::of(&[
+                    GoalEvidence::A_YOUNGSTER_IS_COMING,
+                    GoalEvidence::LATE_CAREER,
+                ]),
+                (s.career_spent() * generosity * 0.5).clamp(0.0, 1.0),
+                today,
+            );
+        } else {
+            // The room has a fault line in it now, and he is one side of
+            // it. Small per week and cumulative — this is a thing that
+            // sours over a season, not in an afternoon.
+            self.friction = self.friction.saturating_add(1).min(6);
+            self.shift(-Self::SHIFT * 0.2);
+        }
     }
 }
 
@@ -495,5 +617,63 @@ mod tests {
             );
         }
         assert!(mind.appraise(&organs).weighted() < 0.0);
+    }
+}
+
+impl SocialMind {
+    /// What belonging says about a decision.
+    pub(super) fn weigh_option(&self, option: MindOption, organs: &MindOrgans) -> ReasonSet {
+        let mut reasons = ReasonSet::new();
+
+        match option {
+            MindOption::JoinClub(club_id) => {
+                let club = ActorRef::club(club_id);
+                // He knows the place. Nostalgia is not a metaphor here —
+                // the ledger has genuinely warmed over the years he was
+                // away, because a loyal man re-reads his own past kindly.
+                let home = organs.memory.believes(FactClaim::SpiritualHome, club);
+                let adored = organs
+                    .memory
+                    .believes(FactClaim::FansAdoredMe, ActorRef::fans(club_id));
+                let turned = organs
+                    .memory
+                    .believes(FactClaim::FansTurnedOnMe, ActorRef::fans(club_id));
+                if home > 0.1 {
+                    reasons.push(GoalKind::StayAtThisClub, home);
+                }
+                if adored > 0.1 {
+                    reasons.push(GoalKind::PlayForMyBoyhoodClub, adored * 0.7);
+                }
+                if turned > 0.1 {
+                    // Going back to a crowd that turned on him is a thing
+                    // very few players do.
+                    reasons.push(GoalKind::EscapeThePressure, -turned);
+                }
+            }
+
+            MindOption::RequestTransfer | MindOption::StayAndFight => {
+                let anchored = organs.goals.pressure_of(GoalKind::StayAtThisClub);
+                let legend = organs.goals.pressure_of(GoalKind::BecomeAClubLegend);
+                let homesick = organs.goals.pressure_of(GoalKind::GoHome);
+                let sign = if matches!(option, MindOption::StayAndFight) {
+                    1.0
+                } else {
+                    -1.0
+                };
+                if anchored > 0.1 {
+                    reasons.push(GoalKind::StayAtThisClub, anchored * sign);
+                }
+                if legend > 0.1 {
+                    reasons.push(GoalKind::BecomeAClubLegend, legend * sign);
+                }
+                if homesick > 0.1 {
+                    reasons.push(GoalKind::GoHome, homesick * -sign);
+                }
+            }
+
+            _ => {}
+        }
+
+        reasons
     }
 }

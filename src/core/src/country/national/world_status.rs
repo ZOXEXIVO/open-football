@@ -5,6 +5,7 @@
 //! can't reach them without breaking borrows.
 
 use super::NationalTeam;
+use crate::club::player::mind::{ActorRef, EpisodeKind};
 use crate::continent::Continent;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
@@ -42,6 +43,7 @@ impl NationalTeam {
             .flat_map(|continent| continent.countries.par_iter_mut())
             .for_each(|country| {
                 for club in country.clubs.iter_mut() {
+                    let club_id = club.id;
                     for team in club.teams.iter_mut() {
                         for player in team.players.iter_mut() {
                             let is_called_up = called_up.contains(&player.id);
@@ -77,6 +79,23 @@ impl NationalTeam {
                                         None,
                                         happiness_ctx,
                                     );
+                                    // A first cap is a flashbulb night in
+                                    // anybody's career; a recall after
+                                    // months out is a lesser but real one.
+                                    // Filed with no actor -- the country
+                                    // picked him, and the country is not
+                                    // somebody he has a standing account
+                                    // with.
+                                    let mctx = player.mind_context(date, Some(club_id));
+                                    player.mind.remember(
+                                        if caps == 0 {
+                                            EpisodeKind::FirstCap
+                                        } else {
+                                            EpisodeKind::MajorTournamentSquad
+                                        },
+                                        ActorRef::NONE,
+                                        &mctx,
+                                    );
                                 }
                             } else if was_in {
                                 player.statuses.remove(PlayerStatusType::Int);
@@ -104,6 +123,17 @@ impl NationalTeam {
                                     None,
                                     happiness_ctx,
                                 );
+                                // Losing an international place is a
+                                // thing a player carries into every club
+                                // decision he makes for the next year.
+                                if caps >= 5 {
+                                    let mctx = player.mind_context(date, Some(club_id));
+                                    player.mind.remember(
+                                        EpisodeKind::NationalSnub,
+                                        ActorRef::NONE,
+                                        &mctx,
+                                    );
+                                }
                             }
                         }
                     }

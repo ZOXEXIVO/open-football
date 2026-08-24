@@ -1,6 +1,7 @@
 use crate::HappinessEventType;
 use crate::club::player::condition::InjuryRiskInputs;
 use crate::club::player::injury::{BodyPart, InjuryType};
+use crate::club::player::mind::{ActorRef, EpisodeKind};
 use crate::club::player::player::Player;
 use crate::club::{PlayerResult, PlayerStatusType};
 use crate::utils::DateUtils;
@@ -47,6 +48,35 @@ impl MedicalStaffQuality {
 }
 
 impl Player {
+    /// Notice an injury he has not filed yet, and decide whether it is
+    /// the kind of thing a career remembers.
+    ///
+    /// Two bars, both read off the rolled duration rather than the
+    /// injury's name: three months out is a season gone and reads as
+    /// career-threatening; three weeks is a serious injury; a knock is
+    /// not a memory at all and would only evict one from a 32-slot
+    /// store. The counter advances either way, so a torn hamstring is
+    /// never filed twice and a bruise is never filed at all.
+    fn remember_new_injury(&mut self, now: NaiveDate, club_id: Option<u32>) {
+        let count = self.player_attributes.injury_count;
+        if count <= self.mind.competitive.injuries_seen {
+            return;
+        }
+        self.mind.competitive.injuries_seen = count;
+
+        let days = self.player_attributes.injury_days_remaining
+            + self.player_attributes.recovery_days_remaining;
+        let kind = if days >= 90 {
+            EpisodeKind::CareerThreateningInjury
+        } else if days >= 21 {
+            EpisodeKind::SeriousInjury
+        } else {
+            return;
+        };
+        let ctx = self.mind_context(now, club_id);
+        self.mind.remember(kind, ActorRef::NONE, &ctx);
+    }
+
     /// Process injury lifecycle: injured → recovery → healthy.
     /// The medical staff quality comes from the parent ClubContext and
     /// modulates recovery speed + spontaneous injury risk.
@@ -55,8 +85,16 @@ impl Player {
         result: &mut PlayerResult,
         now: NaiveDate,
         medical: &MedicalStaffQuality,
+        club_id: Option<u32>,
     ) {
         let injury_proneness = self.player_attributes.injury_proneness;
+
+        // A serious injury is one of the handful of things that changes
+        // what a footballer wants. It is noticed here rather than at the
+        // dozen sites that can cause one, by watching the counter
+        // `set_injury` already increments — so there is one severity
+        // model rather than two that can disagree.
+        self.remember_new_injury(now, club_id);
 
         if self.player_attributes.is_injured {
             // Phase 1: Injured — decrement injury days
@@ -126,6 +164,15 @@ impl Player {
                     None,
                     happiness_ctx,
                 );
+                // Coming back from a long lay-off is its own event in a
+                // career, distinct from the injury that caused it. Short
+                // absences are not — a fortnight out and back is a
+                // fortnight nobody remembers.
+                if recovery_left >= 14.0 {
+                    let ctx = self.mind_context(now, club_id);
+                    self.mind
+                        .remember(EpisodeKind::ReturnedFromLongInjury, ActorRef::NONE, &ctx);
+                }
             }
         } else if self.player_attributes.is_in_recovery() {
             // Phase 2: Recovery — post-injury low match fitness phase.

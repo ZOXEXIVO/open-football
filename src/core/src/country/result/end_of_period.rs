@@ -472,17 +472,24 @@ impl CountryResult {
     ) {
         let is_european_qualification = matches!(event, HappinessEventType::QualifiedForEurope);
         for club in &mut country.clubs {
+            let club_id = club.id;
             for team in club.teams.iter_mut() {
                 if team.id != team_id {
                     continue;
                 }
                 for player in team.players.iter_mut() {
-                    player.on_team_season_event_with_prestige(
+                    let fired = player.on_team_season_event_with_prestige(
                         event.clone(),
                         cooldown_days,
                         prestige,
                         date,
                     );
+                    // Only what actually reached him as a mood reaches
+                    // him as a memory — a title he was cooled down out of
+                    // is a title the season already counted.
+                    if fired {
+                        player.remember_season_outcome(&event, club_id, date);
+                    }
                     if is_european_qualification {
                         player.on_continental_qualification_satisfaction();
                     }
@@ -664,6 +671,7 @@ impl CountryResult {
             eligible.into_iter().map(|e| (e.player_id, e)).collect();
 
         for club in country.clubs.iter_mut() {
+            let club_id = club.id;
             let mut club_owns_winner = false;
             for team in club.teams.iter_mut() {
                 if team.id != snapshot.winner_team_id {
@@ -723,6 +731,13 @@ impl CountryResult {
                         true, // skip season-participation — folded into involvement
                         date,
                     );
+                    // A cup medal is a night he remembers, filed against
+                    // the club he won it with.
+                    player.remember_season_outcome(
+                        &HappinessEventType::DomesticCupWon,
+                        club_id,
+                        date,
+                    );
 
                     let mut input = AwardReputationInput::new()
                         .with_league_id(snapshot.cup_league_id)
@@ -777,6 +792,7 @@ impl CountryResult {
                 let rep_norm = (reputation as f32 / 10_000.0).clamp(0.0, 1.0);
                 let prestige = (0.80 + 0.40 * rep_norm).clamp(0.80, 1.20);
                 for club in country.clubs.iter_mut() {
+                    let club_id = club.id;
                     let mut owns_winner = false;
                     for team in club.teams.iter_mut() {
                         if team.id != winner_team_id {
@@ -800,6 +816,11 @@ impl CountryResult {
                                 365,
                                 prestige,
                                 false,
+                                date,
+                            );
+                            player.remember_season_outcome(
+                                &HappinessEventType::TrophyWon,
+                                club_id,
                                 date,
                             );
                         }

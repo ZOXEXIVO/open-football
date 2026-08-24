@@ -24,6 +24,13 @@ pub struct CountryContext {
     /// minting elite prospects: a Brazilian academy of the same physical
     /// quality as a Cambodian one should produce stronger youth on average.
     pub reputation: u16,
+    /// Months until the next major tournament this country is heading
+    /// toward. `u8::MAX` for none in view. Stamped by the continent tick
+    /// from the national-competition cycle arithmetic, and read by the
+    /// player mind — the tournament calendar is the only clock in
+    /// football that dates a player's *club* situation from outside the
+    /// club.
+    pub months_to_tournament: u8,
 }
 
 impl CountryContext {
@@ -38,6 +45,7 @@ impl CountryContext {
             stadium_attendance_factor: 1.0,
             price_level: 1.0,
             reputation: 0,
+            months_to_tournament: u8::MAX,
         }
     }
 
@@ -52,7 +60,14 @@ impl CountryContext {
             stadium_attendance_factor: 1.0,
             price_level: 1.0,
             reputation: 0,
+            months_to_tournament: u8::MAX,
         }
+    }
+
+    /// Stamp the tournament clock the continent worked out this tick.
+    pub fn with_tournament_clock(mut self, months: u8) -> Self {
+        self.months_to_tournament = months;
+        self
     }
 
     pub fn with_code(mut self, code: String) -> Self {

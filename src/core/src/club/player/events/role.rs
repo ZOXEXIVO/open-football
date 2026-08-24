@@ -11,10 +11,13 @@
 //! [`super::career`] to scale team-level season events
 //! (relegation, trophies, …) by how invested the player was.
 
+use chrono::NaiveDate;
+
 use super::scaling;
 use super::types::{MatchOutcome, MatchParticipation};
 use crate::HappinessEventType;
 use crate::club::player::behaviour_config::HappinessConfig;
+use crate::club::player::mind::{ActorRef, EpisodeKind};
 use crate::club::player::player::Player;
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
@@ -22,6 +25,27 @@ use crate::{
 };
 
 impl Player {
+    /// File a place won or lost in memory.
+    ///
+    /// Winning a starting place is one of the two or three things a
+    /// player can tell you about any given season, and losing one is the
+    /// other. Filed against the *manager* rather than the club — a shirt
+    /// is given and taken by a man, and the standing account this opens
+    /// with him is what makes a change of manager mean something later.
+    /// Falls back to the club when the bench is vacant.
+    fn remember_role_change(&mut self, kind: EpisodeKind, at: Option<(u32, NaiveDate)>) {
+        let Some((club_id, date)) = at else {
+            return;
+        };
+        let who = self
+            .squad_standing_view
+            .filter(|v| v.head_coach_id != 0)
+            .map(|v| ActorRef::staff(v.head_coach_id))
+            .unwrap_or_else(|| ActorRef::club(club_id));
+        let ctx = self.mind_context(date, Some(club_id));
+        self.mind.remember(kind, who, &ctx);
+    }
+
     /// Update the rolling starter ratio on a competitive match and emit the
     /// one-shot role-transition events when the player crosses the
     /// established / not-established threshold. EMA window ~ 4 matches.
@@ -34,7 +58,15 @@ impl Player {
         self.happiness.starter_ratio =
             self.happiness.starter_ratio * (1.0 - ALPHA) + sample * ALPHA;
         self.happiness.appearances_tracked = self.happiness.appearances_tracked.saturating_add(1);
-        self.evaluate_role_transition();
+        // The club and the day, so a place won or lost can be filed
+        // against the place it happened. A friendly proves nothing
+        // about a manager's matchday trust and is filtered upstream.
+        let at = if o.club_id == 0 || o.is_friendly {
+            None
+        } else {
+            Some((o.club_id, o.date))
+        };
+        self.evaluate_role_transition(at);
     }
 
     /// One-shot transition logic. Need at least 5 tracked appearances
@@ -43,7 +75,7 @@ impl Player {
     /// so a KeyPlayer losing his place hurts twice as much as a rotation
     /// player, and a hungry prospect winning a starting place feels it
     /// twice as much as an established veteran for whom it's expected.
-    pub(super) fn evaluate_role_transition(&mut self) {
+    pub(super) fn evaluate_role_transition(&mut self, at: Option<(u32, NaiveDate)>) {
         const MIN_APPS: u8 = 5;
         const STARTER_FLOOR: f32 = 0.65;
         const BENCHED_CEILING: f32 = 0.40;
@@ -68,6 +100,7 @@ impl Player {
                 90,
             ) {
                 self.happiness.is_established_starter = true;
+                self.remember_role_change(EpisodeKind::WonStartingPlace, at);
             }
         } else if self.happiness.is_established_starter
             && self.happiness.starter_ratio <= BENCHED_CEILING
@@ -89,6 +122,7 @@ impl Player {
                 90,
             ) {
                 self.happiness.is_established_starter = false;
+                self.remember_role_change(EpisodeKind::LostStartingPlace, at);
             }
         }
     }

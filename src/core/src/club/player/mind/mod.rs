@@ -41,9 +41,11 @@
 //!
 //! ## Status
 //!
-//! Phases 1, 3 and 4 of `docs/player_mind.md` are live: memory, goals,
-//! and the five faculties. Beliefs (phase 2's surprise term) and
-//! deliberation (phase 5, [`SubMind::weigh`]) are still to come.
+//! Phases 1, 3, 4 and 5 of `docs/player_mind.md` are live: memory,
+//! goals, the five faculties, and deliberation — [`SubMind::weigh`]
+//! answers through [`PlayerMind::deliberate`]. Beliefs (phase 2's
+//! surprise term) are still to come; `EncodingInputs::surprise` is
+//! passed as a constant everywhere until they land.
 //!
 //! Everything here runs **alongside** the four legacy layers rather than
 //! replacing them. `PlayerHappiness` still owns morale and
@@ -72,7 +74,7 @@ pub use career::{CareerMind, CareerStage};
 pub use competitive::CompetitiveMind;
 pub use financial::FinancialMind;
 pub use professional::ProfessionalMind;
-pub use situation::MindSituation;
+pub use situation::{MindSituation, NationalStanding};
 pub use social::SocialMind;
 pub use submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind, WeightedReason};
 
@@ -317,6 +319,13 @@ impl PlayerMind {
         self.organs.memory.recall(cue, &ctx.recall())
     }
 
+    /// Look at what he holds, without disturbing it. For the profile
+    /// page, a scout report, the census — anything that is a reader
+    /// rather than the man himself.
+    pub fn inspect(&self, cue: RecallCue, ctx: &MindTickContext) -> RecallResult {
+        self.organs.memory.inspect(cue, &ctx.recall())
+    }
+
     /// How he feels about a club, read-only — the question asked of
     /// every option on a transfer shortlist. Only an actual
     /// [`Self::recall`] counts as remembering.
@@ -381,6 +390,43 @@ impl PlayerMind {
     #[inline]
     pub fn strongest_goal(&self) -> Option<&MindGoal> {
         self.organs.goals.strongest()
+    }
+
+    /// What he makes of a decision he faces.
+    ///
+    /// The mind's output, and the thing the whole system was built for.
+    /// Every faculty is asked, each answers with *named* reasons rather
+    /// than a bare number, and the set folds into one verdict that
+    /// carries its own explanation — so the newspaper desk, the
+    /// decisions register and the transfer-reason localiser can print
+    /// why without inventing anything.
+    ///
+    /// Deliberately read-only. Deliberating about a move does not change
+    /// what he wants; acting on it does, and that happens at the call
+    /// site through the ordinary goal writes.
+    ///
+    /// The fan-out order decides who is heard when a decision draws more
+    /// than the six reasons a `ReasonSet` holds. Competitive first,
+    /// because for a footballer the shirt usually is the argument;
+    /// financial last, because money is almost never the loudest voice
+    /// and almost never silent.
+    pub fn deliberate(&self, option: MindOption) -> ReasonSet {
+        let mut reasons = self.competitive.weigh(option, &self.organs);
+        reasons.absorb(&self.professional.weigh(option, &self.organs));
+        reasons.absorb(&self.career.weigh(option, &self.organs));
+        reasons.absorb(&self.social.weigh(option, &self.organs));
+        reasons.absorb(&self.financial.weigh(option, &self.organs));
+        reasons
+    }
+
+    /// How he leans on a decision, −1..+1. Positive argues for it.
+    ///
+    /// The scalar behind [`Self::deliberate`], for the call sites that
+    /// want a number rather than an explanation. Prefer the reasons
+    /// wherever anything is going to be shown to anybody.
+    #[inline]
+    pub fn leaning(&self, option: MindOption) -> f32 {
+        self.deliberate(option).net()
     }
 
     /// The periodic think. Called from `Player::simulate`; cheap enough
@@ -462,7 +508,7 @@ impl PlayerMind {
         // — a career is continuous, and being underpaid is not settled
         // by changing employer.
         self.social.on_club_change();
-        self.professional.on_manager_change(ActorRef::NONE);
+        self.professional.on_club_change();
     }
 
     /// Census for the `.dev/mind` harness and the player profile UI.

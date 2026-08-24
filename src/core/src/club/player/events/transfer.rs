@@ -366,6 +366,10 @@ impl Player {
         // Squad social view belongs to the previous club's roster; the
         // new club's weekly pre-tick will rebuild it on its next Monday.
         self.squad_social_view = None;
+        // Same for where he stood in it. He arrives with no place in the
+        // queue at all until the new squad ranks him, which is the truth
+        // of a first week.
+        self.squad_standing_view = None;
         // Transfer-request reasons evaporate when the move actually
         // happens — the wish was granted.
         self.transfer_request_reasons.clear();

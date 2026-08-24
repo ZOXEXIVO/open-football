@@ -143,6 +143,19 @@ impl GoalStack {
         true
     }
 
+    /// Something took the heat out of a want without answering it.
+    ///
+    /// Distinct from [`Self::advance`], and the difference is the point:
+    /// advancing says the want is closer to being *met*, easing says he
+    /// simply minds less for now. A new manager arriving does the second
+    /// to a man who wanted away — nothing about his situation has
+    /// changed, and he is willing to wait and see.
+    pub fn ease(&mut self, kind: GoalKind, amount: f32) {
+        if let Some(goal) = self.get_mut(kind) {
+            goal.yield_to_competition(amount);
+        }
+    }
+
     /// Move a goal toward being satisfied.
     pub fn advance(&mut self, kind: GoalKind, amount: f32) {
         if let Some(goal) = self.get_mut(kind) {
@@ -769,8 +782,15 @@ mod tests {
     fn the_stack_is_copy_and_bounded() {
         fn assert_copy<T: Copy>() {}
         assert_copy::<GoalStack>();
+        // Twelve goals of 24 bytes plus the review clock. The step from
+        // 256 was `GoalEvidence` widening to `u64`: the 29 atoms it
+        // started with filled a `u32` exactly, and the squad-standing,
+        // development and international rules each needed atoms of their
+        // own. Four bytes a goal, forty-eight a player, ~3 MB across a
+        // world — paid deliberately, and this bound is what stops it
+        // being paid again by accident.
         assert!(
-            size_of::<GoalStack>() <= 256,
+            size_of::<GoalStack>() <= 320,
             "GoalStack grew to {}",
             size_of::<GoalStack>()
         );

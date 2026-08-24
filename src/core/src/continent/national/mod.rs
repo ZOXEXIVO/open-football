@@ -38,6 +38,52 @@ impl NationalTeamCompetitions {
         }
     }
 
+    /// Months until the next major tournament these countries are
+    /// heading toward. `u8::MAX` when there is none in view.
+    ///
+    /// The tournament calendar is the only clock in football that puts a
+    /// hard date on a player's *club* situation: a fringe international
+    /// who is not playing in the January before a World Cup will move,
+    /// and will drop a level to do it. `MindSituation::tournament_pressure`
+    /// is what reads this, and it is why every January of a tournament
+    /// year looks different from every other January.
+    ///
+    /// Derived from the cycle arithmetic rather than from a fixture,
+    /// because the fixtures for a tournament two years out do not exist
+    /// yet and the players thinking about it do. Assumes a June
+    /// tournament, which every competition in the catalogue is.
+    pub fn months_to_next_tournament(&self, date: NaiveDate) -> u8 {
+        const TOURNAMENT_MONTH: u32 = 6;
+
+        let mut soonest = u32::MAX;
+        for config in &self.competition_configs {
+            let cycle = config.cycle_years.max(1) as i32;
+            // The window has to reach *backwards* as well as forwards.
+            // A tournament two years out had its qualifying draw two
+            // years ago, so a forward-only walk skips the whole current
+            // cycle and reports the one after it — three years late,
+            // every time, which is exactly the case this is for.
+            for offset in -cycle..=cycle {
+                let year = date.year() + offset;
+                if !config.should_start_cycle(year) {
+                    continue;
+                }
+                let tournament_year = config.tournament_year_for(year) as i32;
+                let months = (tournament_year - date.year()) * 12 + TOURNAMENT_MONTH as i32
+                    - date.month() as i32;
+                if months >= 0 {
+                    soonest = soonest.min(months as u32);
+                }
+            }
+        }
+
+        if soonest == u32::MAX {
+            u8::MAX
+        } else {
+            soonest.min(u8::MAX as u32 - 1) as u8
+        }
+    }
+
     /// Check and start new competition cycles if needed.
     /// Called with the current simulation date and country IDs sorted by reputation.
     pub fn check_new_cycles(
@@ -238,4 +284,79 @@ pub struct NationalCompetitionFixture {
     /// the owning competition's `config.team_level`. Drives squad
     /// building, stats, and schedule routing in the world orchestrator.
     pub level: NationalTeamLevel,
+}
+
+#[cfg(test)]
+mod tournament_clock_tests {
+    use super::*;
+    use crate::continent::national::config::{
+        CompetitionScope, QualifyingConfig, ScheduleConfig, TournamentConfig,
+    };
+
+    fn config(id: u32, cycle_years: u32, cycle_offset: u32) -> NationalCompetitionConfig {
+        NationalCompetitionConfig {
+            id,
+            name: format!("Competition {id}"),
+            short_name: format!("C{id}"),
+            scope: CompetitionScope::Global,
+            continent_id: None,
+            team_level: NationalTeamLevel::default(),
+            cycle_years,
+            cycle_offset,
+            qualifying: QualifyingConfig { zones: Vec::new() },
+            tournament: TournamentConfig {
+                total_teams: 24,
+                group_count: 6,
+                teams_per_group: 4,
+                advance_per_group: 2,
+                best_third_placed: 4,
+            },
+            schedule: ScheduleConfig {
+                qualifying_dates: Vec::new(),
+                tournament_group_dates: Vec::new(),
+                tournament_knockout_dates: Vec::new(),
+            },
+        }
+    }
+
+    fn day(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).expect("valid date")
+    }
+
+    #[test]
+    fn a_confederation_with_no_competitions_has_no_clock() {
+        let comps = NationalTeamCompetitions::new(Vec::new());
+        assert_eq!(comps.months_to_next_tournament(day(2030, 1, 1)), u8::MAX);
+    }
+
+    #[test]
+    fn the_clock_counts_down_to_the_next_tournament() {
+        // World Cup shape: cycle 4, offset 2 → qualifying opens in years
+        // divisible by four, tournament two years later (2026, 2030…).
+        let comps = NationalTeamCompetitions::new(vec![config(1, 4, 2)]);
+
+        let january_before = comps.months_to_next_tournament(day(2030, 1, 1));
+        let two_years_out = comps.months_to_next_tournament(day(2028, 6, 1));
+
+        assert_eq!(january_before, 5, "June 2030 is five months from January");
+        assert!(
+            two_years_out > january_before,
+            "the clock runs down, not up"
+        );
+    }
+
+    #[test]
+    fn the_soonest_tournament_is_the_one_that_presses() {
+        // A confederation running both a global and a continental cycle:
+        // a player is heading for whichever comes first, which is what a
+        // January window actually reacts to.
+        let both = NationalTeamCompetitions::new(vec![config(1, 4, 2), config(2, 2, 1)]);
+        let global_only = NationalTeamCompetitions::new(vec![config(1, 4, 2)]);
+
+        let date = day(2028, 9, 1);
+        assert!(
+            both.months_to_next_tournament(date) <= global_only.months_to_next_tournament(date),
+            "the nearer of the two is the one he is playing for"
+        );
+    }
 }

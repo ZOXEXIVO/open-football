@@ -163,6 +163,43 @@
                     </ul>
                 </div>
                 {% endif %}
+                {% if let Some(m) = mind %}
+                {% if !m.wants.is_empty() %}
+                <div class="fm-personal-section">
+                    <h4 class="fm-section-subtitle">{{ i18n.t("mind_what_he_wants") }}</h4>
+                    <ul class="fm-mind-wants">
+                        {% for want in m.wants %}
+                        <li class="fm-mind-want{% if want.unspoken %} fm-mind-unspoken{% endif %}">
+                            <div class="fm-mind-want-head">
+                                <span class="fm-mind-want-name">{{ want.name }}</span>
+                                <span class="fm-mind-want-status">{{ want.status }}</span>
+                            </div>
+                            <div class="fm-mini-bar"><div class="fm-mini-fill fm-mind-fill" style="width:{{ want.pressure }}%"></div></div>
+                            {% if let Some(deadline) = want.deadline %}
+                            <div class="fm-mind-note">{{ deadline }}</div>
+                            {% endif %}
+                            {% if let Some(blocked) = want.blocked %}
+                            <div class="fm-mind-note fm-mind-blocked">{{ blocked }}</div>
+                            {% endif %}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+                {% if !m.memories.is_empty() %}
+                <div class="fm-personal-section">
+                    <h4 class="fm-section-subtitle">{{ i18n.t("mind_what_he_remembers") }}</h4>
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-value{% if m.sentiment > 10 %} fm-rel-good{% elif m.sentiment < -10 %} fm-rel-poor{% endif %}">{{ m.sentiment_label }}</span>
+                    </div>
+                    <ul class="fm-mind-memories">
+                        {% for memory in m.memories %}
+                        <li class="fm-mind-memory{% if memory.warm %} fm-mind-warm{% else %} fm-mind-sour{% endif %}">{{ memory.text }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+                {% endif %}
                 {% if let Some(rel) = manager_relationship %}
                 <div class="fm-personal-section">
                     <h4 class="fm-section-subtitle">{{ i18n.t("manager_relationship") }}</h4>

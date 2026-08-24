@@ -105,64 +105,94 @@ impl GoalOrigin {
 /// The concrete signals a goal latched onto. A packed bit-set so a goal
 /// stays small; every atom is a thing a renderer can name.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct GoalEvidence(u32);
+pub struct GoalEvidence(u64);
 
 impl GoalEvidence {
     // ── Club and league standing ────────────────────────────────
     /// He is clearly better than the club he is at.
-    pub const OUTGROWN_CLUB: u32 = 1 << 0;
+    pub const OUTGROWN_CLUB: u64 = 1 << 0;
     /// The league itself is the ceiling, whatever the club's local size.
-    pub const LEAGUE_IS_A_CEILING: u32 = 1 << 1;
+    pub const LEAGUE_IS_A_CEILING: u64 = 1 << 1;
     /// No route to continental football from here.
-    pub const NO_CONTINENTAL_ROUTE: u32 = 1 << 2;
+    pub const NO_CONTINENTAL_ROUTE: u64 = 1 << 2;
     /// The club is not going to win anything.
-    pub const NOT_A_CONTENDER: u32 = 1 << 3;
+    pub const NOT_A_CONTENDER: u64 = 1 << 3;
     /// The squad around him is below his level.
-    pub const SQUAD_BELOW_HIS_LEVEL: u32 = 1 << 4;
+    pub const SQUAD_BELOW_HIS_LEVEL: u64 = 1 << 4;
     /// The club went down.
-    pub const RELEGATED: u32 = 1 << 5;
+    pub const RELEGATED: u64 = 1 << 5;
 
     // ── Playing time ────────────────────────────────────────────
-    pub const NO_FIRST_TEAM_FOOTBALL: u32 = 1 << 6;
-    pub const LOST_HIS_PLACE: u32 = 1 << 7;
-    pub const PLAYED_OUT_OF_POSITION: u32 = 1 << 8;
+    pub const NO_FIRST_TEAM_FOOTBALL: u64 = 1 << 6;
+    pub const LOST_HIS_PLACE: u64 = 1 << 7;
+    pub const PLAYED_OUT_OF_POSITION: u64 = 1 << 8;
     /// A rival was signed for his position.
-    pub const RIVAL_SIGNED: u32 = 1 << 9;
+    pub const RIVAL_SIGNED: u64 = 1 << 9;
 
     // ── The manager ─────────────────────────────────────────────
-    pub const PROMISE_BROKEN: u32 = 1 << 10;
-    pub const MANAGER_DOES_NOT_RATE_HIM: u32 = 1 << 11;
-    pub const PUBLICLY_CRITICISED: u32 = 1 << 12;
+    pub const PROMISE_BROKEN: u64 = 1 << 10;
+    pub const MANAGER_DOES_NOT_RATE_HIM: u64 = 1 << 11;
+    pub const PUBLICLY_CRITICISED: u64 = 1 << 12;
 
     // ── Money ───────────────────────────────────────────────────
-    pub const PAID_BELOW_HIS_PEERS: u32 = 1 << 13;
-    pub const TERMS_REFUSED: u32 = 1 << 14;
-    pub const CONTRACT_RUNNING_DOWN: u32 = 1 << 15;
+    pub const PAID_BELOW_HIS_PEERS: u64 = 1 << 13;
+    pub const TERMS_REFUSED: u64 = 1 << 14;
+    pub const CONTRACT_RUNNING_DOWN: u64 = 1 << 15;
 
     // ── Life and belonging ──────────────────────────────────────
-    pub const HOMESICK: u32 = 1 << 16;
-    pub const ISOLATED_IN_THE_SQUAD: u32 = 1 << 17;
-    pub const LANGUAGE_BARRIER: u32 = 1 << 18;
-    pub const FAMILY_UNSETTLED: u32 = 1 << 19;
-    pub const FANS_HOSTILE: u32 = 1 << 20;
-    pub const MEDIA_PRESSURE: u32 = 1 << 21;
+    pub const HOMESICK: u64 = 1 << 16;
+    pub const ISOLATED_IN_THE_SQUAD: u64 = 1 << 17;
+    pub const LANGUAGE_BARRIER: u64 = 1 << 18;
+    pub const FAMILY_UNSETTLED: u64 = 1 << 19;
+    pub const FANS_HOSTILE: u64 = 1 << 20;
+    pub const MEDIA_PRESSURE: u64 = 1 << 21;
 
     // ── Character and career stage ──────────────────────────────
-    pub const HIGH_AMBITION: u32 = 1 << 22;
-    pub const LONG_SERVICE: u32 = 1 << 23;
-    pub const PRIME_YEARS_PASSING: u32 = 1 << 24;
-    pub const LATE_CAREER: u32 = 1 << 25;
+    pub const HIGH_AMBITION: u64 = 1 << 22;
+    pub const LONG_SERVICE: u64 = 1 << 23;
+    pub const PRIME_YEARS_PASSING: u64 = 1 << 24;
+    pub const LATE_CAREER: u64 = 1 << 25;
     /// Heritage — boyhood club, home country, a favourite.
-    pub const HERITAGE_PULL: u32 = 1 << 26;
+    pub const HERITAGE_PULL: u64 = 1 << 26;
     /// He has been here long enough that nothing is left to prove.
-    pub const NOTHING_LEFT_TO_PROVE: u32 = 1 << 27;
+    pub const NOTHING_LEFT_TO_PROVE: u64 = 1 << 27;
     /// Concrete outside interest exists.
-    pub const CLUBS_ARE_INTERESTED: u32 = 1 << 28;
+    pub const CLUBS_ARE_INTERESTED: u64 = 1 << 28;
+
+    // ── Standing in the squad ───────────────────────────────────
+    /// Not benched — excluded. He is not being considered at all.
+    pub const FROZEN_OUT: u64 = 1 << 29;
+    /// He is kept out by a man he does not rate above himself.
+    pub const BLOCKED_BY_A_PEER: u64 = 1 << 30;
+    /// He is the man in possession, and somebody is coming for the shirt.
+    pub const A_YOUNGSTER_IS_COMING: u64 = 1 << 31;
+
+    // ── Getting better ──────────────────────────────────────────
+    /// He has stopped improving.
+    pub const NO_LONGER_IMPROVING: u64 = 1 << 32;
+    /// The coaching here cannot take a player of his level further.
+    pub const COACHING_CEILING: u64 = 1 << 33;
+
+    // ── The international game ──────────────────────────────────
+    /// A major tournament is close enough to matter.
+    pub const TOURNAMENT_YEAR: u64 = 1 << 34;
+    /// He has been left out of his country's squad.
+    pub const NATIONAL_SNUB: u64 = 1 << 35;
+
+    // ── The badge ───────────────────────────────────────────────
+    /// The man who signed him is gone.
+    pub const LOST_HIS_ADVOCATE: u64 = 1 << 36;
+    /// He was bought as a marquee signing and has not delivered.
+    pub const CARRYING_A_PRICE_TAG: u64 = 1 << 37;
+    /// He has given this club more than most, and knows it.
+    pub const CLUB_SERVANT: u64 = 1 << 38;
+    /// The club is cashing in rather than building.
+    pub const CLUB_IS_SELLING_UP: u64 = 1 << 39;
 
     pub const EMPTY: GoalEvidence = GoalEvidence(0);
 
-    pub const fn of(atoms: &[u32]) -> Self {
-        let mut bits = 0u32;
+    pub const fn of(atoms: &[u64]) -> Self {
+        let mut bits = 0u64;
         let mut index = 0;
         while index < atoms.len() {
             bits |= atoms[index];
@@ -172,12 +202,12 @@ impl GoalEvidence {
     }
 
     #[inline]
-    pub fn contains(self, atom: u32) -> bool {
+    pub fn contains(self, atom: u64) -> bool {
         self.0 & atom != 0
     }
 
     #[inline]
-    pub fn insert(&mut self, atom: u32) {
+    pub fn insert(&mut self, atom: u64) {
         self.0 |= atom;
     }
 
@@ -192,7 +222,7 @@ impl GoalEvidence {
     }
 
     #[inline]
-    pub fn bits(self) -> u32 {
+    pub fn bits(self) -> u64 {
         self.0
     }
 
@@ -224,6 +254,11 @@ pub enum GoalBlocker {
     JustArrived,
     /// The window is shut.
     WindowClosed,
+    /// He is not being considered at all. Distinct from being behind
+    /// somebody: there is no competition to win, because he is not in
+    /// it — so fighting for his place is not a thing he can do, however
+    /// hard he trains.
+    FrozenOut,
 }
 
 impl GoalBlocker {
@@ -241,6 +276,7 @@ impl GoalBlocker {
             GoalBlocker::InjuryLayoff => "mind_goal_blocker_injury",
             GoalBlocker::JustArrived => "mind_goal_blocker_just_arrived",
             GoalBlocker::WindowClosed => "mind_goal_blocker_window",
+            GoalBlocker::FrozenOut => "mind_goal_blocker_frozen_out",
         }
     }
 }
@@ -281,6 +317,17 @@ mod tests {
             GoalEvidence::HERITAGE_PULL,
             GoalEvidence::NOTHING_LEFT_TO_PROVE,
             GoalEvidence::CLUBS_ARE_INTERESTED,
+            GoalEvidence::FROZEN_OUT,
+            GoalEvidence::BLOCKED_BY_A_PEER,
+            GoalEvidence::A_YOUNGSTER_IS_COMING,
+            GoalEvidence::NO_LONGER_IMPROVING,
+            GoalEvidence::COACHING_CEILING,
+            GoalEvidence::TOURNAMENT_YEAR,
+            GoalEvidence::NATIONAL_SNUB,
+            GoalEvidence::LOST_HIS_ADVOCATE,
+            GoalEvidence::CARRYING_A_PRICE_TAG,
+            GoalEvidence::CLUB_SERVANT,
+            GoalEvidence::CLUB_IS_SELLING_UP,
         ];
         let combined = GoalEvidence::of(&atoms);
         assert_eq!(

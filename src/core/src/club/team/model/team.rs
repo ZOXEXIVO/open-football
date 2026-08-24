@@ -3,8 +3,8 @@ use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::{
     Achievement, CaptaincyAssigner, ChemistryContextBuilder, CompetitionType, MatchOutcome,
     MatchResultInfo, MentorshipProcessor, PreventiveRestPass, SquadSocialViewBuilder,
-    SquadStatusUpdater, TeamBuilder, TeamCoachingScores, TeamFixtureWindow, TeamLeagueHistory,
-    TeamSocialDebug, TeamSocialSnapshot, TeamType,
+    SquadStandingViewBuilder, SquadStatusUpdater, TeamBuilder, TeamCoachingScores,
+    TeamFixtureWindow, TeamLeagueHistory, TeamSocialDebug, TeamSocialSnapshot, TeamType,
 };
 use crate::context::GlobalContext;
 use crate::shared::CurrencyValue;
@@ -279,6 +279,19 @@ impl Team {
         PreventiveRestPass::apply(&mut self.players.players, best_sports_sci, week_date);
 
         SquadSocialViewBuilder::refresh(&mut self.players.players);
+
+        // Where each man stands in this dressing room — who picks the
+        // side, who is in front of him, what the coaching here can still
+        // teach him. Runs beside the social view because it answers the
+        // same class of question: things about a player that only the
+        // squad around him knows.
+        SquadStandingViewBuilder::refresh(
+            &mut self.players.players,
+            &self.staffs,
+            self.captain_id,
+            self.vice_captain_id,
+            week_date,
+        );
 
         // Team-level social weather. Runs after the per-player chemistry
         // recalc so today's per-relation drift is already visible in
@@ -732,8 +745,8 @@ mod captaincy_tests {
 
             // Appoint the old captain, then force the handover to the
             // successor — both writes go through the single chokepoint.
-            CaptaincyAssigner::set_official_captain(&mut team, Some(1), Some(2));
-            CaptaincyAssigner::set_official_captain(&mut team, Some(2), Some(1));
+            CaptaincyAssigner::set_official_captain(&mut team, Some(1), Some(2), d(2026, 7, 1));
+            CaptaincyAssigner::set_official_captain(&mut team, Some(2), Some(1), d(2026, 7, 1));
 
             team.players
                 .players
@@ -874,7 +887,7 @@ mod captaincy_tests {
         let mut team = build_team_with(vec![p1, p2]);
 
         // None -> A: award A only.
-        CaptaincyAssigner::set_official_captain(&mut team, Some(1), Some(2));
+        CaptaincyAssigner::set_official_captain(&mut team, Some(1), Some(2), d(2026, 7, 1));
         assert_eq!(team.captain_id, Some(1));
         {
             let a = team.players.players.iter().find(|p| p.id == 1).unwrap();
@@ -889,7 +902,7 @@ mod captaincy_tests {
         }
 
         // A -> A (redundant): no new events.
-        CaptaincyAssigner::set_official_captain(&mut team, Some(1), Some(2));
+        CaptaincyAssigner::set_official_captain(&mut team, Some(1), Some(2), d(2026, 7, 1));
         {
             let a = team.players.players.iter().find(|p| p.id == 1).unwrap();
             assert_eq!(
@@ -900,7 +913,7 @@ mod captaincy_tests {
         }
 
         // A -> B: strip A, award B.
-        CaptaincyAssigner::set_official_captain(&mut team, Some(2), Some(1));
+        CaptaincyAssigner::set_official_captain(&mut team, Some(2), Some(1), d(2026, 7, 1));
         assert_eq!(team.captain_id, Some(2));
         let a = team.players.players.iter().find(|p| p.id == 1).unwrap();
         let b = team.players.players.iter().find(|p| p.id == 2).unwrap();

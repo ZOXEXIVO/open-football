@@ -157,7 +157,7 @@ impl Player {
             self.happiness.note_official_non_appearance(left_out);
         }
 
-        self.evaluate_role_transition();
+        self.evaluate_role_transition(None);
 
         // Two follow-on emits keyed off the same selection snapshot:
         //

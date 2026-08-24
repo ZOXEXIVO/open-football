@@ -136,6 +136,14 @@ impl Continent {
         // serial prologue used to be the ramp that stalled the continent's
         // worker before its inner `countries.par_iter_mut()` below could
         // widen. `par_iter` collect preserves country order.
+        // How far off the next major tournament is, worked out once for
+        // the whole confederation. Every country on it is heading for the
+        // same calendar, and the cycle arithmetic is the same walk for
+        // each — so it belongs here rather than inside the fan-out.
+        let tournament_clock = self
+            .national_team_competitions
+            .months_to_next_tournament(ctx.simulation.date.date());
+
         let country_ctxs: Vec<GlobalContext<'gc>> = self
             .countries
             .par_iter()
@@ -146,6 +154,7 @@ impl Continent {
                     c.generator_data.people_names.clone(),
                     c.season_dates(),
                 )
+                .with_country_tournament_clock(tournament_clock)
             })
             .collect();
 

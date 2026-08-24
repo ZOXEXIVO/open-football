@@ -46,7 +46,7 @@ impl GoalBridge {
         use TransferRequestReason as R;
 
         let map =
-            |goal: GoalKind, origin: GoalOrigin, atoms: &[u32], weight: f32| -> ReasonMapping {
+            |goal: GoalKind, origin: GoalOrigin, atoms: &[u64], weight: f32| -> ReasonMapping {
                 ReasonMapping {
                     goal,
                     origin,

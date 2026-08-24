@@ -35,6 +35,7 @@ use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::events::scaling::{
     criticism_amplifier, criticism_dampener, reputation_amplifier,
 };
+use crate::club::player::mind::{ActorRef, EpisodeKind};
 use crate::club::team::Team;
 use crate::utils::DateUtils;
 use crate::{
@@ -162,7 +163,7 @@ impl CaptaincyAssigner {
             None => None,
         };
 
-        Self::set_official_captain(team, new_captain, new_vice);
+        Self::set_official_captain(team, new_captain, new_vice, date);
     }
 
     /// The single safe chokepoint for writing the official club captaincy.
@@ -183,9 +184,15 @@ impl CaptaincyAssigner {
     /// separate concern that never calls here.
     ///
     /// [`emit_handover_events`]: CaptaincyAssigner::emit_handover_events
-    pub fn set_official_captain(team: &mut Team, new_captain: Option<u32>, new_vice: Option<u32>) {
+    pub fn set_official_captain(
+        team: &mut Team,
+        new_captain: Option<u32>,
+        new_vice: Option<u32>,
+        date: NaiveDate,
+    ) {
         if team.captain_id != new_captain {
             Self::emit_handover_events(team, team.captain_id, new_captain);
+            Self::remember_handover(team, team.captain_id, new_captain, date);
         }
         if team.vice_captain_id != new_vice {
             Self::emit_vice_handover_events(team, team.vice_captain_id, new_vice, new_captain);
@@ -193,6 +200,35 @@ impl CaptaincyAssigner {
 
         team.captain_id = new_captain;
         team.vice_captain_id = new_vice;
+    }
+
+    /// File the armband changing hands in both men's memories.
+    ///
+    /// The armband is the clearest statement a club makes about who a
+    /// player is to it, which is why it never fades on a mood cooldown:
+    /// a man made captain remembers the day, and a man stripped of it
+    /// remembers that longer. Filed against the club rather than the
+    /// manager who decided — the captaincy belongs to the badge, and a
+    /// long server who is passed over is aggrieved with the place.
+    fn remember_handover(
+        team: &mut Team,
+        old_captain: Option<u32>,
+        new_captain: Option<u32>,
+        date: NaiveDate,
+    ) {
+        let club_id = team.club_id;
+        if club_id == 0 {
+            return;
+        }
+        let mut file = |player_id: Option<u32>, kind: EpisodeKind| {
+            let Some(id) = player_id else { return };
+            if let Some(p) = team.players.players.iter_mut().find(|p| p.id == id) {
+                let ctx = p.mind_context(date, Some(club_id));
+                p.mind.remember(kind, ActorRef::club(club_id), &ctx);
+            }
+        };
+        file(old_captain, EpisodeKind::CaptaincyRemoved);
+        file(new_captain, EpisodeKind::CaptaincyAwarded);
     }
 
     /// Emit `CaptaincyRemoved` for the outgoing captain (only if still in

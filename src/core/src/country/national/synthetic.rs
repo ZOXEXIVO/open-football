@@ -289,6 +289,7 @@ impl NationalTeam {
             free_agent_state: None,
             availability_market: None,
             squad_social_view: None,
+            squad_standing_view: None,
             transfer_request_reasons: Vec::new(),
             big_stage_inclination: 0.0,
             // Synthetic seniors (age 22-34) are established pros, not debutants.

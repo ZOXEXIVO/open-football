@@ -302,6 +302,85 @@ impl Recall {
         }
     }
 
+    /// What a cue would bring back, **without bringing it back**.
+    ///
+    /// The same selection as [`Self::cue`] with the two mutations
+    /// removed: nothing is rehearsed and nothing drifts. That is the
+    /// difference between a man walking back into a place and somebody
+    /// else looking at what he remembers about it — a profile page, a
+    /// scout report, a census — and only the first should strengthen
+    /// anything. A reader that used `cue` would keep a career's worth of
+    /// memories alive purely by being read.
+    pub fn inspect(
+        episodes: &EpisodeStore,
+        semantic: &SemanticStore,
+        ledger: &AttributionLedger,
+        cue: RecallCue,
+        ctx: &RecallContext,
+    ) -> RecallResult {
+        let mood = ctx.mood();
+
+        let mut recalled: Vec<RecalledEpisode> = Vec::new();
+        for episode in episodes.iter() {
+            if !cue.matches_episode(episode) {
+                continue;
+            }
+            let beta = ForgettingCurve::beta(
+                ctx.professionalism,
+                ctx.consistency,
+                ctx.temperament,
+                episode.valence(),
+            );
+            let retention = ForgettingCurve::retention_protected(
+                episode.encoding(),
+                episode.last_touched,
+                ctx.today,
+                beta,
+                episode.is_flashbulb(),
+            );
+            if retention < ForgettingCurve::FAINT {
+                continue;
+            }
+            let congruence = 1.0 + mood * episode.valence() * Self::MOOD_CONGRUENCE;
+            recalled.push(RecalledEpisode {
+                episode: *episode,
+                vividness: (retention * congruence).clamp(0.0, 1.0),
+            });
+        }
+        recalled.sort_by(|a, b| {
+            b.vividness
+                .partial_cmp(&a.vividness)
+                .unwrap_or(Ordering::Equal)
+        });
+        recalled.truncate(Self::MAX_EPISODES);
+
+        let mut facts: Vec<SemanticFact> = semantic
+            .iter()
+            .filter(|f| cue.matches_subject(f.subject))
+            .copied()
+            .collect();
+        facts.sort_by(|a, b| {
+            b.strength()
+                .partial_cmp(&a.strength())
+                .unwrap_or(Ordering::Equal)
+        });
+
+        let accounts: Vec<ActorAccount> = ledger
+            .iter()
+            .filter(|a| cue.matches_subject(a.actor))
+            .filter_map(|a| {
+                let floor = Ledger::floor_from_sentiment(Semantic::sentiment(semantic, a.actor));
+                Ledger::account(ledger, a.actor, ctx.today, floor)
+            })
+            .collect();
+
+        RecallResult {
+            episodes: recalled,
+            facts,
+            accounts,
+        }
+    }
+
     /// How he feels about a club, without the full recall payload. The
     /// common question, and the one the transfer path asks.
     ///

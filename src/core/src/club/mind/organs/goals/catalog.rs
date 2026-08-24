@@ -60,6 +60,24 @@ pub enum GoalKind {
     StayAtThisLoanClub,
     /// He needs games and knows he will not get them here.
     GoOutOnLoan,
+    /// The man in possession, with somebody coming for the shirt. The
+    /// mirror of [`GoalKind::WinBackMyPlace`], and a different state:
+    /// defending a place is not the same as chasing one, and the two
+    /// resolve on opposite results.
+    HoldOntoMyPlace,
+
+    // ── Getting better ──────────────────────────────────────────
+    /// He has stopped improving and means to start again. Points
+    /// nowhere on its own — it is answered by a better coach, a role
+    /// that stretches him, or a training focus, all of which the club
+    /// can give him without him going anywhere.
+    KeepImproving,
+    /// The coaching here has taken him as far as it can. The rung above
+    /// [`GoalKind::KeepImproving`] and below wanting a bigger club — it
+    /// is *still* satisfiable in place, by the club hiring somebody
+    /// better, which is why it is a separate want rather than a stage of
+    /// wanting out.
+    WorkWithABetterCoach,
 
     // ── The manager, and standing ───────────────────────────────
     WinTheManagersTrust,
@@ -70,12 +88,23 @@ pub enum GoalKind {
     /// The counter-goal. A club legend actively wants to stay, and it
     /// pushes back against every goal above.
     StayAtThisClub,
+    /// The long server's want. Not to stay — he already means to stay —
+    /// but to be *treated* like what he has become: the armband, terms
+    /// offered before he has to ask, being spoken about as part of the
+    /// place. Refused, it is one of the sharpest grievances in the game,
+    /// because it cannot be bought off with money.
+    BecomeAClubLegend,
 
     // ── Money ───────────────────────────────────────────────────
     BePaidWhatImWorth,
     /// Length and stability rather than headline wage.
     SecureMyFuture,
     GetAReleaseClause,
+    /// He has decided not to re-sign. Every month he plays on is
+    /// leverage, and at the end of it he walks for nothing and picks
+    /// where he goes. A want that looks like inaction from outside and
+    /// is in fact the most deliberate decision a player ever makes.
+    RunDownMyContract,
 
     // ── Life ────────────────────────────────────────────────────
     GoHome,
@@ -148,8 +177,11 @@ pub enum GoalDirection {
 /// representable — masks describe real goals only.
 type GoalBit = u64;
 
-/// A set of goals, for the mutual-exclusion rules. 33 kinds fit a `u64`
-/// with room to spare.
+/// A set of goals, for the mutual-exclusion rules.
+///
+/// One bit per [`GoalKind`], so the catalog cannot grow past 64 kinds
+/// without widening this. `every_kind_fits_the_mask` is the guard —
+/// without it the sixty-fifth want would silently alias the first.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GoalMask(GoalBit);
 
@@ -280,15 +312,27 @@ const WANTS_OUT: GoalMask = GoalMask::of(&[
     GoalKind::PlayFirstTeamFootball,
     GoalKind::GoHome,
     GoalKind::EscapeThePressure,
+    GoalKind::RunDownMyContract,
 ]);
 
 /// Everything that keeps him where he is.
 const WANTS_TO_STAY: GoalMask = GoalMask::of(&[
     GoalKind::StayAtThisClub,
+    GoalKind::BecomeAClubLegend,
     GoalKind::WinBackMyPlace,
+    GoalKind::HoldOntoMyPlace,
     GoalKind::WinTheManagersTrust,
     GoalKind::BeCaptain,
 ]);
+
+/// The three rungs of wanting to get better, in order. Each one
+/// **supersedes** the one below rather than competing with it: a man who
+/// has concluded the coaching here cannot help him has stopped simply
+/// wanting to improve, and a man who wants out has stopped waiting for a
+/// new coach. Holding two at once would double-count the same
+/// frustration.
+const WANTS_A_BETTER_COACH: GoalMask = GoalMask::of(&[GoalKind::WorkWithABetterCoach]);
+const JUST_WANTS_TO_IMPROVE: GoalMask = GoalMask::of(&[GoalKind::KeepImproving]);
 
 /// Everything that points a manager out of his job.
 const MANAGER_WANTS_OUT: GoalMask = GoalMask::of(&[
@@ -373,6 +417,28 @@ impl GoalKind {
             GoalKind::ProveMyselfAtMyParentClub => S::ordinary(D::Career, Dir::Neutral),
             GoalKind::StayAtThisLoanClub => S::ordinary(D::Career, Dir::Neutral),
             GoalKind::GoOutOnLoan => S::fleeting(D::Career, Dir::Leave),
+            // Defending a shirt is quieter than chasing one. He does not
+            // announce it and he never demands anything over it — he
+            // just trains harder and plays like a man who can hear
+            // footsteps.
+            GoalKind::HoldOntoMyPlace => GoalSpec {
+                voice_at: 0.80,
+                press_at: 0.99,
+                ..S::ordinary(D::Competitive, Dir::Stay).competing(WANTS_OUT)
+            },
+
+            // Getting better. Neither of these is a grievance and
+            // neither points anywhere on its own, which is the whole
+            // point of having them: they are the two rungs a club still
+            // gets to answer before a player starts looking at the door.
+            GoalKind::KeepImproving => GoalSpec {
+                decay_per_month: 0.08,
+                ..S::private(D::Career, Dir::Neutral).competing(WANTS_A_BETTER_COACH)
+            },
+            GoalKind::WorkWithABetterCoach => GoalSpec {
+                decay_per_month: 0.06,
+                ..S::private(D::Career, Dir::Neutral).competing(JUST_WANTS_TO_IMPROVE)
+            },
 
             // The manager, and standing
             GoalKind::WinTheManagersTrust => {
@@ -386,10 +452,32 @@ impl GoalKind {
                 ..S::private(D::Social, Dir::Stay).competing(WANTS_OUT)
             },
 
+            // The long server's want. It fades even slower than the
+            // decision to stay that produced it, and he says it out loud
+            // sooner than he would say anything about money — because
+            // what he is asking for is not money.
+            GoalKind::BecomeAClubLegend => GoalSpec {
+                decay_per_month: 0.02,
+                voice_at: 0.50,
+                press_at: 0.85,
+                ..S::ordinary(D::Social, Dir::Stay).competing(WANTS_OUT)
+            },
+
             // Money
             GoalKind::BePaidWhatImWorth => S::grievance(D::Financial, Dir::Neutral),
             GoalKind::SecureMyFuture => S::private(D::Financial, Dir::Neutral),
             GoalKind::GetAReleaseClause => S::fleeting(D::Financial, Dir::Neutral),
+            // A decision, not a grievance: it hardly fades, it is never
+            // said out loud until it is a fact, and it is answered only
+            // by the calendar. `press_at` above 1.0 makes that structural
+            // — there is no demand to make, because he already has what
+            // he wants simply by waiting.
+            GoalKind::RunDownMyContract => GoalSpec {
+                decay_per_month: 0.03,
+                voice_at: 0.75,
+                press_at: 0.95,
+                ..S::private(D::Financial, Dir::Leave).competing(WANTS_TO_STAY)
+            },
 
             // Life
             GoalKind::GoHome => GoalSpec {
@@ -502,13 +590,18 @@ impl GoalKind {
             GoalKind::ProveMyselfAtMyParentClub => "mind_goal_prove_at_parent",
             GoalKind::StayAtThisLoanClub => "mind_goal_stay_on_loan",
             GoalKind::GoOutOnLoan => "mind_goal_go_on_loan",
+            GoalKind::HoldOntoMyPlace => "mind_goal_hold_onto_my_place",
+            GoalKind::KeepImproving => "mind_goal_keep_improving",
+            GoalKind::WorkWithABetterCoach => "mind_goal_better_coach",
             GoalKind::WinTheManagersTrust => "mind_goal_managers_trust",
             GoalKind::BeCaptain => "mind_goal_captaincy",
             GoalKind::BeAllowedToLeave => "mind_goal_permission_to_leave",
             GoalKind::StayAtThisClub => "mind_goal_stay",
+            GoalKind::BecomeAClubLegend => "mind_goal_club_legend",
             GoalKind::BePaidWhatImWorth => "mind_goal_fair_wage",
             GoalKind::SecureMyFuture => "mind_goal_secure_future",
             GoalKind::GetAReleaseClause => "mind_goal_release_clause",
+            GoalKind::RunDownMyContract => "mind_goal_run_down_contract",
             GoalKind::GoHome => "mind_goal_go_home",
             GoalKind::SettleMyFamily => "mind_goal_settle_family",
             GoalKind::LearnTheLanguage => "mind_goal_learn_language",
@@ -555,13 +648,18 @@ impl GoalKind {
         GoalKind::ProveMyselfAtMyParentClub,
         GoalKind::StayAtThisLoanClub,
         GoalKind::GoOutOnLoan,
+        GoalKind::HoldOntoMyPlace,
+        GoalKind::KeepImproving,
+        GoalKind::WorkWithABetterCoach,
         GoalKind::WinTheManagersTrust,
         GoalKind::BeCaptain,
         GoalKind::BeAllowedToLeave,
         GoalKind::StayAtThisClub,
+        GoalKind::BecomeAClubLegend,
         GoalKind::BePaidWhatImWorth,
         GoalKind::SecureMyFuture,
         GoalKind::GetAReleaseClause,
+        GoalKind::RunDownMyContract,
         GoalKind::GoHome,
         GoalKind::SettleMyFamily,
         GoalKind::LearnTheLanguage,
@@ -597,7 +695,7 @@ mod tests {
     fn all_lists_every_variant() {
         assert_eq!(
             GoalKind::ALL.len(),
-            47,
+            52,
             "GoalKind::ALL is out of sync with the enum"
         );
     }
