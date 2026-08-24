@@ -3,8 +3,8 @@ use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondi
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
-use crate::r#match::player::strategies::common::states::{RecoveryChallenge, TackleDecision};
 use crate::r#match::player::strategies::common::states::TackleEngagement;
+use crate::r#match::player::strategies::common::states::{RecoveryChallenge, TackleDecision};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,

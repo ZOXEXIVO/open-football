@@ -4756,15 +4756,55 @@ impl PlayerEventDispatcher {
                         * (1.0 - seen * 0.55)
                         * (1.0 + (GoalkeeperSkillProfile::POPULATION_READ - keeper_read) * 0.60)
                 };
-                let goal_line_y = goal_line_y + rng.jitter(0.0, read_error);
-                // Arc approximation: z under gravity, from the shared
-                // constant rather than a copy of it. The literal here was
-                // `0.157` — the pre-fix value — so the moment the physics
-                // moved, the keeper's projected crossing height and the
-                // ball's actual one would have parted company.
-                let goal_line_z = (field.ball.position.z + final_velocity.z * ticks_to_goal
-                    - 0.5 * GRAVITY_PER_TICK * ticks_to_goal * ticks_to_goal)
-                    .max(0.0);
+                // Diagnostic switch: with `OF_GK_READ_OFF` set, the keeper
+                // reads the crossing point exactly. The A/B control for the
+                // placement read — it moves the population save rate, so
+                // "what does the read error cost?" cannot be answered by
+                // reading the diff. The draw is taken either way so the
+                // seeded RNG stream stays phase-aligned between the arms;
+                // same pattern as `SaveModel::save_when_beaten`.
+                let drawn = rng.jitter(0.0, read_error);
+                static READ_OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                // Kept unshadowed: the post-shot expectation below is a
+                // property of the STRIKE and must not carry the keeper's
+                // mistake — the same rule its own note states about
+                // reading where he was standing.
+                let true_goal_line_y = goal_line_y;
+                let goal_line_y =
+                    if *READ_OFF.get_or_init(|| std::env::var("OF_GK_READ_OFF").is_ok()) {
+                        goal_line_y
+                    } else {
+                        goal_line_y + drawn
+                    };
+                // **The arrival height, integrated rather than solved.**
+                //
+                // This was a drag-free arc — `z + vz·t − ½g·t²` over
+                // `t = dx/vx` — and both halves of that are the launch
+                // state, so it assumed the ball keeps its launch speed all
+                // the way to the line. It does not (see `AIR_DRAG_PER_TICK`,
+                // which documents a 26% shortfall at keeper kicking
+                // speeds), the real flight takes longer, and gravity acts
+                // for all of it: measured over 250 matches the prediction
+                // ran **+0.37 m high**, so shots arriving in the top corner
+                // were read as going over the bar and
+                // `KeeperShotDive::should_launch` declined to move for
+                // them. See [`Ball::ballistic_crossing`].
+                //
+                // The lateral projection above is deliberately left alone —
+                // drag is isotropic, so `vy/vx` and therefore the crossing
+                // `y` survive it exactly. Only the vertical axis was biased.
+                let goal_line_z = Ball::ballistic_crossing(
+                    field.ball.position,
+                    final_velocity,
+                    field.ball.spin,
+                    goal_line_x,
+                )
+                .map(|(_, z, _)| z)
+                .unwrap_or_else(|| {
+                    (field.ball.position.z + final_velocity.z * ticks_to_goal
+                        - 0.5 * GRAVITY_PER_TICK * ticks_to_goal * ticks_to_goal)
+                        .max(0.0)
+                });
                 // Stamp who struck it, in the units the save contest
                 // scores. Read here rather than at save time: the save
                 // resolves several ticks downstream, where the shooter
@@ -4785,8 +4825,13 @@ impl PlayerEventDispatcher {
                 // the keeper's own position: reading where he stood would
                 // let good positioning shrink his own expectation and
                 // cancel the advantage it earned him.
+                // …and never from his READ of it either: `goal_line_y` above
+                // carries the placement jitter, the unread share of the
+                // curl and, on a deflection, the whole pre-deflection line.
+                // An expectation built on the keeper's mistake is not a
+                // property of the strike. See `true_goal_line_y`.
                 field.ball.last_shot_xgot = SaveModel::expected_goal_on_target(
-                    goal_line_y - field.size.height as f32 * 0.5,
+                    true_goal_line_y - field.size.height as f32 * 0.5,
                     final_velocity.norm(),
                     goal_line_z,
                 );

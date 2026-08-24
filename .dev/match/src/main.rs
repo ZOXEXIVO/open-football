@@ -8005,6 +8005,153 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 h[3] as f64 * 100.0 / h[0] as f64,
                 h[4] as f64 * 100.0 / h[0] as f64,
             );
+            println!(
+                "    …and of those, WROTE OFF above his own CROSSBAR_MARGIN while the ball came \
+                 in UNDER the bar: {} ({:.1}% of arrivals) — a shot he decided not to move for",
+                h[5],
+                h[5] as f64 * 100.0 / h[0] as f64,
+            );
+        }
+    }
+
+
+    // ── KEEPER HANDLING: WHAT HE DOES WITH THE SAVE ────────────────────
+    // Every other keeper block measures whether the save happens. This is
+    // the only one that measures what he did with it, banded by the
+    // attribute that is supposed to decide.
+    {
+        use core::mid_run_diag::KeeperHandlingDiag;
+        let h = KeeperHandlingDiag::snapshot();
+        let total: u64 = (0..4).map(|b| h[b * 8]).sum();
+        if total > 0 {
+            println!();
+            println!("--- KEEPER HANDLING (what he does with the save, by his own Handling) ---");
+            println!(
+                "  handling      saves     raw   scaled    HELD    tipped   spilled   shot pace   diff"
+            );
+            for (b, label) in [
+                (0usize, "< 8"),
+                (1, "8-10"),
+                (2, "11-13"),
+                (3, "14+"),
+            ] {
+                let n = h[b * 8];
+                if n == 0 {
+                    continue;
+                }
+                let pct = |v: u64| v as f64 * 100.0 / n as f64;
+                println!(
+                    "  {:<10} {:>8}   {:>5.1}   {:>5.3}   {:>4.0}%     {:>4.0}%     {:>4.0}%    {:>5.2} u/t  {:>5.3}",
+                    label,
+                    n,
+                    h[b * 8 + 4] as f64 / 100.0 / n as f64,
+                    h[b * 8 + 6] as f64 / 1000.0 / n as f64,
+                    pct(h[b * 8 + 1]),
+                    pct(h[b * 8 + 2]),
+                    pct(h[b * 8 + 3]),
+                    h[b * 8 + 5] as f64 / 100.0 / n as f64,
+                    h[b * 8 + 7] as f64 / 1000.0 / n as f64,
+                );
+            }
+        }
+    }
+    // ── KEEPER COMMIT vs TRUTH ─────────────────────────────────────────
+    // The one block that compares where the keeper thinks the shot is
+    // going with where it is going. Everything else in the harness scores
+    // him against his own read, so the error cancels and cannot be seen.
+    {
+        use core::mid_run_diag::KeeperCommitDiag;
+        let c = KeeperCommitDiag::snapshot();
+        let n: u64 = (0..4).map(|b| c[b * 6]).sum();
+        if n > 0 || c[24] > 0 {
+            let u = |v: u64, d: u64| {
+                if d == 0 {
+                    0.0
+                } else {
+                    v as f64 / 100.0 / d as f64 * 0.125
+                }
+            };
+            println!();
+            println!("--- KEEPER COMMIT vs TRUTH (his read of the crossing point against the ball's) ---");
+            println!(
+                "  at the DIVE LAUNCH        launches   read err   ball across him   he threw   WRONG WAY"
+            );
+            for (b, label) in [
+                (0usize, "< 11 m"),
+                (1, "11-18 m"),
+                (2, "18-28 m"),
+                (3, "28 m +"),
+            ] {
+                let k = c[b * 6];
+                if k == 0 {
+                    continue;
+                }
+                println!(
+                    "  {:<10}          {:>8}    {:>6.2}m           {:>6.2}m    {:>6.2}m   {:>5.1}% of {}",
+                    label,
+                    k,
+                    u(c[b * 6 + 1], k),
+                    u(c[b * 6 + 2], k),
+                    u(c[b * 6 + 3], k),
+                    if c[b * 6 + 4] == 0 {
+                        0.0
+                    } else {
+                        c[b * 6 + 5] as f64 * 100.0 / c[b * 6 + 4] as f64
+                    },
+                    c[b * 6 + 4],
+                );
+            }
+            if c[24] > 0 {
+                let a = c[24];
+                println!(
+                    "  at the ARRIVAL: {} on-frame arrivals, read off the true crossing by {:.2} m",
+                    a,
+                    u(c[25], a)
+                );
+                println!(
+                    "    lateral error scored on his READ {:.2} m   on the TRUTH {:.2} m",
+                    u(c[26], a),
+                    u(c[27], a)
+                );
+                println!(
+                    "    BEYOND HIS REACH on the read {:.1}%   on the truth {:.1}%   \
+                     (rolled a save he could not reach {:.1}%, denied one he could {:.1}%)",
+                    c[28] as f64 * 100.0 / a as f64,
+                    c[29] as f64 * 100.0 / a as f64,
+                    c[30] as f64 * 100.0 / a as f64,
+                    c[31] as f64 * 100.0 / a as f64,
+                );
+                println!(
+                    "    the ball's REAL gap across him at his own depth {:.2} m; \
+                     within a metre of him {} ({:.1}% of arrivals), and of those the model \
+                     called {} BEYOND HIS REACH ({:.1}%)",
+                    u(c[37], a),
+                    c[38],
+                    c[38] as f64 * 100.0 / a as f64,
+                    c[39],
+                    if c[38] == 0 {
+                        0.0
+                    } else {
+                        c[39] as f64 * 100.0 / c[38] as f64
+                    },
+                );
+            }
+            if c[36] > 0 {
+                println!(
+                    "  while the shot is in the air: {:.1}% of his steer ticks pull him AWAY from \
+                     the ball ({} of {} ticks with it more than a metre across him); \
+                     mean ball across him {:.2} m, mean pull {:.2} m",
+                    if c[32] == 0 {
+                        0.0
+                    } else {
+                        c[33] as f64 * 100.0 / c[32] as f64
+                    },
+                    c[33],
+                    c[32],
+                    u(c[34], c[36]),
+                    u(c[35], c[36]),
+                );
+            }
         }
     }
 

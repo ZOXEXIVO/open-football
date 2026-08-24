@@ -2239,7 +2239,7 @@ pub mod mid_run_diag {
     /// Slots: 0 arrivals, 1 Σ predicted z ×100, 2 Σ live crossing z ×100,
     /// 3 arrivals the prediction put over the bar while the ball came in
     /// UNDER it, 4 the converse.
-    pub static SHOT_HEIGHT: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+    pub static SHOT_HEIGHT: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
 
     pub struct ShotHeightDiag;
 
@@ -2254,11 +2254,207 @@ pub mod mid_run_diag {
             if predicted <= bar && actual > bar {
                 SHOT_HEIGHT[4].fetch_add(1, Ordering::Relaxed);
             }
+            // …and the subset that matters: the keeper's own write-off gate is
+            // `KeeperShotDive::CROSSBAR_MARGIN` above the bar, so THIS is the
+            // count of shots he decided not to move for that went in under it.
+            if predicted > bar + 0.36 && actual <= bar {
+                SHOT_HEIGHT[5].fetch_add(1, Ordering::Relaxed);
+            }
         }
 
-        pub fn snapshot() -> [u64; 5] {
-            let mut out = [0u64; 5];
+        pub fn snapshot() -> [u64; 6] {
+            let mut out = [0u64; 6];
             for (slot, c) in out.iter_mut().zip(SHOT_HEIGHT.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
+    /// **Which way does he go, and which way does the ball go?**
+    ///
+    /// Every other keeper counter scores him against `ShotTarget::goal_line_y`
+    /// — the crossing point as HE read it, which carries
+    /// `KEEPER_PLACEMENT_READ`'s jitter. He steers at that number, dives at
+    /// that number, and `SaveModel::wedge` then measures him against the same
+    /// number, so the read error cancels exactly and is invisible to every
+    /// save, reach and dive statistic in the harness. It is not invisible to
+    /// a viewer: what he watches is the keeper's body against the BALL.
+    ///
+    /// This is the only block that compares the read with the truth.
+    ///
+    /// Launch rows, banded by strike distance exactly as `KeeperRangeDiag`
+    /// bands it, recorded when `KeeperShotDive::should_launch` fires:
+    /// +0 launches, +1 Σ|read − true| ×100 at his own depth, +2 Σ|ball
+    /// across him| ×100, +3 Σ|aim across him| ×100, +4 launches where the
+    /// ball is further across him than [`KeeperCommitDiag::SIDE_FLOOR`],
+    /// +5 of those, the ones where he threw himself the OTHER WAY.
+    ///
+    /// Arrival slots (24..), recorded in `Ball::try_save_shot` at his plane:
+    /// 24 arrivals, 25 Σ|read − true| ×100 at the goal line, 26 Σ lateral
+    /// error against the READ ×100, 27 Σ lateral error against the TRUTH
+    /// ×100, 28 beyond his reach scored on the read, 29 beyond his reach
+    /// scored on the truth, 30 arrivals the read let him roll for that the
+    /// truth puts out of reach, 31 the converse.
+    pub static GK_COMMIT: [AtomicU64; 40] = [const { AtomicU64::new(0) }; 40];
+
+    /// **Does HANDLING decide whether he holds the ball?**
+    ///
+    /// A save has three endings a viewer can tell apart — held, tipped
+    /// round the post, spilled back into the six-yard box — and which one
+    /// it is should be the goalkeeper's `handling` speaking. Every other
+    /// keeper block in the harness measures whether the save HAPPENS; none
+    /// of them can see what he did with it, so a keeper who stops
+    /// everything and holds nothing reads as a good goalkeeper.
+    ///
+    /// Banded on the RAW `goalkeeping.handling` (1-20), not on
+    /// `GoalkeeperSkillProfile::handling_profile`, deliberately: the
+    /// profile blends seven attributes and the question here is about the
+    /// one on the player's card.
+    ///
+    /// Four bands (< 8 / 8-10 / 11-13 / ≥ 14) × 6 slots: +0 saves resolved,
+    /// +1 held, +2 tipped for a corner, +3 spilled into danger, +4 Σ the
+    /// raw attribute ×100, +5 Σ the strike's pace ×100 (so a band that
+    /// happens to face harder shots is visible rather than assumed).
+    pub static GK_HANDLING: [AtomicU64; 32] = [const { AtomicU64::new(0) }; 32];
+
+    pub struct KeeperHandlingDiag;
+
+    impl KeeperHandlingDiag {
+        pub fn band(handling: f32) -> usize {
+            if handling < 8.0 {
+                0
+            } else if handling < 11.0 {
+                1
+            } else if handling < 14.0 {
+                2
+            } else {
+                3
+            }
+        }
+
+        /// `outcome`: 0 held, 1 tipped for a corner, 2 spilled.
+        pub fn note(handling: f32, outcome: usize, ball_speed: f32, scaled: f32, difficulty: f32) {
+            let base = Self::band(handling) * 8;
+            let add = |slot: usize, n: u64| {
+                if slot < GK_HANDLING.len() {
+                    GK_HANDLING[slot].fetch_add(n, Ordering::Relaxed);
+                }
+            };
+            add(base, 1);
+            add(base + 1 + outcome.min(2), 1);
+            add(base + 4, (handling.max(0.0) * 100.0) as u64);
+            add(base + 5, (ball_speed.max(0.0) * 100.0) as u64);
+            // …and the SCALED, peer-shifted value the model actually reads.
+            // Any quality term multiplying a calibrated quantity has to be
+            // centred on this, not on 0.5 — see `SaveModel::strike_power`.
+            add(base + 6, (scaled.max(0.0) * 1000.0) as u64);
+            // …and the difficulty the hold base is divided by. A base is only
+            // meaningful next to the mean difficulty it is realised at.
+            add(base + 7, (difficulty.max(0.0) * 1000.0) as u64);
+        }
+
+        pub fn snapshot() -> [u64; 32] {
+            let mut out = [0u64; 32];
+            for (slot, c) in out.iter_mut().zip(GK_HANDLING.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+    pub struct KeeperCommitDiag;
+
+    impl KeeperCommitDiag {
+        /// How far across him the ball has to be before "he went the wrong
+        /// way" means anything. 8 u is a metre: inside that a keeper is
+        /// covering the ball with his body whichever way he leans.
+        pub const SIDE_FLOOR: f32 = 8.0;
+
+        fn add(slot: usize, n: u64) {
+            if slot < GK_COMMIT.len() {
+                GK_COMMIT[slot].fetch_add(n, Ordering::Relaxed);
+            }
+        }
+
+        /// `aim_dy` / `true_dy` are signed offsets ACROSS him — where he is
+        /// throwing himself, and where the ball is actually going.
+        pub fn note_launch(band: usize, read_minus_true: f32, aim_dy: f32, true_dy: f32) {
+            let base = band * 6;
+            Self::add(base, 1);
+            Self::add(base + 1, (read_minus_true.abs() * 100.0) as u64);
+            Self::add(base + 2, (true_dy.abs() * 100.0) as u64);
+            Self::add(base + 3, (aim_dy.abs() * 100.0) as u64);
+            if true_dy.abs() >= Self::SIDE_FLOOR {
+                Self::add(base + 4, 1);
+                if aim_dy * true_dy < 0.0 {
+                    Self::add(base + 5, 1);
+                }
+            }
+        }
+
+        pub fn note_arrival(
+            read_minus_true: f32,
+            error_on_read: f32,
+            error_on_truth: f32,
+            reach: f32,
+        ) {
+            Self::add(24, 1);
+            Self::add(25, (read_minus_true.abs() * 100.0) as u64);
+            Self::add(26, (error_on_read.abs() * 100.0) as u64);
+            Self::add(27, (error_on_truth.abs() * 100.0) as u64);
+            let out_on_read = error_on_read > reach;
+            let out_on_truth = error_on_truth > reach;
+            if out_on_read {
+                Self::add(28, 1);
+            }
+            if out_on_truth {
+                Self::add(29, 1);
+            }
+            if out_on_truth && !out_on_read {
+                Self::add(30, 1);
+            }
+            if out_on_read && !out_on_truth {
+                Self::add(31, 1);
+            }
+        }
+
+        /// One tick of a live shot, from the steering site: which way his
+        /// CURRENT belief pulls him, against which way the ball is really
+        /// going. The launch row cannot see this — by the time he leaves his
+        /// feet he has already been walking at the read for most of the
+        /// flight, so a commitment made at 20% of the flight reads as a
+        /// correct-looking dive.
+
+        /// The one measurement with no model in it: how far across him the
+        /// ball ACTUALLY is at the moment it reaches his depth. `wedge`
+        /// answers a different question — how much of the goal mouth his
+        /// body shadows, seen from the striker — and that is the right
+        /// question for pricing his coverage and the wrong one for asking
+        /// whether his hands could have got to this ball.
+        pub fn note_physical(gap_across: f32, beyond_on_read: bool) {
+            Self::add(37, (gap_across.abs() * 100.0) as u64);
+            if gap_across.abs() <= Self::SIDE_FLOOR {
+                Self::add(38, 1);
+                if beyond_on_read {
+                    Self::add(39, 1);
+                }
+            }
+        }
+        pub fn note_steer(belief_dy: f32, true_dy: f32) {
+            Self::add(36, 1);
+            Self::add(34, (true_dy.abs() * 100.0) as u64);
+            Self::add(35, (belief_dy.abs() * 100.0) as u64);
+            if true_dy.abs() >= Self::SIDE_FLOOR {
+                Self::add(32, 1);
+                if belief_dy * true_dy < 0.0 {
+                    Self::add(33, 1);
+                }
+            }
+        }
+
+        pub fn snapshot() -> [u64; 40] {
+            let mut out = [0u64; 40];
+            for (slot, c) in out.iter_mut().zip(GK_COMMIT.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
             out

@@ -12,7 +12,6 @@ use crate::r#match::{
     ConditionContext, MAX_OWNER_TRACK_DISTANCE, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
 };
-use nalgebra::Rotation3;
 use nalgebra::Vector3;
 
 /// Longest a keeper stays down, in AI ticks (20 ms each — see the units
@@ -273,29 +272,37 @@ impl GoalkeeperDivingState {
                 return across;
             }
         }
-
         // Prediction time scales with positioning + reaction quality.
         let prediction_time =
             (0.12 + prof.positioning * 0.26 + prof.shot_stopping * 0.22).clamp(0.10, 0.52);
         let future_ball_position = ball_position + ball_velocity * prediction_time;
 
         let to_future_ball = future_ball_position - ctx.player.position;
-        let mut dive_direction = if to_future_ball.norm() > f32::EPSILON {
+        // **NO SKILL-SCALED ANGULAR ERROR HERE.**
+        //
+        // This used to finish with a random rotation about `z` whose
+        // amplitude was a function of the keeper: `0.05 + poor_skill_penalty
+        // * 0.34 + (1 − condition) * 0.16 − positioning * 0.10`, clamped at
+        // 0.55, halved by the draw — **±15.8° for the worst keeper in the
+        // game and exactly 0° for an elite one**. The one thing it decided
+        // was WHICH WAY HE WENT, which is not what being a poor goalkeeper
+        // means: a bad keeper is slow to read it, slow off his line and
+        // short of the corner, and every one of those is already modelled.
+        // `dive_reach` scales how far he gets, `explosive_mult` and
+        // `calculate_dive_speed` how fast, `KeeperShotReaction::reaction_ticks`
+        // how late he starts, and `KeeperShotReaction::crossing_y` how long
+        // he takes to read the flight — that last one is where "he guessed
+        // wrong" belongs, because it moves his BODY and the ball then beats
+        // him honestly.
+        //
+        // Reached on the fallback branch only (no live shot of his own on
+        // the ball) — a loose ball, a rebound, a smother — which is still
+        // 48% of all dives, so it was visible.
+        if to_future_ball.norm() > f32::EPSILON {
             to_future_ball.normalize()
         } else {
             Vector3::x()
-        };
-
-        // Direction error scales with poor skill and fatigue, eased by
-        // good positioning. Range: ~0..0.6 rad band; elite stays tight.
-        let direction_error =
-            (0.05 + prof.poor_skill_penalty * 0.34 + (1.0 - prof.condition_mult) * 0.16
-                - prof.positioning * 0.10)
-                .clamp(0.0, 0.55);
-        let random_angle = (ctx.context.rng.unit_f32() - 0.5) * direction_error;
-        dive_direction = Rotation3::new(Vector3::z() * random_angle) * dive_direction;
-
-        dive_direction
+        }
     }
 
     fn calculate_dive_speed(&self, ctx: &StateProcessingContext) -> f32 {

@@ -161,7 +161,7 @@ impl SpinModel {
     }
 
     /// Decay applied once per airborne tick.
-    fn decayed(spin: Vector3<f32>) -> Vector3<f32> {
+    pub(in crate::r#match::engine::ball::ball) fn decayed(spin: Vector3<f32>) -> Vector3<f32> {
         if spin.norm_squared() < Self::NEGLIGIBLE * Self::NEGLIGIBLE {
             Vector3::zeros()
         } else {
@@ -176,7 +176,10 @@ impl SpinModel {
     /// back, sometimes stopping dead. This is the visible half of spin for
     /// anyone watching a ball bounce, and the old direction-preserving
     /// bounce (`v.x *= 0.95`) could express neither.
-    fn bounce_kick(spin: Vector3<f32>, velocity: Vector3<f32>) -> (Vector3<f32>, f32) {
+    pub(in crate::r#match::engine::ball::ball) fn bounce_kick(
+        spin: Vector3<f32>,
+        velocity: Vector3<f32>,
+    ) -> (Vector3<f32>, f32) {
         let Some(dir) = Vector3::new(velocity.x, velocity.y, 0.0).try_normalize(1.0e-4) else {
             return (Vector3::zeros(), 0.35);
         };
@@ -223,12 +226,7 @@ impl SpinModel {
 impl Ball {
     pub fn update_velocity(&mut self) {
         const STOPPING_THRESHOLD: f32 = 0.05; // Lower threshold for smoother final stop
-        // Football bounce retention on grass is ~25-35%. The previous
-        // 0.6 produced trampoline bounces where a lofted clearance
-        // bounced to 30m+ and stayed airborne (above PLAYER_JUMP_REACH)
-        // for 3-5 cycles before a defender could claim. 0.3 keeps the
-        // second bounce low enough to reach on the return trip.
-        const BOUNCE_COEFFICIENT: f32 = 0.3;
+        use crate::r#match::engine::ball::ball::flight::ballistics::BOUNCE_COEFFICIENT;
         // Global ball velocity safety cap. Sits above every action-specific
         // cap (shot 3.2, pass 3.2, clearance 7.0) so it never clamps real
         // physics but still catches runaway bug velocities. Clearances are

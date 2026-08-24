@@ -2119,7 +2119,29 @@ impl KeeperShotReaction {
             (elapsed / read_by.max(1e-3)).clamp(0.0, 1.0)
         };
         let held = ctx.player.position.y;
-        held + (target.goal_line_y - held) * confidence
+        let belief = held + (target.goal_line_y - held) * confidence;
+        // Which way that pulls him, against which way the ball is really
+        // going. This is the site the commitment is actually made at — the
+        // dive only ratifies it — so it is the only place a keeper walking
+        // away from the ball can be counted. See `KeeperCommitDiag`.
+        #[cfg(feature = "match-logs")]
+        {
+            let b = &ctx.tick_context.positions.ball;
+            let to_line = (own_goal.x - b.position.x) / b.velocity.x;
+            if to_line.is_finite() && to_line > 0.0 {
+                let true_line = b.position.y + b.velocity.y * to_line;
+                // ⚠ ON-FRAME ONLY. Unfiltered, the wide shots he correctly
+                // ignores dominate every tick counted here and the mean
+                // reads nineteen metres across him.
+                if (true_line - own_goal.y).abs() <= GOAL_WIDTH {
+                    crate::mid_run_diag::KeeperCommitDiag::note_steer(
+                        belief - held,
+                        true_line - held,
+                    );
+                }
+            }
+        }
+        belief
     }
 
     /// Hold a steering vector to what a set keeper can actually do.
@@ -2585,6 +2607,31 @@ impl KeeperShotDive {
                 )),
                 5,
             );
+            // …and WHERE HE IS THROWING HIMSELF against where the ball is
+            // actually going. Every other counter here scores him against
+            // `target.goal_line_y`, which is the crossing point as he READ
+            // it — so the read error cancels and no save statistic can see
+            // a keeper diving away from the ball. See `KeeperCommitDiag`.
+            {
+                use crate::mid_run_diag::KeeperCommitDiag as C;
+                let b = &ctx.tick_context.positions.ball;
+                let to_plane = (ctx.player.position.x - b.position.x) / b.velocity.x;
+                if to_plane.is_finite() && to_plane > 0.0 {
+                    let true_y = b.position.y + b.velocity.y * to_plane;
+                    let aim = Self::crossing_at(
+                        ctx.player.position.x,
+                        target.struck_from,
+                        goal.x,
+                        target.goal_line_y,
+                    );
+                    C::note_launch(
+                        range_band,
+                        aim.y - true_y,
+                        aim.y - ctx.player.position.y,
+                        true_y - ctx.player.position.y,
+                    );
+                }
+            }
         }
         true
     }
@@ -2705,20 +2752,34 @@ impl KeeperShotSave {
             return false;
         }
         // Ball over the bar — no save attempt worth making.
-        if target.goal_line_z > GOAL_HEIGHT {
+        //
+        // Against the SAME margin `KeeperShotDive::should_launch` uses, and
+        // for the same reason: `goal_line_z` is a projection, `Ball::
+        // try_save_shot` retires a shot as off-frame at 2.8 m on live
+        // ballistics, and a bare `> GOAL_HEIGHT` here refused to let him
+        // catch balls the physics went on to resolve. Three sites, one
+        // tolerance.
+        if target.goal_line_z > GOAL_HEIGHT + KeeperShotDive::CROSSBAR_MARGIN {
             return false;
         }
         // …and what his reach is worth from where he is standing. Same
-        // model as the physics save — `SaveModel::wedge` — so the two
+        // model as the physics save — `SaveModel::contact` — so the two
         // paths cannot disagree about whether he was in position, and so
         // neither of them charges him for narrowing the angle.
-        let (lateral_error, reach) = SaveModel::wedge(
+        //
+        // ⚠ …and scored against the BALL, for the same reason and with the
+        // same care as the physics save: `target.goal_line_y` is what he
+        // believes and is deliberately wrong, so adjudicating a catch on it
+        // denied him balls arriving in his hands. See the long note at the
+        // `contact` call in `Ball::try_save_shot`. The gather gate below is
+        // already physical; this makes the reach test agree with it.
+        let ball = &ctx.tick_context.positions.ball;
+        let (lateral_error, reach) = SaveModel::contact(
             target.struck_from,
-            ctx.tick_context.positions.ball.velocity.norm(),
+            ball.velocity.norm(),
             ctx.player.position,
             Self::base_reach(&prof),
-            ctx.ball().direction_to_own_goal().x,
-            target.goal_line_y,
+            ball.position.y,
         );
         if lateral_error > reach {
             return false;

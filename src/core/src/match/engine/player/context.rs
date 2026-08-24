@@ -498,7 +498,6 @@ impl LooseBallChase {
     }
 }
 
-
 impl Default for LooseBallChase {
     fn default() -> Self {
         Self::new()
