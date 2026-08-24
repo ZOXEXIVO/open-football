@@ -579,6 +579,7 @@ mod tests {
         "signing_reason_loan_foreign_prospect",
         "signing_reason_listing_broadcast",
         "signing_reason_academy_graduation",
+        "signing_reason_academy_emergency_callup",
         "signing_reason_manual",
         "signing_reason_rival_suffix",
         "scout_verdict_line",

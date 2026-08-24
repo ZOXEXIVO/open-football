@@ -197,6 +197,9 @@ impl SimHarness {
         let mut slowest_ms = 0.0f64;
         let mut census = LeagueGoalCensus::default();
         let mut world = WorldMatchCensus::default();
+        // Taken before the first tick: the world exactly as the database
+        // hydrated it, which is the state the youth pathway has to heal.
+        let youth_before = YouthSquadCensus::take(&self.data);
 
         for day in 1..=days {
             let tick_start = Instant::now();
@@ -233,6 +236,7 @@ impl SimHarness {
         // row: one match is a scoreline, not a rate.
         census.print(MIN_CENSUS_MATCHES);
         world.print();
+        youth_before.print(&YouthSquadCensus::take(&self.data));
     }
 
     /// Minimal executor for a future guaranteed ready on its first poll
@@ -591,5 +595,141 @@ impl WorldMatchCensus {
         for (slug, totals) in comps.iter().skip(comps.len().saturating_sub(12)) {
             totals.print_row(slug);
         }
+    }
+}
+
+/// Youth-squad census — the instrument for "can the world's age-restricted
+/// teams actually field a side, and how long does it take them to get
+/// there".
+///
+/// The shipped database carries real senior squads and almost no youth
+/// records: a third of the U18 teams start a new world with nobody in
+/// them at all. Whether that heals is not visible in any match statistic
+/// (an eleven-a-side fixture is played whatever the roster looks like) so
+/// it needs its own reading, taken over the same world the day tick is
+/// already running. Take one before the first tick and one after the
+/// last: the pair is the whole measurement.
+#[derive(Default)]
+struct YouthSquadCensus {
+    teams: usize,
+    empty: usize,
+    below_eleven: usize,
+    below_fourteen: usize,
+    players: usize,
+    /// Academy rosters behind those teams — the pool the youth squads are
+    /// fed from, and the thing a runaway backfill would inflate.
+    academies: usize,
+    academy_players: usize,
+    /// Every footballer in the world: senior squads, youth squads,
+    /// academies, free agents. The guard rail. Nothing in the youth
+    /// pathway is allowed to be a *source* — an academy that hands a boy
+    /// up and invents a replacement the same morning reads here as a
+    /// population that climbs and never settles, which is how the last
+    /// two throughput regressions were caught.
+    world_players: usize,
+}
+
+impl YouthSquadCensus {
+    /// A football team is eleven players; eleven plus three substitutes
+    /// is a squad that can play a fixture properly. Both numbers mirror
+    /// `ClubAcademy::EMERGENCY_YOUTH_SIZE` / `_TARGET`.
+    const FIELDING: usize = 11;
+    const WORKING: usize = 14;
+
+    fn take(data: &SimulatorData) -> Self {
+        let mut c = YouthSquadCensus::default();
+        c.world_players = data.free_agents.len();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    c.academies += 1;
+                    c.academy_players += club.academy.players.players.len();
+                    c.world_players += club.academy.players.players.len();
+                    for team in &club.teams.teams {
+                        c.world_players += team.players.len();
+                        if !team.team_type.is_youth() {
+                            continue;
+                        }
+                        let n = team.players.len();
+                        c.teams += 1;
+                        c.players += n;
+                        if n == 0 {
+                            c.empty += 1;
+                        }
+                        if n < Self::FIELDING {
+                            c.below_eleven += 1;
+                        }
+                        if n < Self::WORKING {
+                            c.below_fourteen += 1;
+                        }
+                    }
+                }
+            }
+        }
+        c
+    }
+
+    fn pct(part: usize, whole: usize) -> f64 {
+        if whole == 0 {
+            0.0
+        } else {
+            part as f64 * 100.0 / whole as f64
+        }
+    }
+
+    /// Print `self` (day 0) against `after` (last day) as one table, so
+    /// the reading is the change rather than two absolute numbers the
+    /// reader has to difference by hand.
+    fn print(&self, after: &YouthSquadCensus) {
+        println!("\nyouth squads (U18…U23)          day 0      end     change");
+        let row = |label: &str, a: usize, b: usize| {
+            println!("  {label:<26} {a:>7} {b:>8} {:>+10}", b as i64 - a as i64);
+        };
+        row("teams", self.teams, after.teams);
+        row("  empty", self.empty, after.empty);
+        row(
+            "  cannot field XI (<11)",
+            self.below_eleven,
+            after.below_eleven,
+        );
+        row(
+            "  under a working 14",
+            self.below_fourteen,
+            after.below_fourteen,
+        );
+        row("players on youth rosters", self.players, after.players);
+        println!(
+            "  {:<26} {:>6.1}% {:>7.1}%",
+            "cannot field XI",
+            Self::pct(self.below_eleven, self.teams),
+            Self::pct(after.below_eleven, after.teams),
+        );
+        println!(
+            "  {:<26} {:>7.1} {:>8.1}",
+            "mean squad size",
+            self.players as f64 / self.teams.max(1) as f64,
+            after.players as f64 / after.teams.max(1) as f64,
+        );
+        row(
+            "academy players (world)",
+            self.academy_players,
+            after.academy_players,
+        );
+        println!(
+            "  {:<26} {:>7.1} {:>8.1}",
+            "mean academy size",
+            self.academy_players as f64 / self.academies.max(1) as f64,
+            after.academy_players as f64 / after.academies.max(1) as f64,
+        );
+        row(
+            "WORLD PLAYERS (all)",
+            self.world_players,
+            after.world_players,
+        );
+        println!(
+            "  {:<26} {:>16.1}%",
+            "world growth",
+            Self::pct(after.world_players, self.world_players.max(1)) - 100.0,
+        );
     }
 }

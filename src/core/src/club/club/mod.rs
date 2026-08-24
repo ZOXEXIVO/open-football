@@ -548,6 +548,19 @@ impl Club {
             // Weekly: rebalance players across all teams
             self.rebalance_squads(date);
 
+            // Weekly: a youth squad that cannot field eleven players is
+            // an emergency, not something to leave until the season
+            // turns over. Runs after the rebalance so it only counts a
+            // hole the club's own promotions could not close, and is
+            // bounded to one rescue a month inside the academy.
+            let emergency_callups = self.process_youth_emergency_callups(
+                date,
+                ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or(""),
+            );
+            if !emergency_callups.is_empty() {
+                result.academy_transfers.extend(emergency_callups);
+            }
+
             // Weekly: hand pro contracts to youth players who've earned
             // them on form (also makes them visible to the loan market).
             self.review_youth_contracts(date);

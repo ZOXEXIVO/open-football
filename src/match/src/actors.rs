@@ -948,6 +948,12 @@ impl Actors {
     /// are, and between them the settle eases rather than switching, because
     /// there is no angle at which a body abruptly starts falling over.
     pub(crate) const GOES_OVER: (f32, f32) = (0.75, 1.22);
+    /// How wide the transit between standing up and lying down is, as a
+    /// share of [`PlayerActor::committed`]. See [`PlayerActor::toppled`]:
+    /// a body has no resting angle in the middle of this, and the only
+    /// reason the middle exists at all is that a change of pose must be
+    /// continuous.
+    const RESOLVES: f32 = 0.22;
     /// How far off the ground, in metres, counts as fully airborne for the
     /// arms. The engine's own leap apex runs 0.34 m for a poor jumper to
     /// 0.75 for a good one, so this reaches full stretch partway up rather
@@ -1040,8 +1046,10 @@ impl Actors {
     /// to 2.8 m/s a lateral step is a shuffle and his feet stay square; past
     /// it they cannot, and he crosses them. The width of the band is the
     /// outfielder's, since it is the same body.
-    pub(crate) const KEEPER_OPEN_UP: (f32, f32) =
-        (Self::SQUARE_UP.1, Self::SQUARE_UP.1 + (Self::OPEN_UP.1 - Self::OPEN_UP.0));
+    pub(crate) const KEEPER_OPEN_UP: (f32, f32) = (
+        Self::SQUARE_UP.1,
+        Self::SQUARE_UP.1 + (Self::OPEN_UP.1 - Self::OPEN_UP.0),
+    );
     /// How far ahead of the playhead a keeper's save is read, in seconds of
     /// match time, and at what interval.
     ///
@@ -2615,11 +2623,7 @@ impl Actors {
             // through lasts. Outranks the run: this is the one moment a
             // footballer is not facing where he is going.
             direction
-        } else if actor.is_goalkeeper
-            && ball.on_pitch
-            && !unwatched
-            && position.distance(ball.position) < Self::SET_RANGE.1
-        {
+        } else if actor.is_goalkeeper && ball.on_pitch && !unwatched {
             // **A goalkeeper stays square to the play, and opens up as he
             // gets going — but he never turns his back on the ball.**
             //
@@ -2631,11 +2635,23 @@ impl Actors {
             // run while his neck holds the ball, which is what `look`
             // already draws.
             //
-            // Bounded by the same range that puts him on his toes, so it is
-            // one claim rather than two: while the ball is near enough to be
-            // his problem he never turns away from it, and a keeper
-            // strolling out to the edge of his area with play at the other
-            // end walks where he is going like anybody else.
+            // ⚠ **THE RANGE GATE IS GONE, and it was the reported bug.**
+            //
+            // This branch used to require the ball inside `SET_RANGE.1` —
+            // 34 m — and everything beyond it fell through to "face your
+            // run". A keeper dropping back onto his line as an attack builds
+            // from the halfway line is doing exactly that at exactly that
+            // range, so he was drawn sprinting at his own net with his back
+            // to eleven opponents. Measured over real chunks
+            // (`census_keeper`), **he was inside a right angle of his own
+            // goal on 7–8% of his moving frames and on 20–30% of the frames
+            // above a jog** — which is where the eye is, because he is
+            // moving.
+            //
+            // What replaces it is not a bigger number but the right shape.
+            // A keeper turns and runs when the ball has stopped being his
+            // problem AND he is genuinely going somewhere; either one alone
+            // is not enough, and both are continuous. See `limit` below.
             //
             // Above the run branch rather than below it, because the run
             // branch is exactly what it is overruling. Measured, this is 87%
@@ -2668,11 +2684,44 @@ impl Actors {
                     let opening = Self::ease(
                         (actor.speed - Self::SQUARE_UP.0) / (Self::SQUARE_UP.1 - Self::SQUARE_UP.0),
                     );
+                    // **How far round from the ball he is willing to go.**
+                    //
+                    // Two things have to be true before a goalkeeper turns
+                    // his back on the ball, and the product of them is the
+                    // whole rule:
+                    //
+                    // * **it is not his problem** — the same
+                    //   [`Actors::SET_RANGE`] band that puts him on his
+                    //   toes, so there is one claim about when the ball is
+                    //   near his goal rather than two; and
+                    // * **he is genuinely going somewhere** — past
+                    //   [`Actors::SQUARE_UP`], where the shuffle ends,
+                    //   toward a flat sprint.
+                    //
+                    // Either alone leaves him open. A keeper walking back to
+                    // his line with play at the other end watches the play
+                    // — which is what a real one does and what the old range
+                    // gate got wrong — and a keeper sprinting off his line
+                    // at a through-ball is running at the ball anyway, so
+                    // the limit never binds on him.
+                    let range = Vec3::new(
+                        ball.position.x - position.x,
+                        0.0,
+                        ball.position.z - position.z,
+                    )
+                    .length();
+                    let his_problem = ((Self::SET_RANGE.1 - range)
+                        / (Self::SET_RANGE.1 - Self::SET_RANGE.0))
+                        .clamp(0.0, 1.0);
+                    let committed = Self::ease(
+                        (actor.speed - Self::SQUARE_UP.1) / (Self::SPRINT - Self::SQUARE_UP.1),
+                    );
+                    let limit =
+                        Self::SHOULDER + (PI - Self::SHOULDER) * (1.0 - his_problem) * committed;
                     let square = watching.x.atan2(watching.z);
                     let along = going.x.atan2(going.z);
                     let swing = ((along - square + PI).rem_euclid(TAU)) - PI;
-                    let turned =
-                        square + (swing * opening).clamp(-Self::SHOULDER, Self::SHOULDER);
+                    let turned = square + (swing * opening).clamp(-limit, limit);
                     Vec3::new(turned.sin(), 0.0, turned.cos())
                 }
                 _ => watching,
@@ -3018,8 +3067,37 @@ impl PlayerActor {
         // from three systems, one of which runs before the frame's update,
         // and it is a handful of calls a frame rather than the fifty-odd
         // per player the cache exists for.
-        let hips = standing + (Carriage::KNEELING - standing) * self.gait().kneeling();
-        self.height + hips - settled
+        let gait = self.gait();
+        let hips = standing + (Carriage::KNEELING - standing) * gait.kneeling();
+        let lift = self.height + hips - settled;
+        if self.dive <= 1e-3 {
+            return lift;
+        }
+
+        // **And then the turf has the last word.**
+        //
+        // Every number above is a claim about where his HIPS go, and the
+        // settle they ride on — `SETTLE · sin(tilt)` — is exact for a man
+        // standing and for one lying on his side and wrong at every angle
+        // between, in the direction that puts him inside the pitch: a body
+        // rotating about its own hip drops eight times as fast as a straight
+        // leg swings up out of the way. Swept across the range of dives the
+        // engine actually produces, a landing at 12° left a boot **14 cm
+        // under the grass** and one at 40° left it **29 cm** under. That is
+        // the reported *"stuck in the textures"*, and it is not a curve to
+        // be tuned: a footballer cannot be inside the pitch, so it is an
+        // invariant, and enforcing it directly fixes every angle at once
+        // including the ones nobody has sampled.
+        //
+        // Only ever for a man off his feet — at most two players, usually
+        // none — because it is the one case the settle exists for and the
+        // only one whose figure is not simply standing on the turf.
+        let placed = Carriage::placed(pitch, roll, lift);
+        let under = Physique::underside(gait)
+            .into_iter()
+            .map(|point| placed.transform_point(point).y)
+            .fold(f32::MAX, f32::min);
+        lift - under.min(0.0)
     }
 
     /// Advances the whole of a save: off his feet, through the extension, and
@@ -3239,7 +3317,7 @@ impl PlayerActor {
             Actors::ease((self.rising() * Actors::ROLL_EARLY).min(1.0)) * Actors::ROLLS_OVER;
         let way = Vec2::from_angle(way.angle_to(Vec2::Y) * onto_his_front).rotate(way);
         let flying = Actors::SPRAWL_ANGLE * self.tip.length() * self.stretch;
-        let landed = FRAC_PI_2 * self.committed();
+        let landed = FRAC_PI_2 * self.toppled();
         let tip = way * (flying + (landed - flying) * self.settling());
         (tip.y, -tip.x)
     }
@@ -3266,6 +3344,32 @@ impl PlayerActor {
         Actors::ease((over - Actors::GOES_OVER.0) / (Actors::GOES_OVER.1 - Actors::GOES_OVER.0))
     }
 
+    /// **And how far over he comes to REST**, 0 upright and 1 flat out.
+    ///
+    /// ⚠ **Not [`Self::committed`], and this is the difference between a
+    /// keeper who fell over and one frozen halfway through falling.** That
+    /// number is how far past his own base of support he arrived, and it
+    /// decides WHETHER he goes down. It is not the angle he ends up at,
+    /// because a body on grass has no resting angle in between: tipped past
+    /// its base it falls all the way, short of it it stands up. Nothing
+    /// holds a man at forty degrees.
+    ///
+    /// Used proportionally — `FRAC_PI_2 * committed` — the middle third of
+    /// the dives the engine actually produces landed him leaning at **40°
+    /// with his hips at 0.47 m and a boot 29 cm inside the pitch**. That is
+    /// the report *"he falls to the side, but not completely, and it looks
+    /// like he is stuck in the textures"*, and neither of the two tests that
+    /// pin this could see it: one asserts a full-length dive lies flat and
+    /// the other that a standing leap does not fall, and the fault is
+    /// between them. See `measure_landing`, which sweeps the range.
+    ///
+    /// [`Actors::RESOLVES`] is how wide the transit is. Narrow on purpose:
+    /// it is there so the change is continuous, not so there is a shelf to
+    /// sit on.
+    fn toppled(&self) -> f32 {
+        Actors::ease((self.committed() - 0.5) / Actors::RESOLVES + 0.5)
+    }
+
     /// How far through the landing he is, 0..1, whatever kind of landing it
     /// turned out to be. What ends the flight: the extension gives way, the
     /// arms come down, the ball comes in off the gloves and onto the chest.
@@ -3279,7 +3383,7 @@ impl PlayerActor {
     /// Faded by the dive itself, so it lets go as he gets back to his feet
     /// rather than pinning him to the turf.
     fn grounded(&self) -> f32 {
-        self.settling() * self.committed()
+        self.settling() * self.toppled()
     }
 
     /// **How far off the floor he has pushed**, 0 flat out and 1 back on his
@@ -3296,7 +3400,7 @@ impl PlayerActor {
     /// other.
     fn rising(&self) -> f32 {
         let landed = (self.down / Actors::GROUNDING).clamp(0.0, 1.0);
-        landed * self.committed() * (1.0 - self.dive)
+        landed * self.toppled() * (1.0 - self.dive)
     }
 
     /// How far out at the end of a stretch he is — off his feet and not yet
@@ -3412,12 +3516,38 @@ impl PlayerActor {
 
     fn gait(&self) -> Gait {
         // An outfielder leaving the ground is heading a ball, not saving one.
+        //
+        // **And a keeper leaving it is doing one of two quite different
+        // things**, which is why this was not simply zero for him. He goes
+        // ACROSS his goal at a shot and UP at a cross, and the second is a
+        // jump in every sense: he gathers, drives off one leg and takes the
+        // other knee through, and none of that is a dive. Hard-zeroed here,
+        // a keeper claiming a corner at the top of a leap was drawn with a
+        // diver's legs — both trailing, one scissored up behind him — and no
+        // push under either of them.
+        //
+        // [`PlayerActor::flat`] already knows which: it is the angle he left
+        // the ground at, latched over the first moments of the flight, 1 for
+        // a dive flat across the goal and 0 for a man going straight up. The
+        // same number the topple is scaled by, read the other way round, so
+        // the two cannot disagree about what kind of flight this was.
+        //
+        // ⚠ And it belongs to the FLIGHT, given back by the landing exactly
+        // as `stretch` is. `dive` survives the touchdown by design — a keeper
+        // does not stand straight back up — but a folded knee is a SHORTER
+        // LEG, so a man who has landed and is still 40% jumping stands with
+        // his boots 7 cm above the turf. Same bookkeeping as `SET_DROP`, and
+        // the same trap `DOUBLED_DROP` documents.
         let jump = if self.is_goalkeeper {
-            0.0
+            self.dive * (1.0 - self.flat) * (1.0 - self.settling())
         } else {
             (self.height / Actors::JUMP_HEIGHT).clamp(0.0, 1.0)
         };
         let grounded = self.grounded();
+        // How far up onto his knees he has come — [`Gait::kneeling`], worked
+        // here because two fields below have to be its complement and the
+        // gait it is a method on does not exist yet.
+        let kneeling = (4.0 * self.rising() * grounded).clamp(0.0, 1.0);
         let extended = self.extended();
         // A boot, a head, a keeper's throw and a throw-in are one swing routed
         // to four different sets of limbs, so they are four amplitudes off one
@@ -3497,12 +3627,17 @@ impl PlayerActor {
             carrying: self.carrying * (1.0 - self.dive) * (1.0 - jump),
             jump,
             // A keeper is set whenever the ball is near his goal — but not
-            // while he is running, off his feet, or holding it: all three are
+            // while he is off his feet or holding it, both of which are
             // things a man in the set position is by definition not doing.
-            set: self.set
-                * (1.0 - (self.speed / Actors::SPRINT).clamp(0.0, 1.0))
-                * (1.0 - self.dive)
-                * (1.0 - self.carry),
+            //
+            // ⚠ **And NOT gated on his speed any more.** This is the claim
+            // that the ball is his problem, and it stays true while he
+            // moves: what his pace decides is the STANCE, which is
+            // [`Joint::crouched`] and is what the legs read. Gated here, the
+            // arms came down as he set off — and the legs stayed welded,
+            // because `1 − speed/SPRINT` is 0.83 at a walking pace and a
+            // keeper does nine tenths of his moving below a walk.
+            set: self.set * (1.0 - self.dive) * (1.0 - self.carry),
             // Both arms go out for the dive and for the leap — but not once
             // the ball is settled in his gloves, where the cradle takes them
             // back in, and not once he is down. A man off the ground is
@@ -3549,7 +3684,18 @@ impl PlayerActor {
             },
             // Down there AND beaten, which is the four seconds after a goal
             // that had no reaction in them at all.
-            beaten: self.despair * grounded,
+            //
+            // ⚠ **And not once he is up on his knees.** This is the pose of
+            // a man FACE DOWN on the turf — head turned into the grass,
+            // trunk curled, the free arm over it — and `grounded` alone is
+            // still 0.42 on the kneel shelf, where a beaten keeper parks
+            // for seconds. Composed onto a kneeling body it folded him
+            // double over his own thighs and held him there, which is the
+            // "stuck" half of *"he falls to the side, but not completely,
+            // and it looks like he is stuck in the textures"*. What he does
+            // once he is up is `despair`, which grows as this fades — the
+            // hand-over the two were always meant to make.
+            beaten: self.despair * grounded * (1.0 - kneeling),
             course: self.underfoot,
             open: self.open,
             // A man off his feet is not taking steps, whatever ground he is
@@ -3641,6 +3787,184 @@ mod flight {
         actor
     }
 
+    /// **No part of a landed goalkeeper is ever inside the pitch**, at any
+    /// commitment, not just at the two ends anybody thought to test.
+    ///
+    /// `a_keeper_on_the_grass_is_lying_on_it` pins a full-length dive and
+    /// `a_standing_leap_is_not_a_fall` pins a vertical leap, and the fault
+    /// was between them: `Carriage::SETTLE · sin(tilt)` is exact at 0° and at
+    /// 90° and wrong at every angle in between, in the direction that puts a
+    /// limb through the turf. Measured before the fix, a landing at 12° left
+    /// a boot 14 cm under and one at 40° left it **29 cm** under — reported
+    /// as *"it looks like he is stuck in the textures"*.
+    ///
+    /// Sweeps the whole range and asks every extremity, which is the only
+    /// way a claim about a range can be made. See
+    /// [`PlayerActor::lift`](super::PlayerActor) and
+    /// [`Physique::underside`](crate::body::Physique).
+    #[test]
+    fn the_landing_never_buries_him() {
+        for tenth in 0..=20 {
+            let way = Vec2::X * (tenth as f32 / 20.0);
+            let mut actor = PlayerActor::new(1, true, true);
+            actor.despair = 1.0;
+            for height in FULL_LENGTH.iter().chain(std::iter::repeat_n(&0.0, 12)) {
+                actor.height = *height;
+                actor.speed = if *height > Actors::AIRBORNE_FEET {
+                    9.0
+                } else {
+                    0.0
+                };
+                if actor.track_flight(0.03, 9.0, 0.0, false) {
+                    actor.tip = way;
+                }
+            }
+            let (pitch, roll) = actor.topple();
+            let carriage = Carriage::placed(pitch, roll, actor.lift());
+            let gait = actor.gait();
+            for point in Physique::underside(gait) {
+                let at = carriage.transform_point(point).y;
+                assert!(
+                    at > -0.02,
+                    "landing at a tip of {:.2} put part of him {:.0} cm under the pitch",
+                    way.length(),
+                    -at * 100.0
+                );
+            }
+        }
+    }
+
+    /// **…and he is never left frozen halfway through falling over.**
+    ///
+    /// A body on grass comes to rest upright or flat; nothing holds a man at
+    /// forty degrees. Drawn as `FRAC_PI_2 · committed` it did exactly that
+    /// over the middle third of the dives the engine produces — *"he falls
+    /// to the side, but not completely"*. See [`PlayerActor::toppled`].
+    ///
+    /// The transit is allowed, and has to be, or the change would pop; what
+    /// is asserted is that it is a transit, by counting how much of the
+    /// range lands in it.
+    #[test]
+    fn a_landed_keeper_is_not_frozen_mid_fall() {
+        let mut stranded = 0;
+        for tenth in 0..=20 {
+            let way = Vec2::X * (tenth as f32 / 20.0);
+            let mut actor = PlayerActor::new(1, true, true);
+            for height in FULL_LENGTH.iter().chain(std::iter::repeat_n(&0.0, 12)) {
+                actor.height = *height;
+                actor.speed = if *height > Actors::AIRBORNE_FEET {
+                    9.0
+                } else {
+                    0.0
+                };
+                if actor.track_flight(0.03, 9.0, 0.0, false) {
+                    actor.tip = way;
+                }
+            }
+            let (pitch, roll) = actor.topple();
+            let tilt = Carriage::tilt(pitch, roll).clamp(0.0, 1.0).asin();
+            if tilt > 0.35 && tilt < 1.20 {
+                stranded += 1;
+            }
+        }
+        assert!(
+            stranded <= 2,
+            "{stranded} of 21 landings left him propped up between 20° and 69°"
+        );
+    }
+
+    /// **A keeper who went UP is jumping, not diving.**
+    ///
+    /// `Gait::jump` was hard-zeroed for goalkeepers on the grounds that a
+    /// keeper off his feet is making a save — true of a shot and not of a
+    /// cross, which he meets at the top of a leap with a knee driven through
+    /// and a leg pushing under him. Drawn with a diver's legs he had neither.
+    /// [`PlayerActor::flat`](super::PlayerActor) already knows which kind of
+    /// flight it was; this is that it is used.
+    #[test]
+    fn a_leap_is_not_a_dive() {
+        // Straight up: a standing leap at a cross, no ground covered.
+        let leapt = land(&FULL_LENGTH, 0.4, 0.0, 0, Vec2::X);
+        // …and flat across the goal off a running dive.
+        let dived = land(&ALONG_THE_FLOOR, 9.0, 0.0, 0, Vec2::X);
+        assert!(
+            leapt.gait().jump > 0.5,
+            "a keeper going straight up is drawn diving ({:.2})",
+            leapt.gait().jump
+        );
+        assert!(
+            dived.gait().jump < 0.15,
+            "a keeper going flat across his goal is drawn jumping ({:.2})",
+            dived.gait().jump
+        );
+    }
+    /// **Where a landed keeper actually ends up**, across the whole range of
+    /// dives the engine produces rather than at the two ends anybody thought
+    /// to test.
+    ///
+    /// `a_keeper_on_the_grass_is_lying_on_it` pins a full-length dive and
+    /// `a_standing_leap_is_not_a_fall` pins a vertical leap, and between them
+    /// is everything: a keeper who went half over, landed at forty-odd
+    /// degrees and has nothing under him. Reported as *"he falls to the side,
+    /// but not completely, and looks stuck in the textures"* — which is a
+    /// claim about the middle of a range, and neither test could see it.
+    ///
+    /// ```text
+    /// cargo test --lib measure_landing -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "prints; run by hand when the landing changes"]
+    fn measure_landing() {
+        use crate::body::skeleton;
+
+        println!(
+            "  {:>6} {:>7} {:>7} {:>7} {:>7} {:>9} {:>7}   buried",
+            "tip", "commit", "tilt°", "dive", "ground", "lowest", "hips"
+        );
+        for tenth in 0..=10 {
+            let way = Vec2::X * (tenth as f32 / 10.0);
+            let mut actor = PlayerActor::new(1, true, true);
+            actor.despair = 1.0;
+            // Land him: through the flight, then held on the deck long
+            // enough for the sprawl to settle but not to have got up.
+            for height in FULL_LENGTH.iter().chain(std::iter::repeat_n(&0.0, 12)) {
+                actor.height = *height;
+                let airborne = *height > Actors::AIRBORNE_FEET;
+                actor.speed = if airborne { 9.0 } else { 0.0 };
+                if actor.track_flight(0.03, 9.0, 0.0, false) {
+                    actor.tip = way;
+                }
+            }
+            let (pitch, roll) = actor.topple();
+            let carriage = Carriage::placed(pitch, roll, actor.lift());
+            let gait = actor.gait();
+            let mut lowest = ("", f32::MAX);
+            for (name, point) in skeleton::landmarks(gait) {
+                let at = carriage.transform_point(point).y;
+                if at < lowest.1 {
+                    lowest = (name, at);
+                }
+            }
+            println!(
+                "  {:>6.1} {:>7.2} {:>7.0} {:>7.2} {:>7.2} {:>9.3} {:>7.2}   {}",
+                way.length(),
+                actor.committed(),
+                Carriage::tilt(pitch, roll).asin().to_degrees(),
+                actor.dive,
+                gait.grounded,
+                lowest.1,
+                carriage
+                    .transform_point(Vec3::new(0.0, Physique::HIP, 0.0))
+                    .y,
+                if lowest.1 < -0.02 {
+                    format!("{} {:.0} cm under", lowest.0, -lowest.1 * 100.0)
+                } else {
+                    String::new()
+                }
+            );
+        }
+    }
+
     #[test]
     #[ignore = "prints; run by hand"]
     fn measure_rising() {
@@ -3675,7 +3999,7 @@ mod flight {
                     .min(at(skeleton::boot(1.0, gait)))
                     .min(at(skeleton::crown(gait)));
                 println!(
-                    "{:5.2}s dive {:.2} rise {:.2} ground {:.2} hips {:.2} crown {:.2} gloveR {:.2} bootR {:.2} lowest {:.3}",
+                    "{:5.2}s dive {:.2} rise {:.2} ground {:.2} hips {:.2} crown {:.2} gloveR {:.2} bootR {:.2} lowest {:.3} beaten {:.2} kneel {:.2} prop {:.2}",
                     since as f32 * 0.03,
                     actor.dive,
                     actor.rising(),
@@ -3684,7 +4008,10 @@ mod flight {
                     at(skeleton::crown(gait)),
                     at(skeleton::glove(1.0, gait)),
                     at(skeleton::boot(1.0, gait)),
-                    low
+                    low,
+                    gait.beaten,
+                    gait.kneeling(),
+                    gait.propping(),
                 );
             }
         }
@@ -5301,6 +5628,56 @@ mod ground {
         );
     }
 
+    /// **…and the ball being a long way off does not make it somebody
+    /// else's problem.**
+    ///
+    /// The branch above used to be gated on the ball being inside
+    /// `SET_RANGE.1` — 34 m — and everything past it fell through to "face
+    /// where you are going". A keeper dropping back onto his line as an
+    /// attack builds from the halfway line is at exactly that range doing
+    /// exactly that, so he was drawn walking at his own net with his back to
+    /// eleven opponents. Measured over real recordings he was inside a right
+    /// angle of his own goal on 7–8% of his moving frames and on 20–30% of
+    /// the frames above a jog.
+    ///
+    /// Two things have to be true before he turns round, and the test is
+    /// both halves: the ball has to have stopped being his problem AND he
+    /// has to be going somewhere. See [`Actors::facing`].
+    #[test]
+    fn a_keeper_watches_the_play_from_the_far_end_too() {
+        let ball = BallState {
+            on_pitch: true,
+            position: Vec3::new(0.0, 0.0, 45.0),
+            ..Default::default()
+        };
+        let retreating = |speed: f32| {
+            let mut keeper = PlayerActor::new(1, true, true);
+            keeper.speed = speed;
+            keeper.travel = Vec3::new(0.0, 0.0, -speed);
+            let facing = Actors::facing(&keeper, &ball, Vec3::ZERO, Vec3::ZERO, false);
+            let flat = Vec3::new(facing.x, 0.0, facing.z)
+                .try_normalize()
+                .expect("a heading");
+            flat.dot(Vec3::Z).clamp(-1.0, 1.0).acos()
+        };
+        for speed in [1.5_f32, 2.5] {
+            assert!(
+                retreating(speed) <= Actors::SHOULDER + 1e-3,
+                "dropping back at {speed:.1} m/s with the ball 45 m away he is {:.0}deg \
+                 off it — his back is to the play",
+                retreating(speed).to_degrees()
+            );
+        }
+        // …but a keeper sprinting back for a ball played over him does turn
+        // and run, which is what a real one does and the only reason the
+        // limit is not simply a right angle.
+        assert!(
+            retreating(6.0) > Actors::SHOULDER,
+            "sprinting back with play 45 m away he still runs side-on ({:.0}deg)",
+            retreating(6.0).to_degrees()
+        );
+    }
+
     /// …and going backwards he backpedals rather than turning round, which
     /// is a gait this rig already has.
     #[test]
@@ -5458,7 +5835,10 @@ mod keeper {
                 // A named keeper outranks the geometry outright; the mean
                 // depth is only there for a chunk in which neither of them
                 // did anything but stand.
-                Some((id, total / seen.max(1.0) + if keeping { 1_000.0 } else { 0.0 }))
+                Some((
+                    id,
+                    total / seen.max(1.0) + if keeping { 1_000.0 } else { 0.0 },
+                ))
             })
             .collect();
         depth.sort_by(|a, b| b.1.total_cmp(&a.1));
@@ -5635,7 +6015,13 @@ mod keeper {
         let (start, until) = tracks.ball.span().expect("a recorded chunk");
         let ids = keepers(&mut tracks, start);
         let frame = 1.0f32 / 60.0;
-        println!("  keepers picked: {ids:?} of {} tracks", tracks.players.len());
+        // Printed because it is the thing that was silently wrong for as long
+        // as this module existed — see [`keepers`], which used to hand back a
+        // pair of wingers.
+        println!(
+            "KEEPERS {ids:?}, of {} tracks in the chunk",
+            tracks.players.len()
+        );
         let frames = ((until - start) / (frame as f64 * 1000.0)) as u32;
 
         /// Speed bands, in metres a second, and what to call them.

@@ -1,4 +1,4 @@
-use super::ClubAcademy;
+use super::{AcademyCallUpMode, ClubAcademy};
 use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::{Person, Player, PlayerClubContract, PlayerStatusType};
@@ -14,6 +14,15 @@ impl ClubAcademy {
     /// prospect graduates even at low current ability, because "ready for
     /// youth football" is about the pathway, not first-team quality.
     pub fn graduate_to_youth(&mut self, date: NaiveDate, count: usize) -> Vec<Player> {
+        self.call_up(date, count, AcademyCallUpMode::Scheduled)
+    }
+
+    /// Shared body behind every academy → youth-team move. `mode` picks
+    /// the age floor and the ranking scale; everything downstream of the
+    /// selection — the youth contract, the graduate counter, the
+    /// last-graduation stamp — is identical, because from the club's
+    /// side an emergency call-up *is* a graduation, just an early one.
+    fn call_up(&mut self, date: NaiveDate, count: usize, mode: AcademyCallUpMode) -> Vec<Player> {
         if count == 0 {
             return Vec::new();
         }
@@ -22,11 +31,11 @@ impl ClubAcademy {
             .players
             .players
             .iter()
-            .filter(|p| self.is_graduation_eligible(p, date))
+            .filter(|p| self.is_call_up_eligible(p, date, mode))
             .map(|p| {
                 (
                     p.id,
-                    self.pathway_readiness_score(p, date),
+                    self.readiness_for(p, date, mode),
                     p.age(date),
                     // Assessed ceiling — the staff's belief breaks the
                     // tie, never the hidden biological PA.
@@ -58,7 +67,11 @@ impl ClubAcademy {
                 player.contract = Some(PlayerClubContract::new_youth(salary, expiration));
 
                 debug!(
-                    "academy graduation -> U18: {} (CA={}, age={})",
+                    "academy {} -> youth: {} (CA={}, age={})",
+                    match mode {
+                        AcademyCallUpMode::Scheduled => "graduation",
+                        AcademyCallUpMode::Emergency => "emergency call-up",
+                    },
                     player.full_name,
                     player.player_attributes.current_ability,
                     player.age(date)
@@ -126,6 +139,93 @@ impl ClubAcademy {
             self.last_graduation_year = Some(date.year());
         }
         graduated
+    }
+
+    /// A football team is eleven players. A youth squad below that
+    /// cannot fulfil its fixture at all, which is the one situation
+    /// where a club stops waiting for the graduation round in July and
+    /// promotes whoever it has.
+    pub const EMERGENCY_YOUTH_SIZE: usize = 11;
+
+    /// What the emergency tops a short squad back up to: the eleven plus
+    /// three substitutes. Deliberately not a full squad — the rescue
+    /// exists to get a team on the pitch, and growing that eleven into a
+    /// real age group is the seasonal graduation round's job.
+    pub const EMERGENCY_YOUTH_TARGET: usize = 14;
+
+    /// Youngest age the academy will hand up when the youth squad
+    /// cannot field a team. Fifteen is the ordinary floor; a club short
+    /// of bodies plays its under-15s, as clubs actually do, rather than
+    /// forfeiting for a year while a full academy trains next door.
+    pub const EMERGENCY_CALL_UP_AGE: u8 = 14;
+
+    /// How many prospects the academy can hand over today without
+    /// emptying itself.
+    ///
+    /// The bound is not a taste judgement: [`ClubAcademy::
+    /// ensure_minimum_players`] bootstraps a whole replacement year
+    /// group in a single day once the roster falls under half its target
+    /// floor. Draining past that point turns every emergency into a
+    /// player-minting pump — the academy hands up fourteen, invents
+    /// fourteen more overnight, and the world's population climbs with
+    /// each short squad. Stopping at the bootstrap line means the losses
+    /// come back through the two-a-month trialist trickle instead, which
+    /// is a recruitment rhythm rather than a source.
+    pub fn call_up_capacity(&self) -> usize {
+        let floor = self.settings.players_count_range.start as usize;
+        // `ensure_minimum_players` bootstraps while `current * 2 < floor`,
+        // so the last safe roster size is `ceil(floor / 2)`.
+        let bootstrap_line = floor.div_ceil(2);
+        self.players.players.len().saturating_sub(bootstrap_line)
+    }
+
+    /// The academy's emergency budget for `date` — how many prospects it
+    /// will release into short youth squads this month, across all of
+    /// them. Zero once it has already answered an emergency this month:
+    /// the check runs weekly, and without the stamp four consecutive
+    /// Mondays would drain the same academy four times.
+    pub fn emergency_allowance(&self, date: NaiveDate) -> usize {
+        let answered_this_month = self
+            .last_emergency_call_up
+            .is_some_and(|d| d.year() == date.year() && d.month() == date.month());
+        if answered_this_month {
+            return 0;
+        }
+        self.call_up_capacity()
+    }
+
+    /// Hand up to `count` prospects from the academy into a youth squad
+    /// that cannot field a team, over the age-14 emergency floor and
+    /// ranked by the same readiness score the seasonal round uses. Never
+    /// takes more than [`ClubAcademy::call_up_capacity`] regardless of
+    /// what the caller asks for.
+    pub fn emergency_call_up(&mut self, date: NaiveDate, count: usize) -> Vec<Player> {
+        let count = count.min(self.call_up_capacity());
+        self.call_up(date, count, AcademyCallUpMode::Emergency)
+    }
+
+    /// Record that the academy answered an emergency today, closing the
+    /// budget until next month.
+    pub fn record_emergency_call_up(&mut self, date: NaiveDate) {
+        self.last_emergency_call_up = Some(date);
+    }
+
+    /// Prospects the academy could hand up under the emergency floor
+    /// right now, paired with their readiness score. Mirrors
+    /// [`ClubAcademy::graduation_candidates`] for the emergency mode so
+    /// the UI and tests can read the pool without running the call-up.
+    pub fn emergency_candidates(&self, date: NaiveDate) -> Vec<(u32, i16)> {
+        self.players
+            .players
+            .iter()
+            .filter(|p| self.is_call_up_eligible(p, date, AcademyCallUpMode::Emergency))
+            .map(|p| {
+                (
+                    p.id,
+                    self.readiness_for(p, date, AcademyCallUpMode::Emergency),
+                )
+            })
+            .collect()
     }
 
     /// Number of additional "elite overshoot" graduates the academy is
@@ -460,6 +560,141 @@ mod tests {
 
         // No room at all → nobody is pulled up.
         assert!(academy.graduate_age_overdue(date, 17, 0).is_empty());
+    }
+
+    #[test]
+    fn emergency_call_up_reaches_fourteen_year_olds() {
+        // A 14-year-old is invisible to the seasonal round (the tier-4
+        // policy graduates at 15) but is exactly who a club promotes
+        // when its U18 cannot field a team.
+        let date = NaiveDate::from_ymd_opt(2025, 9, 1).unwrap();
+        let mut academy = ClubAcademy::new(8); // tier 4 → min_graduation_age 15
+        assert_eq!(
+            academy.pathway_policy.min_graduation_age, 15,
+            "test premise"
+        );
+        for _ in 0..30 {
+            academy.players.add(prospect(14, 55, 90, 10.0, 8500, date));
+        }
+
+        assert!(
+            academy.graduation_candidates(date).is_empty(),
+            "the seasonal round must still not see a 14-year-old"
+        );
+        assert_eq!(
+            academy.emergency_candidates(date).len(),
+            30,
+            "the emergency floor reaches the whole year group"
+        );
+        let called = academy.emergency_call_up(date, 6);
+        assert_eq!(called.len(), 6);
+        assert!(
+            called.iter().all(|p| p.contract.is_some()),
+            "an emergency call-up still signs a youth contract"
+        );
+    }
+
+    #[test]
+    fn emergency_call_up_never_drains_past_the_bootstrap_line() {
+        // The academy backfill mints a whole replacement year group in a
+        // day once the roster falls under half its floor. The call-up
+        // must stop above that line or every emergency becomes a pump.
+        let date = NaiveDate::from_ymd_opt(2025, 9, 1).unwrap();
+        let mut academy = ClubAcademy::new(8);
+        let floor = academy.settings.players_count_range.start as usize;
+        for _ in 0..20 {
+            academy.players.add(prospect(15, 55, 90, 10.0, 8500, date));
+        }
+
+        let capacity = academy.call_up_capacity();
+        assert_eq!(capacity, 20 - floor.div_ceil(2));
+        let called = academy.emergency_call_up(date, 99);
+        assert_eq!(called.len(), capacity, "capacity bounds an unbounded ask");
+        assert!(
+            academy.players.players.len() * 2 >= floor,
+            "roster must stay above the backfill's bootstrap line"
+        );
+        assert_eq!(
+            academy.call_up_capacity(),
+            0,
+            "a drained academy offers nothing further"
+        );
+    }
+
+    #[test]
+    fn emergency_allowance_is_once_a_month() {
+        // The club checks weekly; the academy answers monthly.
+        let date = NaiveDate::from_ymd_opt(2025, 9, 1).unwrap();
+        let mut academy = ClubAcademy::new(8);
+        for _ in 0..40 {
+            academy.players.add(prospect(15, 55, 90, 10.0, 8500, date));
+        }
+
+        assert!(academy.emergency_allowance(date) > 0);
+        academy.record_emergency_call_up(date);
+        assert_eq!(academy.emergency_allowance(date), 0, "same day");
+        let next_monday = NaiveDate::from_ymd_opt(2025, 9, 8).unwrap();
+        assert_eq!(
+            academy.emergency_allowance(next_monday),
+            0,
+            "still the same month"
+        );
+        let next_month = NaiveDate::from_ymd_opt(2025, 10, 6).unwrap();
+        assert!(
+            academy.emergency_allowance(next_month) > 0,
+            "the budget reopens the following month"
+        );
+    }
+
+    #[test]
+    fn emergency_call_up_respects_welfare_but_not_age() {
+        // Only the age floor moves: an injured or exhausted boy is no
+        // more available in an emergency than he was in July.
+        let date = NaiveDate::from_ymd_opt(2025, 9, 1).unwrap();
+        let mut academy = ClubAcademy::new(8);
+
+        let mut injured = prospect(14, 60, 100, 10.0, 8500, date);
+        injured.player_attributes.is_injured = true;
+        academy.players.add(injured);
+
+        let mut exhausted = prospect(14, 60, 100, 10.0, 8500, date);
+        exhausted.player_attributes.jadedness = 8000;
+        academy.players.add(exhausted);
+
+        let mut too_young = prospect(13, 60, 100, 10.0, 8500, date);
+        too_young.player_attributes.jadedness = 0;
+        academy.players.add(too_young);
+
+        let fit = prospect(14, 60, 100, 10.0, 8500, date);
+        let fit_id = fit.id;
+        academy.players.add(fit);
+
+        let candidates = academy.emergency_candidates(date);
+        assert_eq!(candidates.len(), 1, "only the fit 14-year-old is available");
+        assert_eq!(candidates[0].0, fit_id);
+        assert!(
+            candidates[0].1 > 0,
+            "an emergency ranks 14-year-olds instead of hard-zeroing them: {}",
+            candidates[0].1
+        );
+    }
+
+    #[test]
+    fn emergency_call_up_ranks_the_readiest_first() {
+        // The rescue is early, not arbitrary — the readiest of the year
+        // group still goes up first.
+        let date = NaiveDate::from_ymd_opt(2025, 9, 1).unwrap();
+        let mut academy = ClubAcademy::new(8);
+        let ready = prospect(15, 75, 140, 16.0, 9200, date);
+        let ready_id = ready.id;
+        academy.players.add(ready);
+        for _ in 0..20 {
+            academy.players.add(prospect(14, 45, 55, 6.0, 7200, date));
+        }
+
+        let called = academy.emergency_call_up(date, 3);
+        assert_eq!(called.len(), 3);
+        assert_eq!(called[0].id, ready_id, "readiness still ranks the call-up");
     }
 
     #[test]

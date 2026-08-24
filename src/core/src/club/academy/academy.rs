@@ -52,6 +52,26 @@ impl AcademyPlayerPhase {
     }
 }
 
+/// Why the academy is being asked to hand players up.
+///
+/// The academy has exactly one pathway out — into the club's youngest
+/// youth team — but two very different reasons to use it, and they
+/// disagree about the age floor. Keeping them as one enum means every
+/// eligibility and ranking call states which one it is, rather than a
+/// second set of near-identical helpers drifting away from the first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcademyCallUpMode {
+    /// The readiness-ranked round at the turn of the season. Normal age
+    /// floor, normal seasonal throughput: this is the pathway working.
+    Scheduled,
+    /// The youth squad cannot put eleven players on the pitch. A real
+    /// club answers that by promoting its own next age group early
+    /// rather than forfeiting the fixture, so the floor drops to
+    /// [`ClubAcademy::EMERGENCY_CALL_UP_AGE`] and the size of the hole —
+    /// not the seasonal quota — decides how many go up.
+    Emergency,
+}
+
 #[derive(Debug, Clone)]
 pub struct AcademyPathwayPolicy {
     pub min_graduation_age: u8,
@@ -82,6 +102,20 @@ impl AcademyPathwayPolicy {
             protect_late_developers: tier.value() >= 4,
             max_group_imbalance: if tier.value() >= 8 { 2 } else { 3 },
             tier: tier.value(),
+        }
+    }
+
+    /// Age floor for a call-up made in `mode`.
+    ///
+    /// An emergency never *raises* the bar: a tier-8 academy that
+    /// already graduates at 14 keeps 14 rather than being pushed
+    /// anywhere by the emergency constant.
+    pub fn min_age_for(&self, mode: AcademyCallUpMode) -> u8 {
+        match mode {
+            AcademyCallUpMode::Scheduled => self.min_graduation_age,
+            AcademyCallUpMode::Emergency => self
+                .min_graduation_age
+                .min(ClubAcademy::EMERGENCY_CALL_UP_AGE),
         }
     }
 }
@@ -127,6 +161,11 @@ pub struct ClubAcademy {
     /// as a recruitment brief before falling back to generic position odds.
     pub recruitment_priorities: Vec<PlayerFieldPositionGroup>,
     last_pathway_review: Option<NaiveDate>,
+    /// Month the academy last answered a youth-squad emergency. One
+    /// rescue a month: without the stamp the weekly check would empty
+    /// the academy into a short squad over four consecutive Mondays and
+    /// the backfill would mint a replacement year group behind it.
+    pub(super) last_emergency_call_up: Option<NaiveDate>,
 }
 
 impl ClubAcademy {
@@ -147,6 +186,7 @@ impl ClubAcademy {
             pathway_reputation: starting_rep as u8,
             recruitment_priorities: Vec::new(),
             last_pathway_review: None,
+            last_emergency_call_up: None,
         }
     }
 
@@ -420,7 +460,15 @@ impl ClubAcademy {
     /// [`AcademyReadinessScorer`] so callers don't reach into the free
     /// helper directly.
     pub fn pathway_readiness_score(&self, player: &Player, date: NaiveDate) -> i16 {
-        AcademyReadinessScorer::new(self.pathway_reputation, &self.pathway_policy)
+        self.readiness_for(player, date, AcademyCallUpMode::Scheduled)
+    }
+
+    /// Readiness ranking under a specific call-up mode. An emergency
+    /// scores 14-year-olds on the same axes as everybody else instead of
+    /// hard-zeroing them on age, so the rescue still picks the readiest
+    /// of the year group rather than an arbitrary one.
+    pub fn readiness_for(&self, player: &Player, date: NaiveDate, mode: AcademyCallUpMode) -> i16 {
+        AcademyReadinessScorer::for_mode(self.pathway_reputation, &self.pathway_policy, mode)
             .score(player, date)
     }
 
@@ -431,8 +479,21 @@ impl ClubAcademy {
     /// eligible players via [`pathway_readiness_score`] — it never blocks
     /// graduation. A low-CA but fit 16-year-old is a valid graduate.
     pub fn is_graduation_eligible(&self, player: &Player, date: NaiveDate) -> bool {
+        self.is_call_up_eligible(player, date, AcademyCallUpMode::Scheduled)
+    }
+
+    /// The same welfare/age gate under an explicit call-up mode. Only
+    /// the age floor moves between modes — an emergency never puts an
+    /// injured or exhausted boy on a team sheet, which is the whole
+    /// point of the welfare half of the gate.
+    pub fn is_call_up_eligible(
+        &self,
+        player: &Player,
+        date: NaiveDate,
+        mode: AcademyCallUpMode,
+    ) -> bool {
         let age = player.age(date);
-        age >= self.pathway_policy.min_graduation_age
+        age >= self.pathway_policy.min_age_for(mode)
             && age < 18
             && !player.player_attributes.is_injured
             && player.player_attributes.condition >= 5000
@@ -470,14 +531,29 @@ impl ClubAcademy {
 pub struct AcademyReadinessScorer<'a> {
     pathway_reputation: u8,
     policy: &'a AcademyPathwayPolicy,
+    /// Age below which the score is a hard zero. Read off the call-up
+    /// mode rather than off the policy directly, so an emergency ranks
+    /// the 14-year-olds it is allowed to take instead of scoring the
+    /// whole year group at zero and picking between ties.
+    min_age: u8,
 }
 
 impl<'a> AcademyReadinessScorer<'a> {
     /// Build a scorer from the academy's pathway reputation (0..100).
     pub fn new(pathway_reputation: u8, policy: &'a AcademyPathwayPolicy) -> Self {
+        Self::for_mode(pathway_reputation, policy, AcademyCallUpMode::Scheduled)
+    }
+
+    /// Scorer for a specific call-up mode.
+    pub fn for_mode(
+        pathway_reputation: u8,
+        policy: &'a AcademyPathwayPolicy,
+        mode: AcademyCallUpMode,
+    ) -> Self {
         AcademyReadinessScorer {
             pathway_reputation: pathway_reputation.min(100),
             policy,
+            min_age: policy.min_age_for(mode),
         }
     }
 
@@ -499,7 +575,7 @@ impl<'a> AcademyReadinessScorer<'a> {
     ///   − injury/condition/jadedness penalties
     pub fn score(&self, player: &Player, date: NaiveDate) -> i16 {
         let age = player.age(date);
-        if age < self.policy.min_graduation_age {
+        if age < self.min_age {
             return 0;
         }
 
