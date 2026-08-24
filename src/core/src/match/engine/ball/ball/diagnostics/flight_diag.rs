@@ -62,9 +62,11 @@ pub static PEAK_SPEED_X1000: AtomicU64 = AtomicU64::new(0);
 /// bucket read 64 unexplained relocations a match with a worst case
 /// of 53 m, which looks exactly like a bug and is not one: a throw-in
 /// puts the ball on the touchline and a goal kick puts it in the six-
-/// yard box, and both are supposed to move it a long way. Only the
-/// LAST entry is a genuine "nothing decided this" clamp.
-pub const STAGES: [&str; 12] = [
+/// yard box, and both are supposed to move it a long way. Only
+/// `boundary_clamp` is a genuine "nothing decided this" clamp —
+/// `keeper_body` after it moves the ball for a reason, onto the surface
+/// of the man it has just hit.
+pub const STAGES: [&str; 13] = [
     "intercept",
     "block_shot",
     "save_shot",
@@ -77,6 +79,7 @@ pub const STAGES: [&str; 12] = [
     "restart:wide",
     "restart:throw_in",
     "boundary_clamp",
+    "keeper_body",
 ];
 pub const STAGE_INTERCEPT: usize = 0;
 pub const STAGE_BLOCK: usize = 1;
@@ -90,6 +93,11 @@ pub const STAGE_OVER_BAR: usize = 8;
 pub const STAGE_WIDE: usize = 9;
 pub const STAGE_THROW_IN: usize = 10;
 pub const STAGE_BOUNDARY: usize = 11;
+/// The keeper's own volume. Its own row because it MOVES the ball — onto
+/// the surface of the man it just hit — and booking that against
+/// `ownership`, which it runs after, would put a legitimate rebound into
+/// a bucket whose whole job is to report illegitimate ones.
+pub const STAGE_KEEPER_BODY: usize = 12;
 
 /// The stages above that are RESTARTS — moving the ball is their job,
 /// so their relocations are reported apart from the unexplained ones.
@@ -97,13 +105,13 @@ pub const RESTART_STAGES: std::ops::Range<usize> = STAGE_GOAL..STAGE_BOUNDARY;
 
 /// Horizontal jumps a stage produced that its own velocity cannot
 /// explain, and their summed / worst magnitude in game units.
-pub static JUMPS: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
-pub static JUMP_SUM_X100: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
-pub static JUMP_MAX_X100: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
+pub static JUMPS: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
+pub static JUMP_SUM_X100: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
+pub static JUMP_MAX_X100: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
 /// Fastest the ball was travelling as each stage left it, x1000.
 /// `PEAK_SPEED_X1000` says a runaway speed exists; this says which
 /// pass over the ball put it there.
-pub static STAGE_PEAK_SPEED_X1000: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
+pub static STAGE_PEAK_SPEED_X1000: [AtomicU64; 13] = [const { AtomicU64::new(0) }; 13];
 
 /// Height (mm) at which an interception fired, summed, and how many
 /// fired above a standing player's reach — the ones that need a leap
@@ -208,7 +216,7 @@ impl FlightDiag {
     }
 
     /// Per-stage `(count, mean_units, max_units, peak_speed)`.
-    pub fn jump_snapshot() -> [(u64, f32, f32, f32); 12] {
+    pub fn jump_snapshot() -> [(u64, f32, f32, f32); 13] {
         std::array::from_fn(|i| {
             let n = JUMPS[i].load(Ordering::Relaxed);
             let mean = if n == 0 {

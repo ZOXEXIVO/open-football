@@ -29,6 +29,7 @@ use nalgebra::Vector3;
 /// comment claims.
 #[cfg(feature = "match-logs")]
 pub mod dead_ball_diag {
+    use crate::r#match::ActivityIntensity;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     /// Widest `PlayerState::compact_id()` plus headroom (forwards top
@@ -134,6 +135,124 @@ pub mod dead_ball_diag {
     /// player.
     pub static CHASE_TIER: [AtomicU64; 5] = [ZERO; 5];
     pub const CHASE_TIER_LABELS: [&str; 5] = ["VeryHigh", "High", "Moderate", "Low", "Recovery"];
+
+    /// **How far a footballer actually runs, and at what effort.**
+    ///
+    /// Every other counter in this module is about the ball. This one is
+    /// about the twenty-two, and it exists because the viewer's own census
+    /// read **17.6 km per ninety minutes** off a recorded match — a median
+    /// of 3.26 m/s sustained for the whole game, against the 10-12 km a real
+    /// footballer covers. A squad that never stops moving is the one thing
+    /// no amount of animation can fix, and nothing here measured it.
+    ///
+    /// Fed from [`MatchPlayer::move_to`], which is the single point every
+    /// player's position is integrated at, so it cannot miss a path — and
+    /// the sampling lives HERE rather than there, because a census that
+    /// spells itself out at its call site is a census that goes stale the
+    /// first time somebody adds a counter.
+    pub struct MotionCensus;
+
+    impl MotionCensus {
+        /// One player, one tick: how far he moved, at what declared effort,
+        /// and whether that effort's ceiling was what stopped him.
+        ///
+        /// ⚠ Behind `match-logs` at the call site, and it has to be: this is
+        /// the hottest loop in the engine — twenty-two players a hundred
+        /// times a second — and half a dozen atomics a tick is not a
+        /// measurement anybody should pay for in a shipped season.
+        pub fn note(covered: f32, ceiling: f32, intensity: ActivityIntensity, keeper: bool) {
+            let covered = if covered.is_finite() { covered } else { 0.0 };
+            if keeper {
+                MOTION_KEEPER_TICKS.fetch_add(1, Ordering::Relaxed);
+                MOTION_KEEPER_DISTANCE_X1000
+                    .fetch_add((covered * 1000.0) as u64, Ordering::Relaxed);
+                return;
+            }
+            MOTION_TICKS.fetch_add(1, Ordering::Relaxed);
+            MOTION_DISTANCE_X1000.fetch_add((covered * 1000.0) as u64, Ordering::Relaxed);
+            // 1.2 m/s is a walk; below it he is standing or strolling.
+            if covered < Self::WALKING_PACE {
+                MOTION_STILL.fetch_add(1, Ordering::Relaxed);
+            }
+            MOTION_TIER[Self::tier(intensity)].fetch_add(1, Ordering::Relaxed);
+            MOTION_CEILING_X1000.fetch_add((ceiling * 1000.0) as u64, Ordering::Relaxed);
+            if ceiling > 0.0 && covered >= ceiling * Self::AT_THE_CEILING {
+                MOTION_AT_CEILING.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(km per 90 outfield, km per 90 keeper, share below a walk, tier
+        /// shares, share at the ceiling, mean ceiling in u/tick)`
+        pub fn snapshot() -> (f32, f32, f32, [f32; 5], f32, f32) {
+            let ticks = MOTION_TICKS.load(Ordering::Relaxed).max(1);
+            let keeper_ticks = MOTION_KEEPER_TICKS.load(Ordering::Relaxed).max(1);
+            let mut tiers = [0f32; 5];
+            for (i, share) in tiers.iter_mut().enumerate() {
+                *share = MOTION_TIER[i].load(Ordering::Relaxed) as f32 / ticks as f32;
+            }
+            (
+                Self::per_90(MOTION_DISTANCE_X1000.load(Ordering::Relaxed), ticks),
+                Self::per_90(
+                    MOTION_KEEPER_DISTANCE_X1000.load(Ordering::Relaxed),
+                    keeper_ticks,
+                ),
+                MOTION_STILL.load(Ordering::Relaxed) as f32 / ticks as f32,
+                tiers,
+                MOTION_AT_CEILING.load(Ordering::Relaxed) as f32 / ticks as f32,
+                MOTION_CEILING_X1000.load(Ordering::Relaxed) as f32 / (ticks as f32 * 1000.0),
+            )
+        }
+
+        /// Thousandths of a game unit, over this many player-ticks, as
+        /// kilometres over a ninety-minute match.
+        ///
+        /// A unit is 0.125 m and a tick is 10 ms — see
+        /// `MATCH_TIME_INCREMENT_MS` — so a hundred ticks are a second and
+        /// 5400 seconds are a match.
+        fn per_90(units: u64, ticks: u64) -> f32 {
+            const METRES_PER_MILLI_UNIT: f64 = 0.125 / 1000.0;
+            const TICKS_PER_SECOND: f64 = 100.0;
+            const SECONDS: f64 = 5400.0;
+            (units as f64 * METRES_PER_MILLI_UNIT / ticks as f64 * TICKS_PER_SECOND * SECONDS
+                / 1000.0) as f32
+        }
+
+        /// Indexed like [`ActivityIntensity`] and like
+        /// [`CHASE_TIER_LABELS`], which is what prints them.
+        fn tier(intensity: ActivityIntensity) -> usize {
+            match intensity {
+                ActivityIntensity::VeryHigh => 0,
+                ActivityIntensity::High => 1,
+                ActivityIntensity::Moderate => 2,
+                ActivityIntensity::Low => 3,
+                ActivityIntensity::Recovery => 4,
+            }
+        }
+
+        /// A walking pace, in units a tick: 1.2 m/s.
+        const WALKING_PACE: f32 = 0.096;
+        /// How close to the ceiling counts as being held by it.
+        const AT_THE_CEILING: f32 = 0.97;
+    }
+
+    pub static MOTION_TICKS: AtomicU64 = AtomicU64::new(0);
+    /// Ground covered, in thousandths of a game unit (a unit is 0.125 m).
+    pub static MOTION_DISTANCE_X1000: AtomicU64 = AtomicU64::new(0);
+    /// Ticks spent below a walking pace — 1.2 m/s, or 0.096 u/tick.
+    pub static MOTION_STILL: AtomicU64 = AtomicU64::new(0);
+    /// …and the declared effort tier, indexed like `ActivityIntensity`.
+    pub static MOTION_TIER: [AtomicU64; 5] = [ZERO; 5];
+    /// Ticks the player is at his own speed CEILING — which decides
+    /// whether `ActivityIntensity` is even the lever for total distance.
+    /// A ceiling that rarely binds cannot be lowered to slow anybody down;
+    /// it can only be lowered to stop him keeping up when it matters.
+    pub static MOTION_AT_CEILING: AtomicU64 = AtomicU64::new(0);
+    /// …and the mean ceiling itself, x1000 u/tick.
+    pub static MOTION_CEILING_X1000: AtomicU64 = AtomicU64::new(0);
+    /// Outfielders only above: a keeper's match is a different shape, and
+    /// averaging him in hides both.
+    pub static MOTION_KEEPER_TICKS: AtomicU64 = AtomicU64::new(0);
+    pub static MOTION_KEEPER_DISTANCE_X1000: AtomicU64 = AtomicU64::new(0);
 
     /// `(samples, mean carrier cap, mean chaser cap, mean carrier speed,
     ///   mean chaser speed, share outpaced, tier counts)`
@@ -296,6 +415,7 @@ pub mod dead_ball_diag {
             .chain(CARRIER_PRESSURE.iter())
             .chain(CARRIER_PRESSURE_BY_THIRD.iter())
             .chain(CHASE_TIER.iter())
+            .chain(MOTION_TIER.iter())
         {
             c.store(0, Ordering::Relaxed);
         }
@@ -307,6 +427,13 @@ pub mod dead_ball_diag {
             &CARRIER_SAMPLES,
             &CARRIER_ENGAGERS,
             &CHASE_SAMPLES,
+            &MOTION_TICKS,
+            &MOTION_DISTANCE_X1000,
+            &MOTION_STILL,
+            &MOTION_AT_CEILING,
+            &MOTION_CEILING_X1000,
+            &MOTION_KEEPER_TICKS,
+            &MOTION_KEEPER_DISTANCE_X1000,
             &CHASE_CARRIER_CAP_X1000,
             &CHASE_CHASER_CAP_X1000,
             &CHASE_CARRIER_SPD_X1000,

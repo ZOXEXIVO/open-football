@@ -13,6 +13,8 @@
 //!
 //! Alongside them:
 //!
+//! * [`body`] — the keeper's own volume: not a contest at all, but the
+//!   statement that a ball arriving where he already is comes off him.
 //! * [`contact`] — the arm that decides whether a resolved contact
 //!   writes the ball onto the man or leaves it where it was.
 //! * [`ownership`] — somebody claims it instead: pass-target claims, the
@@ -23,6 +25,7 @@
 //!   assist resolver walks, and the giveaway / shot / carry metadata.
 
 pub mod block;
+pub mod body;
 pub mod contact;
 pub mod interception;
 pub mod ownership;

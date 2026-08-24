@@ -88,6 +88,14 @@ impl SaveModel {
     /// ⚠ It goes HERE and not in `SKILL_FLOOR` — see the note there.
     /// Paired with `SHOT_BAR_BASE`, which was carrying the opposite error:
     /// too few shots converting too well.
+    ///
+    /// ⚠ The arithmetic above quotes an ordinary duel at 0.68, which is
+    /// what `skill_multiplier` returned at the time. It returns 0.57 since
+    /// the keeper was given a body — see [`Self::SKILL_FLOOR`], which also
+    /// answers this note's "not in `SKILL_FLOOR`" and why that argument
+    /// does not run in the other direction. The derivation is kept as
+    /// written because it is a record of how this value was reached, not a
+    /// live calculation.
     const CENTRED_BASE: f32 = 1.12;
     /// How much of that ceiling a full-stretch shot gives away.
     const STRETCH_PENALTY: f32 = 0.42;
@@ -128,12 +136,106 @@ impl SaveModel {
     /// **0.68**. The keeper-quality axis is untouched — only the level
     /// moves, and it moves at every division equally because the
     /// multiplier is a contest.
-    const SKILL_FLOOR: f32 = 0.54;
+    ///
+    /// # 2026-08-25 — 0.54 → 0.45, because the keeper stopped being
+    /// permeable
+    ///
+    /// He was given a BODY ([`KeeperBody`](super::body::KeeperBody)), and
+    /// this constant had been silently carrying the fact that he did not
+    /// have one.
+    ///
+    /// Measured with the volume's own A/B (`OF_KEEPER_BODY=off`, `dev_match
+    /// stats` at L14; the `KEEPER BODY` census counts the sweep in BOTH
+    /// arms, so the control reports the pass-throughs it is allowing):
+    /// **3.1 balls a match travelled straight through a goalkeeper, 0.46 of
+    /// them live shots on frame.** That is 18% of every goal the engine
+    /// scored. Stopping them moved saves/on-target 68.0% → 74.4% and
+    /// goals/match 2.55 → 1.99, both away from the harness's real
+    /// references (~67% and ~2.5).
+    ///
+    /// So the hands were priced to save 68% of what reached them *while
+    /// the man they belong to was permeable*. With him solid they are
+    /// over-generous by exactly the body's share, and the population level
+    /// has to give it back. Swept, three 300-match runs a point:
+    ///
+    /// | ordinary duel | saves/on-target | goals |
+    /// |---------------|-----------------|-------|
+    /// | 0.68          | 74.4%           | 1.99  |
+    /// | 0.61          | 70.2%           | 2.30  |
+    /// | 0.57          | 67.9%           | 2.49  |
+    ///
+    /// 0.57 puts the engine back where it stood before the body existed —
+    /// 68.0% and 2.55 — with 0.46 goals a match no longer passing through a
+    /// man. **[`Self::SKILL_SLOPE`] moves with it**, by the same 0.838, so
+    /// only the level changes and not the shape; see its note for why that
+    /// is not optional.
+    ///
+    /// # Why here and not in `CENTRED_BASE`
+    ///
+    /// That constant's note says the population save rate belongs in the
+    /// geometry and not in this floor, and it is right about the move it
+    /// was written against — LIFTING the floor, which squeezes the
+    /// keeper-quality axis against `MAX_SAVE`. Neither half of that
+    /// objection survives the opposite direction: lowering it moves AWAY
+    /// from the ceiling, and level-parity is a property of the contest's
+    /// FORM (`skill_multiplier` scores a difference) rather than of where
+    /// its floor sits. Both guards the warning names —
+    /// `keeper_skill_spread_stays_wide` and
+    /// `an_evenly_matched_duel_is_the_same_in_every_division` — hold at
+    /// 0.43.
+    ///
+    /// And the shapes are not interchangeable, which decides it.
+    /// `save_probability` is `(geometric_base − speed_penalty) ×
+    /// skill_multiplier`, so scaling the multiplier is a uniform RELATIVE
+    /// cut on every shot, while scaling `CENTRED_BASE` leaves the pace term
+    /// at full size and quietly widens the pace axis — a shape change,
+    /// pinned by `an_ordinary_strike_costs_the_keeper_nothing_on_pace`.
+    /// "His hands are uniformly less decisive now that his body is doing
+    /// part of the work" is a level statement, so it belongs on the level
+    /// term.
+    ///
+    /// ⚠ The better long-term fix is on the SHOT side and is not this. The
+    /// same runs report `shots per xG` at 22.6 against a real ~10 and a
+    /// goals-vs-xG delta of +1.3, i.e. the engine takes far too many
+    /// low-quality shots and converts them far too well; the permeable
+    /// keeper was one of the things paying for that. Rebuilding chance
+    /// quality would let this floor go back up. Until then it carries the
+    /// difference, as it always has.
+    const SKILL_FLOOR: f32 = 0.45;
     /// Width of the keeper-quality band.
     ///
-    /// Mean skill (0.5) lands on `FLOOR + SLOPE/2` = **0.68**, which is
+    /// Mean skill (0.5) lands on `FLOOR + SLOPE/2` = **0.57**, which is
     /// what `an_ordinary_duel_holds_the_calibrated_population_save_rate`
-    /// pins.
+    /// pins. It read 0.68 until the keeper was given a body — see the
+    /// re-derivation on [`Self::SKILL_FLOOR`].
+    ///
+    /// # 2026-08-25 — 0.28 → 0.235, and it MUST move with the floor
+    ///
+    /// The width had never moved before, and dropping the level alone
+    /// looked like the conservative choice. It is not: the band is
+    /// `FLOOR..FLOOR+SLOPE`, so cutting only the floor leaves the same
+    /// absolute width sitting on a lower base and quietly WIDENS the
+    /// keeper-quality axis in the terms that matter — 0.54..0.82 is a
+    /// factor of 1.52 between the worst keeper alive and the best,
+    /// 0.43..0.71 is 1.65.
+    ///
+    /// `stretch_beats_an_elite_keeper_more_than_skill_saves_him` is what
+    /// caught it, and it is the right guard: a full-stretch shot must beat
+    /// an elite keeper more often than a centred one beats a weak keeper,
+    /// which is the statement that GEOMETRY dominates SKILL. That holds iff
+    /// `geometric_base(1)/geometric_base(0) < FLOOR/(FLOOR+SLOPE)`
+    /// — 0.625 against 0.659 at the old pair, and against 0.606 with the
+    /// floor cut on its own, i.e. skill had started to outrank placement at
+    /// the extremes. Scaling both by the same 0.838 leaves the ratio at
+    /// 0.657 and every shape property intact, and moves only the level the
+    /// measurement asked for.
+    ///
+    /// ⚠ **No harness run can see this.** `dev_match stats 14 14` plays
+    /// equal-quality squads, so every duel resolves at `FLOOR + SLOPE/2`
+    /// whatever the slope is, and the population save rate is identical for
+    /// both pairs. The width is pinned by test and by test only — this one
+    /// and `keeper_skill_spread_stays_wide`, which is the same lesson from
+    /// the other direction.
     ///
     /// Be careful which figure you are chasing: the harness prints "real
     /// ~67%" while `skill_multiplier`'s own header cites "a real ~69-71%
@@ -142,7 +244,7 @@ impl SaveModel {
     /// the floor sat at 0.57 (an ordinary duel = 0.71) while three
     /// separate prose comments still advertised 0.68, so the code and its
     /// documentation disagreed about which of the two was in force.
-    const SKILL_SLOPE: f32 = 0.28;
+    const SKILL_SLOPE: f32 = 0.235;
     const MIN_SAVE: f32 = 0.08;
     const MAX_SAVE: f32 = 0.92;
 
@@ -539,7 +641,8 @@ impl SaveModel {
     /// Not 0.5: the two composites do not share a population mean, and
     /// an *ordinary* striker measures [`Self::CONTEST_BALANCE`] above an
     /// ordinary keeper. Feeding that here is what makes a mid-skill
-    /// keeper facing a mid-skill striker resolve to the calibrated 0.68.
+    /// keeper facing a mid-skill striker resolve to the calibrated
+    /// `FLOOR + SLOPE/2` — see [`Self::SKILL_FLOOR`], which owns that level.
     pub(crate) const NEUTRAL_THREAT: f32 = 0.5 + Self::CONTEST_BALANCE;
 
     /// How far a quality mismatch can swing the duel. At 1.0 a keeper a
@@ -585,7 +688,7 @@ impl SaveModel {
     /// shot a weak keeper sat at 0.512 and an elite one at 0.635.
     ///
     /// An equal-quality duel returns `SKILL_FLOOR + SKILL_SLOPE/2` =
-    /// **0.68**, so this is calibration-neutral at the mean while
+    /// **0.57**, so this is calibration-neutral at the mean while
     /// removing the drift.
     /// Crucially it does NOT delete the keeper axis, which the previous
     /// flat-multiplier attempts did: a keeper better than the strikers
@@ -1869,19 +1972,32 @@ mod tests {
     /// saves/on-target figure recorded in this file before that date is
     /// understated**, including the 66.7% that justified the 0.69-0.73
     /// band. With delivery at 100% the same 0.57 floor measured 71.3%.
+    ///
+    /// ⚠ AND DOWN TO 0.55-0.59 (2026-08-25), with the floor again, when
+    /// the keeper was given a body ([`super::body::KeeperBody`]) and 0.46
+    /// goals a match stopped passing through his chest. The band is not
+    /// drifting: it tracks one constant, which tracks one measured
+    /// quantity — see the sweep on [`SaveModel::SKILL_FLOOR`]. Measured at
+    /// 0.43, three 300-match runs at L14: saves/on-target 67.7 / 67.2 /
+    /// 68.8% (mean 67.9) against a real ~67%, goals/match 2.47 / 2.59 /
+    /// 2.42 (mean 2.49) against a real ~2.5 — which is where the engine
+    /// stood before the body existed (68.0% / 2.55), reached with the
+    /// pass-throughs gone.
     #[test]
     fn an_ordinary_duel_holds_the_calibrated_population_save_rate() {
         // An evenly-matched duel — which is what a division's average
         // keeper faces every week, at every level.
         let mid = SaveModel::skill_multiplier(0.5, SaveModel::NEUTRAL_THREAT);
-        // 0.66-0.70, centred on `SKILL_FLOOR + SKILL_SLOPE/2` = 0.68. The
-        // band was 0.69-0.73 while the floor sat at 0.57; it moved with the
-        // floor back to 0.54 — see the note on `SKILL_FLOOR`. Widening it
-        // to span both would defeat the point: the whole job of this test
-        // is to fail when the population save level drifts.
+        // 0.55-0.59, centred on `SKILL_FLOOR + SKILL_SLOPE/2` = 0.57. The
+        // band was 0.69-0.73 while the floor sat at 0.57, 0.66-0.70 at
+        // 0.54, and moved down again when the keeper was given a body and
+        // the hands stopped having to cover for it — see the note on
+        // `SKILL_FLOOR`. Widening it to span all three would defeat the
+        // point: the whole job of this test is to fail when the population
+        // save level drifts.
         assert!(
-            (0.66..=0.70).contains(&mid),
-            "an ordinary duel must stay in the calibrated 0.66-0.70 band, got {mid:.3}"
+            (0.55..=0.59).contains(&mid),
+            "an ordinary duel must stay in the calibrated 0.55-0.59 band, got {mid:.3}"
         );
     }
 

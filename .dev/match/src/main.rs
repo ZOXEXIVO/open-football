@@ -6329,6 +6329,40 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         );
                     }
                     {
+                        // **How far does a footballer actually run?** The
+                        // viewer's own census read 17.6 km per ninety
+                        // minutes off a recorded match against the 10-12 a
+                        // real one covers, and nothing in this harness
+                        // measured it. See [`MotionCensus`].
+                        use core::dead_ball_diag::{CHASE_TIER_LABELS, MotionCensus};
+                        let (outfield, keeper, still, tiers, capped, ceiling) =
+                            MotionCensus::snapshot();
+                        let trow = tiers
+                            .iter()
+                            .enumerate()
+                            .map(|(i, v)| {
+                                format!(
+                                    "{} {:.0}%",
+                                    CHASE_TIER_LABELS[i],
+                                    *v * 100.0
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("  ");
+                        println!(
+                            "  GROUND COVERED  outfield {outfield:.1} km/90 (real 10-12), \
+                             keeper {keeper:.1} (real 4-6); below a walk on {:.0}% of ticks \
+                             (real ~70%)",
+                            still * 100.0
+                        );
+                        println!(
+                            "      effort tier: {trow}\n      \
+                             his speed ceiling is {ceiling:.3} u/tick and he is AT it on \
+                             {:.0}% of ticks",
+                            capped * 100.0
+                        );
+                    }
+                    {
                         let (fo, yi, fl) = core::chase_diag::snapshot();
                         println!(
                             "      chase designation: {:.0} forces/match, {:.0} yields/match ({:.0}% of forces during a delivery in flight)",
@@ -7790,6 +7824,45 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     a[9]
                 );
             }
+        }
+    }
+
+    // ── KEEPER BODY ────────────────────────────────────────────────────
+    // How often the ball hits the man rather than passing through him.
+    // Every one of these used to be a ball travelling through a
+    // goalkeeper's chest, which is what the report said it looked like.
+    // Run with `OF_KEEPER_BODY=off` to get the same census with the
+    // volume switched off — the count is then the number of pass-throughs
+    // a match, and the save rate below is the "before".
+    {
+        use core::mid_run_diag::KeeperBodyDiag;
+        let b = KeeperBodyDiag::snapshot();
+        if b[0] > 0 {
+            let per = b[0] as f64 / n_matches as f64;
+            println!();
+            println!("--- KEEPER BODY (contacts per match, both keepers) ---");
+            println!(
+                "  hit him {:.2}   off his feet {:.0}%   on his feet {:.0}%",
+                per,
+                b[1] as f64 * 100.0 / b[0] as f64,
+                b[2] as f64 * 100.0 / b[0] as f64
+            );
+            println!(
+                "  a shot on frame (a goal prevented) {:.2}   anything else {:.2}",
+                b[3] as f64 / n_matches as f64,
+                b[4] as f64 / n_matches as f64
+            );
+            println!(
+                "  mean arrival {:.2} u/tick   mean {:.0} cm from his hips   mean height {:.2} m",
+                b[5] as f64 / 100.0 / b[0] as f64,
+                b[6] as f64 / b[0] as f64,
+                b[7] as f64 / 100.0 / b[0] as f64
+            );
+            println!(
+                "  mean {:.1} m out from his own line   inside the six-yard box {:.0}%",
+                b[8] as f64 * 0.125 / b[0] as f64,
+                b[9] as f64 * 100.0 / b[0] as f64
+            );
         }
     }
 

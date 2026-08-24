@@ -269,6 +269,37 @@ impl Complexion {
         0.86 + Self::trait_of(id, 0xC13B) as f32 / 360.0
     }
 
+    /// **How bent he runs at the elbow**, −1 nearly straight to +1 folded
+    /// tight — and **how far forward he carries himself**, on the same
+    /// scale.
+    ///
+    /// Both used to be [`Self::carriage`], which also sets how wide he holds
+    /// his arms, which of them does more and where in the cycle he starts:
+    /// nine things off one hash, so the squad varied along a single axis and
+    /// a man who ran with his arms wide always also ran bent and leaning.
+    /// That is exactly the argument [`Self::spring`] makes against cutting
+    /// the stride from the carriage, and it applies to every one of them —
+    /// one hash gives two kinds of runner and four independent hashes give
+    /// sixteen.
+    pub fn elbows(id: u32) -> f32 {
+        Self::trait_of(id, 0x51C7) as f32 / 50.0 - 1.0
+    }
+
+    pub fn lean(id: u32) -> f32 {
+        Self::trait_of(id, 0x2E8D) as f32 / 50.0 - 1.0
+    }
+
+    /// **How far his feet point out when he runs**, in radians.
+    ///
+    /// Skewed rather than centred: nobody runs pigeon-toed to speak of and
+    /// plenty of footballers run at twenty-five degrees, so the draw is
+    /// mostly positive with a small tail the other way. The rest of the
+    /// squad's spread is amplitudes of one cycle; this is a shape, and it is
+    /// on the part of him nearest the camera.
+    pub fn toes(id: u32) -> f32 {
+        Self::trait_of(id, 0x9B04) as f32 / 380.0 - 0.03
+    }
+
     /// …and how fast he ticks over standing still — breathing, shifting his
     /// weight. Twenty-two men breathing in unison is its own kind of robot.
     pub fn tempo(id: u32) -> f32 {

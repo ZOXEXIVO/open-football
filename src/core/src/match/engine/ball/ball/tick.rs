@@ -273,6 +273,25 @@ impl Ball {
             0.0,
         );
         self.tick_carry_tracker(events);
+        // **The keeper's own body**, last of everything that can touch the
+        // ball and immediately before the step it would otherwise travel
+        // through him on. After ownership because a ball he is entitled to
+        // control is a reception rather than a collision; before the move
+        // because the step it sweeps is the one about to be taken. See
+        // [`KeeperBody`](crate::r#match::engine::ball::ball::contest::body::KeeperBody).
+        #[cfg(feature = "match-logs")]
+        let body_allowance = (self.velocity.x * self.velocity.x
+            + self.velocity.y * self.velocity.y)
+            .sqrt()
+            .max(1.5);
+        self.try_keeper_body_block(context, players);
+        #[cfg(feature = "match-logs")]
+        probe.note(
+            crate::r#match::engine::ball::ball::flight_diag::STAGE_KEEPER_BODY,
+            self.position,
+            self.velocity,
+            body_allowance,
+        );
 
         // Move ball FIRST, then check goal/boundary on new position
         // `move_to` is entitled to a tick of its own velocity, plus the
@@ -774,6 +793,9 @@ impl Ball {
         self.try_save_shot(context, players, events);
         self.process_ownership(context, players, events);
         self.tick_carry_tracker(events);
+        // See the full tick for why this sits between ownership and the
+        // move rather than beside the other contests.
+        self.try_keeper_body_block(context, players);
 
         // Move ball: find owner position from players slice directly
         self.move_to_with_players(players);

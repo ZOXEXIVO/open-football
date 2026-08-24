@@ -1986,6 +1986,74 @@ pub mod mid_run_diag {
     /// 9 sum of the ground he could still cover ×10 over the same ticks.
     pub static GK_DIVE_GATE: [AtomicU64; 10] = [const { AtomicU64::new(0) }; 10];
 
+    /// **The ball hitting the goalkeeper.** Not a gate and not a funnel —
+    /// a collision census, because a body block is not a decision anybody
+    /// makes and there is nothing upstream of it to lose.
+    ///
+    /// The number that matters is slot 0 per match: it is how often a ball
+    /// used to travel through a man, and every one of them was visible to
+    /// whoever was watching. Split by posture, because a dive and a stance
+    /// are different obstacles (`KeeperBody::topple`), and by whether the
+    /// contact was a SAVE, because only a live shot on frame is one.
+    ///
+    /// 0 contacts, 1 while he was off his feet, 2 on his feet,
+    /// 3 a live shot on frame (a goal prevented), 4 anything else.
+    /// 5 sum of the approach speed ×100, 6 sum of |along the body| in cm,
+    /// 7 sum of the contact height in cm, 8 sum of the distance from his
+    /// own goal line in units, 9 contacts inside his own six-yard box.
+    ///
+    /// The last two are what say whether the non-shot contacts — the
+    /// larger population — are a keeper being hit by crosses and loose
+    /// balls in his own area, which is football, or a sweeper standing on
+    /// the edge of the D being clipped by every long ball, which would be a
+    /// volume placed somewhere it has no business being.
+    pub static GK_BODY: [AtomicU64; 10] = [const { AtomicU64::new(0) }; 10];
+
+    pub struct KeeperBodyDiag;
+
+    impl KeeperBodyDiag {
+        fn note(slot: usize) {
+            GK_BODY[slot].fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn add(slot: usize, n: u64) {
+            GK_BODY[slot].fetch_add(n, Ordering::Relaxed);
+        }
+
+        /// One contact: how hard it arrived, where on him it hit (metres
+        /// from the hips, signed toward the head), how high off the grass,
+        /// whether it was a shot he was in the way of, how far off the
+        /// ground he was, and how far out from his own line it happened.
+        pub fn note_block(
+            speed: f32,
+            along: f32,
+            height: f32,
+            saved: bool,
+            keeper_lift: f32,
+            from_goal: f32,
+        ) {
+            Self::note(0);
+            Self::note(if keeper_lift > 0.02 { 1 } else { 2 });
+            Self::note(if saved { 3 } else { 4 });
+            Self::add(5, (speed * 100.0).max(0.0) as u64);
+            Self::add(6, (along.abs() * 100.0) as u64);
+            Self::add(7, (height.max(0.0) * 100.0) as u64);
+            Self::add(8, from_goal.max(0.0) as u64);
+            // 5.5 m is the six-yard box; 44 units.
+            if from_goal <= 44.0 {
+                Self::note(9);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 10] {
+            let mut out = [0u64; 10];
+            for (slot, c) in out.iter_mut().zip(GK_BODY.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
     pub struct KeeperDiveDiag;
 
     impl KeeperDiveDiag {

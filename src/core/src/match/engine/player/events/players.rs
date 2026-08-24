@@ -225,22 +225,24 @@ pub mod key_pass_diag {
 pub mod save_accounting_stats {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    // Index meaning: 0=parry 1=catch 2=clear
-    pub static SITE_LABELS: [&str; 3] = ["parry", "catch", "clear"];
-    pub static SAVES_CREDITED: [AtomicU64; 3] =
-        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
-    pub static SHOTS_FACED_INC: [AtomicU64; 3] =
-        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
-    pub static ON_TARGET_PAIRED: [AtomicU64; 3] =
-        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    /// Index meaning: 0=parry 1=catch 2=clear 3=body.
+    ///
+    /// `body` is [`KeeperBody`](crate::r#match::engine::ball::ball::contest::body::KeeperBody)
+    /// — the shot that hit the man rather than his hands. Its own column
+    /// because it is not a parry: a parry is a save he made, and this is
+    /// one that was made for him by standing in the right place. Lumping
+    /// the two together would hide the whole population the volume was
+    /// added to catch.
+    pub static SITE_LABELS: [&str; 4] = ["parry", "catch", "clear", "body"];
+    pub static SAVES_CREDITED: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static SHOTS_FACED_INC: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static ON_TARGET_PAIRED: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
     /// Site fired but the previous_owner / shooter could not be found in
     /// the live players slice — save was credited but on_target was NOT.
     /// This is the primary suspect for saves > on_target.
-    pub static SHOOTER_MISSING: [AtomicU64; 3] =
-        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    pub static SHOOTER_MISSING: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
     /// Site fired but `previous_owner` itself was None.
-    pub static PREVIOUS_OWNER_NONE: [AtomicU64; 3] =
-        [AtomicU64::new(0), AtomicU64::new(0), AtomicU64::new(0)];
+    pub static PREVIOUS_OWNER_NONE: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
     /// On-goal credit (path 4): shot reached the net, scorer credited
     /// with on_target. No save here.
     pub static ON_TARGET_FROM_GOAL: AtomicU64 = AtomicU64::new(0);
@@ -288,36 +290,21 @@ pub mod save_accounting_stats {
     }
 
     pub fn snapshot() -> Snapshot {
+        let read = |arr: &[AtomicU64; 4]| std::array::from_fn(|i| arr[i].load(Ordering::Relaxed));
         Snapshot {
-            saves: [
-                SAVES_CREDITED[0].load(Ordering::Relaxed),
-                SAVES_CREDITED[1].load(Ordering::Relaxed),
-                SAVES_CREDITED[2].load(Ordering::Relaxed),
-            ],
-            on_target: [
-                ON_TARGET_PAIRED[0].load(Ordering::Relaxed),
-                ON_TARGET_PAIRED[1].load(Ordering::Relaxed),
-                ON_TARGET_PAIRED[2].load(Ordering::Relaxed),
-            ],
-            shooter_missing: [
-                SHOOTER_MISSING[0].load(Ordering::Relaxed),
-                SHOOTER_MISSING[1].load(Ordering::Relaxed),
-                SHOOTER_MISSING[2].load(Ordering::Relaxed),
-            ],
-            prev_owner_none: [
-                PREVIOUS_OWNER_NONE[0].load(Ordering::Relaxed),
-                PREVIOUS_OWNER_NONE[1].load(Ordering::Relaxed),
-                PREVIOUS_OWNER_NONE[2].load(Ordering::Relaxed),
-            ],
+            saves: read(&SAVES_CREDITED),
+            on_target: read(&ON_TARGET_PAIRED),
+            shooter_missing: read(&SHOOTER_MISSING),
+            prev_owner_none: read(&PREVIOUS_OWNER_NONE),
             on_target_goal: ON_TARGET_FROM_GOAL.load(Ordering::Relaxed),
         }
     }
 
     pub struct Snapshot {
-        pub saves: [u64; 3],
-        pub on_target: [u64; 3],
-        pub shooter_missing: [u64; 3],
-        pub prev_owner_none: [u64; 3],
+        pub saves: [u64; 4],
+        pub on_target: [u64; 4],
+        pub shooter_missing: [u64; 4],
+        pub prev_owner_none: [u64; 4],
         pub on_target_goal: u64,
     }
 }

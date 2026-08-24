@@ -4,6 +4,10 @@ use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::common_states::{RecoveryChallenge, TackleEngagement};
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::DefenderCondition;
+#[cfg(feature = "match-logs")]
+use crate::r#match::MovementEffort;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::stall::dead_ball_diag::MotionCensus;
 use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK, RunOff};
 use crate::r#match::engine::engine::MATCH_HALF_TIME_MS;
 use crate::r#match::engine::result::PlayerMatchPhysicalSnapshot;
@@ -1315,6 +1319,30 @@ impl MatchPlayer {
     pub fn move_to(&mut self) {
         #[cfg(debug_assertions)]
         let old_position = self.position;
+
+        // **The motion census.** See `dead_ball_diag::MOTION_TICKS`: this is
+        // the one point every player's position is integrated at, so it is
+        // the one place a distance-covered figure cannot miss a path.
+        //
+        // ⚠ Behind `match-logs` like every other diagnostic here, and it has
+        // to be: this is the hottest loop in the engine — twenty-two players
+        // a hundred times a second — and three atomics a tick is not a
+        // measurement anybody should pay for in a shipped season.
+        #[cfg(feature = "match-logs")]
+        {
+            let ceiling = self.max_speed_with_condition_cached()
+                * MovementEffort::speed_fraction(
+                    self.last_activity_intensity,
+                    self.player_attributes.condition_percentage(),
+                );
+            MotionCensus::note(
+                self.velocity.norm(),
+                ceiling,
+                self.last_activity_intensity,
+                self.tactical_position.current_position.position_group()
+                    == PlayerFieldPositionGroup::Goalkeeper,
+            );
+        }
 
         // Apply velocity only if finite. `is_finite` rules out both NaN
         // and ±Infinity — either poisons the position, and a corrupt
