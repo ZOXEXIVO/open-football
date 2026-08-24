@@ -2318,6 +2318,121 @@ pub mod mid_run_diag {
     /// happens to face harder shots is visible rather than assumed).
     pub static GK_HANDLING: [AtomicU64; 32] = [const { AtomicU64::new(0) }; 32];
 
+    /// **Does the keeper's VOICE get him the ball?**
+    ///
+    /// `KeeperBallClaim::is_favourite` is the "keeper's!" test — whether he
+    /// takes a loose ball in front of his goal or leaves it to a defender —
+    /// and it was decided by two fixed distances with **no keeper attribute
+    /// in it at all**. `sc::gk_communication` had been written whole for
+    /// exactly this ("shouting, marshalling the defensive line, calling for
+    /// crosses") and had **zero live callers in the match engine**.
+    ///
+    /// Banded on the RAW `goalkeeping.communication` (1-20) × 8 slots:
+    /// +0 questions asked with the ball in range, +1 he was favourite,
+    /// +2 Σ the raw attribute ×100, +3 Σ the composite the term reads
+    /// ×1000 (so the centring constant is measured, never guessed),
+    /// +4 the same pair for a ball ABOVE head height, +5 favourite there.
+    pub static GK_VOICE: [AtomicU64; 32] = [const { AtomicU64::new(0) }; 32];
+
+    pub struct KeeperVoiceDiag;
+
+    impl KeeperVoiceDiag {
+        pub fn band(communication: f32) -> usize {
+            if communication < 8.0 {
+                0
+            } else if communication < 11.0 {
+                1
+            } else if communication < 14.0 {
+                2
+            } else {
+                3
+            }
+        }
+
+        pub fn note(communication: f32, composite: f32, aerial: bool, favourite: bool) {
+            let base = Self::band(communication) * 8;
+            let add = |slot: usize, n: u64| {
+                if slot < GK_VOICE.len() {
+                    GK_VOICE[slot].fetch_add(n, Ordering::Relaxed);
+                }
+            };
+            add(base, 1);
+            if favourite {
+                add(base + 1, 1);
+            }
+            add(base + 2, (communication.max(0.0) * 100.0) as u64);
+            add(base + 3, (composite.max(0.0) * 1000.0) as u64);
+            if aerial {
+                add(base + 4, 1);
+                if favourite {
+                    add(base + 5, 1);
+                }
+            }
+        }
+
+        pub fn snapshot() -> [u64; 32] {
+            let mut out = [0u64; 32];
+            for (slot, c) in out.iter_mut().zip(GK_VOICE.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
+    /// **Does the keeper's voice reach the back four?**
+    ///
+    /// The defender's anchor lag — how far he is from the slot the team
+    /// plan wants him in — banded by the organising voice of the
+    /// goalkeeper behind him. This is the only block that can say whether
+    /// `ShapeDiscipline`'s keeper term does anything a defender feels;
+    /// the claim rate in `KEEPER VOICE` only measures what the keeper
+    /// does for himself.
+    ///
+    /// Four bands on `TeamSkillAggregates::keeper_voice` × 4 slots:
+    /// +0 samples, +1 Σ lag ×100 (game units), +2 Σ the composite ×1000,
+    /// +3 Σ |depth off the line| ×100 — the flatness of the back four,
+    /// which is what the voice actually steers.
+    pub static GK_VOICE_SHAPE: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
+
+    pub struct KeeperVoiceShapeDiag;
+
+    impl KeeperVoiceShapeDiag {
+        pub fn band(voice: f32) -> usize {
+            if voice < 0.41 {
+                0
+            } else if voice < 0.46 {
+                1
+            } else if voice < 0.51 {
+                2
+            } else {
+                3
+            }
+        }
+
+        pub fn note(voice: f32, lag: f32, off_line: f32) {
+            let base = Self::band(voice) * 4;
+            let add = |slot: usize, n: u64| {
+                if slot < GK_VOICE_SHAPE.len() {
+                    GK_VOICE_SHAPE[slot].fetch_add(n, Ordering::Relaxed);
+                }
+            };
+            add(base, 1);
+            add(base + 1, (lag.max(0.0) * 100.0) as u64);
+            add(base + 2, (voice.max(0.0) * 1000.0) as u64);
+            // …and how far off the LINE the shape puts him after the band
+            // has bounded him. This is the flatness of the back four, and
+            // it is what the keeper's voice is actually steering.
+            add(base + 3, (off_line.abs() * 100.0) as u64);
+        }
+
+        pub fn snapshot() -> [u64; 16] {
+            let mut out = [0u64; 16];
+            for (slot, c) in out.iter_mut().zip(GK_VOICE_SHAPE.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
     pub struct KeeperHandlingDiag;
 
     impl KeeperHandlingDiag {

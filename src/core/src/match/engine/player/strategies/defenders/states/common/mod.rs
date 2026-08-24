@@ -7,6 +7,7 @@ use crate::r#match::engine::player::strategies::common::{
     JADEDNESS_INCREMENT, LOW_CONDITION_THRESHOLD,
 };
 use crate::r#match::player::strategies::RestartHold;
+use crate::r#match::player::strategies::common::team::ShapeDiscipline;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use nalgebra::Vector3;
 
@@ -798,7 +799,14 @@ impl DefensiveLine {
                 .max((m.x - line_x) * forward)
                 .min(MARK_STEP_UP_CAP)
         });
-        let bounded = ahead_of_line.clamp(-Self::DEPTH_DROP, step_up);
+        // …and how wide that band is, which is the goalkeeper's job. See
+        // [`ShapeDiscipline::line_band`]: a commanding keeper keeps his
+        // back four flat, a quiet one lets it string out, and the band
+        // these two constants define is the thing he is marshalling it
+        // out of. Centred, so a median keeper leaves the calibrated
+        // spread exactly where it was fitted.
+        let band = ShapeDiscipline::line_band(ctx);
+        let bounded = ahead_of_line.clamp(-Self::DEPTH_DROP * band, step_up * band);
         let shaped = Vector3::new(line_x + bounded * forward, leashed, target.z);
         #[cfg(feature = "match-logs")]
         {
@@ -808,6 +816,16 @@ impl DefensiveLine {
                 ctx.in_state_time,
                 d.x.abs(),
                 d.y.abs(),
+            );
+            let aggregates = if ctx.player.team_id == ctx.context.field_home_team_id {
+                &ctx.context.home_skill_aggregates
+            } else {
+                &ctx.context.away_skill_aggregates
+            };
+            crate::mid_run_diag::KeeperVoiceShapeDiag::note(
+                aggregates.keeper_voice,
+                d.magnitude(),
+                bounded,
             );
         }
         shaped

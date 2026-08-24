@@ -8015,6 +8015,73 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     }
 
 
+
+    // ── KEEPER VOICE: DOES HE CALL FOR IT ──────────────────────────────
+    // `KeeperBallClaim::is_favourite` had no keeper attribute in it at
+    // all, so a commanding goalkeeper claimed his own six-yard box on the
+    // same terms as one who says nothing.
+    {
+        use core::mid_run_diag::KeeperVoiceDiag;
+        let v = KeeperVoiceDiag::snapshot();
+        let total: u64 = (0..4).map(|b| v[b * 8]).sum();
+        if total > 0 {
+            println!();
+            println!("--- KEEPER VOICE (loose ball in front of him — is it his?) ---");
+            println!("  communication     asked     raw   composite   HIS   above head height");
+            for (b, label) in [(0usize, "< 8"), (1, "8-10"), (2, "11-13"), (3, "14+")] {
+                let n = v[b * 8];
+                if n == 0 {
+                    continue;
+                }
+                let air = v[b * 8 + 4];
+                println!(
+                    "  {:<12} {:>9}   {:>5.1}     {:>5.3}   {:>4.0}%   {:>4.0}% of {}",
+                    label,
+                    n,
+                    v[b * 8 + 2] as f64 / 100.0 / n as f64,
+                    v[b * 8 + 3] as f64 / 1000.0 / n as f64,
+                    v[b * 8 + 1] as f64 * 100.0 / n as f64,
+                    if air == 0 {
+                        0.0
+                    } else {
+                        v[b * 8 + 5] as f64 * 100.0 / air as f64
+                    },
+                    air,
+                );
+            }
+        }
+            // …and whether it reaches the men in front of him.
+            {
+                use core::mid_run_diag::KeeperVoiceShapeDiag;
+                let s = KeeperVoiceShapeDiag::snapshot();
+                let n: u64 = (0..4).map(|b| s[b * 3]).sum();
+                if n > 0 {
+                    println!(
+                        "  defender anchor lag by the voice BEHIND him (lower is a tighter block):"
+                    );
+                    for (b, label) in [
+                        (0usize, "quiet  <0.41"),
+                        (1, "0.41-0.46"),
+                        (2, "0.46-0.51"),
+                        (3, "loud   0.51+"),
+                    ] {
+                        let k = s[b * 4];
+                        if k == 0 {
+                            continue;
+                        }
+                        println!(
+                            "    {:<14} {:>10} samples   voice {:>5.3}   lag {:>5.2} m   
+                             off the line {:>5.2} m",
+                            label,
+                            k,
+                            s[b * 4 + 2] as f64 / 1000.0 / k as f64,
+                            s[b * 4 + 1] as f64 / 100.0 / k as f64 * 0.125,
+                            s[b * 4 + 3] as f64 / 100.0 / k as f64 * 0.125,
+                        );
+                    }
+                }
+            }
+    }
     // ── KEEPER HANDLING: WHAT HE DOES WITH THE SAVE ────────────────────
     // Every other keeper block measures whether the save happens. This is
     // the only one that measures what he did with it, banded by the

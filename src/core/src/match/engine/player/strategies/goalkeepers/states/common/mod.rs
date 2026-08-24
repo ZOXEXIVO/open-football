@@ -873,6 +873,36 @@ impl KeeperBallClaim {
     /// attacker happened to be standing a metre nearer.
     const AERIAL_ADVANTAGE: f32 = 26.0;
 
+    /// …and how much of that edge his VOICE is worth.
+    ///
+    /// The claim was two fixed distances and **no keeper attribute at
+    /// all**: the loudest, most commanding goalkeeper in the game took a
+    /// ball in front of his own goal on exactly the same terms as a
+    /// seventeen-year-old who says nothing. That is the single most
+    /// visible thing communication does on a pitch — a keeper who shouts
+    /// "keeper's!" gets a ball his defenders would otherwise have reached
+    /// first, and a quiet one lets them run into each other over it.
+    ///
+    /// `GoalkeeperSkillProfile::communication` is the composite for it
+    /// (`communication` 0.45 + `command_of_area` 0.30 + concentration +
+    /// positioning), and until this it reached only the punch decision.
+    /// `sc::gk_communication`, written whole for the same job, had **no
+    /// live caller in the match engine at all**.
+    ///
+    /// ⚠ CENTRED on the measured population mean of that composite, and
+    /// MULTIPLICATIVE, for the two reasons this file keeps repeating: an
+    /// uncentred quality term silently recalibrates the claim radius
+    /// rather than adding an axis to it, and an additive one into a
+    /// distance that has to stay positive is rectified at the floor. Read
+    /// the mean off the `KEEPER VOICE` block in `dev_match stats`, which
+    /// prints it beside the raw attribute for this purpose.
+    const POPULATION_VOICE: f32 = 0.390;
+    /// How far the claim radius opens between the quietest keeper in the
+    /// game and the most commanding. 0.70 is about ±10% for the realistic
+    /// spread of the composite — a metre on a cross, which is the
+    /// difference between taking it and watching a defender head it.
+    const VOICE_SPREAD: f32 = 0.70;
+
     /// Is this keeper favourite for the loose ball in front of him?
     pub fn is_favourite(ctx: &StateProcessingContext) -> bool {
         // A DEAD ball is not a loose ball and he is not favourite for it —
@@ -896,12 +926,32 @@ impl KeeperBallClaim {
         }
         let ball = ctx.tick_context.positions.ball.position;
         let aerial = (ball.z / AerialReach::STANDING).clamp(0.0, 1.0);
-        let edge = Self::HANDS_ADVANTAGE + Self::AERIAL_ADVANTAGE * aerial;
+        // `from_ctx` is memoized per (player, tick-key), so the composite
+        // costs a hash lookup on this per-tick path rather than a fresh
+        // `SkillBands` build.
+        let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+        let voice =
+            (1.0 + (prof.communication - Self::POPULATION_VOICE) * Self::VOICE_SPREAD).max(0.2);
+        let edge = (Self::HANDS_ADVANTAGE + Self::AERIAL_ADVANTAGE * aerial) * voice;
         let mine = (ball - ctx.player.position).magnitude() - edge;
-        !ctx.players()
+        let favourite = !ctx
+            .players()
             .opponents()
             .all()
-            .any(|opp| (ball - opp.position).magnitude() < mine)
+            .any(|opp| (ball - opp.position).magnitude() < mine);
+        // Only counted with the ball somewhere he could plausibly claim it
+        // — the question is asked every tick from three different doors,
+        // and a ball on the halfway line says nothing about his voice.
+        #[cfg(feature = "match-logs")]
+        if (ball - ctx.player.position).magnitude() < 120.0 {
+            crate::mid_run_diag::KeeperVoiceDiag::note(
+                ctx.player.skills.goalkeeping.communication,
+                prof.communication,
+                ball.z > KeeperAerialClaim::MIN_HEIGHT,
+                favourite,
+            );
+        }
+        favourite
     }
 }
 

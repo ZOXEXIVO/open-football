@@ -46,9 +46,31 @@ pub struct TeamSkillAggregates {
     /// already recomputed once per ~100 ticks instead of once per
     /// player per tick.
     pub top_leadership: f32,
+    /// **The goalkeeper's organising voice**, from `sc::gk_communication`
+    /// (communication 0.45 + command_of_area 0.25 + leadership 0.15 +
+    /// concentration 0.10 + positioning 0.05).
+    ///
+    /// Kept apart from `top_leadership` deliberately. That one is a
+    /// maximum over the whole eleven and answers "who is running this
+    /// side"; a keeper only wins it if he out-leads the captain. This
+    /// answers a different and narrower question — how much help the men
+    /// IN FRONT OF HIM are getting from behind — and every side has a
+    /// goalkeeper, so it is always live.
+    ///
+    /// Read by `ShapeDiscipline::organisation`, weighted by line: a keeper
+    /// can shout a centre-half into position and can do very little about
+    /// a winger forty metres up the pitch.
+    pub keeper_voice: f32,
 }
 
 impl TeamSkillAggregates {
+    /// Population mean of `keeper_voice`, so the term multiplying the
+    /// shape recall is centred and a median keeper leaves the calibrated
+    /// discipline exactly where it was. ⚠ Measured off the `KEEPER VOICE`
+    /// block in `dev_match stats`, not assumed — see the note on
+    /// `SaveModel::POPULATION_HANDLING` for why 0.5 is the wrong guess for
+    /// any composite that runs through `keeper_curve`.
+    pub const KEEPER_VOICE_REFERENCE: f32 = 0.560;
     /// Neutral default — used when the team has no players or as a
     /// fallback for callers that don't compute composites.
     pub const fn neutral() -> Self {
@@ -60,6 +82,7 @@ impl TeamSkillAggregates {
             gk_quality: 0.5,
             concentration_teamwork_avg: 0.5,
             top_leadership: 0.5,
+            keeper_voice: Self::KEEPER_VOICE_REFERENCE,
         }
     }
 }

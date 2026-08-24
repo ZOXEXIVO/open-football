@@ -239,6 +239,7 @@ mod tests {
             gk_quality: v,
             concentration_teamwork_avg: v,
             top_leadership: v,
+            keeper_voice: v,
         }
     }
 

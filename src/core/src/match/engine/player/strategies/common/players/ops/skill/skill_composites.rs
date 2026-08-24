@@ -26,6 +26,7 @@
 //!   * `aerial_outfield_defender` / `aerial_outfield_attacker`
 //!   * `gk_shot_stopping` / `gk_aerial` / `gk_distribution`
 
+use crate::PlayerFieldPositionGroup;
 use crate::r#match::MatchPlayer;
 use crate::r#match::engine::player::strategies::common::players::ops::effective_skill::{
     ActionContext, SkillBands, SkillCategory, effective_skill,
@@ -765,12 +766,42 @@ pub fn resilience(player: &MatchPlayer, minute: u32) -> f32 {
 pub fn on_field_leadership(player: &MatchPlayer, minute: u32) -> f32 {
     let b = SkillBands::for_player(player, minute);
     let s = &player.skills;
-    let v = (n(b.apply(s.mental.leadership, MENT)) * 0.38
-        + n(b.apply(s.mental.composure, MENT)) * 0.20
-        + n(b.apply(s.mental.determination, MENT)) * 0.16
-        + n(b.apply(s.mental.teamwork, MENT)) * 0.14
-        + n(b.apply(s.mental.concentration, MENT)) * 0.12)
-        .clamp(0.0, 1.0);
+    // **A GOALKEEPER ORGANISES WITH HIS VOICE.**
+    //
+    // `TeamSkillAggregates` takes the MAXIMUM of this composite over the
+    // eleven on the pitch, and the comment at that site says "keeper
+    // included — a shouting keeper marshals a back four as well as any
+    // captain, and `on_field_leadership` reads the same attribute for
+    // both". It did not. Every term here was a MENTAL attribute, and
+    // `goalkeeping.communication` — the one that describes a goalkeeper
+    // talking to his defenders, and the one a keeper is bought for as an
+    // organiser — never entered. A keeper's voice could not reach
+    // `ShapeDiscipline::organisation` at all, so the back four in front of
+    // a loud, commanding keeper held its shape exactly as well as the one
+    // in front of a silent teenager.
+    //
+    // Two blends rather than one plus an extra term, because every
+    // composite in this file has weights summing to 1.0 and
+    // `SkillComposite::pin` depends on it — shifting all skills by δ must
+    // shift the composite by δ, whichever branch a player takes.
+    let v = if player.tactical_position.current_position.position_group()
+        == PlayerFieldPositionGroup::Goalkeeper
+    {
+        (n(b.apply(s.goalkeeping.communication, MENT)) * 0.30
+            + n(b.apply(s.mental.leadership, MENT)) * 0.26
+            + n(b.apply(s.goalkeeping.command_of_area, MENT)) * 0.14
+            + n(b.apply(s.mental.composure, MENT)) * 0.14
+            + n(b.apply(s.mental.concentration, MENT)) * 0.10
+            + n(b.apply(s.mental.determination, MENT)) * 0.06)
+            .clamp(0.0, 1.0)
+    } else {
+        (n(b.apply(s.mental.leadership, MENT)) * 0.38
+            + n(b.apply(s.mental.composure, MENT)) * 0.20
+            + n(b.apply(s.mental.determination, MENT)) * 0.16
+            + n(b.apply(s.mental.teamwork, MENT)) * 0.14
+            + n(b.apply(s.mental.concentration, MENT)) * 0.12)
+            .clamp(0.0, 1.0)
+    };
     clamp_composite(v)
 }
 
@@ -881,6 +912,15 @@ mod tests {
         )
     }
 
+    /// Same player, fielded in goal, with `communication` set apart from
+    /// the rest — `on_field_leadership` branches on the position group, so
+    /// a midfielder-built test player cannot exercise the keeper branch.
+    fn build_keeper(fill: f32, communication: f32) -> MatchPlayer {
+        let mut p = build_player(fill, 9000);
+        p.skills.goalkeeping.communication = communication;
+        p.tactical_position.current_position = PlayerPositionType::Goalkeeper;
+        p
+    }
     #[test]
     fn n_clamps() {
         assert_eq!(n(-3.0), 0.0);
@@ -1096,6 +1136,39 @@ mod tests {
         assert!(defensive_positioning(&avg, 30) < defensive_positioning(&elite, 30));
     }
 
+    /// **A goalkeeper's voice has to reach `top_leadership`.**
+    ///
+    /// `TeamSkillAggregates` takes the maximum of `on_field_leadership`
+    /// over the eleven and `ShapeDiscipline` reads it to decide how
+    /// tightly the block is held, and the comment at that site has always
+    /// said "keeper included — a shouting keeper marshals a back four as
+    /// well as any captain". Until 2026-08-24 every term in the composite
+    /// was a MENTAL attribute, so `goalkeeping.communication` — the one
+    /// that describes precisely that — changed nothing at all.
+    #[test]
+    fn a_keepers_voice_reaches_his_leadership_and_an_outfielders_does_not() {
+        let quiet = build_keeper(10.0, 4.0);
+        let loud = build_keeper(10.0, 18.0);
+        assert!(
+            on_field_leadership(&loud, 30) > on_field_leadership(&quiet, 30) + 0.10,
+            "a commanding keeper must out-organise a silent one: {} vs {}",
+            on_field_leadership(&loud, 30),
+            on_field_leadership(&quiet, 30)
+        );
+        // …and it is a KEEPER'S attribute. An outfielder's leadership must
+        // not move with a goalkeeping attribute he never uses, or the
+        // composite would be reading the wrong card for ten of the eleven.
+        let mut outfield_quiet = build_player(10.0, 9000);
+        outfield_quiet.skills.goalkeeping.communication = 4.0;
+        let mut outfield_loud = build_player(10.0, 9000);
+        outfield_loud.skills.goalkeeping.communication = 18.0;
+        assert!(
+            (on_field_leadership(&outfield_loud, 30) - on_field_leadership(&outfield_quiet, 30))
+                .abs()
+                < 1.0e-6,
+            "an outfielder's organisation must not read a goalkeeping attribute"
+        );
+    }
     #[test]
     fn gk_communication_loads_communication_and_command() {
         let mut elite = build_player(8.0, 9000);

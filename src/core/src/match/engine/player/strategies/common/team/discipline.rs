@@ -49,6 +49,8 @@
 //! [`ShapeDiscipline::is_exempt`] and each one is a case where the ball,
 //! not the shape, is the player's job this instant.
 
+use crate::PlayerFieldPositionGroup;
+use crate::r#match::engine::teamplay::tactical::inputs::TeamSkillAggregates;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, StateProcessingContext};
@@ -146,6 +148,27 @@ impl ShapeDiscipline {
         (velocity * (1.0 - pull) + recall * pull, pull)
     }
 
+    /// How much a goalkeeper's voice is worth to the line in front of him.
+    ///
+    /// Applied to the shape-recall multiplier, centred on
+    /// `TeamSkillAggregates::KEEPER_VOICE_REFERENCE` so a median keeper
+    /// changes nothing. The composite spans roughly 0.33-0.55 across a
+    /// realistic population, so 0.60 is about **±7%** of recall between the
+    /// quietest keeper in the game and the most commanding — the same order
+    /// as the ±15% the `own`/`organiser` blend already carries, and
+    /// deliberately not more: organisation is worth a lot in football and
+    /// it is still not worth as much as being able to defend.
+    const KEEPER_VOICE_DEFENDER: f32 = 0.60;
+    /// …and less as you go up the pitch. He is audible to a holding
+    /// midfielder and not to a winger.
+    const KEEPER_VOICE_MIDFIELD: f32 = 0.24;
+    /// …and what it is worth to the BAND the line is allowed to spread
+    /// across. See [`Self::line_band`]. 0.90 is about ±10% of the band
+    /// over the realistic spread of the composite: a metre either way on
+    /// a 6 m allowance, which is the difference between a flat four and
+    /// one with a man dropping off it.
+    const KEEPER_VOICE_LINE: f32 = 0.90;
+
     /// How well this player is being held in the block, as a multiplier
     /// on the recall — 1.0 for an ordinarily-organised side.
     ///
@@ -212,14 +235,82 @@ impl ShapeDiscipline {
 
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
         let own = sc::decision_quality(ctx.player, minute);
-        let organiser = if ctx.player.team_id == ctx.context.field_home_team_id {
-            ctx.context.home_skill_aggregates.top_leadership
+        let aggregates = if ctx.player.team_id == ctx.context.field_home_team_id {
+            &ctx.context.home_skill_aggregates
         } else {
-            ctx.context.away_skill_aggregates.top_leadership
+            &ctx.context.away_skill_aggregates
         };
+        let organiser = aggregates.top_leadership;
 
         let shortfall = (own * 0.60 + organiser * 0.40) - REFERENCE;
-        (1.0 + shortfall * 0.30).clamp(0.85, 1.15)
+        let held = (1.0 + shortfall * 0.30).clamp(0.85, 1.15);
+
+        // **…AND THE MAN BEHIND THEM.**
+        //
+        // A goalkeeper is the only player on the pitch who can see the
+        // whole shape from behind it, and the only one whose job
+        // description includes saying so out loud. Nothing in the engine
+        // let him: `goalkeeping.communication` reached the punch decision
+        // and a dead composite, so the back four in front of a loud,
+        // commanding keeper held its shape exactly as well as the one in
+        // front of a silent teenager.
+        //
+        // Weighted BY LINE, because that is how it works. He can shout a
+        // centre-half into position all afternoon; he can do very little
+        // about a winger forty metres up the pitch, and nothing at all
+        // about a striker pressing a goal kick. Applied on top of the
+        // existing blend rather than inside it, so the calibrated
+        // discipline is exactly unchanged for a median keeper and the two
+        // channels stay separable.
+        let voice_gain = match ctx
+            .player
+            .tactical_position
+            .current_position
+            .position_group()
+        {
+            PlayerFieldPositionGroup::Defender => Self::KEEPER_VOICE_DEFENDER,
+            PlayerFieldPositionGroup::Midfielder => Self::KEEPER_VOICE_MIDFIELD,
+            _ => 0.0,
+        };
+        if voice_gain == 0.0 {
+            return held;
+        }
+        let voice =
+            (aggregates.keeper_voice - TeamSkillAggregates::KEEPER_VOICE_REFERENCE) * voice_gain;
+        (held * (1.0 + voice)).clamp(0.80, 1.22)
+    }
+
+    /// **How tightly the back line is allowed to spread, by the voice
+    /// behind it.**
+    ///
+    /// `DefenderShape::DEPTH_DROP + DEPTH_STEP_UP` is, in its own words,
+    /// "the spread the line is ALLOWED", and it was the same number for
+    /// every side in every division. Marshalling a back four so that it
+    /// stays flat is the single most recognisable thing a goalkeeper does
+    /// for his defenders — it is what stops one man dropping off and
+    /// playing the rest of them onside — and no attribute reached it.
+    ///
+    /// Below 1.0 for a commanding keeper: a **tighter** band, so the line
+    /// holds together. Above 1.0 for a quiet one, whose back four is
+    /// allowed to string out.
+    ///
+    /// ⚠ Centred on `TeamSkillAggregates::KEEPER_VOICE_REFERENCE`, which
+    /// is **measured** (0.560, off the `KEEPER VOICE` block) and is
+    /// nowhere near 0.5 — `sc::gk_communication` runs through the same
+    /// curve that puts `POPULATION_READ` at 0.479 and
+    /// `SaveModel::POPULATION_HANDLING` at 0.530. An uncentred term here
+    /// would not add a skill axis, it would quietly re-tune the block
+    /// span for every team in the game — and the measured span is already
+    /// wide (49 m defending against a real 35-45), so it would re-tune it
+    /// in the direction it can least afford.
+    pub fn line_band(ctx: &StateProcessingContext) -> f32 {
+        let aggregates = if ctx.player.team_id == ctx.context.field_home_team_id {
+            &ctx.context.home_skill_aggregates
+        } else {
+            &ctx.context.away_skill_aggregates
+        };
+        let shortfall = aggregates.keeper_voice - TeamSkillAggregates::KEEPER_VOICE_REFERENCE;
+        (1.0 - shortfall * Self::KEEPER_VOICE_LINE).clamp(0.78, 1.30)
     }
 
     /// Is the ball this player's job right now? Then the shape is not.

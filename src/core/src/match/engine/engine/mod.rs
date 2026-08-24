@@ -82,6 +82,7 @@ struct SkillAccumulator {
     conc_team_sum: f32,
     conc_team_count: u32,
     top_leadership: f32,
+    keeper_voice: f32,
 }
 
 impl SkillAccumulator {
@@ -100,6 +101,7 @@ impl SkillAccumulator {
             conc_team_sum: 0.0,
             conc_team_count: 0,
             top_leadership: 0.0,
+            keeper_voice: 0.0,
         }
     }
 
@@ -132,6 +134,12 @@ impl SkillAccumulator {
                     + sc::gk_distribution(p, minute) * 0.25;
                 self.gk_sum += g;
                 self.gk_count += 1;
+                // …and his ORGANISING voice, kept apart from his shot-stopping
+                // because it is not a property of how good a goalkeeper he
+                // is, it is a property of how well the ten in front of him
+                // play. `sc::gk_communication` was written whole for this
+                // and had no live caller in the match engine at all.
+                self.keeper_voice = self.keeper_voice.max(sc::gk_communication(p, minute));
                 self.add_conc_team(p, minute);
             }
             PlayerFieldPositionGroup::Defender => {
@@ -258,6 +266,12 @@ impl SkillAccumulator {
                 self.top_leadership.clamp(0.0, 1.0)
             } else {
                 0.5
+            },
+            // A side with no keeper on the pitch is organising itself.
+            keeper_voice: if self.keeper_voice > 0.0 {
+                self.keeper_voice.clamp(0.0, 1.0)
+            } else {
+                TeamSkillAggregates::KEEPER_VOICE_REFERENCE
             },
         }
     }
