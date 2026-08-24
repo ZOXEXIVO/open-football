@@ -182,8 +182,11 @@ impl KeeperBody {
     /// a ball skidding off a hip loses most of its sideways travel.
     const TANGENTIAL: f32 = 0.55;
 
-    /// Rotation surviving the contact — as with the woodwork, nearly none.
-    const SPIN_RETAINED: f32 = 0.25;
+    // Rotation is deliberately NOT handled here. `Ball::record_touch` kills
+    // it outright at the end of the block — *"a foot or a chest kills the
+    // rotation"*, in its own words — so a `SPIN_RETAINED` here would be a
+    // constant nothing reads. The woodwork carries one because a post is
+    // not a touch and nothing downstream clears it.
 
     /// How much of the rebound a keeper's HANDLING is worth, either way.
     ///
@@ -498,7 +501,7 @@ impl KeeperBody {
             ball.velocity =
                 tangent * Self::TANGENTIAL - normal_part * (Self::RESTITUTION * cushion);
         }
-        ball.spin *= Self::SPIN_RETAINED;
+        // Spin: see the note where `SPIN_RETAINED` would have been.
         // The rest of the tick still has to be travelled — same reasoning
         // as the woodwork's, and the same one-frame hitch if it is not.
         ball.position = hit.position

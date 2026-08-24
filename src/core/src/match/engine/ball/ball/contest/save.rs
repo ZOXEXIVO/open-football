@@ -181,8 +181,8 @@ impl SaveModel {
     /// FORM (`skill_multiplier` scores a difference) rather than of where
     /// its floor sits. Both guards the warning names —
     /// `keeper_skill_spread_stays_wide` and
-    /// `an_evenly_matched_duel_is_the_same_in_every_division` — hold at
-    /// 0.43.
+    /// `an_evenly_matched_duel_is_the_same_in_every_division` — hold at the
+    /// new pair.
     ///
     /// And the shapes are not interchangeable, which decides it.
     /// `save_probability` is `(geometric_base − speed_penalty) ×

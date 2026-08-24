@@ -4,8 +4,9 @@
 //! a ball, it is not taken into account that he can block it with his
 //! body — the ball passes through him no matter how he jumps."* Measured
 //! before the fix with `dev_match stats` and the `KEEPER BODY` census
-//! reading the sweep with the volume switched off: **2.9 balls a match
-//! travelled through a goalkeeper**, 0.6 of them live shots on frame.
+//! reading the sweep with the volume switched off: **3.1 balls a match
+//! travelled through a goalkeeper**, 0.46 of them live shots on frame —
+//! 18% of every goal the engine scored.
 //!
 //! These are position tests rather than save-count tests, for the same
 //! reason `keeper_save_contact_tests` is: the complaint is about what the
@@ -48,7 +49,8 @@ fn lone_keeper(field: &mut MatchField, at: Vector3<f32>) -> u32 {
         .players
         .iter_mut()
         .find(|p| {
-            p.side == Some(PlayerSide::Right) && p.tactical_position.current_position.is_goalkeeper()
+            p.side == Some(PlayerSide::Right)
+                && p.tactical_position.current_position.is_goalkeeper()
         })
         .map(|p| {
             p.position = at;
@@ -273,7 +275,10 @@ fn the_engine_and_the_replay_agree_about_where_a_diving_keeper_is() {
         (0.35..0.45).contains(&top),
         "a keeper lying on the grass reaches {top:.2} m"
     );
-    assert!(bottom < 0.05, "and his underside is on it, at {bottom:.2} m");
+    assert!(
+        bottom < 0.05,
+        "and his underside is on it, at {bottom:.2} m"
+    );
     assert!(
         flat.reach_across() > 1.5,
         "flat out he is {:.2} m across the goal",
@@ -289,7 +294,10 @@ fn the_engine_and_the_replay_agree_about_where_a_diving_keeper_is() {
     );
     let upright = KeeperBody::of(keeper);
     let (top, bottom) = upright.envelope();
-    assert!((1.75..1.90).contains(&top), "standing he is {top:.2} m tall");
+    assert!(
+        (1.75..1.90).contains(&top),
+        "standing he is {top:.2} m tall"
+    );
     assert!(bottom.abs() < 0.05, "with his soles on the grass");
     assert!(
         upright.reach_across() < 0.7,
