@@ -1439,9 +1439,32 @@ mod height_recording_tests {
 /// drops the segment but leaves the samples behind writes footage no segment
 /// points at, which the chunker then splits around. Neither shows up in a
 /// recording you watch — only here.
+///
+/// Every expectation here is bracketed by the two bookends — `(0, 10_000)` and
+/// the ten seconds up to the whistle — because a clipped recording always has
+/// them (see [`OPENING_CLIP_MS`]). The clip under test is the one in the middle.
 #[cfg(test)]
 mod chance_clip_tests {
     use super::*;
+
+    /// The two ends every clipped recording keeps, for a match `duration_ms`
+    /// long. Written as a helper rather than as literals so a test reads as
+    /// "the bookends, and the clip I am about to talk about".
+    fn bookends(duration_ms: u64) -> [(u64, u64); 2] {
+        [
+            (0, OPENING_CLIP_MS),
+            (duration_ms - CLOSING_CLIP_MS, duration_ms),
+        ]
+    }
+
+    /// …and the whole segment list for a match with `clips` between them.
+    fn with_bookends(duration_ms: u64, clips: &[(u64, u64)]) -> Vec<(u64, u64)> {
+        let [opening, closing] = bookends(duration_ms);
+        let mut all = vec![opening];
+        all.extend_from_slice(clips);
+        all.push(closing);
+        all
+    }
 
     /// Plays `duration_ms` of ball and one player, scoring at each time in
     /// `goals` and striking a chance at each time in `chances`, then finishes
@@ -1473,11 +1496,15 @@ mod chance_clip_tests {
     #[test]
     fn a_kept_chance_is_clipped_exactly_like_a_goal() {
         let data = record(120_000, &[], &[60_000], &[60_000]);
-        assert_eq!(data.recorded_segments(), Some(&[(55_000, 65_000)][..]));
+        assert_eq!(
+            data.recorded_segments(),
+            Some(&with_bookends(120_000, &[(55_000, 65_000)])[..])
+        );
         assert!(
-            data.ball
-                .iter()
-                .all(|item| (55_000..=65_000).contains(&item.timestamp)),
+            !data.ball.iter().any(|item| {
+                (10_000..55_000).contains(&item.timestamp)
+                    || (65_000..110_000).contains(&item.timestamp)
+            }),
             "a chance clip kept samples outside its window"
         );
     }
@@ -1489,7 +1516,10 @@ mod chance_clip_tests {
         // navigates by, so footage outside it is bytes nobody can ever reach.
         let data = record(120_000, &[30_000], &[60_000, 90_000], &[]);
 
-        assert_eq!(data.recorded_segments(), Some(&[(25_000, 35_000)][..]));
+        assert_eq!(
+            data.recorded_segments(),
+            Some(&with_bookends(120_000, &[(25_000, 35_000)])[..])
+        );
         assert!(
             !data
                 .ball
@@ -1509,11 +1539,12 @@ mod chance_clip_tests {
     #[test]
     fn a_goalless_match_can_still_have_a_reel() {
         // What this whole feature is for. Nil-nil used to record literally
-        // nothing and the viewer said so; now the chances are the recording.
+        // nothing and the viewer said so; now the chances are the body of the
+        // recording and the bookends are its two ends.
         let data = record(120_000, &[], &[39_000, 81_000], &[39_000, 81_000]);
         assert_eq!(
             data.recorded_segments(),
-            Some(&[(34_000, 44_000), (76_000, 86_000)][..])
+            Some(&with_bookends(120_000, &[(34_000, 44_000), (76_000, 86_000)])[..])
         );
         assert!(!data.is_empty());
     }
@@ -1525,7 +1556,10 @@ mod chance_clip_tests {
         // goal's own window — not an overlapping pair for the viewer to
         // reconcile.
         let data = record(120_000, &[63_000], &[60_000], &[]);
-        assert_eq!(data.recorded_segments(), Some(&[(58_000, 68_000)][..]));
+        assert_eq!(
+            data.recorded_segments(),
+            Some(&with_bookends(120_000, &[(58_000, 68_000)])[..])
+        );
     }
 
     #[test]
@@ -1534,7 +1568,10 @@ mod chance_clip_tests {
         // team's, at the other end — the two ranges still have to come out as
         // one segment.
         let data = record(120_000, &[60_000], &[66_000], &[66_000]);
-        assert_eq!(data.recorded_segments(), Some(&[(55_000, 71_000)][..]));
+        assert_eq!(
+            data.recorded_segments(),
+            Some(&with_bookends(120_000, &[(55_000, 71_000)])[..])
+        );
 
         let stamps: Vec<u64> = data.ball.iter().map(|item| item.timestamp).collect();
         let mut sorted = stamps.clone();
@@ -1573,15 +1610,17 @@ mod chance_clip_tests {
         assert_eq!(
             data.recorded_segments(),
             Some(
-                &[(
-                    60_000 - SUBSTITUTION_CLIP_PRE_ROLL_MS,
-                    60_000 + SUBSTITUTION_CLIP_POST_ROLL_MS
-                )][..]
+                &with_bookends(
+                    120_000,
+                    &[(
+                        60_000 - SUBSTITUTION_CLIP_PRE_ROLL_MS,
+                        60_000 + SUBSTITUTION_CLIP_POST_ROLL_MS,
+                    )],
+                )[..]
             )
         );
         assert!(
-            SUBSTITUTION_CLIP_POST_ROLL_MS
-                >= crate::r#match::SubstitutionBreak::BREAK_MS,
+            SUBSTITUTION_CLIP_POST_ROLL_MS >= crate::r#match::SubstitutionBreak::BREAK_MS,
             "the clip stops before the change it is a clip of does"
         );
     }
@@ -1608,10 +1647,13 @@ mod chance_clip_tests {
         assert_eq!(
             data.recorded_segments(),
             Some(
-                &[(
-                    60_000 - SUBSTITUTION_CLIP_PRE_ROLL_MS,
-                    60_000 + SUBSTITUTION_CLIP_POST_ROLL_MS
-                )][..]
+                &with_bookends(
+                    120_000,
+                    &[(
+                        60_000 - SUBSTITUTION_CLIP_PRE_ROLL_MS,
+                        60_000 + SUBSTITUTION_CLIP_POST_ROLL_MS,
+                    )],
+                )[..]
             ),
             "the dropped chance took the substitution with it"
         );
