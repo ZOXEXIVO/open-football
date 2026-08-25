@@ -52,24 +52,47 @@ pub struct ChanceDetail {
 /// Which of a match's near misses are worth a marker and a clip.
 ///
 /// Every shot is a candidate and most of them are nothing; the point of this is
-/// to end up with the two or three moments per side a highlight reel would
-/// actually carry. Three rules, in the order of what they protect:
+/// to end up with the handful of moments a side's highlight reel would actually
+/// carry. Three rules, in the order of what they protect:
 ///
 /// 1. **Quality.** Ranked on xG and nothing else — how the chance ended is
 ///    beside the point, because a header cleared off the line and a sitter
 ///    dragged wide were the same chance until somebody made a decision.
-/// 2. **A quota per side.** Otherwise a one-sided match marks eight moments for
+/// 2. **A quota per side.** Otherwise a one-sided match marks ten moments for
 ///    the team on top and none at all for the side that spent it defending.
 /// 3. **Spacing.** Two markers a rebound apart land on the same pixel of the
 ///    timeline and describe one passage of play twice. The gap is a fraction of
 ///    the match rather than a fixed number of seconds, because the rail IS the
 ///    match: it has to hold at ninety minutes and at the five-minute halves a
 ///    debug build plays.
+///
+/// What comes out of the three is measured rather than asserted — see
+/// `dev_match reel`, which plays the game's own recording scope and counts what
+/// lands on the rail. At the settings below that is 7.4 to 7.9 near misses a
+/// match across runs — five or more in nineteen matches out of twenty, and
+/// never more than the ten the quota allows — against 2.9 goals and 4.8
+/// substitutions.
 pub struct HighlightSelector;
 
 impl HighlightSelector {
-    /// At most this many per side. Two or three is a highlight reel; six is the
-    /// match again.
+    /// At most this many per side, which is what puts a reel in the five to ten
+    /// moments a match is worth.
+    ///
+    /// **It used to be three, and three was what made the reel a bench report.**
+    /// `dev_match reel 60 14 14` measures a clipped recording as the game cuts
+    /// it: at a quota of three, half of all matches came out pinned to the cap
+    /// and the rail carried 5.2 near misses against 4.8 substitution stoppages
+    /// — and a substitution's clip is more than twice as long as a chance's
+    /// (`SUBSTITUTION_CLIP_POST_ROLL_MS`), so over half of what was kept was
+    /// men walking. Five moves the same census to between 7.4 and 7.9, which is
+    /// the width of the noise at sixty matches rather than a range anybody set.
+    ///
+    /// **It binds where it is supposed to and nowhere else.** Lifting it to a
+    /// hundred — no quota at all — is worth 7.1 against 6.9 on the spacing this
+    /// was measured on, because [`Self::SPACING_DIVISOR`] is what actually
+    /// limits a busy side. So what the quota still does is the thing it was
+    /// added for: it stops the team on top taking every marker on the rail and
+    /// leaves the side that spent the match defending its own.
     pub const PER_TEAM: usize = 5;
 
     /// Recorded xG a strike has to reach to count as a chance at all.
@@ -85,15 +108,29 @@ impl HighlightSelector {
     /// the population at 25.5 shots a match with a MEAN of 0.050 and a 90th
     /// percentile of 0.108 — so 0.035 is about the median attempt, not the
     /// "big chance" the same number would mean in a published model. At this
-    /// bar, 40 matches yield 12.4 candidates each and the shortlist keeps 2.3
-    /// per side, with 78% of team-matches getting two markers or more and 8%
-    /// getting none (a side that genuinely never threatened). Anything that
-    /// moves the recorded-xG scale moves this with it — re-measure, don't
-    /// convert.
+    /// bar a match yields about a dozen candidates, of which the two rules
+    /// below keep between 3.7 and 3.9 a side (`dev_match reel 60 14 14`) — no
+    /// match in that census went without a marker at all, and the one in twenty
+    /// that comes out with three or four is a side that genuinely never
+    /// threatened. Anything that moves the recorded-xG scale moves this with it
+    /// — re-measure, don't convert.
     pub const MIN_XG: f32 = 0.035;
 
     /// How far apart two markers have to be, as a divisor of the match length —
-    /// a thirtieth of ninety minutes is three of them.
+    /// a forty-fifth of ninety minutes is two of them.
+    ///
+    /// **Set from the size of a PIN, not from the length of a passage of play.**
+    /// A rebound scramble is over in seconds and the floor below this catches
+    /// it; what needs the minutes is the rail, where `Timeline::MARKER_SIZE` is
+    /// eighteen pixels of a track that is most of the canvas — call it two per
+    /// cent of the match however long the match is, so two moments closer than
+    /// about a fiftieth of it are drawn on top of each other whatever happened
+    /// in between.
+    ///
+    /// It was a thirtieth, and a thirtieth is more than the pin needs: three
+    /// minutes threw away half of everything that cleared [`Self::MIN_XG`] and
+    /// was, rather than the quota, what kept the reel short. Two minutes keeps
+    /// the pins apart and costs the eye nothing.
     const SPACING_DIVISOR: u64 = 45;
 
     /// Trims `chances` to the shortlist and returns the timestamps that
@@ -206,22 +243,36 @@ mod highlight_selector_tests {
 
     #[test]
     fn the_best_chances_are_the_ones_kept() {
+        // Six moments, a quarter of an hour apart, so nothing here is decided
+        // by the spacing rule — one of them has to go and it has to be the
+        // worst one.
         let mut chances = vec![
             chance(HOME, 10, 0.10),
             chance(HOME, 25, 0.40),
             chance(HOME, 40, 0.15),
             chance(HOME, 55, 0.30),
+            chance(HOME, 70, 0.22),
+            chance(HOME, 85, 0.12),
         ];
         let kept = HighlightSelector::select(&mut chances, &[], FULL_TIME);
 
         assert_eq!(
             minutes(&chances),
-            vec![25, 40, 55],
-            "the shortlist is not the three best chances"
+            vec![25, 40, 55, 70, 85],
+            "the shortlist is not the five best chances"
         );
         // …and chronological, because that is the order the timeline draws
         // them in and the order the recorder walks its clips.
-        assert_eq!(kept, vec![25 * 60_000, 40 * 60_000, 55 * 60_000]);
+        assert_eq!(
+            kept,
+            vec![
+                25 * 60_000,
+                40 * 60_000,
+                55 * 60_000,
+                70 * 60_000,
+                85 * 60_000
+            ]
+        );
     }
 
     #[test]
@@ -232,11 +283,13 @@ mod highlight_selector_tests {
         // shows the better team's is a highlight package of half a match.
         let mut chances = vec![
             chance(HOME, 5, 0.50),
-            chance(HOME, 15, 0.48),
-            chance(HOME, 25, 0.46),
-            chance(HOME, 35, 0.44),
-            chance(AWAY, 45, 0.12),
-            chance(AWAY, 60, 0.11),
+            chance(HOME, 12, 0.48),
+            chance(HOME, 19, 0.46),
+            chance(HOME, 26, 0.44),
+            chance(HOME, 33, 0.42),
+            chance(HOME, 40, 0.40),
+            chance(AWAY, 60, 0.12),
+            chance(AWAY, 75, 0.11),
         ];
         HighlightSelector::select(&mut chances, &[], FULL_TIME);
 
@@ -314,10 +367,10 @@ mod highlight_selector_tests {
 
     #[test]
     fn spacing_scales_with_the_match_rather_than_the_clock() {
-        // A debug build plays five-minute halves. A fixed three-minute gap
-        // would allow one marker per half there and the reel would be empty;
-        // the rule is a fraction of the match, so a ten-minute match spaces its
-        // markers twenty seconds apart and keeps all three.
+        // A debug build plays five-minute halves. A fixed two-minute gap would
+        // allow one marker per half there and the reel would be empty; the rule
+        // is a fraction of the match, so a ten-minute match spaces its markers
+        // thirteen seconds apart and keeps all three.
         const SHORT: u64 = 10 * 60_000;
         let mut chances = vec![
             ChanceDetail {

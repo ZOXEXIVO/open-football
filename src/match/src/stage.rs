@@ -72,6 +72,26 @@ use bevy::window::PrimaryWindow;
 #[derive(Component)]
 pub struct Backdrop;
 
+impl Backdrop {
+    /// **Below zero is the picture; zero and above is the interface.**
+    ///
+    /// Three roots share the window and the order between them is not
+    /// negotiable, so it is written down here rather than left to the order
+    /// their `Startup` systems happen to run in — which Bevy does not promise.
+    ///
+    /// The replay is the floor. The name plates over the players' heads are
+    /// part of the football, so they sit on it and go dark with it. The dip
+    /// between two clips ([`crate::cut`]) covers both. And everything at the
+    /// default zero — the transport bar, the flight stick, the altitude
+    /// buttons — is furniture laid over the lot of it, which never dims,
+    /// because a control that went dark at every cut would read as a fault.
+    pub const PICTURE: i32 = -3;
+    /// The plates, over the picture and under the dip. See [`Self::PICTURE`].
+    pub const PLATES: i32 = -2;
+    /// The cut's own veil, over both. See [`Self::PICTURE`].
+    pub const DIP: i32 = -1;
+}
+
 /// The image the replay is drawn into, and how large it is being kept.
 #[derive(Resource)]
 pub struct Stage {
@@ -246,7 +266,7 @@ impl Stage {
     /// Runs at `Startup` beside the rest of the spawns. Order against
     /// [`crate::timeline::Timeline::spawn`] does not matter: the backdrop is
     /// held at a negative global depth, so it is behind the bar whichever of
-    /// them is built first.
+    /// them is built first. See [`Backdrop::PICTURE`] for the whole ladder.
     pub fn spawn(mut commands: Commands, stage: Res<Stage>) {
         commands.spawn((
             Camera2d,
@@ -287,9 +307,10 @@ impl Stage {
                 height: percent(100),
                 ..default()
             },
-            // Behind every other root — the bar, the plates over the players'
-            // heads and the flight stick.
-            GlobalZIndex(-1),
+            // Behind every other root — the plates over the players' heads,
+            // the dip between two clips, the bar and the flight stick. See
+            // [`Backdrop::PICTURE`], which is where that order is set out.
+            GlobalZIndex(Backdrop::PICTURE),
         ));
     }
 

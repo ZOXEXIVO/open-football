@@ -108,6 +108,17 @@ pub struct Playback {
     pub speed: f32,
     /// Set for one frame after a seek so followers can cut instead of glide.
     pub seeked: bool,
+    /// Set for one frame when the playhead ran out of a clip and was carried
+    /// to the next one — a cut the REPLAY made, as against a seek somebody
+    /// asked for.
+    ///
+    /// The two are deliberately separate flags even though a cut is also a
+    /// seek. A scrub sets `seeked` on every frame the pointer is held down,
+    /// and [`crate::cut`] hangs a half-second dip off this one: hung off
+    /// `seeked` instead, dragging the knob across the rail would hold the
+    /// picture dark for as long as the drag lasted, which is precisely when
+    /// somebody needs to see where they are going.
+    pub cut: bool,
 }
 
 impl Playback {
@@ -129,6 +140,7 @@ impl Playback {
             playing: false,
             speed: 1.0,
             seeked: false,
+            cut: false,
         }
     }
 
@@ -202,12 +214,14 @@ impl Playback {
         // Run out of the end of a clip and there is nothing ahead but empty
         // pitch, so cut to the next one. `seeked` because that is what it is —
         // followers have to cut with it rather than glide across forty minutes
-        // of match in a frame.
+        // of match in a frame. And `cut`, because a viewer has to be told: see
+        // [`crate::cut`], which fades the next episode in.
         if !spans.covers(playback.time_ms) {
             match spans.next_start(playback.time_ms) {
                 Some(start) => {
                     playback.time_ms = start;
                     playback.seeked = true;
+                    playback.cut = true;
                 }
                 None => playback.time_ms = playback.duration_ms,
             }
@@ -222,6 +236,7 @@ impl Playback {
     /// Runs last: everything that reacts to a seek has had its turn by now.
     pub fn end_frame(mut playback: ResMut<Playback>) {
         playback.seeked = false;
+        playback.cut = false;
     }
 
     /// Space bar toggles playback — the one keyboard shortcut worth having.

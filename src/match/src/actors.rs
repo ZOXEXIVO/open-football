@@ -9,6 +9,7 @@ use crate::pitch::Pitch;
 use crate::playback::Playback;
 use crate::portrait::Portraits;
 use crate::replay::{ReplayTracks, Track};
+use crate::stage::Backdrop;
 use crate::textures::Textures;
 use crate::timeline::DebugOverlay;
 use crate::typeface::Faces;
@@ -1192,6 +1193,11 @@ impl Actors {
                     justify_content: JustifyContent::Center,
                     ..default()
                 },
+                // A plate names a footballer, so it belongs to the picture
+                // rather than to the interface: it is drawn over the replay and
+                // UNDER the dip a cut fades in through, and goes dark with the
+                // man it is following. See [`Backdrop::PICTURE`].
+                GlobalZIndex(Backdrop::PLATES),
                 Visibility::Hidden,
             ));
 

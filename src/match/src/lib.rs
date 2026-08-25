@@ -13,6 +13,7 @@ mod bringup;
 mod camera;
 mod changeover;
 mod config;
+mod cut;
 mod field;
 mod focus;
 mod kit;
@@ -37,6 +38,7 @@ use crate::bringup::Bringup;
 use crate::camera::{CameraFlight, CameraOrbit, CameraZoom, TvCamera};
 use crate::changeover::ChangeoverShot;
 use crate::config::ViewerConfig;
+use crate::cut::CutFade;
 use crate::focus::{CameraSubject, FocusRing};
 use crate::loader::ChunkLoader;
 use crate::net::Netting;
@@ -181,6 +183,10 @@ impl MatchViewer {
             .init_resource::<TouchGesture>()
             .init_resource::<FlightPad>()
             .init_resource::<Bringup>()
+            // How far through the dip between two clips the picture is. Read
+            // every frame whether or not the recording has any holes in it at
+            // all, so it exists from the first one. See `cut`.
+            .init_resource::<CutFade>()
             .add_systems(
                 Startup,
                 (
@@ -202,6 +208,11 @@ impl MatchViewer {
                     // time the page hands it over.
                     ChangeoverShot::arm,
                     Timeline::spawn,
+                    // Hidden until the replay first cuts, and built here for
+                    // the reason the flight stick is: a sheet assembled on the
+                    // frame it is first wanted is a texture uploaded in the
+                    // middle of the moment it exists to cover.
+                    CutFade::spawn,
                     ChunkLoader::bootstrap,
                     // Hidden until a finger arrives — see `FlightPad::refresh`.
                     // Spawned here rather than then, because a control built on
@@ -375,8 +386,17 @@ impl MatchViewer {
                         // drawing one. See `quality`, which explains why this
                         // may fire exactly once.
                         Quality::relent,
-                        Playback::end_frame,
+                        // Behind the whole frame, because the dip is drawn over
+                        // all of it: whatever the cut this frame did to the
+                        // camera, the bodies and the plates, this is what the
+                        // viewer sees it through. See `cut`.
+                        CutFade::follow_playhead,
                     ),
+                    // Outside the two groups above rather than at the end of
+                    // one, because both are full — Bevy's system tuples stop at
+                    // twenty. It has to stay LAST all the same: it clears the
+                    // flags every one of them reads.
+                    Playback::end_frame,
                     FrameCost::leave_update,
                 )
                     .chain(),

@@ -118,14 +118,18 @@ pub enum RecordingScope {
     /// Every sample, first whistle to last. What `.dev/match` needs — its
     /// analyses read the whole match back off the recording.
     Full,
-    /// The highlights: [`GOAL_CLIP_PRE_ROLL_MS`] either side of each goal, and
-    /// of each near miss the match sheet shortlisted (`HighlightSelector`).
+    /// The highlights: [`GOAL_CLIP_PRE_ROLL_MS`] either side of each goal and of
+    /// each near miss the match sheet shortlisted (`HighlightSelector`), the
+    /// window a substitution stops the match for, and the two ends of the match
+    /// itself ([`OPENING_CLIP_MS`]).
     ///
-    /// Named for the goals because they were once all of it. At the measured
-    /// rate — 2.6 goals and 4.6 kept chances a match — that is about 72 seconds
-    /// of a 5,400-second match, or a seventy-fifth of a full recording; goals
-    /// alone were a two-hundredth. A nil-nil used to keep literally nothing and
-    /// say so, and now has a reel like any other match.
+    /// Named for the goals because they were once all of it. Measured over sixty
+    /// matches (`dev_match reel`): 2.9 goals, 7.4 kept chances and 4.8
+    /// substitution stoppages over 16.4 segments, which comes to 224 seconds of
+    /// a 5,839-second match — a twenty-sixth of a full recording, against a
+    /// two-hundredth when it really was goals alone. A nil-nil used to keep
+    /// literally nothing and say so; now every match has a reel, and every one
+    /// of them opens on the kick-off.
     Goals,
 }
 
@@ -161,6 +165,28 @@ pub const GOAL_CLIP_PRE_ROLL_MS: u64 = 5_000;
 /// same five seconds, which is what carries the save, the rebound and whatever
 /// the follow-up was.
 pub const GOAL_CLIP_POST_ROLL_MS: u64 = 5_000;
+
+/// How much of the kick-off a clipped recording keeps, whatever else happens.
+///
+/// The one moment of a match no rule that watches the football would ever ask
+/// for: nothing has gone in, nobody has had a shot, and there is no board up.
+/// It is also the first thing anybody opening a replay sees — without it the
+/// viewer opens on an empty pitch and a grey rail and sits there until the
+/// playhead reaches a clip in the twelfth minute, which reads as a recording
+/// that failed rather than as a match that had not started yet.
+pub const OPENING_CLIP_MS: u64 = 10_000;
+
+/// And how much of the finish.
+///
+/// The other end of the same argument, and the other thing a reel is expected
+/// to have on it: the whistle, and whatever the ten seconds in front of it were
+/// — a side throwing men forward for an equaliser, or a match being walked out.
+///
+/// ⚠ Cut out of the ROLLING PRE-ROLL at full time, because a whistle can no
+/// more be seen coming than a goal can. That is why the window
+/// [`ResultMatchPositionData::expire`] holds is the longer of this and
+/// [`GOAL_CLIP_PRE_ROLL_MS`] rather than simply the latter.
+pub const CLOSING_CLIP_MS: u64 = 10_000;
 
 /// How long before a substitution its clip starts.
 ///
@@ -344,6 +370,12 @@ enum ClipKind {
     /// A change. Never in doubt, like a goal — the board has gone up and the
     /// two men are already walking.
     Substitution,
+    /// The kick-off. Cut forward from nothing, and the only clip that is opened
+    /// before a ball has been kicked — see [`OPENING_CLIP_MS`].
+    Opening,
+    /// The final whistle. Cut backwards out of the pre-roll, and the only clip
+    /// that is opened after the last one — see [`CLOSING_CLIP_MS`].
+    Closing,
 }
 
 /// Compact top-level serialization.
@@ -410,8 +442,15 @@ impl ResultMatchPositionData {
     }
 
     /// Narrow what the recording keeps. See [`RecordingScope`].
+    ///
+    /// Also where the kick-off clip is opened, because this is the instant the
+    /// recorder learns it is clipping at all and the kick-off is the one moment
+    /// nothing will ever come along and mark. A no-op under
+    /// [`RecordingScope::Full`], which keeps the kick-off the way it keeps
+    /// everything else.
     pub fn with_scope(mut self, scope: RecordingScope) -> Self {
         self.scope = scope;
+        self.open_clip(0, ClipKind::Opening);
         self
     }
 
@@ -607,11 +646,16 @@ impl ResultMatchPositionData {
             || since_last >= HEARTBEAT_INTERVAL_MS
     }
 
-    /// Drop everything at the front of a pre-roll queue that a goal happening
-    /// *now* would no longer want.
+    /// Drop everything at the front of a pre-roll queue that a goal — or a
+    /// final whistle — happening *now* would no longer want.
+    ///
+    /// The longer of the two windows, which is the whistle's: the closing clip
+    /// is cut backwards out of this queue at full time (see
+    /// [`CLOSING_CLIP_MS`]), so a queue trimmed to a goal's five seconds would
+    /// hand back half a bookend.
     #[inline]
     fn expire(pending: &mut VecDeque<ResultPositionDataItem>, timestamp: u64) {
-        let oldest = timestamp.saturating_sub(GOAL_CLIP_PRE_ROLL_MS);
+        let oldest = timestamp.saturating_sub(GOAL_CLIP_PRE_ROLL_MS.max(CLOSING_CLIP_MS));
         while pending.front().is_some_and(|item| item.timestamp < oldest) {
             pending.pop_front();
         }
@@ -733,6 +777,10 @@ impl ResultMatchPositionData {
                 SUBSTITUTION_CLIP_PRE_ROLL_MS,
                 SUBSTITUTION_CLIP_POST_ROLL_MS,
             ),
+            // The two bookends run one way each: there is nothing before a
+            // kick-off and nothing after a whistle.
+            ClipKind::Opening => (0, OPENING_CLIP_MS),
+            ClipKind::Closing => (CLOSING_CLIP_MS, 0),
             ClipKind::Goal | ClipKind::Chance => (GOAL_CLIP_PRE_ROLL_MS, GOAL_CLIP_POST_ROLL_MS),
         };
         let start = timestamp.saturating_sub(pre);
@@ -790,6 +838,11 @@ impl ResultMatchPositionData {
     /// surviving clip is still holding — which is the whole point of marking
     /// speculatively in the first place.
     pub fn finish_retaining(&mut self, total_match_time: u64, kept_chances: &[u64]) {
+        // The end of the match, taken out of the rolling pre-roll BEFORE the
+        // three lines below throw it away. This is the whole reason the window
+        // is as long as it is — see [`CLOSING_CLIP_MS`].
+        self.open_clip(total_match_time, ClipKind::Closing);
+
         self.pending_ball = VecDeque::new();
         self.pending_players = HashMap::new();
         self.capture_until = None;
@@ -1034,6 +1087,11 @@ impl VectorExtensions for Vector3<f32> {
 /// throws away. A clip that loses the build-up is worthless to watch, and a
 /// recorder that quietly keeps the whole match is the cost this exists to
 /// avoid; neither failure shows up anywhere but here.
+///
+/// Every expectation below carries the two bookends — `(0, 10_000)` and the ten
+/// seconds up to the whistle — because a clipped recording always has them (see
+/// [`OPENING_CLIP_MS`]) and a test that expected only the goals would be
+/// asserting a recording the game never produces.
 #[cfg(test)]
 mod goal_clip_tests {
     use super::*;
@@ -1070,18 +1128,43 @@ mod goal_clip_tests {
         )
     }
 
+    /// The stamps of the samples that fall inside one window, which is what
+    /// every assertion about a clip is actually about: the recording is one
+    /// flat stream and a clip is a claim about part of it.
+    fn inside(samples: &[ResultPositionDataItem], from: u64, to: u64) -> (u64, u64) {
+        let held: Vec<u64> = samples
+            .iter()
+            .map(|item| item.timestamp)
+            .filter(|stamp| (from..=to).contains(stamp))
+            .collect();
+        (
+            *held.first().expect("a sample inside the clip"),
+            *held.last().expect("a sample inside the clip"),
+        )
+    }
+
     #[test]
     fn a_goal_keeps_five_seconds_either_side_and_nothing_else() {
         let data = record(RecordingScope::Goals, 60_000, &[30_000]);
 
-        let (first, last) = stamps(&data.ball);
-        assert!(
-            first >= 25_000 && last <= 35_000,
-            "kept ball samples outside the clip: {first}..{last}"
+        // The kick-off and the finish either side of it, always — the goal's
+        // own clip is the middle one.
+        assert_eq!(
+            data.recorded_segments(),
+            Some(&[(0, 10_000), (25_000, 35_000), (50_000, 60_000)][..])
         );
+        assert!(
+            !data.ball.iter().any(|item| {
+                (10_000..25_000).contains(&item.timestamp)
+                    || (35_000..50_000).contains(&item.timestamp)
+            }),
+            "the match between the clips was recorded"
+        );
+
         // And the WHOLE clip, not just the half after the ball crossed the
         // line — the pre-roll is the part that has to be held speculatively,
         // so it is the part that goes missing.
+        let (first, last) = inside(&data.ball, 25_000, 35_000);
         assert!(
             first <= 25_030,
             "the build-up was dropped: starts at {first}"
@@ -1092,13 +1175,37 @@ mod goal_clip_tests {
         );
 
         let player = data.players.get(&7).expect("the player was recorded");
-        let (first, last) = stamps(player);
+        let (first, last) = inside(player, 25_000, 35_000);
         assert!(
             first <= 25_030 && last >= 34_970,
             "the player's clip does not match the ball's: {first}..{last}"
         );
+    }
 
-        assert_eq!(data.recorded_segments(), Some(&[(25_000, 35_000)][..]));
+    /// The two ends of the match, which no rule that watches the football would
+    /// ever ask for and every reel is expected to have. The kick-off is opened
+    /// before a ball is kicked; the whistle is cut backwards out of the pre-roll
+    /// once it goes.
+    #[test]
+    fn the_kick_off_and_the_whistle_are_kept_whatever_happened_between_them() {
+        let data = record(RecordingScope::Goals, 60_000, &[]);
+
+        assert_eq!(
+            data.recorded_segments(),
+            Some(&[(0, 10_000), (50_000, 60_000)][..]),
+            "a match with nothing in it kept something other than its two ends"
+        );
+
+        let (first, last) = inside(&data.ball, 0, 10_000);
+        assert!(
+            first <= 60 && last >= 9_960,
+            "the kick-off clip is {first}..{last} of its ten seconds"
+        );
+        let (first, last) = inside(&data.ball, 50_000, 60_000);
+        assert!(
+            first <= 50_030 && last >= 59_960,
+            "the closing clip is {first}..{last} of its ten seconds"
+        );
     }
 
     #[test]
@@ -1107,7 +1214,10 @@ mod goal_clip_tests {
         // overlapping ranges would double-record the shared seconds and leave
         // the viewer to reconcile them.
         let data = record(RecordingScope::Goals, 60_000, &[30_000, 33_000]);
-        assert_eq!(data.recorded_segments(), Some(&[(25_000, 38_000)][..]));
+        assert_eq!(
+            data.recorded_segments(),
+            Some(&[(0, 10_000), (25_000, 38_000), (50_000, 60_000)][..])
+        );
 
         let stamps: Vec<u64> = data.ball.iter().map(|item| item.timestamp).collect();
         let mut sorted = stamps.clone();
@@ -1124,7 +1234,14 @@ mod goal_clip_tests {
         let data = record(RecordingScope::Goals, 120_000, &[30_000, 90_000]);
         assert_eq!(
             data.recorded_segments(),
-            Some(&[(25_000, 35_000), (85_000, 95_000)][..])
+            Some(
+                &[
+                    (0, 10_000),
+                    (25_000, 35_000),
+                    (85_000, 95_000),
+                    (110_000, 120_000)
+                ][..]
+            )
         );
         assert!(
             !data
@@ -1135,14 +1252,11 @@ mod goal_clip_tests {
         );
     }
 
-    #[test]
-    fn a_goalless_match_records_nothing_and_says_so() {
-        let data = record(RecordingScope::Goals, 60_000, &[]);
-        assert!(data.is_empty(), "a goalless match kept samples");
-        // `Some(empty)`, never `None`: the viewer reads a missing segment list
-        // as "the whole match is here" and would wait forever for it.
-        assert_eq!(data.recorded_segments(), Some::<&[(u64, u64)]>(&[]));
-    }
+    // What used to stand here was `a_goalless_match_records_nothing_and_says_so`.
+    // A goalless match is no longer a recording of nothing — it keeps its two
+    // bookends, which the test above is about — so the empty segment list it
+    // was pinning is now reachable only through a recorder that was never
+    // sampled at all. That is the test below.
 
     /// A match played on a remote worker arrives at the coordinator through
     /// `MatchResultRaw`'s `#[serde(skip)]` position track — that is, as an
@@ -1174,8 +1288,16 @@ mod goal_clip_tests {
     fn a_goal_at_the_death_does_not_claim_time_that_never_happened() {
         // Five seconds past a whistle that has already gone. Left alone, the
         // timeline draws a clip running past full time.
+        //
+        // A goal this late falls inside the closing bookend and merges with it,
+        // and the merge is what makes this worth asserting: the two ranges are
+        // combined on the LATER end, so an untrimmed goal clip would carry the
+        // pair out to 62 s rather than stopping at the whistle.
         let data = record(RecordingScope::Goals, 60_000, &[57_000]);
-        assert_eq!(data.recorded_segments(), Some(&[(52_000, 60_000)][..]));
+        assert_eq!(
+            data.recorded_segments(),
+            Some(&[(0, 10_000), (50_000, 60_000)][..])
+        );
     }
 
     #[test]
@@ -1190,14 +1312,17 @@ mod goal_clip_tests {
             data.add_ball_positions(t, Vector3::new(drift, 272.0, 0.0));
             t += 30;
         }
+        // Samples are offered every 30 ms above, so the window is worth about
+        // this many of them and nothing this test does can make it more.
+        let window = GOAL_CLIP_PRE_ROLL_MS.max(CLOSING_CLIP_MS);
         assert!(
-            data.pending_ball.len() <= 200,
+            data.pending_ball.len() <= (window / 30) as usize + 10,
             "the pre-roll is holding {} samples of a ten-minute goalless spell",
             data.pending_ball.len()
         );
         let oldest = data.pending_ball.front().expect("a sample").timestamp;
         assert!(
-            oldest >= 600_000 - GOAL_CLIP_PRE_ROLL_MS,
+            oldest >= 600_000 - window,
             "the pre-roll is holding samples from {oldest}, older than its window"
         );
     }

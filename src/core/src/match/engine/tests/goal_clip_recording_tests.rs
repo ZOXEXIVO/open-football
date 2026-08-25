@@ -23,7 +23,9 @@ use crate::r#match::engine::context::MatchEngineConfig;
 use crate::r#match::engine::engine::FootballEngine;
 use crate::r#match::engine::result::HighlightSelector;
 use crate::r#match::player::statistics::MatchStatisticType;
-use crate::r#match::result::{GOAL_CLIP_POST_ROLL_MS, GOAL_CLIP_PRE_ROLL_MS, RecordingScope};
+use crate::r#match::result::{
+    CLOSING_CLIP_MS, GOAL_CLIP_POST_ROLL_MS, GOAL_CLIP_PRE_ROLL_MS, OPENING_CLIP_MS, RecordingScope,
+};
 
 /// Plays until a match with at least one goal comes out, and returns it.
 ///
@@ -127,9 +129,11 @@ fn a_clipped_recording_holds_the_goals_and_nothing_else() {
          recorder a goal had gone in",
         goals.len()
     );
+    // Plus the two bookends, which are clips nothing marked: the kick-off and
+    // the ten seconds up to the whistle. See `OPENING_CLIP_MS`.
     let moments = goals.len() + chances.len();
     assert!(
-        segments.len() <= moments,
+        segments.len() <= moments + 2,
         "more clips than moments: {segments:?} for {} goal(s) and {} chance(s)",
         goals.len(),
         chances.len()
@@ -165,7 +169,9 @@ fn a_clipped_recording_holds_the_goals_and_nothing_else() {
     // marked and dropped — which is the assertion that catches a prune that
     // forgot to take the samples with it.
     let recorded: u64 = segments.iter().map(|(start, end)| end - start).sum();
-    let budget = moments as u64 * (GOAL_CLIP_PRE_ROLL_MS + GOAL_CLIP_POST_ROLL_MS);
+    let budget = moments as u64 * (GOAL_CLIP_PRE_ROLL_MS + GOAL_CLIP_POST_ROLL_MS)
+        + OPENING_CLIP_MS
+        + CLOSING_CLIP_MS;
     assert!(
         recorded <= budget,
         "kept {recorded} ms for {} moment(s), more than the {budget} ms the \

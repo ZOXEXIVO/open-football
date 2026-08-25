@@ -547,6 +547,53 @@ impl Textures {
         }))
     }
 
+    /// The ring the picture comes up through when the replay cuts from one
+    /// clip to the next — see [`crate::cut`], which is the only thing that
+    /// draws it.
+    ///
+    /// White throughout with all the weight in the ALPHA, like [`Self::mask`]
+    /// above it and for a second reason as well as the first: `ImageNode::color`
+    /// then carries BOTH the colour of the dip and how far through it we are,
+    /// so a fade is one float written per frame rather than a texture rebuilt
+    /// per frame.
+    ///
+    /// Three numbers, and the shape of a lens rather than of a border:
+    ///
+    /// - [`CORE`] is how much of the picture survives in the middle at the
+    ///   instant of the cut. Not zero — a full dip to black hides the cut
+    ///   instead of announcing it, and the point is to see the new episode
+    ///   arrive.
+    /// - [`REACH`] is where the ring closes to solid, in half-widths. Past
+    ///   one, so the mid-edges are dark and the corners are darker still,
+    ///   which is what makes this read as a lens rather than as a curtain.
+    /// - [`EYE`] puts the middle of it above the middle of the frame, where
+    ///   the eye already thinks the centre of a picture is. It is the same 45%
+    ///   the match page's own loading ground uses.
+    ///
+    /// [`CORE`]: Self::vignette
+    /// [`REACH`]: Self::vignette
+    /// [`EYE`]: Self::vignette
+    pub fn vignette(images: &mut Assets<Image>) -> Handle<Image> {
+        /// Big enough that a gradient this soft is not stretched into visible
+        /// steps across a 4K canvas, small enough to be a quarter of a
+        /// megabyte. There is no detail in here to lose: it is one ramp.
+        const SIZE: u32 = 256;
+        const CORE: f32 = 0.50;
+        const REACH: f32 = 1.6;
+        const EYE: f32 = 0.45;
+
+        let mut data = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+        for row in 0..SIZE {
+            for column in 0..SIZE {
+                let across = (column as f32 + 0.5) / SIZE as f32 - 0.5;
+                let down = (row as f32 + 0.5) / SIZE as f32 - EYE;
+                let reach = (across * across + down * down).sqrt() / (0.5 * REACH);
+                let weight = CORE + (1.0 - CORE) * Self::smooth(reach);
+                data.extend_from_slice(&[255, 255, 255, (weight * 255.0).round() as u8]);
+            }
+        }
+        images.add(Self::image(SIZE, SIZE, data))
+    }
     /// Is this point inside a regular pentagon of `radius` centred on the
     /// origin, turned `rotation` radians from vertex-straight-up?
     ///
@@ -2444,6 +2491,67 @@ mod tests {
         colour.x * 0.2126 + colour.y * 0.7152 + colour.z * 0.0722
     }
 
+    /// The ring a cut is faded in through has to be a LENS: thin enough in the
+    /// middle to see the new episode arrive through it, solid by the corners,
+    /// and one smooth ramp between the two. Each of the three is a way of
+    /// getting it wrong that looks fine in the source — a flat sheet is a
+    /// curtain and reads as a dropped frame, a hard edge reads as a mask, and
+    /// a ring that turns back on itself draws a halo.
+    #[test]
+    fn the_vignette_thins_towards_the_middle_of_the_frame() {
+        let mut images = Assets::default();
+        let handle = Textures::vignette(&mut images);
+        let image = images.get(&handle).expect("the vignette was just added");
+        let size = image.width();
+        let pixels = image.data.as_ref().expect("pixels");
+        let alpha = |x: u32, y: u32| pixels[((y * size + x) * 4 + 3) as usize];
+
+        // The middle of the ring sits above the middle of the frame — see
+        // `vignette`'s `EYE` — so that is where the thin part is measured.
+        let eye = (size as f32 * 0.45) as u32;
+        let middle = alpha(size / 2, eye);
+        let side = alpha(size - 1, eye);
+        let corner = alpha(size - 1, size - 1);
+
+        assert!(
+            (110..=145).contains(&middle),
+            "the middle of the dip is {middle}/255: {}",
+            if middle < 110 {
+                "the cut will not be seen through it"
+            } else {
+                "the new episode arrives behind a curtain"
+            }
+        );
+        assert!(side > 190, "the edge of the frame is only {side}/255 dark");
+        assert!(
+            corner > side,
+            "the corner ({corner}) is no darker than the edge ({side}) — this is a \
+             band, not a lens"
+        );
+
+        // One ramp outward from the eye, on both axes, with no step and no
+        // turn anywhere in it.
+        let mut previous = middle;
+        for x in size / 2..size {
+            let here = alpha(x, eye);
+            assert!(here >= previous, "the ramp turns back at column {x}");
+            assert!(here - previous < 8, "the ramp steps at column {x}");
+            previous = here;
+        }
+        let mut previous = middle;
+        for y in eye..size {
+            let here = alpha(size / 2, y);
+            assert!(here >= previous, "the ramp turns back at row {y}");
+            previous = here;
+        }
+
+        // White throughout: the colour of the dip belongs to the node, which
+        // is what lets one float a frame carry the whole fade.
+        assert!(
+            pixels.chunks(4).all(|texel| texel[..3] == [255, 255, 255]),
+            "the vignette carries a colour of its own"
+        );
+    }
     /// A shirt is printed in capitals, and in the same face the player's own
     /// label is set in — so a letter that face can draw is printed as it is
     /// spelled, accent and all. Only what it cannot draw folds onto a base
