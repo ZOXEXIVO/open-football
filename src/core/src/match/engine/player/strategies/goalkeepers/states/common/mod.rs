@@ -140,6 +140,86 @@ impl KeeperDebug {
     }
 }
 
+/// **A goalkeeper does not chase the ball he has just played.**
+///
+/// # The report, and what it measured
+///
+/// *"Sometimes he kicks the ball around with his hands and runs after it
+/// himself, and sometimes the ball even rolls out of bounds."*
+///
+/// Read off a recorded match rather than off a counter — every mechanism
+/// in this file emits an event and none of them showed anything wrong.
+/// What the replay shows is unambiguous: of **22 keeper deliveries in one
+/// match, 16 (73%) were followed by the keeper sprinting after his own
+/// ball**, at a peak of 8-9 m/s, for one and a half to three seconds,
+/// covering a mean of **12 m up the pitch** before turning round and
+/// running back. One of them, traced tick by tick: he throws it out to a
+/// full-back at 804.06 s and by 804.12 s he is in `Catching`, a metre and
+/// a half behind his own throw, at eight metres a second, for the next
+/// thirty metres — `Catching` → `Standing` → `Clearing` → `Standing` →
+/// `Catching` → `ComingOut` → `Catching`, seven state changes in three
+/// seconds.
+///
+/// # Why every gate let it through
+///
+/// Each of them asks `!ctx.ball().is_owned()`, and an untouched throw
+/// satisfies that: nobody is on it yet. Two of the doors do carry
+/// `blocked_from_recollecting`, but that bar is about a ball which has NOT
+/// travelled — it lifts the moment the ball is five metres clear of him,
+/// which for a delivery is immediately and is exactly backwards. So
+/// `Standing`'s close-ball and sweep branches, both of `Walking`'s
+/// loose-ball branches, its `should_come_out_advanced`,
+/// `ReturningToGoal`'s claim branch and the dispatcher's loose-ball
+/// override all opened on his own pass.
+///
+/// The same bug class this engine keeps producing — an outer gate that
+/// does not ask the question the decision under it is about — and the same
+/// fix that worked for `Interception::is_available`: **one shared
+/// predicate, applied at every door.** Patching the doors individually
+/// does not hold; there are eight of them and the first pass would simply
+/// move the entry.
+///
+/// # The rule
+///
+/// A ball a player has just deliberately played, which nobody has touched
+/// since, is not a loose ball to him. For a keeper it is also the Laws:
+/// a ball released from his hands may not be handled again until somebody
+/// else plays it, and `Ball::record_touch` clears the release marker at
+/// exactly that moment — so the football rule and the engine's own
+/// bookkeeping are already the same statement.
+pub struct KeeperDelivery;
+
+impl KeeperDelivery {
+    /// Diagnostic switch: with `OF_KEEPER_FOLLOW` set the keeper chases
+    /// his own delivery again, exactly as he did before this existed.
+    ///
+    /// The A/B control for it. Sixteen chases a match, each 12 m out and
+    /// 12 m back, is a large share of every metre he covers and of every
+    /// state transition he makes, so what removing it costs cannot be read
+    /// off the diff. Same pattern and purpose as `OF_KEEPER_CALM_OFF` and
+    /// `OF_KEEPER_SERVO`; read once per process. Debug infrastructure — do
+    /// not remove.
+    pub fn follow_allowed() -> bool {
+        use std::sync::OnceLock;
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var("OF_KEEPER_FOLLOW").is_ok())
+    }
+
+    /// Is this ball still the one HE put into play?
+    ///
+    /// Every keeper door that asks "is there a loose ball for me" should
+    /// ask this first and decline.
+    pub fn is_his(ctx: &StateProcessingContext) -> bool {
+        // ⚠ Never for the taker of a restart. A dead ball is not a
+        // delivery, he is the only man allowed to touch it, and walking to
+        // it is the whole of what he is doing — the same exemption
+        // `GoalkeeperTakeBallState` carries twice, and for the same reason.
+        !Self::follow_allowed()
+            && ctx.tick_context.ball.restart_taker != Some(ctx.player.id)
+            && ctx.ball().is_my_own_delivery()
+    }
+}
+
 pub struct KeeperRestPosition;
 
 impl KeeperRestPosition {
@@ -1162,7 +1242,13 @@ pub struct KeeperAerialClaim;
 impl KeeperAerialClaim {
     /// Below this the ball is not in the air in any meaningful sense and
     /// the ground-ball claim owns it.
-    const MIN_HEIGHT: f32 = 1.35;
+    ///
+    /// Public because it is the ONE line between the two models, and the
+    /// loose-ball dispatcher has to read it too: below it a keeper may be
+    /// forced into the ground chase, above it the ball is this claim's and
+    /// nothing else's. Two numbers for one boundary is how a ball ends up
+    /// belonging to both models or to neither.
+    pub const MIN_HEIGHT: f32 = 1.35;
     /// How much higher than an outfielder a keeper plays the ball — he
     /// has his hands above his head and is allowed to use them.
     const ARMS: f32 = 0.45;

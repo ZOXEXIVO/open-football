@@ -1,6 +1,6 @@
 use crate::r#match::engine::ball::ball::HandlingVerdict;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision,
+    ActivityIntensity, GoalkeeperCondition, KeeperDelivery, KeeperFeetDecision,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
@@ -10,7 +10,6 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const PICKUP_DISTANCE_THRESHOLD: f32 = 1.0; // Maximum distance to actually gather the ball
-const PICKUP_SUCCESS_PROBABILITY: f32 = 0.9; // Probability of successfully picking up the ball
 /// The state is entered from up to ~10u away (a keeper walking onto a
 /// ball rolling through their box), so it needs an approach phase. Beyond
 /// this the ball is someone else's problem.
@@ -40,8 +39,11 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
             ));
         }
 
-        // 1. Someone beat us to it.
-        if ctx.ball().is_owned() && !ctx.player.has_ball(ctx) {
+        // 1. Someone beat us to it — or he has just played it himself,
+        // which is the same statement about whose ball it is. See
+        // [`KeeperDelivery`]: bending to scoop up his own throw is the
+        // second-touch offence as well as the reported behaviour.
+        if (ctx.ball().is_owned() && !ctx.player.has_ball(ctx)) || KeeperDelivery::is_his(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,
             ));
@@ -91,11 +93,26 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
         // not a skill test. The base rate is for a ball he is meeting;
         // for one he is standing on it is near-certain, and only a keeper
         // with genuinely poor handling makes a mess of it.
+        //
+        // ⚠ **THE MEETING RATE WAS A FLAT 0.9**, whoever he was and
+        // whatever the ball was doing — so a keeper strolling onto a ball
+        // trickling across his own six-yard box with nobody within thirty
+        // metres fumbled one in ten. That is not a thing that happens, and
+        // it is the wrong shape as well as the wrong number: what makes a
+        // gather hard is a man on you and pace on the ball, and both are
+        // already measured here. `KeeperFeetDecision::pressure` is the
+        // engine's own reading of how closed down he is; the speed bar is
+        // the same 2.0 u/tick every keeper state calls a driven ball.
+        // Unpressured and slow, this is essentially certain; pressed, with
+        // it coming at him quickly and poor hands, it is nearer four in
+        // five — which is where the fumbles a match should come from.
         let handling = (ctx.player.skills.goalkeeping.handling / 20.0).clamp(0.0, 1.0);
         let pickup_chance = if ctx.player.has_ball(ctx) {
             (0.97 + handling * 0.03).min(1.0)
         } else {
-            PICKUP_SUCCESS_PROBABILITY
+            let press = KeeperFeetDecision::pressure(ctx);
+            let pace = (ball_speed / 2.0).clamp(0.0, 1.0);
+            (0.995 - press * 0.10 - pace * 0.08 - (1.0 - handling) * 0.06).clamp(0.70, 0.999)
         };
         let pickup_success = ctx.context.rng.unit_f32() < pickup_chance;
         if pickup_success {
@@ -121,9 +138,22 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
                 KeeperFeetDecision::without_hands(ctx),
             ))
         } else {
-            // Pickup failed, transition to appropriate state (e.g., Diving)
+            // **A fumble is not a dive.**
+            //
+            // This branch sent him to `Diving` — a committed action of
+            // 0.8 to 1.8 s — at a ball he was standing over, one unit
+            // away and barely moving. A keeper who cannot get his hands
+            // cleanly round a ball at his feet does not leave them; he
+            // reaches for it again, and if a man is on him he goes
+            // through it with his body, which is what `KeeperSmother`
+            // is for and `Catching` is the door to.
+            //
+            // The branch above already handles the same failure on a ball
+            // he owns, and handles it exactly this way — on his feet. The
+            // two halves of one fumble disagreeing about whether he ends
+            // up on the floor is the whole of the defect.
             Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Diving,
+                GoalkeeperState::Catching,
             ))
         }
     }

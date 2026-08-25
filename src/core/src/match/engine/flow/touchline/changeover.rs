@@ -77,31 +77,22 @@ pub struct SubstitutionBreak {
 }
 
 impl SubstitutionBreak {
-    /// **How long a substitution stops the match for, in ms of match clock.**
+    /// **The longest the walking may take, in ms of match clock — a ceiling,
+    /// not a length.**
     ///
-    /// A televised change takes twenty to forty seconds; this is the part of
-    /// it worth drawing — the man coming off reaching the line and the man
-    /// coming on reaching his slot — with nothing padded either side.
+    /// It is what the window allows the men to cover their ground in, on top
+    /// of the [beats](Self::BEAT_MS) the camera spends on them. The window
+    /// closes on the tick the last of them is standing on his slot, so an
+    /// ordinary change never comes near this: the two men of a pair go at
+    /// once, and the longer of the two runs is what it costs. Typically ~34 m
+    /// at [`Self::OFF`] against ~35 m at [`Self::ON`] — four or five seconds,
+    /// most of which is inside a beat anyway. The worst case is a corner-flag
+    /// full-back walking 86 m to the halfway line (9.8 s at [`Self::OFF`]),
+    /// which twenty is comfortably clear of.
     ///
-    /// It is also the number every speed below is sized against, and the two
-    /// legs run END TO END now that the man coming off has to reach the man
-    /// coming on. Worst case: a corner-flag full-back to the halfway line
-    /// (86 m at [`Self::OFF`], 9.8 s) and then the gate to a far-corner slot
-    /// (62 m at [`Self::ON`], 7.5 s) — 17.3 s, with the ceiling two and a
-    /// half seconds clear of it. That margin is what keeps the tidy-up at the
-    /// end from being a teleport.
-    ///
-    /// **The longest a substitution may stop the match for, in ms of match
-    /// clock — a ceiling, not a length.**
-    ///
-    /// The window closes on the tick the last man reaches his slot, so what a
-    /// change actually costs is the two runs: the man coming off reaching the
-    /// nearest point on the bench touchline, and only THEN the man coming on
-    /// covering the ground to the slot he is inheriting. Typically ~34 m at
-    /// [`Self::OFF`] plus ~35 m at [`Self::ON`] — nine or ten seconds. The
-    /// worst case is a full-back on the far touchline (68 m across) followed
-    /// by a run to the far corner (~55 m), which is seventeen; twenty leaves
-    /// margin without letting a failed walk stall the match.
+    /// That margin is what keeps the tidy-up at the end from being a
+    /// teleport: [`Self::land`] writes whatever ground a walk had left when
+    /// the ceiling expired, and the census row it books to must read zero.
     ///
     /// A fixed window would have to be as long as the worst case and would
     /// then stand everybody still through the ordinary one.
@@ -124,35 +115,56 @@ impl SubstitutionBreak {
     /// [`MatchContext::sub_walk_off`]: super::super::context::MatchContext::sub_walk_off
     pub const BREAK_MS: u64 = 20_000;
 
-    /// **How long everybody stands still at the start of the window, per man
-    /// being replaced**, in ms of match clock.
+    /// **How long a man coming on stands still while the camera looks at
+    /// him**, in ms of match clock — his close-up, before he moves a step.
     ///
-    /// ⚠ **The picture cannot show a man on the pitch who has already left
-    /// it.** The replay opens a change by looking at the back of each man
-    /// coming off, where he is standing, so his name can be read — see
-    /// `ChangeoverShot::PORTRAIT_MS` in the viewer, which is this same figure.
-    /// Without the hold he is running for the touchline at [`Self::OFF`] from
-    /// the tick the board goes up, 8.75 m/s, and the second and third men of a
-    /// triple change are over the line before the camera reaches them.
+    /// ⚠ **The picture cannot show a man standing at the fourth official's
+    /// shoulder who is already running onto the pitch.** The replay opens
+    /// each change by cutting to the substitute's face, coming round him to
+    /// his back so the name across his shoulders can be read, and only THEN
+    /// letting him go — see `ChangeoverShot::PORTRAIT_MS` in the viewer, which
+    /// is this same figure. Without the hold he is away at [`Self::ON`] from
+    /// the tick the board goes up and the shot is a close-up of the grass he
+    /// was standing on.
     ///
-    /// A second on his back and then the camera comes round to his face, which
-    /// is 3.4 s a man; and it stops the whole window rather than his own leg
-    /// of it, because everybody else on the pitch is already standing still
-    /// and a man jogging off behind a shot of somebody else is the one thing
-    /// in frame that moves.
+    /// A second and a half on his face, the swing round him, and a second on
+    /// his back: 3.4 s a man. It stops the whole window rather than his own
+    /// leg of it, because everybody else on the pitch is already standing
+    /// still and one man moving is the only thing in frame that would.
     ///
     /// ⚠ **The viewer's `ChangeoverShot::PORTRAIT_MS` is this same figure and
     /// the two have to agree** — this crate cannot depend on that one, so if
-    /// either moves the other moves with it. Under-hold and the man walks out
-    /// of his own close-up; over-hold and the picture is on the touchline
-    /// while the pitch stands still.
+    /// either moves the other moves with it. Under-hold and he walks out of
+    /// his own close-up; over-hold and the picture is on a man who has already
+    /// arrived while twenty-one others stand about.
     ///
     /// It is charged to [`Self::resume_at_ms`] rather than taken out of it, so
     /// a change with three men in it still gets the full walking allowance —
     /// and it is match clock, like the rest of the window. Two to four
-    /// stoppages a match at three to ten seconds apiece, which is the same
+    /// stoppages a match at six to eighteen seconds apiece, which is the same
     /// order as the 45-75 s a goal celebration already spends.
     pub const PORTRAIT_MS: u64 = 3_400;
+
+    /// **And how long he then has the picture to himself while he runs on**,
+    /// in ms of match clock.
+    ///
+    /// The camera has come round behind him and it stays exactly where it is:
+    /// he runs away from it onto the field with his name across his shoulders
+    /// and the whole ground laid out in front of him. 2.6 s at [`Self::ON`] is
+    /// a little over twenty metres, which reads as a man arriving rather than
+    /// as a man setting off.
+    ///
+    /// ⚠ **This is what makes a multiple change sequential.** The men are no
+    /// longer released together the moment the last close-up is over — man two
+    /// is still held while man one runs, so a triple change is three complete
+    /// arrivals instead of one portrait each and then a scramble. The viewer's
+    /// `ChangeoverShot::RUN_MS` is the same figure, and the pairing rule is
+    /// [`Self::PORTRAIT_MS`]'s.
+    pub const RUN_MS: u64 = 2_600;
+
+    /// One man's whole turn in front of the camera: his close-up and then his
+    /// run. The next man's close-up starts here.
+    pub const BEAT_MS: u64 = Self::PORTRAIT_MS + Self::RUN_MS;
 
     /// Movement speeds, in game units per tick — one unit is 12.5 cm and one
     /// tick is 10 ms, so 0.08 u/tick is 1 m/s and these are real speeds
@@ -161,13 +173,13 @@ impl SubstitutionBreak {
     /// A man being taken off jogs briskly: the referee is waiting on him and
     /// the manager is waving. 8.75 m/s covers the longest walk anybody can be
     /// given — a corner-flag full-back to the halfway line, 86 m — in under
-    /// ten seconds, which is what leaves room inside [`Self::BREAK_MS`] for
-    /// the second leg.
+    /// ten seconds, inside [`Self::BREAK_MS`] on its own.
     const OFF: f32 = 0.70;
-    /// And on: 8.25 m/s. He is the second half of a sequence rather than the
-    /// first, so his ground and the other man's have to fit inside the
-    /// ceiling together — worst case 86 m off then 62 m on, about eighteen
-    /// seconds.
+    /// And on: 8.25 m/s. He leaves on the same tick as the man he is
+    /// replacing rather than after him, so the two runs overlap and the
+    /// ceiling only has to hold the longer of them — but he is the one being
+    /// watched, and [`Self::RUN_MS`] of camera is sized off this: 2.6 s puts
+    /// him twenty-one metres onto the field.
     const ON: f32 = 0.66;
     /// The walk from the line back to the bench, once he is off.
     /// Deliberately the speed [`MatchField::settle_touchline`] carries on
@@ -201,10 +213,21 @@ impl SubstitutionBreak {
         self.resume_at_ms
     }
 
-    /// How long nobody moves at the start of the window: one
-    /// [`Self::PORTRAIT_MS`] for every man being replaced.
+    /// How long the picture takes to work through the window: one
+    /// [`Self::BEAT_MS`] for every man coming on.
     fn beats_ms(&self) -> u64 {
-        self.changes.len() as u64 * Self::PORTRAIT_MS
+        self.changes.len() as u64 * Self::BEAT_MS
+    }
+
+    /// The match clock the `index`-th man of the window is let go at: the end
+    /// of his own close-up, and not a tick before.
+    ///
+    /// His counterpart leaves on the same tick. The exchange is what a
+    /// substitution is, and both of them standing still until the camera has
+    /// finished with the man coming on is what keeps the close-up a picture of
+    /// somebody standing rather than of somebody halfway out of frame.
+    fn released_at(&self, index: usize) -> u64 {
+        self.opened_at_ms + index as u64 * Self::BEAT_MS + Self::PORTRAIT_MS
     }
 
     /// The changes being played out. Both sides can change at once — that is
@@ -239,9 +262,9 @@ impl SubstitutionBreak {
             meet,
             slot,
         });
-        // Every man added to the window buys another [`Self::PORTRAIT_MS`] of
-        // everybody standing still, so the ceiling has to move with him — the
-        // walking allowance is `BREAK_MS` and the beats are on top of it.
+        // Every man added to the window buys another [`Self::BEAT_MS`] of the
+        // camera's time, so the ceiling has to move with him — the walking
+        // allowance is `BREAK_MS` and the beats are on top of it.
         //
         // Recomputed here rather than in `open` because the window is opened
         // empty: the caller stages the pair straight afterwards and re-arms
@@ -259,32 +282,52 @@ impl SubstitutionBreak {
     /// and a fixed window would have to be long enough for the second while
     /// standing everybody still through the first.
     pub fn advance(&mut self, field: &mut MatchField, context: &MatchContext) -> bool {
-        if context.total_match_time >= self.resume_at_ms {
+        let now = context.total_match_time;
+        if now >= self.resume_at_ms {
             return false;
         }
-        // ⚠ **Nobody moves while the picture is on the men being replaced.**
-        // The replay opens the change with a second on the back of each of
-        // them, standing where he was when the board went up — see
-        // [`Self::PORTRAIT_MS`]. He cannot be shown standing on the pitch and
-        // be running off it at the same time.
-        if context.total_match_time < self.opened_at_ms + self.beats_ms() {
-            return true;
-        }
         let mut done = true;
-        for change in &self.changes {
-            // **He does not move until the other man is off.** A referee
-            // waits for the exchange, and without this gate the two runs are
-            // simultaneous and unrelated — which is what it looked like when
-            // it was watched, and the first thing reported back.
-            let off = Self::walk_off(field, change);
-            done &= off && Self::walk_on(field, change);
+        for (index, change) in self.changes.iter().enumerate() {
+            // ⚠ **Neither man of a pair moves while the picture is on the one
+            // coming on.** The replay opens his beat with his face, comes
+            // round him to the name across his shoulders, and only then lets
+            // him go — see [`Self::PORTRAIT_MS`]. He cannot be shown standing
+            // at the fourth official's shoulder and be running onto the pitch
+            // at the same time.
+            //
+            // ⚠ **And it is per MAN, not per window.** Man two is still held
+            // while man one runs on, which is what makes a triple change three
+            // arrivals rather than one shot of three men setting off together.
+            if now < self.released_at(index) {
+                done = false;
+                continue;
+            }
+            // The two of them go at once and cross at the gate, which is what
+            // an exchange looks like. It used to be sequential — the man
+            // coming off had to be over the line before the substitute moved —
+            // because the shot that opened a change was of HIM, standing on
+            // the pitch. The shot is of the man coming on now and nothing is
+            // waiting on the man leaving.
+            let arrived = Self::walk_on(field, change);
+            done &= Self::walk_off(field, change) && arrived;
         }
-        !done
+        // ⚠ **And the window may not end inside its own beats.** A change
+        // where nobody had far to walk can have everybody standing on his slot
+        // with two men's close-ups still to come; close on that and the picture
+        // is back on the gantry with the shot half told.
+        !done || now < self.opened_at_ms + self.beats_ms()
     }
 
     /// The man leaving: across the pitch to the man replacing him, then along
     /// the touchline towards the dugout at a walk. `true` once he is over the
     /// line, which is also the moment the two of them pass each other.
+    ///
+    /// **Nothing is watching him.** He sets off on the same tick as his
+    /// replacement and runs to the same gate, so the crossing still happens in
+    /// one place — but the camera is behind the man coming on, looking at the
+    /// pitch, and this walk is background. It is here so a body does not
+    /// vanish off the spot it was standing on, not because anybody is pointed
+    /// at it.
     ///
     /// He moves on his [`TouchlineStand`](super::TouchlineStand) rather than
     /// on his `position`, because he is no longer one of the eleven and his

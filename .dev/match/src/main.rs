@@ -7861,6 +7861,206 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         }
     }
 
+    // ── KEEPER RETREAT CENSUS ──────────────────────────────────────────
+    // "He returns to goal watching the play, then turns his back on it the
+    // moment opponents arrive in the box." The viewer only ever opens his
+    // heading onto his run when he is TRAVELLING — past 2.8 m/s, where his
+    // side-step ends — so the drawn defect has an engine half that no
+    // facing fix can reach: how much of his recovery is spent above a jog
+    // with an attack arriving.
+    {
+        use core::mid_run_diag::KeeperRetreatDiag;
+        let r = KeeperRetreatDiag::snapshot();
+        if r[0] > 0 {
+            let keeper_matches = (n_matches * 2) as f64;
+            // Engine units a tick → metres a second: a unit is 0.125 m and
+            // a tick is 10 ms.
+            let mps = |milli: u64, over: u64| {
+                if over == 0 {
+                    0.0
+                } else {
+                    milli as f64 / 1000.0 / over as f64 * 12.5
+                }
+            };
+            let share = |n: u64, of: u64| {
+                if of == 0 {
+                    0.0
+                } else {
+                    n as f64 * 100.0 / of as f64
+                }
+            };
+            println!();
+            println!(
+                "--- KEEPER RETREAT CENSUS (every keeper tick; \"besieged\" = an opponent \
+                 within his own area depth of his goal) ---"
+            );
+            println!(
+                "  all ticks: mean {:.2} m/s   above 2.8 m/s {:.1}%   besieged {:.1}% of ticks \
+                 (mean {:.2} m/s there)",
+                mps(r[1], r[0]),
+                share(r[4], r[0]),
+                share(r[2], r[0]),
+                mps(r[3], r[2])
+            );
+            println!(
+                "  ABOVE 2.8 m/s WITH MEN IN HIS BOX {:.2}% of all his ticks   \
+                 …and the ball also beyond 34 m of him {:.3}%  ← the frames the viewer used \
+                 to draw with his back to the play",
+                share(r[5], r[0]),
+                share(r[6], r[0])
+            );
+            println!(
+                "  ReturningToGoal {:.1}% of his ticks, {:.0} m/keeper/match, mean {:.2} m/s, \
+                 peak {:.2} m/s",
+                share(r[7], r[0]),
+                r[14] as f64 / 1000.0 * 0.125 / keeper_matches,
+                mps(r[8], r[7]),
+                r[15] as f64 / 1000.0 * 12.5
+            );
+            println!(
+                "  …of those: above 2.8 m/s {:.0}%   above 5 m/s {:.0}%   besieged {:.0}% \
+                 (mean {:.2} m/s)   besieged AND above 2.8 m/s {:.0}%",
+                share(r[11], r[7]),
+                share(r[13], r[7]),
+                share(r[9], r[7]),
+                mps(r[10], r[9]),
+                share(r[12], r[7])
+            );
+        }
+    }
+
+    // ── KEEPER CHASE EXITS ─────────────────────────────────────────────
+    // The keeper's loose-ball chase is entered almost entirely by the
+    // dispatcher's override rather than by a door of its own, and the
+    // two-cycle census has repeatedly shown `Take Ball -> Returning to
+    // Goal` at the top of the table with 100% of them reversing inside
+    // 300 ms. This says WHICH of the state's exits does it, and whether it
+    // fires on the tick he arrives — which is the difference between an
+    // override and a state disagreeing, and a chase he simply lost.
+    {
+        use core::mid_run_diag::KeeperChaseDiag;
+        let c = KeeperChaseDiag::snapshot();
+        if c[0] + c[7] > 0 {
+            let per = |v: u64| v as f64 / n_matches as f64;
+            let share = |n: u64| {
+                if c[0] == 0 {
+                    0.0
+                } else {
+                    n as f64 * 100.0 / c[0] as f64
+                }
+            };
+            println!();
+            println!("--- KEEPER CHASE EXITS (GoalkeeperTakeBallState) ---");
+            println!(
+                "  {:.1}/match exited ON THE TICK HE ARRIVED, {:.1}/match after actually \
+                 chasing",
+                per(c[0]),
+                per(c[7])
+            );
+            println!(
+                "  of the first-tick ones: ball owned {:.0}%   his own delivery {:.0}%   \
+                 outside his ground {:.0}%   a shot in flight {:.0}%   reached it {:.0}%   \
+                 timed out {:.0}%",
+                share(c[1]),
+                share(c[2]),
+                share(c[3]),
+                share(c[4]),
+                share(c[5]),
+                share(c[6])
+            );
+        }
+    }
+
+    // ── KEEPER KNOCK-CHAIN CENSUS ──────────────────────────────────────
+    // "Sometimes he kicks the ball around with his hands and runs after it
+    // himself, and sometimes it even rolls out of bounds." Every mechanism
+    // that puts a loose ball back into play off a keeper is already counted
+    // somewhere; none of those counters can see the reported behaviour,
+    // because it is not *a* contact, it is the SECOND one. This links them.
+    {
+        use core::knock_diag::KnockDiag;
+        let k = KnockDiag::snapshot();
+        if k[0] > 0 {
+            let per = |v: u64| v as f64 / n_matches as f64;
+            let share = |n: u64, of: u64| {
+                if of == 0 {
+                    0.0
+                } else {
+                    n as f64 * 100.0 / of as f64
+                }
+            };
+            let long: u64 = (3..=7).map(|i| k[i]).sum();
+            println!();
+            println!("--- KEEPER KNOCK-CHAIN CENSUS (loose contacts off a keeper, linked) ---");
+            println!(
+                "  {:.2} chains/match over {:.2} contacts   CHAINS OF 2 OR MORE {:.3}/match \
+                 ({:.0}% of chains)",
+                per(k[0]),
+                per(k[1]),
+                per(long),
+                share(long, k[0])
+            );
+            println!(
+                "  length      1 {:.2}   2 {:.3}   3 {:.3}   4 {:.3}   5 {:.3}   6+ {:.3}",
+                per(k[2]),
+                per(k[3]),
+                per(k[4]),
+                per(k[5]),
+                per(k[6]),
+                per(k[7])
+            );
+            let ends = ["gloves", "his feet", "cleared", "to an opponent", "OUT OF PLAY", "lapsed"];
+            let row = |base: usize, of: u64| {
+                ends.iter()
+                    .enumerate()
+                    .map(|(i, label)| format!("{label} {:.0}%", share(k[base + i], of)))
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            };
+            println!("  ended:      {}", row(8, k[0]));
+            if long > 0 {
+                println!("  of the 2+:  {}", row(14, long));
+            }
+            let sources = ["body", "spill", "smother", "punch", "other"];
+            println!(
+                "  chains containing a: {}",
+                sources
+                    .iter()
+                    .enumerate()
+                    .map(|(i, label)| format!("{label} {:.2}", per(k[20 + i])))
+                    .collect::<Vec<_>>()
+                    .join("  ")
+            );
+            if long > 0 {
+                println!(
+                    "  …and in the 2+ ones:  {}",
+                    sources
+                        .iter()
+                        .enumerate()
+                        .map(|(i, label)| format!("{label} {:.3}", per(k[25 + i])))
+                        .collect::<Vec<_>>()
+                        .join("  ")
+                );
+            }
+            println!(
+                "  OUT OF PLAY OFF HIM WITH NOBODY NEAR HIM {:.3}/match (target ~0)   \
+                 mean chain travel {:.1} m",
+                per(k[30]),
+                k[31] as f64 * 0.125 / k[0] as f64
+            );
+            println!(
+                "  …and the out-of-play endings split {:.2}/match BEHIND (a corner or a \
+                 goal kick, which is football) vs {:.3} over a TOUCHLINE (which is the report)",
+                per(k[32]),
+                per(k[33])
+            );
+            println!(
+                "  mean chain duration {:.2} s",
+                k[34] as f64 / 100.0 / k[0] as f64
+            );
+        }
+    }
+
     // ── KEEPER TWO-CYCLE CENSUS ────────────────────────────────────────
     // WHICH two states are arguing. The scalar churn number in the motion
     // census has twice been the loudest thing in these diagnostics without

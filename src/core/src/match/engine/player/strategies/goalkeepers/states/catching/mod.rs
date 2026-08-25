@@ -10,11 +10,12 @@
 
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperSetPosition, KeeperShotDive,
-    KeeperShotReaction, KeeperShotSave, KeeperSmother, KeeperSweepLimit,
+    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperDelivery, KeeperSetPosition,
+    KeeperShotDive, KeeperShotReaction, KeeperShotSave, KeeperSmother, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::strategies::common::states::LooseBallChase;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -27,6 +28,28 @@ pub struct GoalkeeperCatchingState {}
 
 impl StateProcessingHandler for GoalkeeperCatchingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // **He has just played this ball: it is not his to go and get.**
+        //
+        // The give-up half of [`KeeperDelivery`]. Closing the doors into
+        // this state is not enough on its own — he can be standing in it
+        // when he releases (a smother he gathered, a parry he then cleared)
+        // — and this state's `velocity` is a `Pursuit` at the live ball
+        // position with a 1.6-2.6x boost on top, which is what turns "he
+        // is in the wrong state" into "he sprints thirty metres after his
+        // own throw". Above everything, because there is nothing here to
+        // decide. A live shot is never his own delivery, so the save path
+        // cannot reach this.
+        if KeeperDelivery::is_his(ctx) && ctx.tick_context.ball.cached_shot_target.is_none() {
+            let prof = GoalkeeperSkillProfile::from_ctx(ctx);
+            return Some(StateChangeResult::with_goalkeeper_state(
+                if KeeperSweepLimit::is_within(ctx, &prof) {
+                    GoalkeeperState::Standing
+                } else {
+                    GoalkeeperState::ReturningToGoal
+                },
+            ));
+        }
+
         if self.is_catch_successful(ctx) {
             // Are hands legal on THIS ball? Asked at the moment the gloves
             // close, NOT while he is moving to it. The Laws bite on the act
@@ -232,11 +255,30 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
             ));
         }
 
+        // **Not a shot: a loose ball, and he goes for it the way every
+        // other chase in this engine does.**
+        //
+        // This was a bare `Pursuit` at the ball's LIVE position with the
+        // 1.6-2.6x boost on it, and nothing bounded it — the only chase
+        // state a keeper has that had neither a lead nor a territory,
+        // where `GoalkeeperTakeBallState` next door steers to
+        // `LooseBallChase::meeting_point` and `contain`s it. Two states
+        // doing the same thing two different ways is how the same keeper
+        // comes to chase the same ball to two different places depending
+        // on which door he came in by; and a tail chase at 2.6x with no
+        // bound is what carries him after a ball drifting toward the
+        // touchline until `RELEASE_DISTANCE` finally lets go, 5.6 m later.
+        let meeting = LooseBallChase::meeting_point(
+            ctx,
+            ctx.tick_context.positions.ball.position,
+            ctx.tick_context.positions.ball.velocity,
+        );
+        let meeting = KeeperSweepLimit::contain(ctx, meeting, &prof);
         let ball_distance = ctx.ball().distance();
         if ball_distance > 3.0 {
             Some(
-                SteeringBehavior::Pursuit {
-                    target: ctx.tick_context.positions.ball.position,
+                SteeringBehavior::Intercept {
+                    target: meeting,
                     target_velocity: ctx.tick_context.positions.ball.velocity,
                 }
                 .calculate(ctx.player)
@@ -244,6 +286,9 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
                     * speed_boost,
             )
         } else {
+            // Inside arm's length he is gathering rather than chasing, so
+            // the target is the ball itself and the pace comes off — see
+            // the note on the arrival gate in `is_catch_successful`.
             Some(
                 SteeringBehavior::Arrive {
                     target: ctx.tick_context.positions.ball.position,

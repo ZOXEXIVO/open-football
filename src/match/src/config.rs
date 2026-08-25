@@ -185,13 +185,16 @@ pub struct ChanceInfo {
 #[derive(Deserialize)]
 pub struct SubstitutionInfo {
     pub player_in_id: u32,
-    /// And the man he replaced.
+    /// And the man he replaced. **Nothing is ever pointed at him** — the shot
+    /// is of the substitute, from his face round to the name on his back and
+    /// then out onto the pitch behind him.
     ///
-    /// [`ChangeoverShot`](crate::changeover::ChangeoverShot) opens the change
-    /// by standing behind him for a second, where he is still standing on the
-    /// pitch, so the name across his shoulders can be read before he leaves.
-    /// Zero on a document written before the shot had a first beat, which
-    /// reads as "there is nobody to look at" and starts at the touchline.
+    /// [`ChangeoverShot`](crate::changeover::ChangeoverShot) wants him anyway,
+    /// to leave him OUT of the sight-line test: he and the man replacing him
+    /// are the only bodies on the ground that move while a change is being
+    /// played out, and a lens that gave way to them would lurch through
+    /// somebody else's close-up. Zero on a document written before the
+    /// recording carried him, which costs the shot nothing.
     #[serde(default)]
     pub player_out_id: u32,
     pub time: f64,

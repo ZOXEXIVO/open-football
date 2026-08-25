@@ -1,6 +1,7 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperSmother, KeeperSweepLimit,
+    ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperDelivery, KeeperSmother,
+    KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -54,6 +55,19 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
             KeeperSweepDiag::note_exit(0);
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Distributing,
+            ));
+        }
+
+        // **He has just played this ball himself: there is nothing to come
+        // out for.** The give-up half of [`KeeperDelivery`] — the doors
+        // into this state now decline his own delivery, but he can already
+        // be in it when he releases (a claim gathered on the way out, then
+        // thrown), and this state's whole job is to travel at the ball.
+        if KeeperDelivery::is_his(ctx) {
+            #[cfg(feature = "match-logs")]
+            KeeperSweepDiag::note_exit(5);
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::ReturningToGoal,
             ));
         }
 

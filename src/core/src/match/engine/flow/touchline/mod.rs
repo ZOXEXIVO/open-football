@@ -18,11 +18,13 @@
 //!
 //! * The bench is a real row of men standing in the run-off in front of their
 //!   dugout ([`Bench`]), drawn by the recorder for the whole match.
-//! * A substitution opens a [`SubstitutionBreak`]: play stops, the outgoing
-//!   player runs for the nearest point on the bench touchline, the incoming
-//!   one comes off the bench, in at the halfway line and out to the slot he
-//!   is taking over. Everybody else stands still, because the ball is dead
-//!   and this is what twenty men do while it is.
+//! * A substitution opens a [`SubstitutionBreak`]: play stops, and the change
+//!   is worked through **one man coming on at a time**. Each of them stands at
+//!   the fourth official's shoulder for his own close-up, and then he and the
+//!   man he is replacing go at once — in at the halfway line and out to the
+//!   slot he is taking over, the other way to the dugout. Everybody else
+//!   stands still, because the ball is dead and this is what twenty men do
+//!   while it is.
 //! * The ROSTER, meanwhile, changes on the tick the decision is made, exactly
 //!   as it always did — see the note on [`changeover`] for why that half
 //!   cannot be deferred with the other. When the window closes the man who

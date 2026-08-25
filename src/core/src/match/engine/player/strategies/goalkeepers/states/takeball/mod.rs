@@ -1,6 +1,7 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision, KeeperSmother, KeeperSweepLimit,
+    ActivityIntensity, GoalkeeperCondition, KeeperDelivery, KeeperFeetDecision, KeeperSmother,
+    KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::common::states::LooseBallChase;
@@ -9,6 +10,8 @@ use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::KeeperChaseDiag;
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
@@ -53,6 +56,7 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         // to `Catching` once he is inside the space he defends. One owner.
         if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
             if Some(target.defending_side) == ctx.player.side {
+                Self::note_exit(ctx, 4);
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::PreparingForSave,
                 ));
@@ -68,12 +72,24 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
 
         // Transition to Catching when ball is very close and not owned
         if ctx.ball().distance() < 3.0 && !ctx.ball().is_owned() {
+            Self::note_exit(ctx, 5);
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Catching,
             ));
         }
 
+        // Somebody has it — or he has just played it himself, which is the
+        // same statement about whose ball it is. See [`KeeperDelivery`];
+        // the restart taker is exempt inside the predicate, so a keeper
+        // walking to his own goal kick is untouched by this.
         if ctx.ball().is_owned() {
+            Self::note_exit(ctx, 1);
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::ReturningToGoal,
+            ));
+        }
+        if KeeperDelivery::is_his(ctx) {
+            Self::note_exit(ctx, 2);
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
             ));
@@ -96,9 +112,31 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         // territory there is, and he is the only man on the pitch allowed
         // to touch it — the same exemption the two timeouts below carry,
         // and for the same reason.
+        //
+        // ⚠ **MEASURED AGAINST WHERE IT WILL LAND, NOT WHERE IT IS.**
+        //
+        // The dispatcher commits him to this chase on
+        // `strain(goal, LANDING position, innermost()) <= 1.0` and this
+        // gave up on the CURRENT position — two different points, so a
+        // lofted ball dropping into his six-yard box from thirty metres up
+        // the pitch satisfied the entry and failed the give-up on the same
+        // tick. Measured: **`Take Ball → Returning to Goal` 375 times a
+        // match, 100% of them inside 300 ms** — and every one is a tick of
+        // sprinting AT the ball (the velocity is computed before the
+        // transition) followed by a burst back toward his goal at
+        // `ActivityIntensity::High`, which is what the stands read as a
+        // keeper turning and running at his own net.
+        //
+        // The `COMMIT < DISENGAGE` invariant is not only about the SIZE of
+        // the two bounds; they have to be about the same quantity. He is
+        // going to meet the ball where it comes down, so that is the point
+        // both ends must ask about — and his own axes are wider than the
+        // `innermost` the dispatcher uses, which keeps the ordering.
         if ctx.tick_context.ball.restart_taker != Some(ctx.player.id) {
             let prof = GoalkeeperSkillProfile::from_ctx(ctx);
-            if !KeeperSweepLimit::covers(ctx, ctx.tick_context.positions.ball.position, &prof) {
+            let meeting = ctx.tick_context.positions.ball.landing_position;
+            if !KeeperSweepLimit::covers(ctx, meeting, &prof) {
+                Self::note_exit(ctx, 3);
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::ReturningToGoal,
                 ));
@@ -126,6 +164,7 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
             // Timeout after 120 ticks — but only if ball isn't very close
             // If ball is close, keep trying instead of giving up
             if ctx.in_state_time > 120 && ctx.ball().distance() > 10.0 {
+                Self::note_exit(ctx, 6);
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::Standing,
                 ));
@@ -133,6 +172,7 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
 
             // Hard timeout after 200 ticks regardless
             if ctx.in_state_time > 200 {
+                Self::note_exit(ctx, 6);
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::Standing,
                 ));
@@ -267,5 +307,17 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
     fn process_conditions(&self, ctx: ConditionContext) {
         // Taking ball requires high intensity as goalkeeper moves to claim the ball
         GoalkeeperCondition::with_velocity(ActivityIntensity::High).process(ctx);
+    }
+}
+
+impl GoalkeeperTakeBallState {
+    /// Book which of this state's five exits fired, and whether it fired on
+    /// the tick he arrived — see [`KeeperChaseDiag`]. An exit on the entry
+    /// tick is the override and this state disagreeing about the same ball,
+    /// which is a different defect from a chase that ran and was lost.
+    #[inline]
+    fn note_exit(_ctx: &StateProcessingContext, _reason: usize) {
+        #[cfg(feature = "match-logs")]
+        KeeperChaseDiag::note_exit(_reason, _ctx.in_state_time == 0);
     }
 }

@@ -53,7 +53,7 @@ pub use restarts::{
 // the resolvers and the player layer that run after it, which is where
 // the set pieces live.
 #[cfg(feature = "match-logs")]
-pub use diagnostics::{assist_diag, block_diag, flight_diag, frame_trace, teleport};
+pub use diagnostics::{assist_diag, block_diag, flight_diag, frame_trace, knock_diag, teleport};
 
 use crate::r#match::PlayerSide;
 use crate::r#match::engine::ball::ball::net::BallInNet;
@@ -129,6 +129,16 @@ pub struct Ball {
     /// apex census wants to count. Diagnostic only.
     #[cfg(feature = "match-logs")]
     pub settled_vz: f32,
+    /// The goalkeeper knock-chain currently open on this ball, if any —
+    /// see [`knock_diag`]. Diagnostic only, and a property of the ball
+    /// rather than of a keeper because a chain is a run of contacts with
+    /// ONE ball.
+    #[cfg(feature = "match-logs")]
+    pub knock_chain: Option<knock_diag::KnockChain>,
+    /// The touch tick the knock census has already looked at, so its
+    /// catch-all sweep books each touch once. Diagnostic only.
+    #[cfg(feature = "match-logs")]
+    pub knock_seen_touch: u64,
     pub center_field_position: f32,
 
     pub field_width: f32,
@@ -688,6 +698,10 @@ impl Ball {
             spin: Vector3::zeros(),
             #[cfg(feature = "match-logs")]
             settled_vz: 0.0,
+            #[cfg(feature = "match-logs")]
+            knock_chain: None,
+            #[cfg(feature = "match-logs")]
+            knock_seen_touch: 0,
             center_field_position: x, // initial ball position = center field
             flags: BallFlags::default(),
             previous_owner: None,
@@ -902,6 +916,50 @@ impl Ball {
         let dx = self.position.x - self.last_release_position.x;
         let dy = self.position.y - self.last_release_position.y;
         if dx * dx + dy * dy >= MIN_TRAVEL * MIN_TRAVEL {
+            return None;
+        }
+        Some(releaser)
+    }
+
+    /// **The player whose delivery this ball still is** — he played it, it
+    /// is on its way, and nobody has touched it since.
+    ///
+    /// [`Self::blocked_recollect_player`] above answers a different
+    /// question — may he HANDLE it again — and its travel bound is the
+    /// exact opposite of the one wanted here. That bar lifts as soon as the
+    /// ball has gone five metres, which is right for a ball that died at
+    /// his feet and wrong for a delivery: **a pass that HAS travelled five
+    /// metres is precisely the one its passer must not set off after.**
+    ///
+    /// Measured over a recorded match: **73% of a goalkeeper's own
+    /// deliveries were followed by him sprinting after the ball** at 8-9
+    /// m/s for one and a half to three seconds, a mean of 12 m up the
+    /// pitch, and then running back. Every keeper chase door asks
+    /// `!ball.is_owned()`, an untouched throw satisfies it, and the
+    /// recollect bar had already lifted by the time the ball was clear of
+    /// him. That is *"he kicks the ball around with his hands and runs
+    /// after it himself"*, and it is also where a large share of his
+    /// sprinting recoveries come from.
+    ///
+    /// Nobody-has-touched-it-since needs no test of its own:
+    /// [`Self::record_touch`] clears `last_release_player_id` the moment
+    /// anybody else plays the ball, which is also exactly when Law 12's
+    /// second-touch bar lifts.
+    pub fn own_delivery_player(&self) -> Option<u32> {
+        /// 4 s. A throw rolls out to a full-back in about three, a punt
+        /// hangs for two and a half; past that, a ball nobody has come for
+        /// is a loose ball again rather than one its passer is barred from
+        /// forever. Time only — see the note above on why travel is the
+        /// wrong axis here. Bounded for the same reason
+        /// `MAX_BLOCK_TICKS` is: no diagnostic bar may become a deadlock.
+        const FOLLOW_TICKS: u64 = 400;
+
+        let releaser = self.last_release_player_id?;
+        if self
+            .current_tick_cached
+            .saturating_sub(self.last_release_tick)
+            > FOLLOW_TICKS
+        {
             return None;
         }
         Some(releaser)

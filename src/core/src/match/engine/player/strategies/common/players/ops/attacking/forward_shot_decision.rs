@@ -2294,6 +2294,62 @@ pub mod mid_run_diag {
     /// wasted motion.
     pub static GK_MOTION: [AtomicU64; 21] = [const { AtomicU64::new(0) }; 21];
 
+    /// **How fast a goalkeeper is travelling while men are in his box** —
+    /// the census behind *"he turns and goes for the goal when there are
+    /// opposing players in the penalty area"*.
+    ///
+    /// The viewer will only draw a keeper with his back to the play when
+    /// two things hold at once: the ball has stopped being his problem, and
+    /// he is genuinely GOING somewhere — past `Actors::SQUARE_UP.1`, where
+    /// his side-step ends, which is **2.8 m/s = 0.224 engine units a
+    /// tick**. So the drawn defect has an engine half, and it is not a
+    /// facing question at all: it is how much of his recovery he spends
+    /// above a jog with an attack arriving.
+    ///
+    /// Sampled once per keeper per AI tick, unconditionally, so the
+    /// denominator is his whole match rather than his threat ticks.
+    /// "Besieged" is an opponent inside his own penalty-area DEPTH of his
+    /// goal centre, measured RADIALLY — the same claim, and the same
+    /// geometry, the viewer's own threat term uses.
+    ///
+    /// ```text
+    ///  0  keeper AI ticks
+    ///  1  Σ speed ×1000, in engine units a tick
+    ///  2  ticks with an opponent inside his area
+    ///  3  Σ speed ×1000 on those
+    ///  4  ticks above SQUARE_UP
+    ///  5  …with an opponent inside his area
+    ///  6  …and the ball also more than 34 m from HIM: the exact frames
+    ///     the viewer used to open his heading all the way round
+    ///  7  ReturningToGoal ticks
+    ///  8  Σ speed ×1000 in ReturningToGoal
+    ///  9  ReturningToGoal ticks with an opponent inside his area
+    /// 10  Σ speed ×1000 on those
+    /// 11  ReturningToGoal ticks above SQUARE_UP
+    /// 12  …with an opponent inside his area
+    /// 13  ReturningToGoal ticks above 5 m/s — a genuine sprint home
+    /// 14  Σ distance covered in ReturningToGoal ×1000
+    /// 15  peak speed seen in ReturningToGoal ×1000
+    /// ```
+    pub static GK_RETREAT: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
+
+    /// **Why a goalkeeper stops chasing a loose ball**, on the tick he
+    /// stops.
+    ///
+    /// `GoalkeeperTakeBallState` is entered almost entirely by the
+    /// dispatcher's loose-ball override rather than by a door of its own,
+    /// and the two-cycle census reads **`Take Ball → Returning to Goal`
+    /// 375 a match, 100% of them inside 300 ms** — an override and a state
+    /// disagreeing about the same ball at tick resolution. The scalar
+    /// cannot say which of the state's five exits does it, and each one
+    /// wants a different fix.
+    ///
+    /// 0 first-tick exits, then by reason: 1 the ball is owned, 2 he has
+    /// just played it himself, 3 it is outside the ground he defends,
+    /// 4 a shot is in flight, 5 he has reached it, 6 the timeouts.
+    /// 7 is entries that lasted longer than a first tick, for scale.
+    pub static GK_CHASE_EXIT: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+
     /// **How far from his goal does he actually GO — on BOTH axes.**
     ///
     /// Every keeper diagnostic in this file measures an excursion as
@@ -3168,6 +3224,106 @@ pub mod mid_run_diag {
         pub fn snapshot() -> [u64; 21] {
             let mut out = [0u64; 21];
             for (slot, c) in out.iter_mut().zip(GK_MOTION.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
+    pub struct KeeperRetreatDiag;
+
+    impl KeeperRetreatDiag {
+        /// The viewer's `Actors::SQUARE_UP.1` — 2.8 m/s — in engine units
+        /// a tick. One unit is 0.125 m and a tick is 10 ms, so a unit a
+        /// tick is 12.5 m/s.
+        pub const SQUARE_UP: f32 = 2.8 / 12.5;
+        /// …and a genuine sprint home.
+        pub const SPRINTING: f32 = 5.0 / 12.5;
+        /// The ball has stopped being his problem, in engine units:
+        /// `Actors::SET_RANGE.1`, 34 m.
+        pub const NOT_HIS_PROBLEM: f32 = 34.0 * 8.0;
+
+        fn note(slot: usize) {
+            GK_RETREAT[slot].fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn add(slot: usize, n: u64) {
+            GK_RETREAT[slot].fetch_add(n, Ordering::Relaxed);
+        }
+
+        /// One keeper tick: how fast, whether he is recovering, whether an
+        /// opponent is inside his area, and how far the ball is from him.
+        pub fn note_tick(speed: f32, recovering: bool, besieged: bool, ball_range: f32) {
+            let milli = (speed.max(0.0) * 1000.0) as u64;
+            let quick = speed > Self::SQUARE_UP;
+            Self::note(0);
+            Self::add(1, milli);
+            if besieged {
+                Self::note(2);
+                Self::add(3, milli);
+            }
+            if quick {
+                Self::note(4);
+                if besieged {
+                    Self::note(5);
+                    if ball_range > Self::NOT_HIS_PROBLEM {
+                        Self::note(6);
+                    }
+                }
+            }
+            if !recovering {
+                return;
+            }
+            Self::note(7);
+            Self::add(8, milli);
+            // Speed is per ENGINE tick and the AI samples every second
+            // one, so the ground he covered since the last sample is twice
+            // it — the ×2 that has been got wrong here before.
+            Self::add(14, milli * 2);
+            GK_RETREAT[15].fetch_max(milli, Ordering::Relaxed);
+            if besieged {
+                Self::note(9);
+                Self::add(10, milli);
+            }
+            if quick {
+                Self::note(11);
+                if besieged {
+                    Self::note(12);
+                }
+            }
+            if speed > Self::SPRINTING {
+                Self::note(13);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 16] {
+            let mut out = [0u64; 16];
+            for (slot, c) in out.iter_mut().zip(GK_RETREAT.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
+    pub struct KeeperChaseDiag;
+
+    impl KeeperChaseDiag {
+        /// One exit from `TakeBall`, by reason, and whether it happened on
+        /// the tick he arrived.
+        pub fn note_exit(reason: usize, first_tick: bool) {
+            if first_tick {
+                GK_CHASE_EXIT[0].fetch_add(1, Ordering::Relaxed);
+                if reason < GK_CHASE_EXIT.len() {
+                    GK_CHASE_EXIT[reason].fetch_add(1, Ordering::Relaxed);
+                }
+            } else {
+                GK_CHASE_EXIT[7].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 8] {
+            let mut out = [0u64; 8];
+            for (slot, c) in out.iter_mut().zip(GK_CHASE_EXIT.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
             out

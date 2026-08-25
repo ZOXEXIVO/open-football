@@ -813,6 +813,12 @@ pub struct BallMetadata {
     /// See `Ball::blocked_recollect_player`.
     pub recollect_blocked_player: Option<u32>,
 
+    /// The player whose delivery this ball still is — he played it and
+    /// nobody has touched it since. See `Ball::own_delivery_player`, and
+    /// `KeeperDelivery`, which is what reads it: a keeper who has just
+    /// thrown the ball out does not then chase it up the pitch.
+    pub delivered_by: Option<u32>,
+
     /// The ball is in a goalkeeper's hands — uncontestable. Read by the
     /// pressing states (there is nothing to press) and by anything that
     /// would otherwise treat the keeper as a carrier who can be closed
@@ -901,6 +907,7 @@ impl BallMetadata {
         self.last_rebound_tick = field.ball.last_rebound_tick;
         self.pass_target = field.ball.pass_target_player_id;
         self.recollect_blocked_player = field.ball.blocked_recollect_player();
+        self.delivered_by = field.ball.own_delivery_player();
         self.held_in_hands = field.ball.held_in_hands;
         self.aerial_contest_winner = field.ball.aerial_contest_winner;
         self.restart_taker = field.ball.awaiting_restart.map(|r| r.taker_id);
@@ -941,6 +948,7 @@ impl From<&MatchField> for BallMetadata {
             last_rebound_tick: 0,
             pass_target: None,
             recollect_blocked_player: None,
+            delivered_by: None,
             held_in_hands: false,
             deliberate_kick_by: None,
             hands_released_by: None,

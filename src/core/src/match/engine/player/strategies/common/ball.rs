@@ -162,6 +162,18 @@ impl<'b> BallOperationsImpl<'b> {
         self.ctx.tick_context.ball.recollect_blocked_player == Some(self.ctx.player.id)
     }
 
+    /// True while this ball is still the DELIVERY this player made — he
+    /// played it, it is on its way, and nobody has touched it since.
+    ///
+    /// The complement of the bar above rather than a wider version of it:
+    /// that one is about a ball that has NOT travelled, this one is about
+    /// one that has. See `Ball::own_delivery_player` for the measurement
+    /// that made it necessary and `KeeperDelivery` for the rule it serves.
+    #[inline]
+    pub fn is_my_own_delivery(&self) -> bool {
+        self.ctx.tick_context.ball.delivered_by == Some(self.ctx.player.id)
+    }
+
     /// Check if the opponent goalkeeper currently holds the ball (in hands — unchallenageable)
     ///
     /// Now genuinely means IN HANDS. It used to return true for any ball

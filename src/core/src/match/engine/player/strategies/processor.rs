@@ -3,7 +3,9 @@ use crate::r#match::common_states::CommonInjuredState;
 use crate::r#match::defenders::states::{DefenderState, DefenderStrategies};
 use crate::r#match::events::{Event, EventCollection};
 use crate::r#match::forwarders::states::{ForwardState, ForwardStrategies};
-use crate::r#match::goalkeepers::states::common::KeeperSweepLimit;
+use crate::r#match::goalkeepers::states::common::{
+    KeeperAerialClaim, KeeperDelivery, KeeperSweepLimit,
+};
 use crate::r#match::goalkeepers::states::state::{GoalkeeperState, GoalkeeperStrategies};
 use crate::r#match::midfielders::states::{MidfielderState, MidfielderStrategies};
 use crate::r#match::player::memory::PlayerMemory;
@@ -498,6 +500,45 @@ impl PlayerFieldPositionGroup {
             {
                 return false;
             }
+            // **…AND NOT THE BALL HE HAS JUST PLAYED HIMSELF.**
+            //
+            // An untouched throw is unowned and carries no `pass_target`
+            // once its window lapses, so every guard above waves it
+            // through, and it is inside 60 u of him for the first second
+            // of its travel by construction — he threw it. Measured off a
+            // recording, this is one of eight doors that between them had
+            // the keeper chasing 73% of his own deliveries a mean 12 m up
+            // the pitch. See `KeeperDelivery`.
+            if tick_context.ball.delivered_by == Some(player.id) && !KeeperDelivery::follow_allowed()
+            {
+                return false;
+            }
+
+            // **…AND NOT A BALL IN THE AIR, which is a different question
+            // with a different model.**
+            //
+            // `GoalkeeperTakeBallState` is a GROUND chase: it steers to
+            // `LooseBallChase::meeting_point`, which flattens the ball to
+            // the turf and rolls it forward under `BallRoll` — an answer
+            // that means nothing about a cross thirty metres up. What a
+            // keeper does about a ball in the air is `KeeperAerialClaim`,
+            // which projects the flight, finds the first point inside his
+            // own area and inside his reach, and asks whether he is
+            // favourite for it; it is wired into `Standing`,
+            // `PreparingForSave` and `ComingOut`, so declining here does
+            // not leave the ball unclaimed, it hands it to the model built
+            // for it.
+            //
+            // Measured: with the give-up below aligned on the landing
+            // point and this gate absent, gathers went from **31.7-32.6
+            // over five runs to 33.2-34.7 over six** — cleanly separated,
+            // and the wrong way against a real 8-12 that the engine
+            // already overshoots four times over. With it back they read
+            // 32.4-34.1, which overlaps both, so this recovers the move
+            // but the sample is too small to say how much of it.
+            if tick_context.positions.ball.position.z > KeeperAerialClaim::MIN_HEIGHT {
+                return false;
+            }
             let gk_dist_sq = (ball_pos - player.position).norm_squared();
             if gk_dist_sq > 60.0 * 60.0 {
                 return false;
@@ -683,6 +724,7 @@ impl<'p> StateProcessor<'p> {
             Self::note_keeper_guard(&processing_ctx, moving);
             Self::note_keeper_motion(&processing_ctx, result.velocity);
             Self::note_keeper_excursion(&processing_ctx);
+            Self::note_keeper_retreat(&processing_ctx, result.velocity);
         }
 
         if let Some(change) = handler.process(&processing_ctx) {
@@ -761,6 +803,52 @@ impl<'p> StateProcessor<'p> {
                 KeeperMotionDiag::note_heading(cos.acos());
             }
         }
+    }
+
+    /// One RETREAT sample per keeper per AI tick — see
+    /// [`KeeperRetreatDiag`], which exists because the drawn defect
+    /// *"he turns his back when there are opponents in the area"* has an
+    /// engine half: the viewer only opens his heading when he is genuinely
+    /// travelling, so how much of his recovery is spent above a jog with an
+    /// attack arriving is the quantity a facing fix cannot see.
+    ///
+    /// ⚠ Read off the APPLIED velocity — last tick's, out of the position
+    /// snapshot — and not off `result.velocity`, which is the state's
+    /// REQUEST and is still to be capped by `goalkeeper_max_speed`, the
+    /// carry model and the acceleration bound in
+    /// [`PlayerState`](crate::r#match::PlayerState). A speed census taken
+    /// on the request measures what the state machine asked for, which is
+    /// not what anybody watching sees.
+    #[cfg(feature = "match-logs")]
+    fn note_keeper_retreat(ctx: &StateProcessingContext, _velocity: Option<Vector3<f32>>) {
+        use crate::mid_run_diag::KeeperRetreatDiag;
+
+        let PlayerState::Goalkeeper(gk_state) = ctx.player.state else {
+            return;
+        };
+        let goal = ctx.ball().direction_to_own_goal();
+        // A penalty area is 16.5 m deep, and RADIALLY from the goal centre
+        // is how the viewer's own threat term reads it — one claim about
+        // "there are men at my goal", not two. 132u = 16.5 m.
+        const AREA_DEPTH: f32 = 132.0;
+        let besieged = ctx
+            .players()
+            .opponents()
+            .nearby_at(goal, AREA_DEPTH)
+            .next()
+            .is_some();
+        let speed = ctx
+            .tick_context
+            .positions
+            .players
+            .velocity(ctx.player.id)
+            .magnitude();
+        KeeperRetreatDiag::note_tick(
+            speed,
+            gk_state == GoalkeeperState::ReturningToGoal,
+            besieged,
+            ctx.ball().distance(),
+        );
     }
 
     /// One EXCURSION sample per keeper per AI tick, unconditionally — see

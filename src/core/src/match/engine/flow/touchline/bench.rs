@@ -201,10 +201,10 @@ impl Bench {
 
     /// Is this coordinate off the playing surface, on the dugout side?
     ///
-    /// The one test the choreography sequences on: the man coming on does not
-    /// move until the man coming off has crossed the line, which is what a
-    /// referee actually waits for and what makes the pair read as an exchange
-    /// rather than as two independent runs.
+    /// What the man coming off is walking towards, and the test that says his
+    /// leg of the change is finished: past the line he stops belonging to the
+    /// substitution window and starts belonging to the recorder, which walks
+    /// him the rest of the way to his seat.
     pub fn is_over_the_line(at: Vector3<f32>) -> bool {
         at.y <= Self::touchline()
     }

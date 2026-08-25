@@ -4,6 +4,8 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::Ball;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::knock_diag::{KnockEnd, KnockSource};
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
@@ -1692,6 +1694,13 @@ impl Ball {
             self.flags.in_flight_state = PARRY_OUT_TICKS as usize + 12;
             self.claim_cooldown = 30;
             self.record_touch(keeper_id, keeper_team, tick, false);
+            // A tip round the post IS a save, and the ball is meant to go
+            // out. Closed here rather than left to the generic out-of-play
+            // ending, which would otherwise book a completed save as a
+            // keeper putting the ball out under his own touch — see
+            // [`knock_diag`](crate::r#match::engine::ball::ball::knock_diag).
+            #[cfg(feature = "match-logs")]
+            self.close_keeper_knock(KnockEnd::Cleared);
             // NB: do NOT emit Intercepted here — its ClaimBall follow-up
             // forces ownership onto the keeper, which CANCELS the corner
             // (the ball must stay loose and cross out). The save is already
@@ -1797,6 +1806,11 @@ impl Ball {
         self.flags.in_flight_state = 10;
         self.claim_cooldown = 0;
         self.record_touch(keeper_id, keeper_team, tick, false);
+        // The spill is the classic first link of a knock-chain: it comes
+        // off his gloves at a metre a second and lands in his own six-yard
+        // box. See [`knock_diag`](crate::r#match::engine::ball::ball::knock_diag).
+        #[cfg(feature = "match-logs")]
+        self.note_keeper_knock(keeper, KnockSource::Spill, players);
         events.add_ball_event(BallEvent::Intercepted(
             keeper_id,
             self.previous_owner,

@@ -1,6 +1,6 @@
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperFeetDecision, KeeperOneOnOne, KeeperRestPosition,
-    KeeperSmother,
+    ActivityIntensity, GoalkeeperCondition, KeeperDelivery, KeeperFeetDecision, KeeperOneOnOne,
+    KeeperRestPosition, KeeperSmother,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
@@ -47,8 +47,15 @@ impl StateProcessingHandler for GoalkeeperReturningGoalState {
             ));
         }
 
-        // Loose ball very close — claim it instead of ignoring it
-        if !ctx.ball().is_owned() && ctx.ball().distance() < 15.0 && ctx.ball().on_own_side() {
+        // Loose ball very close — claim it instead of ignoring it. Not the
+        // one he has just played, though: jogging home past his own throw
+        // and turning round to chase it is the whole of the second report.
+        // See [`KeeperDelivery`].
+        if !ctx.ball().is_owned()
+            && !KeeperDelivery::is_his(ctx)
+            && ctx.ball().distance() < 15.0
+            && ctx.ball().on_own_side()
+        {
             // 5.0 u/tick is above `MAX_SHOT_VELOCITY` (3.2), so this bar
             // excluded nothing and a keeper jogging back gathered shots.
             let ball_speed = ctx.tick_context.positions.ball.velocity.norm();

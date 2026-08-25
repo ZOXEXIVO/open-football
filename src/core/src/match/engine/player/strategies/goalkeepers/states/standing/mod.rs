@@ -1,7 +1,7 @@
 use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperBallClaim,
-    KeeperCarrierThreat, KeeperDebug, KeeperFeetDecision, KeeperOneOnOne, KeeperRestPosition,
-    KeeperSmother, KeeperSweepLimit,
+    KeeperCarrierThreat, KeeperDebug, KeeperDelivery, KeeperFeetDecision, KeeperOneOnOne,
+    KeeperRestPosition, KeeperSmother, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -52,7 +52,15 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         // over — the pick-up path grants ownership directly, so the
         // ownership layer's own guard never saw it. Declining here is what
         // breaks the cycle: the ball stays live and an outfielder takes it.
-        let own_dead_delivery = ctx.ball().blocked_from_recollecting();
+        // …and the same is true of the delivery he has just made, which is
+        // the case the bar above CANNOT see: it lifts as soon as the ball
+        // is five metres clear of him, and a throw is clear of him
+        // immediately. See [`KeeperDelivery`], and note that the two
+        // together are "this ball is still mine and I may not have it" in
+        // both of its forms — the one that never left and the one that
+        // did.
+        let own_dead_delivery =
+            ctx.ball().blocked_from_recollecting() || KeeperDelivery::is_his(ctx);
 
         let ball_distance = ctx.ball().distance();
         // The speed bar is what separates a ball he can gather from one

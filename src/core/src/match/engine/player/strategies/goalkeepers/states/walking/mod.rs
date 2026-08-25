@@ -1,6 +1,6 @@
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperOneOnOne, KeeperRestPosition, KeeperSmother,
-    KeeperSweepLimit,
+    ActivityIntensity, GoalkeeperCondition, KeeperDelivery, KeeperOneOnOne, KeeperRestPosition,
+    KeeperSmother, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -53,8 +53,15 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
         // "slow ball" meant every ball, and a keeper mid-stroll reached
         // out and collected shots. 2.0 u/tick (25 m/s) is a driven ball —
         // past that he is making a save, not picking it up.
+        //
+        // ⚠ …and neither bar in this state asked whether the ball was HIS
+        // OWN DELIVERY. `Standing`'s equivalents carry the recollect bar;
+        // these two carried nothing at all, and they are the widest doors
+        // in the keeper's whole tree. See [`KeeperDelivery`].
+        let his_own = KeeperDelivery::is_his(ctx);
         if ctx.ball().distance() < 5.0
             && !ctx.ball().is_owned()
+            && !his_own
             && ctx.ball().on_own_side()
             && ctx.tick_context.positions.ball.velocity.norm() < 2.0
         {
@@ -75,10 +82,16 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
         // `GoalkeeperTakeBallState` gives up on exactly that condition, so
         // without it here the two are a two-cycle: measured, 88 entries a
         // match through this door and 100% of them reversed inside 300 ms.
+        // …and about the point he would be going TO, which for a lofted
+        // ball is not the point it is at. `GoalkeeperTakeBallState` gives
+        // up on the landing position, so this asks about the same
+        // quantity — the two used to disagree by the whole flight of a
+        // cross. See the note at that give-up.
         if ctx.ball().should_take_ball_immediately()
+            && !his_own
             && KeeperSweepLimit::covers(
                 ctx,
-                ctx.tick_context.positions.ball.position,
+                ctx.tick_context.positions.ball.landing_position,
                 &GoalkeeperSkillProfile::from_ctx(ctx),
             )
         {
@@ -88,7 +101,11 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
         }
 
         // Loose ball nearby — go claim it directly
-        if !ctx.ball().is_owned() && ctx.ball().distance() < 30.0 && ctx.ball().on_own_side() {
+        if !ctx.ball().is_owned()
+            && !his_own
+            && ctx.ball().distance() < 30.0
+            && ctx.ball().on_own_side()
+        {
             let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
             if ball_speed < 2.0 {
                 return Some(StateChangeResult::with_goalkeeper_state(
@@ -155,7 +172,7 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
         }
 
         // Use decision-making skill for coming out
-        if self.should_come_out_advanced(ctx) && ball_distance < 60.0 {
+        if !his_own && self.should_come_out_advanced(ctx) && ball_distance < 60.0 {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ComingOut,
             ));

@@ -54,6 +54,8 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::engine::ball::ball::boundary::frame::GoalFrame;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::knock_diag::KnockSource;
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::state::PlayerState;
@@ -646,6 +648,11 @@ impl Ball {
         }
 
         KeeperBody::rebound(self, &hit, cushion);
+        // A ball that has come off a man who was not gathering it. See
+        // [`knock_diag`](crate::r#match::engine::ball::ball::knock_diag) —
+        // the chain, not this contact, is what the report is about.
+        #[cfg(feature = "match-logs")]
+        self.note_keeper_knock(keeper, KnockSource::Body, players);
 
         let tick = self.current_tick_cached;
         // Nobody played it deliberately, so it stays LOOSE and the six-yard

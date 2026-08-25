@@ -201,17 +201,24 @@ pub const SUBSTITUTION_CLIP_PRE_ROLL_MS: u64 = 2_000;
 /// the line, the man coming the other way, the pair of them passing at the
 /// halfway flag.
 ///
-/// ⚠ **Sized against [`SubstitutionBreak::BREAK_MS`], which is a CEILING**, so
-/// this is longer than an ordinary change needs. The recorder cannot know at
-/// the mark how long the window will turn out to run — that is decided by how
-/// far the two men have to walk — and a clip cut to the typical nine or ten
-/// seconds would stop halfway through the slow one, leading a marker to
-/// footage of a man standing in the run-off. What the extra seconds hold on an
-/// ordinary change is not padding either: the window closes when the last man
-/// is on, so they are the restart and the first of the play that follows it.
+/// ⚠ **The recorder cannot know at the mark how long the window will turn out
+/// to run**, so this is sized for the long one and is longer than an ordinary
+/// change needs. Two things decide the length: how many men are in the change,
+/// each of whom gets a [`SubstitutionBreak::BEAT_MS`] of camera, and how far
+/// the last of them has to walk once his beat lets him go. A side may change
+/// three at one stoppage, and the worst case of that is 2 x `BEAT_MS` +
+/// `PORTRAIT_MS` before the last man moves and 62 m at `ON` afterwards —
+/// twenty-three seconds. A clip cut to the typical seven or eight would stop
+/// halfway through the slow one, leading a marker to footage of a man standing
+/// in the run-off.
+///
+/// What the extra seconds hold on an ordinary change is not padding either:
+/// the window closes when the last man is on, so they are the restart and the
+/// first of the play that follows it.
 ///
 /// [`SubstitutionBreak::BREAK_MS`]: super::SubstitutionBreak::BREAK_MS
-pub const SUBSTITUTION_CLIP_POST_ROLL_MS: u64 = 21_000;
+/// [`SubstitutionBreak::BEAT_MS`]: super::SubstitutionBreak::BEAT_MS
+pub const SUBSTITUTION_CLIP_POST_ROLL_MS: u64 = 24_000;
 
 /// Rounding applied to a recorded coordinate, once on the way into the buffer
 /// and again on the way out to JSON.
@@ -1619,9 +1626,19 @@ mod chance_clip_tests {
                 )[..]
             )
         );
+        // The two things that decide how long a window runs: the ceiling on
+        // the walking, and the beats the camera spends on a three-man change
+        // before the last of them is even released. The clip has to outlast
+        // both, or a marker leads to footage of a man standing in the run-off.
+        use crate::r#match::SubstitutionBreak;
         assert!(
-            SUBSTITUTION_CLIP_POST_ROLL_MS >= crate::r#match::SubstitutionBreak::BREAK_MS,
-            "the clip stops before the change it is a clip of does"
+            SUBSTITUTION_CLIP_POST_ROLL_MS >= SubstitutionBreak::BREAK_MS,
+            "the clip stops before a slow walk does"
+        );
+        assert!(
+            SUBSTITUTION_CLIP_POST_ROLL_MS
+                >= 2 * SubstitutionBreak::BEAT_MS + SubstitutionBreak::PORTRAIT_MS + 7_500,
+            "the clip stops before the third man of a triple change is on"
         );
     }
 

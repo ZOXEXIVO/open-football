@@ -13,11 +13,16 @@
 //! * [`frame_trace`] — the woodwork's own per-tick ball trace, captured
 //!   around a hit.
 //! * [`assist_diag`] — why a goal did or didn't carry an assist.
+//! * [`knock_diag`] — the keeper knock-chain census: every loose contact
+//!   off a goalkeeper, linked into chains, because the reported defect is
+//!   never the first touch.
 
 #[cfg(feature = "match-logs")]
 pub mod assist_diag;
 #[cfg(feature = "match-logs")]
 pub mod block_diag;
+#[cfg(feature = "match-logs")]
+pub mod knock_diag;
 #[cfg(feature = "match-logs")]
 pub mod flight_diag;
 #[cfg(feature = "match-logs")]

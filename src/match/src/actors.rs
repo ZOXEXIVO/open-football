@@ -129,6 +129,29 @@ pub struct PlayerActor {
     /// How set he is, 0..1 — a keeper on his toes with a shot on. See
     /// [`Gait::set`].
     set: f32,
+    /// **How besieged his own goal is, 0..1** — the nearest of the ball and
+    /// an opposing player, eased over [`Actors::SET_RANGE`] measured from
+    /// the middle of the goal he is defending.
+    ///
+    /// Only a keeper's, and it exists for one reason: it is the term
+    /// [`Actors::facing`] was missing. That branch decided whether he was
+    /// allowed to turn his back on the play from the ball's distance to
+    /// HIM, which says nothing at all about whether there are men in his
+    /// box — so a counter breaking from the halfway line, with two forwards
+    /// already standing on his penalty spot, read as "not his problem" and
+    /// opened his heading all the way round at exactly the wrong moment.
+    /// That is the reported bug, in the maintainer's words: *"he returns to
+    /// the goal keeping players in sight, then turns and goes for the goal
+    /// when there are opposing players in the penalty area."*
+    ///
+    /// ⚠ **Smoothed ONE WAY on purpose.** It snaps up and eases down over
+    /// [`Actors::SIEGE_RELIEF`], because turning your back on the play is
+    /// slow to earn and instant to revoke: a man arriving in the box takes
+    /// the permission away on the frame he arrives, and a box that has just
+    /// emptied does not hand it back for another second. That asymmetry is
+    /// also the hysteresis — without it a striker hovering on the 34 m band
+    /// edge would flicker the clamp open and shut at frame rate.
+    besieged: f32,
     /// Which end he defends. Only ever read to decide whether a goal was
     /// scored at his end or the other one — see [`Aftermath`].
     is_home: bool,
@@ -515,6 +538,145 @@ impl BallSpin {
     /// Exponential catch-up over `response` seconds, framerate independent.
     fn approach(response: f32, delta: f32) -> f32 {
         1.0 - (-delta / response).exp()
+    }
+}
+
+/// **How much danger there is at each end of the pitch**, worked once a
+/// frame from everybody's position — the thing a goalkeeper's facing
+/// decision needs and cannot get from his own actor.
+///
+/// Two goals, two sides, one number each: the nearest an opposing player
+/// has got to that goal, plus where the ball is relative to it. A keeper
+/// reads the entry for the goal he is standing in front of and the side he
+/// is not on. See [`PlayerActor::besieged`] for what it is for and
+/// [`Actors::facing`] for the rule it feeds.
+///
+/// Whole-pitch rather than per-keeper because the survey has to run BEFORE
+/// the animation loop, which mutates the very transforms it would have to
+/// read.
+#[derive(Clone, Copy, Default)]
+pub struct Siege {
+    /// Indexed `[goal][home?]`: the nearest that side has got to that goal,
+    /// in metres, and `f32::MAX` when nobody of that side is on the pitch.
+    nearest: [[f32; 2]; 2],
+    /// …and the ball's own distance from each goal, or `None` when it is
+    /// out of play and there is nothing to defend against.
+    ball: [Option<f32>; 2],
+}
+
+impl Siege {
+    /// Which goal a point belongs to: the one on its own side of halfway.
+    ///
+    /// A keeper never crosses halfway in this engine — `KeeperSweepLimit`
+    /// caps his excursion at about thirty metres — so for the one player
+    /// this is asked about it is simply which end he is defending, and it
+    /// survives the teams changing ends at half time without anything
+    /// having to be told.
+    fn end_of(position: Vec3) -> usize {
+        usize::from(position.x > 0.0)
+    }
+
+    fn goal(end: usize) -> Vec3 {
+        Vec3::new(
+            if end == 0 {
+                -Field::HALF_LENGTH
+            } else {
+                Field::HALF_LENGTH
+            },
+            0.0,
+            0.0,
+        )
+    }
+
+    fn flat(from: Vec3, to: Vec3) -> f32 {
+        Vec2::new(to.x - from.x, to.z - from.z).length()
+    }
+
+    /// An empty picture with the ball in it, or with nothing to defend
+    /// against if it is out of play.
+    pub(crate) fn opened(ball: Option<Vec3>) -> Self {
+        let mut siege = Siege {
+            nearest: [[f32::MAX; 2]; 2],
+            ball: [None; 2],
+        };
+        if let Some(ball) = ball {
+            for end in 0..2 {
+                siege.ball[end] = Some(Self::flat(Self::goal(end), ball));
+            }
+        }
+        siege
+    }
+
+    /// Fold one player into it.
+    ///
+    /// Split out from the survey so the census can build the same picture
+    /// off a recording without a Bevy world to query — what the harness
+    /// measures then goes through the same geometry the renderer uses,
+    /// rather than through a second copy of it that can quietly drift.
+    pub(crate) fn observe(&mut self, is_home: bool, position: Vec3) {
+        let side = usize::from(is_home);
+        for end in 0..2 {
+            let gap = Self::flat(Self::goal(end), position);
+            let slot = &mut self.nearest[end][side];
+            if gap < *slot {
+                *slot = gap;
+            }
+        }
+    }
+
+    /// Walk every visible actor once and record how near each side has got
+    /// to each goal.
+    fn survey(
+        actors: &Query<(&mut PlayerActor, &mut Transform, &Visibility)>,
+        ball: &BallState,
+    ) -> Self {
+        let mut siege = Self::opened(ball.on_pitch.then_some(ball.position));
+        for (actor, transform, visibility) in actors {
+            if *visibility == Visibility::Hidden {
+                continue;
+            }
+            siege.observe(actor.is_home, transform.translation);
+        }
+        siege
+    }
+
+    /// How near the nearest OPPONENT has got to the goal at this end, in
+    /// metres — `f32::MAX` when there is nobody.
+    ///
+    /// The ball is deliberately not in it. [`Self::on`] is the continuous
+    /// term the rig uses and takes the worse of the two; this is the raw
+    /// half a census needs to say "there was a man in his box", which is
+    /// the sentence the report was written in.
+    pub(crate) fn closest_opponent(&self, is_home: bool, position: Vec3) -> f32 {
+        self.nearest[Self::end_of(position)][usize::from(!is_home)]
+    }
+
+    /// …and the same question asked with a plain side flag, for a harness
+    /// that has a recording rather than an actor.
+    pub(crate) fn on(&self, is_home: bool, position: Vec3) -> f32 {
+        let end = Self::end_of(position);
+        let opponent = self.nearest[end][usize::from(!is_home)];
+        let range = match self.ball[end] {
+            Some(ball) => ball.min(opponent),
+            None => opponent,
+        };
+        Actors::nearing(range)
+    }
+
+    /// How besieged this keeper's goal is, 0..1 — the nearer of the ball
+    /// and the closest opponent, eased over [`Actors::SET_RANGE`].
+    ///
+    /// The same band, and deliberately: `SET_RANGE` is already this crate's
+    /// one claim about when the ball is near a goal — its near figure is
+    /// the depth of a penalty area and its far one the edge of the middle
+    /// third — and a second set of numbers saying the same thing in
+    /// different words is how two parts of a rig come to disagree.
+    ///
+    /// RADIAL from the middle of the goal rather than a box test, because a
+    /// threshold at the penalty spot would let a striker two steps outside
+    /// the D flick a keeper's whole heading round.
+    fn at(&self, keeper: &PlayerActor, position: Vec3) -> f32 {
+        self.on(keeper.is_home, position)
     }
 }
 
@@ -997,6 +1159,18 @@ impl Actors {
     /// coloured shirt. The near figure is roughly the top of the penalty
     /// area, the far one the edge of the middle third.
     const SET_RANGE: (f32, f32) = (16.5, 34.0);
+
+    /// How near a goal something is, 0 at the far edge of [`Self::SET_RANGE`]
+    /// and 1 inside its near one.
+    ///
+    /// One function because it was the same three lines written out in four
+    /// places — the keeper's set stance, his facing clamp, [`Siege`] and
+    /// the census that measures them — and they are all the same claim
+    /// about the same band. Two copies of a claim is how the stance and the
+    /// heading come to disagree about whether the ball is near his goal.
+    fn nearing(range: f32) -> f32 {
+        ((Self::SET_RANGE.1 - range) / (Self::SET_RANGE.1 - Self::SET_RANGE.0)).clamp(0.0, 1.0)
+    }
     /// Eye height, in metres, for working out how far up or down he is
     /// looking. Crown is [`Physique::STATURE`]; eyes sit a little under it.
     const EYE: f32 = 1.66;
@@ -1063,6 +1237,17 @@ impl Actors {
     /// the run even though the chest does not — which is a crossover run,
     /// and is precisely how a keeper recovers.
     pub(crate) const SHOULDER: f32 = 1.75;
+    /// How long a goalkeeper keeps watching after his box empties, in
+    /// seconds — the decay half of [`PlayerActor::besieged`].
+    ///
+    /// The rise has no constant: a man arriving at his goal takes the
+    /// permission to turn away on the frame he arrives. Only the relief is
+    /// smoothed, and it is what stops the clamp flickering at the band
+    /// edge — a striker drifting either side of 34 m from the goal cannot
+    /// open and shut a keeper's heading at frame rate. A little over a
+    /// second is how long a keeper goes on watching a cleared ball before
+    /// he trusts it.
+    const SIEGE_RELIEF: f32 = 1.2;
     /// Where a KEEPER's legs open onto his course, in metres a second —
     /// [`Actors::OPEN_UP`] for everybody else.
     ///
@@ -2099,6 +2284,12 @@ impl Actors {
         // a second and his arms come up over about the same. Snapping the
         // mood on the frame the ball crosses the line reads as a cut.
         let mood = 1.0 - (-delta / Self::MOOD_RESPONSE).exp();
+        // …and the threat picture at each end, before anybody is moved.
+        // See [`Siege`]: a keeper's right to turn his back on the play is a
+        // claim about HIS GOAL, so it cannot be worked out from his own
+        // actor alone — it needs everybody else's position, which is
+        // exactly what this loop is about to start mutating.
+        let siege = Siege::survey(&actors, &ball);
 
         for (mut actor, mut transform, visibility) in &mut actors {
             if *visibility == Visibility::Hidden {
@@ -2443,13 +2634,29 @@ impl Actors {
             // of, and the reason a dive used to arrive from nowhere.
             let wanted_set = if actor.is_goalkeeper && ball.on_pitch && !heedless {
                 let to_ball = ball.position - position;
-                let range = Vec3::new(to_ball.x, 0.0, to_ball.z).length();
-                ((Self::SET_RANGE.1 - range) / (Self::SET_RANGE.1 - Self::SET_RANGE.0))
-                    .clamp(0.0, 1.0)
+                Self::nearing(Vec3::new(to_ball.x, 0.0, to_ball.z).length())
             } else {
                 0.0
             };
             actor.set += (wanted_set - actor.set) * if playback.seeked { 1.0 } else { pace };
+
+            // **And how besieged his goal is** — see [`PlayerActor::besieged`].
+            //
+            // Snapped up, eased down: a man arriving in his box takes away
+            // his right to turn his back on the frame he arrives, and a box
+            // that has just cleared does not hand it back for another
+            // second. That asymmetry is the hysteresis on the clamp below.
+            let wanted_siege = if actor.is_goalkeeper && !heedless {
+                siege.at(&actor, position)
+            } else {
+                0.0
+            };
+            actor.besieged = if playback.seeked || wanted_siege >= actor.besieged {
+                wanted_siege
+            } else {
+                let relief = 1.0 - (-delta / Self::SIEGE_RELIEF).exp();
+                actor.besieged + (wanted_siege - actor.besieged) * relief
+            };
 
             // **The save he makes on his feet**, which is 84% of the balls
             // that arrive at him at pace. The reach opens out as the ball
@@ -2734,15 +2941,30 @@ impl Actors {
                     // gate got wrong — and a keeper sprinting off his line
                     // at a through-ball is running at the ball anyway, so
                     // the limit never binds on him.
+                    //
+                    // ⚠ **AND "NOT HIS PROBLEM" IS A CLAIM ABOUT HIS GOAL,
+                    // NOT ABOUT HIM.** This term was the ball's distance to
+                    // the KEEPER and nothing here read the opposition at
+                    // all — so a counter breaking from halfway, with two
+                    // forwards already standing on his penalty spot, put
+                    // the ball 34 m from him, opened the limit to a half
+                    // turn, and drew him pivoting to face his own net at
+                    // the exact moment the danger arrived. That is the
+                    // reported bug, and it is the worst possible frame to
+                    // get wrong: it is the one everybody is watching.
+                    //
+                    // [`PlayerActor::besieged`] is the other half of the
+                    // same question — how near his GOAL the nearest of the
+                    // ball and an opponent has got — and the two combine by
+                    // taking the WORSE of them, because either on its own
+                    // is enough to make the ball his business.
                     let range = Vec3::new(
                         ball.position.x - position.x,
                         0.0,
                         ball.position.z - position.z,
                     )
                     .length();
-                    let his_problem = ((Self::SET_RANGE.1 - range)
-                        / (Self::SET_RANGE.1 - Self::SET_RANGE.0))
-                        .clamp(0.0, 1.0);
+                    let his_problem = Self::nearing(range).max(actor.besieged);
                     let committed = Self::ease(
                         (actor.speed - Self::SQUARE_UP.1) / (Self::SPRINT - Self::SQUARE_UP.1),
                     );
@@ -3080,6 +3302,7 @@ impl PlayerActor {
             height: 0.0,
             look_pitch: 0.0,
             set: 0.0,
+            besieged: 0.0,
             previous: None,
             heading: 0.0,
             // Start everyone at a different point in the run cycle. The
@@ -3983,6 +4206,69 @@ mod flight {
             dived.gait().jump
         );
     }
+    /// **A ball that comes OFF him is not drawn as a ball he caught.**
+    ///
+    /// The engine gives a goalkeeper a physical volume
+    /// (`KeeperBody`), so several times a match a ball simply rebounds off
+    /// him — the capsule keeps 30% of the pace and the ball drops in front
+    /// of him. Drawn as a two-handed gather that is a keeper catching a
+    /// shot he in fact never had, which is the visual half of *"he kicks
+    /// the ball around with his hands"*.
+    ///
+    /// The rig already reads the outcome off the ball rather than guessing
+    /// it — a quarter of a second on, it is either sitting in his gloves or
+    /// it has gone — and this is that it stays that way. Built as two
+    /// synthetic tracks through the real [`Actors::next_arrival`]: the same
+    /// arrival, the same keeper, and the only difference is what the ball
+    /// does afterwards.
+    #[test]
+    fn a_ball_that_bounces_off_him_is_not_drawn_as_a_catch() {
+        use crate::replay::{ChunkPayload, Track};
+
+        // A shot arriving at a man on the origin at ~30 m/s, and then
+        // either stopping in his gloves or carrying on off him. Sampled
+        // every 30 ms throughout, because the reader deliberately refuses
+        // to interpolate across a gap wider than 200 ms — a sparser tail
+        // reads as a ball standing still, which is the answer under test.
+        let track = |away: f32, height: f32| {
+            let mut samples = String::from("[");
+            // 7.2 units a step is 30 m/s, arriving at the middle of the
+            // pitch, where the keeper is standing.
+            for step in 0..12 {
+                let z = 545.0 / 2.0 + (12 - step) as f32 * 7.2;
+                samples.push_str(&format!("[{},420.0,{z},1.10],", step * 30));
+            }
+            for step in 0..40 {
+                let z = 545.0 / 2.0 + step as f32 * away;
+                let comma = if step == 39 { "" } else { "," };
+                samples.push_str(&format!(
+                    "[{},420.0,{z},{height:.2}]{comma}",
+                    360 + step * 30
+                ));
+            }
+            samples.push(']');
+            let raw = serde_json::value::RawValue::from_string(samples).expect("well-formed");
+            let mut track = Track::default();
+            track.merge(ChunkPayload::open(&raw));
+            track
+        };
+        // Held: it stops on him, at glove height, and stays there.
+        let mut held = track(0.0, 1.15);
+        // Off him: the same arrival, and then 2.4 units a step — 10 m/s,
+        // which is what `KeeperBody::RESTITUTION` leaves on a ball off a
+        // chest — dropping to his boots.
+        let mut spilled = track(2.4, 0.30);
+        let keeper = Field::to_world(420.0, 272.5, 0.0);
+        let read = |ball: &mut Track| {
+            Actors::next_arrival(ball, 0.0, keeper).expect("a ball arriving at him")
+        };
+        assert!(read(&mut held).held, "a ball that stops in his gloves");
+        assert!(
+            !read(&mut spilled).held,
+            "a ball still travelling a quarter of a second later is drawn as a clean catch"
+        );
+    }
+
     /// **Where a landed keeper actually ends up**, across the whole range of
     /// dives the engine produces rather than at the two ends anybody thought
     /// to test.
@@ -6010,6 +6296,156 @@ mod ground {
         );
     }
 
+    /// **…and men in his box take the turn away from him whatever the ball
+    /// is doing.**
+    ///
+    /// The reported bug in one test. `a_keeper_watches_the_play_from_the_far_end_too`
+    /// above deliberately allows a keeper sprinting back for a ball played
+    /// over him to turn and run, because that is what a real one does — and
+    /// the term deciding it was the ball's distance to HIM, which says
+    /// nothing about whether there are opponents at his goal. So the same
+    /// permission was handed to a keeper recovering into a box with two
+    /// forwards standing in it, and it is the one moment of a match at
+    /// which nobody may look away.
+    ///
+    /// The claim is about his GOAL, so the fixture is the same run at the
+    /// same speed with the same ball, twice, differing only in what
+    /// [`Siege`] says is happening behind him.
+    #[test]
+    fn a_keeper_never_shows_his_back_with_men_in_his_box() {
+        let ball = BallState {
+            on_pitch: true,
+            position: Vec3::new(0.0, 0.0, 45.0),
+            ..Default::default()
+        };
+        let sprinting_back = |besieged: f32| {
+            let mut keeper = PlayerActor::new(1, true, true);
+            keeper.speed = 6.0;
+            keeper.travel = Vec3::new(0.0, 0.0, -6.0);
+            keeper.besieged = besieged;
+            let facing = Actors::facing(&keeper, &ball, Vec3::ZERO, Vec3::ZERO, false);
+            Vec3::new(facing.x, 0.0, facing.z)
+                .try_normalize()
+                .expect("a heading")
+                .dot(Vec3::Z)
+                .clamp(-1.0, 1.0)
+                .acos()
+        };
+        // An empty box: he turns and runs, exactly as before.
+        assert!(
+            sprinting_back(0.0) > Actors::SHOULDER,
+            "the far-end case has stopped working: {:.0}deg",
+            sprinting_back(0.0).to_degrees()
+        );
+        // **A man actually IN it: he does not turn, and that is the report.**
+        assert!(
+            sprinting_back(1.0) <= Actors::SHOULDER + 1e-3,
+            "with a man in his penalty area he is {:.0}deg off the ball",
+            sprinting_back(1.0).to_degrees()
+        );
+        // …and it holds at every speed, which the old rule did not: the
+        // whole defect was that going faster bought him the turn.
+        for speed in [3.0_f32, 4.5, 6.0, 9.0] {
+            let mut keeper = PlayerActor::new(1, true, true);
+            keeper.speed = speed;
+            keeper.travel = Vec3::new(0.0, 0.0, -speed);
+            keeper.besieged = 1.0;
+            let facing = Actors::facing(&keeper, &ball, Vec3::ZERO, Vec3::ZERO, false);
+            let off = Vec3::new(facing.x, 0.0, facing.z)
+                .try_normalize()
+                .expect("a heading")
+                .dot(Vec3::Z)
+                .clamp(-1.0, 1.0)
+                .acos();
+            assert!(
+                off <= Actors::SHOULDER + 1e-3,
+                "at {speed:.1} m/s with his box occupied he is {:.0}deg off the ball",
+                off.to_degrees()
+            );
+        }
+        // **Continuous and monotone across the whole band**, not a switch:
+        // a striker drifting over the edge of the threat range must not
+        // flick a keeper's whole chest round between two frames, and
+        // partial danger buys partial permission rather than all of it.
+        let mut previous = sprinting_back(0.0);
+        for step in 1..=40 {
+            let open = sprinting_back(step as f32 / 40.0);
+            assert!(
+                open <= previous + 1e-4 && previous - open < 0.06,
+                "his heading jumps {:.1}deg at siege {:.3}",
+                (previous - open).to_degrees(),
+                step as f32 / 40.0
+            );
+            previous = open;
+        }
+    }
+
+    /// **A through-ball still gets a sprint that faces the run.**
+    ///
+    /// The clamp is a ceiling on how far he may turn AWAY from the ball,
+    /// and a keeper racing a striker to a ball played in behind is running
+    /// AT it — so however besieged his goal is, the limit must not bind on
+    /// him. Without this the fix above would have a keeper sprinting out of
+    /// his area sideways.
+    #[test]
+    fn a_besieged_keeper_still_faces_the_ball_he_is_sprinting_at() {
+        let ball = BallState {
+            on_pitch: true,
+            position: Vec3::new(0.0, 0.0, 20.0),
+            ..Default::default()
+        };
+        let mut keeper = PlayerActor::new(1, true, true);
+        keeper.speed = 6.0;
+        keeper.travel = Vec3::new(0.0, 0.0, 6.0);
+        keeper.besieged = 1.0;
+        let facing = Actors::facing(&keeper, &ball, Vec3::ZERO, Vec3::ZERO, false);
+        let flat = Vec3::new(facing.x, 0.0, facing.z)
+            .try_normalize()
+            .expect("a heading");
+        assert!(
+            flat.z > 0.999,
+            "he is not looking at the through-ball he is sprinting out to: {flat:?}"
+        );
+    }
+
+    /// **The threat picture reads the goal he is standing in front of, and
+    /// the side he is not on.**
+    ///
+    /// Three ways to get this wrong and all of them silent: reading the far
+    /// goal, reading his own team-mates as the threat, and reading the ball
+    /// when it is out of play. Each is one index.
+    #[test]
+    fn the_siege_reads_his_own_goal_and_the_other_team() {
+        let his_goal = Vec3::new(-Field::HALF_LENGTH, 0.0, 0.0);
+        let on_his_line = his_goal + Vec3::new(2.0, 0.0, 0.0);
+        // A striker of the other side on the penalty spot, a team-mate on
+        // the spot at the FAR end, and the ball out of play.
+        let mut siege = Siege::opened(None);
+        siege.observe(false, his_goal + Vec3::new(11.0, 0.0, 0.0));
+        siege.observe(true, Vec3::new(Field::HALF_LENGTH - 11.0, 0.0, 0.0));
+        assert!(
+            (siege.on(true, on_his_line) - 1.0).abs() < 1e-4,
+            "a striker on his penalty spot is not besieging him: {:.2}",
+            siege.on(true, on_his_line)
+        );
+        assert_eq!(
+            siege.closest_opponent(true, on_his_line).round(),
+            11.0,
+            "he is reading the wrong end or the wrong team"
+        );
+        // His own team-mate standing in his six-yard box is not a threat.
+        let mut friendly = Siege::opened(None);
+        friendly.observe(true, his_goal + Vec3::new(4.0, 0.0, 0.0));
+        assert_eq!(
+            friendly.on(true, on_his_line),
+            0.0,
+            "his own defender is besieging him"
+        );
+        // …and a ball at his goal is, whoever is standing near it.
+        let with_ball = Siege::opened(Some(his_goal + Vec3::new(8.0, 0.0, 0.0)));
+        assert!(with_ball.on(true, on_his_line) > 0.99);
+    }
+
     /// …and going backwards he backpedals rather than turning round, which
     /// is a gait this rig already has.
     #[test]
@@ -6177,6 +6613,37 @@ pub(crate) mod replayed {
             depth.sort_by(|a, b| b.1.total_cmp(&a.1));
             depth.truncate(2);
             depth.into_iter().map(|(id, _)| id).collect()
+        }
+
+        /// **Which side each player is on**, as `id → started in the left
+        /// half`.
+        ///
+        /// A chunk carries positions and states and no team sheet, so this
+        /// is read off the one instant of a match at which the recording
+        /// says it without being told: **at kick-off every player is in his
+        /// own half.** The label is then invariant — the teams change ends
+        /// at half time and both groups flip together, so `side[a] !=
+        /// side[b]` still means "opponents" for the whole recording, which
+        /// is the only thing anybody asks of it.
+        ///
+        /// A substitute has no kick-off sample and is absent from the map.
+        /// Callers treat an unknown as nobody's opponent, which under-counts
+        /// by at most the handful of minutes a sub is on for and never
+        /// invents an opponent that is not there.
+        pub fn sides(tracks: &mut ReplayTracks, start: f64) -> std::collections::HashMap<u32, bool> {
+            let ids: Vec<u32> = tracks.players.keys().copied().collect();
+            let mut sides = std::collections::HashMap::new();
+            for id in ids {
+                let Some(track) = tracks.players.get_mut(&id) else {
+                    continue;
+                };
+                // The first second, not the first frame: the very first
+                // sample of a track can precede the kick-off placement.
+                if let Some(p) = track.position_at(start + 200.0) {
+                    sides.insert(id, p[0] < 420.0);
+                }
+            }
+            sides
         }
 
         /// …and everybody else.
@@ -6530,8 +6997,76 @@ mod keeper {
         // And the pose at the top of each of them.
         let mut apex_gait: Vec<Gait> = Vec::new();
 
+        // **The threat picture at every frame** — the thing the facing rule
+        // needs and the census used not to have, so the acceptance question
+        // (*is he ever drawn with his back to a live ball while men are in
+        // his box?*) could not be asked at all. Built through [`Siege`]'s
+        // own constructor rather than a copy of its arithmetic, so the
+        // harness cannot come to disagree with the renderer about it.
+        let sides = Chunk::sides(&mut tracks, start);
+        let everybody: Vec<u32> = tracks.players.keys().copied().collect();
+        println!(
+            "  sides read off the kick-off frame: {} of {} tracks placed",
+            sides.len(),
+            everybody.len()
+        );
+        let mut pictures: Vec<Siege> = Vec::with_capacity(frames as usize);
+        for f in 0..frames {
+            let now = start + f as f64 * frame as f64 * 1000.0;
+            let ball = tracks
+                .ball
+                .position_at(now)
+                .map(|b| Field::to_world(b[0], b[1], b[2]));
+            let mut siege = Siege::opened(ball);
+            for id in &everybody {
+                let Some(&home) = sides.get(id) else {
+                    continue;
+                };
+                if let Some(p) = tracks.players.get_mut(id).and_then(|t| t.position_at(now)) {
+                    siege.observe(home, Field::to_world(p[0], p[1], p[2]));
+                }
+            }
+            pictures.push(siege);
+        }
+        // Frames with a man inside his own penalty area, and of those the
+        // ones in which he is drawn more than `BACK_ON_IT` off a live ball.
+        //
+        // ⚠ **Both arms, in one pass.** A second heading is integrated
+        // beside the real one through the same [`Actors::facing`] with
+        // [`PlayerActor::besieged`] held at zero — which is exactly the rule
+        // as it stood before the threat term existed. Running the control
+        // inside the census rather than against an older revision is the
+        // only way to compare them on the SAME recording, and the working
+        // tree moves under you anyway.
+        let mut under_siege = 0u64;
+        let mut back_on_it = 0u64;
+        let mut back_anywhere = 0u64;
+        let mut loose_back_on_it = 0u64;
+        let mut loose_back_anywhere = 0u64;
+        let mut live_frames = 0u64;
+        // …and of the frames he IS drawn turned away, the ones where the
+        // rule ASKED for it, as against the ones where his heading is still
+        // catching up with a clamp that has already closed. Only the first
+        // kind is a decision anybody made, and only the first kind can be
+        // fixed here.
+        let mut wanted_turned = 0u64;
+        let mut loose_wanted_turned = 0u64;
+        // How far off the ball the rule lets him turn while he is MOVING
+        // with men in his box, as a distribution rather than a threshold —
+        // the threshold above counts the frames it goes all the way wrong,
+        // and this says how much of the turn the term is actually holding
+        // back on the many more frames it goes partly wrong.
+        let mut opening: Vec<f32> = Vec::new();
+        let mut loose_opening: Vec<f32> = Vec::new();
+        /// More than this far off the ball is his back to it, in radians.
+        /// 115° — past `Actors::SHOULDER` (100°) by enough that no
+        /// legitimate over-the-shoulder recovery can reach it.
+        const BACK_ON_IT: f32 = 2.007;
+
         for id in ids {
-            let mut actor = PlayerActor::new(id, true, true);
+            let mut actor = PlayerActor::new(id, true, sides.get(&id).copied().unwrap_or(true));
+            // The control's heading, integrated on the same frames.
+            let mut loose_heading = 0.0f32;
             let mut previous: Option<Vec3> = None;
             // His own goal is the one he stands in front of.
             let mut post = 0.0f32;
@@ -6583,16 +7118,107 @@ mod keeper {
                     state.on_pitch = true;
                     state.position = b;
                 }
+                // …and how besieged his goal is, snapped up and eased down
+                // exactly as `animate` does it.
+                let picture = pictures[f as usize];
+                let wanted_siege = picture.on(actor.is_home, position);
+                actor.besieged = if wanted_siege >= actor.besieged {
+                    wanted_siege
+                } else {
+                    actor.besieged
+                        + (wanted_siege - actor.besieged)
+                            * (1.0 - (-frame / Actors::SIEGE_RELIEF).exp())
+                };
+                // The turn, applied identically to both headings — only the
+                // facing rule differs between them.
+                let eased = (actor.speed / Actors::SPRINT).clamp(0.0, 1.0);
+                let ceiling = (Actors::PIVOT_RATE.0
+                    + (Actors::PIVOT_RATE.1 - Actors::PIVOT_RATE.0) * eased)
+                    * frame;
+                let response = 1.0 - (-frame / Actors::TURN_RESPONSE).exp();
+                let mut turn_toward = |heading: f32, want: Vec3| match Vec3::new(
+                    want.x, 0.0, want.z,
+                )
+                .try_normalize()
+                {
+                    Some(want) => {
+                        let wanted = want.x.atan2(want.z);
+                        let swing = (wanted - heading + PI).rem_euclid(TAU) - PI;
+                        heading + (swing * response).clamp(-ceiling, ceiling)
+                    }
+                    None => heading,
+                };
+                // The control's want, taken by holding the threat term at
+                // zero for one call. `facing` never reads the heading — it
+                // returns a direction to turn TOWARD — so the two arms need
+                // nothing of each other beyond their own integrators.
+                let besieged = actor.besieged;
+                actor.besieged = 0.0;
+                let loose_want = Actors::facing(&actor, &state, position, step, false);
+                actor.besieged = besieged;
+                loose_heading = turn_toward(loose_heading, loose_want);
                 let want = Actors::facing(&actor, &state, position, step, false);
-                if let Some(want) = Vec3::new(want.x, 0.0, want.z).try_normalize() {
-                    let wanted = want.x.atan2(want.z);
-                    let swing = (wanted - actor.heading + PI).rem_euclid(TAU) - PI;
-                    let eased = (actor.speed / Actors::SPRINT).clamp(0.0, 1.0);
-                    let ceiling = (Actors::PIVOT_RATE.0
-                        + (Actors::PIVOT_RATE.1 - Actors::PIVOT_RATE.0) * eased)
-                        * frame;
-                    actor.heading += (swing * (1.0 - (-frame / Actors::TURN_RESPONSE).exp()))
-                        .clamp(-ceiling, ceiling);
+                actor.heading = turn_toward(actor.heading, want);
+
+                // **THE ACCEPTANCE QUESTION.** Is he ever drawn with his
+                // back to a live ball while there is a man in his box?
+                if let Some(b) = ball {
+                    let to_ball = Vec3::new(b.x - position.x, 0.0, b.z - position.z);
+                    if let Some(to_ball) = to_ball.try_normalize() {
+                        let bearing = to_ball.x.atan2(to_ball.z);
+                        let off = |heading: f32| {
+                            ((bearing - heading + PI).rem_euclid(TAU) - PI).abs()
+                        };
+                        live_frames += 1;
+                        let in_the_box = picture.closest_opponent(actor.is_home, position)
+                            <= Field::PENALTY_AREA_DEPTH;
+                        let turned = off(actor.heading) > BACK_ON_IT;
+                        let loose_turned = off(loose_heading) > BACK_ON_IT;
+                        if turned {
+                            back_anywhere += 1;
+                        }
+                        if loose_turned {
+                            loose_back_anywhere += 1;
+                        }
+                        if in_the_box {
+                            under_siege += 1;
+                            // Did the RULE ask for a turned back, or is the
+                            // heading simply still coming round? Asked of
+                            // both arms and on every besieged frame, not
+                            // only the ones he happens to be turned on —
+                            // this is the number the fix is about.
+                            let asked = |want: Vec3| {
+                                Vec3::new(want.x, 0.0, want.z)
+                                    .try_normalize()
+                                    .is_some_and(|w| off(w.x.atan2(w.z)) > BACK_ON_IT)
+                            };
+                            if asked(want) {
+                                wanted_turned += 1;
+                            }
+                            if asked(loose_want) {
+                                loose_wanted_turned += 1;
+                            }
+                            if actor.speed > Actors::SQUARE_UP.0 {
+                                let asked_off = |w: Vec3| {
+                                    Vec3::new(w.x, 0.0, w.z)
+                                        .try_normalize()
+                                        .map(|w| off(w.x.atan2(w.z)))
+                                };
+                                if let (Some(a), Some(b)) =
+                                    (asked_off(want), asked_off(loose_want))
+                                {
+                                    opening.push(a);
+                                    loose_opening.push(b);
+                                }
+                            }
+                            if turned {
+                                back_on_it += 1;
+                            }
+                            if loose_turned {
+                                loose_back_on_it += 1;
+                            }
+                        }
+                    }
                 }
 
                 let forward = Vec3::new(actor.heading.sin(), 0.0, actor.heading.cos());
@@ -6614,10 +7240,7 @@ mod keeper {
                 let wanted_set = match ball {
                     Some(b) => {
                         let to_ball = b - position;
-                        let range = Vec3::new(to_ball.x, 0.0, to_ball.z).length();
-                        ((Actors::SET_RANGE.1 - range)
-                            / (Actors::SET_RANGE.1 - Actors::SET_RANGE.0))
-                            .clamp(0.0, 1.0)
+                        Actors::nearing(Vec3::new(to_ball.x, 0.0, to_ball.z).length())
                     }
                     None => 0.0,
                 };
@@ -6733,6 +7356,50 @@ mod keeper {
                 share(goalward[band], in_band[band]),
             );
         }
+        println!(
+            "  MEN IN HIS BOX on {:.1}% of live-ball frames ({under_siege} of {live_frames})",
+            share(under_siege, live_frames)
+        );
+        println!(
+            "  BACK TO A LIVE BALL (>115 deg) WITH MEN IN HIS BOX: {back_on_it} frames \
+             ({:.2}% of them)   control, with the threat term off: {loose_back_on_it} ({:.2}%)",
+            share(back_on_it, under_siege),
+            share(loose_back_on_it, under_siege)
+        );
+        println!(
+            "  …and off a live ball at all, anywhere: {back_anywhere} ({:.2}%)   \
+             control {loose_back_anywhere} ({:.2}%)",
+            share(back_anywhere, live_frames),
+            share(loose_back_anywhere, live_frames)
+        );
+        println!(
+            "  THE RULE ASKED for a turned back on {wanted_turned} besieged frames \
+             ({:.3}%)   control {loose_wanted_turned} ({:.3}%)   \
+             — the rest of the {back_on_it} above are his heading still coming round",
+            share(wanted_turned, under_siege),
+            share(loose_wanted_turned, under_siege)
+        );
+        let quantile = |v: &mut Vec<f32>, q: f32| {
+            if v.is_empty() {
+                return f32::NAN;
+            }
+            v.sort_by(f32::total_cmp);
+            v[((v.len() as f32 - 1.0) * q) as usize].to_degrees()
+        };
+        let asked_frames = opening.len();
+        println!(
+            "  how far off the ball the rule LETS him turn, moving with men in his box \
+             ({asked_frames} frames): p50 {:.0} deg  p90 {:.0}  p99 {:.0}  max {:.0}   \
+             control p50 {:.0}  p90 {:.0}  p99 {:.0}  max {:.0}",
+            quantile(&mut opening, 0.50),
+            quantile(&mut opening, 0.90),
+            quantile(&mut opening, 0.99),
+            quantile(&mut opening, 1.0),
+            quantile(&mut loose_opening, 0.50),
+            quantile(&mut loose_opening, 0.90),
+            quantile(&mut loose_opening, 0.99),
+            quantile(&mut loose_opening, 1.0),
+        );
         let moving: u64 = in_band[1..].iter().sum();
         let back: u64 = goalward[1..].iter().sum();
         println!(

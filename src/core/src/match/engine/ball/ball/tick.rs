@@ -122,6 +122,12 @@ impl Ball {
         // the entire restart machinery have never been in a census.
         #[cfg(feature = "match-logs")]
         let census = crate::r#match::engine::ball::ball::teleport::BallPass::open(self);
+        // **Has the goalkeeper's open knock-chain ended?** Asked before
+        // anything else touches the ball, so the ending it books is the one
+        // the PREVIOUS tick left behind rather than one this tick is about
+        // to overwrite. See [`knock_diag`].
+        #[cfg(feature = "match-logs")]
+        self.settle_keeper_knock(players);
         #[cfg(feature = "match-logs")]
         {
             use std::sync::atomic::Ordering;
