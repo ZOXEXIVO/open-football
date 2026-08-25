@@ -420,21 +420,6 @@ impl SubScoring {
         s.clamp(0.0, 1.0)
     }
 
-    /// Sub-timing windows in minutes — used by callers to gate when each
-    /// substitution slot may be used. Real coaches stagger their tactical
-    /// changes around the 60–80 minute window; injuries and red-card
-    /// fallout are exceptions.
-    pub fn allowed_in_window(sub_index: u8, match_minute: u32, force_critical: bool) -> bool {
-        if force_critical {
-            return match_minute >= 5;
-        }
-        match sub_index {
-            0 => match_minute >= 55 && match_minute <= 88,
-            1 => match_minute >= 65 && match_minute <= 88,
-            2 => match_minute >= 75 && match_minute <= 92,
-            _ => match_minute >= 85,
-        }
-    }
 }
 
 #[cfg(test)]

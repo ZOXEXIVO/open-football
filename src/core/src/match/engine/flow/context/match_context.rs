@@ -4,7 +4,7 @@
 //! or advance one slice of it are siblings in this group.
 
 use super::config::MatchEngineConfig;
-use super::substitution_record::SubstitutionRecord;
+use super::substitution_record::{SubstitutionRecord, SubstitutionWindows};
 use crate::MatchTacticType;
 use crate::r#match::engine::chemistry::{ChemistryMap, TacticalFamiliarity};
 use crate::r#match::engine::environment::MatchEnvironment;
@@ -53,6 +53,10 @@ pub struct MatchContext {
     /// Whether the knockout-tie ET bonus substitution is allowed for
     /// this match. Mirrors `MatchRules.allow_extra_time_extra_sub`.
     pub allow_extra_time_extra_sub: bool,
+    /// How many separate stoppages each side has already interrupted to
+    /// make a change. The Law allows three, plus the interval free — see
+    /// [`SubstitutionWindows`].
+    pub substitution_windows: SubstitutionWindows,
     pub additional_time_ms: u64,
     pub period_stoppage_time_ms: u64,
     pub penalty_shootout_kicks: Vec<PenaltyShootoutKick>,
@@ -350,6 +354,7 @@ impl MatchContext {
             max_substitutions_per_team: rules.max_substitutions_per_team,
             max_substitutions_per_pass: rules.max_substitutions_per_pass,
             allow_extra_time_extra_sub: rules.allow_extra_time_extra_sub,
+            substitution_windows: SubstitutionWindows::default(),
             additional_time_ms: 0,
             period_stoppage_time_ms: 0,
             penalty_shootout_kicks: Vec::new(),

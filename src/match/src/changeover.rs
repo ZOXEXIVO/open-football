@@ -34,9 +34,10 @@ use crate::camera::{CameraFlight, CameraOrbit};
 use crate::config::ViewerConfig;
 use crate::field::Field;
 use crate::focus::CameraSubject;
+use crate::pitch::Pitch;
 use crate::playback::Playback;
 use bevy::prelude::*;
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::PI;
 
 /// One change, as the camera needs it: when, whose backs to get behind at the
 /// touchline, and who to look at one at a time before that.
@@ -176,10 +177,43 @@ impl ChangeoverShot {
     /// And how far in front of him the lens then stops. Far enough that he is
     /// behind the camera rather than filling the bottom of the frame.
     const GAP: f32 = 0.9;
-    /// The closest the shot will ever be driven, in metres. Past this a man is
-    /// no longer in his own close-up — and it is also as close as the swing
-    /// gets to him, so it has to clear a body.
-    const SNUG: f32 = 1.9;
+    /// The closest the shot will ever be driven, in metres, and the most of
+    /// its distance it will give up to get there.
+    ///
+    /// Both floors on the same thing: a shot that ducks in past everybody who
+    /// is standing about ends up with the lens on somebody's shoulder. Past
+    /// this the man in the way is left in shot instead — a team-mate in the
+    /// background is a picture, a team-mate at arm's length is not.
+    const CRAMPED: f32 = 1.4;
+    /// **The widest the lens may open**, as a multiple of the wheel's own
+    /// factor — a floor on the magnification, which is a ceiling on the angle.
+    ///
+    /// The lens opens by whatever the shot gives up in distance so the man
+    /// stays the same size in frame, and that is right down to about three
+    /// metres. Below it the arithmetic asks for a fisheye: driven in to
+    /// [`Self::CRAMPED`] the back beat wants 0.14, which is 108 degrees and a
+    /// man with a head the size of his shoulders.
+    ///
+    /// So the widening stops here and the framing gives instead — the closer
+    /// the shot is forced, the tighter it crops. That is the right way round:
+    /// what the first beat is for is the print across his shoulders, and a
+    /// shot cropped at his waist still has all of it.
+    const WIDEST: f32 = 0.30;
+    /// **The box the lens may stand in**, as half-extents along and across
+    /// the pitch, in metres: the run-off, pulled in by a metre so the
+    /// advertising hoardings standing at the end of it are always behind the
+    /// camera rather than across the shot.
+    ///
+    /// ⚠ The banks of seating start two metres beyond the boards and
+    /// [`Bank::cull`](crate::pitch::Bank) hides whichever one the lens is
+    /// inside — so a rig that wanders out here does not merely stand behind a
+    /// wall, it makes a whole stand blink out of the picture as it crosses the
+    /// line.
+    const PERIMETER: f32 = 1.0;
+    const INSIDE: (f32, f32) = (
+        Field::HALF_LENGTH + Pitch::END_MARGIN - Self::PERIMETER,
+        Field::HALF_WIDTH + Pitch::SIDE_MARGIN - Self::PERIMETER,
+    );
 
     /// How long a change lasts when the recording does not say — a document
     /// written before the engine played substitutions out, or one made on the
@@ -298,26 +332,22 @@ impl ChangeoverShot {
             let (_, transform, _) = actors.iter().find(|(actor, _, visibility)| {
                 actor.id == man && **visibility != Visibility::Hidden
             })?;
-            // ⚠ **Somebody else standing in the gap owns the shot.** Twenty-one
-            // other men are stood still all over the pitch and one of them is
-            // sooner or later a couple of metres behind the man being looked
-            // at: rendered, the second close-up of a double change was the back
-            // of a team-mate filling the frame, and the subject was somewhere
-            // behind him. So the lens comes as far forward as it has to.
-            let boots = transform.translation;
-            let forward = Self::heading(transform);
-            let others = || {
-                actors.iter().filter_map(move |(actor, at, visibility)| {
-                    (actor.id != man && *visibility != Visibility::Hidden).then_some(at.translation)
-                })
-            };
+            // Everybody else who is drawn, so the swing can duck in past
+            // whoever is standing in its way — see `clear`. A stack array
+            // rather than a collection: this runs every frame a close-up is on
+            // and there are never more than a couple of dozen of them.
+            let mut others = [Vec3::ZERO; 32];
+            let mut count = 0;
+            for (actor, at, visibility) in &actors {
+                if actor.id != man && *visibility != Visibility::Hidden && count < others.len() {
+                    others[count] = at.translation;
+                    count += 1;
+                }
+            }
             Some(Self::close_up(
                 transform,
                 (beat - index as f64 * Self::PORTRAIT_MS) as f32,
-                (
-                    Self::clear(boots, -forward, Self::BACK_OFF.0, others()),
-                    Self::clear(boots, forward, Self::FACE_OFF.0, others()),
-                ),
+                &others[..count],
             ))
         });
 
@@ -356,46 +386,50 @@ impl ChangeoverShot {
     /// The shot on one man, `into` ms into his own beat.
     ///
     /// Everything here is in HIS frame rather than the pitch's: the camera
-    /// goes behind his shoulders whichever way he happens to be facing, which
-    /// at a dead ball is wherever he was looking when play stopped. Reading it
-    /// off the transform is also the only way to be sure — `Actors::facing`
-    /// turns a stationary man toward the ball, and toward nothing at all when
-    /// the ball is off the pitch, which is exactly the case at the stoppage
-    /// every substitution is made at.
-    /// `reach` is how far the lens may stand off him at each end — see
-    /// [`Self::clear`], which is what stops a team-mate standing in the gap.
-    fn close_up(transform: &Transform, into: f32, reach: (f32, f32)) -> Portrait {
+    /// goes behind his shoulders whichever way he happens to be facing, and
+    /// swings round to his face from there. `others` is everybody else who is
+    /// drawn, because the one thing this shot cannot do is put a body between
+    /// the lens and its subject — see [`Self::clear`].
+    fn close_up(transform: &Transform, into: f32, others: &[Vec3]) -> Portrait {
         let boots = transform.translation;
-        let forward = Self::heading(transform);
-        let behind = Self::rig(boots, -forward, (reach.0, Self::BACK_OFF.1));
-        let front = Self::rig(boots, forward, (reach.1, Self::FACE_OFF.1));
-        let chest = boots.with_y(Self::CHEST);
-        let face = boots.with_y(Self::FACE_AT);
-        // **The lens opens with every metre the shot gives up.** Coming
-        // forward past a man in the way would otherwise make the subject grow,
-        // so the framing would depend on who happened to be standing behind
-        // him; widening in step keeps him the same size in frame however far
-        // in the camera had to come.
-        let lens = |wanted: f32, at: f32, lens: f32| lens * at / wanted;
-        let back = lens(Self::BACK_OFF.0, reach.0, Self::BACK_LENS);
-        let front_lens = lens(Self::FACE_OFF.0, reach.1, Self::FACE_LENS);
+        let turn =
+            Self::ease(((into - Self::BACK_MS as f32) / Self::TURN_MS as f32).clamp(0.0, 1.0));
 
-        let turn = ((into - Self::BACK_MS as f32) / Self::TURN_MS as f32).clamp(0.0, 1.0);
-        if turn <= 0.0 {
-            return Portrait {
-                stand: behind,
-                aim: chest,
-                lens: back,
-            };
-        }
-        let turn = Self::ease(turn);
+        // ⚠ **The bearing is worked out for THIS frame, and so is everything
+        // hung off it.**
+        //
+        // The obvious build takes the two end positions, clears each of them
+        // once, and swings between them — and it puts the camera through
+        // people. The ends are dead behind him and dead in front; the metre of
+        // ground the lens actually travels over is neither, and it is where
+        // the man standing two metres to his left is. Measured on the first
+        // change of a real match: a team-mate 2.15 m away, the swing passing
+        // within a foot of him, his body across the whole frame and then
+        // through the near plane.
+        //
+        // So the arc is a bearing that is re-cleared every frame. What comes
+        // out is not a circle any more — the lens ducks in where somebody is
+        // standing and comes back out after him — which is exactly what
+        // somebody carrying a camera round a man would do.
+        let bearing = Quat::from_rotation_y(turn * PI) * -Self::heading(transform);
+        let wanted = Self::BACK_OFF.0 + (Self::FACE_OFF.0 - Self::BACK_OFF.0) * turn;
+        let reach = Self::clear(boots, bearing, wanted, others);
+
         Portrait {
-            // ⚠ Round him, not through him. The two ends are dead behind and
-            // dead in front, so the straight line between them runs the length
-            // of the man it is looking at.
-            stand: Self::swing_round(behind, front, boots, turn),
-            aim: chest.lerp(face, turn),
-            lens: back + (front_lens - back) * turn,
+            stand: Vec3::new(
+                boots.x + bearing.x * reach,
+                boots.y + Self::BACK_OFF.1 + (Self::FACE_OFF.1 - Self::BACK_OFF.1) * turn,
+                boots.z + bearing.z * reach,
+            ),
+            aim: boots
+                .with_y(Self::CHEST)
+                .lerp(boots.with_y(Self::FACE_AT), turn),
+            // **The lens opens with every metre the shot gives up**, so a man
+            // it had to duck in past does not change how big the subject
+            // comes out — until [`Self::WIDEST`], where opening any further
+            // would be a fisheye and the shot crops instead.
+            lens: ((Self::BACK_LENS + (Self::FACE_LENS - Self::BACK_LENS) * turn) * reach / wanted)
+                .max(Self::WIDEST),
         }
     }
 
@@ -413,45 +447,57 @@ impl ChangeoverShot {
             .normalize_or_zero()
     }
 
-    /// **How far the lens can stand off him along `bearing` before somebody
-    /// else is standing in the gap**, in metres.
+    /// **How far the lens may stand off him along `bearing`**, in metres:
+    /// as far as it wants, unless the ground runs out or somebody is standing
+    /// in the gap.
     ///
-    /// ⚠ A close-up is the only shot in the replay with something between the
-    /// camera and its subject as a matter of course: twenty-one other men are
-    /// stood still all over the pitch, none of them will move until this is
-    /// over, and one of them is sooner or later a couple of metres behind the
-    /// man being looked at. Rendered, the second close-up of a double change
-    /// was the back of a team-mate filling the whole frame.
+    /// ⚠ **A close-up is the only shot in the replay with something between
+    /// the camera and its subject as a matter of course.** Twenty-one other
+    /// men are stood still all over the pitch, none of them will move until
+    /// the change is over, and one of them is sooner or later a couple of
+    /// metres from the man being looked at. Rendered, the second close-up of a
+    /// double change was the back of a team-mate filling the frame.
     ///
-    /// So the shot gives up distance rather than the subject: it stops
-    /// [`Self::GAP`] short of the nearest man inside [`Self::LANE`] of the
-    /// sight line, and no nearer than [`Self::SNUG`], which is as close as a
-    /// camera can be to a man and still have him in it.
-    fn clear(boots: Vec3, bearing: Vec3, wanted: f32, others: impl Iterator<Item = Vec3>) -> f32 {
-        let mut reach = wanted;
+    /// ⚠ **And the ground is not infinite.** Six metres behind a full-back
+    /// standing on his own touchline is three metres BEHIND the advertising
+    /// hoardings — a wall across the shot — and five is inside a bank of
+    /// seating, which `Bank::cull` then takes out of the picture altogether:
+    /// a whole stand blinking off and on as the lens swings past the line.
+    ///
+    /// So the shot gives up distance rather than the subject, all the way in
+    /// to [`Self::CRAMPED`] — it would rather be a foot behind his shoulder
+    /// than have somebody else's back across the frame. What gives with it is
+    /// the FRAMING, not the sight line: see [`Self::WIDEST`], which is where
+    /// the lens stops opening and the shot starts cropping instead.
+    fn clear(boots: Vec3, bearing: Vec3, wanted: f32, others: &[Vec3]) -> f32 {
+        let mut reach = wanted.min(Self::inside_the_ground(boots, bearing));
         for other in others {
-            let to = (other - boots).with_y(0.0);
+            let to = (*other - boots).with_y(0.0);
             let along = to.dot(bearing);
-            // Behind the lens, or so close to the subject that he is part of
-            // the same picture rather than in front of it.
-            if along <= Self::SNUG {
+            if along <= 0.0 || (to - bearing * along).length() >= Self::LANE {
                 continue;
             }
-            if (to - bearing * along).length() < Self::LANE && along - Self::GAP < reach {
-                reach = along - Self::GAP;
-            }
+            reach = reach.min(along - Self::GAP);
         }
-        reach.clamp(Self::SNUG, wanted)
+        reach.clamp(Self::CRAMPED, wanted)
     }
 
-    /// A camera `off.0` metres from `boots` along `bearing`, standing `off.1`
-    /// above the grass.
-    fn rig(boots: Vec3, bearing: Vec3, off: (f32, f32)) -> Vec3 {
-        Vec3::new(
-            boots.x + bearing.x * off.0,
-            boots.y + off.1,
-            boots.z + bearing.z * off.0,
-        )
+    /// How far the lens can go along `bearing` before it is out of the ground,
+    /// in metres.
+    ///
+    /// The box is the run-off — `Pitch::SIDE_MARGIN` across and
+    /// `Pitch::END_MARGIN` behind the goals — pulled in by [`Self::PERIMETER`]
+    /// so the hoardings standing at the end of it are always behind the lens
+    /// rather than across it.
+    fn inside_the_ground(boots: Vec3, bearing: Vec3) -> f32 {
+        let wall = |at: f32, step: f32, limit: f32| {
+            if step.abs() < 1e-4 {
+                f32::MAX
+            } else {
+                (limit * step.signum() - at) / step
+            }
+        };
+        wall(boots.x, bearing.x, Self::INSIDE.0).min(wall(boots.z, bearing.z, Self::INSIDE.1))
     }
 
     /// Smoothstep. Every beat of the move starts and stops on it, which is
@@ -459,39 +505,6 @@ impl ChangeoverShot {
     /// operated rather than as animated.
     fn ease(t: f32) -> f32 {
         t * t * (3.0 - 2.0 * t)
-    }
-
-    /// `from` to `to` the long way — around `pivot` rather than through it.
-    ///
-    /// ⚠ **A straight line between the two ends of a close-up goes through the
-    /// man.** They are dead behind him and dead in front of him, so the chord
-    /// between them is his own body: the camera would pass through his chest
-    /// at the fastest part of the move. Swinging the bearing instead holds
-    /// every frame of it an arm's length from him, and it is also the only
-    /// version that reads as one camera going round somebody rather than as
-    /// two cameras cutting.
-    ///
-    /// The short way round; a dead heat — which is what dead behind to dead in
-    /// front is — goes left.
-    fn swing_round(from: Vec3, to: Vec3, pivot: Vec3, t: f32) -> Vec3 {
-        let (ax, az) = (from.x - pivot.x, from.z - pivot.z);
-        let (bx, bz) = (to.x - pivot.x, to.z - pivot.z);
-        let start = az.atan2(ax);
-        let mut sweep = bz.atan2(bx) - start;
-        while sweep > PI {
-            sweep -= TAU;
-        }
-        while sweep <= -PI {
-            sweep += TAU;
-        }
-        let angle = start + sweep * t;
-        let (near, far) = (ax.hypot(az), bx.hypot(bz));
-        let radius = near + (far - near) * t;
-        Vec3::new(
-            pivot.x + angle.cos() * radius,
-            from.y + (to.y - from.y) * t,
-            pivot.z + angle.sin() * radius,
-        )
     }
 
     /// How the lens is held while the shot is on, as a multiple of the
@@ -553,6 +566,7 @@ impl ChangeoverShot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::f32::consts::TAU;
 
     /// A man standing at `at`, facing `bearing` radians round from +Z.
     fn standing(at: Vec3, bearing: f32) -> Transform {
@@ -567,17 +581,25 @@ mod tests {
         Vec3::new(bearing.sin(), 0.0, bearing.cos())
     }
 
+    /// Is `other` standing on the line between the lens and the man it is
+    /// pointed at — near enough to it, and far enough from both ends to be a
+    /// body across the frame rather than part of the picture?
+    fn across_the_shot(lens: Vec3, man: Vec3, other: Vec3) -> bool {
+        let to_man = (man - lens).with_y(0.0);
+        let range = to_man.length();
+        let sight = to_man / range;
+        let to_other = (other - lens).with_y(0.0);
+        let along = to_other.dot(sight);
+        along > 0.3 && along < range - 0.3 && (to_other - sight * along).length() < 0.55
+    }
+
     #[test]
     fn the_first_beat_stands_behind_his_shoulders() {
         // The name is printed across the back of the shirt and nowhere else,
         // so the whole shot is worthless from any other bearing.
         for bearing in [0.0, 1.1, PI, -2.4] {
             let man = standing(Vec3::new(12.0, 0.0, -7.0), bearing);
-            let shot = ChangeoverShot::close_up(
-                &man,
-                0.0,
-                (ChangeoverShot::BACK_OFF.0, ChangeoverShot::FACE_OFF.0),
-            );
+            let shot = ChangeoverShot::close_up(&man, 0.0, &[]);
             let to_camera = (shot.stand - man.translation).with_y(0.0).normalize();
             assert!(
                 to_camera.dot(facing(bearing)) < -0.99,
@@ -592,11 +614,7 @@ mod tests {
     fn and_the_last_beat_is_in_front_of_his_face() {
         let bearing = 0.8;
         let man = standing(Vec3::new(-3.0, 0.0, 20.0), bearing);
-        let shot = ChangeoverShot::close_up(
-            &man,
-            ChangeoverShot::PORTRAIT_MS as f32,
-            (ChangeoverShot::BACK_OFF.0, ChangeoverShot::FACE_OFF.0),
-        );
+        let shot = ChangeoverShot::close_up(&man, ChangeoverShot::PORTRAIT_MS as f32, &[]);
         let to_camera = (shot.stand - man.translation).with_y(0.0).normalize();
         assert!(
             to_camera.dot(facing(bearing)) > 0.99,
@@ -604,11 +622,7 @@ mod tests {
         );
         assert_eq!(shot.aim, man.translation.with_y(ChangeoverShot::FACE_AT));
         // Closer, which is the whole reason for coming round.
-        let back = ChangeoverShot::close_up(
-            &man,
-            0.0,
-            (ChangeoverShot::BACK_OFF.0, ChangeoverShot::FACE_OFF.0),
-        );
+        let back = ChangeoverShot::close_up(&man, 0.0, &[]);
         assert!(
             shot.stand.distance(man.translation) < back.stand.distance(man.translation),
             "the face shot is no nearer than the shirt was"
@@ -624,12 +638,7 @@ mod tests {
         let mut nearest = f32::MAX;
         for step in 0..=200 {
             let into = ChangeoverShot::PORTRAIT_MS as f32 * step as f32 / 200.0;
-            let at = ChangeoverShot::close_up(
-                &man,
-                into,
-                (ChangeoverShot::BACK_OFF.0, ChangeoverShot::FACE_OFF.0),
-            )
-            .stand;
+            let at = ChangeoverShot::close_up(&man, into, &[]).stand;
             let reach = (at - man.translation).with_y(0.0).length();
             nearest = nearest.min(reach);
             if let Some(previous) = previous {
@@ -645,6 +654,72 @@ mod tests {
     }
 
     #[test]
+    fn nobody_else_ever_stands_between_the_lens_and_the_man() {
+        // ⚠ **This is the one the arc got wrong.** Clearing only the two ends
+        // of the swing leaves the whole middle of it — which is exactly where
+        // the man standing a couple of metres to his left is. Measured on the
+        // first change of a real match: a team-mate 2.15 m away, the lens
+        // sweeping past four metres out, and his back across the frame with
+        // the subject somewhere behind him.
+        let man = standing(Vec3::new(-8.5, 0.0, -29.2), 0.4);
+        // Every bearing round him, one at a time, at the distance the real
+        // one stood at and at a comfortable one.
+        for reach in [2.15f32, 3.6] {
+            for step in 0..24 {
+                let angle = step as f32 / 24.0 * TAU;
+                let beside = man.translation + Vec3::new(angle.sin(), 0.0, angle.cos()) * reach;
+                for frame in 0..=200 {
+                    let into = ChangeoverShot::PORTRAIT_MS as f32 * frame as f32 / 200.0;
+                    let at = ChangeoverShot::close_up(&man, into, &[beside]).stand;
+                    assert!(
+                        !across_the_shot(at, man.translation, beside),
+                        "a man at {reach} m on bearing {step}/24 is across the shot from {at:?}"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn the_lens_never_leaves_the_ground() {
+        // ⚠ Six metres behind a full-back on his own touchline is three metres
+        // BEHIND the hoardings, and five is inside a bank of seating — which
+        // `Bank::cull` then hides, so a whole stand blinks out of the picture
+        // as the swing crosses the line.
+        let corners = [
+            Vec3::new(0.0, 0.0, -Field::HALF_WIDTH),
+            Vec3::new(0.0, 0.0, Field::HALF_WIDTH),
+            Vec3::new(Field::HALF_LENGTH, 0.0, 0.0),
+            Vec3::new(-Field::HALF_LENGTH, 0.0, Field::HALF_WIDTH),
+        ];
+        for boots in corners {
+            for step in 0..16 {
+                let man = standing(boots, step as f32 / 16.0 * TAU);
+                for frame in 0..=100 {
+                    let into = ChangeoverShot::PORTRAIT_MS as f32 * frame as f32 / 100.0;
+                    let at = ChangeoverShot::close_up(&man, into, &[]).stand;
+                    assert!(
+                        at.x.abs() <= ChangeoverShot::INSIDE.0 + 1e-3
+                            && at.z.abs() <= ChangeoverShot::INSIDE.1 + 1e-3,
+                        "the lens walked out of the ground to {at:?} from {boots:?}"
+                    );
+                }
+            }
+        }
+        // And what it gives up in distance it takes back in lens, so a man on
+        // the touchline is framed like a man in the middle of the pitch.
+        let edge = standing(Vec3::new(0.0, 0.0, -Field::HALF_WIDTH), 0.0);
+        let middle = standing(Vec3::ZERO, 0.0);
+        let size = |man: &Transform| {
+            let shot = ChangeoverShot::close_up(man, 0.0, &[]);
+            shot.lens / shot.stand.distance(man.translation)
+        };
+        assert!(
+            (size(&edge) - size(&middle)).abs() < 0.02,
+            "he changed size for standing near the line"
+        );
+    }
+
+    #[test]
     fn the_lens_stops_short_of_anybody_standing_in_the_gap() {
         // ⚠ Rendered, the second close-up of a double change was the back of a
         // team-mate filling the frame with the subject somewhere behind him.
@@ -654,24 +729,23 @@ mod tests {
         let behind = -ChangeoverShot::heading(&man);
         let wanted = ChangeoverShot::BACK_OFF.0;
 
-        let empty: [Vec3; 0] = [];
         assert_eq!(
-            ChangeoverShot::clear(Vec3::ZERO, behind, wanted, empty.into_iter()),
+            ChangeoverShot::clear(Vec3::ZERO, behind, wanted, &[]),
             wanted,
             "an empty lane costs the shot nothing"
         );
 
         // A man four metres behind him pulls the lens in front of him…
         let blocker = behind * 4.0;
-        let reach = ChangeoverShot::clear(Vec3::ZERO, behind, wanted, [blocker].into_iter());
+        let reach = ChangeoverShot::clear(Vec3::ZERO, behind, wanted, &[blocker]);
         assert!(
             reach < 4.0 - 0.5 && reach > 2.0,
             "the lens came to {reach} m against a man at 4"
         );
         // …and the subject stays the same size in frame, because the lens
         // opens by exactly what the distance gave up.
-        let blocked = ChangeoverShot::close_up(&man, 0.0, (reach, ChangeoverShot::FACE_OFF.0));
-        let open = ChangeoverShot::close_up(&man, 0.0, (wanted, ChangeoverShot::FACE_OFF.0));
+        let blocked = ChangeoverShot::close_up(&man, 0.0, &[blocker]);
+        let open = ChangeoverShot::close_up(&man, 0.0, &[]);
         assert!(
             (blocked.lens / blocked.stand.distance(man.translation)
                 - open.lens / open.stand.distance(man.translation))
@@ -684,17 +758,31 @@ mod tests {
         // in front when the shot is looking at a back.
         for elsewhere in [behind * 4.0 + Vec3::new(3.0, 0.0, 3.0), -behind * 4.0] {
             assert_eq!(
-                ChangeoverShot::clear(Vec3::ZERO, behind, wanted, [elsewhere].into_iter()),
+                ChangeoverShot::clear(Vec3::ZERO, behind, wanted, &[elsewhere]),
                 wanted,
                 "the shot gave way to somebody at {elsewhere:?}"
             );
         }
 
-        // And it never drives closer than a man can be framed from.
-        let crowd: Vec<Vec3> = (1..6).map(|n| behind * (n as f32 * 0.7)).collect();
+        // ⚠ **And a man two metres away is ducked in front of as well**, all
+        // the way to `CRAMPED`. He is the case this exists for: the real one
+        // stood 2.15 m off the second man of a real change, and a shot that
+        // stops politely short of him is a shot of his back.
+        let close = ChangeoverShot::clear(Vec3::ZERO, behind, wanted, &[behind * 2.0]);
         assert!(
-            ChangeoverShot::clear(Vec3::ZERO, behind, wanted, crowd.into_iter())
-                >= ChangeoverShot::SNUG
+            close < 2.0 - 0.3,
+            "the lens stayed at {close} m, behind a man at 2"
+        );
+        assert!(close >= ChangeoverShot::CRAMPED);
+
+        // What gives then is the FRAMING, not the sight line: the lens stops
+        // widening at `WIDEST` rather than going to a fisheye, so the shot
+        // crops in instead.
+        let driven = ChangeoverShot::close_up(&man, 0.0, &[behind * 2.0]);
+        assert_eq!(driven.lens, ChangeoverShot::WIDEST);
+        assert!(
+            open.lens > driven.lens,
+            "a shot with room is no tighter than one without"
         );
     }
 

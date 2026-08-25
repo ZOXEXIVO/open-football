@@ -566,6 +566,17 @@ impl Pitch {
     /// readers, no chance of them disagreeing.
     pub const SUN: Vec3 = Vec3::new(-0.4, -1.0, 0.35);
 
+    /// **How much ground there is outside the playing surface**, in metres:
+    /// across the touchlines, and behind the goal lines. The advertising
+    /// hoardings stand at the end of it and the banks of seating begin two
+    /// metres beyond them, so this pair is the whole run-off — everything
+    /// between the paint and the first thing a camera can walk into.
+    ///
+    /// Read by `ChangeoverShot`, which puts a lens on the grass a few metres
+    /// behind a man and has to know where the ground stops.
+    pub const SIDE_MARGIN: f32 = 3.4;
+    pub const END_MARGIN: f32 = 4.6;
+
     /// The pitch as the mower left it: the shade the grass lies in going away
     /// from the roller, and the shade of the same grass lying back toward it.
     ///
@@ -895,8 +906,6 @@ impl Pitch {
         materials: &mut Assets<StandardMaterial>,
         images: &mut Assets<Image>,
     ) {
-        const SIDE_MARGIN: f32 = 3.4;
-        const END_MARGIN: f32 = 4.6;
         const HOARDING_HEIGHT: f32 = 0.95;
         const HOARDING_DEPTH: f32 = 0.14;
         // How wide one advert reads on the boards, in metres. Matched to the
@@ -933,8 +942,8 @@ impl Pitch {
         // invented brand.
         let advert = Textures::hoarding(images, "OPEN-FOOTBALL.ORG");
 
-        let along = Field::HALF_LENGTH + END_MARGIN;
-        let across = Field::HALF_WIDTH + SIDE_MARGIN;
+        let along = Field::HALF_LENGTH + Self::END_MARGIN;
+        let across = Field::HALF_WIDTH + Self::SIDE_MARGIN;
         // The perimeter, accumulated rather than spawned: one buffer for the
         // boards, one for the lit strip along their tops, and one per distinct
         // advert repeat.

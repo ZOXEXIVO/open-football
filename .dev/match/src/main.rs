@@ -2735,7 +2735,7 @@ fn print_usage() {
 // disproportionately ones holding a lead — finishing with zero subs
 // and an untouched bench. Real-world reference (5-sub era): ~4.5
 // subs/team, zero-sub teams essentially nonexistent.
-fn run_subs_experiment(n_matches: usize, level: u8) {
+fn run_subs_experiment(n_matches: usize, level: u8, bench_gap: u8) {
     println!(
         "Substitution usage: {} matches, both squads level {}",
         n_matches, level
@@ -2746,15 +2746,20 @@ fn run_subs_experiment(n_matches: usize, level: u8) {
         away_goals: u8,
         home_subs: usize,
         away_subs: usize,
+        /// Every change made in the match, as `(team_id, minute, index-within-team,
+        /// discretionary?)`. The minute is what the census is actually for: a
+        /// substitution model that reads the game should scatter these, and one
+        /// that reads a clock should stack them on a handful of values.
+        events: Vec<(u32, u32, usize, bool)>,
     }
 
     // Production-like squad: XI at `level`, bench 3 levels weaker
     // (selection puts the best players on the pitch), and kickoff
     // condition in the 82-96% band the persistence layer actually
     // hands the engine mid-season (never a pristine 100%).
-    fn make_squad_production_like(team_id: u32, level: u8, seed: usize) -> MatchSquad {
+    let make_squad_production_like = |team_id: u32, level: u8, seed: usize| -> MatchSquad {
         let base_id = team_id * 100;
-        let bench_level = level.saturating_sub(3).max(1);
+        let bench_level = level.saturating_sub(bench_gap).max(1);
         let cond = |k: usize| 8200 + ((seed * 7 + k * 131) % 1400) as i16;
 
         let main_squad: Vec<MatchPlayer> = POSITIONS_442
@@ -2799,7 +2804,7 @@ fn run_subs_experiment(n_matches: usize, level: u8) {
             selection_omissions: Vec::new(),
             coach_snapshot: None,
         }
-    }
+    };
 
     let rows: Vec<SubsRow> = (0..n_matches)
         .into_par_iter()
@@ -2818,11 +2823,31 @@ fn run_subs_experiment(n_matches: usize, level: u8) {
                 .iter()
                 .filter(|s| s.team_id == 2)
                 .count();
+            let mut seen = std::collections::HashMap::<u32, usize>::new();
+            let events = result
+                .substitutions
+                .iter()
+                .map(|s| {
+                    let idx = seen.entry(s.team_id).or_insert(0);
+                    let n = *idx;
+                    *idx += 1;
+                    (
+                        s.team_id,
+                        (s.match_time_ms / 60_000) as u32,
+                        n,
+                        matches!(
+                            s.reason,
+                            core::r#match::SubstitutionReason::Discretionary
+                        ),
+                    )
+                })
+                .collect();
             SubsRow {
                 home_goals: score.home_team.get(),
                 away_goals: score.away_team.get(),
                 home_subs,
                 away_subs,
+                events,
             }
         })
         .collect();
@@ -2892,6 +2917,176 @@ fn run_subs_experiment(n_matches: usize, level: u8) {
                 *zeros as f32 / (*teams).max(1) as f32 * 100.0
             );
         }
+    }
+
+    // WHEN the changes happen. A model that reads the game scatters these;
+    // a model that reads a clock stacks them on the minute the gate opens.
+    let all: Vec<(u32, u32, usize, bool)> =
+        rows.iter().flat_map(|r| r.events.iter().copied()).collect();
+    if all.is_empty() {
+        return;
+    }
+    let disc: Vec<&(u32, u32, usize, bool)> = all.iter().filter(|e| e.3).collect();
+
+    // Correlation budget. Letting the bench read the scoreline earlier than
+    // the eleven do is the one part of the timing rewrite that could leak
+    // into the draw-correlation regime the 62' play gate exists to bound —
+    // and the calibration harness cannot see it, because its squads have no
+    // bench. This is the only place the question can be asked.
+    {
+        let n = rows.len() as f64;
+        let (mut sh, mut sa, mut shh, mut saa, mut sha) = (0.0f64, 0.0, 0.0, 0.0, 0.0);
+        for r in &rows {
+            let (h, a) = (r.home_goals as f64, r.away_goals as f64);
+            sh += h;
+            sa += a;
+            shh += h * h;
+            saa += a * a;
+            sha += h * a;
+        }
+        let (mh, ma) = (sh / n, sa / n);
+        let cov = sha / n - mh * ma;
+        let vh = (shh / n - mh * mh).max(1e-9);
+        let va = (saa / n - ma * ma).max(1e-9);
+        println!(
+            "\nteam-goal correlation rho: {:+.3}  (real ~0.00)   draws {:.1}% (real ~25%)",
+            cov / (vh * va).sqrt(),
+            rows.iter().filter(|r| r.home_goals == r.away_goals).count() as f32 / n as f32 * 100.0
+        );
+    }
+
+    println!("\nminute histogram (all changes, 5' buckets):");
+    let mut buckets = [0usize; 25];
+    for e in &all {
+        buckets[((e.1 / 5) as usize).min(24)] += 1;
+    }
+    let peak = buckets.iter().copied().max().unwrap_or(1).max(1);
+    for (b, &v) in buckets.iter().enumerate() {
+        if v == 0 {
+            continue;
+        }
+        let bar = "#".repeat((v * 40 / peak).max(1));
+        println!(
+            "  {:>3}-{:<3} {:>4} ({:>4.1}%) {}",
+            b * 5,
+            b * 5 + 4,
+            v,
+            v as f32 / all.len() as f32 * 100.0,
+            bar
+        );
+    }
+
+    // Per-slot spread. The 1st change of a side, the 2nd, the 3rd... If the
+    // gate is what decides, each slot collapses onto a narrow band with a
+    // hard floor and the modal minute carries a large share of the mass.
+    println!("\nby slot (discretionary only): n / mean / sd / p10 / p50 / p90 / min / max / mode");
+    for slot in 0..5usize {
+        let mut mins: Vec<u32> = disc
+            .iter()
+            .filter(|e| e.2 == slot)
+            .map(|e| e.1)
+            .collect();
+        if mins.is_empty() {
+            continue;
+        }
+        mins.sort_unstable();
+        let n = mins.len();
+        let mean = mins.iter().map(|&m| m as f64).sum::<f64>() / n as f64;
+        let sd =
+            (mins.iter().map(|&m| (m as f64 - mean).powi(2)).sum::<f64>() / n as f64).sqrt();
+        let q = |p: f64| mins[((n as f64 * p) as usize).min(n - 1)];
+        let mut freq = std::collections::HashMap::<u32, usize>::new();
+        for &m in &mins {
+            *freq.entry(m).or_default() += 1;
+        }
+        let (mode, mode_n) = freq.iter().max_by_key(|&(_, &c)| c).map(|(&m, &c)| (m, c)).unwrap();
+        println!(
+            "  #{}: {:>4}  {:>5.1}'  sd {:>4.1}  {:>3} {:>3} {:>3}  [{:>3}..{:>3}]  mode {}' ({:.0}% of slot, {} distinct minutes)",
+            slot + 1,
+            n,
+            mean,
+            sd,
+            q(0.10),
+            q(0.50),
+            q(0.90),
+            mins[0],
+            mins[n - 1],
+            mode,
+            mode_n as f32 / n as f32 * 100.0,
+            freq.len()
+        );
+    }
+
+    // Does the game state move the clock at all? Compare the first change of
+    // a side when it is behind vs level vs ahead at full time. A situational
+    // model chases a deficit early; a clock model does not care.
+    // Windows: how many separate stoppages a side interrupts. Real sides get
+    // three plus the interval, so five changes have to share.
+    {
+        let mut window_counts = [0usize; 7];
+        let mut ht = 0usize;
+        for r in &rows {
+            for team in [1u32, 2] {
+                let mut minutes: Vec<u32> = r
+                    .events
+                    .iter()
+                    .filter(|e| e.0 == team)
+                    .map(|e| e.1)
+                    .collect();
+                minutes.dedup();
+                let distinct = {
+                    let mut m = minutes.clone();
+                    m.sort_unstable();
+                    m.dedup();
+                    m.len()
+                };
+                window_counts[distinct.min(6)] += 1;
+            }
+            ht += r.events.iter().filter(|e| e.1 == 45 || e.1 == 46).count();
+        }
+        let total = rows.len() * 2;
+        let spread: String = window_counts
+            .iter()
+            .enumerate()
+            .filter(|&(_, &v)| v > 0)
+            .map(|(k, &v)| format!("{k}:{:.0}%", v as f32 / total as f32 * 100.0))
+            .collect::<Vec<_>>()
+            .join("  ");
+        println!("\ndistinct change moments per team-match: {spread}");
+        println!(
+            "half-time changes: {} ({:.1}% of all, real ~10-14%)",
+            ht,
+            ht as f32 / all.len() as f32 * 100.0
+        );
+    }
+
+    println!("\nfirst discretionary change by final result:");
+    for (label, want) in [("behind", -1i32), ("level", 0), ("ahead", 1)] {
+        let mut mins: Vec<u32> = Vec::new();
+        for r in &rows {
+            for (team, gf, ga) in [(1u32, r.home_goals, r.away_goals), (2, r.away_goals, r.home_goals)] {
+                let sign = (gf as i32 - ga as i32).signum();
+                if sign != want {
+                    continue;
+                }
+                if let Some(e) = r.events.iter().find(|e| e.0 == team && e.3) {
+                    mins.push(e.1);
+                }
+            }
+        }
+        if mins.is_empty() {
+            continue;
+        }
+        mins.sort_unstable();
+        let mean = mins.iter().map(|&m| m as f64).sum::<f64>() / mins.len() as f64;
+        println!(
+            "  {:>6}: n={:<4} mean {:.1}'  median {}'  min {}'",
+            label,
+            mins.len(),
+            mean,
+            mins[mins.len() / 2],
+            mins[0]
+        );
     }
 }
 
@@ -3044,7 +3239,7 @@ fn main() {
         "subs" => {
             let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(100);
             let level: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14);
-            run_subs_experiment(n, level);
+            run_subs_experiment(n, level, args.get(4).and_then(|s| s.parse().ok()).unwrap_or(3));
         }
         // Mixed-quality diagnostic: two identical XIs except one slot,
         // where Team 1 fields a senior-quality player and Team 2 a

@@ -4,13 +4,15 @@ use std::cmp::Ordering;
 
 use crate::club::staff::{CoachDecisionEngine, CoachLiveMatchContext};
 use crate::r#match::engine::coach::TacticalNeed;
+use crate::r#match::engine::flow::context::SubstitutionWindows;
 use crate::r#match::engine::flow::result::SubstitutionReason;
 use crate::r#match::engine::flow::touchline::SubstitutionBreak;
 use crate::r#match::engine::sub_scoring::{LiveSubstitutionStats, SubScoring};
+use crate::r#match::engine::urgency::{BenchPressure, ChangeOpportunity, SubstitutionUrgency};
 use crate::r#match::field::MatchField;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::transition::TransitionSource;
-use crate::r#match::{MatchContext, MatchPlayer};
+use crate::r#match::{MatchContext, MatchPlayer, MatchState};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 
 /// In-match youth-protection thresholds and the candidate predicate.
@@ -70,15 +72,16 @@ impl YouthProtection {
 /// Three strategies, in priority order:
 /// 0. **Critical injury** — anyone (force-selected or not) with condition
 ///    < 2000 is pulled off; under-17 protection runs alongside. These
-///    bypass `allowed_in_window` and ignore star protection.
+///    bypass the timing model entirely and ignore star protection: a man
+///    who cannot continue comes off in whatever minute he got hurt in.
 /// 1. **Discretionary scored-pair subs** — fatigue / tactical /
 ///    development cases are evaluated as `(out, in)` pairs using
 ///    [`sub_off_score_protected`] + [`sub_in_score`] so goal scorers and
 ///    high-rated starters are protected unless the case for removing
-///    them is strong (extreme fatigue, comfortable late lead, or a
-///    decisive tactical need). The window gate from
-///    [`allowed_in_window`] applies — discretionary subs only fire in
-///    real-football timing bands.
+///    them is strong. *Whether* the manager is reaching for the bench at
+///    all is decided by [`BenchPressure`] — the scoreline, the legs, the
+///    trouble on the pitch and his own temperament, with no minute
+///    calendar anywhere in it. See [`urgency`](super::urgency).
 pub fn process_substitutions(
     field: &mut MatchField,
     context: &mut MatchContext,
@@ -441,14 +444,18 @@ impl Substitutions {
             if !field.substitutes.iter().any(|p| p.team_id == team_id) {
                 continue;
             }
+            let is_home = team_id == field.home_team_id;
 
-            // Score-reactivity respects the same behavioral visibility
-            // gate as the mentality / shape / desperation reads — before
-            // minute 62 the bench plans as if the game were level, so
-            // the substitution engine can't leak the score-regime
-            // correlation the gate exists to bound. (The discretionary
-            // window opens at 55'; those first minutes now read 0-0.)
-            let (own_goals, opp_goals) = if !context.behavioral_score_visible() {
+            // Score-reactivity respects a visibility gate, but the BENCH's
+            // gate, not the eleven's — see
+            // [`MatchContext::BENCH_SCORE_FROM_MINUTE`]. A manager may know
+            // he is losing from the half-hour, which is what lets a deficit
+            // reach the interval and bring a change forward; how his team
+            // plays is still held to the later gate, which is where the
+            // draw-correlation budget is actually spent.
+            //
+            // [`MatchContext::BENCH_SCORE_FROM_MINUTE`]: super::super::flow::context::MatchContext::BENCH_SCORE_FROM_MINUTE
+            let (own_goals, opp_goals) = if !context.bench_score_visible() {
                 (0, 0)
             } else if team_id == context.field_home_team_id {
                 (
@@ -484,9 +491,6 @@ impl Substitutions {
                 .collect();
             youth_protection_candidates.sort_by_key(|&(_, cond, _)| cond);
 
-            let comfortable_lead = goal_diff >= 2 && match_minutes >= 65;
-            let late_comfort = goal_diff >= 3 && match_minutes >= 75;
-
             // Safety-net critical sweep for injuries that landed between
             // medical passes; counts against this pass's cap.
             let mut subs_made =
@@ -516,7 +520,12 @@ impl Substitutions {
                 }
             }
 
-            let need = if match_minutes >= 55 {
+            // How badly this bench wants using, right now — the whole of the
+            // timing decision, and the only thing that decides it. See
+            // [`urgency`](super::urgency).
+            let pressure = Self::bench_pressure(field, context, team_id, goal_diff, coach);
+
+            let need = if match_minutes >= 45 {
                 let progress = (context.total_match_time as f32
                     / crate::r#match::MATCH_TIME_MS as f32)
                     .min(1.0);
@@ -548,43 +557,70 @@ impl Substitutions {
                 TacticalNeed::Fatigue
             };
 
-            let match_minute_u32 = match_minutes as u32;
+            // A change may be made at the interval, on a stoppage a
+            // team-mate has already caused, or by interrupting play — and
+            // the three cost the manager very different things. See
+            // [`ChangeOpportunity`].
+            let at_half_time = context.state.match_state == MatchState::HalfTime;
+            let windows_spent = context.substitution_windows.spent(is_home);
             loop {
                 if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
                     break;
                 }
                 let used = context.subs_used_by_team(team_id) as u8;
-                if !SubScoring::allowed_in_window(used, match_minute_u32, false) {
+                // Three stoppages a side over normal time; the interval is
+                // free and does not spend one. A window already open is
+                // ridden by every further change in the same pass, which is
+                // exactly how five changes fit into three windows.
+                let riding_open_window = subs_made > 0;
+                if !at_half_time
+                    && !riding_open_window
+                    && windows_spent >= SubstitutionWindows::PER_TEAM
+                {
+                    break;
+                }
+                let opportunity = ChangeOpportunity::new(
+                    match_minutes as u32,
+                    at_half_time,
+                    riding_open_window,
+                    windows_spent,
+                    context
+                        .max_substitutions_per_team
+                        .saturating_sub(used as usize)
+                        .min(u8::MAX as usize) as u8,
+                );
+                if !pressure.clears_at(used, &opportunity) {
                     break;
                 }
 
-                let (base_threshold, protection_dampening) = if late_comfort {
-                    (0.60, 0.5)
-                } else if comfortable_lead {
-                    (0.70, 0.75)
-                } else {
-                    (0.85, 1.0)
-                };
-                // Late-match bench-use urgency. Fresh legs become a
-                // strictly better asset as the match runs down, and
-                // real coaches use the bench late almost
-                // unconditionally — a 5-sub-era side averages ~4.5
-                // subs and finishing with an untouched bench is a
-                // once-a-season oddity. Without this decay the static
-                // threshold left a measurable share of teams
-                // (disproportionately leading ones, whose scorers
-                // carry star protection) at zero subs for the whole
-                // match. Ramp: full threshold until ~62', then down
-                // ~0.012/min so 70' ≈ -0.10, 80' ≈ -0.22, 87'+ = -0.30.
-                let late_urgency = ((match_minutes as f32 - 62.0) / 25.0).clamp(0.0, 1.0) * 0.30;
-                // Each sub already burned raises the bar for the next
-                // one — coaches keep the last change in the pocket for
-                // an emergency, so the 5th sub needs a materially
-                // stronger case than the 1st. Without this friction
-                // the urgency decay flips the failure mode from
-                // "teams never sub" to "every team unloads all 5".
-                let used_friction = 0.045 * used as f32;
-                let threshold = (base_threshold - late_urgency + used_friction).max(0.40);
+                // How badly he wants it, on a 0..1 scale — the same reading
+                // that decided he wants it at all, reused to decide how
+                // fussy he is about which change it is. A manager three
+                // down with twenty minutes left takes a swap he would have
+                // turned down at 1-1 on the hour.
+                let conviction = pressure.conviction_at(used, &opportunity);
+                // Star protection follows COMFORT, not urgency, and the two
+                // are not the same thing. A side two goals down wants a
+                // change badly and still would not dream of hooking the man
+                // who scored — it hooks the passengers. A side three up with
+                // ten minutes left has no urgency at all and takes its
+                // scorer off to a standing ovation. So the thing that
+                // softens the protection is the lead being killed, which is
+                // exactly what [`BenchPressure::close_out`] measures.
+                //
+                // Squared so a one-goal lead barely touches it: at 2-1 on
+                // 78' the scorer keeps nine-tenths of his protection, which
+                // is the behaviour
+                // `process_substitutions_removes_tired_winger_over_high_rated_scorer`
+                // exists to hold.
+                let comfort = pressure.close_out_share();
+                let protection_dampening = (1.0 - 0.65 * comfort * comfort).clamp(0.35, 1.0);
+                // What the (out, in) pair has to be worth. Slides between a
+                // fussy manager and a desperate one across the same span
+                // the old fixed ladder covered, but driven by the situation
+                // rather than by the minute hand.
+                let threshold = Self::PAIR_BAR_RELUCTANT
+                    - (Self::PAIR_BAR_RELUCTANT - Self::PAIR_BAR_DESPERATE) * conviction;
 
                 let chosen = Self::best_discretionary_pair_with_coach(
                     field,
@@ -620,7 +656,64 @@ impl Substitutions {
     }
 }
 
+/// The timing half of the substitution decision — everything that answers
+/// "is the board going up?", as opposed to "whose number is on it?".
 impl Substitutions {
+    /// Pair score a manager demands when he does not much want a change.
+    /// The old fixed ladder's top rung, kept: a swap that clears this is
+    /// worth making on its merits alone.
+    const PAIR_BAR_RELUCTANT: f32 = 0.88;
+
+    /// Pair score a manager will settle for when he needs *something* to
+    /// change. Below this the swap is worse than the player it replaces on
+    /// every axis the scorer can see, and desperation is not a reason to
+    /// make the team worse.
+    const PAIR_BAR_DESPERATE: f32 = 0.42;
+
+    /// Read this side's appetite for a change.
+    ///
+    /// Builds the live snapshots the trouble term needs from the same
+    /// outfield starters the pair scorer will look at, in the same order,
+    /// so the two agree about who is on the pitch. The snapshots are the
+    /// expensive part of the read (each one runs the rating model), which
+    /// is why the whole thing is built once per team per pass rather than
+    /// once per candidate.
+    fn bench_pressure(
+        field: &MatchField,
+        context: &MatchContext,
+        team_id: u32,
+        goal_diff: i32,
+        coach: Option<&CoachDecisionEngine<'_>>,
+    ) -> BenchPressure {
+        let starters: Vec<&MatchPlayer> = field
+            .players
+            .iter()
+            .filter(|p| p.team_id == team_id && !p.is_sent_off)
+            .collect();
+        // The scoreline the snapshots are rated against is the one the
+        // bench is allowed to see, so a blinded pass rates a level game.
+        let (own, opp) = if goal_diff >= 0 {
+            (goal_diff as u8, 0)
+        } else {
+            (0, (-goal_diff) as u8)
+        };
+        let live: Vec<LiveSubstitutionStats> = starters
+            .iter()
+            .map(|p| {
+                LiveSubstitutionStats::from_player(p, context.total_match_time, own, opp)
+            })
+            .collect();
+        SubstitutionUrgency::read(
+            (context.total_match_time / 60_000) as u32,
+            goal_diff,
+            &starters,
+            &live,
+            coach.map(|c| c.profile),
+            context.rng.seed(),
+            team_id,
+        )
+    }
+
     /// Per-tick in-match injury roll. A small per-player chance scaled by
     /// jadedness, low condition, age, and low natural_fitness. When triggered,
     /// condition is slammed down to 1500 — just below the CRITICAL_CONDITION
@@ -762,7 +855,13 @@ impl Substitutions {
         // the same point — he waits on it and the man he is replacing runs to
         // it — so it is worked out once, here, where the window is in reach.
         let is_home = team_id == field.home_team_id;
-        let waits_at = (!MatchContext::sub_walk_off()).then(|| {
+        // Nobody walks anywhere at the interval: both sides are indoors, the
+        // period boundary resets every position ten milliseconds later, and
+        // a `SubstitutionBreak` staged here would arm a pause in a state
+        // that runs no ticks to serve it.
+        let walked = !MatchContext::sub_walk_off()
+            && context.state.match_state != MatchState::HalfTime;
+        let waits_at = walked.then(|| {
             let waiting = context
                 .substitution_break
                 .as_ref()
@@ -806,6 +905,22 @@ impl Substitutions {
                 reason,
                 SubstitutionReason::CriticalInjury | SubstitutionReason::GoalkeeperEmergency
             );
+        }
+
+        // Charge the side a window if this change is the one that stopped
+        // play for it. A team-mate already changed on this same stoppage
+        // means the window is open and this man rides it — which is what a
+        // double change is, and why five changes fit into three windows.
+        // The interval is free, in the Law and here.
+        if context.state.match_state != MatchState::HalfTime {
+            let now = context.total_match_time;
+            let already_in_window = context
+                .substitutions
+                .iter()
+                .any(|s| s.team_id == team_id && s.match_time == now);
+            if !already_in_window {
+                context.substitution_windows.open(is_home);
+            }
         }
 
         context.record_substitution(
@@ -1441,7 +1556,6 @@ mod tests {
     use crate::club::team::tactics::MatchTacticType;
     use crate::r#match::ball::Ball;
     use crate::r#match::engine::result::{Score, TeamScore};
-    use crate::r#match::engine::sub_scoring::SubScoring;
     use crate::r#match::squad::squad::MatchSquad;
     use crate::r#match::{MatchContext, MatchField, MatchFieldSize, MatchPlayerCollection};
 
@@ -1903,21 +2017,92 @@ mod tests {
         }
     }
 
+    /// The regression this whole rewrite exists for: the minute a side
+    /// reaches for its bench must depend on what the match is doing.
+    ///
+    /// The old gate was `allowed_in_window(slot, minute)` — a step function
+    /// of the minute hand and nothing else, which is why 400 measured
+    /// fixtures put the first change of a *losing* side at 71.9' and of a
+    /// *winning* side at 72.0'.
     #[test]
-    fn allowed_in_window_gates_discretionary_subs() {
-        // The discretionary loop calls `allowed_in_window` with
-        // force_critical=false. The window function is what enforces
-        // the 55+/65+/75+/85+ slot calendar.
-        assert!(!SubScoring::allowed_in_window(0, 40, false));
-        assert!(!SubScoring::allowed_in_window(0, 54, false));
-        assert!(SubScoring::allowed_in_window(0, 55, false));
-        assert!(SubScoring::allowed_in_window(0, 88, false));
-        assert!(!SubScoring::allowed_in_window(0, 89, false));
+    fn willingness_moves_with_the_match_not_the_clock() {
+        // An average manager: the seeded temperament is neutralised so the
+        // test measures the match, not the man.
+        let quiet = |m: u32, gd: i32| {
+            let mut p = SubstitutionUrgency::read(m, gd, &[], &[], None, 0, 0);
+            p.total -= p.temperament;
+            p
+        };
+        let first_change_minute = |gd: i32| {
+            (20..=95)
+                .find(|&m| quiet(m, gd).clears_at(0, &ChangeOpportunity::new(m, false, false, 0, 5)))
+                .unwrap_or(120)
+        };
 
-        // force_critical bypasses the window (post-5'). Critical-injury
-        // and youth-protection passes use this carve-out.
-        assert!(SubScoring::allowed_in_window(0, 10, true));
-        assert!(SubScoring::allowed_in_window(2, 6, true));
+        let chasing = first_change_minute(-2);
+        let level = first_change_minute(0);
+        let protecting = first_change_minute(2);
+
+        assert!(
+            chasing + 10 <= level,
+            "a side two goals down must change at least ten minutes earlier \
+             than a level one: {chasing}' vs {level}'"
+        );
+        assert!(
+            protecting < level,
+            "a side protecting a two-goal lead spends a change to kill the \
+             game: {protecting}' vs level {level}'"
+        );
+        assert!(
+            chasing < protecting,
+            "and chasing must still be the more urgent of the two: \
+             {chasing}' vs {protecting}'"
+        );
+    }
+
+    /// Half-time is a real substitution moment and the busiest single
+    /// minute in the real game. The old model could not produce one at all:
+    /// discretionary changes were gated to the second half and the first
+    /// window opened on 55'.
+    #[test]
+    fn a_side_with_a_reason_changes_at_the_interval() {
+        let pressure = |gd: i32| {
+            let mut p = SubstitutionUrgency::read(45, gd, &[], &[], None, 0, 0);
+            p.total -= p.temperament;
+            p
+        };
+        assert!(
+            pressure(-2).clears_at(0, &ChangeOpportunity::new(45, true, false, 0, 5)),
+            "two down at the break is a half-time change"
+        );
+        assert!(
+            !pressure(0).clears_at(0, &ChangeOpportunity::new(45, true, false, 0, 5)),
+            "a level, uneventful first half is not"
+        );
+        assert!(
+            !pressure(-2).clears_at(0, &ChangeOpportunity::new(45, false, false, 0, 5)),
+            "and the same pressure in open play on 45' is not enough — \
+             the interval is what makes the change cheap"
+        );
+    }
+
+    /// The bar rises with each change already made, so a side does not
+    /// unload its whole bench on one stoppage.
+    #[test]
+    fn each_change_costs_more_than_the_last() {
+        let mut late = SubstitutionUrgency::read(85, -1, &[], &[], None, 0, 0);
+        late.total -= late.temperament;
+        let highest_slot = (0..5u8)
+            .filter(|&s| late.clears_at(s, &ChangeOpportunity::new(85, false, false, 0, 5)))
+            .count();
+        assert!(
+            highest_slot >= 1,
+            "a side a goal down at 85' should be making changes"
+        );
+        assert!(
+            highest_slot < 5,
+            "but not all five on the same stoppage: cleared {highest_slot}"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────

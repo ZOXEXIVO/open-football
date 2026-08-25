@@ -30,6 +30,46 @@ pub struct SubstitutionRecord {
     pub break_ms: u64,
 }
 
+/// How many separate stoppages each side has spent on changes.
+///
+/// The Law gives a side five substitutions but only **three opportunities**
+/// to make them, the interval not counting as one. It is the reason real
+/// changes come in clusters — a double on the hour, a single at 72', two
+/// more at 80' — rather than as five separately-scheduled events, and
+/// without it a five-sub side simply interrupts the match five times.
+///
+/// A whole pass rides one window: the loop opens it on its first swap and
+/// every further swap in the same pass is free, which is exactly what a
+/// double change is.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SubstitutionWindows {
+    home: u8,
+    away: u8,
+}
+
+impl SubstitutionWindows {
+    /// Stoppages a side may interrupt for a change over normal time.
+    /// Half-time is free and does not spend one.
+    pub const PER_TEAM: u8 = 3;
+
+    /// Windows this side has already spent.
+    pub fn spent(&self, is_home: bool) -> u8 {
+        if is_home { self.home } else { self.away }
+    }
+
+    /// Charge a side for interrupting play. Saturates rather than wrapping —
+    /// a forced injury change is allowed to exceed the allowance (it does in
+    /// the Law too), and the counter is only ever read as a comparison.
+    pub fn open(&mut self, is_home: bool) {
+        let slot = if is_home {
+            &mut self.home
+        } else {
+            &mut self.away
+        };
+        *slot = slot.saturating_add(1);
+    }
+}
+
 impl MatchContext {
     pub fn subs_used_by_team(&self, team_id: u32) -> usize {
         self.substitutions

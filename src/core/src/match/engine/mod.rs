@@ -65,7 +65,7 @@ pub use officiating::set_pieces::{
 pub use officiating::{corner_shape, management, referee, set_pieces};
 
 // substitution/ — full-path access only (no glob was exported originally).
-pub use substitution::{sub_scoring, substitutions};
+pub use substitution::{sub_scoring, substitutions, urgency};
 
 // rating + psychology — direct children of the engine module.
 pub use psychology::{

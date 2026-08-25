@@ -115,6 +115,66 @@ impl MatchContext {
     /// correlation budget.
     pub const SCORE_REACTION_FROM_MINUTE: u32 = 62;
 
+    /// Match minute from which the **bench** may read the scoreline, which
+    /// is earlier than the minute the eleven on the pitch may.
+    ///
+    /// The two are separate because the thing the gate above is rationing
+    /// is not knowledge, it is *play*. What carried the draw surplus was
+    /// trailing sides attacking harder and leading sides sitting deeper —
+    /// eleven men changing how they play, on every tick, for the rest of
+    /// the match. A manager deciding at 40' that his left winger is coming
+    /// off at the interval changes nothing about how anybody plays until
+    /// the change is made, and then it changes one player.
+    ///
+    /// It is also simply what managers do. Nobody watches his side go two
+    /// down on the half-hour and thinks about the bench for the first time
+    /// twenty-two minutes later; the whole point of a half-time change is
+    /// that it was decided during the first half. Holding the substitution
+    /// engine to the play gate meant the earliest a deficit could reach
+    /// the bench at all was 62' — by which time the first change had
+    /// usually already been made, blind, and the scoreline could no longer
+    /// move it.
+    ///
+    /// Set at the half-hour: late enough that a fluke early goal does not
+    /// empty a bench, early enough to reach the interval with a view.
+    ///
+    /// **Measured, both arms, 400 fixtures on `dev_match subs 400 14` —
+    /// the only harness that fields a bench, so the only one that can see
+    /// this at all:**
+    ///
+    /// | | gate at 62' | gate at 30' |
+    /// |---|---|---|
+    /// | team-goal rho | +0.301 | **+0.184** |
+    /// | draws | 25.5% | 25.0% |
+    /// | first change, mean | 64.0' | 59.6' |
+    /// | first change, sd | 4.0 | **8.3** |
+    /// | modal minute's share of the slot | 30% | 11% |
+    /// | first change, behind vs ahead | 63.2' / 64.6' | **55.4' / 63.9'** |
+    ///
+    /// It does not spend correlation budget — it *returns* some, because a
+    /// trailing side that changes earlier changes into a weaker player and
+    /// the comeback dynamic that carries rho gets damped rather than fed.
+    ///
+    /// The other half of that table is the more interesting half, and it
+    /// is why this constant is part of the timing fix rather than a
+    /// concession to it: with the bench blind until 62', every side's read
+    /// of its own match was *identical* — the clock and nothing else — so
+    /// every side crossed the bar in the same minute. The old gate was
+    /// itself one of the reasons substitutions all happened at once.
+    pub const BENCH_SCORE_FROM_MINUTE: u32 = 30;
+
+    /// Whether the substitution layer may read the real scoreline yet.
+    ///
+    /// Shares the `OF_SCORE_BLIND` control with
+    /// [`behavioral_score_visible`](Self::behavioral_score_visible) so the
+    /// score-blind A/B arm stays genuinely blind everywhere.
+    pub fn bench_score_visible(&self) -> bool {
+        if Self::score_blind() {
+            return false;
+        }
+        (self.total_match_time / 60_000) as u32 >= Self::BENCH_SCORE_FROM_MINUTE
+    }
+
     /// **How hard the score-reactive regime pulls, as one number.**
     ///
     /// The gate above decides WHEN teams start reading the scoreline;

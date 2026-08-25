@@ -242,6 +242,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut sub_times_initialized = false;
         // The board is up and the manager is waiting for the ball to go dead.
         let mut sub_due = false;
+        // Rate limit on the off-plan look at the bench — the one that lets a
+        // side react to the match instead of to its own review timer.
+        let mut next_sub_look_ms: u64 = 0;
         // Whether a change is played out at all — see
         // [`MatchContext::sub_walk_off`], the A/B control for what the walk
         // costs. Read once, here, rather than at each of the four sites that
@@ -293,6 +296,30 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut next_position_record_ms: u64 =
             (initial_t / Self::POSITION_RECORD_INTERVAL_MS + 1) * Self::POSITION_RECORD_INTERVAL_MS;
         let track_positions = match_data.is_tracking_positions();
+
+        // **The interval.**
+        //
+        // `HalfTime` is a state that runs no ticks — `increment_time` returns
+        // false for it on the first call, so the loop below never executes a
+        // body — which makes this the only place a change can be made at the
+        // break. And a change at the break is worth making: it is the single
+        // most common substitution minute in real football, because it costs
+        // the manager nothing. No stoppage, no walk across the pitch, none of
+        // his three windows, and a dressing room to explain it in. It is also
+        // the only kind of change the old model could not make at all, subs
+        // having been gated to the second half.
+        //
+        // Position resets, the squad swap and the second-half kickoff all
+        // happen in `StateManager::handle_state_finish` *after* this returns,
+        // so a man who comes on here is placed by the same code that places
+        // everybody else. Nothing is drawn and nothing is clipped: there is
+        // no play to interrupt and no moment to show.
+        if context.state.match_state == MatchState::HalfTime {
+            let per_pass_cap = context.max_substitutions_per_pass;
+            let today = context.today;
+            process_substitutions(field, context, per_pass_cap, today);
+            return result;
+        }
 
         while context.increment_time() {
             // Post-goal dead time. No ball physics, no AI, no events, no
@@ -539,11 +566,19 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 }
             }
 
-            // Discretionary substitutions allowed from the second half
-            // onwards, plus extra time when we reach it in a knockout
-            // tie. First-half subs in real football are reactive
-            // (injuries) — the medical pass above owns those. ET gets
-            // one bonus sub on entry (FIFA rule).
+            // The manager's ROUTINE review of his bench runs from the second
+            // half on, plus extra time when a knockout tie reaches it. Its
+            // clock is deliberately confined to those periods: it is the
+            // only substitution site that draws from
+            // [`MatchContext::rng`](crate::r#match::MatchContext), and a
+            // benchless fixture must keep consuming exactly the stream it
+            // consumed before the pressure model existed. ET gets one bonus
+            // sub on entry (FIFA rule).
+            //
+            // What runs in the FIRST half is the off-plan look below, which
+            // draws nothing. A first-half change is a reaction — to an
+            // injury, a booking, a game that has fallen apart — and a
+            // reaction does not wait for a review that is not due.
             let subs_enabled = matches!(
                 context.state.match_state,
                 MatchState::SecondHalf | MatchState::ExtraTime
@@ -571,41 +606,69 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 }
 
                 let period_time = context.time.time;
-                // **The board goes up when the timer says so; the change is
-                // made at the next dead ball.**
+                // **The manager reviews his bench on his own clock, and acts
+                // between reviews when the match makes him.**
                 //
-                // Two steps rather than one, and the split is not stylistic.
-                // A change now stops the match for
-                // [`SubstitutionBreak::BREAK_MS`], which must not be the
-                // thing that stops it — see
-                // [`Substitutions::play_is_stopped`]. But the RE-ARM has to
-                // stay on the tick the timer fired: it is an
-                // [`MatchContext::rng`] draw, the stream is shared with every
-                // calibrated decision in the match, and moving it to the next
-                // throw-in would reshuffle every roll downstream of it in
-                // matches that never make a substitution at all — every one
-                // the calibration harness plays, whose squads have no bench.
+                // The timer is the routine review: every manager has a plan
+                // — "something around the hour" — and this is it, drawn once
+                // per period and re-armed each time it fires. What it is
+                // NOT, any more, is the thing that decides the minute: that
+                // is [`BenchPressure`], read per side inside the pass, and
+                // the second condition below is what lets it act without
+                // waiting for the next review. Between them, a quiet game
+                // gets its changes on the plan and a game that has gone
+                // wrong gets them when it goes wrong.
+                //
+                // The RE-ARM has to stay on the tick the timer fired: it is
+                // an [`MatchContext::rng`] draw, the stream is shared with
+                // every calibrated decision in the match, and moving it to
+                // the next throw-in would reshuffle every roll downstream of
+                // it in matches that never make a substitution at all —
+                // every one the calibration harness plays, whose squads have
+                // no bench. For the same reason the review clock is left
+                // exactly as it was rather than being folded into the
+                // pressure model: a benchless fixture must consume the
+                // stream it consumed before this model existed, and it does.
+                //
+                // [`BenchPressure`]: crate::r#match::engine::urgency::BenchPressure
                 if period_time >= next_sub_time_ms {
                     sub_due = true;
                     next_sub_time_ms = period_time + context.rng.range_u64(5, 15) * 60 * 1000;
                 }
-                if sub_due && (!walk_on || Substitutions::play_is_stopped(field)) {
-                    sub_due = false;
-                    // Deterministic "today" — captured at context
-                    // construction. Used only for the youth-protection
-                    // sub branch, where the comparison is age <= 17.
-                    let today = context.today;
-                    let per_pass_cap = context.max_substitutions_per_pass;
-                    // A clipped recording keeps what somebody wants to watch,
-                    // and a change is one of those — see `mark_substitution`.
-                    // One mark per stoppage, however many men crossed the
-                    // line on it: overlapping clips are merged at full time
-                    // anyway, and a double change is one moment.
-                    let before = context.substitutions.len();
-                    process_substitutions(field, context, per_pass_cap, today);
-                    if walk_on && context.substitutions.len() > before {
-                        match_data.mark_substitution(context.total_match_time);
-                    }
+            }
+
+            // **The look.** Either the review came due, or enough match has
+            // passed since the last look that the pressure could have moved.
+            //
+            // The pass is cheap for a side with nothing to do — it walks its
+            // own roster and returns — and returns before touching anything
+            // at all for a side with no bench, which is every fixture the
+            // calibration harness plays. Rate-limited to a second of match
+            // clock so a spell of throw-ins does not re-walk both rosters on
+            // every tick: nothing the read depends on moves faster than a
+            // player's condition does.
+            let look_enabled = matches!(
+                context.state.match_state,
+                MatchState::FirstHalf | MatchState::SecondHalf | MatchState::ExtraTime
+            );
+            let urgent_look = look_enabled && context.time.time >= next_sub_look_ms;
+            if (sub_due || urgent_look) && (!walk_on || Substitutions::play_is_stopped(field)) {
+                sub_due = false;
+                next_sub_look_ms = context.time.time + 1_000;
+                // Deterministic "today" — captured at context
+                // construction. Used only for the youth-protection
+                // sub branch, where the comparison is age <= 17.
+                let today = context.today;
+                let per_pass_cap = context.max_substitutions_per_pass;
+                // A clipped recording keeps what somebody wants to watch,
+                // and a change is one of those — see `mark_substitution`.
+                // One mark per stoppage, however many men crossed the
+                // line on it: overlapping clips are merged at full time
+                // anyway, and a double change is one moment.
+                let before = context.substitutions.len();
+                process_substitutions(field, context, per_pass_cap, today);
+                if walk_on && context.substitutions.len() > before {
+                    match_data.mark_substitution(context.total_match_time);
                 }
             }
         }

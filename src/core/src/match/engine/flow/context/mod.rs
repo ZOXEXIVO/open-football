@@ -39,4 +39,4 @@ pub use clock::MATCH_TIME_INCREMENT_MS;
 pub use config::MatchEngineConfig;
 pub use match_context::{MatchContext, PendingAdvantage};
 pub use penalty_area::PenaltyArea;
-pub use substitution_record::SubstitutionRecord;
+pub use substitution_record::{SubstitutionRecord, SubstitutionWindows};
