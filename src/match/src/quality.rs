@@ -268,7 +268,8 @@ impl Quality {
             .ok()?
             .dyn_into()
             .ok()?;
-        let context: WebGl2RenderingContext = canvas.get_context("webgl2").ok()??.dyn_into().ok()?;
+        let context: WebGl2RenderingContext =
+            canvas.get_context("webgl2").ok()??.dyn_into().ok()?;
         // The extension has to be asked for before the parameter it defines can
         // be read, and asking for it is where a browser that declines to answer
         // declines.

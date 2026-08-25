@@ -1,5 +1,6 @@
 use nalgebra::Vector3;
 
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
     ActivityIntensity, DefenderCondition, DefensiveLine, Interception,
@@ -50,6 +51,16 @@ impl StateProcessingHandler for DefenderHoldingLineState {
         {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::AttackingCorner,
+            ));
+        }
+
+        // The plan has named him for the run beyond the width holder.
+        // A full-back who has been given the overlap is not holding the
+        // line; his side has decided it can play without him for the
+        // length of this attack. See `overlapping`.
+        if WideChannel::still_mine(ctx) && ctx.team().is_overlap_runner() {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Overlapping,
             ));
         }
 

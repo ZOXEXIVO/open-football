@@ -1,3 +1,4 @@
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{
     ActivityIntensity, ForwardCondition, InterceptionRange,
@@ -25,6 +26,14 @@ impl StateProcessingHandler for ForwardReturningState {
         }
 
         if ctx.team().is_control_ball() {
+            // Straight back out to the touchline rather than via
+            // `Running`, which would spend its own tick deciding the
+            // same thing.
+            if WideChannel::still_mine(ctx) {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::HoldingWidth,
+                ));
+            }
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 

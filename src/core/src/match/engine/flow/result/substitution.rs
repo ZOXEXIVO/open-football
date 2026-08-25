@@ -20,6 +20,20 @@ pub struct SubstitutionInfo {
     /// protection / fatigue rotation never qualify as frustration.
     #[serde(default)]
     pub reason: SubstitutionReason,
+    /// How long the match stopped for while the change was played out, in ms.
+    ///
+    /// The replay reads it to hold its substitution shot for exactly as long
+    /// as the change lasted — the window closes when the last man reaches his
+    /// slot, so it is nine or ten seconds for an ordinary change and nearly
+    /// twice that when somebody has the width of the pitch to cross. See
+    /// [`SubstitutionBreak`](super::super::touchline::SubstitutionBreak).
+    ///
+    /// Defaulted for documents written before the change was played out at
+    /// all, and zero on the instant path (`OF_SUB_WALK_OFF`); a reader that
+    /// sees zero should fall back to a constant of its own rather than cut
+    /// the shot immediately.
+    #[serde(default)]
+    pub break_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

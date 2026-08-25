@@ -5,7 +5,12 @@
 use super::match_context::MatchContext;
 use crate::r#match::{MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS, MatchState, MatchTime, PlayerSide};
 
-const MATCH_TIME_INCREMENT_MS: u64 = 10;
+/// How much match clock one engine tick is worth, in milliseconds.
+///
+/// Public because a tick is the unit every patience bound, cooldown and
+/// commitment clock in the engine is written in, so anything converting a
+/// duration into ticks needs this number rather than its own copy of `10`.
+pub const MATCH_TIME_INCREMENT_MS: u64 = 10;
 const MAX_STOPPAGE_PER_PERIOD_MS: u64 = 15 * 60 * 1000;
 
 impl MatchContext {

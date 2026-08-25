@@ -499,6 +499,54 @@ impl Textures {
         }))
     }
 
+    /// And the two arrows, marking a change.
+    ///
+    /// One pointing on, one pointing off, stacked — the sign the fourth
+    /// official holds up, which is the only glyph in football that means
+    /// substitution and nothing else. Drawn horizontally rather than
+    /// vertically because the pin is a circle: two long shapes side by side
+    /// waste the round corners, two stacked ones fill them.
+    ///
+    /// Both arrows are the same shape and one is turned through half a turn,
+    /// so the pair reads as a swap rather than as two unrelated marks. The
+    /// head is deliberately more than twice the width of the shaft: at a
+    /// dozen pixels an arrow whose head only just outgrows its stem reads as
+    /// a plain bar, which is the same mistake [`Self::chance_icon`] documents
+    /// at its own size.
+    pub fn substitution_icon(images: &mut Assets<Image>) -> Handle<Image> {
+        /// Where the two arrows sit, as a fraction down the square, and how
+        /// thick the shafts are.
+        const ROW: f32 = 0.29;
+        const SHAFT: f32 = 0.075;
+        /// The span each arrow covers across the square, and where its head
+        /// begins.
+        const TAIL: f32 = 0.16;
+        const NOSE: f32 = 0.84;
+        const HEAD_AT: f32 = 0.52;
+        const HEAD_HALF: f32 = 0.20;
+
+        images.add(Self::mask(|x, y| {
+            // Fold the two arrows onto one: the lower one is the upper one
+            // rotated half a turn about the centre of the square.
+            let (along, across) = if y < 0.5 {
+                (x, y - ROW)
+            } else {
+                (1.0 - x, (1.0 - y) - ROW)
+            };
+            let across = across.abs();
+            if !(TAIL..=NOSE).contains(&along) {
+                return false;
+            }
+            if along <= HEAD_AT {
+                return across <= SHAFT;
+            }
+            // The head: a triangle closing from `HEAD_HALF` at its base to
+            // nothing at the point.
+            let into_head = (along - HEAD_AT) / (NOSE - HEAD_AT);
+            across <= HEAD_HALF * (1.0 - into_head)
+        }))
+    }
+
     /// Is this point inside a regular pentagon of `radius` centred on the
     /// origin, turned `rotation` radians from vertex-straight-up?
     ///
@@ -1493,10 +1541,7 @@ impl Textures {
         const ACROSS_A_LEAF: u16 = 4;
 
         Turf {
-            albedo: images.add(Self::tiled(
-                Self::mipped(SIZE, SIZE, data),
-                ALONG_THE_PITCH,
-            )),
+            albedo: images.add(Self::tiled(Self::mipped(SIZE, SIZE, data), ALONG_THE_PITCH)),
             relief: images.add(Self::tiled(
                 Self::mipped_linear(SIZE, SIZE, Self::relief(SIZE, &lit)),
                 ACROSS_A_LEAF,
@@ -1543,8 +1588,7 @@ impl Textures {
                 // Tangent space here is the one [`crate::pitch::Sward`] writes
                 // out: U on +X, V on +Z, and the green channel positive along
                 // V, which is the convention Bevy's own normal maps use.
-                let normal =
-                    Vec3::new(-across * RELIEF, -down * RELIEF, 1.0).normalize_or(Vec3::Z);
+                let normal = Vec3::new(-across * RELIEF, -down * RELIEF, 1.0).normalize_or(Vec3::Z);
                 data.extend_from_slice(&[
                     ((normal.x * 0.5 + 0.5) * 255.0) as u8,
                     ((normal.y * 0.5 + 0.5) * 255.0) as u8,

@@ -429,6 +429,18 @@ struct ChanceJson {
     time: u64,
 }
 
+/// Every change either side made. Carried for the same reason the chances
+/// are: the timeline marks them, and the engine stops the match to play each
+/// one out, so a harness that dropped them would show a replay that pauses
+/// twelve seconds for no visible reason.
+#[derive(Serialize)]
+struct SubstitutionJson {
+    player_in_id: u32,
+    player_out_id: u32,
+    time: u64,
+    break_ms: u64,
+}
+
 #[derive(Serialize)]
 struct MetadataJson {
     chunk_count: usize,
@@ -449,6 +461,7 @@ struct ViewerConfigJson<'a> {
     players: &'a [PlayerJson],
     goals: &'a [GoalJson],
     chances: &'a [ChanceJson],
+    substitutions: &'a [SubstitutionJson],
     debug: bool,
 }
 
@@ -471,6 +484,7 @@ impl ViewerPage {
         match_time_ms: u64,
         goals: &[GoalJson],
         chances: &[ChanceJson],
+        substitutions: &[SubstitutionJson],
         players: &[PlayerJson],
     ) -> String {
         let config = ViewerConfigJson {
@@ -488,6 +502,7 @@ impl ViewerPage {
             players,
             goals,
             chances,
+            substitutions,
             debug: true,
         };
 
@@ -2918,7 +2933,13 @@ fn main() {
         "record" => {
             let level_a: Option<u8> = args.get(2).and_then(|s| s.parse().ok());
             let level_b: Option<u8> = args.get(3).and_then(|s| s.parse().ok());
-            run_record(level_a, level_b);
+            // `record 14 14 clipped` narrows the scope to the one the GAME
+            // uses, so what lands in `match_results` is the reel a player
+            // actually gets rather than the whole match the harness keeps.
+            // The only way to check that every goal, chance and substitution
+            // has footage behind its marker.
+            let clipped = args.get(4).is_some_and(|s| s == "clipped");
+            run_record(level_a, level_b, clipped);
         }
         // Deterministic seeded timing + calibration-neutrality benchmark.
         "bench" => {
@@ -7144,6 +7165,52 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         );
     }
 
+    // ── WIDE PLAY ──────────────────────────────────────────────────────
+    //
+    // Two separate questions the aggregate cross count cannot answer, and
+    // both of them are the report ("no attacks down the flanks, no
+    // crosses from the touchline"): does anybody actually stand on a
+    // touchline, and when the ball is delivered, is it from the byline or
+    // hopefully from 35 m?
+    {
+        use core::mid_run_diag::WideDiag;
+        let w = WideDiag::snapshot();
+        let per = |v: u64| v as f64 / n_matches as f64;
+        if w[0] > 0 {
+            let deliveries = w[5] + w[6] + w[7];
+            println!();
+            println!("--- WIDE PLAY (per match unless stated) ---");
+            println!(
+                "  touchline-holder ticks {:.0}, of which genuinely in the outer 20%: {:.1}%   \
+                 (the plan vs the shape)",
+                per(w[0]),
+                w[1] as f64 * 100.0 / w[0].max(1) as f64
+            );
+            println!(
+                "  overlap-run ticks {:.0}   at the byline (<12 m from the goal line) {:.1}% of wide ticks",
+                per(w[2]),
+                w[3] as f64 * 100.0 / w[0].max(1) as f64
+            );
+            println!("  flank releases played {:.1}", per(w[4]));
+            println!(
+                "  deliveries {:.1}/match ({:.1} per team, real ~16-18): DEF {:.1} / MID {:.1} / FWD {:.1}",
+                per(deliveries),
+                per(deliveries) / 2.0,
+                per(w[5]),
+                per(w[6]),
+                per(w[7]),
+            );
+            println!(
+                "  …of them from inside the box's width (a byline ball) {:.1}%; mean distance from the goal line {:.1} m",
+                w[8] as f64 * 100.0 / deliveries.max(1) as f64,
+                (w[9] as f64 / deliveries.max(1) as f64) * 0.125,
+            );
+            println!(
+                "  real reference: a Premier League team crosses 16-18 times a match, of which ~25% are cut back or struck from inside the width of the box"
+            );
+        }
+    }
+
     // ── OVERLAPPING FULLBACK FUNNEL ────────────────────────────────────
     {
         use core::mid_run_diag::OverlapDiag;
@@ -8086,8 +8153,6 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             );
         }
     }
-
-
 
     // ── KEEPER VOICE: DOES HE CALL FOR IT ──────────────────────────────
     // `KeeperBallClaim::is_favourite` had no keeper attribute in it at
@@ -10768,8 +10833,11 @@ fn run_paths(matches: usize, level: u8) {
 /// recording on and write the same chunk files, then exit. No axum
 /// server, no browser launch — so a replay can be captured and inspected
 /// without taking over the machine.
-fn run_record(level_a: Option<u8>, level_b: Option<u8>) {
+fn run_record(level_a: Option<u8>, level_b: Option<u8>, clipped: bool) {
     MatchRuntime::set_events_mode(true);
+    if clipped {
+        MatchRuntime::set_recording_scope(core::r#match::RecordingScope::Goals);
+    }
 
     let level_a = level_a.unwrap_or_else(random_level);
     let level_b = level_b.unwrap_or_else(random_level);
@@ -10786,6 +10854,60 @@ fn run_record(level_a: Option<u8>, level_b: Option<u8>) {
         level_a,
         level_b
     );
+    println!(
+        "substitutions: {} [{}]",
+        result.substitutions.len(),
+        result
+            .substitutions
+            .iter()
+            .map(|s| {
+                format!(
+                    "{}ms {}->{} ({}s)",
+                    s.match_time_ms,
+                    s.player_out_id,
+                    s.player_in_id,
+                    s.break_ms / 1000
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    // **Does every marker have footage behind it?**
+    //
+    // Under the game's clipped scope the recording is a handful of segments
+    // and everything outside them is grey. A goal, a chance or a substitution
+    // whose window falls in a hole is a mark on the timeline that leads
+    // nowhere, and nothing but this says so — the result and the recording
+    // are built by different passes and neither checks the other.
+    if let Some(segments) = result.position_data.recorded_segments() {
+        let covers = |from: u64, to: u64| {
+            segments
+                .iter()
+                .any(|(start, end)| from >= *start && to <= *end)
+        };
+        println!(
+            "recorded segments: {} covering {:.0}s of {:.0}s",
+            segments.len(),
+            segments.iter().map(|(a, b)| (b - a) as f64).sum::<f64>() / 1000.0,
+            result.match_time_ms as f64 / 1000.0,
+        );
+        let mut missing = 0;
+        for change in &result.substitutions {
+            if !covers(change.match_time_ms, change.match_time_ms + change.break_ms) {
+                println!(
+                    "  NOT RECORDED: substitution at {}ms ({}->{})",
+                    change.match_time_ms, change.player_out_id, change.player_in_id
+                );
+                missing += 1;
+            }
+        }
+        println!(
+            "  {} of {} substitutions have footage behind their marker",
+            result.substitutions.len() - missing,
+            result.substitutions.len()
+        );
+    }
 
     let out_dir = PathBuf::from("match_results").join(LEAGUE_SLUG);
     std::fs::create_dir_all(&out_dir).expect("failed to create output dir");
@@ -10864,6 +10986,26 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
         })
         .collect();
 
+    let substitutions_json: Vec<SubstitutionJson> = result
+        .substitutions
+        .iter()
+        .map(|s| SubstitutionJson {
+            player_in_id: s.player_in_id,
+            player_out_id: s.player_out_id,
+            time: s.match_time_ms,
+            break_ms: s.break_ms,
+        })
+        .collect();
+    println!(
+        "Substitutions: {} ({})",
+        substitutions_json.len(),
+        substitutions_json
+            .iter()
+            .map(|s| format!("{}'", s.time / 60_000))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
     let out_dir = PathBuf::from("match_results").join(LEAGUE_SLUG);
     std::fs::create_dir_all(&out_dir).expect("failed to create output dir");
 
@@ -10919,6 +11061,7 @@ fn run_viewer(level_a: Option<u8>, level_b: Option<u8>) {
         result.match_time_ms,
         &goals_json,
         &chances_json,
+        &substitutions_json,
         &players_json,
     ));
 
@@ -11098,7 +11241,6 @@ fn run_over_the_bar(matches: usize, level: u8) {
         println!("{capture}");
     }
 }
-
 
 /// **Where a ball that goes UP ends up.**
 ///

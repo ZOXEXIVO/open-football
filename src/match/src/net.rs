@@ -635,8 +635,8 @@ impl Netting {
     #[inline]
     fn roof_ceiling(past_line: f32) -> f32 {
         let t = (past_line / Field::NET_DEPTH).clamp(0.0, 1.0);
-        let mesh = Field::PHYSICS_GOAL_HEIGHT
-            + (Field::NET_BACK_HEIGHT - Field::PHYSICS_GOAL_HEIGHT) * t;
+        let mesh =
+            Field::PHYSICS_GOAL_HEIGHT + (Field::NET_BACK_HEIGHT - Field::PHYSICS_GOAL_HEIGHT) * t;
         mesh + Self::GIVE_SIDE * 4.0 * t * (1.0 - t)
     }
 
@@ -926,11 +926,7 @@ mod tests {
             0.0
         )));
         assert!(
-            !Netting::inside_a_goal(Vec3::new(
-                Field::HALF_LENGTH + Field::NET_DEPTH,
-                2.3,
-                0.0
-            )),
+            !Netting::inside_a_goal(Vec3::new(Field::HALF_LENGTH + Field::NET_DEPTH, 2.3, 0.0)),
             "the roof net is {:.2} m up at the back bar — a ball at 2.30 m \
              is over the top of it",
             Field::NET_BACK_HEIGHT

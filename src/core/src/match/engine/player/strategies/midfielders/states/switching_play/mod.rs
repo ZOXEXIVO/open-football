@@ -99,13 +99,27 @@ impl MidfielderSwitchingPlayState {
         // at the same rate; only the destination moves up the pitch.
         let goal = ctx.player().opponent_goal_position();
         let my_goal_distance = (goal - player_position).magnitude();
+        // The man the team put on the far touchline is the man a switch
+        // is FOR. Scored rather than filtered, like everything else here,
+        // and worth about as much as a genuinely free opponent-free
+        // pocket — because that is what he is, by construction.
+        let far_holder = {
+            let team = ctx.team();
+            let wide = team.wide_plan();
+            wide.far_holder()
+        };
         let score = |teammate: &MatchPlayerLite| -> f32 {
             let space = self.calculate_space_around_player(ctx, teammate);
             // Ground the switch gains or gives up, in units, folded into
             // the same score. Bounded so it breaks ties and outranks a
             // marginally freer man without ever vetoing the only option.
             let gained = my_goal_distance - (goal - teammate.position).magnitude();
-            space + (gained / 40.0).clamp(-6.0, 6.0)
+            let assigned = if far_holder == Some(teammate.id) {
+                5.0
+            } else {
+                0.0
+            };
+            space + (gained / 40.0).clamp(-6.0, 6.0) + assigned
         };
 
         ctx.players()

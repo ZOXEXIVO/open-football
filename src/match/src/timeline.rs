@@ -1,6 +1,7 @@
 use crate::actors::BallState;
 use crate::camera::{CameraFlight, CameraOrbit, CameraRig, CameraZoom};
 use crate::config::ViewerConfig;
+use crate::focus::CameraSubject;
 use crate::loader::ChunkLoader;
 use crate::perf::FrameCost;
 use crate::playback::{Playback, RecordedSpans};
@@ -200,6 +201,7 @@ impl Timeline {
         let away_ink = config.away.foreground_color(Color::WHITE);
         let goal_glyph = Textures::goal_icon(&mut images);
         let chance_glyph = Textures::chance_icon(&mut images);
+        let change_glyph = Textures::substitution_icon(&mut images);
         let icons = TransportIcons {
             play: Textures::play_icon(&mut images),
             pause: Textures::pause_icon(&mut images),
@@ -344,10 +346,24 @@ impl Timeline {
                             // marker has to say both when something happened
                             // and what, or every clip looks alike from here.
                             //
-                            // Chances first, goals over the top of them: two
-                            // markers can land close enough to overlap and a
-                            // goal is never the one that should go under.
+                            // Substitutions under the chances, chances under
+                            // the goals: two markers can land close enough to
+                            // overlap, and the order they are spawned in is
+                            // the order they are painted in. A goal is never
+                            // the one that should go under, and a change is
+                            // never the one that should go on top.
                             if config.match_time_ms > 0.0 {
+                                for change in &config.substitutions {
+                                    Self::marker(
+                                        track,
+                                        (change.time / config.match_time_ms).clamp(0.0, 1.0) as f32,
+                                        config.substitution_belongs_to_home(change),
+                                        (home, home_ink),
+                                        (away, away_ink),
+                                        change_glyph.clone(),
+                                        false,
+                                    );
+                                }
                                 for chance in &config.chances {
                                     Self::marker(
                                         track,
@@ -588,11 +604,14 @@ impl Timeline {
 
     /// One event on the rail: a round pin in the shirt of the side it belongs
     /// to, with a glyph in that shirt's own ink saying what it was — a ball for
-    /// a goal, an exclamation for a chance that stayed out.
+    /// a goal, an exclamation for a chance that stayed out, two arrows for a
+    /// change.
     ///
-    /// `at` is the fraction along the match. A goal's pin is the larger of the
-    /// two and sits under a brighter hairline, which is the whole of how the
-    /// bar ranks them: same shape, same place, one of them louder.
+    /// `at` is the fraction along the match. A `major` pin is the larger of
+    /// the two sizes and sits under a brighter hairline, which is the whole of
+    /// how the bar ranks them: same shape, same place, one of them louder.
+    /// Only a goal is major — a chance and a substitution are both things that
+    /// happened on the way to one.
     ///
     /// The hairline is not trim. A kit colour is whatever the club wears and
     /// half the league wears something dark: a navy pin on a dark rail over a
@@ -605,15 +624,15 @@ impl Timeline {
         home: (Color, Color),
         away: (Color, Color),
         glyph: Handle<Image>,
-        scored: bool,
+        major: bool,
     ) {
         let (shirt, ink) = if is_home { home } else { away };
-        let size = if scored {
+        let size = if major {
             Self::MARKER_SIZE
         } else {
             Self::MARKER_SIZE_CHANCE
         };
-        let edge = if scored { 0.75 } else { 0.45 };
+        let edge = if major { 0.75 } else { 0.45 };
 
         track
             .spawn((
@@ -842,9 +861,10 @@ impl Timeline {
         mut orbit: ResMut<CameraOrbit>,
         mut zoom: ResMut<CameraZoom>,
         mut flight: ResMut<CameraFlight>,
+        mut subject: ResMut<CameraSubject>,
     ) {
         if button.iter().any(|i| *i == Interaction::Pressed) {
-            CameraRig::reset(&mut orbit, &mut zoom, &mut flight);
+            CameraRig::reset(&mut orbit, &mut zoom, &mut flight, &mut subject);
         }
     }
 
@@ -1044,16 +1064,19 @@ impl Timeline {
     ///
     /// On a canvas of open pitch there is nothing else that says the camera
     /// has been moved, and someone who has flown behind a stand and lost the
-    /// ball needs telling which button gets it back.
+    /// ball needs telling which button gets it back. Following a player counts
+    /// as moving it: the ring on the grass says WHO the camera is on, and this
+    /// is what says the ball is no longer what it is watching.
     pub fn refresh_camera_reset(
         orbit: Res<CameraOrbit>,
         zoom: Res<CameraZoom>,
         flight: Res<CameraFlight>,
+        subject: Res<CameraSubject>,
         mut reset: Query<&mut Chip, With<CameraResetButton>>,
     ) {
         if let Ok(mut chip) = reset.single_mut() {
             chip.set_if_neq(Chip {
-                armed: CameraRig::moved(&orbit, &zoom, &flight),
+                armed: CameraRig::moved(&orbit, &zoom, &flight, &subject),
             });
         }
     }

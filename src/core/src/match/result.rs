@@ -162,6 +162,31 @@ pub const GOAL_CLIP_PRE_ROLL_MS: u64 = 5_000;
 /// the follow-up was.
 pub const GOAL_CLIP_POST_ROLL_MS: u64 = 5_000;
 
+/// How long before a substitution its clip starts.
+///
+/// Two seconds, against a goal's five, because there is no build-up to a
+/// substitution: it is made at a dead ball, so the seconds before it are a
+/// stationary ball and twenty men waiting for a throw-in.
+pub const SUBSTITUTION_CLIP_PRE_ROLL_MS: u64 = 2_000;
+
+/// And how long after.
+///
+/// Everything worth watching is on this side of the mark — the man walking to
+/// the line, the man coming the other way, the pair of them passing at the
+/// halfway flag.
+///
+/// ⚠ **Sized against [`SubstitutionBreak::BREAK_MS`], which is a CEILING**, so
+/// this is longer than an ordinary change needs. The recorder cannot know at
+/// the mark how long the window will turn out to run — that is decided by how
+/// far the two men have to walk — and a clip cut to the typical nine or ten
+/// seconds would stop halfway through the slow one, leading a marker to
+/// footage of a man standing in the run-off. What the extra seconds hold on an
+/// ordinary change is not padding either: the window closes when the last man
+/// is on, so they are the restart and the first of the play that follows it.
+///
+/// [`SubstitutionBreak::BREAK_MS`]: super::SubstitutionBreak::BREAK_MS
+pub const SUBSTITUTION_CLIP_POST_ROLL_MS: u64 = 21_000;
+
 /// Rounding applied to a recorded coordinate, once on the way into the buffer
 /// and again on the way out to JSON.
 ///
@@ -316,6 +341,9 @@ struct Clip {
 enum ClipKind {
     Goal,
     Chance,
+    /// A change. Never in doubt, like a goal — the board has gone up and the
+    /// two men are already walking.
+    Substitution,
 }
 
 /// Compact top-level serialization.
@@ -673,14 +701,42 @@ impl ResultMatchPositionData {
         self.open_clip(timestamp, ClipKind::Chance);
     }
 
+    /// The board has gone up: keep the change.
+    ///
+    /// Cut differently from the other two, and the difference is the whole
+    /// reason it has its own entry point. A goal needs build-up and almost no
+    /// tail; a substitution is the opposite. It happens at a dead ball, so
+    /// there is nothing behind it worth two seconds of a stationary ball, and
+    /// everything worth watching — the man walking off, the man coming on —
+    /// happens AFTER the instant it is stamped at, for as long as
+    /// `SubstitutionBreak::BREAK_MS` says.
+    ///
+    /// One clip per STOPPAGE rather than per change — a double change on the
+    /// same whistle is one moment and one window, and two marks against the
+    /// same instant would merge here anyway. Measured on real recordings that
+    /// is two to four a match, so ~30-60 s on top of the ~72 s the goals and
+    /// chances keep: it roughly doubles a clipped recording, and is still a
+    /// fortieth of a whole match. A marker on the timeline with grey behind
+    /// it would be worse than no marker.
+    pub fn mark_substitution(&mut self, timestamp: u64) {
+        self.open_clip(timestamp, ClipKind::Substitution);
+    }
+
     /// Keep the seconds either side of `timestamp`, and remember why.
     fn open_clip(&mut self, timestamp: u64, kind: ClipKind) {
         if !self.track_positions || self.scope != RecordingScope::Goals {
             return;
         }
 
-        let start = timestamp.saturating_sub(GOAL_CLIP_PRE_ROLL_MS);
-        let end = timestamp.saturating_add(GOAL_CLIP_POST_ROLL_MS);
+        let (pre, post) = match kind {
+            ClipKind::Substitution => (
+                SUBSTITUTION_CLIP_PRE_ROLL_MS,
+                SUBSTITUTION_CLIP_POST_ROLL_MS,
+            ),
+            ClipKind::Goal | ClipKind::Chance => (GOAL_CLIP_PRE_ROLL_MS, GOAL_CLIP_POST_ROLL_MS),
+        };
+        let start = timestamp.saturating_sub(pre);
+        let end = timestamp.saturating_add(post);
 
         self.clips.push(Clip {
             at: timestamp,
@@ -744,8 +800,9 @@ impl ResultMatchPositionData {
             return;
         }
 
-        self.clips
-            .retain(|clip| clip.kind == ClipKind::Goal || kept_chances.contains(&clip.at));
+        self.clips.retain(|clip| {
+            !matches!(clip.kind, ClipKind::Chance) || kept_chances.contains(&clip.at)
+        });
 
         // Merge what is left into the segment list. Clips are marked in match
         // order, but two of them can still overlap — a goal off a rebound from
@@ -1361,6 +1418,77 @@ mod chance_clip_tests {
         assert_eq!(
             stamps, sorted,
             "the merged clip repeats or reorders samples"
+        );
+    }
+
+    /// A change, and the shape of its clip: almost nothing in front of it and
+    /// the whole of the window behind it.
+    ///
+    /// The post-roll is the load-bearing number. A substitution stops the
+    /// match for `SubstitutionBreak::BREAK_MS` and every second of what
+    /// anybody wants to see is inside that window, so a clip cut like a
+    /// goal's — five seconds either side — would end with both men still
+    /// walking and lead the viewer to a marker whose footage stops halfway
+    /// through the thing it marks.
+    #[test]
+    fn a_change_is_clipped_forwards_rather_than_backwards() {
+        let mut data = ResultMatchPositionData::new().with_scope(RecordingScope::Goals);
+        let mut t = 30;
+        while t <= 120_000 {
+            if t == 60_000 {
+                data.mark_substitution(t);
+            }
+            let drift = (t / 30) as f32;
+            data.add_ball_positions(t, Vector3::new(drift, 272.0, 0.0));
+            data.add_player_positions(7, t, Vector3::new(drift, 200.0, 0.0));
+            t += 30;
+        }
+        data.finish(120_000);
+
+        assert_eq!(
+            data.recorded_segments(),
+            Some(
+                &[(
+                    60_000 - SUBSTITUTION_CLIP_PRE_ROLL_MS,
+                    60_000 + SUBSTITUTION_CLIP_POST_ROLL_MS
+                )][..]
+            )
+        );
+        assert!(
+            SUBSTITUTION_CLIP_POST_ROLL_MS
+                >= crate::r#match::SubstitutionBreak::BREAK_MS,
+            "the clip stops before the change it is a clip of does"
+        );
+    }
+
+    /// A change is never speculative. Only a chance is settled at the whistle;
+    /// the board went up and two men crossed the line, and no shortlist has
+    /// anything to say about that.
+    #[test]
+    fn a_change_survives_a_shortlist_that_kept_nothing() {
+        let mut data = ResultMatchPositionData::new().with_scope(RecordingScope::Goals);
+        let mut t = 30;
+        while t <= 120_000 {
+            if t == 30_000 {
+                data.mark_chance(t);
+            }
+            if t == 60_000 {
+                data.mark_substitution(t);
+            }
+            data.add_ball_positions(t, Vector3::new((t / 30) as f32, 272.0, 0.0));
+            t += 30;
+        }
+        data.finish_retaining(120_000, &[]);
+
+        assert_eq!(
+            data.recorded_segments(),
+            Some(
+                &[(
+                    60_000 - SUBSTITUTION_CLIP_PRE_ROLL_MS,
+                    60_000 + SUBSTITUTION_CLIP_POST_ROLL_MS
+                )][..]
+            ),
+            "the dropped chance took the substitution with it"
         );
     }
 

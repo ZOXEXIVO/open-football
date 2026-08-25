@@ -1,5 +1,6 @@
 use crate::DatabaseEntity;
 use crate::generators::rng::HydrationRng;
+use crate::generators::world_start::WorldStart;
 use crate::loaders::{CountryLoader, OdbHistoryItem, OdbPlayer, OdbPosition};
 use chrono::{Datelike, NaiveDate, Utc};
 use core::league::Season;
@@ -1744,7 +1745,10 @@ impl PlayerGenerator {
             .foots(foots)
             .positions(positions)
             .languages(native_languages)
-            .last_transfer_date(ClubJoinAnchor::resolve(record))
+            .last_transfer_date(ClubJoinAnchor::resolve(
+                record,
+                WorldStart::season_start_year(),
+            ))
             .made_senior_debut(Player::presumed_already_debuted(
                 age,
                 statistics_history.is_some(),
@@ -1813,25 +1817,78 @@ impl ClubJoinAnchor {
     /// Approximate the join date from the scraped season-by-season history.
     ///
     /// The record's `contract.started` field cannot serve here despite looking
-    /// like the obvious source: the scrape stamps it synthetically, and 54,484
-    /// of the 54,645 player records carry the identical `2025-07-01`. Seeding
-    /// tenure from it would tell the simulation that every footballer alive
-    /// joined his club on the same day.
+    /// like the obvious source: the scrape stamps it synthetically, and 55,854
+    /// of the 55,986 contracted records carry the identical `2025-07-01`.
+    /// Seeding tenure from it would tell the simulation that every footballer
+    /// alive joined his club on the same day.
     ///
     /// The history rows do carry a real signal — they name the club a player
-    /// turned out for each season — so the first season of his current
-    /// unbroken spell is a genuine join date. Walking back only while the run
-    /// of seasons is contiguous means a player who left and later returned
-    /// dates his tenure from the return, not from the first spell. Loan
-    /// seasons are skipped: being borrowed by a club is not joining it, and a
-    /// loanee later signed outright should date his stay from the permanent
-    /// move.
+    /// turned out for each season — and the answer turns on where the most
+    /// recent of those seasons was spent:
     ///
-    /// `None` when the history says nothing about his current club — either it
-    /// is empty (roughly three quarters of records) or it names only earlier
-    /// clubs. That is a genuine "unknown", and `Player::years_at_club` treats
-    /// it as one rather than inventing a career-length stay.
-    pub fn resolve(record: &OdbPlayer) -> Option<NaiveDate> {
+    ///   * **Still ours at the end of the record.** The first season of his
+    ///     current unbroken spell is a genuine join date. Walking back only
+    ///     while the run is contiguous means a player who left and later
+    ///     returned dates his tenure from the return, not from the first
+    ///     spell. His own loan seasons away don't break the run — being lent
+    ///     out is not leaving — and a loan season *at* this club doesn't start
+    ///     one, since a loanee later signed outright should date his stay from
+    ///     the permanent move.
+    ///   * **Somewhere else at the end of the record.** He has moved here
+    ///     since, so nothing earlier in the record describes his current stay:
+    ///     the spell walk would hand a returning old boy a decade of service
+    ///     he no longer has. When the season he was last elsewhere is the one
+    ///     the world has just finished, the move is the window that has just
+    ///     closed, and he is dated as this season's signing. That is what lets
+    ///     the coach see a database transfer as a new face at all — without
+    ///     it, roughly 9,300 of the 56,000 clubbed records changed club over
+    ///     the summer yet opened the save carrying no transfer anchor,
+    ///     drawing no newcomer penalty in selection and walking straight into
+    ///     the XI.
+    ///   * **Anything older, or nothing usable at all.** A genuine unknown:
+    ///     the record last saw him elsewhere seasons ago and says nothing
+    ///     about when he arrived here, so claiming either freshness or tenure
+    ///     would be an invention. `None` — and `Player::years_at_club` treats
+    ///     it as the unknown it is rather than inventing a career-length stay.
+    ///
+    /// `world_season_start_year` is the season the save opens in (2026 for a
+    /// world starting 2026-08-01) — see [`WorldStart`]. Free agents carry no
+    /// club to have joined and always resolve to `None`.
+    pub fn resolve(record: &OdbPlayer, world_season_start_year: u16) -> Option<NaiveDate> {
+        if record.club_id == 0 {
+            return None;
+        }
+
+        let ours = Self::seasons_as_our_player(record);
+        let away = Self::last_season_away(record, ours.is_empty());
+
+        if let Some(away) = away {
+            if ours.last().is_none_or(|latest| away > *latest) {
+                // Another club's player after the last season he was ours, so
+                // he arrived in the close season that followed. Only the
+                // window just gone is datable; an older gap could hide any
+                // number of undocumented moves and leaves the arrival
+                // genuinely unplaced.
+                if away + 1 < world_season_start_year {
+                    return None;
+                }
+                return Some(Season::new(world_season_start_year).start_date());
+            }
+        }
+
+        let mut spell_start = *ours.last()?;
+        for pair in ours.windows(2).rev() {
+            if pair[1] != pair[0] + 1 {
+                break;
+            }
+            spell_start = pair[0];
+        }
+        Some(Season::new(spell_start).start_date())
+    }
+
+    /// Seasons the player spent as the current club's own player, ascending
+    /// and deduplicated.
+    fn seasons_as_our_player(record: &OdbPlayer) -> Vec<u16> {
         let mut seasons: Vec<u16> = record
             .history
             .iter()
@@ -1840,15 +1897,24 @@ impl ClubJoinAnchor {
             .collect();
         seasons.sort_unstable();
         seasons.dedup();
+        seasons
+    }
 
-        let mut spell_start = *seasons.last()?;
-        for pair in seasons.windows(2).rev() {
-            if pair[1] != pair[0] + 1 {
-                break;
-            }
-            spell_start = pair[0];
-        }
-        Some(Season::new(spell_start).start_date())
+    /// The most recent season on record spent away from the current club.
+    ///
+    /// `never_ours` flips how a loan row elsewhere reads. For a player the
+    /// record has never had at this club, a season on loan at some third club
+    /// still proves he was not here, and dates the move as firmly as a
+    /// permanent spell would. For a player who does have seasons here, that
+    /// same row is his own loan out and back; counting it would make every
+    /// returning loanee a brand-new signing.
+    fn last_season_away(record: &OdbPlayer, never_ours: bool) -> Option<u16> {
+        record
+            .history
+            .iter()
+            .filter(|h| h.club_id != record.club_id && (never_ours || !h.is_loan))
+            .map(|h| h.season)
+            .max()
     }
 }
 
@@ -3787,6 +3853,11 @@ mod odb_hydration_tests {
             .collect()
     }
 
+    /// The season these fixtures' world opens in: the record runs to
+    /// 2025/26, so the save starts on 2026-08-01 and the window that has
+    /// just closed is the summer of 2026.
+    const WORLD_SEASON: u16 = 2026;
+
     #[test]
     fn join_anchor_reads_the_current_unbroken_spell() {
         // Two clubs, then four straight seasons at the club he is at now:
@@ -3803,7 +3874,7 @@ mod odb_hydration_tests {
             (2025, 500, false),
         ]);
         assert_eq!(
-            ClubJoinAnchor::resolve(&r),
+            ClubJoinAnchor::resolve(&r, WORLD_SEASON),
             NaiveDate::from_ymd_opt(2022, 8, 1)
         );
     }
@@ -3824,7 +3895,7 @@ mod odb_hydration_tests {
             (2025, 500, false),
         ]);
         assert_eq!(
-            ClubJoinAnchor::resolve(&r),
+            ClubJoinAnchor::resolve(&r, WORLD_SEASON),
             NaiveDate::from_ymd_opt(2024, 8, 1)
         );
     }
@@ -3841,24 +3912,114 @@ mod odb_hydration_tests {
             (2025, 500, false),
         ]);
         assert_eq!(
-            ClubJoinAnchor::resolve(&r),
+            ClubJoinAnchor::resolve(&r, WORLD_SEASON),
             NaiveDate::from_ymd_opt(2025, 8, 1)
         );
     }
 
     #[test]
     fn join_anchor_is_none_without_evidence() {
-        // No history at all, and history naming only earlier clubs, both mean
-        // the same thing: nothing on record says when he arrived HERE. The
-        // fabricated-tenure bug lived on this returning a date anyway.
+        // No history at all, and a record that goes quiet seasons before the
+        // save opens, both mean the same thing: nothing on file says when he
+        // arrived HERE. The fabricated-tenure bug lived on this returning a
+        // date anyway.
         let mut empty = record(900_004, 130, 140, vec![("ST", 20)]);
         empty.club_id = 500;
-        assert_eq!(ClubJoinAnchor::resolve(&empty), None);
+        assert_eq!(ClubJoinAnchor::resolve(&empty, WORLD_SEASON), None);
 
-        let mut elsewhere = record(900_005, 130, 140, vec![("ST", 20)]);
-        elsewhere.club_id = 500;
-        elsewhere.history = history(vec![(2023, 400, false), (2024, 450, false)]);
-        assert_eq!(ClubJoinAnchor::resolve(&elsewhere), None);
+        let mut stale = record(900_005, 130, 140, vec![("ST", 20)]);
+        stale.club_id = 500;
+        stale.history = history(vec![(2022, 400, false), (2023, 450, false)]);
+        assert_eq!(
+            ClubJoinAnchor::resolve(&stale, WORLD_SEASON),
+            None,
+            "last seen elsewhere three seasons ago — he could have arrived in \
+             any window since, so neither freshness nor tenure is claimable"
+        );
+    }
+
+    #[test]
+    fn join_anchor_dates_last_summers_signing_from_the_season_he_was_elsewhere() {
+        // He played 2025/26 for someone else and is on this club's roster in
+        // the save's opening squad: he signed in the window that has just
+        // closed, and the coach has to see a new face. Left as `None` he drew
+        // no newcomer penalty at all and walked into the XI on day one.
+        let mut r = record(900_010, 130, 140, vec![("ST", 20)]);
+        r.club_id = 500;
+        r.history = history(vec![
+            (2023, 400, false),
+            (2024, 400, false),
+            (2025, 400, false),
+        ]);
+        assert_eq!(
+            ClubJoinAnchor::resolve(&r, WORLD_SEASON),
+            NaiveDate::from_ymd_opt(2026, 8, 1)
+        );
+    }
+
+    #[test]
+    fn join_anchor_dates_a_returning_old_boy_from_the_move_back() {
+        // Four years here, one year away, back this summer. The spell walk
+        // read only the seasons at this club and handed him a 2021 anchor —
+        // five years of service he had already ended.
+        let mut r = record(900_011, 130, 140, vec![("MC", 20)]);
+        r.club_id = 500;
+        r.history = history(vec![
+            (2021, 500, false),
+            (2022, 500, false),
+            (2023, 500, false),
+            (2024, 500, false),
+            (2025, 600, false),
+        ]);
+        assert_eq!(
+            ClubJoinAnchor::resolve(&r, WORLD_SEASON),
+            NaiveDate::from_ymd_opt(2026, 8, 1)
+        );
+    }
+
+    #[test]
+    fn join_anchor_keeps_a_loanee_coming_home_settled() {
+        // His own loan out and back is not a transfer. Counting the season
+        // away would restamp every returning loanee as a brand-new signing.
+        let mut r = record(900_012, 130, 140, vec![("DC", 20)]);
+        r.club_id = 500;
+        r.history = history(vec![
+            (2023, 500, false),
+            (2024, 500, false),
+            (2025, 600, true),
+        ]);
+        assert_eq!(
+            ClubJoinAnchor::resolve(&r, WORLD_SEASON),
+            NaiveDate::from_ymd_opt(2023, 8, 1)
+        );
+    }
+
+    #[test]
+    fn join_anchor_dates_a_signing_whose_last_season_was_a_loan_elsewhere() {
+        // Never this club's player on record, and last season he was another
+        // club's loanee. Whoever owned him, it was not us — so the move here
+        // still dates to this summer.
+        let mut r = record(900_013, 130, 140, vec![("AMC", 20)]);
+        r.club_id = 500;
+        r.history = history(vec![
+            (2023, 400, false),
+            (2024, 400, false),
+            (2025, 700, true),
+        ]);
+        assert_eq!(
+            ClubJoinAnchor::resolve(&r, WORLD_SEASON),
+            NaiveDate::from_ymd_opt(2026, 8, 1)
+        );
+    }
+
+    #[test]
+    fn join_anchor_leaves_free_agents_unanchored() {
+        // A clubless record has no club to have joined; the rows name only
+        // where he used to be.
+        let mut r = record(900_014, 130, 140, vec![("ST", 20)]);
+        r.club_id = 0;
+        r.history = history(vec![(2024, 400, false), (2025, 400, false)]);
+        assert_eq!(ClubJoinAnchor::resolve(&r, WORLD_SEASON), None);
     }
 
     #[test]
@@ -3877,6 +4038,18 @@ mod odb_hydration_tests {
         let bare = record(900_007, 130, 140, vec![("ST", 20)]);
         let p = PlayerGenerator::generate_from_odb(&bare, 1, "it", &data);
         assert_eq!(p.last_transfer_date(), None);
+
+        // A record whose last season names another club is a signing from
+        // the window the save opens after, and must land on opening day so
+        // the settling clock starts at zero rather than already expired.
+        let mut mover = record(900_008, 130, 140, vec![("ST", 20)]);
+        mover.club_id = 500;
+        mover.history = history(vec![
+            (WorldStart::season_start_year() - 2, 400, false),
+            (WorldStart::season_start_year() - 1, 400, false),
+        ]);
+        let p = PlayerGenerator::generate_from_odb(&mover, 1, "it", &data);
+        assert_eq!(p.last_transfer_date(), Some(WorldStart::date()));
     }
 
     #[test]

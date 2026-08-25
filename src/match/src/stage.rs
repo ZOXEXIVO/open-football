@@ -470,14 +470,14 @@ mod tests {
     #[test]
     fn the_target_is_always_the_shape_of_the_canvas() {
         let panels = [
-            (1280, 720),   // a laptop
-            (1920, 1080),  // the common case
-            (3840, 2160),  // 4K, exactly on the budget
-            (7680, 4320),  // 4K at 200%, well over it
-            (3440, 1440),  // ultrawide
-            (5120, 1440),  // super-ultrawide, under the budget on area
-            (5120, 2160),  // super-ultrawide at 4K height, over it
-            (2560, 2880),  // and one taller than it is wide
+            (1280, 720),  // a laptop
+            (1920, 1080), // the common case
+            (3840, 2160), // 4K, exactly on the budget
+            (7680, 4320), // 4K at 200%, well over it
+            (3440, 1440), // ultrawide
+            (5120, 1440), // super-ultrawide, under the budget on area
+            (5120, 2160), // super-ultrawide at 4K height, over it
+            (2560, 2880), // and one taller than it is wide
         ];
         for (width, height) in panels {
             let window = canvas(width, height);
@@ -495,7 +495,11 @@ mod tests {
                     // Without this the assertion above would pass on a target
                     // small enough for its own quantisation to swallow a
                     // visible stretch.
-                    assert!(error < 0.01, "{wanted} is off shape by {:.2}%", error * 100.0);
+                    assert!(
+                        error < 0.01,
+                        "{wanted} is off shape by {:.2}%",
+                        error * 100.0
+                    );
                 }
             }
         }

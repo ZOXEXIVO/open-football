@@ -23,6 +23,7 @@ pub use state::*;
 // teamplay/ — re-export the modules (preserve `engine::<module>::` paths)
 // and the items previously surfaced at the engine root.
 pub use teamplay::attack::{AttackPlan, AttackRefreshInputs, BoxSlot};
+pub use teamplay::wide::{Flank, WidePlan};
 pub use teamplay::chemistry::{
     ChemistryInputs, ChemistryMap, ChemistryModifiers, Lane, Role, TacticalFamiliarity,
     chemistry_modifiers, initial_chemistry,
@@ -33,7 +34,7 @@ pub use teamplay::shape::{ShapeRefreshInputs, TeamShape};
 pub use teamplay::standard::MatchStandard;
 pub use teamplay::tactical::*;
 pub use teamplay::zones::{LateralLane, MatchZone, ZoneCoeffs, ZoneStats};
-pub use teamplay::{attack, chemistry, coach, defence, shape, standard, tactical, zones};
+pub use teamplay::{attack, chemistry, coach, defence, shape, standard, tactical, wide, zones};
 
 // flow/
 pub use flow::celebration::GoalCelebration;
@@ -43,7 +44,9 @@ pub use flow::field::*;
 pub use flow::goal::*;
 pub use flow::result::*;
 pub use flow::rng::MatchRng;
-pub use flow::{celebration, context, environment, field, goal, result, rng};
+pub use flow::touchline::changeover::{advance_substitution_break, finish_substitution_break};
+pub use flow::touchline::{Bench, SubstitutionBreak, TouchlineStand};
+pub use flow::{celebration, context, environment, field, goal, result, rng, touchline};
 
 // officiating/
 pub use officiating::corner_shape::{CornerRole, CornerShape, CornerStation};

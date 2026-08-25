@@ -4,6 +4,7 @@ pub mod generator;
 pub mod player;
 pub mod rng;
 pub mod staff;
+pub mod world_start;
 
 pub use generator::*;
 pub use player::*;

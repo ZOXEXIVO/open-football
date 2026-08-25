@@ -7,7 +7,8 @@ mod staffs;
 use crate::DatabaseEntity;
 use crate::generators::PlayerGenerator;
 use crate::generators::convert::{convert_national_competition, uefa_u21_championship_config};
-use chrono::{Datelike, Local, NaiveDate, NaiveDateTime};
+use crate::generators::world_start::WorldStart;
+use chrono::NaiveDateTime;
 use core::competitions::GlobalCompetitions;
 use core::context::NaiveTime;
 use core::continent::Continent;
@@ -33,10 +34,7 @@ impl DatabaseGenerator {
             seed_core_player_id_sequence(max_odb_id);
         }
 
-        let current_date = NaiveDateTime::new(
-            NaiveDate::from_ymd_opt(Local::now().year(), 8, 1).unwrap(),
-            NaiveTime::default(),
-        );
+        let current_date = NaiveDateTime::new(WorldStart::date(), NaiveTime::default());
 
         // Convert all national competition entities to runtime configs.
         // The compiled database predates the `team_level` field, so the

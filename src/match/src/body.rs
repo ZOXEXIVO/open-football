@@ -2085,6 +2085,18 @@ impl Gait {
 impl Joint {
     /// The angle the leading leg swings through, standing and at a sprint.
     const HIP_SWING: (f32, f32) = (0.10, 0.62);
+    /// How much further than the ground he covers a runner's legs may swing,
+    /// as a share — see [`Joint::stepping`], where the flight phase is
+    /// bounded by it.
+    ///
+    /// ⚠ **It is the same claim as the 105% floor at 6 m/s in
+    /// `the_planted_foot_carries_the_ground_across_its_whole_stance`**, and
+    /// the two have to be read together: that test measures what the boot
+    /// does with the ground while it is down, and a runner's foot genuinely
+    /// goes back faster than the turf because for part of the cycle neither
+    /// foot is on it. At 0.10 the measured figure came out at 104% and the
+    /// foot skated by a hair.
+    const FLIGHT_BONUS: f32 = 0.14;
     const KNEE_FLEX: (f32, f32) = (0.16, 1.55);
     /// The shoulder through the run, and the elbow that goes with it.
     ///
@@ -4260,20 +4272,24 @@ impl Joint {
     /// much bigger. Exactly the bookkeeping [`Joint::TREAD_GAIN`] does for
     /// the lateral gait, and for the same reason.
     ///
-    /// ⚠ **Applied at `STRIDE_GAIN` of the full figure, not all of it**, and
-    /// the reason is not taste. [`Joint::stepping`] already carries a flight
-    /// term — `run · spring` — which at the top of the range beats the
-    /// ground demand and wins the `max`. That term IS compensation for the
-    /// sinusoid falling short of the turf; laying the re-fit on top of it
-    /// pays for the same shortfall twice, and rendered, a sprinter's thighs
-    /// came 111° apart at full extension, which is past what a body reaches.
-    /// At 0.8 the split is 98° and the planted foot still carries 60% of the
-    /// ground at four metres a second against 32% before.
+    /// ⚠ **It is paid in FULL, and it used to be paid at 0.8.**
+    ///
+    /// The discount was there because [`Joint::stepping`]'s flight term —
+    /// `run · spring`, unbounded and `max`ed against the ground — was paying
+    /// for the same shortfall a second time, and the two together put a
+    /// sprinter's thighs 111° apart, which is past what a body reaches.
+    ///
+    /// The flight term is now a bounded bonus ON the ground rather than a
+    /// claim of its own, so it no longer pays for anything and the re-fit has
+    /// to. Left at 0.8 the planted foot carried 99% of the ground at six
+    /// metres a second against a floor of 105 — it skated, which is the
+    /// failure this whole model exists to prevent and the reason the
+    /// shortened stride could not simply be taken out of the swing.
     fn stride_gain() -> f32 {
         let full = 1.0 / (1.0 - Self::STRIDE_SHAPE + Self::STRIDE_SHAPE * 2.0 / PI);
         1.0 + (full - 1.0) * Self::STRIDE_GAIN
     }
-    const STRIDE_GAIN: f32 = 0.8;
+    const STRIDE_GAIN: f32 = 1.0;
     const STRIDE_SHAPE: f32 = 0.55;
 
     /// **The hip angle that puts the FOOT where the stride wants it**, given
@@ -4396,7 +4412,23 @@ impl Joint {
         // backpedal, so out of the forward quadrant the ground is the whole
         // of the answer — otherwise a keeper shuffling at four metres a
         // second plants his feet a metre and a half apart.
-        let flight = gait.run * gait.spring * gait.course.y.max(0.0);
+        // ⚠ **…and it is a BONUS on the ground, not a claim of its own.**
+        //
+        // It used to be `run · spring` outright, and `max`ed against the
+        // ground. That is an assertion about the amplitude in units of a
+        // sprint cycle, and it does not know what a stride is: shorten
+        // [`Actors::STRIDE`] and the ground demand falls while this does not,
+        // so the legs go on swinging exactly as far as before and the whole
+        // stride model is bypassed. Measured on the day the stride was
+        // shortened, the boots still came 15% further apart than the ground
+        // he was covering, at every pace above four metres a second.
+        //
+        // What a flight phase actually buys is a few per cent: his feet do go
+        // back faster than the turf because for part of the cycle neither is
+        // on it. So it is a percentage of the ground, and it cannot outrun
+        // the thing it is compensating for.
+        let flight = (gait.run * gait.spring * gait.course.y.max(0.0))
+            .min(ground.clamp(0.0, 1.0) * (1.0 + Self::FLIGHT_BONUS));
         // ⚠ **And nothing at all for a side-step**, which is a claim about
         // the SAGITTAL cycle and is the whole of what this answers. Measured,
         // both terms above come out at 0.000 for a pure side-step at every
@@ -5355,10 +5387,19 @@ pub(crate) mod skeleton {
     }
 
     /// Mid-stride at this much of a sprint.
+    /// A man running at this share of a sprint.
+    ///
+    /// ⚠ **`carry_ground` is set from the same speed**, because the flight
+    /// term is a bonus ON it now — see [`Joint::stepping`]. A fixture that
+    /// left it at zero used to still produce a full stride, off the `run`
+    /// claim alone; it now produces a man standing still with his legs
+    /// straight, which is a fixture describing something that cannot happen
+    /// rather than a bug in the rig.
     pub fn running(run: f32) -> Gait {
         let mut gait = still();
         gait.run = run;
         gait.phase = 1.1;
+        gait.carry_ground = Actors::stride_of(7, run * Actors::SPRINT, Vec2::Y).1;
         gait
     }
 

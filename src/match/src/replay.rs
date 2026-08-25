@@ -506,8 +506,8 @@ mod chunks {
     /// the entire trick, so it is worth asserting rather than assuming.
     #[test]
     fn the_envelope_arrives_without_the_players() {
-        let chunk: ChunkPayload = serde_json::from_slice(DOCUMENT.as_bytes())
-            .expect("the document is well-formed");
+        let chunk: ChunkPayload =
+            serde_json::from_slice(DOCUMENT.as_bytes()).expect("the document is well-formed");
         assert_eq!(chunk.ball.len(), 1, "the ball is read with the envelope");
         assert_eq!(chunk.players.len(), 2, "both players are accounted for");
 
@@ -529,8 +529,8 @@ mod chunks {
     /// the pitch, third component and all.
     #[test]
     fn a_deferred_track_reads_back_whole() {
-        let chunk: ChunkPayload = serde_json::from_slice(DOCUMENT.as_bytes())
-            .expect("the document is well-formed");
+        let chunk: ChunkPayload =
+            serde_json::from_slice(DOCUMENT.as_bytes()).expect("the document is well-formed");
         let mut tracks = ReplayTracks::default();
         let deferred = tracks.absorb(chunk);
 

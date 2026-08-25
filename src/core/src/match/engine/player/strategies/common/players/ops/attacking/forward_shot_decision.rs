@@ -1864,6 +1864,82 @@ pub mod mid_run_diag {
     /// 6 same flank, 7 ball ahead, 8 rest-defence, 9 COMMITTED.
     pub static OVERLAP_FUNNEL: [AtomicU64; 10] = [const { AtomicU64::new(0) }; 10];
 
+    /// **Does the side actually play with width, and does the width
+    /// produce anything?**
+    ///
+    /// The aggregate "crosses struck" cannot tell a side that works the
+    /// ball to the byline apart from one that hits a hopeful ball from
+    /// 40 m, and it cannot say whether the two men who are supposed to
+    /// be on the touchlines ever get there. Both questions are the
+    /// report — "no attacks down the flanks, no crosses from the
+    /// touchline" — so both are counted where they happen.
+    ///
+    /// Slots: 0 ticks a player held a width assignment, 1 of those spent
+    /// inside the outer 20% (where a cross is legal at all), 2 ticks on
+    /// an overlap run, 3 byline arrivals (a wide player inside 12 m of
+    /// the goal line), 4 flank releases played, 5 deliveries struck by a
+    /// DEF, 6 by a MID, 7 by a FWD, 8 deliveries struck from inside the
+    /// box's width (a genuine byline ball), 9 sum of delivery distance
+    /// from the goal line in units (÷ total deliveries for the mean).
+    pub static WIDE_PLAY: [AtomicU64; 10] = [const { AtomicU64::new(0) }; 10];
+
+    pub struct WideDiag;
+
+    impl WideDiag {
+        pub fn note(slot: usize) {
+            if slot < 10 {
+                WIDE_PLAY[slot].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn add(slot: usize, n: u64) {
+            if slot < 10 {
+                WIDE_PLAY[slot].fetch_add(n, Ordering::Relaxed);
+            }
+        }
+
+        pub fn snapshot() -> [u64; 10] {
+            let mut out = [0u64; 10];
+            for (slot, c) in out.iter_mut().zip(WIDE_PLAY.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+
+        pub fn reset() {
+            for c in WIDE_PLAY.iter() {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+
+        /// One delivery, tagged by who struck it and from where.
+        /// `role` is 0 DEF / 1 MID / 2 FWD; `goal_line_gap` is how far
+        /// the crosser stood from the goal line, in units.
+        pub fn note_delivery(role: usize, goal_line_gap: f32, inside_box_width: bool) {
+            Self::note(5 + role.min(2));
+            if inside_box_width {
+                Self::note(8);
+            }
+            Self::add(9, goal_line_gap.max(0.0) as u64);
+        }
+
+        /// One tick of a player holding a width assignment. `wide` is
+        /// whether he is actually in the outer fifth of the pitch —
+        /// which is the difference between a plan and a shape.
+        pub fn note_width_tick(wide: bool, overlap: bool, at_byline: bool) {
+            Self::note(0);
+            if wide {
+                Self::note(1);
+            }
+            if overlap {
+                Self::note(2);
+            }
+            if at_byline {
+                Self::note(3);
+            }
+        }
+    }
+
     pub struct OverlapDiag;
 
     impl OverlapDiag {
@@ -3223,6 +3299,7 @@ pub mod mid_run_diag {
 
     pub fn reset() {
         CrossDiag::reset();
+        WideDiag::reset();
         PlanDiag::reset();
         DefenceDiag::reset();
         DuelDiag::reset();

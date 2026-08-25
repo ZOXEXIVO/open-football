@@ -3,7 +3,8 @@ use crate::r#match::forwarders::states::{
     ForwardCrossingState, ForwardDribblingState, ForwardFinishingState, ForwardHeadingState,
     ForwardInterceptingState, ForwardPassingState, ForwardPressingState, ForwardRestingState,
     ForwardReturningState, ForwardRunningInBehindState, ForwardRunningState, ForwardShootingState,
-    ForwardStandingState, ForwardTacklingState, ForwardTakeBallState, ForwardWalkingState,
+    ForwardHoldingWidthState, ForwardStandingState, ForwardTacklingState, ForwardTakeBallState,
+    ForwardWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::Result;
@@ -36,12 +37,13 @@ pub enum ForwardState {
     Intercepting = 16,   // Intercepting the ball,
     Returning = 17,      // Returning the ball
     Resting = 18,        // Recovering stamina when fatigued
+    HoldingWidth = 19,   // Holding a touchline to stretch the defence — see `holding_width`
 }
 
 impl ForwardState {
     /// Every variant in declared order — the single source of truth for
     /// the state universe (transition-graph audit + id-stability snapshot).
-    pub const ALL: [ForwardState; 19] = [
+    pub const ALL: [ForwardState; 20] = [
         ForwardState::Standing,
         ForwardState::Walking,
         ForwardState::Passing,
@@ -61,6 +63,7 @@ impl ForwardState {
         ForwardState::Intercepting,
         ForwardState::Returning,
         ForwardState::Resting,
+        ForwardState::HoldingWidth,
     ];
 }
 
@@ -96,6 +99,9 @@ impl ForwardStrategies {
             }
             ForwardState::Returning => state_processor.process(ForwardReturningState::default()),
             ForwardState::Resting => state_processor.process(ForwardRestingState::default()),
+            ForwardState::HoldingWidth => {
+                state_processor.process(ForwardHoldingWidthState::default())
+            }
         }
     }
 }
@@ -122,6 +128,7 @@ impl Display for ForwardState {
             ForwardState::Intercepting => write!(f, "Intercepting"),
             ForwardState::Returning => write!(f, "Returning"),
             ForwardState::Resting => write!(f, "Resting"),
+            ForwardState::HoldingWidth => write!(f, "Holding Width"),
         }
     }
 }

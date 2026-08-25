@@ -1,4 +1,5 @@
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderGuardingState;
 use crate::r#match::midfielders::states::MidfielderState;
@@ -7,6 +8,7 @@ use crate::r#match::midfielders::states::common::{
     ActivityIntensity, LaneAhead, MidfielderCondition, Opportunity, ShapeStation, TakeOn, U_PER_M,
 };
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
@@ -14,7 +16,6 @@ use crate::r#match::player::strategies::common::players::ops::forward_shot_decis
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::player::strategies::common::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::common::states::MarkEngagement;
-use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, DefensiveDuty, GamePhase, MatchContext, MatchPlayerLite, PassEvaluator,
     PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -1145,6 +1146,48 @@ impl StateProcessingHandler for MidfielderRunningState {
             // the one place raising the bar does not distort the shot mix
             // the way `TARGET_SIZE_WEIGHT` does — it removes the arrival,
             // not the attempt.
+            // THE WIDE AREA, before the carry.
+            //
+            // ⚠ ORDER IS THE WHOLE FIX. This ladder used to sit BELOW the
+            // carry, and the carry returns early — so a man on the
+            // touchline with a runner in the box was asked "is there
+            // grass in front of you?" first, and on a flank there always
+            // is, because the flank is where nobody stands. Measured, the
+            // crossing rung was reached on **0.005% of on-ball ticks**
+            // and the engine struck 2.2 open-play crosses a team a match
+            // against a real 16-18.
+            //
+            // Nothing here reads a role or a team assignment: it is
+            // decided by where the man is standing, so a full-back, a
+            // midfielder or a centre-half who finds himself wide and high
+            // plays it the same way. See `FlankPlay`.
+            if settled && ctx.ball().has_stable_possession() {
+                match FlankPlay::decide(ctx) {
+                    Some(FlankAction::ReleaseOutside { target }) => {
+                        #[cfg(feature = "match-logs")]
+                        crate::mid_run_diag::WideDiag::note(4);
+                        onball_diag::record(Exit::FlankRelease);
+                        return Some(StateChangeResult::with_midfielder_state_and_event(
+                            MidfielderState::Running,
+                            Event::PlayerEvent(PlayerEvent::PassTo(
+                                PassingEventContext::new()
+                                    .with_from_player_id(ctx.player.id)
+                                    .with_to_player_id(target)
+                                    .with_reason("MID_FLANK_RELEASE")
+                                    .build(ctx),
+                            )),
+                        ));
+                    }
+                    Some(FlankAction::Deliver) => {
+                        onball_diag::record(Exit::Cross);
+                        return Some(StateChangeResult::with_midfielder_state(
+                            MidfielderState::Crossing,
+                        ));
+                    }
+                    None => {}
+                }
+            }
+
             const CARRY_ROOM: f32 = 0.55;
             if goal_dist > POINT_BLANK_DISTANCE
                 && goal_dist < field_width * 0.85
@@ -1152,14 +1195,6 @@ impl StateProcessingHandler for MidfielderRunningState {
             {
                 onball_diag::record(Exit::Carry);
                 return None;
-            }
-
-            // CROSSING: Wide midfielder in attacking third with teammates in the box
-            if settled && ctx.ball().has_stable_possession() && self.should_cross(ctx) {
-                onball_diag::record(Exit::Cross);
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Crossing,
-                ));
             }
 
             // SWITCH PLAY: the ball side is crowded and the far flank is
@@ -1320,6 +1355,15 @@ impl StateProcessingHandler for MidfielderRunningState {
 
             // Teammate has the ball — actively support the attack
             if ctx.team().is_control_ball() {
+                // …unless the plan has given him a touchline. First,
+                // because every branch below is written from the ball
+                // outward and would pull him infield.
+                if WideChannel::still_mine(ctx) {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::HoldingWidth,
+                    ));
+                }
+
                 let ball_distance = ctx.ball().distance();
                 let goal_dist = ctx.ball().distance_to_opponent_goal();
                 let field_width = ctx.context.field_size.width as f32;
@@ -1851,19 +1895,27 @@ impl MidfielderRunningState {
     /// footballers do: he takes it across the defender's face, off his
     /// shoulder, looking for the angle that opens.
     fn calculate_simple_ball_movement(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let goal_pos = ctx.player().opponent_goal_position();
         let player_pos = ctx.player.position;
+        // How much of the line ahead survives contact with the man in
+        // front. Fully open lane: straight at the aim. Closed: almost
+        // all of the movement goes across him.
+        let lane = LaneAhead::read(ctx);
+
+        // …and WHERE he is driving. Every carry in this engine aims at
+        // the goal, which from a touchline is a diagonal into the two
+        // centre-backs — the carrier cuts infield into the crowd, gets
+        // shut down, and the flank is never used. A wide carrier being
+        // shown outside drives the byline instead; `FlankPlay` owns the
+        // condition and returns `None` for everybody else, so this is
+        // the only line that changes for a central carrier.
+        let goal_pos = FlankPlay::carry_aim(ctx, lane.openness)
+            .unwrap_or_else(|| ctx.player().opponent_goal_position());
         let to_goal = (goal_pos - player_pos).normalize();
 
         // Smooth sinusoidal lateral sway instead of binary flip
         let phase = (ctx.in_state_time as f32) * std::f32::consts::TAU / 60.0;
         let sway = phase.sin() * 0.2;
         let mut lateral = Vector3::new(-to_goal.y * sway, to_goal.x * sway, 0.0);
-
-        // How much of the line to goal survives contact with the man in
-        // front. Fully open lane: straight at goal. Closed: almost all
-        // of the movement goes across him.
-        let lane = LaneAhead::read(ctx);
         let mut forward = 1.0f32;
         if let Some(nearest_id) = lane.nearest_id {
             // 0.85, not 1.35: letting the forward component go NEGATIVE
@@ -2366,39 +2418,6 @@ impl MidfielderRunningState {
 
         // If 3 or more players nearby (congestion), need to clear
         total_nearby >= 3
-    }
-
-    /// Check if wide midfielder should deliver a cross into the box
-    fn should_cross(&self, ctx: &StateProcessingContext) -> bool {
-        let field_height = ctx.context.field_size.height as f32;
-        let y = ctx.player.position.y;
-        let wide_margin = field_height * 0.2;
-
-        // Must be in a wide channel (top or bottom 20%)
-        let is_wide = y < wide_margin || y > field_height - wide_margin;
-        if !is_wide {
-            return false;
-        }
-
-        // Must be in attacking third
-        let goal_dist = ctx.ball().distance_to_opponent_goal();
-        let field_width = ctx.context.field_size.width as f32;
-        if goal_dist > field_width * 0.35 {
-            return false;
-        }
-
-        // Must have at least 1 teammate within 150 units of opponent goal
-        let goal_pos = ctx.player().opponent_goal_position();
-        let teammates_in_box = ctx.players().teammates().nearby_at(goal_pos, 150.0).count();
-        if teammates_in_box < 1 {
-            return false;
-        }
-
-        // Crossing skill scales the willingness smoothly (sigmoid pivot
-        // at 8/20). A bad crosser still attempts a deep cross
-        // occasionally; an elite one almost always does.
-        let p = SkillCurve::new(ctx.player.skills.technical.crossing, 8.0, 0.6).probability();
-        ctx.context.rng.unit_f32() < p
     }
 
     /// Find a safe backward/lateral pass target for tempo control.

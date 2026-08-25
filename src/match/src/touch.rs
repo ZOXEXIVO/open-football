@@ -55,6 +55,15 @@ pub struct TouchDevice {
     seen: bool,
 }
 
+impl TouchDevice {
+    /// Is the flight furniture on the canvas? Anything that has to decide
+    /// whether a pointer landed on the replay or on a control has to know,
+    /// because two of those controls are not drawn until a finger arrives.
+    pub fn seen(&self) -> bool {
+        self.seen
+    }
+}
+
 /// The fingers currently on the open pitch, and where each was last frame.
 ///
 /// Positions are tracked here rather than read from [`Touch::delta`], which
@@ -120,7 +129,7 @@ impl Layout {
         )
     }
 
-    /// Did this finger land on the viewer's own furniture rather than on the
+    /// Did this pointer land on the viewer's own furniture rather than on the
     /// open pitch?
     ///
     /// The camera gestures need this because touch has no second button to
@@ -132,11 +141,18 @@ impl Layout {
     /// The bar is a band across the bottom rather than a queried node, which is
     /// exactly what it is: [`Timeline::spawn`] gives it the full width and
     /// exactly [`Timeline::BAR_HEIGHT`] at the foot of a full-height column.
-    fn furniture(&self, at: Vec2) -> bool {
-        at.y >= self.size.y - Timeline::BAR_HEIGHT
-            || at.distance(self.stick()) <= Self::RADIUS
+    ///
+    /// `pad` says whether the flight furniture is on the canvas at all. It is
+    /// hidden until a finger has been seen (see [`FlightPad::refresh`]), and a
+    /// mouse — which asks this same question before picking a player out of the
+    /// crowd — must not be blocked by two controls that are not being drawn.
+    fn furniture(&self, at: Vec2, pad: bool) -> bool {
+        if at.y >= self.size.y - Timeline::BAR_HEIGHT {
+            return true;
+        }
+        pad && (at.distance(self.stick()) <= Self::RADIUS
             || self.lift(true).contains(at)
-            || self.lift(false).contains(at)
+            || self.lift(false).contains(at))
     }
 }
 
@@ -159,6 +175,18 @@ impl TouchControls {
         if !device.seen && touches.any_just_pressed() {
             device.seen = true;
         }
+    }
+
+    /// Did a pointer land on the viewer's own controls rather than on the open
+    /// pitch?
+    ///
+    /// Shared with [`crate::focus`], which asks the same question of a mouse
+    /// before it reads a click as "follow that player". One description of
+    /// where the furniture is rather than two — a second copy is a second set
+    /// of numbers waiting to drift, which is the note the one-finger drag
+    /// already carries.
+    pub fn on_furniture(window: &Window, at: Vec2, pad: bool) -> bool {
+        Layout::of(window).furniture(at, pad)
     }
 
     /// One finger turns the camera; two work the lens.
@@ -202,7 +230,11 @@ impl TouchControls {
         landed.sort_by_key(|touch| touch.id());
         for touch in landed {
             let known = gesture.fingers.iter().any(|(id, _)| *id == touch.id());
-            if !known && !layout.furniture(touch.start_position()) {
+            // The pad is always cut out here: a finger on the glass is what
+            // turns it on, and `TouchControls::watch` has already run this
+            // frame — so by the time a touch reaches these gestures the stick
+            // is on the canvas.
+            if !known && !layout.furniture(touch.start_position(), true) {
                 gesture.fingers.push((touch.id(), touch.position()));
             }
         }

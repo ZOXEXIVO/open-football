@@ -1,9 +1,12 @@
 use crate::PlayerPositionType;
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay};
+use crate::r#match::midfielders::states::common::LaneAhead;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
@@ -1049,6 +1052,40 @@ impl StateProcessingHandler for ForwardRunningState {
             // Evaluate best action based on game context
             // Require minimum carry time to prevent instant pass-after-receive
             let ownership_ticks = ctx.tick_context.ball.ownership_duration;
+
+            // THE WIDE AREA, above the generic pass.
+            //
+            // A wide forward in the final third is not looking for
+            // "somebody better placed" — he is looking for the box, and
+            // the generic evaluator has no idea that is what the flank
+            // is for. Decided purely on where he is standing, so it
+            // covers a striker who has drifted wide as readily as a
+            // nominal winger. See `FlankPlay`.
+            if ownership_ticks > 8 {
+                match FlankPlay::decide(ctx) {
+                    Some(FlankAction::ReleaseOutside { target }) => {
+                        #[cfg(feature = "match-logs")]
+                        crate::mid_run_diag::WideDiag::note(4);
+                        return Some(StateChangeResult::with_forward_state_and_event(
+                            ForwardState::Running,
+                            Event::PlayerEvent(PlayerEvent::PassTo(
+                                PassingEventContext::new()
+                                    .with_from_player_id(ctx.player.id)
+                                    .with_to_player_id(target)
+                                    .with_reason("FWD_FLANK_RELEASE")
+                                    .build(ctx),
+                            )),
+                        ));
+                    }
+                    Some(FlankAction::Deliver) => {
+                        return Some(StateChangeResult::with_forward_state(
+                            ForwardState::Crossing,
+                        ));
+                    }
+                    None => {}
+                }
+            }
+
             if ownership_ticks > 12 && self.should_pass(ctx) {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
@@ -1056,13 +1093,6 @@ impl StateProcessingHandler for ForwardRunningState {
             if ownership_ticks > 20 && self.should_dribble(ctx) {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Dribbling,
-                ));
-            }
-
-            // Cross from wide position in attacking third
-            if self.should_cross(ctx) {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Crossing,
                 ));
             }
 
@@ -1152,6 +1182,16 @@ impl StateProcessingHandler for ForwardRunningState {
 
             // Priority 3: Create space when team has possession
             if ctx.team().is_control_ball() {
+                // …but a wide forward has a touchline to hold, and it
+                // outranks looking for a gap: the gap he is creating by
+                // standing there is for somebody else. See
+                // `holding_width`.
+                if WideChannel::still_mine(ctx) {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::HoldingWidth,
+                    ));
+                }
+
                 if self.should_create_space(ctx) {
                     return Some(StateChangeResult::with_forward_state(
                         ForwardState::CreatingSpace,
@@ -2013,6 +2053,26 @@ impl ForwardRunningState {
         // reads as on the pitch.
         const CARRY_DEADBAND: f32 = 6.0; // 0.75 m
 
+        // The byline, ahead of everything else a wide carrier might do.
+        //
+        // `find_optimal_attacking_path` and `BallCarry::target` both aim
+        // at goal, which from a touchline is a diagonal into the centre-
+        // backs. Substituting the aim — not the steering — is what turns
+        // "he cut inside and lost it" into "he got to the byline", and
+        // `FlankPlay` returns `None` for every carrier who is not
+        // actually wide, so a central striker's carry is untouched.
+        let openness = LaneAhead::read(ctx).openness;
+        if let Some(byline) = FlankPlay::carry_aim(ctx, openness) {
+            if (byline - ctx.player.position).magnitude() >= CARRY_DEADBAND {
+                return SteeringBehavior::Arrive {
+                    target: byline,
+                    slowing_distance: 20.0,
+                }
+                .calculate(ctx.player)
+                .velocity;
+            }
+        }
+
         if let Some(target_position) = self.find_optimal_attacking_path(ctx) {
             if (target_position - ctx.player.position).magnitude() < CARRY_DEADBAND {
                 return self.settle_over_the_ball(ctx);
@@ -2497,30 +2557,6 @@ impl ForwardRunningState {
         markers >= 2 || (markers >= 1 && very_close > 0)
     }
 
-    fn should_cross(&self, ctx: &StateProcessingContext) -> bool {
-        let field_height = ctx.context.field_size.height as f32;
-        let y = ctx.player.position.y;
-        let wide_margin = field_height * 0.2;
-
-        // Must be in a wide channel
-        let is_wide = y < wide_margin || y > field_height - wide_margin;
-        if !is_wide {
-            return false;
-        }
-
-        // Must be in attacking third
-        if !self.is_in_good_attacking_position(ctx) {
-            return false;
-        }
-
-        // Must have teammates in the box to cross to
-        let goal_pos = ctx.player().opponent_goal_position();
-        let teammates_in_box = ctx.players().teammates().nearby_at(goal_pos, 120.0).count();
-
-        let crossing = ctx.player.skills.technical.crossing / 20.0;
-
-        teammates_in_box >= 1 && crossing > 0.4
-    }
 
     fn should_dribble(&self, ctx: &StateProcessingContext) -> bool {
         let dribbling_raw = ctx.player.skills.technical.dribbling;

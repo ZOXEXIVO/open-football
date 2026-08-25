@@ -51,6 +51,9 @@
 
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::engine::teamplay::tactical::inputs::TeamSkillAggregates;
+use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, StateProcessingContext};
@@ -347,6 +350,30 @@ impl ShapeDiscipline {
         // A pass is on its way to him — he must go and meet it wherever
         // it has been played, which is by design AHEAD of where he is.
         if ctx.tick_context.ball.pass_target == Some(ctx.player.id) {
+            return true;
+        }
+
+        // He is holding a touchline, or running beyond the man who is.
+        //
+        // The general rule for an exemption is "something else is
+        // definitely this player's job", and here it is stronger than
+        // usual: these three states do not derive a destination from ball
+        // geometry at all. They steer at [`WideChannel::target`], which is
+        // itself built from `my_anchor` — so the tether would be
+        // correcting a target that already came out of the team plan.
+        //
+        // It would also be correcting it in the wrong direction. The
+        // touchline hold IS the anchor and needs no help; the byline run
+        // deliberately leaves it, and measured at a mean 11.8 m of lag
+        // that puts the recall at ~49% of the runner's velocity, aimed
+        // back up the pitch. The one run this whole layer exists to
+        // produce was being half-cancelled by the layer above it.
+        if matches!(
+            ctx.player.state,
+            PlayerState::Midfielder(MidfielderState::HoldingWidth)
+                | PlayerState::Forward(ForwardState::HoldingWidth)
+                | PlayerState::Defender(DefenderState::Overlapping)
+        ) {
             return true;
         }
 

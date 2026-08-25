@@ -83,6 +83,30 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             }
         });
 
+        // **And the men beside the pitch.**
+        //
+        // Fourteen substitutes standing in front of two dugouts, plus
+        // whoever has already been taken off and is still walking back to
+        // one. They are recorded from their [`TouchlineStand`] rather than
+        // from `position`, which for all of them is the off-pitch sentinel —
+        // see that type for why the two coordinates have to stay apart.
+        //
+        // Walked here, on the recording's own cadence, rather than in the
+        // tick loop: these bodies exist only so the replay has something to
+        // draw, so a match nobody is recording pays nothing for them at all.
+        //
+        // Cost: a stationary man clears the dedup on the heartbeat alone, so
+        // the row costs one sample per player per `HEARTBEAT_INTERVAL_MS`.
+        // Under `RecordingScope::Goals` — what the game itself records —
+        // only the seconds inside a clip survive, which is where a
+        // substitution is worth watching anyway.
+        field.settle_touchline(Self::POSITION_RECORD_INTERVAL_MS);
+        for player in field.off_pitch() {
+            if let Some(stand) = player.touchline {
+                match_data.add_player_positions(player.id, timestamp, stand.at);
+            }
+        }
+
         match_data.add_ball_positions(timestamp, field.ball.position);
     }
 

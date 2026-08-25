@@ -11,8 +11,10 @@ mod aftermath;
 mod body;
 mod bringup;
 mod camera;
+mod changeover;
 mod config;
 mod field;
+mod focus;
 mod kit;
 mod loader;
 mod net;
@@ -33,7 +35,9 @@ use crate::actors::{Actors, BallState};
 use crate::aftermath::Aftermath;
 use crate::bringup::Bringup;
 use crate::camera::{CameraFlight, CameraOrbit, CameraZoom, TvCamera};
+use crate::changeover::ChangeoverShot;
 use crate::config::ViewerConfig;
+use crate::focus::{CameraSubject, FocusRing};
 use crate::loader::ChunkLoader;
 use crate::net::Netting;
 use crate::perf::FrameCost;
@@ -158,6 +162,15 @@ impl MatchViewer {
             // registration was missed here.
             .init_resource::<CameraOrbit>()
             .init_resource::<CameraFlight>()
+            // Which of the twenty-two the camera has been asked to follow.
+            // Read by `TvCamera::follow_play`, by the ring on the grass and by
+            // the reset chip, so it exists from the first frame whether or not
+            // anybody ever clicks a player. See `focus`.
+            .init_resource::<CameraSubject>()
+            // Filled at startup from the config's substitutions; read by
+            // `TvCamera::follow_play` on every frame, so it exists from the
+            // first one whether or not the match had a change in it.
+            .init_resource::<ChangeoverShot>()
             // The touch half of the same controls. `TouchDrive` is read by
             // `CameraFlight::steer` on every frame whether or not anything has
             // ever been touched, so it is registered unconditionally — the
@@ -178,6 +191,16 @@ impl MatchViewer {
                     // `stage`.
                     Stage::spawn,
                     Actors::spawn,
+                    // Hidden until a player is picked. Built here rather than
+                    // then for the reason `FlightPad::spawn` is: a marker
+                    // assembled on the frame it is first wanted is a mesh and
+                    // a material queued in the middle of a click.
+                    FocusRing::spawn,
+                    // Cuts the config's substitutions into one shot per
+                    // stoppage. Startup rather than per-frame because the
+                    // answer cannot change: the recording is fixed by the
+                    // time the page hands it over.
+                    ChangeoverShot::arm,
                     Timeline::spawn,
                     ChunkLoader::bootstrap,
                     // Hidden until a finger arrives — see `FlightPad::refresh`.
@@ -248,6 +271,13 @@ impl MatchViewer {
                         // Ahead of every camera system below, so a click on
                         // the reset chip lands on the frame it happened.
                         Timeline::handle_camera_reset,
+                        // The click on the pitch itself, and deliberately
+                        // BEFORE the playhead moves: what the pointer was
+                        // aimed at is the frame that was on the screen, and
+                        // that frame was drawn from last update's positions.
+                        // Testing against this update's would ask the viewer
+                        // to lead a running player. See `focus`.
+                        CameraSubject::handle_pick,
                         Playback::handle_keyboard,
                         Playback::advance,
                         Actors::follow_playhead,
@@ -271,6 +301,19 @@ impl MatchViewer {
                         // the body it belongs to has just been put — including
                         // how far off the ground.
                         Actors::cast_shadows,
+                        // After the bodies have moved and before anything
+                        // reads the subject: this is what copies the followed
+                        // player's position out for the camera and walks the
+                        // shot in and out of the close-up.
+                        CameraSubject::settle,
+                        // Beside it, off the same facts and for the same
+                        // reason: the substitution shot aims at where the men
+                        // coming on have just been put, and `follow_play`
+                        // below reads what it writes.
+                        ChangeoverShot::settle,
+                        // Straight after it, off the same two facts — where he
+                        // is standing and how far the shot has closed.
+                        FocusRing::follow,
                         // After `follow_playhead`, which is what moves the
                         // ball: the netting is deformed by wherever the ball
                         // has just been put, so a frame's lag here would show

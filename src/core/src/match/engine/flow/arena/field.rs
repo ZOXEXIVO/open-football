@@ -1,6 +1,7 @@
 use crate::Tactics;
 use crate::club::staff::CoachMatchSnapshot;
 use crate::r#match::ball::Ball;
+use crate::r#match::engine::flow::touchline::{Bench, SubstitutionBreak, TouchlineStand};
 use crate::r#match::{
     FieldSquad, MatchFieldSize, MatchPlayer, MatchSquad, POSITION_POSITIONING, PlayerSide,
     PositionType, TransitionSource,
@@ -76,6 +77,16 @@ pub struct MatchField {
     pub ball: Ball,
     pub players: Vec<MatchPlayer>,
     pub substitutes: Vec<MatchPlayer>,
+    /// Men who have already been taken off, kept only so the replay can go
+    /// on drawing them on the touchline.
+    ///
+    /// **Nothing in the engine may scan this.** A substituted player is not a
+    /// player any more: he cannot be picked to come back on
+    /// (`find_best_substitute` reads `substitutes`, and this is precisely why
+    /// he is not put back there), he is not in any proximity table, and he
+    /// has no state to process. See
+    /// [`touchline`](super::super::touchline) for what he is for.
+    pub departed: Vec<MatchPlayer>,
 
     pub home_team_id: u32,
     pub away_team_id: u32,
@@ -125,14 +136,16 @@ impl MatchField {
         let home_coach_snapshot = left_team_squad.coach_snapshot.clone();
         let away_coach_snapshot = right_team_squad.coach_snapshot.clone();
 
+        let size = MatchFieldSize::new(width, height);
         let (players_on_field, substitutes) =
-            setup_player_on_field(left_team_squad, right_team_squad);
+            setup_player_on_field(left_team_squad, right_team_squad, &size, home_team_id);
 
         let field = MatchField {
-            size: MatchFieldSize::new(width, height),
+            size,
             ball: Ball::with_coord(width as f32, height as f32),
             players: players_on_field,
             substitutes,
+            departed: Vec::new(),
             home_team_id,
             away_team_id,
             left_side_players: Some(left_squad),
@@ -359,7 +372,30 @@ impl MatchField {
         }
     }
 
-    pub fn substitute_player(&mut self, player_out_id: u32, player_in_id: u32) -> bool {
+    /// Swap `player_out_id` off the pitch for `player_in_id`.
+    ///
+    /// `waits_at` asks for the change to be PLAYED OUT rather than made in a
+    /// frame: the man coming on is stood on that point — his place at the
+    /// fourth official's shoulder — for
+    /// [`SubstitutionBreak`](super::super::touchline::SubstitutionBreak) to
+    /// walk to his slot, and the man coming off keeps his last on-pitch
+    /// coordinate to walk off from. `None` places him on the slot outright,
+    /// which is what every caller wanted before the walk existed and what the
+    /// unit fixtures still do.
+    ///
+    /// The caller owns the gate rather than this function working it out,
+    /// because it depends on how many of the same side are already standing
+    /// there and only the window knows that.
+    ///
+    /// Either way the ROSTER changes here and now — see the module note on
+    /// [`changeover`](super::super::touchline::changeover) for why deferring
+    /// that half is a trap.
+    pub fn substitute_player(
+        &mut self,
+        player_out_id: u32,
+        player_in_id: u32,
+        waits_at: Option<Vector3<f32>>,
+    ) -> bool {
         // Find the outgoing player's position info
         let out_info = match self.players.iter().find(|p| p.id == player_out_id) {
             Some(p) => (
@@ -385,38 +421,116 @@ impl MatchField {
         player_in.tactical_position.current_position = position;
         player_in.tactical_position.regenerate_waypoints(side);
         player_in.start_position = start_pos;
-        // A substitute coming on IS placed — he walks on from the
-        // touchline in reality, and the engine has no touchline to walk
-        // him from. Counted so the rest of the table can be read against
-        // something known to be legitimate.
-        #[cfg(feature = "match-logs")]
-        {
-            use crate::r#match::engine::ball::ball::teleport as tc;
-            tc::PlayerTeleportCensus::note_firing(tc::PSITE_SUBSTITUTION);
-            tc::PlayerTeleportCensus::note(tc::PSITE_SUBSTITUTION, player_in.position, start_pos);
-        }
-        player_in.position = start_pos;
+        // **He walks on now.** This used to BE the placement — the sub was
+        // written onto his slot from the off-pitch sentinel, 100% of the
+        // time, and the census booked it as legitimate because the engine had
+        // no touchline to walk him from. It has one now, so he starts from
+        // the spot in the row he has been standing on all match and the
+        // window carries him in; what is left when the referee waves play on
+        // is booked by `SubstitutionBreak::land`, and should be nothing.
+        //
+        // The instant path keeps its own note, because it is still a
+        // whole-pitch write and still wants counting.
+        let is_home = player_in.team_id == self.home_team_id;
+        let placed = if let Some(gate) = waits_at {
+            gate
+        } else {
+            #[cfg(feature = "match-logs")]
+            {
+                use crate::r#match::engine::ball::ball::teleport as tc;
+                tc::PlayerTeleportCensus::note_firing(tc::PSITE_SUBSTITUTION);
+                tc::PlayerTeleportCensus::note(
+                    tc::PSITE_SUBSTITUTION,
+                    player_in.position,
+                    start_pos,
+                );
+            }
+            start_pos
+        };
+        player_in.position = placed;
+        // He is one of the eleven now, so he is drawn from his own coordinate
+        // and never from a touchline stand. Substitutes do not have one: a row
+        // of men standing out here for ninety minutes is scenery, and only the
+        // man in the middle of a change is worth drawing beside the pitch.
+        player_in.touchline = None;
         player_in.set_default_state(TransitionSource::Substitution);
 
         // Replace the outgoing player in the field
         if let Some(out_slot) = self.players.iter_mut().find(|p| p.id == player_out_id) {
-            *out_slot = player_in;
+            let mut player_out = std::mem::replace(out_slot, player_in);
 
             // Clear any ball references to the substituted-out player
             self.ball.clear_player_reference(player_out_id);
+
+            // …and he keeps walking. He is out of the roster and out of every
+            // scan in the engine from this line on, but he is still a man on
+            // the touchline as far as the recording is concerned, and the
+            // alternative is a body that vanishes wherever it was standing.
+            //
+            // His last on-pitch coordinate is where the walk starts and his
+            // own technical area is where it ends — after which he stops
+            // being drawn altogether (`settle_touchline` drops him), because
+            // a lone figure standing beside an empty bench for the rest of
+            // the match is the scenery this feature deliberately does not
+            // have. His `position` goes to the same sentinel every off-pitch
+            // player is parked at, because from here he is not a player.
+            if waits_at.is_some() {
+                let dugout = Bench::dugout(&self.size, is_home);
+                player_out.touchline = Some(TouchlineStand::walking(player_out.position, dugout));
+            }
+            player_out.position = Vector3::new(-500.0, -500.0, 0.0);
+            player_out.velocity = Vector3::zeros();
+            self.departed.push(player_out);
 
             true
         } else {
             false
         }
     }
+
+    /// One recorder's-worth of walking for everybody off the pitch.
+    ///
+    /// The men in the row have nowhere to go and cost a comparison each; the
+    /// one or two who have just come off are still on their way to it. It is
+    /// driven from `write_match_positions` rather than from the tick loop
+    /// on purpose: these bodies exist only so the replay has something to
+    /// draw, so the recording's own cadence is the only clock they need, and
+    /// a match nobody is recording pays nothing at all for them.
+    ///
+    /// A man who reaches his technical area is dropped from
+    /// [`Self::departed`] outright: he has gone to the bench, the bench is
+    /// not drawn, and a figure standing alone in the run-off for the rest of
+    /// the match is exactly the scenery this is here to avoid.
+    pub fn settle_touchline(&mut self, elapsed_ms: u64) {
+        let distance = SubstitutionBreak::HOME * elapsed_ms as f32
+            / crate::r#match::MATCH_TIME_INCREMENT_MS as f32;
+        for player in self.departed.iter_mut() {
+            if let Some(stand) = player.touchline.as_mut() {
+                stand.settle(distance);
+            }
+        }
+        self.departed
+            .retain(|p| p.touchline.is_some_and(|stand| !stand.arrived()));
+    }
+
+    /// Everybody the recorder should draw beside the pitch.
+    ///
+    /// Only the men in the middle of a change — the one who has just come off
+    /// and is still walking. A substitute who is not coming on has no
+    /// touchline stand and is not drawn: see [`TouchlineStand`].
+    pub fn off_pitch(&self) -> impl Iterator<Item = &MatchPlayer> {
+        self.departed.iter()
+    }
 }
 
 fn setup_player_on_field(
     left_team_squad: MatchSquad,
     right_team_squad: MatchSquad,
+    size: &MatchFieldSize,
+    home_team_id: u32,
 ) -> (Vec<MatchPlayer>, Vec<MatchPlayer>) {
     let setup_squad = |squad: MatchSquad, side: PlayerSide| {
+        let is_home = squad.team_id == home_team_id;
         let mut players = Vec::with_capacity(squad.main_squad.len());
         let mut subs = Vec::with_capacity(squad.substitutes.len());
 
@@ -431,7 +545,7 @@ fn setup_player_on_field(
             }
         }
 
-        for mut player in squad.substitutes {
+        for (index, mut player) in squad.substitutes.into_iter().enumerate() {
             player.side = Some(side);
             player.tactical_position.regenerate_waypoints(Some(side));
             player.rebuild_waypoint_cache();
@@ -444,6 +558,10 @@ fn setup_player_on_field(
             // corner: the loose-ball "am I closest" veto could pick a
             // bench player and nobody would chase a ball rolling there.
             // Far off-pitch, they can never win a distance comparison.
+            //
+            // And they get no touchline stand either, so the recorder never
+            // draws them: a substitute becomes visible when he is brought on
+            // and not a moment before. See [`TouchlineStand`].
             player.position = Vector3::new(-500.0, -500.0, 0.0);
             subs.push(player);
         }

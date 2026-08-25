@@ -72,6 +72,22 @@
                             </svg>
                             {{ i18n.t("match_hint_camera") }}
                         </span>
+                        {# The same mouse a third time with the other button lit,
+                           so the three of them read as one control described
+                           three ways. Next to the camera hint because it IS a
+                           camera control — it points the broadcast rig at one
+                           footballer instead of at the ball, and the ring drawn
+                           under him on the grass is the only other thing that
+                           says so. #}
+                        <span class="match-hint">
+                            <svg class="match-hint-icon" viewBox="0 0 14 20" aria-hidden="true" focusable="false">
+                                <path class="mh-live" d="M5.4 1.22A6 6 0 0 0 1 7v1.6H5.4Z"/>
+                                <rect class="mh-shell" x="1" y="1" width="12" height="18" rx="6"/>
+                                <path class="mh-shell" d="M1.1 8.6H12.9"/>
+                                <rect class="mh-shell" x="5.9" y="2.6" width="2.2" height="4.2" rx="1.1"/>
+                            </svg>
+                            {{ i18n.t("match_hint_follow") }}
+                        </span>
                         <span class="match-hint">
                             <svg class="match-hint-icon match-hint-icon--keys" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
                                 <rect class="mh-shell" x="7.2" y="3.95" width="5.6" height="5.6" rx="1.2"/>
@@ -111,6 +127,18 @@
                                 <circle class="mh-live" cx="7.8" cy="12.2" r="1.9"/>
                             </svg>
                             {{ i18n.t("match_hint_touch_zoom") }}
+                        </span>
+                        {# The tap, drawn as what it produces: the ring the
+                           viewer paints on the grass under the player being
+                           followed, with the thumb in the middle of it. The
+                           legend and the marker are the same shape, so there is
+                           nothing to match up. #}
+                        <span class="match-hint">
+                            <svg class="match-hint-icon match-hint-icon--wide" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+                                <circle class="mh-shell" cx="10" cy="10" r="6.6"/>
+                                <circle class="mh-live" cx="10" cy="10" r="2.8"/>
+                            </svg>
+                            {{ i18n.t("match_hint_touch_follow") }}
                         </span>
                         <span class="match-hint">
                             <svg class="match-hint-icon match-hint-icon--wide" viewBox="0 0 20 20" aria-hidden="true" focusable="false">

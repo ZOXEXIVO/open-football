@@ -1012,6 +1012,39 @@ impl PassEvaluator {
             }
         }
 
+        // ── …AND THE WIDTH ───────────────────────────────────────────
+        //
+        // Scored outside the `plan.active` block on purpose: width is
+        // held from the first pass out of defence, in every phase we
+        // have the ball, while the box slots need a phase that commits
+        // bodies forward. See `WidePlan::active`.
+        //
+        // A man on a touchline is worth finding for a reason none of the
+        // static geometry above can see. He is not closer to goal — the
+        // forward-value term will usually mark him DOWN — and he is not
+        // in more space by accident; he is in more space because the
+        // whole point of standing there is that nobody else is. The
+        // switch is worth more than the hold because moving the ball
+        // across the pitch is what makes width mean anything: hold width
+        // and never use it and you have simply removed two players from
+        // the game.
+        let wide = team_ops.wide_plan();
+        if let Some(flank) = wide.flank_of(receiver.id) {
+            if flank == wide.ball_flank {
+                tactical_value += 0.12;
+            } else {
+                // The far side. `switch_total` already prices how much
+                // lateral distance the ball covers, so this is credited
+                // against it rather than flat — a switch to a man 40 m
+                // away is a switch, one to a man 8 m away is a pass.
+                tactical_value += 0.10 + switch_total * 0.20;
+            }
+        } else if wide.is_overlap_runner(receiver.id) {
+            // He is beyond the ball and outside the full-back by
+            // construction. This is the pass the run was made for.
+            tactical_value += 0.16;
+        }
+
         // Allow negative tactical values for backward passes
         tactical_value.clamp(-0.5, 1.8)
     }

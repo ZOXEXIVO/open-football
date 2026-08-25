@@ -535,7 +535,10 @@ impl Sward {
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::RENDER_WORLD,
         )
-        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, std::mem::take(&mut self.positions))
+        .with_inserted_attribute(
+            Mesh::ATTRIBUTE_POSITION,
+            std::mem::take(&mut self.positions),
+        )
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, std::mem::take(&mut self.normals))
         .with_inserted_attribute(Mesh::ATTRIBUTE_TANGENT, std::mem::take(&mut self.tangents))
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, std::mem::take(&mut self.uvs))
@@ -1174,11 +1177,10 @@ impl Pitch {
             let up = riser * row as f32;
             let back = TREAD * row as f32;
             terrace
-                .merge(&Mesh::from(Cuboid::new(
-                    length,
-                    riser * 1.9,
-                    TREAD * 0.96,
-                )).translated_by(Vec3::new(0.0, up, back)))
+                .merge(
+                    &Mesh::from(Cuboid::new(length, riser * 1.9, TREAD * 0.96))
+                        .translated_by(Vec3::new(0.0, up, back)),
+                )
                 .expect("every row is the same cuboid");
         }
         let terrace = meshes.add(terrace);
@@ -1309,10 +1311,7 @@ mod tests {
         ));
         let centre = Sward::wear(Vec2::ZERO);
         // A corner is the one part of a pitch nobody spends a match on.
-        let corner = Sward::wear(Vec2::new(
-            Field::HALF_LENGTH - 1.0,
-            Field::HALF_WIDTH - 1.0,
-        ));
+        let corner = Sward::wear(Vec2::new(Field::HALF_LENGTH - 1.0, Field::HALF_WIDTH - 1.0));
 
         assert!(goalmouth > 0.9, "the goalmouth goes bare: {goalmouth}");
         assert!(spot > 0.2, "the penalty spot is stood on: {spot}");

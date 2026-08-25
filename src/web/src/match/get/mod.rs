@@ -103,6 +103,7 @@ struct ViewerConfigJson {
     players: Vec<PlayerJson>,
     goals: Vec<GoalEventJson>,
     chances: Vec<ChanceEventJson>,
+    substitutions: Vec<SubstitutionEventJson>,
     labels: ViewerLabelsJson,
 }
 
@@ -168,6 +169,22 @@ struct GoalEventJson {
 struct ChanceEventJson {
     player_id: u32,
     time: u64,
+}
+
+/// A change, with a clip of its own in the recording: the engine stops the
+/// match for it and plays the two walks out, so the timeline marks it the way
+/// it marks a goal and there is something behind the mark to watch.
+#[derive(Serialize)]
+struct SubstitutionEventJson {
+    player_in_id: u32,
+    /// And the man he replaced. The replay opens the change by looking at the
+    /// back of him, standing where he was, so the crowd can read who is coming
+    /// off — see `ChangeoverShot::PORTRAIT_MS`.
+    player_out_id: u32,
+    time: u64,
+    /// How long the match stopped for while it was made. The replay holds its
+    /// pitch-side camera on the change for exactly this long.
+    break_ms: u64,
 }
 
 #[derive(Serialize)]
@@ -360,6 +377,17 @@ pub async fn match_get_action(
         })
         .collect();
 
+    let viewer_substitutions: Vec<SubstitutionEventJson> = result_details
+        .substitutions
+        .iter()
+        .map(|change| SubstitutionEventJson {
+            player_in_id: change.player_in_id,
+            player_out_id: change.player_out_id,
+            time: change.match_time_ms,
+            break_ms: change.break_ms,
+        })
+        .collect();
+
     let mut viewer_players: Vec<PlayerJson> = Vec::new();
 
     // Assign squad numbers (1-based) per team when shirt_number is not set
@@ -536,6 +564,7 @@ pub async fn match_get_action(
         players: viewer_players,
         goals: viewer_goals,
         chances: viewer_chances,
+        substitutions: viewer_substitutions,
         labels: ViewerLabelsJson {
             first_half: i18n.t("first_half").to_string(),
             second_half: i18n.t("second_half").to_string(),

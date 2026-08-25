@@ -22,6 +22,12 @@ pub struct ViewerConfig {
     /// chances were recorded, which reads as a match of goals and grey.
     #[serde(default)]
     pub chances: Vec<ChanceInfo>,
+    /// Every change either side made, each with a clip of its own in the
+    /// recording — the twelve seconds the match stops for while one man walks
+    /// off and another walks on. Absent on a document written before
+    /// substitutions were played out, which reads as a match nobody changed.
+    #[serde(default)]
+    pub substitutions: Vec<SubstitutionInfo>,
     /// Display strings, already translated by the page. Keeping them on this
     /// side of the boundary is what lets the viewer stay free of i18n.
     #[serde(default)]
@@ -81,6 +87,16 @@ impl ViewerConfig {
         self.players
             .iter()
             .find(|p| p.id == chance.player_id)
+            .is_some_and(|p| p.is_home)
+    }
+
+    /// True when it was the home side that made the change. Read off the man
+    /// coming ON — he is the one the document is guaranteed to carry, because
+    /// a substitute who never played is still in the squad list.
+    pub fn substitution_belongs_to_home(&self, change: &SubstitutionInfo) -> bool {
+        self.players
+            .iter()
+            .find(|p| p.id == change.player_in_id)
             .is_some_and(|p| p.is_home)
     }
 }
@@ -164,4 +180,30 @@ pub struct GoalInfo {
 pub struct ChanceInfo {
     pub player_id: u32,
     pub time: f64,
+}
+
+#[derive(Deserialize)]
+pub struct SubstitutionInfo {
+    pub player_in_id: u32,
+    /// And the man he replaced.
+    ///
+    /// [`ChangeoverShot`](crate::changeover::ChangeoverShot) opens the change
+    /// by standing behind him for a second, where he is still standing on the
+    /// pitch, so the name across his shoulders can be read before he leaves.
+    /// Zero on a document written before the shot had a first beat, which
+    /// reads as "there is nobody to look at" and starts at the touchline.
+    #[serde(default)]
+    pub player_out_id: u32,
+    pub time: f64,
+    /// How long the match stopped for while this change was played out, in
+    /// ms — the engine's window closes on the tick the last man reaches his
+    /// slot, so it is nine or ten seconds for an ordinary change and nearly
+    /// twice that when somebody has the width of the pitch to cross.
+    ///
+    /// [`ChangeoverShot`](crate::changeover::ChangeoverShot) holds its
+    /// pitch-side camera for exactly this long. Zero on a document written
+    /// before the change was played out at all, which the shot reads as "use
+    /// your own constant".
+    #[serde(default)]
+    pub break_ms: u64,
 }

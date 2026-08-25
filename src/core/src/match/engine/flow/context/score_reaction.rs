@@ -202,6 +202,38 @@ impl MatchContext {
         1.0 - (1.0 - progress) * Self::score_reaction_gain()
     }
 
+    /// Diagnostic switch: with `OF_SUB_WALK_OFF` set, a substitution goes
+    /// back to being the instant body swap it was before August 2026 — no
+    /// waiting for the ball to go dead, no
+    /// [`SubstitutionBreak`](super::super::touchline::SubstitutionBreak), the man
+    /// coming on written straight onto his slot, and nothing marked on the
+    /// timeline.
+    ///
+    /// It is the A/B control for the one thing the walk costs that nothing
+    /// else in the engine can give back: **twelve seconds of match clock per
+    /// STOPPAGE that a change is made at** — two to four a match once
+    /// simultaneous changes are counted once, so 24-48 s, or 0.4-0.9% of the
+    /// football in it. Whether that shows up in goals, shots or saves is a
+    /// question about the whole population and cannot be answered from a
+    /// diff — nor by checking out an older revision, for the reason
+    /// [`shape_off`](Self::shape_off) gives.
+    ///
+    /// ⚠ **And it needs a very large n.** At 300 matches an arm the standard
+    /// error on the difference is ~0.15 goals/match, which is a third of a
+    /// percent of the goal rate away from being able to see an effect this
+    /// size at all. Two arms that come out a tenth of a goal apart have said
+    /// nothing.
+    ///
+    /// The off arm is the old engine exactly, including the medical pass's
+    /// old scheduling, so a checksum comparison is meaningful. Same pattern
+    /// and same purpose as the switches above; read once per process. Debug
+    /// infrastructure — do not remove.
+    pub fn sub_walk_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_SUB_WALK_OFF").is_ok())
+    }
+
     /// The scoreline as BEHAVIOR is allowed to see it: 0-0 (level)
     /// before `SCORE_REACTION_FROM_MINUTE`, the real difference after.
     /// All tactical / coach / desperation score reads route through

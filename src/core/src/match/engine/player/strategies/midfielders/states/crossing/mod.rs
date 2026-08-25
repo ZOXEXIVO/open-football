@@ -51,6 +51,14 @@ impl StateProcessingHandler for MidfielderCrossingState {
                 #[cfg(feature = "match-logs")]
                 {
                     CrossDiag::note(decision.cross_type);
+                    {
+                        let goal = ctx.player().opponent_goal_position();
+                        crate::mid_run_diag::WideDiag::note_delivery(
+                            1,
+                            (goal.x - ctx.player.position.x).abs(),
+                            (ctx.player.position.y - goal.y).abs() < 165.0,
+                        );
+                    }
                     if ctx.ball().is_team_attacking_corner() {
                         CORNER_CROSS_SENT.fetch_add(1, Ordering::Relaxed);
                         if let Some(t) = ctx.context.players.by_id(decision.target_id) {

@@ -44,6 +44,7 @@
 //! instead of trading it back and forth every refresh — the same
 //! stability problem the `CreatingSpace` gap shortlist documents.
 
+use crate::r#match::engine::teamplay::plans::wide::{Flank, WideBuilder, WidePlan};
 use crate::r#match::{MatchField, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
 
@@ -163,6 +164,10 @@ pub struct AttackPlan {
     pub box_slots: [Option<u32>; 4],
     /// Players held behind the ball as rest defence.
     pub rest_defence: [Option<u32>; 5],
+    /// Who is holding each touchline, and who is running beyond them.
+    /// See [`wide`](super::wide) — this is the lateral half of the plan,
+    /// and without it every assignment above is a central one.
+    pub wide: WidePlan,
     /// True while the plan describes a live attack. When false every
     /// consumer falls back to its own positioning — there is no attack to
     /// have roles in.
@@ -178,6 +183,7 @@ impl AttackPlan {
             far_runner: None,
             box_slots: [None; 4],
             rest_defence: [None; 5],
+            wide: WidePlan::idle(),
             active: false,
         }
     }
@@ -217,17 +223,19 @@ impl AttackPlan {
             .and_then(|id| field.players.iter().find(|p| p.id == id))
             .map(|p| p.team_id);
 
-        for (plan, team_id, attacking, rest_target) in [
+        for (plan, team_id, attacking, in_possession, rest_target) in [
             (
                 &mut *home,
                 inputs.home_team_id,
                 inputs.home_attacking,
+                inputs.home_in_possession,
                 inputs.home_rest_defence,
             ),
             (
                 &mut *away,
                 inputs.away_team_id,
                 inputs.away_attacking,
+                inputs.away_in_possession,
                 inputs.away_rest_defence,
             ),
         ] {
@@ -239,19 +247,32 @@ impl AttackPlan {
             // owner check only needs to veto the case where an opponent
             // has actually taken the ball off us.
             let ours = owner_team.is_none_or(|t| t == team_id);
-            if !attacking || !ours {
-                *plan = AttackPlan::idle();
-                #[cfg(feature = "match-logs")]
-                crate::mid_run_diag::PlanDiag::note_refresh(false, 0);
-                continue;
-            }
-            PlanBuilder {
+            let builder = PlanBuilder {
                 field,
                 team_id,
                 ball_pos,
                 rest_target,
+            };
+            if !attacking || !ours {
+                // Width outlives the attack plan.
+                //
+                // `wants_bodies_forward` is false during `BuildUp`, and
+                // a side playing out from the back is exactly when its
+                // full-backs go wide — the whole purpose of the width is
+                // to stretch the first line of the press so there is
+                // somewhere to play. Holding a touchline commits nobody
+                // forward, so it is safe in every phase we have the
+                // ball, unlike a box slot or an overlap.
+                let previous_wide = plan.wide;
+                *plan = AttackPlan::idle();
+                if in_possession && ours {
+                    builder.build_width(plan, &previous_wide);
+                }
+                #[cfg(feature = "match-logs")]
+                crate::mid_run_diag::PlanDiag::note_refresh(false, 0);
+                continue;
             }
-            .build(plan);
+            builder.build(plan);
             #[cfg(feature = "match-logs")]
             crate::mid_run_diag::PlanDiag::note_refresh(
                 plan.active,
@@ -271,6 +292,11 @@ pub struct AttackRefreshInputs<'a> {
     /// is correct (`Attack` / `AttackingTransition` / `Progression`).
     pub home_attacking: bool,
     pub away_attacking: bool,
+    /// True whenever that side simply has the ball, in any phase. Width
+    /// is held from the first pass out of defence — see the `BuildUp`
+    /// note in [`AttackPlan::refresh`].
+    pub home_in_possession: bool,
+    pub away_in_possession: bool,
     /// How many players that side wants behind the ball, from
     /// `TeamTacticalState::rest_defense_count`.
     pub home_rest_defence: u8,
@@ -290,17 +316,63 @@ impl PlanBuilder<'_> {
     /// Beyond this a player is not part of the attack at all.
     const ATTACK_RADIUS: f32 = 420.0;
 
-    fn build(&self, plan: &mut AttackPlan) {
-        let previous = *plan;
-        *plan = AttackPlan::idle();
-
-        let Some(side) = self
+    /// Which end this side attacks, and the width builder projected into
+    /// its formation's own bounding box.
+    ///
+    /// The box is read the same way [`ShapeBuilder`](super::block::ShapeBuilder)
+    /// reads it, so "wide" and "advanced" mean the same thing to the plan
+    /// and to the block it is projected into.
+    fn geometry(&self) -> Option<(PlayerSide, WideBuilder<'_>)> {
+        let side = self
             .field
             .players
             .iter()
             .find(|p| p.team_id == self.team_id)
-            .and_then(|p| p.side)
-        else {
+            .and_then(|p| p.side)?;
+        let field_width = self.field.size.width as f32;
+        let (mut min_lat, mut max_lat) = (f32::MAX, f32::MIN);
+        let (mut min_depth, mut max_depth) = (f32::MAX, f32::MIN);
+        for p in self.outfielders() {
+            let depth = side.attacking_progress_x(p.start_position.x, field_width);
+            min_depth = min_depth.min(depth);
+            max_depth = max_depth.max(depth);
+            min_lat = min_lat.min(p.start_position.y);
+            max_lat = max_lat.max(p.start_position.y);
+        }
+        if min_depth > max_depth {
+            return None;
+        }
+        Some((
+            side,
+            WideBuilder {
+                field: self.field,
+                team_id: self.team_id,
+                side,
+                ball_pos: self.ball_pos,
+                min_lat,
+                lat_span: (max_lat - min_lat).max(1.0),
+                min_depth,
+                depth_span: (max_depth - min_depth).max(0.01),
+            },
+        ))
+    }
+
+    /// The touchlines alone, for a side that has the ball but is not yet
+    /// in a phase that commits bodies forward.
+    fn build_width(&self, plan: &mut AttackPlan, previous: &WidePlan) {
+        let Some((_, wide)) = self.geometry() else {
+            return;
+        };
+        let carrier = self.field.ball.current_owner;
+        wide.holders(&mut plan.wide, previous, |id| Some(id) != carrier);
+        plan.wide.active = true;
+    }
+
+    fn build(&self, plan: &mut AttackPlan) {
+        let previous = *plan;
+        *plan = AttackPlan::idle();
+
+        let Some((side, wide)) = self.geometry() else {
             return;
         };
         let forward_dir = side.forward_dir_x();
@@ -318,11 +390,38 @@ impl PlanBuilder<'_> {
         plan.carrier = self.field.ball.current_owner;
         plan.active = true;
 
-        // ── Rest defence first ────────────────────────────────────────
-        // Taking the deepest N off the table BEFORE assigning attacking
-        // roles is what stops the shape emptying: a slot can never be
-        // filled by a man who is supposed to be holding.
         let mut held = HeldSet::default();
+
+        // ── Width first ───────────────────────────────────────────────
+        // How wide a side plays is the first decision it makes with the
+        // ball, not the last. Assigning the touchlines before anything
+        // else is also what makes them REACHABLE: every other role in
+        // this module pulls a man toward the middle, so a width holder
+        // chosen from the leftovers is a man who has already been given
+        // a reason to be somewhere else. See `wide`.
+        wide.holders(&mut plan.wide, &previous.wide, |id| {
+            Some(id) != plan.carrier
+        });
+        plan.wide.active = true;
+        // Only the BALL-SIDE holder is reserved. The far-side one stays
+        // eligible for the far post, because the blind-side winger
+        // arriving at the back post is the same player doing the same
+        // job one phase later — see the `wide` module docs.
+        if let Some(id) = plan.wide.holder(plan.wide.ball_flank) {
+            held.mark(id);
+        }
+
+        // ── Rest defence ──────────────────────────────────────────────
+        // Taking the men who hold BEFORE assigning attacking roles is
+        // what stops the shape emptying: a slot can never be filled by a
+        // man who is supposed to be staying home.
+        //
+        // Neither touchline is a place you defend from, so a width
+        // holder is never rest defence — otherwise the plan would name
+        // the same man as both the outlet on the flank and the cover
+        // behind the ball, and he would spend the possession running
+        // between the two.
+        let ball_flank = plan.wide.ball_flank;
         // At most ten outfielders — a stack buffer keeps this refresh
         // allocation-free, which matters because it runs twice every ten
         // ticks for the whole match.
@@ -332,7 +431,10 @@ impl PlanBuilder<'_> {
             if ranked_len == MAX_OUTFIELD {
                 break;
             }
-            depth_ranked[ranked_len] = (p.id, (goal - p.position).magnitude());
+            if plan.wide.flank_of(p.id).is_some() {
+                continue;
+            }
+            depth_ranked[ranked_len] = (p.id, self.rest_fit(p, goal, ball_flank, field_height));
             ranked_len += 1;
         }
         // Insertion sort, deepest first; ties by id so the pick is
@@ -353,6 +455,18 @@ impl PlanBuilder<'_> {
         for (slot, (id, _)) in plan.rest_defence.iter_mut().zip(&depth_ranked[..rest_n]) {
             *slot = Some(*id);
             held.mark(*id);
+        }
+
+        // ── …and only now, the overlap ────────────────────────────────
+        // Whoever is left on the ball's flank behind the width holder is
+        // by construction a man the plan could afford to send, so the
+        // safety question is already answered and the run needs no gate
+        // of its own.
+        wide.overlap(&mut plan.wide, |id| {
+            !held.contains(id) && Some(id) != plan.carrier
+        });
+        if let Some(id) = plan.wide.overlap_runner {
+            held.mark(id);
         }
 
         // ── Box slots ─────────────────────────────────────────────────
@@ -466,6 +580,67 @@ impl PlanBuilder<'_> {
             .map(|(id, _)| id);
     }
 
+    /// How much this player is wanted at home, in "effective depth" —
+    /// game units from the goal being attacked, plus what his job is
+    /// worth in the same currency.
+    ///
+    /// Depth is most of it: rest defence is, first of all, whoever is
+    /// already back there. But WHICH of two men at the same depth stays
+    /// is a footballing question with a settled answer, and ranking on
+    /// raw depth alone got it wrong every time. A back four's two
+    /// full-backs stand at the same depth as each other, so both were
+    /// picked, on every possession — which is most of why the
+    /// overlapping-full-back funnel measured **260 committed ticks a
+    /// match** out of 256 000 asked. The behaviour was gated on a
+    /// coin-flip that the plan had already decided against.
+    ///
+    /// Real rest defence is the centre-backs, the screen in front of
+    /// them, and the full-back *away* from the ball. The full-back on
+    /// the ball's side is the one who goes; that is what the shape is
+    /// for. The three bonuses are the distances each of those jobs is
+    /// worth: a screening midfielder plays 15-20 m in front of the back
+    /// line and should still rank alongside it, so his is the largest.
+    fn rest_fit(
+        &self,
+        player: &MatchPlayer,
+        goal: Vector3<f32>,
+        ball_flank: Flank,
+        field_height: f32,
+    ) -> f32 {
+        let pos = player.tactical_position.current_position;
+        (goal - player.position).magnitude()
+            + Self::rest_bonus(
+                pos.is_central_defender(),
+                pos.is_defensive_midfielder(),
+                Flank::of(player.start_position.y, field_height) != ball_flank,
+            )
+    }
+
+    /// The job half of [`Self::rest_fit`], in the same units (game units
+    /// from the goal being attacked). Pure, so the ordering it is
+    /// supposed to produce can be asserted without an engine fixture.
+    fn rest_bonus(central_defender: bool, screen: bool, far_side: bool) -> f32 {
+        /// A centre-back holds even when he has stepped up (~17.5 m).
+        const CENTRAL_HOLD: f32 = 140.0;
+        /// The screen is worth his own advancement (~21 m), so he ranks
+        /// with the line he is screening.
+        const SCREEN_HOLD: f32 = 170.0;
+        /// Enough to separate two full-backs standing level (~9 m).
+        const FAR_SIDE_HOLD: f32 = 70.0;
+
+        let mut bonus = 0.0;
+        if central_defender {
+            bonus += CENTRAL_HOLD;
+        }
+        if screen {
+            bonus += SCREEN_HOLD;
+        }
+        if far_side {
+            bonus += FAR_SIDE_HOLD;
+        }
+        bonus
+    }
+
     /// How well this player suits this slot. Proximity decides WHO (a run
     /// is made by whoever is placed to make it), attributes decide how
     /// good the occupancy is, and position group keeps defenders out of
@@ -546,5 +721,50 @@ impl HeldSet {
 
     fn contains(&self, id: u32) -> bool {
         self.ids[..self.len].contains(&id)
+    }
+}
+
+#[cfg(test)]
+mod rest_defence_tests {
+    use super::PlanBuilder;
+
+    /// The ordering rest defence has to produce, stated as a test rather
+    /// than as a comment: with a back four standing level, the two
+    /// centre-backs and the FAR full-back stay, and the ball-side
+    /// full-back is the one released.
+    ///
+    /// Ranking on raw depth cannot produce it — the four are at the same
+    /// depth, so it picked whichever two full-backs the tie-break
+    /// happened to reach, on every possession. That is why the overlap
+    /// funnel measured 260 committed ticks a match.
+    #[test]
+    fn the_ball_side_fullback_is_the_one_who_goes() {
+        let cb = PlanBuilder::rest_bonus(true, false, false);
+        let far_fb = PlanBuilder::rest_bonus(false, false, true);
+        let ball_fb = PlanBuilder::rest_bonus(false, false, false);
+        assert!(cb > far_fb, "a centre-back holds ahead of a full-back");
+        assert!(
+            far_fb > ball_fb,
+            "the full-back away from the ball is the one who tucks in"
+        );
+        assert_eq!(ball_fb, 0.0, "the ball-side full-back carries no hold");
+    }
+
+    /// …and the screen ranks with the line he screens, not behind it. He
+    /// plays 15-20 m in front of the back four, so a bonus smaller than
+    /// that gap would leave him ranked below a full-back who is level
+    /// with the centre-backs — and the full-back would stay home in his
+    /// place.
+    #[test]
+    fn the_screen_ranks_with_the_line_he_screens() {
+        let screen = PlanBuilder::rest_bonus(false, true, false);
+        let far_fb = PlanBuilder::rest_bonus(false, false, true);
+        // 15 m in game units — a defensive midfielder's normal distance
+        // in front of his own back line.
+        const AHEAD: f32 = 120.0;
+        assert!(
+            screen > far_fb + AHEAD - 70.0,
+            "the screen is out-ranked by his own advancement"
+        );
     }
 }

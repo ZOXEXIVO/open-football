@@ -240,10 +240,20 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let mut next_sub_time_ms: u64 = 0;
         let mut sub_times_initialized = false;
+        // The board is up and the manager is waiting for the ball to go dead.
+        let mut sub_due = false;
+        // Whether a change is played out at all — see
+        // [`MatchContext::sub_walk_off`], the A/B control for what the walk
+        // costs. Read once, here, rather than at each of the four sites that
+        // branch on it.
+        let walk_on = !MatchContext::sub_walk_off();
         let mut et_bonus_granted = false;
         // Medical (forced-injury) pass scheduling — independent of the
         // discretionary sub timer, re-armed at the start of each period.
         let mut next_medical_time_ms: u64 = 0;
+        // Rate limit on the "is anybody too hurt to go on?" sweep, which now
+        // runs off dead balls rather than off the injury roll's own clock.
+        let mut next_medical_check_ms: u64 = 0;
         let mut medical_period: Option<MatchState> = None;
 
         let mut tick_ctx = GameTickContext::new(field, &context.players);
@@ -300,8 +310,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // the last pre-goal frame for a minute, which is why the ball
             // appeared to stop dead on the goal line.
             if context.total_match_time < context.dead_ball_until_ms {
-                let celebrating = advance_goal_celebration(field, context);
-                if celebrating
+                // Two cutscenes share the window and never overlap — a
+                // substitution cannot be staged inside a celebration (the
+                // pass that stages one sits below this `continue`) and a goal
+                // cannot be scored inside a substitution (there is no ball
+                // physics in either). See `SubstitutionBreak`.
+                let playing_out = advance_goal_celebration(field, context)
+                    | advance_substitution_break(field, context);
+                if playing_out
                     && track_positions
                     && context.total_match_time >= next_position_record_ms
                 {
@@ -316,9 +332,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // from the kickoff set-up, exactly as it did when the reset
             // happened at the far end of the window. It cannot be done inside
             // the branch above, whose own condition is what keeps the clock
-            // short of the restart instant.
+            // short of the restart instant. A substitution window that is
+            // still open lands its walkers for the same reason.
             if context.goal_celebration.is_some() {
                 advance_goal_celebration(field, context);
+            }
+            if context.substitution_break.is_some() {
+                advance_substitution_break(field, context);
             }
 
             tick_parity += 1;
@@ -487,11 +507,35 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     medical_period = Some(context.state.match_state);
                     next_medical_time_ms =
                         context.time.time + context.rng.range_u64(3, 8) * 60 * 1000;
+                    next_medical_check_ms = 0;
                 }
+                // The ROLL keeps its own clock: it draws from the match RNG,
+                // and the stream is shared with every calibrated decision
+                // downstream, so moving when it fires moves the whole match.
                 if context.time.time >= next_medical_time_ms {
-                    Substitutions::process_medical(field, context);
+                    Substitutions::process_injuries(field, context);
+                    if !walk_on {
+                        Substitutions::process_medical(field, context);
+                    }
                     next_medical_time_ms =
                         context.time.time + context.rng.range_u64(6, 14) * 60 * 1000;
+                }
+                // The REPLACEMENTS wait for the ball to be dead, like every
+                // other substitution — a physio does not come on while the
+                // game is going. Checked once a second of match clock rather
+                // than every dead-ball tick: the scan is four walks of the
+                // roster and the answer cannot change faster than a player's
+                // condition does.
+                if walk_on
+                    && context.time.time >= next_medical_check_ms
+                    && Substitutions::play_is_stopped(field)
+                {
+                    let before = context.substitutions.len();
+                    Substitutions::process_medical(field, context);
+                    if context.substitutions.len() > before {
+                        match_data.mark_substitution(context.total_match_time);
+                    }
+                    next_medical_check_ms = context.time.time + 1_000;
                 }
             }
 
@@ -527,22 +571,51 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 }
 
                 let period_time = context.time.time;
+                // **The board goes up when the timer says so; the change is
+                // made at the next dead ball.**
+                //
+                // Two steps rather than one, and the split is not stylistic.
+                // A change now stops the match for
+                // [`SubstitutionBreak::BREAK_MS`], which must not be the
+                // thing that stops it — see
+                // [`Substitutions::play_is_stopped`]. But the RE-ARM has to
+                // stay on the tick the timer fired: it is an
+                // [`MatchContext::rng`] draw, the stream is shared with every
+                // calibrated decision in the match, and moving it to the next
+                // throw-in would reshuffle every roll downstream of it in
+                // matches that never make a substitution at all — every one
+                // the calibration harness plays, whose squads have no bench.
                 if period_time >= next_sub_time_ms {
+                    sub_due = true;
+                    next_sub_time_ms = period_time + context.rng.range_u64(5, 15) * 60 * 1000;
+                }
+                if sub_due && (!walk_on || Substitutions::play_is_stopped(field)) {
+                    sub_due = false;
                     // Deterministic "today" — captured at context
                     // construction. Used only for the youth-protection
                     // sub branch, where the comparison is age <= 17.
                     let today = context.today;
                     let per_pass_cap = context.max_substitutions_per_pass;
+                    // A clipped recording keeps what somebody wants to watch,
+                    // and a change is one of those — see `mark_substitution`.
+                    // One mark per stoppage, however many men crossed the
+                    // line on it: overlapping clips are merged at full time
+                    // anyway, and a double change is one moment.
+                    let before = context.substitutions.len();
                     process_substitutions(field, context, per_pass_cap, today);
-                    next_sub_time_ms = period_time + context.rng.range_u64(5, 15) * 60 * 1000;
+                    if walk_on && context.substitutions.len() > before {
+                        match_data.mark_substitution(context.total_match_time);
+                    }
                 }
             }
         }
 
-        // The whistle can go while the ball is still in the net. Settle the
-        // goal before the period boundary runs its own resets, so nothing
-        // downstream sees a half-processed one.
+        // The whistle can go while the ball is still in the net, or while two
+        // men are still walking across the touchline. Settle both before the
+        // period boundary runs its own resets, so nothing downstream sees a
+        // half-processed goal or a substitute standing in the run-off.
         finish_goal_celebration(field, context);
+        finish_substitution_break(field, context);
 
         result
     }

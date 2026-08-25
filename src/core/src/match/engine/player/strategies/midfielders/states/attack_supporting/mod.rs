@@ -1,4 +1,5 @@
 use crate::PlayerSkills;
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
     ActivityIntensity, Interception, MidfielderCondition,
@@ -76,6 +77,17 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
         {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Intercepting,
+            ));
+        }
+
+        // …unless the plan has given him a touchline. This state is the
+        // single biggest consumer of a midfielder's match (13% of every
+        // AI tick in the game) and every path through it moves him
+        // TOWARD the ball, which for a wide player is the one direction
+        // that destroys the shape. See `holding_width`.
+        if WideChannel::still_mine(ctx) {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::HoldingWidth,
             ));
         }
 

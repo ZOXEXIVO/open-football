@@ -9,6 +9,7 @@ use crate::MatchTacticType;
 use crate::r#match::engine::chemistry::{ChemistryMap, TacticalFamiliarity};
 use crate::r#match::engine::environment::MatchEnvironment;
 use crate::r#match::engine::flow::rng::MatchRng;
+use crate::r#match::engine::flow::touchline::SubstitutionBreak;
 use crate::r#match::engine::player::events::players::FoulSeverity;
 use crate::r#match::engine::psychology::PsychologyState;
 use crate::r#match::engine::referee::RefereeProfile;
@@ -180,6 +181,17 @@ pub struct MatchContext {
     /// restart at the end of it. `None` whenever play is live. See
     /// [`GoalCelebration`](crate::r#match::GoalCelebration).
     pub goal_celebration: Option<GoalCelebration>,
+    /// The substitution being made, if any — the other cutscene that runs
+    /// inside the `dead_ball_until_ms` window, and the one that changes the
+    /// roster at the end of it.
+    ///
+    /// It can never overlap [`Self::goal_celebration`]: the substitution pass
+    /// sits below the dead-ball `continue` in `play_inner`, so no swap can be
+    /// staged while a goal is being celebrated, and no goal can be scored
+    /// while a substitution is being made because there is no ball physics
+    /// inside either window. See
+    /// [`SubstitutionBreak`](super::super::touchline::SubstitutionBreak).
+    pub substitution_break: Option<SubstitutionBreak>,
     /// Sim-minute at which the FIRST shape change fired in this match
     /// (any side). Stamped once and never overwritten so the result
     /// summary can show the moment the manager pivoted. `None` while
@@ -367,6 +379,7 @@ impl MatchContext {
             last_shape_change_tick: u64::MAX,
             dead_ball_until_ms: 0,
             goal_celebration: None,
+            substitution_break: None,
             first_shape_change_minute: None,
             starting_home_tactic: None,
             starting_away_tactic: None,

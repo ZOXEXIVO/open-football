@@ -521,6 +521,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             away_team_id: context.field_away_team_id,
             home_attacking: context.tactical_home.wants_bodies_forward(),
             away_attacking: context.tactical_away.wants_bodies_forward(),
+            home_in_possession: context.tactical_home.in_possession,
+            away_in_possession: context.tactical_away.in_possession,
             home_rest_defence: context.tactical_home.rest_defense_count,
             away_rest_defence: context.tactical_away.rest_defense_count,
         };

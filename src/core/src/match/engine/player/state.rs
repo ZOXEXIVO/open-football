@@ -818,11 +818,11 @@ mod state_id_tests {
         // Ids are never reused, so recordings made before the removal
         // still decode every surviving state to the same name.
         let all = PlayerState::all();
-        assert_eq!(all.len(), 1 + 17 + 21 + 20 + 19, "state count changed");
+        assert_eq!(all.len(), 1 + 17 + 22 + 21 + 20, "state count changed");
         assert_eq!(GoalkeeperState::ALL.len(), 17);
-        assert_eq!(DefenderState::ALL.len(), 21);
-        assert_eq!(MidfielderState::ALL.len(), 20);
-        assert_eq!(ForwardState::ALL.len(), 19);
+        assert_eq!(DefenderState::ALL.len(), 22);
+        assert_eq!(MidfielderState::ALL.len(), 21);
+        assert_eq!(ForwardState::ALL.len(), 20);
 
         let mut ids: Vec<u16> = all.iter().map(|s| s.compact_id()).collect();
         let unique: std::collections::BTreeSet<u16> = ids.iter().copied().collect();
@@ -834,9 +834,9 @@ mod state_id_tests {
         expected.extend([
             100, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 117, 118, 119,
         ]);
-        expected.extend(200..=220u16); // 21 DEF (220 = Crossing)
-        expected.extend(300..=319u16); // 20 MID (319 = Heading)
-        expected.extend(400..=418u16); // 19 FWD
+        expected.extend(200..=221u16); // 22 DEF (221 = Overlapping)
+        expected.extend(300..=320u16); // 21 MID (320 = HoldingWidth)
+        expected.extend(400..=419u16); // 20 FWD (419 = HoldingWidth)
         assert_eq!(ids, expected, "compact_id space drifted");
 
         // Anchor a few named states so an intra-band reorder is caught

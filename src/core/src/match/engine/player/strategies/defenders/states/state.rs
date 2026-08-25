@@ -3,7 +3,8 @@ use crate::r#match::defenders::states::{
     DefenderAttackingCornerState, DefenderClearingState, DefenderCoveringState,
     DefenderCrossingState, DefenderGuardingState, DefenderHeadingState, DefenderHoldingLineState,
     DefenderInterceptingState, DefenderMarkingState, DefenderPassingState, DefenderPressingState,
-    DefenderPushingUpState, DefenderRestingState, DefenderReturningState, DefenderRunningState,
+    DefenderOverlappingState, DefenderPushingUpState, DefenderRestingState, DefenderReturningState,
+    DefenderRunningState,
     DefenderShootingState, DefenderStandingState, DefenderTacklingState, DefenderTakeBallState,
     DefenderTrackingBackState, DefenderWalkingState,
 };
@@ -38,6 +39,7 @@ pub enum DefenderState {
     Guarding = 18, // Guarding an attacker — denying space and preventing them from getting open
     AttackingCorner = 19, // Pushed up to attack an attacking corner (run into the box, head on goal)
     Crossing = 20,        // Overlapping fullback delivering from a wide advanced position
+    Overlapping = 21,     // The full-back run beyond the width holder — see `overlapping`
 }
 
 impl DefenderState {
@@ -69,7 +71,7 @@ impl DefenderState {
 
     /// Every variant in declared order — single source of truth for the
     /// state universe (transition-graph audit + id-stability snapshot).
-    pub const ALL: [DefenderState; 21] = [
+    pub const ALL: [DefenderState; 22] = [
         DefenderState::Standing,
         DefenderState::Covering,
         DefenderState::PushingUp,
@@ -91,6 +93,7 @@ impl DefenderState {
         DefenderState::Guarding,
         DefenderState::AttackingCorner,
         DefenderState::Crossing,
+        DefenderState::Overlapping,
     ];
 }
 
@@ -161,6 +164,9 @@ impl DefenderStrategies {
                 state_processor.process(DefenderAttackingCornerState::default())
             }
             DefenderState::Crossing => state_processor.process(DefenderCrossingState::default()),
+            DefenderState::Overlapping => {
+                state_processor.process(DefenderOverlappingState::default())
+            }
         }
     }
 }
@@ -189,6 +195,7 @@ impl Display for DefenderState {
             DefenderState::Guarding => write!(f, "Guarding"),
             DefenderState::AttackingCorner => write!(f, "Attacking Corner"),
             DefenderState::Crossing => write!(f, "Crossing"),
+            DefenderState::Overlapping => write!(f, "Overlapping"),
         }
     }
 }

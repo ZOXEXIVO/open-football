@@ -447,7 +447,23 @@ impl CrossModel {
         goal_pos: Vector3<f32>,
         target_heading_skill: f32,
     ) -> CrossType {
-        let near_byline = crosser_dist_to_goal < 90.0;
+        // ⚠ THE BYLINE IS A DEPTH, NOT A RADIUS.
+        //
+        // This was `crosser_dist_to_goal < 90.0` — the distance to the
+        // goal's CENTRE. A player standing on the byline at the corner of
+        // the penalty area is 11 m from the goal LINE and 22 m from the
+        // goal centre, so the radial test read 176u and the pull-back
+        // branch below could only ever fire from inside the six-yard box,
+        // where nobody crosses from. Measured consequence: **19 cutbacks
+        // in 200 matches**, against a real ~10% of all crosses, for a
+        // ball that is the single highest-value pass in football.
+        //
+        // It is the same class of error as the keeper's `goal_line_y`:
+        // a quantity whose name says one axis, measured on two. Depth
+        // from the goal line is what "at the byline" means, and it is
+        // what the second branch below needs too.
+        let byline_depth = (goal_pos.x - crosser_pos.x).abs();
+        let near_byline = byline_depth < 110.0;
         let target_inside_box = (target_pos - goal_pos).norm_squared() < BOX_DEPTH * BOX_DEPTH;
 
         // `target_heading_skill` is already normalised (raw/20). Compute
@@ -504,8 +520,12 @@ impl CrossModel {
         let poor_header = ctx.context.rng.unit_f32() < p_poor_header_wide;
         if poor_header {
             // Foot-runner profile — keep it out of the air. Deep enough
-            // in and the pull-back is the better ball.
-            return if crosser_dist_to_goal < 150.0 && target_inside_box {
+            // in and the pull-back is the better ball. Depth again, not
+            // radius: 190u is 24 m from the goal line, roughly the edge
+            // of the penalty area, which is as far out as a ball played
+            // backwards into the box is still a cutback rather than a
+            // cross.
+            return if byline_depth < 190.0 && target_inside_box {
                 CrossType::Cutback
             } else {
                 CrossType::DrivenLowCross

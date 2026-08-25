@@ -80,6 +80,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 player_in_id: sub_record.player_in_id,
                 match_time_ms: sub_record.match_time,
                 reason: sub_record.reason,
+                break_ms: sub_record.break_ms,
             });
         }
 

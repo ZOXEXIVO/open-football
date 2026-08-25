@@ -1,3 +1,4 @@
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::player::PlayerSide;
@@ -33,6 +34,16 @@ impl StateProcessingHandler for DefenderPushingUpState {
         {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::AttackingCorner,
+            ));
+        }
+
+        // The plan has named him for the run beyond the width holder,
+        // which is a specific job with a specific target — and it is
+        // sprinted, not pushed up at the `Moderate` speed cap this state
+        // declares. See `overlapping`.
+        if WideChannel::still_mine(ctx) && ctx.team().is_overlap_runner() {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Overlapping,
             ));
         }
 

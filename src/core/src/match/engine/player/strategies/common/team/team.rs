@@ -1,6 +1,7 @@
 use crate::r#match::{
-    AttackPlan, BoxSlot, CoachInstruction, DefensiveDuty, DefensivePlan, GamePhase, MatchCoach,
-    MatchPlayerLite, PlayerSide, StateProcessingContext, TeamShape, TeamTacticalState,
+    AttackPlan, BoxSlot, CoachInstruction, DefensiveDuty, DefensivePlan, Flank, GamePhase,
+    MatchCoach, MatchPlayerLite, PlayerSide, StateProcessingContext, TeamShape, TeamTacticalState,
+    WidePlan,
 };
 use crate::{PlayerFieldPositionGroup, Tactics};
 use nalgebra::Vector3;
@@ -25,6 +26,12 @@ impl<'b> TeamOperationsImpl<'b> {
     /// How far goal-side of his man a marker sits (~1.5 m) — touch-tight
     /// enough to contest, not so tight he is turned every time.
     const MARK_SHOULDER: f32 = 12.0;
+    /// How far up the pitch, and how far outside the width holder, the
+    /// overlapping runner aims (~7.5 m ahead, ~2.5 m wider). Beyond the
+    /// man he is overlapping and outside him: both halves are what make
+    /// the pass simple and the full-back's decision hard.
+    const OVERLAP_LEAD: f32 = 60.0;
+    const OVERLAP_OUTSIDE: f32 = 20.0;
 
     pub fn tactics(&self) -> &Tactics {
         // A sent-off / mid-swap player can transiently have no side
@@ -185,10 +192,14 @@ impl<'b> TeamOperationsImpl<'b> {
     /// 2. **Defensive duty** — he has been given a man, a cover angle, or
     ///    the ball carrier ([`DefensivePlan`]). Only applies while his
     ///    side is actually defending.
-    /// 3. **Team shape** — his anchor inside the live block
+    /// 3. **Width** — he has been told to hold a touchline, or to run
+    ///    beyond the man who is ([`WidePlan`]). Above the block because
+    ///    that is the entire point: the block is a rectangle sized by an
+    ///    average, and an average never puts anybody on the paint.
+    /// 4. **Team shape** — his anchor inside the live block
     ///    ([`TeamShape`]). Always available, covers all eleven, and is
     ///    what makes the side one body rather than eleven agents.
-    /// 4. **Kickoff dot** — the pre-plan fallback, kept only for the
+    /// 5. **Kickoff dot** — the pre-plan fallback, kept only for the
     ///    first tick of a match and for a player who has somehow left
     ///    every roster.
     ///
@@ -205,10 +216,77 @@ impl<'b> TeamOperationsImpl<'b> {
                 return duty;
             }
         }
+        if let Some(wide) = self.my_width_anchor() {
+            return wide;
+        }
         if let Some(anchor) = self.shape().anchor_of(self.ctx.player.id) {
             return anchor;
         }
         self.ctx.player.start_position
+    }
+
+    /// This side's width assignment — who is on each touchline and who
+    /// is running beyond them.
+    pub fn wide_plan(&self) -> &WidePlan {
+        &self.attack_plan().wide
+    }
+
+    /// The touchline this player has been told to hold, if any. `None`
+    /// whenever his side is not in possession.
+    pub fn my_width_flank(&self) -> Option<Flank> {
+        self.wide_plan().flank_of(self.ctx.player.id)
+    }
+
+    /// Is this player the one licensed to run beyond the ball-side width
+    /// holder this possession?
+    pub fn is_overlap_runner(&self) -> bool {
+        self.wide_plan().is_overlap_runner(self.ctx.player.id)
+    }
+
+    /// Where a width holder — or the man overlapping him — should be
+    /// standing.
+    ///
+    /// The DEPTH is whatever the block already wanted: holding width is
+    /// a lateral instruction, and a winger who abandons his line to
+    /// stand on a touchline is not holding width, he is lost. The
+    /// LATERAL is the whole assignment, and it scales with
+    /// `team_width_target` so a deliberately narrow side still plays
+    /// narrow — at width 0 this returns the block anchor unchanged and
+    /// the engine behaves exactly as it did before the width plan
+    /// existed.
+    ///
+    /// The overlap runner is placed a stride *outside* the holder's line
+    /// and further forward, because the run that matters is the one that
+    /// gets beyond him. Being outside is what makes the pass a simple
+    /// one and the defender's decision a hard one.
+    pub fn my_width_anchor(&self) -> Option<Vector3<f32>> {
+        let plan = self.attack_plan();
+        if !plan.wide.active {
+            return None;
+        }
+        let field_height = self.ctx.context.field_size.height as f32;
+        let block = self.shape().anchor_of(self.ctx.player.id)?;
+        // 0.35 floor: a man given the touchline goes at least part of
+        // the way there whatever the tactic says, or the assignment is
+        // decorative.
+        let hug = 0.35 + 0.65 * self.team_width_target().clamp(0.0, 1.0);
+
+        if let Some(flank) = plan.wide.flank_of(self.ctx.player.id) {
+            return Some(WidePlan::width_anchor(block, flank, field_height, hug));
+        }
+        if plan.wide.is_overlap_runner(self.ctx.player.id) {
+            let flank = plan.wide.ball_flank;
+            let base = WidePlan::width_anchor(block, flank, field_height, hug);
+            let forward = self.ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
+            let field_width = self.ctx.context.field_size.width as f32;
+            return Some(Vector3::new(
+                (base.x + forward * Self::OVERLAP_LEAD).clamp(14.0, field_width - 14.0),
+                (base.y + flank.sign() * Self::OVERLAP_OUTSIDE)
+                    .clamp(10.0, field_height - 10.0),
+                0.0,
+            ));
+        }
+        None
     }
 
     /// How far this player is from the place his team wants him.

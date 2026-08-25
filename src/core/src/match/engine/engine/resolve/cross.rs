@@ -233,7 +233,21 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         // Attacker vs defender. Base is low because most crosses are
         // headed clear — the spread comes from the aerial mismatch.
-        let att_win = (0.26 + (att_score - def_score) * 0.55 + type_edge).clamp(0.05, 0.62);
+        //
+        // 0.26 → 0.32, re-derived once open-play crossing existed at all.
+        // The harness prints the reference this is against (`real: cross
+        // completion ~22-25%`) and measured **10%** over 200 fixtures:
+        // 46 contests a match, 41 of them headed clear, 0.9 headers on
+        // goal. That was invisible for as long as the contest fired 3.9
+        // times a match on 2.2 open-play crosses a team — a rate nobody
+        // could calibrate against, because the sample did not exist.
+        //
+        // It is deliberately still well under half. Most crosses ARE
+        // headed clear; the point of the number is that the ones that
+        // are not should be the ones where an attacker has genuinely
+        // beaten his man, and the `(att_score - def_score) * 0.55` term
+        // is what says so.
+        let att_win = (0.32 + (att_score - def_score) * 0.55 + type_edge).clamp(0.05, 0.62);
 
         if context.rng.bernoulli(att_win) {
             #[cfg(feature = "match-logs")]

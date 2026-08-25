@@ -42,9 +42,9 @@
 //! window: a median over two seconds of frames is well clear of that step.
 
 use crate::config::ViewerConfig;
+use bevy::camera::visibility::ViewVisibility;
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
-use bevy::camera::visibility::ViewVisibility;
 
 /// A fixed window of millisecond samples, kept unsorted and summarised on
 /// demand — a frame writes three of these and the readout asks four times a

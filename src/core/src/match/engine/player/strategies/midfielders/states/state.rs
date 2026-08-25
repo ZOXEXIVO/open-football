@@ -4,7 +4,8 @@ use crate::r#match::midfielders::states::{
     MidfielderGuardingState, MidfielderHeadingState, MidfielderInterceptingState,
     MidfielderPassingState, MidfielderPressingState, MidfielderRestingState,
     MidfielderReturningState, MidfielderRunningState, MidfielderShootingState,
-    MidfielderStandingState, MidfielderSwitchingPlayState, MidfielderTacklingState,
+    MidfielderHoldingWidthState, MidfielderStandingState, MidfielderSwitchingPlayState,
+    MidfielderTacklingState,
     MidfielderTakeBallState, MidfielderWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};
@@ -36,12 +37,13 @@ pub enum MidfielderState {
     CreatingSpace = 17,   // Creating space for teammates
     Guarding = 18, // Guarding an attacker — denying space and preventing them from getting open
     Heading = 19,  // Contesting an aerial ball in midfield — knock-down, clearance or flick
+    HoldingWidth = 20, // Holding a touchline to stretch the defence — see `holding_width`
 }
 
 impl MidfielderState {
     /// Every variant in declared order — single source of truth for the
     /// state universe (transition-graph audit + id-stability snapshot).
-    pub const ALL: [MidfielderState; 20] = [
+    pub const ALL: [MidfielderState; 21] = [
         MidfielderState::Standing,
         MidfielderState::Distributing,
         MidfielderState::Dribbling,
@@ -62,6 +64,7 @@ impl MidfielderState {
         MidfielderState::CreatingSpace,
         MidfielderState::Guarding,
         MidfielderState::Heading,
+        MidfielderState::HoldingWidth,
     ];
 }
 
@@ -123,6 +126,9 @@ impl MidfielderStrategies {
                 state_processor.process(MidfielderGuardingState::default())
             }
             MidfielderState::Heading => state_processor.process(MidfielderHeadingState::default()),
+            MidfielderState::HoldingWidth => {
+                state_processor.process(MidfielderHoldingWidthState::default())
+            }
         }
     }
 }
@@ -150,6 +156,7 @@ impl Display for MidfielderState {
             MidfielderState::CreatingSpace => write!(f, "Creating Space"),
             MidfielderState::Guarding => write!(f, "Guarding"),
             MidfielderState::Heading => write!(f, "Heading"),
+            MidfielderState::HoldingWidth => write!(f, "Holding Width"),
         }
     }
 }

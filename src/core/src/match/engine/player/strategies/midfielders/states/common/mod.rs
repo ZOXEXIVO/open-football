@@ -161,9 +161,10 @@ pub mod onball_diag {
         AntiOscillation = 20,
         NoDecision = 21,
         ForcedTakeOn = 22,
+        FlankRelease = 23,
     }
 
-    pub const EXITS: usize = 23;
+    pub const EXITS: usize = 24;
     pub const NAMES: [&str; EXITS] = [
         "corner",
         "snapshot-shot",
@@ -188,6 +189,7 @@ pub mod onball_diag {
         "anti-oscillation",
         "no-decision (hold)",
         "DRIBBLE (forced)",
+        "pass:flank-release",
     ];
 
     const ZERO: AtomicU64 = AtomicU64::new(0);
@@ -275,6 +277,7 @@ pub mod onball_diag {
         AntiOscillation,
         NoDecision,
         ForcedTakeOn,
+        FlankRelease,
     }
 
     #[inline(always)]

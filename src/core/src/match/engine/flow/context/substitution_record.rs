@@ -17,6 +17,17 @@ pub struct SubstitutionRecord {
     /// emit logic can distinguish protective swaps (injury / youth)
     /// from discretionary tactical hooks.
     pub reason: crate::r#match::engine::flow::result::SubstitutionReason,
+    /// How long the match actually stopped for while the change was played
+    /// out, in ms — see
+    /// [`SubstitutionBreak`](super::super::touchline::SubstitutionBreak), whose
+    /// window
+    /// closes when the last man reaches his slot rather than on a clock.
+    ///
+    /// Zero until that window closes, and zero forever on the instant path
+    /// (`OF_SUB_WALK_OFF`) and anywhere a swap is made outside a live match.
+    /// The replay reads it to hold its substitution shot for exactly as long
+    /// as the change lasted instead of guessing at a constant.
+    pub break_ms: u64,
 }
 
 impl MatchContext {
@@ -45,6 +56,7 @@ impl MatchContext {
             player_in_id,
             match_time,
             reason,
+            break_ms: 0,
         });
     }
 }

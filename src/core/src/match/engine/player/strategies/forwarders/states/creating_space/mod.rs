@@ -1,4 +1,5 @@
 use crate::TacticalStyle;
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
@@ -61,6 +62,15 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         // Check if team lost possession
         if !ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+        }
+
+        // A wide forward holding a touchline is not hunting a gap
+        // between two centre-backs — his job is the space he leaves by
+        // standing out there. See `holding_width`.
+        if WideChannel::still_mine(ctx) {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::HoldingWidth,
+            ));
         }
 
         // A branch routing to `Intercepting` used to sit here. Like the

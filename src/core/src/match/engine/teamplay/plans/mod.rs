@@ -29,3 +29,4 @@ pub mod defence;
 pub mod duties;
 pub mod matcher;
 pub mod shape;
+pub mod wide;

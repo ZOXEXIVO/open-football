@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use crate::club::staff::{CoachDecisionEngine, CoachLiveMatchContext};
 use crate::r#match::engine::coach::TacticalNeed;
 use crate::r#match::engine::flow::result::SubstitutionReason;
+use crate::r#match::engine::flow::touchline::SubstitutionBreak;
 use crate::r#match::engine::sub_scoring::{LiveSubstitutionStats, SubScoring};
 use crate::r#match::field::MatchField;
 use crate::r#match::player::state::PlayerState;
@@ -145,13 +146,48 @@ impl Substitutions {
         );
     }
 
-    /// Injury roll + forced critical replacements, any period. The
-    /// per-period scheduling lives in the match loop; this pass owns
-    /// the whole match's injury exposure so the second-half
-    /// discretionary pass no longer rolls injuries itself.
-    pub(crate) fn process_medical(field: &mut MatchField, context: &mut MatchContext) {
-        Self::roll_in_match_injuries(field, context);
+    /// **May a substitution be made right now?**
+    ///
+    /// Only at a stoppage, which is both the Law and the only honest answer
+    /// once a change takes twelve seconds of match clock: freezing a ball in
+    /// flight for that long, or standing twenty men still around one that is
+    /// being dribbled, is not a substitution, it is a bug with a reason.
+    ///
+    /// The test is a restart that has been awarded and whose ball has come to
+    /// rest — throw-in, goal kick, corner, free kick. `settled` matters as
+    /// much as the award does: a restart is armed on the tick the ball
+    /// crosses the line and the ball keeps rolling out afterwards
+    /// ([`RunOff`]), so the window would otherwise open on a ball in motion.
+    ///
+    /// There is one of these every forty seconds or so of football, which
+    /// makes the wait invisible next to a substitution timer that fires every
+    /// five to fifteen minutes.
+    ///
+    /// [`RunOff`]: super::super::ball::ball::RunOff
+    pub fn play_is_stopped(field: &MatchField) -> bool {
+        field
+            .ball
+            .awaiting_restart
+            .is_some_and(|restart| restart.settled)
+    }
 
+    /// The in-match injury roll, on its own schedule.
+    ///
+    /// Split out from [`Self::process_medical`] so the replacements it
+    /// creates can wait for a stoppage while the roll itself does not: it
+    /// draws from [`MatchContext::rng`], and the stream is shared with every
+    /// calibrated decision in the match, so moving WHEN it fires moves
+    /// everything downstream of it.
+    ///
+    /// [`MatchContext::rng`]: super::super::flow::context::MatchContext::rng
+    pub(crate) fn process_injuries(field: &mut MatchField, context: &mut MatchContext) {
+        Self::roll_in_match_injuries(field, context);
+    }
+
+    /// Forced critical replacements, any period. The per-period scheduling
+    /// lives in the match loop; the injury roll that feeds this is
+    /// [`Self::process_injuries`], which keeps its own clock.
+    pub(crate) fn process_medical(field: &mut MatchField, context: &mut MatchContext) {
         let team_ids = [field.home_team_id, field.away_team_id];
         for &team_id in &team_ids {
             if !context.can_substitute(team_id) {
@@ -675,7 +711,16 @@ impl Substitutions {
         }
     }
 
-    /// Execute a single substitution: save stats, swap players, update context.
+    /// Execute a single substitution: save stats, swap players, update
+    /// context, and open the window the change is PLAYED OUT in.
+    ///
+    /// The roster half is unchanged and still happens here, on the tick the
+    /// decision is made — see the module note on
+    /// [`changeover`](super::super::flow::touchline::changeover) for
+    /// why the two halves cannot be reordered. What is new is the last block:
+    /// the two men are left standing at either end of a walk, play is stopped
+    /// for [`SubstitutionBreak::BREAK_MS`], and nothing else on the pitch
+    /// moves until they have finished it.
     fn execute_substitution(
         field: &mut MatchField,
         context: &mut MatchContext,
@@ -684,6 +729,10 @@ impl Substitutions {
         player_in_id: u32,
         reason: crate::r#match::engine::flow::result::SubstitutionReason,
     ) -> bool {
+        // The slot the man replacing him is inheriting, read before the swap
+        // consumes him and needed only to draw the change.
+        let departure = field.get_player(player_out_id).map(|p| p.start_position);
+
         // Save subbed-out player's stats before they're replaced. Minutes
         // are computed from the player's entry tick so a 60th-minute sub-
         // off correctly records ~60 minutes (or less, if the player came
@@ -707,7 +756,20 @@ impl Substitutions {
                 .push(phys_snapshot);
         }
 
-        if !field.substitute_player(player_out_id, player_in_id) {
+        // Where he stands and waits, if the change is being played out: his
+        // own place at the fourth official's shoulder, spaced along from any
+        // team-mate already standing there. Both halves of the change need
+        // the same point — he waits on it and the man he is replacing runs to
+        // it — so it is worked out once, here, where the window is in reach.
+        let is_home = team_id == field.home_team_id;
+        let waits_at = (!MatchContext::sub_walk_off()).then(|| {
+            let waiting = context
+                .substitution_break
+                .as_ref()
+                .map_or(0, |window| window.waiting_for(is_home));
+            crate::r#match::Bench::entry_gate(&field.size, is_home, waiting)
+        });
+        if !field.substitute_player(player_out_id, player_in_id, waits_at) {
             return false;
         }
 
@@ -776,6 +838,28 @@ impl Substitutions {
         if let Some(squad) = right_squad {
             if squad.team_id == team_id {
                 squad.mark_substitute_used(player_in_id);
+            }
+        }
+
+        // And now the part anybody watching actually sees. The roster has
+        // changed; the two men have not moved yet. Open a window if this is
+        // the first change of the stoppage — a double change on the same
+        // whistle shares one — and put the pair in it.
+        if let (Some(slot), Some(gate)) = (departure, waits_at) {
+            let now = context.total_match_time;
+            if context.substitution_break.is_none() {
+                context.substitution_break = Some(SubstitutionBreak::open(now));
+            }
+            if let Some(window) = context.substitution_break.as_mut() {
+                window.stage(is_home, player_out_id, player_in_id, gate, slot);
+                // Play stops until the window closes, which is when the last
+                // man is on — the pause is armed for the ceiling and pulled
+                // back by `close`. Same field the post-goal pause uses, and
+                // the two can never overlap: the substitution pass sits below
+                // that pause's `continue` in the match loop, and no goal can
+                // be scored inside a window with no ball physics in it.
+                context.dead_ball_until_ms =
+                    context.dead_ball_until_ms.max(window.resume_at_ms());
             }
         }
 
@@ -1546,6 +1630,7 @@ mod tests {
             ball: Ball::with_coord(840.0, 545.0),
             players,
             substitutes,
+            departed: Vec::new(),
             home_team_id: 1,
             away_team_id: 2,
             left_side_players: None,

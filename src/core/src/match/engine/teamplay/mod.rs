@@ -25,5 +25,5 @@ pub mod squad;
 pub mod tactical;
 pub mod zones;
 
-pub use plans::{attack, defence, shape};
+pub use plans::{attack, defence, shape, wide};
 pub use squad::{chemistry, standard};

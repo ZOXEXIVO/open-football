@@ -1,6 +1,8 @@
 use crate::actors::BallState;
+use crate::changeover::ChangeoverShot;
 use crate::config::ViewerConfig;
 use crate::field::Field;
+use crate::focus::CameraSubject;
 use crate::playback::Playback;
 use crate::quality::Quality;
 use crate::stage::Stage;
@@ -376,8 +378,10 @@ impl CameraFlight {
     }
 
     /// Back on the gantry, and the broadcast rig picks the shot up again from
-    /// wherever the ball is.
-    fn land(&mut self) {
+    /// wherever the ball is — or from whichever player it has been asked to
+    /// follow, which is the other caller: a free camera is written from the
+    /// flight state every frame and cannot follow anybody.
+    pub fn land(&mut self) {
         self.airborne = None;
     }
 
@@ -549,9 +553,9 @@ impl CameraFlight {
 }
 
 /// Everything the operator can move: where the rig stands, where it has been
-/// flown, and how tight the lens is.
+/// flown, how tight the lens is, and which of the twenty-two it is following.
 ///
-/// The three are separate resources because they are moved by separate
+/// The four are separate resources because they are moved by separate
 /// gestures, but there is only one shot, and one control that puts all of it
 /// back — which is what this exists to hold.
 pub struct CameraRig;
@@ -559,17 +563,29 @@ pub struct CameraRig;
 impl CameraRig {
     /// Back to the frame the replay opens on: on the gantry, at rest zoom,
     /// following the ball.
-    pub fn reset(orbit: &mut CameraOrbit, zoom: &mut CameraZoom, flight: &mut CameraFlight) {
+    pub fn reset(
+        orbit: &mut CameraOrbit,
+        zoom: &mut CameraZoom,
+        flight: &mut CameraFlight,
+        subject: &mut CameraSubject,
+    ) {
         *orbit = CameraOrbit::default();
         *zoom = CameraZoom::default();
         flight.land();
+        subject.release();
     }
 
     /// Has anything been moved off the opening shot? The reset button lights
     /// up on this, which is the only thing that says out loud that the camera
     /// is somewhere the replay did not put it.
-    pub fn moved(orbit: &CameraOrbit, zoom: &CameraZoom, flight: &CameraFlight) -> bool {
+    pub fn moved(
+        orbit: &CameraOrbit,
+        zoom: &CameraZoom,
+        flight: &CameraFlight,
+        subject: &CameraSubject,
+    ) -> bool {
         flight.airborne()
+            || subject.locked()
             || orbit.bearing.abs() > 1e-3
             || (orbit.elevation - TvCamera::rest_elevation()).abs() > 1e-3
             || (zoom.factor - 1.0).abs() > 1e-3
@@ -682,6 +698,35 @@ impl TvCamera {
     /// a tighter frame needs a quicker operator.
     const RESPONSE: f32 = 0.30;
 
+    /// What the four constants above become when the rig is following one
+    /// player rather than the ball — see [`CameraSubject`], whose grip blends
+    /// each of them in and back out again.
+    ///
+    /// They have to move together with the lens, and that is the whole reason
+    /// they exist. Everything above frames the PLAY: the rig slides only four
+    /// fifths of the way after the ball, the aim leads it across the pitch by
+    /// less than a third, and a metre of near bias puts the touchline on the
+    /// bottom edge. All three are the right answer for a wide shot and all
+    /// three are wrong for a close one — at twice the magnification the
+    /// horizontal frame is about 0.118 rad wide, and a ball out by the goal
+    /// line sits 0.127 rad off the axis those constants aim down. Which is to
+    /// say the player the camera had been asked to follow would be just off the
+    /// edge of the frame.
+    ///
+    /// Followed, the rig tracks him one for one and looks straight at him: the
+    /// slide, the lead and the bias all go, and the aim is lifted off the turf
+    /// to his chest so he sits in the middle of the shot rather than along its
+    /// bottom edge.
+    const LOCK_TRAVEL: f32 = 1.0;
+    const LOCK_TRAVEL_LIMIT: f32 = 0.95;
+    const LOCK_AIM_ACROSS: f32 = 1.0;
+    /// How far up him the shot is centred, in metres.
+    const LOCK_RISE: f32 = 1.05;
+    /// A close shot needs a quicker operator, which is the note on `RESPONSE`
+    /// taken at its word: at twice the magnification the same lag puts twice
+    /// as much of him off centre.
+    const LOCK_RESPONSE: f32 = 0.18;
+
     /// How far out from the centre spot the gantry stands, along the ground.
     fn rest_reach() -> f32 {
         Field::HALF_WIDTH + Self::SETBACK
@@ -768,29 +813,45 @@ impl TvCamera {
         zoom: Res<CameraZoom>,
         orbit: Res<CameraOrbit>,
         flight: Res<CameraFlight>,
+        subject: Res<CameraSubject>,
+        changeover: Res<ChangeoverShot>,
         mut camera: Single<(&mut TvCamera, &mut Transform, &mut Projection)>,
     ) {
         let (rig, transform, projection) = &mut *camera;
 
-        // The lens. `FOV` is the framing at 1.0; zooming in narrows it.
+        // How far the shot has closed onto one player, 0..1. Every framing
+        // constant below that a follow changes is blended by it, so picking a
+        // man out of the crowd is one continuous move of the camera rather
+        // than a cut to a second one.
+        let grip = subject.grip();
+        let close = |wide: f32, tight: f32| wide + (tight - wide) * grip;
+
+        // The lens. `FOV` is the framing at 1.0; zooming in narrows it. The
+        // follow multiplies the wheel rather than moving it — see
+        // [`CameraSubject::magnification`].
         if let Projection::Perspective(perspective) = projection.as_mut() {
-            let wanted = Self::FOV / zoom.factor.max(0.01);
+            let wanted = Self::FOV
+                / (zoom.factor * subject.magnification() * changeover.magnification()).max(0.01);
             if (perspective.fov - wanted).abs() > 1e-4 {
                 perspective.fov = wanted;
             }
         }
 
-        let target = if ball.on_pitch {
-            Vec3::new(ball.position.x, 0.0, ball.position.z)
-        } else {
-            Vec3::ZERO
+        // A followed player outranks the ball, which is the whole point of
+        // him: the shot he is in is the one the viewer asked for, wherever the
+        // football has got to.
+        let target = match (subject.target(), ball.on_pitch) {
+            (Some(at), _) => Vec3::new(at.x, 0.0, at.z),
+            (None, true) => Vec3::new(ball.position.x, 0.0, ball.position.z),
+            (None, false) => Vec3::ZERO,
         };
 
         if playback.seeked {
             rig.focus = target;
         } else {
             // Exponential catch-up, framerate independent.
-            let blend = 1.0 - (-time.delta_secs() / Self::RESPONSE).exp();
+            let response = close(Self::RESPONSE, Self::LOCK_RESPONSE);
+            let blend = 1.0 - (-time.delta_secs() / response).exp();
             rig.focus = rig.focus.lerp(target, blend.clamp(0.0, 1.0));
         }
 
@@ -824,14 +885,22 @@ impl TvCamera {
         // main stand, the half-width from behind a goal, and the two mixed
         // anywhere in between.
         let along = rail.x.abs() * Field::HALF_LENGTH + rail.z.abs() * Field::HALF_WIDTH;
-        let limit = along * Self::TRAVEL_LIMIT;
-        let travel = (rig.focus.dot(rail) * Self::TRAVEL).clamp(-limit, limit);
+        let limit = along * close(Self::TRAVEL_LIMIT, Self::LOCK_TRAVEL_LIMIT);
+        let travel =
+            (rig.focus.dot(rail) * close(Self::TRAVEL, Self::LOCK_TRAVEL)).clamp(-limit, limit);
 
-        transform.translation = gantry + rail * travel;
-        transform.look_at(
-            rail * rig.focus.dot(rail)
-                + depth * (rig.focus.dot(depth) * Self::AIM_ACROSS + Self::AIM_NEAR_BIAS),
-            Vec3::Y,
-        );
+        let looking_at = rail * rig.focus.dot(rail)
+            + depth
+                * (rig.focus.dot(depth) * close(Self::AIM_ACROSS, Self::LOCK_AIM_ACROSS)
+                    + close(Self::AIM_NEAR_BIAS, 0.0))
+            + Vec3::Y * close(0.0, Self::LOCK_RISE);
+
+        // …and last, the one shot that is not this rig at all. A substitution
+        // is watched from beside the pitch rather than from the gantry — see
+        // [`ChangeoverShot`], which mixes the two ends rather than cutting
+        // between them, so the move out and the move back are one path.
+        let (stand, aim) = changeover.blend(gantry + rail * travel, looking_at);
+        transform.translation = stand;
+        transform.look_at(aim, Vec3::Y);
     }
 }

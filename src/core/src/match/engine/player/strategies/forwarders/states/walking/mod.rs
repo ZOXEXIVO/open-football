@@ -1,3 +1,4 @@
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::{
@@ -27,6 +28,11 @@ impl StateProcessingHandler for ForwardWalkingState {
 
         if ctx.ball().is_owned() {
             if ctx.team().is_control_ball() {
+                if WideChannel::still_mine(ctx) {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::HoldingWidth,
+                    ));
+                }
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::CreatingSpace,
                 ));

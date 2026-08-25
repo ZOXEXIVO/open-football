@@ -1,4 +1,5 @@
 use crate::TacticalStyle;
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
     ActivityIntensity, Interception, MidfielderCondition,
@@ -48,6 +49,15 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
         {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Intercepting,
+            ));
+        }
+
+        // A man with a touchline is not looking for a gap between two
+        // centre-backs — he already knows where he is going, and the gap
+        // he is creating is for somebody else. See `holding_width`.
+        if WideChannel::still_mine(ctx) {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::HoldingWidth,
             ));
         }
 

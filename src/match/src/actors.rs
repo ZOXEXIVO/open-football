@@ -759,7 +759,25 @@ impl Actors {
     const NECK: f32 = 1.05;
     /// Stride length: how far a player travels per step, walking and per extra
     /// metre per second of pace. A sprinter's stride tops out around 2 m.
-    const STRIDE: (f32, f32, f32) = (0.75, 0.13, 2.10);
+    ///
+    /// ⚠ **The middle figure is what the leg swing is, and it was 0.13.**
+    /// Everything about a running leg is derived from the stride — the hip
+    /// angle is solved to put the foot where it asks
+    /// ([`crate::body::Joint::swinging`]) and the knee folds against the same
+    /// phase — so this number IS how far the legs come apart, and it was
+    /// reported as *"players run too strangely due to their long stride"*.
+    ///
+    /// At 0.13 a man at the engine's own speed ceiling took a 1.65 m step;
+    /// rendered side-on, his boots came 1.65 m apart with both legs nearly
+    /// straight, which is a hurdler rather than a footballer. 0.10 gives 1.45
+    /// at the same pace and a cadence of 4.8 steps a second — inside what a
+    /// sprinter actually turns over, where the old figure was loping at 4.2.
+    ///
+    /// It matters more than it looks because of what the engine does with
+    /// speed: it moves a footballer 23.6 km in ninety minutes and holds him
+    /// AT the ceiling on 70% of ticks, so the top of this range is not a rare
+    /// pose, it is the one the squad is drawn in for most of a match.
+    const STRIDE: (f32, f32, f32) = (0.75, 0.10, 2.10);
     /// The most steps a second anybody takes. See [`Actors::stride_of`].
     const TOP_CADENCE: f32 = 6.0;
     /// Seconds for a player to come round onto a new heading.
@@ -784,6 +802,12 @@ impl Actors {
     /// distance and under any camera: a world-space offset shrinks to nothing
     /// as the rig flattens, and a pixel offset crowds whoever is nearest.
     const LABEL_GAP: f32 = 0.15;
+    /// How far past a touchline a player may be and still be labelled, in
+    /// metres. A metre covers a man who has overrun the line and the
+    /// substitute waiting to come on (0.75 m out); it does not reach the
+    /// technical area, which the engine puts 2.1 m out. See
+    /// [`Self::place_labels`].
+    const PLATE_TOUCHLINE: f32 = 1.0;
     /// The band of heights, in metres, that means a ball is in a goalkeeper's
     /// gloves.
     ///
@@ -2736,6 +2760,23 @@ impl Actors {
             } else {
                 Vec3::new(step.x, 0.0, step.z)
             }
+        } else if position.z.abs() > Field::HALF_WIDTH {
+            // **A man standing off the pitch faces the pitch.**
+            //
+            // He is a substitute waiting at the fourth official's shoulder to
+            // come on, and what he is watching is the football — not the
+            // ball, which at the dead-ball stoppage every substitution is
+            // made at is lying somewhere out along the touchline BESIDE him.
+            // The branch below would turn him to it, and did: every waiting
+            // substitute stood side-on to the camera that had come round
+            // specifically to look at him.
+            //
+            // Square to the line rather than aimed at the centre spot,
+            // because that is how a man stands on a touchline. It only
+            // reaches him while he is STILL — the man walking away down the
+            // line after coming off is moving, and the branch above turns him
+            // onto his walk.
+            Vec3::new(0.0, 0.0, -position.z.signum())
         } else if ball.on_pitch && !unwatched {
             ball.position - position
         } else {
@@ -2887,6 +2928,8 @@ impl Actors {
         mut labels: Query<(&PlayerLabel, &mut Node, &mut Visibility), Without<PlayerActor>>,
     ) {
         let (camera, camera_transform) = *camera;
+        let eye = camera_transform.translation;
+        let ahead = camera_transform.forward();
         let camera_transform = GlobalTransform::from(*camera_transform);
 
         // **The plates are not in the same space the projection lands in.**
@@ -2930,6 +2973,36 @@ impl Actors {
             // and hang the plate below the boots by a share of the height
             // between them.
             let boots = actor_transform.translation;
+            // **A man behind the lens does not get one either.**
+            //
+            // `world_to_viewport` MIRRORS a point behind the camera rather
+            // than refusing it, so his plate lands somewhere inside the frame
+            // with no body under it. From the gantry nothing is ever behind
+            // the camera and it never showed; the substitution shot stands
+            // the rig on the touchline twenty-eight metres from the halfway
+            // line, and half a dozen names appeared floating in the far
+            // stand. A dot product is the only thing that separates the two
+            // cases, because both come back as a point on the screen.
+            if (boots - eye).dot(*ahead) <= 0.0 {
+                settle(&mut visibility, Visibility::Hidden);
+                continue;
+            }
+            // **A man well beyond the touchline does not get a name plate.**
+            //
+            // A plate belongs to somebody in the match. The man walking to his
+            // dugout after a change is not, and neither is anybody who has
+            // stepped into the run-off to fetch a ball — the ball is out of
+            // play and so is he.
+            //
+            // The margin is a metre, which is wider than it looks: it keeps
+            // the plate on a substitute waiting at the fourth official's
+            // shoulder (three quarters of a metre out) through the seconds
+            // before he comes on, where knowing who is about to arrive is
+            // most of the point.
+            if boots.z.abs() > Field::HALF_WIDTH + Self::PLATE_TOUCHLINE {
+                settle(&mut visibility, Visibility::Hidden);
+                continue;
+            }
             let crown = boots + Vec3::Y * Physique::STATURE * actor_transform.scale.y;
             let (Ok(boots), Ok(crown)) = (
                 camera.world_to_viewport(&camera_transform, boots),
@@ -5242,6 +5315,79 @@ mod ground {
         }
     }
 
+    /// **How far apart the two boots get, fore and aft, at full extension —
+    /// and how that compares with the step the ground is asking for.**
+    ///
+    /// The two ought to be the same number. A stride IS the gap between the
+    /// feet at full extension, and [`Actors::stride_of`] is where the length
+    /// of one is decided; a leg swing that carries the boots further than
+    /// that is a leg swing carrying more ground than the man is covering,
+    /// which he can only pay for by skating.
+    fn split_of(speed: f32, spring: f32) -> (f32, f32) {
+        let (stride, _) = Actors::stride_of(WALKER, speed, Vec2::Y);
+        let mut widest = 0.0f32;
+        for step in 0..240 {
+            let mut gait = moving(speed, step as f32 * TAU / 240.0, Vec2::Y);
+            gait.spring = spring;
+            widest = widest.max((boot(1.0, gait).z - boot(-1.0, gait).z).abs());
+        }
+        (stride, widest)
+    }
+
+    /// The bounciest runner a squad can contain — see `Complexion::spring`,
+    /// which runs 0.86 to 1.135. The flight term is multiplied by it, so he
+    /// is the man any bound on the swing has to hold for.
+    const SPRINGIEST: f32 = 1.135;
+
+    #[test]
+    #[ignore = "prints the swing table; run with --ignored --nocapture"]
+    fn dump_swing() {
+        println!("speed  stride  widest(1.0)  widest(max spring)");
+        for tenth in 10..=70 {
+            let speed = tenth as f32 / 10.0;
+            let (stride, plain) = split_of(speed, 1.0);
+            let (_, bouncy) = split_of(speed, SPRINGIEST);
+            println!(
+                "{speed:5.1}  {stride:6.2}  {plain:6.2} ({:+3.0}%)  {bouncy:6.2} ({:+3.0}%)",
+                (plain / stride - 1.0) * 100.0,
+                (bouncy / stride - 1.0) * 100.0
+            );
+        }
+    }
+
+    /// ⚠ **The legs must not swing further than the ground they carry.**
+    ///
+    /// [`Joint::stepping`] takes the larger of the ground the stride demands
+    /// and a FLIGHT term — `run · spring` — which is there because a runner's
+    /// feet genuinely do go back faster than the turf. It was unbounded and
+    /// it was quoted as a share of `SPRINT` (6 m/s) while a footballer's p99
+    /// is 6.7, and `spring` multiplies it by up to 1.135 on top: measured
+    /// before this was fixed, the boots came **2.55 m apart at 7 m/s against
+    /// a 1.66 m stride, a 54% over-swing**, and the knee folded past 130°.
+    /// That is the reported *"players run too strangely due to their long
+    /// stride"*.
+    ///
+    /// A little over is right — that is what the flight phase buys — but it
+    /// is a few per cent, not a half.
+    #[test]
+    fn the_legs_do_not_swing_further_than_the_ground_they_carry() {
+        for tenth in 10..=70 {
+            let speed = tenth as f32 / 10.0;
+            let (stride, widest) = split_of(speed, SPRINGIEST);
+            assert!(
+                widest <= stride * 1.15,
+                "at {speed:.1} m/s his boots come {widest:.2} m apart against a \
+                 {stride:.2} m stride — {:.0}% more ground than he is covering",
+                (widest / stride - 1.0) * 100.0
+            );
+            assert!(
+                widest >= stride * 0.55,
+                "at {speed:.1} m/s his boots come only {widest:.2} m apart \
+                 against a {stride:.2} m stride, so the planted foot is skating"
+            );
+        }
+    }
+
     /// And the old model, restated, so the fix cannot quietly be undone: the
     /// run cycle's own amplitude alone is not enough to carry a walk.
     #[test]
@@ -5249,7 +5395,12 @@ mod ground {
         let speed = 1.4_f32;
         let (stride, _) = Actors::stride_of(WALKER, speed, Vec2::Y);
         let rate = PI * speed / stride;
+        // The OLD gait, built by hand: `run` and nothing under it. The
+        // fixture cannot be `skeleton::running` any more, because that now
+        // sets `carry_ground` from the same speed — which is the thing this
+        // test exists to say is load-bearing.
         let mut gait = running((speed / Actors::SPRINT).clamp(0.0, 1.0));
+        gait.carry_ground = 0.0;
         let mut planted = (0.0, f32::MAX);
         for step in 0..240 {
             gait.phase = step as f32 * TAU / 240.0;

@@ -1,5 +1,6 @@
 use nalgebra::Vector3;
 
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
     ActivityIntensity, DefenderCondition, DefensiveLine,
@@ -216,6 +217,14 @@ impl StateProcessingHandler for DefenderStandingState {
         {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Intercepting,
+            ));
+        }
+
+        // The plan has named him for the overlap — a specific run
+        // with a specific target, above the generic push-up.
+        if WideChannel::still_mine(ctx) && ctx.team().is_overlap_runner() {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Overlapping,
             ));
         }
 

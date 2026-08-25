@@ -10,6 +10,7 @@ use crate::r#match::MovementEffort;
 use crate::r#match::engine::ball::ball::stall::dead_ball_diag::MotionCensus;
 use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK, RunOff};
 use crate::r#match::engine::engine::MATCH_HALF_TIME_MS;
+use crate::r#match::engine::flow::touchline::TouchlineStand;
 use crate::r#match::engine::result::PlayerMatchPhysicalSnapshot;
 use crate::r#match::engine::tactics::TacticalPositions;
 use crate::r#match::events::EventCollection;
@@ -88,6 +89,15 @@ pub struct MatchPlayer {
     /// genuinely 2-D-plus-height is the real fix, and a much larger one.
     pub height: f32,
     pub side: Option<PlayerSide>,
+    /// Where the REPLAY draws him while he is off the pitch — his place in
+    /// the row in front of the dugout, and, during a substitution, the line
+    /// he walks in or out along. `None` for anyone who is one of the eleven.
+    ///
+    /// Deliberately a second coordinate rather than a use of [`Self::position`]:
+    /// everybody off the pitch is parked at the sentinel `(-500, -500)`
+    /// because the bench is chained into the same proximity table the players
+    /// are scanned in. See [`TouchlineStand`] for the whole argument.
+    pub touchline: Option<TouchlineStand>,
     pub state: PlayerState,
     /// Ticks spent in the current `state`, counted in **AI ticks** (full
     /// `game_tick_inner` passes), not raw simulation ticks. The engine
@@ -504,6 +514,7 @@ impl MatchPlayer {
             height: 0.0,
             tactical_position: TacticalPositions::new(position, None),
             side: None,
+            touchline: None,
             state: Self::default_state(position),
             in_state_time: 0,
             previous_state: None,
@@ -580,6 +591,7 @@ impl MatchPlayer {
             height: 0.0,
             tactical_position: TacticalPositions::new(tactical_position, side),
             side,
+            touchline: None,
             state: Self::default_state(tactical_position),
             in_state_time: 0,
             previous_state: None,

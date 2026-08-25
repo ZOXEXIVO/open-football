@@ -35,6 +35,7 @@ pub mod rng;
 pub mod score_reaction;
 pub mod substitution_record;
 
+pub use clock::MATCH_TIME_INCREMENT_MS;
 pub use config::MatchEngineConfig;
 pub use match_context::{MatchContext, PendingAdvantage};
 pub use penalty_area::PenaltyArea;
