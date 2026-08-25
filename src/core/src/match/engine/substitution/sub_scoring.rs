@@ -419,7 +419,6 @@ impl SubScoring {
         }
         s.clamp(0.0, 1.0)
     }
-
 }
 
 #[cfg(test)]

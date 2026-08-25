@@ -7,6 +7,7 @@
 //! one is live state, keyed to the match clock.
 
 use super::match_context::MatchContext;
+use crate::r#match::engine::flow::result::SubstitutionReason;
 
 pub struct SubstitutionRecord {
     pub team_id: u32,
@@ -16,7 +17,7 @@ pub struct SubstitutionRecord {
     /// Reason the swap fired. Stamped at the call-site so post-match
     /// emit logic can distinguish protective swaps (injury / youth)
     /// from discretionary tactical hooks.
-    pub reason: crate::r#match::engine::flow::result::SubstitutionReason,
+    pub reason: SubstitutionReason,
     /// How long the match actually stopped for while the change was played
     /// out, in ms — see
     /// [`SubstitutionBreak`](super::super::touchline::SubstitutionBreak), whose
@@ -88,7 +89,7 @@ impl MatchContext {
         player_out_id: u32,
         player_in_id: u32,
         match_time: u64,
-        reason: crate::r#match::engine::flow::result::SubstitutionReason,
+        reason: SubstitutionReason,
     ) {
         self.substitutions.push(SubstitutionRecord {
             team_id,

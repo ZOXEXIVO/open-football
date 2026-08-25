@@ -30,11 +30,11 @@ use crate::club::team::tactics::MatchTacticType;
 use crate::r#match::engine::ball::ball::{AwaitedRestart, PassOriginRestart};
 use crate::r#match::engine::engine::FootballEngine;
 use crate::r#match::engine::result::Score;
-use crate::r#match::engine::substitutions::{Substitutions, process_substitutions};
+use crate::r#match::engine::substitutions::Substitutions;
 use crate::r#match::engine::touchline::{Bench, SubstitutionBreak, advance_substitution_break};
 use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::squad::squad::MatchSquad;
-use crate::r#match::{MatchContext, MatchField, MatchPlayer, MatchPlayerCollection};
+use crate::r#match::{MatchContext, MatchField, MatchPlayer, MatchPlayerCollection, MatchRng};
 use crate::shared::fullname::FullName;
 use crate::{PersonAttributes, PlayerAttributes, PlayerPositionType, PlayerSkills};
 use chrono::NaiveDate;
@@ -122,6 +122,11 @@ fn kickoff() -> (MatchField, MatchContext) {
     let field = MatchField::new(840, 545, home, away);
     let mut context = MatchContext::new(&field, players, Score::new(1, 2), false, false);
     context.total_match_time = 60 * 60_000;
+    // Pin the seed: the substitution timing model draws each side's manager
+    // from it (see `SubstitutionUrgency::temperament`), and an entropy seed
+    // would decide from run to run whether a discretionary change joins the
+    // forced one on the same stoppage.
+    context.rng = MatchRng::from_seed(0x5EED_0F17);
     (field, context)
 }
 
@@ -235,7 +240,7 @@ fn a_substitution_stops_the_match_and_walks_both_men() {
 
     let opened_at = context.total_match_time;
     let today = context.today;
-    process_substitutions(&mut field, &mut context, 3, today);
+    Substitutions::process(&mut field, &mut context, 3, today);
 
     // The roster changed on this tick — that half is unconditional, and the
     // decision layer depends on it (see the `changeover` module note).
@@ -252,9 +257,20 @@ fn a_substitution_stops_the_match_and_walks_both_men() {
         .find(|c| c.player_out_id == out_id)
         .expect("the injured man's change is in the window");
     let in_id = change.player_in_id;
+    // One beat per man being replaced, not one beat: a manager who is already
+    // stopping the game for an injury sends on whoever else was going on, and
+    // the window holds them all. Counting the staged changes rather than
+    // assuming one is what makes this an assertion about the geometry instead
+    // of about how many men happened to cross the line.
+    let staged = context
+        .substitution_break
+        .as_ref()
+        .expect("the window is open")
+        .changes()
+        .len() as u64;
     assert_eq!(
         context.dead_ball_until_ms,
-        opened_at + SubstitutionBreak::BREAK_MS + SubstitutionBreak::PORTRAIT_MS,
+        opened_at + SubstitutionBreak::BREAK_MS + SubstitutionBreak::PORTRAIT_MS * staged,
         "play must stop for at most the ceiling, plus the beat the picture \
          spends on each man being replaced"
     );
@@ -370,7 +386,7 @@ fn the_two_men_cross_at_the_halfway_line() {
     let started_at = field.get_player(out_id).unwrap().position;
 
     let today = context.today;
-    process_substitutions(&mut field, &mut context, 3, today);
+    Substitutions::process(&mut field, &mut context, 3, today);
     let waiting = field
         .players
         .iter()
@@ -412,7 +428,7 @@ fn nobody_moves_while_the_picture_is_on_the_men_being_replaced() {
     let (mut field, mut context) = kickoff();
     let out_id = injure_the_furthest_man(&mut field);
     let today = context.today;
-    process_substitutions(&mut field, &mut context, 3, today);
+    Substitutions::process(&mut field, &mut context, 3, today);
 
     let opened_at = context.total_match_time;
     let stood_at = field
@@ -480,7 +496,7 @@ fn the_man_who_came_off_walks_out_of_the_picture_and_then_stops_being_drawn() {
     let (mut field, mut context) = kickoff();
     let out_id = injure_the_furthest_man(&mut field);
     let today = context.today;
-    process_substitutions(&mut field, &mut context, 3, today);
+    Substitutions::process(&mut field, &mut context, 3, today);
     let dugout = field
         .departed
         .iter()

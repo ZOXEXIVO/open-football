@@ -12,7 +12,7 @@ use crate::r#match::engine::urgency::{BenchPressure, ChangeOpportunity, Substitu
 use crate::r#match::field::MatchField;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::transition::TransitionSource;
-use crate::r#match::{MatchContext, MatchPlayer, MatchState};
+use crate::r#match::{Bench, MATCH_TIME_MS, MatchContext, MatchPlayer, MatchState};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 
 /// In-match youth-protection thresholds and the candidate predicate.
@@ -67,67 +67,65 @@ impl YouthProtection {
     }
 }
 
-/// Process substitutions for both teams.
-///
-/// Three strategies, in priority order:
-/// 0. **Critical injury** — anyone (force-selected or not) with condition
-///    < 2000 is pulled off; under-17 protection runs alongside. These
-///    bypass the timing model entirely and ignore star protection: a man
-///    who cannot continue comes off in whatever minute he got hurt in.
-/// 1. **Discretionary scored-pair subs** — fatigue / tactical /
-///    development cases are evaluated as `(out, in)` pairs using
-///    [`sub_off_score_protected`] + [`sub_in_score`] so goal scorers and
-///    high-rated starters are protected unless the case for removing
-///    them is strong. *Whether* the manager is reaching for the bench at
-///    all is decided by [`BenchPressure`] — the scoreline, the legs, the
-///    trouble on the pitch and his own temperament, with no minute
-///    calendar anywhere in it. See [`urgency`](super::urgency).
-pub fn process_substitutions(
-    field: &mut MatchField,
-    context: &mut MatchContext,
-    max_subs_per_team: usize,
-    today: NaiveDate,
-) {
-    // Take the snapshots by `mem::take`. The substitution layer needs
-    // an immutable borrow of the snapshot to build the
-    // `CoachDecisionEngine`, while `process_with_coaches` needs a
-    // mutable borrow of `field` for the actual swap. Borrowing the
-    // snapshot back at the end of the call (so a future substitution
-    // pass on the same field still sees it) avoids cloning the memory
-    // map twice per match. Empty snapshots (tests / dev_match /
-    // wire-format reconstruction) keep the legacy memory-less path.
-    let home_snapshot = std::mem::take(&mut field.home_coach_snapshot);
-    let away_snapshot = std::mem::take(&mut field.away_coach_snapshot);
-    let home_engine = home_snapshot
-        .as_ref()
-        .map(|s| CoachDecisionEngine::new(&s.memory, &s.profile, s.strategy));
-    let away_engine = away_snapshot
-        .as_ref()
-        .map(|s| CoachDecisionEngine::new(&s.memory, &s.profile, s.strategy));
-    Substitutions::process_with_coaches(
-        field,
-        context,
-        max_subs_per_team,
-        today,
-        home_engine.as_ref(),
-        away_engine.as_ref(),
-    );
-    drop(home_engine);
-    drop(away_engine);
-    field.home_coach_snapshot = home_snapshot;
-    field.away_coach_snapshot = away_snapshot;
-}
-
-/// Match-side helpers grouped under one namespace. The free-function
-/// versions of these helpers all lived at module scope; bundling them
-/// under a struct keeps `process_substitutions` readable, lets tests
-/// reach in via stable `Substitutions::xxx` paths, and gives the file a
-/// single place to grow per-difficulty / per-rule-set knobs later.
+/// Match-side helpers grouped under one namespace, and the entry point
+/// itself. Bundling them keeps the pass readable, lets tests reach in via
+/// stable `Substitutions::xxx` paths, and gives the file a single place to
+/// grow per-difficulty / per-rule-set knobs later.
 pub(crate) struct Substitutions;
 
 impl Substitutions {
+    /// Process substitutions for both teams.
+    ///
+    /// Three strategies, in priority order:
+    /// 0. **Critical injury** — anyone (force-selected or not) with condition
+    ///    < 2000 is pulled off; under-17 protection runs alongside. These
+    ///    bypass the timing model entirely and ignore star protection: a man
+    ///    who cannot continue comes off in whatever minute he got hurt in.
+    /// 1. **Discretionary scored-pair subs** — fatigue / tactical /
+    ///    development cases are evaluated as `(out, in)` pairs using
+    ///    [`sub_off_score_protected`] + [`sub_in_score`] so goal scorers and
+    ///    high-rated starters are protected unless the case for removing
+    ///    them is strong. *Whether* the manager is reaching for the bench at
+    ///    all is decided by [`BenchPressure`] — the scoreline, the legs, the
+    ///    trouble on the pitch and his own temperament, with no minute
+    ///    calendar anywhere in it. See [`urgency`](super::urgency).
+    pub fn process(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        max_subs_per_team: usize,
+        today: NaiveDate,
+    ) {
+        // Take the snapshots by `mem::take`. The substitution layer needs
+        // an immutable borrow of the snapshot to build the
+        // `CoachDecisionEngine`, while `process_with_coaches` needs a
+        // mutable borrow of `field` for the actual swap. Borrowing the
+        // snapshot back at the end of the call (so a future substitution
+        // pass on the same field still sees it) avoids cloning the memory
+        // map twice per match. Empty snapshots (tests / dev_match /
+        // wire-format reconstruction) keep the legacy memory-less path.
+        let home_snapshot = std::mem::take(&mut field.home_coach_snapshot);
+        let away_snapshot = std::mem::take(&mut field.away_coach_snapshot);
+        let home_engine = home_snapshot
+            .as_ref()
+            .map(|s| CoachDecisionEngine::new(&s.memory, &s.profile, s.strategy));
+        let away_engine = away_snapshot
+            .as_ref()
+            .map(|s| CoachDecisionEngine::new(&s.memory, &s.profile, s.strategy));
+        Self::process_with_coaches(
+            field,
+            context,
+            max_subs_per_team,
+            today,
+            home_engine.as_ref(),
+            away_engine.as_ref(),
+        );
+        drop(home_engine);
+        drop(away_engine);
+        field.home_coach_snapshot = home_snapshot;
+        field.away_coach_snapshot = away_snapshot;
+    }
     /// Internal entry point that carries optional coach decision
-    /// engines per side. Mirrors the public `process_substitutions`
+    /// engines per side. Mirrors [`Self::process`]
     /// signature but adds the two `Option<&CoachDecisionEngine>`
     /// handles — used by the public wrapper above (with `None`) and
     /// by tests / wiring code that already holds the head coach.
@@ -526,9 +524,7 @@ impl Substitutions {
             let pressure = Self::bench_pressure(field, context, team_id, goal_diff, coach);
 
             let need = if match_minutes >= 45 {
-                let progress = (context.total_match_time as f32
-                    / crate::r#match::MATCH_TIME_MS as f32)
-                    .min(1.0);
+                let progress = (context.total_match_time as f32 / MATCH_TIME_MS as f32).min(1.0);
                 let match_coach = context.coach_for_team(team_id);
                 let condition_avg = field
                     .players
@@ -675,9 +671,19 @@ impl Substitutions {
     /// Builds the live snapshots the trouble term needs from the same
     /// outfield starters the pair scorer will look at, in the same order,
     /// so the two agree about who is on the pitch. The snapshots are the
-    /// expensive part of the read (each one runs the rating model), which
+    /// expensive part of the read — each one runs the rating model — which
     /// is why the whole thing is built once per team per pass rather than
     /// once per candidate.
+    ///
+    /// **And that is cheap enough to leave alone.** The pass now runs at
+    /// every dead ball rather than at the four or five scheduled moments the
+    /// old timer allowed, which looks like it ought to matter. Measured, 200
+    /// fixtures: 96.9 s with an exact short-circuit that skipped the
+    /// snapshots whenever the bar was out of reach even with the worst
+    /// possible trouble reading, 98.0 s without it. One percent, which is
+    /// run-to-run noise — so the short-circuit was taken back out and this
+    /// note stands in its place, for whoever next reads the call site and
+    /// worries about the same thing.
     fn bench_pressure(
         field: &MatchField,
         context: &MatchContext,
@@ -697,14 +703,13 @@ impl Substitutions {
         } else {
             (0, (-goal_diff) as u8)
         };
+        let now = context.total_match_time;
         let live: Vec<LiveSubstitutionStats> = starters
             .iter()
-            .map(|p| {
-                LiveSubstitutionStats::from_player(p, context.total_match_time, own, opp)
-            })
+            .map(|p| LiveSubstitutionStats::from_player(p, now, own, opp))
             .collect();
         SubstitutionUrgency::read(
-            (context.total_match_time / 60_000) as u32,
+            (now / 60_000) as u32,
             goal_diff,
             &starters,
             &live,
@@ -820,7 +825,7 @@ impl Substitutions {
         team_id: u32,
         player_out_id: u32,
         player_in_id: u32,
-        reason: crate::r#match::engine::flow::result::SubstitutionReason,
+        reason: SubstitutionReason,
     ) -> bool {
         // The slot the man replacing him is inheriting, read before the swap
         // consumes him and needed only to draw the change.
@@ -859,14 +864,14 @@ impl Substitutions {
         // period boundary resets every position ten milliseconds later, and
         // a `SubstitutionBreak` staged here would arm a pause in a state
         // that runs no ticks to serve it.
-        let walked = !MatchContext::sub_walk_off()
-            && context.state.match_state != MatchState::HalfTime;
+        let walked =
+            !MatchContext::sub_walk_off() && context.state.match_state != MatchState::HalfTime;
         let waits_at = walked.then(|| {
             let waiting = context
                 .substitution_break
                 .as_ref()
                 .map_or(0, |window| window.waiting_for(is_home));
-            crate::r#match::Bench::entry_gate(&field.size, is_home, waiting)
+            Bench::entry_gate(&field.size, is_home, waiting)
         });
         if !field.substitute_player(player_out_id, player_in_id, waits_at) {
             return false;
@@ -973,8 +978,7 @@ impl Substitutions {
                 // the two can never overlap: the substitution pass sits below
                 // that pause's `continue` in the match loop, and no goal can
                 // be scored inside a window with no ball physics in it.
-                context.dead_ball_until_ms =
-                    context.dead_ball_until_ms.max(window.resume_at_ms());
+                context.dead_ball_until_ms = context.dead_ball_until_ms.max(window.resume_at_ms());
             }
         }
 
@@ -1368,6 +1372,7 @@ impl CoachLiveAdapter {
 mod tests {
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::r#match::MatchRng;
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions, PlayerSkills,
@@ -2035,7 +2040,9 @@ mod tests {
         };
         let first_change_minute = |gd: i32| {
             (20..=95)
-                .find(|&m| quiet(m, gd).clears_at(0, &ChangeOpportunity::new(m, false, false, 0, 5)))
+                .find(|&m| {
+                    quiet(m, gd).clears_at(0, &ChangeOpportunity::new(m, false, false, 0, 5))
+                })
                 .unwrap_or(120)
         };
 
@@ -2127,6 +2134,14 @@ mod tests {
         let players = MatchPlayerCollection::from_squads(&home_squad, &away_squad);
         let field = MatchField::new(840, 545, home_squad, away_squad);
         let mut context = MatchContext::new(&field, players, Score::new(1, 2), false, false);
+        // Pin the seed. `MatchContext::new` takes one from entropy, and the
+        // match seed is what
+        // [`SubstitutionUrgency::temperament`](super::urgency::SubstitutionUrgency)
+        // draws each side's manager from — so without this every one of
+        // these fixtures gets a different coach every run, and a case
+        // sitting near the bar passes or fails on the draw. The value is
+        // arbitrary; what matters is that it is the same one every time.
+        context.rng = MatchRng::from_seed(0x5EED_0F17);
         context.score.home_team = TeamScore::new_with_score(1, score_home);
         context.score.away_team = TeamScore::new_with_score(2, score_away);
         context.total_match_time = total_match_time;
@@ -2171,7 +2186,7 @@ mod tests {
             }
         }
 
-        process_substitutions(&mut field, &mut context, 5, d(2025, 1, 1));
+        Substitutions::process(&mut field, &mut context, 5, d(2025, 1, 1));
 
         // The scorer must not be on the substituted_out list. The
         // winger should be (the only discretionary sub-eligible
@@ -2220,7 +2235,7 @@ mod tests {
             }
         }
 
-        process_substitutions(&mut field, &mut context, 5, d(2025, 1, 1));
+        Substitutions::process(&mut field, &mut context, 5, d(2025, 1, 1));
 
         let subbed_out_ids: Vec<u32> = context
             .substituted_out_stats
@@ -2269,7 +2284,7 @@ mod tests {
             }
         }
 
-        process_substitutions(&mut field, &mut context, 5, d(2025, 1, 1));
+        Substitutions::process(&mut field, &mut context, 5, d(2025, 1, 1));
 
         assert!(
             context.subs_used_by_team(1) >= 1,
@@ -2306,7 +2321,7 @@ mod tests {
             }
         }
 
-        process_substitutions(&mut field, &mut context, 5, d(2025, 1, 1));
+        Substitutions::process(&mut field, &mut context, 5, d(2025, 1, 1));
 
         let subbed_out_ids: Vec<u32> = context
             .substituted_out_stats

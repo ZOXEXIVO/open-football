@@ -28,7 +28,7 @@ use crate::r#match::engine::rating::RatingContext;
 use crate::r#match::engine::set_pieces::{
     penalty_conversion_prob, score_keeper_save, score_penalty_taker,
 };
-use crate::r#match::engine::substitutions::{Substitutions, process_substitutions};
+use crate::r#match::engine::substitutions::Substitutions;
 use crate::r#match::engine::touchline::changeover::{
     advance_substitution_break, finish_substitution_break,
 };

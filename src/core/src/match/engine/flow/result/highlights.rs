@@ -70,7 +70,7 @@ pub struct HighlightSelector;
 impl HighlightSelector {
     /// At most this many per side. Two or three is a highlight reel; six is the
     /// match again.
-    pub const PER_TEAM: usize = 3;
+    pub const PER_TEAM: usize = 5;
 
     /// Recorded xG a strike has to reach to count as a chance at all.
     ///
@@ -94,7 +94,7 @@ impl HighlightSelector {
 
     /// How far apart two markers have to be, as a divisor of the match length —
     /// a thirtieth of ninety minutes is three of them.
-    const SPACING_DIVISOR: u64 = 30;
+    const SPACING_DIVISOR: u64 = 45;
 
     /// Trims `chances` to the shortlist and returns the timestamps that
     /// survived, in the order they happened — which is exactly the list the

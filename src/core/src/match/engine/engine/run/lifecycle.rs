@@ -317,7 +317,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         if context.state.match_state == MatchState::HalfTime {
             let per_pass_cap = context.max_substitutions_per_pass;
             let today = context.today;
-            process_substitutions(field, context, per_pass_cap, today);
+            Substitutions::process(field, context, per_pass_cap, today);
             return result;
         }
 
@@ -568,9 +568,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
             // The manager's ROUTINE review of his bench runs from the second
             // half on, plus extra time when a knockout tie reaches it. Its
-            // clock is deliberately confined to those periods: it is the
-            // only substitution site that draws from
-            // [`MatchContext::rng`](crate::r#match::MatchContext), and a
+            // clock is deliberately confined to those periods: it is the only
+            // substitution site that draws from `MatchContext::rng`, and a
             // benchless fixture must keep consuming exactly the stream it
             // consumed before the pressure model existed. ET gets one bonus
             // sub on entry (FIFA rule).
@@ -619,6 +618,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 // gets its changes on the plan and a game that has gone
                 // wrong gets them when it goes wrong.
                 //
+                // Deciding and acting stay two steps, and the split is not
+                // stylistic: a change stops the match for
+                // [`SubstitutionBreak::BREAK_MS`], which must not be the
+                // thing that stops it — see
+                // [`Substitutions::play_is_stopped`]. Whichever of the two
+                // conditions below fires, the change still waits for the
+                // ball to be dead.
+                //
                 // The RE-ARM has to stay on the tick the timer fired: it is
                 // an [`MatchContext::rng`] draw, the stream is shared with
                 // every calibrated decision in the match, and moving it to
@@ -629,8 +636,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 // exactly as it was rather than being folded into the
                 // pressure model: a benchless fixture must consume the
                 // stream it consumed before this model existed, and it does.
-                //
-                // [`BenchPressure`]: crate::r#match::engine::urgency::BenchPressure
                 if period_time >= next_sub_time_ms {
                     sub_due = true;
                     next_sub_time_ms = period_time + context.rng.range_u64(5, 15) * 60 * 1000;
@@ -666,7 +671,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 // line on it: overlapping clips are merged at full time
                 // anyway, and a double change is one moment.
                 let before = context.substitutions.len();
-                process_substitutions(field, context, per_pass_cap, today);
+                Substitutions::process(field, context, per_pass_cap, today);
                 if walk_on && context.substitutions.len() > before {
                     match_data.mark_substitution(context.total_match_time);
                 }

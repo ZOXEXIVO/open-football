@@ -54,17 +54,28 @@
 //!
 //! # What it measures
 //!
-//! Same census, same 400 fixtures, `dev_match subs 400 14`:
+//! `dev_match subs 800 14 2` — 800 fixtures, bench two levels below the XI:
 //!
 //! | | before | after | real |
 //! |---|---|---|---|
-//! | first change of a side, mean | 71.9' | 59.8' | ~62' |
-//! | first change, **standard deviation** | **4.2'** | **10.4'** | ~13' |
-//! | distinct minutes it lands on | 25 | 46 | — |
-//! | first change: behind vs ahead | 71.9' / 72.0' | **54.7' / 64.8'** | large |
-//! | changes at the interval | none possible | 7% | 10-14% |
+//! | first change of a side, mean | 71.9' | 60.9' | ~62' |
+//! | first change, **standard deviation** | **4.2'** | **10.6'** | ~13' |
+//! | distinct minutes it lands on | 25 | 51 | — |
+//! | share landing on the modal minute | 11% | 8% | — |
+//! | first change: behind vs ahead | 71.9' / 72.0' | **55.9' / 65.2'** | large |
+//! | changes at the interval | none possible | 6.8% | 10-14% |
 //! | separate moments a side interrupts | 5 | 2-3 | 2-3 |
-//! | changes per side | 4.83 | 4.63 | ~4.5 |
+//! | changes per side | 4.83 | 4.5 | ~4.5 |
+//! | team-goal rho / draws | — | +0.14 / 25.1% | ~0 / ~25% |
+//!
+//! The row that was the complaint is the fifth: the scoreline used to be
+//! worth a tenth of a minute and is now worth nine, and the second is why
+//! the same fixture no longer looks the same twice.
+//!
+//! Still short of the real game in two places, both known and neither
+//! load-bearing: the interval is a little under-used, and 50-55' is thinner
+//! than a real Saturday because most of what would have happened there has
+//! been pulled forward to the break.
 //!
 //! # Temperament, and why it is not a die roll
 //!
@@ -77,10 +88,10 @@
 //! `MatchContext::rng`, so adding this
 //! model does not move a single roll in a fixture that has no bench to use.
 
+use crate::PlayerPositionType;
 use crate::club::staff::CoachProfile;
 use crate::r#match::MatchPlayer;
 use crate::r#match::engine::sub_scoring::LiveSubstitutionStats;
-use crate::PlayerPositionType;
 
 /// One side's appetite for a change, at one moment.
 ///
@@ -464,8 +475,7 @@ impl SubstitutionUrgency {
         let m = minute as f32;
         let progress = (m / 90.0).clamp(0.0, 1.2);
 
-        let clock =
-            ((m - Self::CLOCK_FROM) / (Self::CLOCK_TO - Self::CLOCK_FROM)).clamp(0.0, 1.0);
+        let clock = ((m - Self::CLOCK_FROM) / (Self::CLOCK_TO - Self::CLOCK_FROM)).clamp(0.0, 1.0);
 
         let chase = {
             let deficit = (-goal_diff).max(0) as f32;
