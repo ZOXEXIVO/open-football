@@ -64,6 +64,7 @@ impl InterceptionDuel {
     /// Multiplier an evenly-matched duel resolves to. Quoted so callers
     /// and tests can name the population anchor instead of re-deriving
     /// it from the two constants above.
+    #[allow(dead_code)] // quoted anchor: read by tests and by calibration notes
     pub(crate) const PARITY: f32 = Self::FLOOR + Self::SLOPE * 0.5;
 
     #[inline]

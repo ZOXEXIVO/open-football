@@ -1,9 +1,9 @@
 use crate::TacticalStyle;
-use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
     ActivityIntensity, Interception, MidfielderCondition,
 };
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,

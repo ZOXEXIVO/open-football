@@ -50,8 +50,8 @@
 //! not the shape, is the player's job this instant.
 
 use crate::PlayerFieldPositionGroup;
-use crate::r#match::engine::teamplay::tactical::inputs::TeamSkillAggregates;
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::engine::teamplay::tactical::inputs::TeamSkillAggregates;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::state::PlayerState;

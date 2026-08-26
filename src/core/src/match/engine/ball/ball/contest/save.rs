@@ -720,6 +720,7 @@ impl SaveModel {
 
     /// Reference point for the spread guard: an ordinary centred shot
     /// from an ordinary striker, no speed penalty, no weather.
+    #[cfg(test)]
     #[inline]
     pub(crate) fn centred_save_probability(skill: f32) -> f32 {
         Self::save_probability(0.0, 0.0, skill, Self::NEUTRAL_THREAT, 0.0)

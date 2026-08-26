@@ -143,10 +143,17 @@ fn corner_winner_blocked_after_consecutive_failures() {
     hist.record_corner(true, CornerRoutine::PenaltySpot, 0.04);
     let env = MatchEnvironment::default();
     let scores = score_corner_routines(15.0, 15.0, 0.55, 0.50, false, false, &env);
-    // PenaltySpot is normally the winner per spec base probs, but two
-    // failed reps in a row → blocked.
-    let pick = pick_corner_routine(&scores, &hist, true);
-    assert_ne!(pick, CornerRoutine::PenaltySpot);
+    // PenaltySpot carries the largest share per spec base probs, but two
+    // failed reps in a row → out of the draw at every roll.
+    for i in 0..100 {
+        let pick = pick_corner_routine(&scores, &hist, true, i as f32 / 100.0);
+        assert_ne!(
+            pick,
+            CornerRoutine::PenaltySpot,
+            "roll={}",
+            i as f32 / 100.0
+        );
+    }
 }
 
 #[test]

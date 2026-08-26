@@ -1,12 +1,11 @@
 use crate::r#match::midfielders::states::{
     MidfielderAttackSupportingState, MidfielderCreatingSpaceState, MidfielderCrossingState,
     MidfielderDistanceShootingState, MidfielderDistributingState, MidfielderDribblingState,
-    MidfielderGuardingState, MidfielderHeadingState, MidfielderInterceptingState,
-    MidfielderPassingState, MidfielderPressingState, MidfielderRestingState,
-    MidfielderReturningState, MidfielderRunningState, MidfielderShootingState,
-    MidfielderHoldingWidthState, MidfielderStandingState, MidfielderSwitchingPlayState,
-    MidfielderTacklingState,
-    MidfielderTakeBallState, MidfielderWalkingState,
+    MidfielderGuardingState, MidfielderHeadingState, MidfielderHoldingWidthState,
+    MidfielderInterceptingState, MidfielderPassingState, MidfielderPressingState,
+    MidfielderRestingState, MidfielderReturningState, MidfielderRunningState,
+    MidfielderShootingState, MidfielderStandingState, MidfielderSwitchingPlayState,
+    MidfielderTacklingState, MidfielderTakeBallState, MidfielderWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::Result;

@@ -11,9 +11,9 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::ball::ball::CornerWalk;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::teleport as tc;
-use crate::r#match::engine::corner_shape::CornerRole;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::corner_shape::CornerShape;
+use crate::r#match::engine::corner_shape::{CornerDeadline, CornerRole};
 use crate::r#match::engine::engine::*;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::midfielders::states::MidfielderState;
@@ -339,10 +339,29 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         {
             return;
         }
-        let held = field
-            .ball
-            .current_tick_cached
-            .saturating_sub(shape.armed_tick);
+        // **He is still standing over it.** The kick has not been taken,
+        // so the delivery's clock has not started: keep re-stamping the
+        // deadline's origin onto now, exactly as the go-live re-stamp in
+        // `AwaitedRestart::take_from` does for the walk-in.
+        //
+        // The deadline is sized off what a corner PHYSICALLY takes once
+        // the ball is in the air — the flight and the moment somebody
+        // attacks it — and the seconds a taker spends set over a dead ball
+        // are a stoppage, which is precisely when the other twenty-one are
+        // meant to be walking into the shape. Measured before this: the
+        // shape was released by the deadline on 81% of corners in the
+        // fourth tier and 56% in the first, i.e. the box emptied before
+        // the cross was met in most corners at every level of the pyramid.
+        //
+        // Bounded, because "he never strikes it" has to terminate. Past
+        // the set-up ceiling the corner is not a corner any more and falls
+        // through to the release below.
+        //
+        // ⚠ It has to be the ORIGINAL dead ball he is still standing over,
+        // not a ball that came back to him. A short corner played to a
+        // team-mate and returned would otherwise re-pin the whole shape
+        // for another set-up window, in the middle of open play.
+        let now = field.ball.current_tick_cached;
         // The taker is the only man who may touch the ball without ending
         // the set piece: the award stamps him as last toucher, and so does
         // his own delivery (a cross is a deliberate kick). Anybody else on
@@ -350,7 +369,25 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let only_the_taker_has_touched_it = field.ball.last_touch_player_id == Some(shape.taker_id);
         let corner_still_live = field.ball.pass_origin_restart == PassOriginRestart::Corner
             && only_the_taker_has_touched_it;
-        if corner_still_live && held < Self::CORNER_SHAPE_MAX_TICKS {
+        if CornerDeadline::armed()
+            && corner_still_live
+            && field.ball.current_owner == Some(shape.taker_id)
+        {
+            let since_live = now.saturating_sub(shape.live_tick.unwrap_or(shape.armed_tick));
+            if since_live < CornerDeadline::SETUP_MAX_TICKS {
+                if let Some(s) = field.ball.corner_shape.as_mut() {
+                    s.armed_tick = now;
+                }
+                return;
+            }
+        }
+        let held = now.saturating_sub(shape.armed_tick);
+        let deadline = if CornerDeadline::armed() {
+            shape.deadline_ticks
+        } else {
+            CornerDeadline::CALIBRATION_TICKS
+        };
+        if corner_still_live && held < deadline {
             return;
         }
         // `corner_still_live` here means nothing ended it — the deadline
@@ -363,16 +400,4 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
         field.ball.corner_shape = None;
     }
-
-    /// Longest a corner shape may pin anybody, in engine ticks (10 ms
-    /// each), counted from the award.
-    ///
-    /// Sized off what a corner physically takes: the cross leaves the
-    /// taker 50 ms after the award, the flight from the flag to the far
-    /// post is 35 m at ~20 m/s, and the aerial contest resolves the
-    /// instant the ball is airborne. Two and a half seconds covers all of
-    /// it with room over, and nothing beyond it is still a corner —
-    /// whatever is happening by then is open play with the restart flag
-    /// left up.
-    const CORNER_SHAPE_MAX_TICKS: u64 = 250;
 }

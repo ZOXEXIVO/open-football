@@ -1938,11 +1938,6 @@ mod tests {
         assert_eq!(MatchPage::score(2, 1), "2\u{2011}1");
     }
 
-    /// Every match report must stay printable without its scorer — a
-    /// stored result can arrive without details, and a 0-0 has nobody
-    /// to name. Each match stem therefore keeps at least one phrasing
-    /// in every locale that needs no `{player}` at all.
-    #[test]
     /// The market desk reads a signing's motive off a key the transfer
     /// pipeline writes as a string, which is a join no compiler checks.
     ///
@@ -1996,6 +1991,10 @@ mod tests {
         }
     }
 
+    /// Every match report must stay printable without its scorer — a
+    /// stored result can arrive without details, and a 0-0 has nobody
+    /// to name. Each match stem therefore keeps at least one phrasing
+    /// in every locale that needs no `{player}` at all.
     #[test]
     fn a_match_report_can_always_print_without_its_scorer() {
         for (lang, _) in BUNDLES {

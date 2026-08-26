@@ -27,7 +27,7 @@ use crate::club::mind::organs::memory::EpochDay;
 pub struct Escalation;
 
 /// What one goal's review changed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StatusChange {
     pub kind: GoalKind,
     pub from: GoalStatus,

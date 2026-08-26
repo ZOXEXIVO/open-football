@@ -1,4 +1,4 @@
-use crate::field::Field;
+use crate::scene::field::Field;
 use bevy::prelude::{Resource, error};
 use serde::de::{Error as DeError, IgnoredAny, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -172,13 +172,13 @@ impl StateTrack {
 ///
 /// So the document is opened in two passes. This one reads the envelope and
 /// leaves each player's samples as a [`RawValue`] — bytes serde has confirmed
-/// are a well-formed JSON value and has otherwise not looked inside. That
-/// costs a scan for the closing bracket, where the full parse costs a number
-/// converted and a vector grown for every one of some hundred thousand
-/// samples. The second pass is [`Self::open`], and
-/// [`crate::loader::ChunkLoader::pump`] runs it a few players at a time
-/// against a millisecond budget, so the cost lands as a handful of ordinary
-/// frames instead of one stall.
+/// are a well-formed JSON value and has otherwise not looked inside. That costs
+/// a scan for the closing bracket, where the full parse costs a number
+/// converted and a vector grown for every one of some hundred thousand samples.
+/// The second pass is [`Self::open`], and
+/// [`crate::recording::loader::ChunkLoader::pump`] runs it a few players at a
+/// time against a millisecond budget, so the cost lands as a handful of
+/// ordinary frames instead of one stall.
 ///
 /// The ball is deliberately NOT deferred with them. It is one track against
 /// twenty-two, the camera follows it, and nothing can be shown until it is
@@ -330,9 +330,9 @@ impl Track {
     /// When this entity first appears in the recording, or `None` while
     /// nothing of it has been downloaded yet.
     ///
-    /// Read by [`crate::actors::Actors::take_the_field`] to know when a man on
-    /// the bench is about to be needed. `&self` and no cursor: it is the front
-    /// of the track, not a lookup into it.
+    /// Read by [`crate::players::actors::Actors::take_the_field`] to know when
+    /// a man on the bench is about to be needed. `&self` and no cursor: it is
+    /// the front of the track, not a lookup into it.
     pub fn opens_at(&self) -> Option<f64> {
         self.samples.first().map(|sample| sample.t as f64)
     }

@@ -15,6 +15,7 @@ use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::runoff::ExitAxis;
 use crate::r#match::engine::ball::ball::{AwaitedRestart, Ball, RunOff};
 use crate::r#match::engine::corner_shape::CornerShape;
+use crate::r#match::engine::set_pieces::ThrowAppetite;
 use crate::r#match::events::EventCollection;
 use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
 #[cfg(feature = "match-logs")]
@@ -803,10 +804,6 @@ impl CornerWalk {
 pub struct ThrowIn;
 
 impl ThrowIn {
-    /// Below this the attribute is not a long-throw specialism, it is
-    /// just an ordinary throw-in.
-    const SPECIALIST_BAR: f32 = 14.0;
-
     /// Delivery range in field units, as `(min, max)`.
     ///
     /// 140u baseline + up to 180u extra at long_throws=20 — at this
@@ -824,10 +821,43 @@ impl ThrowIn {
         (12.0, max_range)
     }
 
-    /// Whether the player can deliver a "long throw into the box" — only
-    /// in the attacking third, and only with a genuine long-throw skill.
-    pub fn can_reach_box(long_throws_skill: f32, in_attacking_third: bool) -> bool {
-        in_attacking_third && long_throws_skill >= Self::SPECIALIST_BAR
+    /// Whether the player is in a position to deliver a long throw into
+    /// the box at all: it has to be the attacking third, and the box has
+    /// to be inside [`Self::range`] from where he is standing.
+    ///
+    /// # Why the skill is not tested here
+    ///
+    /// It used to be — `long_throws >= 14.0`, a bare bar on the raw
+    /// attribute — and that is a skill CLIFF standing in for a distance.
+    /// Two things followed.
+    /// A 13.9 thrower two metres from the corner flag could not
+    /// reach a box he was practically standing in, while a 14.0 thrower
+    /// from the halfway line could; and because the bar is absolute, the
+    /// population that clears it is a property of the DIVISION — level 8
+    /// generates a mean of 8.2 and nobody in the league has a long throw
+    /// at all, level 20 generates 15.1 and everybody does.
+    ///
+    /// [`Self::range`] already answers the question continuously and
+    /// physically: 17.5 m for an ordinary thrower rising to ~40 m for a
+    /// specialist. Whether that reaches the box from HERE is geometry,
+    /// and geometry is what a man standing on the touchline actually
+    /// reads. The attribute keeps its whole effect — it just exerts it
+    /// through how far the ball goes, which is what a long throw is.
+    pub fn can_reach_box(
+        long_throws_skill: f32,
+        in_attacking_third: bool,
+        distance_to_box_edge: f32,
+    ) -> bool {
+        if !in_attacking_third {
+            return false;
+        }
+        if !ThrowAppetite::armed() {
+            // The old bar, restored under the same switch that restores
+            // the routine chooser's — they were one cliff at two sites.
+            return long_throws_skill >= 14.0;
+        }
+        let (_, max_range) = Self::range(long_throws_skill);
+        distance_to_box_edge <= max_range
     }
 
     /// Score-based thrower selection.
@@ -928,9 +958,29 @@ mod throw_in_tests {
     }
 
     #[test]
-    fn box_throw_needs_both_the_third_and_the_attribute() {
-        assert!(!ThrowIn::can_reach_box(20.0, false), "own half");
-        assert!(!ThrowIn::can_reach_box(9.0, true), "no long-throw skill");
-        assert!(ThrowIn::can_reach_box(16.0, true));
+    fn box_throw_needs_the_third_and_the_distance() {
+        // Own half is never a long throw into the box, however far he
+        // can hurl it.
+        assert!(!ThrowIn::can_reach_box(20.0, false, 50.0), "own half");
+        // From deep in the corner (60u to the edge of the box) an
+        // ordinary thrower reaches it. That is the point: the ball goes
+        // where the geometry says, not where a 14/20 bar says.
+        assert!(ThrowIn::can_reach_box(9.0, true, 60.0));
+        // …and from 250u out — near the halfway line — only a genuine
+        // specialist does.
+        assert!(!ThrowIn::can_reach_box(9.0, true, 250.0));
+        assert!(ThrowIn::can_reach_box(20.0, true, 250.0));
+    }
+
+    /// The attribute has to buy REACH continuously, or the cliff has
+    /// simply moved from the gate into the range curve.
+    #[test]
+    fn every_extra_point_of_long_throws_buys_ground() {
+        let mut prev = ThrowIn::range(1.0).1;
+        for lt in 2..=20 {
+            let next = ThrowIn::range(lt as f32).1;
+            assert!(next > prev, "flat between {} and {lt}", lt - 1);
+            prev = next;
+        }
     }
 }

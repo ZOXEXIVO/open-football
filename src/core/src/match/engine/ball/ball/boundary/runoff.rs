@@ -32,7 +32,7 @@
 //!
 //! The two margins are **the viewer's own**, and that is the point of
 //! taking them from there rather than inventing them. `Pitch::spawn_ground`
-//! (`src/match/src/pitch.rs`) builds advertising hoardings at 3.4 m beyond
+//! (`src/match/src/scene/pitch.rs`) builds advertising hoardings at 3.4 m beyond
 //! each touchline and 4.6 m behind each goal, and those boards are what a
 //! ball rolling out of play actually hits. Put the physics anywhere else
 //! and the ball either stops in open grass for no reason a watcher can

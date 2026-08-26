@@ -11,9 +11,9 @@ use crate::r#match::events::EventCollection;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
-#[cfg(feature = "match-logs")]
-use crate::match_log_debug;
 use nalgebra::Vector3;
+use std::env::var;
+use std::sync::OnceLock;
 
 /// Where the ball actually is when a pass is booked as received, and
 /// how often the delivery is then thrown away.
@@ -406,6 +406,25 @@ pub mod reception_diag {
             DIED_DEAD_BALL.load(Ordering::Relaxed),
             OUT_OF_REACH.load(Ordering::Relaxed),
         )
+    }
+}
+
+/// **The takeover bar is an absolute edge, not a share of the league.**
+///
+/// `OF_TAKEOVER_ABS_OFF=1` restores the bare `1.25×` ratio exactly — the
+/// pre-2026-08-26 engine. The A/B control for the channel; see the note
+/// at its use inside `check_ball_ownership`.
+pub struct TakeoverMargin;
+
+impl TakeoverMargin {
+    #[inline]
+    pub fn armed() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| {
+            !var("OF_TAKEOVER_ABS_OFF")
+                .map(|v| v != "0" && !v.is_empty())
+                .unwrap_or(false)
+        })
     }
 }
 
@@ -1601,6 +1620,35 @@ impl Ball {
             25
         };
         const TAKEOVER_ADVANTAGE_THRESHOLD: f32 = 1.25;
+        // **How much better the challenger has to be, priced against the
+        // division.**
+        //
+        // This was a bare ratio — `challenger < owner * 1.25`, "beat him
+        // by a quarter of what he is". `calculate_tackling_score` is a
+        // weight-1 blend of composites on a 0..20 scale, so it rises with
+        // the standard of football, and a ratio therefore demands a
+        // BIGGER ABSOLUTE EDGE the higher up the pyramid the match is
+        // played: a quarter of 8 is two attribute points, a quarter of 16
+        // is four. Within-division spread does not scale that way — it is
+        // roughly the same handful of points at every level — so the same
+        // 50/50 that is winnable in the fourth tier is unwinnable in the
+        // first, and possession gets stickier the better the players are
+        // for no footballing reason.
+        //
+        // `MatchStandard::shift` is exactly the deviation of this match's
+        // composites from the calibration division, in the same
+        // normalised units, so `score - 20*shift` is the owner's score
+        // re-read at the division every constant here was fitted in. Zero
+        // shift at level 14 ⇒ bit-identical to the old ratio where it was
+        // measured.
+        let takeover_margin = |owner_score: f32| {
+            let at_calibration = if TakeoverMargin::armed() {
+                (owner_score - 20.0 * MatchStandard::shift(context)).max(0.0)
+            } else {
+                owner_score
+            };
+            at_calibration * (TAKEOVER_ADVANTAGE_THRESHOLD - 1.0)
+        };
 
         // Minute derived from cached tick — `current_tick_cached` is
         // refreshed every tick via `update*`, so it tracks the same
@@ -1654,8 +1702,12 @@ impl Ball {
                                 let challenger_score =
                                     Self::calculate_tackling_score(challenger_full, minute);
 
-                                // Require challenger to be significantly better
-                                if challenger_score < current_score * TAKEOVER_ADVANTAGE_THRESHOLD {
+                                // Require challenger to be significantly
+                                // better — by the same ABSOLUTE edge in
+                                // every division, not by a share of a
+                                // number that grows with the league.
+                                if challenger_score < current_score + takeover_margin(current_score)
+                                {
                                     // Challenger not strong enough - maintain current ownership
                                     self.ownership_duration += 1;
                                     return;

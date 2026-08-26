@@ -1,4 +1,3 @@
-use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{

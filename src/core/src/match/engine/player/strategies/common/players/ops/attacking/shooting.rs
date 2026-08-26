@@ -96,7 +96,18 @@ impl<'p> ShootingOperationsImpl<'p> {
             // The ball is still on its restart, so a strike now IS that
             // set piece — same rule the event builder classifies by, so
             // the pre-shot gate and the in-flight resolution agree.
-            set_piece: ShotType::from_restart(self.ctx.tick_context.ball.pass_origin_restart),
+            //
+            // Deliberately never `Header` here. This profile is what the
+            // pre-shot GATES read, and `expected_xg(d, true)` at a gate
+            // is the LOCATION value — "is a chance available from here" —
+            // not a prediction of the strike that follows. Classifying
+            // the gate as a header would cut headed chance SUPPLY (a
+            // separate, opposite problem: headers are 2.8% of shots
+            // against a real 15-18%), which is not what the strike model
+            // is for. The event builder classifies the shot that is
+            // actually taken.
+            shot_type: ShotType::from_restart(self.ctx.tick_context.ball.pass_origin_restart)
+                .unwrap_or(ShotType::FootOpenPlay),
             standard_shift: MatchStandard::shift(self.ctx.context),
         };
 

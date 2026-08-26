@@ -22,10 +22,10 @@ pub mod assist_diag;
 #[cfg(feature = "match-logs")]
 pub mod block_diag;
 #[cfg(feature = "match-logs")]
-pub mod knock_diag;
-#[cfg(feature = "match-logs")]
 pub mod flight_diag;
 #[cfg(feature = "match-logs")]
 pub mod frame_trace;
+#[cfg(feature = "match-logs")]
+pub mod knock_diag;
 #[cfg(feature = "match-logs")]
 pub mod teleport;

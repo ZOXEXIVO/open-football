@@ -298,7 +298,6 @@ impl WideBuilder<'_> {
                 });
             plan.holders[flank.index()] = best.map(|(id, _)| id);
         }
-
     }
 
     /// …and the run beyond the ball-side holder.

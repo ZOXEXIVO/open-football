@@ -1,10 +1,10 @@
 //! How many pixels the replay is actually drawn into.
 //!
-//! [`crate::quality`] deals with the other half of the same problem and says
-//! why it is a problem at all: on an integrated part the frame is bound per
-//! SAMPLE, and there are only two ways to write fewer of them — take fewer
-//! samples per pixel, which is what the tier does, or have fewer pixels, which
-//! is what this does.
+//! [`crate::app::quality`] deals with the other half of the same problem and
+//! says why it is a problem at all: on an integrated part the frame is bound
+//! per SAMPLE, and there are only two ways to write fewer of them — take
+//! fewer samples per pixel, which is what the tier does, or have fewer pixels,
+//! which is what this does.
 //!
 //! Of the two this is the one with the better exchange rate. Sampling is a
 //! ladder with two rungs on the web (WebGL2 offers one sample or four and
@@ -58,8 +58,8 @@
 //! reallocates its render target each time. Going one way converges in the
 //! first seconds and then stops, which is what smoothness is made of.
 
-use crate::perf::FrameCost;
-use crate::quality::Quality;
+use crate::app::perf::FrameCost;
+use crate::app::quality::Quality;
 use bevy::camera::{ImageRenderTarget, RenderTarget};
 use bevy::image::{ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
@@ -81,10 +81,11 @@ impl Backdrop {
     ///
     /// The replay is the floor. The name plates over the players' heads are
     /// part of the football, so they sit on it and go dark with it. The dip
-    /// between two clips ([`crate::cut`]) covers both. And everything at the
-    /// default zero — the transport bar, the flight stick, the altitude
-    /// buttons — is furniture laid over the lot of it, which never dims,
-    /// because a control that went dark at every cut would read as a fault.
+    /// between two clips ([`crate::broadcast::cut`]) covers both. And
+    /// everything at the default zero — the transport bar, the flight stick,
+    /// the altitude buttons — is furniture laid over the lot of it, which
+    /// never dims, because a control that went dark at every cut would read as
+    /// a fault.
     pub const PICTURE: i32 = -3;
     /// The plates, over the picture and under the dip. See [`Self::PICTURE`].
     pub const PLATES: i32 = -2;
@@ -95,7 +96,8 @@ impl Backdrop {
 /// The image the replay is drawn into, and how large it is being kept.
 #[derive(Resource)]
 pub struct Stage {
-    /// What [`crate::camera::TvCamera`] renders into and [`Backdrop`] shows.
+    /// What [`crate::broadcast::camera::TvCamera`] renders into and
+    /// [`Backdrop`] shows.
     canvas: Handle<Image>,
     /// Where on [`Self::SCALES`] the controller has settled.
     step: usize,
@@ -264,8 +266,8 @@ impl Stage {
     /// The window camera, and the sheet the replay is shown on.
     ///
     /// Runs at `Startup` beside the rest of the spawns. Order against
-    /// [`crate::timeline::Timeline::spawn`] does not matter: the backdrop is
-    /// held at a negative global depth, so it is behind the bar whichever of
+    /// [`crate::ui::timeline::Timeline::spawn`] does not matter: the backdrop
+    /// is held at a negative global depth, so it is behind the bar whichever of
     /// them is built first. See [`Backdrop::PICTURE`] for the whole ladder.
     pub fn spawn(mut commands: Commands, stage: Res<Stage>) {
         commands.spawn((

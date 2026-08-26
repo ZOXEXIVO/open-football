@@ -964,11 +964,6 @@ mod tests {
         );
     }
 
-    /// A descending ball must actually bounce. The collision test used to
-    /// run AFTER the roll/fly split, which zeroed the downward velocity
-    /// first and left the branch unreachable for anything moving at a
-    /// normal speed — lofted balls simply died where they landed.
-    #[test]
     /// **A slow ball in the air must not be put on the floor.**
     ///
     /// The settle branch fired on total SPEED alone and wrote
@@ -1007,6 +1002,10 @@ mod tests {
         );
     }
 
+    /// A descending ball must actually bounce. The collision test used to
+    /// run AFTER the roll/fly split, which zeroed the downward velocity
+    /// first and left the branch unreachable for anything moving at a
+    /// normal speed — lofted balls simply died where they landed.
     #[test]
     fn a_descending_ball_bounces_instead_of_dying_on_contact() {
         let mut ball = Ball::with_coord(840.0, 545.0);

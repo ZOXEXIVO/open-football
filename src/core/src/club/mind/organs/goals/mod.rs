@@ -53,4 +53,4 @@ pub use catalog::{GoalDirection, GoalKind, GoalMask, GoalSpec};
 pub use escalation::{Escalation, StatusChange};
 pub use evidence::{GoalBlocker, GoalDomain, GoalEvidence, GoalOrigin};
 pub use goal::{GoalStatus, MindGoal};
-pub use stack::{GoalCensus, GoalReviewReport, GoalStack, GoalStore};
+pub use stack::{FormedWant, GoalCensus, GoalReviewReport, GoalStack, GoalStore};

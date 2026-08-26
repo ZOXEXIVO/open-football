@@ -5,6 +5,8 @@ use crate::r#match::player::strategies::players::ops::effective_skill::{
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::ops::xg::ShotType;
+use std::env::var;
+use std::sync::OnceLock;
 
 // ---------------------------------------------------------------------------
 // ShotSkillProfile — unified shooting model
@@ -38,15 +40,27 @@ pub struct ShotSkillInputs {
     /// Distance to GK if a closing keeper is in scope; None otherwise.
     pub gk_distance: Option<f32>,
     pub is_sprinting_or_recent_sprint: bool,
-    /// Set piece this strike is, if any. `None` for open play.
+    /// What KIND of chance this is. `FootOpenPlay` is the neutral
+    /// default and every multiplier below it is exactly 1.0, so
+    /// classifying a shot never moves the population conversion rate on
+    /// its own.
     ///
-    /// A penalty and a direct free kick are not shots-from-a-distance:
-    /// they are their own actions with their own attributes and their
-    /// own conversion bands. Without this the profile scored both with
-    /// the open-play finishing curve, which is why `penalty_taking` and
-    /// `free_kicks` could pick a taker and then have no effect at all on
-    /// whether he scored.
-    pub set_piece: Option<ShotType>,
+    /// Three of the types are a different ACTION rather than a different
+    /// look at goal, and the profile executes each off its own skills:
+    ///
+    /// * a **penalty** and a **direct free kick** are not
+    ///   shots-from-a-distance — they are struck from a standing start
+    ///   with their own attributes and their own real-world conversion
+    ///   bands. Without this the profile scored both with the open-play
+    ///   finishing curve, which is why `penalty_taking` and `free_kicks`
+    ///   could pick a taker and then have no effect at all on whether he
+    ///   scored;
+    /// * a **header** is aimed by the neck, not by the standing foot.
+    ///   Same defect, same shape: `heading` won the duel that produced
+    ///   the chance and then the strike was resolved on `finishing`,
+    ///   `technique` and `balance` as though he had hit it with his
+    ///   instep.
+    pub shot_type: ShotType,
     /// How far the standard of football in this match sits from the
     /// division these curves were fitted in — see
     /// [`crate::r#match::engine::teamplay::standard::MatchStandard`].
@@ -82,9 +96,30 @@ pub struct ShotSkillProfile {
     pub shooting_condition_mult: f32,
     pub low_condition_penalty: f32,
     pub pressure_penalty: f32,
-    /// Carried through from [`ShotSkillInputs::set_piece`] so
-    /// [`Self::expected_xg`] can apply the dead-ball conversion band.
-    pub set_piece: Option<ShotType>,
+    /// Carried through from [`ShotSkillInputs::shot_type`] so
+    /// [`Self::expected_xg`] can apply the dead-ball conversion band and
+    /// the per-type multiplier.
+    pub shot_type: ShotType,
+}
+
+/// **A header is struck with the head.**
+///
+/// `OF_HEADER_SHOT_OFF=1` restores the pre-2026-08-26 engine exactly: a
+/// headed attempt is executed off the finishing-led open-play composite
+/// and priced at a foot shot's conversion rate. The A/B control for the
+/// channel — see [`ShotType::is_header`].
+pub struct HeaderStrike;
+
+impl HeaderStrike {
+    #[inline]
+    pub fn armed() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| {
+            !var("OF_HEADER_SHOT_OFF")
+                .map(|v| v != "0" && !v.is_empty())
+                .unwrap_or(false)
+        })
+    }
 }
 
 #[inline]
@@ -203,15 +238,33 @@ impl ShotSkillProfile {
                 .clamp(0.0, 1.0)
         };
 
-        // Dead-ball override. `penalty_execution` is deliberately linear
+        // Per-action override. `penalty_execution` is deliberately linear
         // (a penalty is a technically trivial kick, so the skill response
         // is close to linear and composure carries a quarter of it);
         // `dead_ball_strike` is curved like the open-play composites,
         // because bending one over a wall genuinely is a specialist
-        // action a mediocre striker of the ball simply cannot perform.
-        let execution_skill = match inputs.set_piece {
-            Some(ShotType::Penalty) => sc::penalty_execution(player, inputs.minute),
-            Some(ShotType::DirectFreeKick) => sc::dead_ball_strike(player, inputs.minute),
+        // action a mediocre striker of the ball simply cannot perform;
+        // `header_finish` is curved the same way and led by `heading`,
+        // because meeting a cross cleanly and steering it down is a
+        // specialist action too — and the one the engine was resolving
+        // on the striker's instep.
+        //
+        // `header_finish` is a weight-1 linear blend of `n(skill)`, so
+        // `peer`-ing it against the standard of football in this match is
+        // exact and is zero at the calibration division — same argument
+        // as `receiving_first_touch`, and required because
+        // `execution_skill` feeds absolute anchors
+        // (`0.50 + execution*0.85` and friends) further down.
+        let header = HeaderStrike::armed() && inputs.shot_type.is_header();
+        let header_execution = || {
+            let skill01 =
+                (sc::header_finish(player, inputs.minute) - inputs.standard_shift).clamp(0.0, 1.0);
+            pow_curve(skill01, 1.45)
+        };
+        let execution_skill = match inputs.shot_type {
+            ShotType::Penalty => sc::penalty_execution(player, inputs.minute),
+            ShotType::DirectFreeKick => sc::dead_ball_strike(player, inputs.minute),
+            _ if header => header_execution(),
             _ => open_play_execution,
         };
 
@@ -248,9 +301,12 @@ impl ShotSkillProfile {
         // Placement — finishing + decisions + technique drive how well
         // the player can pick a corner. On a dead ball, picking the
         // corner IS the skill being tested and it is the specialist
-        // attribute that names it, so the same override applies.
-        let placement_skill = match inputs.set_piece {
-            Some(ShotType::Penalty) | Some(ShotType::DirectFreeKick) => execution_skill,
+        // attribute that names it, so the same override applies. A header
+        // goes the same way: a man cannot pick a corner with his head any
+        // better than he can direct the ball at all, and steering it down
+        // and across the keeper IS heading ability.
+        let placement_skill = match inputs.shot_type {
+            _ if inputs.shot_type.is_dead_ball() || header => execution_skill,
             _ => (pow_curve(finishing01, 1.65) * 0.45
                 + pow_curve(decisions01, 1.40) * 0.25
                 + pow_curve(technique01, 1.40) * 0.20
@@ -325,7 +381,7 @@ impl ShotSkillProfile {
             shooting_condition_mult,
             low_condition_penalty,
             pressure_penalty,
-            set_piece: inputs.set_piece,
+            shot_type: inputs.shot_type,
         }
     }
 
@@ -338,11 +394,11 @@ impl ShotSkillProfile {
         // kick has to beat a wall as well as him. Both have their own
         // well-established real-world conversion bands and neither is
         // described by "an unpressured shot from this distance".
-        match self.set_piece {
+        match self.shot_type {
             // Real penalties convert 70-82%. The band is centred on the
             // population of *selected* takers so wiring `penalty_taking`
             // in redistributes conversion rather than shifting it.
-            Some(ShotType::Penalty) => {
+            ShotType::Penalty => {
                 let scale = (0.975 + (self.execution_skill - PENALTY_EXECUTION_REFERENCE) * 0.50)
                     .clamp(0.85, 1.10);
                 return (0.76 * scale * self.shooting_condition_mult).clamp(0.55, 0.88);
@@ -350,7 +406,7 @@ impl ShotSkillProfile {
             // Real direct free kicks convert ~6-8% overall, and a
             // specialist from 20m is worth several times a defender
             // from the same spot. 60u ≈ 7.5m, 200u = 25m.
-            Some(ShotType::DirectFreeKick) => {
+            ShotType::DirectFreeKick => {
                 let dist_score =
                     (1.0 - (distance.clamp(60.0, 200.0) - 60.0) / 140.0).clamp(0.0, 1.0);
                 return (0.03 + dist_score * 0.05 + self.execution_skill * 0.04).clamp(0.03, 0.12);
@@ -391,11 +447,21 @@ impl ShotSkillProfile {
 
         let clarity_mult = if has_clear_shot { 1.0 } else { 0.35 };
         let pressure_mult = (1.0 - self.pressure_penalty * 0.85).clamp(0.20, 1.0);
+        // What KIND of chance this is, at the same geometry. Exactly 1.0
+        // for `FootOpenPlay` — the type every open-play strike carries —
+        // so this is calibration-neutral by construction and only the
+        // classified minority (headers) move.
+        let type_mult = if HeaderStrike::armed() {
+            self.shot_type.xg_multiplier()
+        } else {
+            1.0
+        };
         let mut xg = distance_factor
             * self.shot_quality_multiplier
             * self.shooting_condition_mult
             * pressure_mult
-            * clarity_mult;
+            * clarity_mult
+            * type_mult;
 
         // Long-range cap unless the player has elite long shots
         // (encoded via execution_skill above ~0.55 implies long_shots≥16).

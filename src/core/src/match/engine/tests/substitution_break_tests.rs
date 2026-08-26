@@ -15,11 +15,10 @@
 //!    moves until the picture has finished with the man coming on — and the
 //!    NEXT pair does not move until he has had his run as well. See
 //!    [`SubstitutionBreak::BEAT_MS`].
-//! 2. **Neither walker teleports.** The window closes when the last man is on
-//!    rather than on a clock, so the only way the tidy-up at the end becomes
-//!    the whole-pitch write it replaced is if a walk runs out of
-//!    [`SubstitutionBreak::BREAK_MS`] first — which is what the step
-//!    assertions catch.
+//! 2. **Neither walker teleports.** The window closes on its own beats and
+//!    hands both men over wherever they have got to, so there is nothing left
+//!    for a tidy-up to close and nothing is landed — which is exactly the
+//!    condition the step assertions catch if it ever changes back.
 //! 3. **Nobody else moves**, and nobody who is not part of the change is
 //!    drawn beside the pitch at all.
 
@@ -286,9 +285,9 @@ fn a_substitution_stops_the_match_and_walks_both_men() {
         .expect("the injured man's change is in the window") as u64;
     assert_eq!(
         context.dead_ball_until_ms,
-        opened_at + SubstitutionBreak::BREAK_MS + SubstitutionBreak::BEAT_MS * staged,
-        "play must stop for at most the ceiling, plus the beat the picture \
-         spends on each man coming on"
+        opened_at + SubstitutionBreak::BEAT_MS * staged,
+        "play must stop for exactly the beat the picture spends on each man \
+         coming on, and for nothing else"
     );
 
     // Both men start where they really are: him on the pitch, the substitute
@@ -356,39 +355,62 @@ fn a_substitution_stops_the_match_and_walks_both_men() {
     );
 
     // Neither of them jumped. The bounds are the two speeds plus a whisker
-    // for float drift; anything above them is `land` closing ground a walk
-    // ran out of window to cover.
+    // for float drift.
+    //
+    // ⚠ **This is the assertion that guards the 2026-08-26 change.** The
+    // window no longer waits for either walker, so `land` closing the ground
+    // one of them had left would be a twenty-metre teleport rather than the
+    // few centimetres it used to be — and `land` no longer writes a position
+    // at all. If it ever does again, it shows up here first.
     assert!(
         longest_step(walk_on) <= 0.67,
-        "the substitute jumped {:.2} units in one tick — the window ran out \
-         before his walk did",
+        "the substitute jumped {:.2} units in one tick — something landed him",
         longest_step(walk_on)
     );
+    // ⚠ **His bound has to allow for the HANDOVER.** Inside the window the man
+    // coming off is walked by `advance` once per TICK; past it he is walked by
+    // `settle_touchline` once per RECORDED FRAME, which is three ticks' worth
+    // of ground in one go. Both are the same 8.75 m/s in the recording — and
+    // the recording is all the replay ever sees, so it interpolates a smooth
+    // walk either way — but this track is sampled every tick, where the second
+    // of them looks like a step three times the size.
+    let handover = SubstitutionBreak::OFF * (30 / TICK_MS) as f32;
     assert!(
-        longest_step(walk_off) <= 0.71,
-        "the man coming off jumped {:.2} units in one tick",
+        longest_step(walk_off) <= handover + 0.01,
+        "the man coming off jumped {:.2} units in one tick, against {handover:.2} \
+         for a recorder's step",
         longest_step(walk_off)
     );
 
-    // He finished on the slot he was brought on for.
-    let arrived = field.players.iter().find(|p| p.id == in_id).unwrap();
-    assert_eq!(
-        arrived.position, slot,
-        "the substitute did not reach his slot"
+    // **He is on the pitch and still going.** He is NOT on his slot: the
+    // window stops two seconds into his run and his own AI takes him the rest
+    // of the way once play is live, which is what a substitute jogging into
+    // position looks like.
+    let arriving = field.players.iter().find(|p| p.id == in_id).unwrap();
+    assert!(
+        !Bench::is_over_the_line(arriving.position),
+        "the substitute is still out in the run-off at {:?}",
+        arriving.position
+    );
+    let covered = (arriving.position - entered_at).norm();
+    assert!(
+        covered > 100.0,
+        "he only covered {covered:.1} units of his run — two seconds at ON is \
+         about a hundred and thirty"
+    );
+    assert!(
+        arriving.position != slot,
+        "he is standing on his slot — something landed him there"
     );
 
-    // The window closed as soon as he got there rather than at the ceiling,
-    // and stamped how long it took on the ledger.
+    // The window ran for exactly its beats and nothing else, and stamped how
+    // long it took on the ledger.
     let spent = context.total_match_time - opened_at;
-    assert!(
-        spent < SubstitutionBreak::BREAK_MS + SubstitutionBreak::BEAT_MS * staged,
-        "the window ran to its ceiling ({spent} ms) instead of ending on the \
-         last man"
-    );
-    assert!(
-        spent >= SubstitutionBreak::BEAT_MS * staged,
-        "the window closed inside its own beats ({spent} ms) — the picture is \
-         still working through them"
+    assert_eq!(
+        spent,
+        SubstitutionBreak::BEAT_MS * staged,
+        "the window ran for {spent} ms instead of its own beats — it is \
+         waiting for somebody again"
     );
     assert_eq!(
         context.dead_ball_until_ms, context.total_match_time,
@@ -423,24 +445,30 @@ fn the_two_men_cross_at_the_halfway_line() {
     let tracks = play_out_the_window(&mut field, &mut context);
     let walk = &tracks[&out_id];
 
-    // He does NOT leave by the nearest point on the line — he crosses where
+    // He does NOT leave by the nearest point on the line — he heads for where
     // the man replacing him is standing, which is what makes the exchange one
     // picture instead of two. He started 289 units along from there.
-    let crossing = *walk
-        .iter()
-        .find(|p| Bench::is_over_the_line(**p))
-        .expect("he must cross the line");
+    //
+    // ⚠ **Measured as a HEADING rather than as a crossing**, because since
+    // 2026-08-26 the window stops two seconds into the substitute's run and
+    // hands him over well short of the line — see
+    // `SubstitutionBreak::beats_ms`. Where he actually crosses is
+    // `settle_touchline`'s business by then, and it is steering him at the
+    // dugout; what the window still owes the picture is that he set off
+    // ALONG the pitch toward the gate rather than straight across it.
+    let ended = *walk.last().expect("he was sampled");
     assert!(
-        (crossing.x - waiting.x).abs() < 20.0,
-        "he crossed at x={:.0}, {:.0} units from the substitute at x={:.0}",
-        crossing.x,
-        (crossing.x - waiting.x).abs(),
-        waiting.x
+        (ended.x - started_at.x).abs() > 40.0,
+        "he moved {:.0} units along the pitch — a man leaving by the nearest \
+         point on the line would move none at all",
+        (ended.x - started_at.x).abs()
     );
+    let closed = (started_at - waiting).norm() - (ended - waiting).norm();
     assert!(
-        (crossing.x - started_at.x).abs() > 100.0,
-        "the fixture no longer starts him anywhere near the halfway line, so \
-         this test cannot tell the two rules apart"
+        closed > 100.0,
+        "he closed only {closed:.0} units of the ground to the substitute at \
+         x={:.0} — he is not walking at him",
+        waiting.x
     );
 }
 
@@ -505,16 +533,22 @@ fn nobody_moves_while_the_picture_is_on_the_man_coming_on() {
         );
     }
 
-    // And then it lets go, and the pair cross at the gate.
+    // And then it lets go, and the pair set off.
+    //
+    // ⚠ Not "and he is over the line": the window stops two seconds into the
+    // substitute's run now and neither man is expected to have arrived
+    // anywhere — see `SubstitutionBreak::beats_ms`. What the beat owes is that
+    // he was still on his spot the tick before it ended and off it afterwards.
     play_out_the_window(&mut field, &mut context);
+    let ended_at = field
+        .departed
+        .iter()
+        .find(|p| p.id == out_id)
+        .and_then(|p| p.touchline)
+        .map(|stand| stand.at);
     assert!(
-        field
-            .departed
-            .iter()
-            .find(|p| p.id == out_id)
-            .and_then(|p| p.touchline)
-            .is_none_or(|stand| Bench::is_over_the_line(stand.at)),
-        "he never crossed the line once the beat was over"
+        ended_at.is_none_or(|at| at != stood_at),
+        "he never left his spot once the beat was over"
     );
 }
 

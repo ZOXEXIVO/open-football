@@ -12,23 +12,29 @@
 //! decides how deeply an event brands itself on him
 //! ([`MindOrgans::relevance_for`]).
 //!
+//! [`journal`] is the third, and it is not an organ in the same sense —
+//! nothing reads it back. It is the dated trail of what the other two
+//! did, kept so a mind can be shown rather than only inspected.
+//!
 //! `beliefs` and `mood` follow in their own phases — see
 //! `docs/player_mind.md`.
 
 pub mod goals;
+pub mod journal;
 pub mod memory;
 
 pub use goals::{
-    Escalation, GoalBlocker, GoalBridge, GoalCensus, GoalDirection, GoalDomain, GoalEvidence,
-    GoalKind, GoalMask, GoalOrigin, GoalReviewReport, GoalSpec, GoalStack, GoalStatus, GoalStore,
-    MindGoal, ReasonMapping, StatusChange,
+    Escalation, FormedWant, GoalBlocker, GoalBridge, GoalCensus, GoalDirection, GoalDomain,
+    GoalEvidence, GoalKind, GoalMask, GoalOrigin, GoalReviewReport, GoalSpec, GoalStack,
+    GoalStatus, GoalStore, MindGoal, ReasonMapping, StatusChange,
 };
+pub use journal::{MindJournal, MindNote, MindNoteKind, MindNoteStore};
 pub use memory::{
     ActorAccount, ActorKind, ActorRef, AttributionLedger, ConsolidationReport, Consolidator,
     EncodingInputs, EpisodeDomain, EpisodeFlags, EpisodeKind, EpisodeStore, EpochDay, FactClaim,
-    ForgettingCurve, Ledger, LedgerEntry, MemoryCensus, MemoryContext, MindClock, MindEpisode,
-    MindHolder, MindMemory, Recall, RecallContext, RecallCue, RecallResult, RecalledEpisode,
-    Semantic, SemanticFact, SemanticStore,
+    ForgettingCurve, FormedFact, Ledger, LedgerEntry, MemoryCensus, MemoryContext, MindClock,
+    MindEpisode, MindHolder, MindMemory, Recall, RecallContext, RecallCue, RecallResult,
+    RecalledEpisode, Semantic, SemanticFact, SemanticStore,
 };
 
 /// The shared state of one mind.
@@ -44,6 +50,9 @@ pub struct MindOrgans {
     pub memory: MindMemory,
     /// What he wants, and how close each want is to being said out loud.
     pub goals: GoalStack,
+    /// The dated turning points the other two produced. Written by the
+    /// weekly think, read by nothing inside the simulation.
+    pub journal: MindJournal,
 }
 
 impl MindOrgans {
@@ -67,6 +76,74 @@ impl MindOrgans {
             // Nothing in the goal model speaks to injuries or
             // bereavements; they land at their own intrinsic weight.
             None => 0.5,
+        }
+    }
+
+    /// Write the week's turning points into the diary.
+    ///
+    /// One call, shared by both minds, at the end of the periodic think —
+    /// the only place where both reports are in hand and the date is
+    /// certain. Everything it writes was already decided; nothing here
+    /// re-derives a turn from a snapshot.
+    ///
+    /// Want formations carry their own date, because they happen on
+    /// whichever day the emit site noticed. Rung walks and convictions
+    /// are dated `today`, because the review and the consolidation pass
+    /// are literally when the mind reached them.
+    pub fn journal_tick(
+        &mut self,
+        goals: Option<&GoalReviewReport>,
+        consolidation: Option<&ConsolidationReport>,
+        today: EpochDay,
+    ) {
+        if let Some(report) = goals {
+            for want in report.formed() {
+                self.journal.record(MindNote::want(
+                    MindNoteKind::WantFormed,
+                    want.kind,
+                    want.day,
+                ));
+            }
+            for change in report.changes() {
+                if let Some(kind) = Self::note_for(change) {
+                    self.journal
+                        .record(MindNote::want(kind, change.kind, today));
+                }
+            }
+        }
+
+        if let Some(report) = consolidation {
+            for fact in report.formed() {
+                self.journal
+                    .record(MindNote::conviction(fact.claim, fact.subject, today));
+            }
+        }
+    }
+
+    /// Which turn, if any, a rung walk is worth writing down.
+    ///
+    /// Climbing to [`Voiced`] is the first thing anyone outside his head
+    /// can observe, so it is worth a line; *falling back* to it from a
+    /// formal demand is him going quiet again, which the diary does not
+    /// pretend is the same event. The two silent rungs never appear:
+    /// [`Latent`] is a feeling he has not acknowledged and [`Active`] is
+    /// one he acts on without saying, and a diary that announced either
+    /// would be reporting something nobody — including him — could point
+    /// to on the day.
+    ///
+    /// [`Voiced`]: GoalStatus::Voiced
+    /// [`Latent`]: GoalStatus::Latent
+    /// [`Active`]: GoalStatus::Active
+    fn note_for(change: StatusChange) -> Option<MindNoteKind> {
+        match change.to {
+            GoalStatus::Voiced if change.from.rung() < GoalStatus::Voiced.rung() => {
+                Some(MindNoteKind::WantVoiced)
+            }
+            GoalStatus::Pressing => Some(MindNoteKind::WantPressed),
+            GoalStatus::Satisfied => Some(MindNoteKind::WantSatisfied),
+            GoalStatus::Frustrated => Some(MindNoteKind::WantFrustrated),
+            GoalStatus::Abandoned => Some(MindNoteKind::WantAbandoned),
+            GoalStatus::Voiced | GoalStatus::Latent | GoalStatus::Active => None,
         }
     }
 

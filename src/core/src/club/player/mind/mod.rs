@@ -80,19 +80,20 @@ pub use submind::{MindOption, MindView, MoodContribution, ReasonSet, SubMind, We
 
 pub use organs::MindOrgans;
 pub use organs::goals::{
-    Escalation, GoalBlocker, GoalBridge, GoalCensus, GoalDirection, GoalEvidence, GoalKind,
-    GoalMask, GoalOrigin, GoalReviewReport, GoalSpec, GoalStack, GoalStatus, MindGoal,
+    Escalation, FormedWant, GoalBlocker, GoalBridge, GoalCensus, GoalDirection, GoalEvidence,
+    GoalKind, GoalMask, GoalOrigin, GoalReviewReport, GoalSpec, GoalStack, GoalStatus, MindGoal,
     ReasonMapping, StatusChange,
 };
+pub use organs::journal::{MindJournal, MindNote, MindNoteKind, MindNoteStore};
 // `GoalDomain` is re-exported from the goals organ, but the name reads
 // better unqualified alongside `EpisodeDomain`.
 pub use organs::goals::GoalDomain;
 pub use organs::memory::{
     ActorAccount, ActorKind, ActorRef, AttributionLedger, ConsolidationReport, Consolidator,
     EncodingInputs, EpisodeDomain, EpisodeFlags, EpisodeKind, EpisodeStore, EpochDay, FactClaim,
-    ForgettingCurve, Ledger, LedgerEntry, MemoryCensus, MemoryContext, MindClock, MindEpisode,
-    MindHolder, MindMemory, Recall, RecallContext, RecallCue, RecallResult, RecalledEpisode,
-    Semantic, SemanticFact, SemanticStore,
+    ForgettingCurve, FormedFact, Ledger, LedgerEntry, MemoryCensus, MemoryContext, MindClock,
+    MindEpisode, MindHolder, MindMemory, Recall, RecallContext, RecallCue, RecallResult,
+    RecalledEpisode, Semantic, SemanticFact, SemanticStore,
 };
 
 use crate::club::person::PersonAttributes;
@@ -262,6 +263,16 @@ impl PlayerMind {
     #[inline]
     pub fn goals_mut(&mut self) -> &mut GoalStack {
         &mut self.organs.goals
+    }
+
+    /// Borrow the dated trail of what has turned in him.
+    ///
+    /// Read-only by design, and read by nothing inside the simulation. A
+    /// diary that decisions consulted would be a fourth organ with none
+    /// of the three's discipline about decay — see [`MindJournal`].
+    #[inline]
+    pub fn journal(&self) -> &MindJournal {
+        &self.organs.journal
     }
 
     /// Record something that happened.
@@ -483,6 +494,13 @@ impl PlayerMind {
 
         let goals = self.organs.goals.review(today);
         let consolidation = self.organs.memory.maybe_consolidate(&ctx.memory());
+        // Everything either pass decided, written down before the reports
+        // go out of scope. This is the *only* place a note is authored:
+        // the reports are consumed by value by callers that are free to
+        // ignore them, and a diary written by a caller would be a diary
+        // that stops existing the day someone drops the return value.
+        self.organs
+            .journal_tick(goals.as_ref(), consolidation.as_ref(), today);
         MindTickReport {
             goals,
             consolidation,
@@ -693,5 +711,121 @@ mod tests {
     fn the_mind_stays_copy_so_cloning_a_player_stays_cheap() {
         fn assert_copy<T: Copy>() {}
         assert_copy::<PlayerMind>();
+    }
+
+    #[test]
+    fn a_want_that_appears_is_written_down_on_the_day_it_appeared() {
+        let mut mind = PlayerMind::new();
+        // Formed on a Wednesday by whichever site noticed it...
+        let formed = d(2026, 8, 26);
+        mind.pursue(
+            GoalKind::LeaveThisClub,
+            GoalOrigin::Grievance,
+            GoalEvidence::EMPTY,
+            0.5,
+            &ctx(formed, 7),
+        );
+        // ...and reported by the review that runs later.
+        mind.tick(&ctx(d(2026, 9, 2), 7));
+
+        let notes: Vec<&MindNote> = mind.journal().iter().collect();
+        assert_eq!(notes.len(), 1, "one want, one note");
+        assert_eq!(notes[0].kind, MindNoteKind::WantFormed);
+        assert_eq!(notes[0].goal, GoalKind::LeaveThisClub);
+        assert_eq!(
+            notes[0].day,
+            MindClock::day(formed),
+            "the note carries the day the want appeared, not the day it was reported"
+        );
+    }
+
+    #[test]
+    fn a_want_is_only_announced_once() {
+        let mut mind = PlayerMind::new();
+        let mut day = d(2026, 8, 26);
+        mind.pursue(
+            GoalKind::LeaveThisClub,
+            GoalOrigin::Grievance,
+            GoalEvidence::EMPTY,
+            0.5,
+            &ctx(day, 7),
+        );
+        // Ten weekly reviews, the want fed every one of them.
+        for _ in 0..10 {
+            day += chrono::Duration::days(7);
+            mind.pursue(
+                GoalKind::LeaveThisClub,
+                GoalOrigin::Grievance,
+                GoalEvidence::EMPTY,
+                0.5,
+                &ctx(day, 7),
+            );
+            mind.tick(&ctx(day, 7));
+        }
+
+        let formed = mind
+            .journal()
+            .iter()
+            .filter(|n| n.kind == MindNoteKind::WantFormed)
+            .count();
+        assert_eq!(
+            formed, 1,
+            "a want that is fed every week appeared exactly once"
+        );
+    }
+
+    #[test]
+    fn saying_it_out_loud_is_the_turn_the_diary_records() {
+        let mut mind = PlayerMind::new();
+        let mut day = d(2026, 8, 26);
+        // Fed hard, week after week, until it climbs the ladder.
+        for _ in 0..30 {
+            mind.pursue(
+                GoalKind::LeaveThisClub,
+                GoalOrigin::Grievance,
+                GoalEvidence::EMPTY,
+                1.0,
+                &ctx(day, 7),
+            );
+            mind.goals_mut().set_urgency(GoalKind::LeaveThisClub, 1.0);
+            mind.tick(&ctx(day, 7));
+            day += chrono::Duration::days(7);
+        }
+
+        let kinds: Vec<MindNoteKind> = mind.journal().iter().map(|n| n.kind).collect();
+        assert!(
+            kinds.contains(&MindNoteKind::WantVoiced),
+            "a want fed to the top of the ladder was said out loud somewhere: {kinds:?}"
+        );
+        // The two silent rungs are never announced — nobody, him
+        // included, could point to the day either happened.
+        assert!(
+            mind.journal().iter().all(|n| n.kind != MindNoteKind::None),
+            "no empty note was ever written"
+        );
+    }
+
+    #[test]
+    fn the_diary_survives_a_move() {
+        let mut mind = PlayerMind::new();
+        let day = d(2026, 8, 26);
+        mind.pursue(
+            GoalKind::LeaveThisClub,
+            GoalOrigin::Grievance,
+            GoalEvidence::EMPTY,
+            0.5,
+            &ctx(day, 7),
+        );
+        mind.tick(&ctx(d(2026, 9, 2), 7));
+        let before = mind.journal().len();
+        assert!(before > 0);
+
+        mind.on_club_change(7);
+
+        assert_eq!(
+            mind.journal().len(),
+            before,
+            "what turned in him at a club he has left is still what turned in him"
+        );
     }
 }

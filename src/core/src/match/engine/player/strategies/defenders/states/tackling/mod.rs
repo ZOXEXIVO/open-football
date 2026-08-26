@@ -355,7 +355,6 @@ impl DefenderTacklingState {
         opponent: &MatchPlayerLite,
     ) -> (bool, bool, FoulSeverity) {
         let rng = &ctx.context.rng;
-        let minute = sc::minute_from_ms(ctx.context.total_match_time);
 
         // Unified defender profile drives both the success and the foul
         // model. tackle_profile blends tackling/positioning/anticipation/

@@ -21,9 +21,7 @@ use crate::r#match::player::strategies::players::ops::dribble_duel::{
 use crate::r#match::player::strategies::players::ops::effective_skill::{
     ActionContext, effective_skill,
 };
-use crate::r#match::player::strategies::players::ops::first_touch::{
-    PassContext, ReceiverPressure, resolve_first_touch,
-};
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::players::ops::traits_bias::{movement_bias, passing_bias};
 use crate::r#match::{MatchPlayer, RatingContext};
 use crate::shared::fullname::FullName;
@@ -92,8 +90,16 @@ fn full_skills(value: f32) -> PlayerSkills {
     s
 }
 
+/// The reception composite the LIVE model rolls against
+/// (`Ball::roll_first_touch` scales `(1.15 - quality)^1.6` by it, and
+/// `maybe_record_first_touch_loss` books the stat off the same idea).
+///
+/// Rewritten 2026-08-26: this used to drive `resolve_first_touch`, a
+/// parallel reception resolver with no match callers at all, so it was
+/// pinning behaviour the engine never executed. Deleted with it — the
+/// property is real, so it is now asserted where the football happens.
 #[test]
-fn elite_first_touch_keeps_possession_more_often_than_poor() {
+fn elite_first_touch_controls_better_than_poor() {
     let elite = build(
         PlayerPositionType::ForwardCenter,
         full_skills(17.0),
@@ -106,38 +112,18 @@ fn elite_first_touch_keeps_possession_more_often_than_poor() {
         9000,
         vec![],
     );
-    let pass = PassContext {
-        distance_units: 80.0,
-        driven: true,
-        ..Default::default()
-    };
-    let pressure = ReceiverPressure {
-        nearest_defender: 4.0,
-        defenders_within_6u: 1,
-        ..Default::default()
-    };
-    let mut elite_kept = 0;
-    let mut poor_kept = 0;
-    for i in 0..40 {
-        let r = (i as f32 + 0.5) / 40.0;
-        if resolve_first_touch(&elite, pass, pressure, 30, r)
-            .outcome
-            .keeps_possession()
-        {
-            elite_kept += 1;
-        }
-        if resolve_first_touch(&poor, pass, pressure, 30, r)
-            .outcome
-            .keeps_possession()
-        {
-            poor_kept += 1;
-        }
-    }
+    let elite_q = sc::receiving_first_touch(&elite, 30);
+    let poor_q = sc::receiving_first_touch(&poor, 30);
+    assert!(elite_q > poor_q + 0.15, "elite={elite_q}, poor={poor_q}");
+
+    // …and the gap has to survive the curve the live roll applies, or a
+    // better receiver is better on paper and identical on the pitch.
+    let loss = |q: f32| (0.006 + 0.5 * 0.060) * (1.15 - q).powf(1.6);
     assert!(
-        elite_kept > poor_kept + 10,
-        "elite={}, poor={}",
-        elite_kept,
-        poor_kept
+        loss(poor_q) > loss(elite_q) * 1.5,
+        "poor={}, elite={}",
+        loss(poor_q),
+        loss(elite_q)
     );
 }
 
@@ -155,15 +141,7 @@ fn exhausted_player_first_touch_degrades() {
         2500,
         vec![],
     );
-    let pass = PassContext::default();
-    let pressure = ReceiverPressure {
-        nearest_defender: 4.0,
-        defenders_within_6u: 1,
-        ..Default::default()
-    };
-    let r_fresh = resolve_first_touch(&p_fresh, pass, pressure, 80, 0.5);
-    let r_tired = resolve_first_touch(&p_tired, pass, pressure, 80, 0.5);
-    assert!(r_fresh.control_score > r_tired.control_score);
+    assert!(sc::receiving_first_touch(&p_fresh, 80) > sc::receiving_first_touch(&p_tired, 80));
 }
 
 #[test]

@@ -150,10 +150,8 @@ impl WideChannel {
         // Same call shape as the pass evaluator's, deliberately: an
         // extra phantom defender on the goal line would shift the line
         // one man upfield and read an offside winger as onside.
-        let line = OffsideLine::second_last(
-            ctx.players().opponents().all().map(|o| o.position.x),
-            side,
-        );
+        let line =
+            OffsideLine::second_last(ctx.players().opponents().all().map(|o| o.position.x), side);
         let onside = line.is_none_or(|line_x| {
             !OffsideLine::is_beyond(side, ctx.player.position.x, ball.x, line_x)
         });
@@ -171,8 +169,10 @@ impl WideChannel {
     #[cfg(feature = "match-logs")]
     pub fn note_tick(ctx: &StateProcessingContext) {
         use crate::mid_run_diag::WideDiag;
-        let wide = crate::r#match::player::strategies::common::passing::CrossModel::
-            is_in_wide_position(ctx);
+        let wide =
+            crate::r#match::player::strategies::common::passing::CrossModel::is_in_wide_position(
+                ctx,
+            );
         let overlap = ctx.team().is_overlap_runner();
         let at_byline = ctx
             .player
@@ -215,8 +215,7 @@ impl WideChannel {
                 // Level with the ball plus a stride, on his own line.
                 // Taking the anchor's `y` keeps `team_width_target`
                 // honest: a narrow side advances up a narrow channel.
-                let x = (ball.x + forward * Self::ADVANCE_LEAD)
-                    .clamp(14.0, field_width - 14.0);
+                let x = (ball.x + forward * Self::ADVANCE_LEAD).clamp(14.0, field_width - 14.0);
                 let ahead_of_anchor = side.forward_delta(anchor.x, x) > 0.0;
                 Vector3::new(if ahead_of_anchor { x } else { anchor.x }, anchor.y, 0.0)
             }
@@ -224,8 +223,10 @@ impl WideChannel {
                 let goal = ctx.player().opponent_goal_position();
                 Vector3::new(
                     (goal.x - forward * Self::BYLINE_DEPTH).clamp(14.0, field_width - 14.0),
-                    (goal.y + flank.sign() * Self::BYLINE_LATERAL)
-                        .clamp(WidePlan::TOUCHLINE_INSET, field_height - WidePlan::TOUCHLINE_INSET),
+                    (goal.y + flank.sign() * Self::BYLINE_LATERAL).clamp(
+                        WidePlan::TOUCHLINE_INSET,
+                        field_height - WidePlan::TOUCHLINE_INSET,
+                    ),
                     0.0,
                 )
             }

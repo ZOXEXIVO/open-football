@@ -70,51 +70,13 @@ pub struct Changeover {
 pub struct SubstitutionBreak {
     /// Match clock (ms) the board went up.
     opened_at_ms: u64,
-    /// Match clock (ms) play resumes at IF nobody has finished walking by
-    /// then — see [`Self::BREAK_MS`], which is a ceiling.
+    /// Match clock (ms) play resumes at. Exactly the beats — see
+    /// [`Self::beats_ms`], which is the whole length of a window.
     resume_at_ms: u64,
     changes: Vec<Changeover>,
 }
 
 impl SubstitutionBreak {
-    /// **The longest the walking may take, in ms of match clock — a ceiling,
-    /// not a length.**
-    ///
-    /// It is what the window allows the men to cover their ground in, on top
-    /// of the [beats](Self::BEAT_MS) the camera spends on them. The window
-    /// closes on the tick the last of them is standing on his slot, so an
-    /// ordinary change never comes near this: the two men of a pair go at
-    /// once, and the longer of the two runs is what it costs. Typically ~34 m
-    /// at [`Self::OFF`] against ~35 m at [`Self::ON`] — four or five seconds,
-    /// most of which is inside a beat anyway. The worst case is a corner-flag
-    /// full-back walking 86 m to the halfway line (9.8 s at [`Self::OFF`]),
-    /// which twenty is comfortably clear of.
-    ///
-    /// That margin is what keeps the tidy-up at the end from being a
-    /// teleport: [`Self::land`] writes whatever ground a walk had left when
-    /// the ceiling expired, and the census row it books to must read zero.
-    ///
-    /// A fixed window would have to be as long as the worst case and would
-    /// then stand everybody still through the ordinary one.
-    ///
-    /// ⚠ Whatever it comes to is **match clock that used to be football.**
-    /// The engine has always credited a substitution with 30 s of stoppage
-    /// time while consuming none of it; now it consumes the window.
-    ///
-    /// Per STOPPAGE, not per change — a double or triple change on the same
-    /// whistle shares one window, which is the whole reason a window holds a
-    /// list. Measured on real recordings, ten changes a match arrive in two
-    /// to four stoppages, so the bill is well under a percent of the playing
-    /// time — an order below the 45-75 s a goal celebration already costs,
-    /// and in the same direction, since a match with the ball out of play has
-    /// less football in it. The calibration harness cannot see it either way:
-    /// `dev_match stats` builds squads with an empty bench, so the
-    /// substitution pass returns before it ever reaches here. `dev_match
-    /// bench` can — see [`MatchContext::sub_walk_off`].
-    ///
-    /// [`MatchContext::sub_walk_off`]: super::super::context::MatchContext::sub_walk_off
-    pub const BREAK_MS: u64 = 20_000;
-
     /// **How long a man coming on stands still while the camera looks at
     /// him**, in ms of match clock — his close-up, before he moves a step.
     ///
@@ -150,9 +112,8 @@ impl SubstitutionBreak {
     ///
     /// The camera has come round behind him and it stays exactly where it is:
     /// he runs away from it onto the field with his name across his shoulders
-    /// and the whole ground laid out in front of him. 2.6 s at [`Self::ON`] is
-    /// a little over twenty metres, which reads as a man arriving rather than
-    /// as a man setting off.
+    /// and the whole ground laid out in front of him. Two seconds at
+    /// [`Self::ON`] is sixteen metres, which reads as a man arriving.
     ///
     /// ⚠ **This is what makes a multiple change sequential.** The men are no
     /// longer released together the moment the last close-up is over — man two
@@ -160,7 +121,12 @@ impl SubstitutionBreak {
     /// arrivals instead of one portrait each and then a scramble. The viewer's
     /// `ChangeoverShot::RUN_MS` is the same figure, and the pairing rule is
     /// [`Self::PORTRAIT_MS`]'s.
-    pub const RUN_MS: u64 = 2_600;
+    ///
+    /// ⚠⚠ **And since 2026-08-26 it is also the END of the window**, not just
+    /// a beat inside it — see [`Self::advance`]. Two seconds of him running is
+    /// what the change is worth; where he and the man he replaced have got to
+    /// when it expires is the match's business, not the window's.
+    pub const RUN_MS: u64 = 2_000;
 
     /// One man's whole turn in front of the camera: his close-up and then his
     /// run. The next man's close-up starts here.
@@ -173,8 +139,14 @@ impl SubstitutionBreak {
     /// A man being taken off jogs briskly: the referee is waiting on him and
     /// the manager is waving. 8.75 m/s covers the longest walk anybody can be
     /// given — a corner-flag full-back to the halfway line, 86 m — in under
-    /// ten seconds, inside [`Self::BREAK_MS`] on its own.
-    const OFF: f32 = 0.70;
+    /// ten seconds. Most of that now falls AFTER the window, with the match
+    /// going on around him.
+    ///
+    /// Public because the window no longer walks him all the way to the line —
+    /// it stops on its own beats and hands him to
+    /// `MatchField::settle_touchline`, which carries on at this speed until he
+    /// is over it. See [`Self::beats_ms`].
+    pub const OFF: f32 = 0.70;
     /// And on: 8.25 m/s. He leaves on the same tick as the man he is
     /// replacing rather than after him, so the two runs overlap and the
     /// ceiling only has to hold the longer of them — but he is the one being
@@ -198,23 +170,48 @@ impl SubstitutionBreak {
     /// finished and `land` writes nothing.
     const ARRIVED: f32 = 0.05;
 
-    /// Open a window at `now` with nothing in it yet.
+    /// Open a window at `now` with nothing in it yet — and so, until a change
+    /// is staged into it, one that is already over.
     pub fn open(now: u64) -> Self {
         SubstitutionBreak {
             opened_at_ms: now,
-            resume_at_ms: now + Self::BREAK_MS,
+            resume_at_ms: now,
             changes: Vec::with_capacity(2),
         }
     }
 
-    /// The latest play can resume. It usually resumes sooner — see
-    /// [`Self::BREAK_MS`].
+    /// When play resumes. Exactly, now — see [`Self::beats_ms`].
     pub fn resume_at_ms(&self) -> u64 {
         self.resume_at_ms
     }
 
-    /// How long the picture takes to work through the window: one
-    /// [`Self::BEAT_MS`] for every man coming on.
+    /// **How long the window lasts, in ms of match clock: one
+    /// [`Self::BEAT_MS`] for every man coming on, and not a tick more.**
+    ///
+    /// ⚠ **It used to wait for the walking, and that is the 2026-08-26
+    /// change** (maintainer: *"on subs — do not wait until replaced player run
+    /// to field side; show 2 secs when new player run on field and stop"*).
+    /// The old window ran until the last substitute was standing on his slot
+    /// AND the last man coming off was over the touchline, under a
+    /// twenty-second ceiling (`BREAK_MS`, now gone). Both of those are ground
+    /// nobody is watching: the camera cuts away at the end of the last man's
+    /// run, and everything after it was the match standing still for a walk
+    /// that had already left the frame.
+    ///
+    /// So the window is a fixed, known length now — a single change costs 5.4
+    /// s of match clock, a triple 16.2 — and where either walker has got to
+    /// when it expires is the match's business rather than the window's:
+    ///
+    /// - the man coming ON is one of the eleven and keeps running to his slot
+    ///   under his own AI once play resumes, which is what a substitute does;
+    /// - the man coming OFF is handed to
+    ///   `MatchField::settle_touchline`, which walks him the rest of the way
+    ///   while the football goes on around him.
+    ///
+    /// ⚠ **And that is why [`Self::land`] no longer writes a position.** The
+    /// old tidy-up put the substitute on his slot to close whatever ground a
+    /// walk had left when the ceiling expired; against a window that stops
+    /// two seconds into his run, the same write is a twenty-metre teleport.
     fn beats_ms(&self) -> u64 {
         self.changes.len() as u64 * Self::BEAT_MS
     }
@@ -263,30 +260,28 @@ impl SubstitutionBreak {
             slot,
         });
         // Every man added to the window buys another [`Self::BEAT_MS`] of the
-        // camera's time, so the ceiling has to move with him — the walking
-        // allowance is `BREAK_MS` and the beats are on top of it.
+        // camera's time, and the beats ARE the window — see
+        // [`Self::beats_ms`].
         //
         // Recomputed here rather than in `open` because the window is opened
         // empty: the caller stages the pair straight afterwards and re-arms
         // `dead_ball_until_ms` off this same figure, which is also what
         // `close` compares against to pull the pause back.
-        self.resume_at_ms = self.opened_at_ms + Self::BREAK_MS + self.beats_ms();
+        self.resume_at_ms = self.opened_at_ms + self.beats_ms();
     }
 
     /// One tick of the window. `true` while it is still running.
     ///
-    /// It ends when the last man is on, not when the clock says so:
-    /// [`Self::resume_at_ms`] is a CEILING. A change where nobody had far to
-    /// walk costs the match nine or ten seconds; one where a full-back on the
-    /// far touchline has to cross the whole width costs nearly twice that,
-    /// and a fixed window would have to be long enough for the second while
-    /// standing everybody still through the first.
+    /// ⚠ **It ends on the clock and on nothing else** — see
+    /// [`Self::beats_ms`]. It used to end when the last substitute was
+    /// standing on his slot AND the last man coming off was over the line,
+    /// which meant the match stood still for a walk the camera had already
+    /// cut away from.
     pub fn advance(&mut self, field: &mut MatchField, context: &MatchContext) -> bool {
         let now = context.total_match_time;
         if now >= self.resume_at_ms {
             return false;
         }
-        let mut done = true;
         for (index, change) in self.changes.iter().enumerate() {
             // ⚠ **Neither man of a pair moves while the picture is on the one
             // coming on.** The replay opens his beat with his face, comes
@@ -299,23 +294,16 @@ impl SubstitutionBreak {
             // while man one runs on, which is what makes a triple change three
             // arrivals rather than one shot of three men setting off together.
             if now < self.released_at(index) {
-                done = false;
                 continue;
             }
             // The two of them go at once and cross at the gate, which is what
-            // an exchange looks like. It used to be sequential — the man
-            // coming off had to be over the line before the substitute moved —
-            // because the shot that opened a change was of HIM, standing on
-            // the pitch. The shot is of the man coming on now and nothing is
-            // waiting on the man leaving.
-            let arrived = Self::walk_on(field, change);
-            done &= Self::walk_off(field, change) && arrived;
+            // an exchange looks like. Neither of them is waited FOR: both of
+            // these report whether they have arrived and neither answer is
+            // read any more.
+            Self::walk_on(field, change);
+            Self::walk_off(field, change);
         }
-        // ⚠ **And the window may not end inside its own beats.** A change
-        // where nobody had far to walk can have everybody standing on his slot
-        // with two men's close-ups still to come; close on that and the picture
-        // is back on the gantry with the shot half told.
-        !done || now < self.opened_at_ms + self.beats_ms()
+        true
     }
 
     /// The man leaving: across the pitch to the man replacing him, then along
@@ -417,21 +405,28 @@ impl SubstitutionBreak {
         position.y += uy * step;
     }
 
-    /// Put every man who came on exactly where an instant swap would have put
-    /// him, and stop him.
+    /// Hand both walkers back to the match.
     ///
-    /// The distance this closes is the window's own error — how much ground a
-    /// walker had left when the referee waved play on — and it is booked
-    /// against the `substitution` row of the player-teleport census, which is
-    /// where the whole-pitch write this replaces used to be booked. The row
-    /// must read near zero; anything else is a walk that ran out of
-    /// [`Self::BREAK_MS`] before it ran out of ground.
+    /// ⚠ **This used to PUT the man coming on exactly where an instant swap
+    /// would have put him**, on the grounds that the window had run until he
+    /// was all but standing there and the write was a few centimetres. Against
+    /// a window that stops two seconds into his run — see [`Self::beats_ms`] —
+    /// the same write is twenty metres of teleport, straight into the
+    /// `substitution` row of the player-teleport census that was watching for
+    /// exactly this.
+    ///
+    /// So nothing is landed. He is one of the eleven with a real position and
+    /// a real velocity, and the moment play resumes his own AI carries him the
+    /// rest of the way to his slot, which is what a substitute jogging into
+    /// position looks like. The only thing this still does is let go of the
+    /// man walking off.
     fn land(&self, field: &mut MatchField) {
         for change in &self.changes {
-            // A man still held here never got over the line before the
-            // ceiling expired — `walk_off` releases everybody else the tick
-            // they cross. Let him walk home from wherever he is rather than
-            // stand there held forever.
+            // A man still held here has not reached the touchline —
+            // `walk_off` releases everybody else the tick they cross. Let him
+            // walk home from wherever he has got to rather than stand there
+            // held forever; `MatchField::settle_touchline` takes him on, and
+            // keeps his brisk pace until he is over the line.
             if let Some(stand) = field
                 .departed
                 .iter_mut()
@@ -440,26 +435,6 @@ impl SubstitutionBreak {
             {
                 stand.held = false;
             }
-
-            let Some(player) = field
-                .players
-                .iter_mut()
-                .find(|p| p.id == change.player_in_id)
-            else {
-                continue;
-            };
-            #[cfg(feature = "match-logs")]
-            {
-                use crate::r#match::engine::ball::ball::teleport as tc;
-                tc::PlayerTeleportCensus::note_firing(tc::PSITE_SUBSTITUTION);
-                tc::PlayerTeleportCensus::note(
-                    tc::PSITE_SUBSTITUTION,
-                    player.position,
-                    change.slot,
-                );
-            }
-            player.position = change.slot;
-            player.velocity = Vector3::zeros();
         }
     }
 }
@@ -498,19 +473,20 @@ pub fn finish_substitution_break(field: &mut MatchField, context: &mut MatchCont
 /// patience the window spent for it.
 fn close(field: &mut MatchField, context: &mut MatchContext, window: SubstitutionBreak) {
     window.land(field);
-    // Capped at the window's own ceiling rather than at `BREAK_MS`, because
-    // the beats at the top of it are on top of that — see
-    // `SubstitutionBreak::PORTRAIT_MS`. The figure is what the replay sizes
-    // its shot from, and the shot includes the beats.
+    // What the change actually cost, which is the figure the replay sizes its
+    // shot from. Capped at the window's own length: a half-time whistle can
+    // close a window early through `finish_substitution_break`, and a shot
+    // held for longer than the footage behind it is a camera pointed at a
+    // pitch nobody is standing on.
     let spent_ms = context
         .total_match_time
         .saturating_sub(window.opened_at_ms)
         .min(window.resume_at_ms.saturating_sub(window.opened_at_ms));
 
-    // **Play resumes the moment the last man is on**, not when the ceiling
-    // says so — see [`SubstitutionBreak::BREAK_MS`]. The pause was armed for
-    // the ceiling, so it has to be pulled back here, and only if it is still
-    // this window's: a goal celebration owns the same field and must never
+    // **Play resumes when the beats are done.** Ordinarily that is exactly
+    // when `dead_ball_until_ms` was armed for and this changes nothing; it is
+    // here for the early close above. Only if the pause is still this
+    // window's, though: a goal celebration owns the same field and must never
     // have its own window cut short by a substitution's tidy-up. The two
     // cannot overlap, and this is what keeps that true even if they ever do.
     if context.dead_ball_until_ms == window.resume_at_ms {

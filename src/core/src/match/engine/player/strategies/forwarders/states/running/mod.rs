@@ -1,19 +1,19 @@
 use crate::PlayerPositionType;
-use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
-use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay};
 use crate::r#match::midfielders::states::common::LaneAhead;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     BallCarry, ShotDecision, evaluate_forward_shot_decision,
 };
 use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::player::strategies::common::states::TackleEngagement;
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
@@ -2556,7 +2556,6 @@ impl ForwardRunningState {
 
         markers >= 2 || (markers >= 1 && very_close > 0)
     }
-
 
     fn should_dribble(&self, ctx: &StateProcessingContext) -> bool {
         let dribbling_raw = ctx.player.skills.technical.dribbling;

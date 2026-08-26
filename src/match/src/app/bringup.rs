@@ -39,8 +39,8 @@
 //! deliberately not the first drawn frame, because the frame the squad first
 //! appears on is itself one of the four expensive ones.
 
-use crate::loader::ChunkLoader;
-use crate::quality::Quality;
+use crate::app::quality::Quality;
+use crate::recording::loader::ChunkLoader;
 use bevy::prelude::*;
 
 /// How far through the bring-up the scene is.
@@ -55,8 +55,8 @@ pub struct Bringup {
     /// outstanding.
     course: usize,
     /// Whether anybody has taken the field yet — set by
-    /// [`crate::actors::Actors::take_the_field`], which is where the squad's
-    /// own pipelines are queued.
+    /// [`crate::players::actors::Actors::take_the_field`], which is where the
+    /// squad's own pipelines are queued.
     squad_out: bool,
     /// When the squad came out, on the real clock. See [`Self::SETTLE`].
     settle_at: Option<f32>,
@@ -162,8 +162,8 @@ impl Bringup {
         self.warming >= Self::WARM_UP
     }
 
-    /// Noted by [`crate::actors::Actors::take_the_field`] the first time it
-    /// dresses anybody.
+    /// Noted by [`crate::players::actors::Actors::take_the_field`] the first
+    /// time it dresses anybody.
     pub fn squad_took_the_field(&mut self) {
         self.squad_out = true;
     }

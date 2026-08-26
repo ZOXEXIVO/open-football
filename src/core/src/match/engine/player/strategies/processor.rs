@@ -509,7 +509,8 @@ impl PlayerFieldPositionGroup {
             // recording, this is one of eight doors that between them had
             // the keeper chasing 73% of his own deliveries a mean 12 m up
             // the pitch. See `KeeperDelivery`.
-            if tick_context.ball.delivered_by == Some(player.id) && !KeeperDelivery::follow_allowed()
+            if tick_context.ball.delivered_by == Some(player.id)
+                && !KeeperDelivery::follow_allowed()
             {
                 return false;
             }

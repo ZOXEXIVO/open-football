@@ -1,7 +1,7 @@
-use crate::config::ViewerConfig;
-use crate::perf::FrameCost;
-use crate::playback::{Playback, RecordedSpans};
-use crate::replay::{ChunkPayload, RecordingMetadata, ReplayTracks};
+use crate::app::config::ViewerConfig;
+use crate::app::perf::FrameCost;
+use crate::recording::playback::{Playback, RecordedSpans};
+use crate::recording::replay::{ChunkPayload, RecordingMetadata, ReplayTracks};
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use serde_json::value::RawValue;
@@ -24,9 +24,9 @@ enum Delivery {
 
 /// A chunk whose envelope is in and whose players are not.
 ///
-/// See [`crate::replay::ChunkPayload`] for why they are separated at all, and
-/// [`ChunkLoader::PARSE_BUDGET_MS`] for how much of a frame reading them is
-/// allowed to cost.
+/// See [`crate::recording::replay::ChunkPayload`] for why they are separated at
+/// all, and [`ChunkLoader::PARSE_BUDGET_MS`] for how much of a frame reading
+/// them is allowed to cost.
 struct Unread {
     index: usize,
     players: Vec<(u32, Box<RawValue>)>,
@@ -57,7 +57,7 @@ pub struct ChunkLoader {
     /// True once the first chunk is on the pitch.
     pub ready: bool,
     /// True when the recording kept nothing at all — a goalless match under
-    /// goal clipping. Read by [`crate::bringup::Bringup`], which would
+    /// goal clipping. Read by [`crate::app::bringup::Bringup`], which would
     /// otherwise hold the loading overlay over an empty pitch waiting for a
     /// squad that is never coming.
     nothing: bool,
@@ -222,10 +222,11 @@ impl ChunkLoader {
     /// Reads as many of the waiting players' tracks as a frame can afford.
     ///
     /// A chunk is only marked loaded once the last of its players is in.
-    /// [`Self::covers`] is what tells [`crate::actors::Actors::follow_playhead`]
-    /// that a player with no samples is genuinely off the pitch rather than
-    /// still in flight, so calling a half-read chunk loaded would take the
-    /// whole squad off the field for as many frames as the read takes.
+    /// [`Self::covers`] is what tells
+    /// [`crate::players::actors::Actors::follow_playhead`] that a player with
+    /// no samples is genuinely off the pitch rather than still in flight, so
+    /// calling a half-read chunk loaded would take the whole squad off the
+    /// field for as many frames as the read takes.
     fn read_on(&mut self, tracks: &mut ReplayTracks) {
         let started = Instant::now();
         while let Some(chunk) = self.unread.front_mut() {

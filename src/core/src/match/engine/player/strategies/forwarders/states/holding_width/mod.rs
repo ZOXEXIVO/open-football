@@ -51,7 +51,9 @@ impl StateProcessingHandler for ForwardHoldingWidthState {
         // covers a ball nobody is receiving.
         if ctx.ball().is_towards_player() && ctx.ball().distance() < 120.0 && !ctx.ball().is_owned()
         {
-            return Some(StateChangeResult::with_forward_state(ForwardState::TakeBall));
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::TakeBall,
+            ));
         }
 
         None

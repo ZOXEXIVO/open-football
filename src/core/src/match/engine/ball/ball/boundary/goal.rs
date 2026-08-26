@@ -7,10 +7,10 @@ use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::engine::ball::ball::runoff::ExitAxis;
 use crate::r#match::engine::ball::ball::{AwaitedRestart, Ball, CornerWalk, RunOff};
-use crate::r#match::engine::corner_shape::{CornerShape, CornerShapeHold};
+use crate::r#match::engine::corner_shape::{CornerDeadline, CornerShape, CornerShapeHold};
 use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::engine::set_pieces::{
-    CornerRoutine, pick_corner_routine, score_corner_routines, score_corner_taker,
+    pick_corner_routine, score_corner_routines, score_corner_taker,
 };
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
@@ -910,8 +910,16 @@ impl Ball {
                     protecting_lead,
                     &context.environment,
                 );
-                let chosen_routine =
-                    pick_corner_routine(&scores, &context.set_piece_history, is_home_attacking);
+                // One draw, at the award — the corner is a single
+                // opportunity and the routine is decided once, standing
+                // over it. `pick_corner_routine` samples the five scores
+                // rather than maximising over them; see its note.
+                let chosen_routine = pick_corner_routine(
+                    &scores,
+                    &context.set_piece_history,
+                    is_home_attacking,
+                    context.rng.unit_f32(),
+                );
                 self.pending_corner_routine = Some(chosen_routine);
                 // Stamp the taker's delivery quality so `resolve_corner_contest`
                 // can weigh the ball that actually arrives. Without it the
@@ -921,6 +929,7 @@ impl Ball {
                 self.pending_corner_delivery = sc::set_piece_delivery(taker, minute);
                 #[cfg(feature = "match-logs")]
                 {
+                    use crate::r#match::engine::set_pieces::CornerRoutine;
                     use crate::mid_run_diag::SetPieceDiag;
                     use std::sync::atomic::Ordering;
                     crate::mid_run_diag::CORNERS_AWARDED.fetch_add(1, Ordering::Relaxed);
@@ -987,6 +996,7 @@ impl Ball {
                     armed_tick: self.current_tick_cached,
                     live_tick: (!walked).then_some(self.current_tick_cached),
                     taker_id,
+                    deadline_ticks: CornerDeadline::ticks(context),
                 });
 
                 if walked {

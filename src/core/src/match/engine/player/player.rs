@@ -1,11 +1,11 @@
 use crate::club::player::events::PositionLoad;
 use crate::club::player::traits::PlayerTrait;
+#[cfg(feature = "match-logs")]
+use crate::r#match::MovementEffort;
 use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::common_states::{RecoveryChallenge, TackleEngagement};
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::DefenderCondition;
-#[cfg(feature = "match-logs")]
-use crate::r#match::MovementEffort;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::stall::dead_ball_diag::MotionCensus;
 use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK, RunOff};
@@ -966,6 +966,8 @@ impl MatchPlayer {
     ///     clamp applies — identical to a light tick).
     ///
     /// The player re-decides on the next full tick, ~20 ms later.
+    /// `ball_pos` / `ball_vel` feed the `match-logs` motion trace only.
+    #[cfg_attr(not(feature = "match-logs"), allow(unused_variables))]
     pub fn lod_skip_update(
         &mut self,
         context: &MatchContext,

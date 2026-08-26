@@ -13,11 +13,11 @@
 //! at all simply never replaces it. Which is the only way to load a face over
 //! a network into a match that has already kicked off.
 
-use crate::actors::PlayerActor;
-use crate::body::{BodyParts, Flesh, Thatch};
-use crate::config::{PlayerInfo, ViewerConfig};
-use crate::kit::{Complexion, Wardrobe};
-use crate::textures::{Portrait, Textures};
+use crate::app::config::{PlayerInfo, ViewerConfig};
+use crate::art::textures::{Portrait, Textures};
+use crate::players::actors::PlayerActor;
+use crate::players::body::{BodyParts, Flesh, Thatch};
+use crate::players::kit::{Complexion, Wardrobe};
 use bevy::prelude::*;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -596,17 +596,17 @@ impl Silhouette {
 
 /// The face materials, and the mailbox pictures land in.
 ///
-/// Built empty by [`crate::actors::Actors::spawn`] and filled a man at a time
-/// by [`crate::actors::Actors::take_the_field`], which is what dresses him.
-/// **That order is the contract**, and it is why the send is not done here for
-/// the whole squad at once: [`Self::attach`] repaints the face material and
-/// then reaches for the man's `Flesh` and `Thatch` — the limbs to move onto
-/// the complexion in the picture, and the cap of hair to take off over it —
-/// and those are components on a body. A picture that landed before the body
-/// was built would repaint a material nothing was wearing yet and leave him to
-/// walk on in the wrong skin under hair he does not have. Asking only once he
-/// has been assembled makes that unreachable rather than unlikely: the network
-/// cannot answer sooner than the frame the request was made on.
+/// Built empty by [`crate::players::actors::Actors::spawn`] and filled a man at
+/// a time by [`crate::players::actors::Actors::take_the_field`], which is what
+/// dresses him. **That order is the contract**, and it is why the send is not
+/// done here for the whole squad at once: [`Self::attach`] repaints the face
+/// material and then reaches for the man's `Flesh` and `Thatch` — the limbs
+/// to move onto the complexion in the picture, and the cap of hair to take off
+/// over it — and those are components on a body. A picture that landed before
+/// the body was built would repaint a material nothing was wearing yet and
+/// leave him to walk on in the wrong skin under hair he does not have. Asking
+/// only once he has been assembled makes that unreachable rather than unlikely:
+/// the network cannot answer sooner than the frame the request was made on.
 #[derive(Resource)]
 pub struct Portraits {
     /// The material each man's picture will be painted into, as he is dressed.
@@ -621,7 +621,7 @@ pub struct Portraits {
     complexions: Vec<Handle<StandardMaterial>>,
     /// Finished pictures, waiting for a frame to be folded in. Browser
     /// fetches resolve on the JS microtask queue, which has no access to the
-    /// ECS — same arrangement as [`crate::loader::ChunkLoader`].
+    /// ECS — same arrangement as [`crate::recording::loader::ChunkLoader`].
     inbox: Arc<Mutex<Vec<(u32, Portrait)>>>,
 }
 
@@ -1061,9 +1061,8 @@ impl Portraits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::body::preview;
-    use crate::kit::HairStyle;
-    use crate::textures::{Beard, FaceLook};
+    use crate::art::textures::{Beard, FaceLook};
+    use crate::players::body::preview;
 
     /// A patch of studio card with a head-coloured blob sitting in the middle
     /// of it, which is what a club head shot is once it has been cropped.

@@ -25,7 +25,7 @@ use swash::FontRef;
 use swash::scale::{Render, ScaleContext, Source};
 use swash::zeno::{Format, Vector};
 
-include!("../fonts/coverage.rs");
+include!("../../fonts/coverage.rs");
 
 /// Installs [`Faces`].
 pub struct Typeface;
@@ -34,8 +34,8 @@ impl Typeface {
     /// Compiled in rather than fetched: the viewer is one WASM artefact the
     /// page loads and runs, and a face arriving a round trip later would draw
     /// the first frames of the replay with no names on it.
-    pub const OUTFIT: &'static [u8] = include_bytes!("../fonts/Outfit-subset.ttf");
-    pub const MANROPE: &'static [u8] = include_bytes!("../fonts/Manrope-subset.ttf");
+    pub const OUTFIT: &'static [u8] = include_bytes!("../../fonts/Outfit-subset.ttf");
+    pub const MANROPE: &'static [u8] = include_bytes!("../../fonts/Manrope-subset.ttf");
 }
 
 impl Plugin for Typeface {
@@ -121,12 +121,13 @@ impl Faces {
 /// Lettering painted into a texture rather than laid out by the text engine.
 ///
 /// The print on the back of a shirt is not a label: it is part of the kit,
-/// baked into the material a player wears (see [`crate::kit`]), and Bevy's text
-/// stack cannot draw into a texture. So it is rasterised here, out of the same
-/// two faces every label in the viewer is set in — which is the whole point.
-/// The lettering used to come from a hand-rolled 5×7 grid, and a shirt number
-/// drawn on graph paper next to a name set in Outfit read as two different
-/// games; one face for both is what makes the squad look like one squad.
+/// baked into the material a player wears (see [`crate::players::kit`]), and
+/// Bevy's text stack cannot draw into a texture. So it is rasterised here, out
+/// of the same two faces every label in the viewer is set in — which is the
+/// whole point. The lettering used to come from a hand-rolled 5×7 grid, and a
+/// shirt number drawn on graph paper next to a name set in Outfit read as two
+/// different games; one face for both is what makes the squad look like one
+/// squad.
 ///
 /// `swash` does the outlines. It is not a new dependency in any meaningful
 /// sense — `bevy_text` already carries it, and it is what rasterises the labels

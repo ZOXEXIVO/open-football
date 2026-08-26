@@ -1,6 +1,6 @@
-use crate::field::Field;
-use crate::net::Netting;
-use crate::textures::{Textures, Turf};
+use crate::art::textures::{Textures, Turf};
+use crate::scene::field::Field;
+use crate::scene::net::Netting;
 use bevy::asset::RenderAssetUsages;
 use bevy::math::Affine2;
 use bevy::mesh::Indices;
@@ -644,7 +644,7 @@ impl Pitch {
     /// Split from the rest of the stadium on purpose: this is one of the four
     /// materials whose shader takes about six seconds to link in a browser
     /// that has not seen it before, and a course per frame is what gives the
-    /// page the thread back between them. See [`crate::bringup`].
+    /// page the thread back between them. See [`crate::app::bringup`].
     pub fn lay_turf(
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,

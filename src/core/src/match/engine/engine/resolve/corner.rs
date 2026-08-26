@@ -38,7 +38,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         context: &mut MatchContext,
     ) {
         use crate::r#match::PassOriginRestart;
-        use nalgebra::Vector3;
 
         let ball = &field.ball;
         if ball.corner_contest_resolved || ball.pass_origin_restart != PassOriginRestart::Corner {
@@ -251,7 +250,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // [`AerialDelivery`] — which is the corner half of the "ball
             // teleports" report. `CORNER_APEX` is a normal in-swinger:
             // 5 m up, about 1.7 s in the air, comfortably inside
-            // `CORNER_SHAPE_MAX_TICKS` so the shape still holds for the
+            // `CornerDeadline` so the shape still holds for the
             // whole flight.
             Self::deliver_to_winner(
                 field,

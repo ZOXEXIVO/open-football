@@ -1,5 +1,8 @@
 use crate::r#match::engine::psychology::Psychology;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::{MatchPlayerLite, StateProcessingContext};
+use std::env::var;
+use std::sync::OnceLock;
 
 /// Operations for assessing pressure situations on the field
 pub struct PressureOperationsImpl<'p> {
@@ -147,5 +150,62 @@ impl<'p> PressureOperationsImpl<'p> {
         // hangs off. Narrow tilt (±~15%) — psychology should colour who
         // steps out, not override work rate or position.
         raw * Psychology::initiative_for(&self.ctx.context.psychology, self.ctx.player.id)
+            * PressUnit::compliance(self.ctx)
+    }
+}
+
+/// **Does he press because his team is pressing?**
+///
+/// `work_rate` says how much a player runs. `teamwork` says whether he
+/// runs WITH them, and the counter-press is the one moment in football
+/// where that distinction is the whole action: a side either arrives
+/// together in the two seconds after it loses the ball, or one man
+/// sprints at the carrier while the other ten walk.
+///
+/// Deliberately an INTERACTION with the team's own press call rather
+/// than a fourth additive weight beside `work_rate`. An additive term is
+/// how `teamwork` came to be live in nine composites at 0.07-0.14 and
+/// measure at nothing: pinned 6 against 18 across a whole side it moved
+/// the goal differential by **+0.18**, inside the noise floor and the
+/// wrong way round. Multiplying by the team's intensity means the
+/// attribute only bites when there IS a unit to join, which is what the
+/// word means.
+pub struct PressUnit;
+
+impl PressUnit {
+    /// Widest the attribute may swing an individual's counter-press
+    /// appetite, at full team press intensity. ±20% at the extremes of
+    /// the attribute; nothing at all when the team is not pressing.
+    const BAND: f32 = 0.40;
+
+    /// Compliance multiplier, centred on 1.0 at the population.
+    ///
+    /// Reads `teamwork - MatchStandard::shift`, so "a good team player"
+    /// means good relative to the football around him and the term is
+    /// exactly neutral in the calibration division — see [`MatchStandard`].
+    ///
+    /// [`MatchStandard`]: crate::r#match::engine::teamplay::standard::MatchStandard
+    pub fn compliance(ctx: &StateProcessingContext) -> f32 {
+        if !Self::armed() {
+            return 1.0;
+        }
+        let unit = ((ctx.player.skills.mental.teamwork / 20.0) - MatchStandard::shift(ctx.context))
+            .clamp(0.0, 1.0);
+        // How hard the side has actually been told to press. At zero
+        // there is no unit and the attribute is silent.
+        let intensity = ctx.team().press_intensity().clamp(0.0, 1.0);
+        (1.0 + (unit - 0.5) * intensity * Self::BAND).clamp(0.80, 1.20)
+    }
+
+    /// `OF_TEAMWORK_PRESS_OFF=1` removes the compliance term — the
+    /// pre-2026-08-26 engine. The A/B control for the channel.
+    #[inline]
+    pub fn armed() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| {
+            !var("OF_TEAMWORK_PRESS_OFF")
+                .map(|v| v != "0" && !v.is_empty())
+                .unwrap_or(false)
+        })
     }
 }

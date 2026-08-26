@@ -436,6 +436,36 @@ fn aerial_outfield_inner(player: &MatchPlayer, minute: u32, defender: bool) -> f
     clamp_composite(v)
 }
 
+/// **Striking a ball at goal with the head.**
+///
+/// Not the duel that wins it — that is [`aerial_outfield_attacker`],
+/// which is about leaving the ground first and holding the man off — and
+/// not a foot shot, which the `shooting_*` composites cover. A header is
+/// aimed by the neck and settled by the timing of the contact, so
+/// `heading` is the headline attribute; `finishing` supplies the instinct
+/// for which part of the goal to pick; `jumping` and `strength` decide
+/// whether he gets OVER the ball (down, into a corner) or under it (into
+/// the away end).
+///
+/// Deliberately a different mix from the duel composite. The two are the
+/// two halves of the same moment and the engine has to be able to tell a
+/// centre-half who wins everything in the air and heads it straight at
+/// the keeper apart from a striker who loses more duels and buries the
+/// ones he wins.
+pub fn header_finish(player: &MatchPlayer, minute: u32) -> f32 {
+    let b = SkillBands::for_player(player, minute);
+    let s = &player.skills;
+    let v = (n(b.apply(s.technical.heading, TECH)) * 0.40
+        + n(b.apply(s.technical.finishing, TECH)) * 0.20
+        + n(b.apply(s.physical.jumping, EXPL)) * 0.12
+        + n(b.apply(s.mental.composure, MENT)) * 0.10
+        + n(b.apply(s.technical.technique, TECH)) * 0.08
+        + n(b.apply(s.physical.strength, EXPL)) * 0.06
+        + n(b.apply(s.mental.bravery, MENT)) * 0.04)
+        .clamp(0.0, 1.0);
+    clamp_composite(v)
+}
+
 // ---------------------------------------------------------------------------
 // Goalkeeping
 // ---------------------------------------------------------------------------

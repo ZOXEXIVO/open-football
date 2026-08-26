@@ -8,7 +8,7 @@
 //! contradict them.
 
 use super::catalog::{GoalDirection, GoalKind};
-use super::escalation::Escalation;
+use super::escalation::{Escalation, StatusChange};
 use super::evidence::{GoalBlocker, GoalDomain, GoalEvidence, GoalOrigin};
 use super::goal::{GoalStatus, MindGoal};
 use crate::club::mind::organs::memory::{EpochDay, FixedStore, MindClock};
@@ -24,6 +24,18 @@ pub struct GoalStack {
     /// Last time the stack was reviewed. Review is weekly; this gates it
     /// without a separate scheduler.
     pub last_reviewed: EpochDay,
+}
+
+/// A want that appeared, and the day it did.
+///
+/// The day is carried rather than assumed to be the review's, because a
+/// want is formed by whichever emit site noticed the thing that prompted
+/// it — any day of the week — while the review that *reports* it runs on
+/// Mondays. A reader dating them all to the review would be guessing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FormedWant {
+    pub kind: GoalKind,
+    pub day: EpochDay,
 }
 
 /// What one review pass changed. Returned for the census harness, the
@@ -43,6 +55,47 @@ pub struct GoalReviewReport {
     pub newly_voiced: u16,
     /// Goals newly escalated to a formal demand.
     pub newly_pressing: u16,
+    /// Wants that appeared this pass.
+    formed: [FormedWant; Self::MAX_LISTED],
+    formed_count: u8,
+    /// Rungs walked this pass.
+    changes: [StatusChange; Self::MAX_LISTED],
+    change_count: u8,
+}
+
+impl GoalReviewReport {
+    /// How many turns of each sort the report *names*. The counts above
+    /// stay authoritative — a pass that turned more goals than this
+    /// still counts every one of them, it just cannot list them all.
+    ///
+    /// Fixed-capacity and `Copy` because the report crosses the tick
+    /// boundary by value: a `Vec` here would put a heap allocation into
+    /// the weekly think of every player in the world.
+    pub const MAX_LISTED: usize = 6;
+
+    /// The wants that appeared this pass, in stack order.
+    pub fn formed(&self) -> impl Iterator<Item = FormedWant> + '_ {
+        self.formed[..self.formed_count as usize].iter().copied()
+    }
+
+    /// The rungs walked this pass, in the order they were decided.
+    pub fn changes(&self) -> impl Iterator<Item = StatusChange> + '_ {
+        self.changes[..self.change_count as usize].iter().copied()
+    }
+
+    fn push_formed(&mut self, kind: GoalKind, day: EpochDay) {
+        if (self.formed_count as usize) < Self::MAX_LISTED {
+            self.formed[self.formed_count as usize] = FormedWant { kind, day };
+            self.formed_count += 1;
+        }
+    }
+
+    fn push_change(&mut self, change: StatusChange) {
+        if (self.change_count as usize) < Self::MAX_LISTED {
+            self.changes[self.change_count as usize] = change;
+            self.change_count += 1;
+        }
+    }
 }
 
 impl GoalStack {
@@ -290,9 +343,26 @@ impl GoalStack {
         } else {
             MindClock::elapsed(self.last_reviewed, today)
         };
+        let previously_reviewed = self.last_reviewed;
         self.last_reviewed = today;
 
         let mut report = GoalReviewReport::default();
+
+        // Wants that appeared since the last think, named before
+        // anything moves them. A want formed and voiced in the same pass
+        // reports both turns, in the order they actually happened —
+        // which is what a diary of them has to preserve.
+        //
+        // The window is the same exactly-once discipline the mood sweep
+        // uses: strictly *after* the previous review, so a want cannot
+        // be announced twice, and a fresh stack (`last_reviewed` at the
+        // epoch) announces what it already holds at each want's own
+        // formation date rather than pretending they all began today.
+        for goal in self.goals.iter() {
+            if goal.is_live() && goal.formed_on > previously_reviewed {
+                report.push_formed(goal.kind, goal.formed_on);
+            }
+        }
 
         for goal in self.goals.iter_mut() {
             if goal.is_live() {
@@ -327,6 +397,7 @@ impl GoalStack {
             if change.to == GoalStatus::Pressing {
                 report.newly_pressing += 1;
             }
+            report.push_change(change);
         }
 
         // Resolved goals stay one pass so the caller can read the report,

@@ -2,11 +2,10 @@ use crate::r#match::defenders::states::common::DefensiveRecovery;
 use crate::r#match::defenders::states::{
     DefenderAttackingCornerState, DefenderClearingState, DefenderCoveringState,
     DefenderCrossingState, DefenderGuardingState, DefenderHeadingState, DefenderHoldingLineState,
-    DefenderInterceptingState, DefenderMarkingState, DefenderPassingState, DefenderPressingState,
-    DefenderOverlappingState, DefenderPushingUpState, DefenderRestingState, DefenderReturningState,
-    DefenderRunningState,
-    DefenderShootingState, DefenderStandingState, DefenderTacklingState, DefenderTakeBallState,
-    DefenderTrackingBackState, DefenderWalkingState,
+    DefenderInterceptingState, DefenderMarkingState, DefenderOverlappingState,
+    DefenderPassingState, DefenderPressingState, DefenderPushingUpState, DefenderRestingState,
+    DefenderReturningState, DefenderRunningState, DefenderShootingState, DefenderStandingState,
+    DefenderTacklingState, DefenderTakeBallState, DefenderTrackingBackState, DefenderWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use nalgebra::Vector3;

@@ -32,9 +32,9 @@
 //! cut would read as a fault rather than as a transition. That order is held by
 //! three numbers and nothing else — see [`Backdrop::PICTURE`].
 
-use crate::playback::Playback;
-use crate::stage::Backdrop;
-use crate::textures::Textures;
+use crate::app::stage::Backdrop;
+use crate::art::textures::Textures;
+use crate::recording::playback::Playback;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 

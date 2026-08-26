@@ -3,11 +3,11 @@ use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondi
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::passing::CrossModel;
-#[cfg(feature = "match-logs")]
-use crate::mid_run_diag::{CrossDiag, WideDiag};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
+#[cfg(feature = "match-logs")]
+use crate::mid_run_diag::{CrossDiag, WideDiag};
 use nalgebra::Vector3;
 
 /// Ticks of wind-up before the ball is struck. Matches the midfielder /

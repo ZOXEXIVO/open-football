@@ -342,6 +342,13 @@ pub type EpisodeStore = FixedStore<MindEpisode, 32>;
 /// Runs the monthly consolidation pass.
 pub struct Consolidator;
 
+/// A belief that crystallised on this pass, and who it is about.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FormedFact {
+    pub claim: FactClaim,
+    pub subject: ActorRef,
+}
+
 /// What one pass did. Returned for the census harness and the tests;
 /// callers are free to ignore it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -354,6 +361,32 @@ pub struct ConsolidationReport {
     pub episodes_consolidated: u16,
     /// Episodes dropped for having faded.
     pub episodes_forgotten: u16,
+    /// Which beliefs those were.
+    formed: [FormedFact; Self::MAX_LISTED],
+    formed_count: u8,
+}
+
+impl ConsolidationReport {
+    /// How many newly formed beliefs the report *names*. `facts_formed`
+    /// stays authoritative; a pass that formed more than this counts
+    /// them all and names the first few.
+    ///
+    /// Four is generous for a monthly pass: a mind that concluded five
+    /// separate new things about its life in one month is not a mind
+    /// consolidating, it is a mind being seeded.
+    pub const MAX_LISTED: usize = 4;
+
+    /// The beliefs that crystallised on this pass.
+    pub fn formed(&self) -> impl Iterator<Item = FormedFact> + '_ {
+        self.formed[..self.formed_count as usize].iter().copied()
+    }
+
+    fn push_formed(&mut self, claim: FactClaim, subject: ActorRef) {
+        if (self.formed_count as usize) < Self::MAX_LISTED {
+            self.formed[self.formed_count as usize] = FormedFact { claim, subject };
+            self.formed_count += 1;
+        }
+    }
 }
 
 impl Consolidator {
@@ -478,6 +511,7 @@ impl Consolidator {
             let formed = Semantic::assert(semantic, rule.claim, subject, now, strongest.max(0.35));
             if formed {
                 report.facts_formed += 1;
+                report.push_formed(rule.claim, subject);
             } else {
                 report.facts_reinforced += 1;
             }

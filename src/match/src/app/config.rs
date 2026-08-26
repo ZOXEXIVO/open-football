@@ -38,6 +38,16 @@ pub struct ViewerConfig {
     /// that means anything to a player.
     #[serde(default)]
     pub debug: bool,
+    /// Whether to walk the two teams out before the replay starts — the line
+    /// on the touchline, and the camera that goes down it. See
+    /// [`Lineup`](crate::broadcast::lineup::Lineup).
+    ///
+    /// Absent means yes: every match gets its line-up, and a document written
+    /// before there was one gets it too. The `.dev/match` harness is the only
+    /// caller that ever turns it off, because fifteen seconds of ceremony in
+    /// front of every run of a screenshot loop is fifteen seconds of ceremony.
+    #[serde(default = "ViewerConfig::walked_out")]
+    pub lineup: bool,
 }
 
 #[derive(Deserialize)]
@@ -61,6 +71,11 @@ impl Default for ViewerLabels {
 }
 
 impl ViewerConfig {
+    /// The default for [`Self::lineup`], which serde wants as a function.
+    fn walked_out() -> bool {
+        true
+    }
+
     pub fn metadata_url(&self) -> String {
         format!("{}/metadata", self.api_base)
     }
@@ -128,6 +143,18 @@ pub struct PlayerInfo {
     pub last_name: String,
     pub position: String,
     pub is_home: bool,
+    /// **Whether he was on the team sheet rather than the bench.**
+    ///
+    /// Only the eleven walk out before kick-off, and the recording cannot say
+    /// which eleven those were: on a goals-only recording a starter who came
+    /// off before the first goal has no track in the document at all, and a
+    /// substitute who came on before it has one that opens at the same instant
+    /// as everybody else's. Absent on a document written before there was a
+    /// line-up, which [`Lineup`](crate::broadcast::lineup::Lineup) reads as
+    /// "take the first eleven of each side" — the order both producers write
+    /// them in.
+    #[serde(default)]
+    pub starting: bool,
     /// What he looks like: indices into `shared::Palette`'s three tables,
     /// decided from his nationality by the page that served this document.
     ///
@@ -146,7 +173,7 @@ pub struct PlayerInfo {
     /// Where his PHOTOGRAPH is, for the players who have one — the same head
     /// shot his profile page shows, which the viewer fetches once the match is
     /// on screen and lays over the front of his skull (see
-    /// [`crate::portrait`]). Absent for a regen, who has never been
+    /// [`crate::players::portrait`]). Absent for a regen, who has never been
     /// photographed by anybody.
     #[serde(default)]
     pub photo: Option<String>,
@@ -189,11 +216,11 @@ pub struct SubstitutionInfo {
     /// is of the substitute, from his face round to the name on his back and
     /// then out onto the pitch behind him.
     ///
-    /// [`ChangeoverShot`](crate::changeover::ChangeoverShot) wants him anyway,
-    /// to leave him OUT of the sight-line test: he and the man replacing him
-    /// are the only bodies on the ground that move while a change is being
-    /// played out, and a lens that gave way to them would lurch through
-    /// somebody else's close-up. Zero on a document written before the
+    /// [`ChangeoverShot`](crate::broadcast::changeover::ChangeoverShot) wants
+    /// him anyway, to leave him OUT of the sight-line test: he and the man
+    /// replacing him are the only bodies on the ground that move while a change
+    /// is being played out, and a lens that gave way to them would lurch
+    /// through somebody else's close-up. Zero on a document written before the
     /// recording carried him, which costs the shot nothing.
     #[serde(default)]
     pub player_out_id: u32,
@@ -203,10 +230,38 @@ pub struct SubstitutionInfo {
     /// slot, so it is nine or ten seconds for an ordinary change and nearly
     /// twice that when somebody has the width of the pitch to cross.
     ///
-    /// [`ChangeoverShot`](crate::changeover::ChangeoverShot) holds its
-    /// pitch-side camera for exactly this long. Zero on a document written
+    /// [`ChangeoverShot`](crate::broadcast::changeover::ChangeoverShot) holds
+    /// its pitch-side camera for exactly this long. Zero on a document written
     /// before the change was played out at all, which the shot reads as "use
     /// your own constant".
     #[serde(default)]
     pub break_ms: u64,
+}
+
+#[cfg(test)]
+impl ViewerConfig {
+    /// A document with nothing in it but a squad — what the parts of the
+    /// viewer that only ever read the team sheets are checked against.
+    pub fn of_players(players: Vec<PlayerInfo>) -> ViewerConfig {
+        ViewerConfig {
+            canvas: String::new(),
+            api_base: String::new(),
+            match_time_ms: 0.0,
+            home: TeamColors {
+                background: "#ffffff".to_string(),
+                foreground: "#000000".to_string(),
+            },
+            away: TeamColors {
+                background: "#000000".to_string(),
+                foreground: "#ffffff".to_string(),
+            },
+            players,
+            goals: Vec::new(),
+            chances: Vec::new(),
+            substitutions: Vec::new(),
+            labels: ViewerLabels::default(),
+            debug: false,
+            lineup: true,
+        }
+    }
 }

@@ -1,12 +1,13 @@
-use crate::actors::BallState;
-use crate::changeover::ChangeoverShot;
-use crate::config::ViewerConfig;
-use crate::field::Field;
-use crate::focus::CameraSubject;
-use crate::playback::Playback;
-use crate::quality::Quality;
-use crate::stage::Stage;
-use crate::touch::TouchDrive;
+use crate::app::config::ViewerConfig;
+use crate::app::quality::Quality;
+use crate::app::stage::Stage;
+use crate::broadcast::changeover::ChangeoverShot;
+use crate::broadcast::focus::CameraSubject;
+use crate::broadcast::lineup::Lineup;
+use crate::players::actors::BallState;
+use crate::recording::playback::Playback;
+use crate::scene::field::Field;
+use crate::ui::touch::TouchDrive;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::pbr::{DistanceFog, FogFalloff};
 use bevy::prelude::*;
@@ -152,9 +153,10 @@ impl CameraOrbit {
     /// pointer.
     ///
     /// The gesture itself lives in [`Self::drag`], because a finger performs
-    /// exactly the same one — see [`crate::touch`]. All this system decides is
-    /// when a mouse is doing it: a bare left button belongs to the transport
-    /// bar, so the camera takes the two buttons the bar has no use for.
+    /// exactly the same one — see [`crate::ui::touch`]. All this system
+    /// decides is when a mouse is doing it: a bare left button belongs to the
+    /// transport bar, so the camera takes the two buttons the bar has no use
+    /// for.
     pub fn handle_drag(
         mouse: Res<ButtonInput<MouseButton>>,
         mut moved: MessageReader<CursorMoved>,
@@ -185,9 +187,9 @@ impl CameraOrbit {
     /// the head.
     ///
     /// Shared by the right-button drag above and the one-finger drag in
-    /// [`crate::touch`], on purpose and not merely for the saving: the two are
-    /// the same control, and the same sweep across the canvas has to leave the
-    /// rig in the same place whether it was made with a mouse or a thumb. A
+    /// [`crate::ui::touch`], on purpose and not merely for the saving: the two
+    /// are the same control, and the same sweep across the canvas has to leave
+    /// the rig in the same place whether it was made with a mouse or a thumb. A
     /// second copy of these three lines is a second set of numbers waiting to
     /// drift.
     pub fn drag(&mut self, drag: Vec2, flight: &mut CameraFlight) {
@@ -682,7 +684,14 @@ impl TvCamera {
     /// four fifths. The cost is at the other end of the wheel — the widest shot
     /// it can reach comes in by the same 20% — and that end was already
     /// spending itself on sky.
-    const FOV: f32 = 0.265;
+    ///
+    /// Public because it is the unit every other lens in the replay is quoted
+    /// in: the shots that take the camera off the gantry are all written as a
+    /// MULTIPLE of this, and one of them — the pre-match line-up's team shot,
+    /// which has to hold eleven men across the frame — works its multiple out
+    /// from the ground it has to cover rather than being given one. See
+    /// [`Lineup::lens_for`](crate::broadcast::lineup::Lineup).
+    pub const FOV: f32 = 0.265;
     /// How far the aim point follows the ball across the pitch. Low down the
     /// whole width is in shot anyway, so this is back to a gentle lead rather
     /// than a chase — and it has to stay gentle, because tilting up from here
@@ -815,6 +824,7 @@ impl TvCamera {
         flight: Res<CameraFlight>,
         subject: Res<CameraSubject>,
         changeover: Res<ChangeoverShot>,
+        lineup: Res<Lineup>,
         mut camera: Single<(&mut TvCamera, &mut Transform, &mut Projection)>,
     ) {
         let (rig, transform, projection) = &mut *camera;
@@ -831,7 +841,11 @@ impl TvCamera {
         // [`CameraSubject::magnification`].
         if let Projection::Perspective(perspective) = projection.as_mut() {
             let wanted = Self::FOV
-                / (zoom.factor * subject.magnification() * changeover.magnification()).max(0.01);
+                / (zoom.factor
+                    * subject.magnification()
+                    * changeover.magnification()
+                    * lineup.magnification())
+                .max(0.01);
             if (perspective.fov - wanted).abs() > 1e-4 {
                 perspective.fov = wanted;
             }
@@ -900,6 +914,12 @@ impl TvCamera {
         // [`ChangeoverShot`], which mixes the two ends rather than cutting
         // between them, so the move out and the move back are one path.
         let (stand, aim) = changeover.blend(gantry + rail * travel, looking_at);
+        // …and the one shot that does not belong to the match at all: before
+        // the first whistle the picture is the two teams lined up on the
+        // touchline, and there is nothing to blend with because there is no
+        // football yet. It TAKES the frame outright and gives it back on a cut
+        // — see [`Lineup`], which explains why this end of it is not a ramp.
+        let (stand, aim) = lineup.framing().unwrap_or((stand, aim));
         transform.translation = stand;
         transform.look_at(aim, Vec3::Y);
     }

@@ -3645,6 +3645,25 @@ a:active {
     color: #c9d1d8;
 }
 
+/* Mind — what turned in his own head. Unlike a decision it keeps its
+   valence rail, because a note about a conviction is genuinely warm or
+   sour; only the marker and the chip mark it as coming from the inside.
+   The hollow marker is the whole idea: nothing here was observed, it was
+   concluded. */
+.fm-evt-mind .fm-evt-marker {
+    background: transparent;
+    border: 1.5px solid #7d6fa8;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+.fm-evt-mind.fm-evt-neutral .fm-evt-rail {
+    background: linear-gradient(180deg, #5f5580 0%, #453d5e 100%);
+}
+.fm-evt-kind-mind {
+    background: rgba(125, 111, 168, 0.16);
+    color: #a396cc;
+    border-color: rgba(125, 111, 168, 0.34);
+}
+
 /* --- Big events: career-visible moments --- */
 
 .fm-evt-big {

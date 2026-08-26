@@ -1,6 +1,6 @@
-use crate::config::{ViewerConfig, ViewerLabels};
-use crate::loader::ChunkLoader;
-use crate::replay::ReplayTracks;
+use crate::app::config::{ViewerConfig, ViewerLabels};
+use crate::recording::loader::ChunkLoader;
+use crate::recording::replay::ReplayTracks;
 use bevy::prelude::*;
 use wasm_bindgen::JsValue;
 
@@ -113,8 +113,8 @@ pub struct Playback {
     /// asked for.
     ///
     /// The two are deliberately separate flags even though a cut is also a
-    /// seek. A scrub sets `seeked` on every frame the pointer is held down,
-    /// and [`crate::cut`] hangs a half-second dip off this one: hung off
+    /// seek. A scrub sets `seeked` on every frame the pointer is held down, and
+    /// [`crate::broadcast::cut`] hangs a half-second dip off this one: hung off
     /// `seeked` instead, dragging the knob across the rail would hold the
     /// picture dark for as long as the drag lasted, which is precisely when
     /// somebody needs to see where they are going.
@@ -212,10 +212,10 @@ impl Playback {
         playback.time_ms += time.delta_secs_f64() * 1000.0 * playback.speed as f64;
 
         // Run out of the end of a clip and there is nothing ahead but empty
-        // pitch, so cut to the next one. `seeked` because that is what it is —
-        // followers have to cut with it rather than glide across forty minutes
-        // of match in a frame. And `cut`, because a viewer has to be told: see
-        // [`crate::cut`], which fades the next episode in.
+        // pitch, so cut to the next one. `seeked` because that is what it is
+        // — followers have to cut with it rather than glide across forty
+        // minutes of match in a frame. And `cut`, because a viewer has to be
+        // told: see [`crate::broadcast::cut`], which fades the next episode in.
         if !spans.covers(playback.time_ms) {
             match spans.next_start(playback.time_ms) {
                 Some(start) => {

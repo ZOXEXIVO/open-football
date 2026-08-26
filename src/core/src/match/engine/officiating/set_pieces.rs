@@ -7,6 +7,8 @@
 
 use crate::r#match::engine::environment::{MatchEnvironment, Pitch, Weather};
 use std::cmp::Ordering;
+use std::env::var;
+use std::sync::OnceLock;
 
 /// Distance band of a direct free kick from goal, in field units (where
 /// 1u ≈ 0.125m). 90u ≈ 11m, 130u ≈ 16m.
@@ -403,6 +405,36 @@ impl CornerScores {
         }
         best.0
     }
+
+    /// The five routines with their weights, in a fixed order so the
+    /// sampling cursor below is reproducible.
+    fn weighted(&self) -> [(CornerRoutine, f32); 5] {
+        [
+            (CornerRoutine::NearPost, self.near_post),
+            (CornerRoutine::PenaltySpot, self.penalty_spot),
+            (CornerRoutine::FarPost, self.far_post),
+            (CornerRoutine::Short, self.short),
+            (CornerRoutine::EdgeCutback, self.edge_cutback),
+        ]
+    }
+}
+
+/// **A corner routine is drawn from the five, not maximised over them.**
+///
+/// `OF_CORNER_MIX_OFF=1` restores the pre-2026-08-26 argmax exactly. The
+/// A/B control for the channel — see [`pick_corner_routine`].
+pub struct CornerRoutineMix;
+
+impl CornerRoutineMix {
+    #[inline]
+    pub fn armed() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| {
+            !var("OF_CORNER_MIX_OFF")
+                .map(|v| v != "0" && !v.is_empty())
+                .unwrap_or(false)
+        })
+    }
 }
 
 /// Score the five corner routines.
@@ -494,22 +526,126 @@ pub fn score_corner_routines(
     }
 }
 
-/// Pick a throw-in routine. Returns LongBox only when the thrower has the
-/// long-throw skill and is in the attacking third with available targets.
+/// Pick a throw-in routine — a ball hurled into the box, or the square
+/// one that the overwhelming majority of throw-ins are.
+///
+/// # Two skill cliffs, removed
+///
+/// This was `lt >= 0.70` (long_throws 14/20) with a `lt >= 0.55` (11/20)
+/// relaxation when chasing, over a boolean "is there anybody in there".
+/// Both bars were absolute reads on the raw attribute, which is what
+/// [`crate::r#match::engine::teamplay::standard::MatchStandard`] exists
+/// to stop: the generator's mean is 8.2 at level 8 and 15.1 at level 20,
+/// so the same bar meant "nobody in this league takes long throws" at one
+/// end of the pyramid and "everybody does" at the other. And a bar is a
+/// cliff — 13.9 never threw one, 14.0 always did.
+///
+/// The reach question now belongs to
+/// [`ThrowIn::can_reach_box`](crate::r#match::engine::ball::ball::ThrowIn::can_reach_box),
+/// which asks it as geometry. What is left here is the CHOICE, and it is
+/// continuous: how much of a weapon this throw is (his range against the
+/// division), how good the target in there is, and whether the game state
+/// says throw it anyway.
+///
+/// `aerial_advantage_0_1` is the best attacking aerial composite in the
+/// box, `standard_shift` the match's distance from the calibration
+/// division (both are weight-1 composite reads, so subtracting it is
+/// exact and zero at level 14).
 pub fn pick_throw_routine(
     long_throws_0_20: f32,
     in_attacking_third: bool,
-    have_aerial_targets_in_box: bool,
+    aerial_advantage_0_1: f32,
     chasing_late: bool,
+    standard_shift: f32,
 ) -> ThrowRoutine {
-    let lt = (long_throws_0_20 / 20.0).clamp(0.0, 1.0);
-    if in_attacking_third && lt >= 0.70 && have_aerial_targets_in_box {
-        return ThrowRoutine::LongBox;
+    if !in_attacking_third {
+        return ThrowRoutine::ShortRecycle;
     }
-    if chasing_late && in_attacking_third && lt >= 0.55 {
-        return ThrowRoutine::LongBox;
+    if !ThrowAppetite::armed() {
+        // The pre-2026-08-26 pair of cliffs, restored exactly.
+        let lt = (long_throws_0_20 / 20.0).clamp(0.0, 1.0);
+        let have_target = aerial_advantage_0_1 >= 0.55;
+        if lt >= 0.70 && have_target {
+            return ThrowRoutine::LongBox;
+        }
+        if chasing_late && lt >= 0.55 {
+            return ThrowRoutine::LongBox;
+        }
+        return ThrowRoutine::ShortRecycle;
     }
-    ThrowRoutine::ShortRecycle
+    let weapon = ThrowAppetite::weapon(long_throws_0_20, standard_shift);
+    let target = ThrowAppetite::target(aerial_advantage_0_1, standard_shift);
+    if weapon * target >= ThrowAppetite::bar(chasing_late) {
+        ThrowRoutine::LongBox
+    } else {
+        ThrowRoutine::ShortRecycle
+    }
+}
+
+/// The three continuous reads behind [`pick_throw_routine`]: how much of
+/// a weapon this throw is, how much of a target is standing in there, and
+/// the bar the product has to clear.
+///
+/// Kept together on a type rather than left as loose helpers because they
+/// are one model — moving any one of the three without the others changes
+/// the population rate of long throws, and the band centring is only
+/// meaningful read as a set.
+pub struct ThrowAppetite;
+
+impl ThrowAppetite {
+    /// `OF_LONG_THROW_CURVE_OFF=1` restores the two skill cliffs this
+    /// replaced — `long_throws >= 14/20` for the routine and
+    /// `>= 14/20` again for the reach — plus the boolean target test. The
+    /// A/B control for the channel, covering both this chooser and
+    /// [`ThrowIn::can_reach_box`](crate::r#match::engine::ball::ball::ThrowIn::can_reach_box).
+    #[inline]
+    pub fn armed() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| {
+            !var("OF_LONG_THROW_CURVE_OFF")
+                .map(|v| v != "0" && !v.is_empty())
+                .unwrap_or(false)
+        })
+    }
+
+    /// A throw is a weapon in proportion to how much further than an
+    /// ordinary one it travels — not a step at 14/20.
+    ///
+    /// The band is centred so the population that actually throws one is
+    /// the population that threw one under the old bar: this removes the
+    /// cliff, it does not fill the league with Rory Delaps. Priced
+    /// against the division, because "a long throw" means a throw longer
+    /// than the ones around it.
+    #[inline]
+    pub fn weapon(long_throws_0_20: f32, standard_shift: f32) -> f32 {
+        Self::smoothstep(0.55, 0.95, (long_throws_0_20 / 20.0) - standard_shift)
+    }
+
+    /// …and it is worth aiming at a man in proportion to how much of an
+    /// aerial threat he is.
+    #[inline]
+    pub fn target(aerial_advantage_0_1: f32, standard_shift: f32) -> f32 {
+        Self::smoothstep(0.30, 0.70, aerial_advantage_0_1 - standard_shift)
+    }
+
+    /// Chasing a game late is the classic reason to throw one into the
+    /// box you would not throw at 0-0, so it LOWERS the bar rather than
+    /// inflating the appetite: a man who cannot make the delivery still
+    /// cannot make it in the 88th minute.
+    #[inline]
+    pub fn bar(chasing_late: bool) -> f32 {
+        if chasing_late { 0.18 } else { 0.35 }
+    }
+
+    /// Hermite smoothstep between two edges; `edge0 > edge1` inverts it.
+    #[inline]
+    fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+        if (edge0 - edge1).abs() < f32::EPSILON {
+            return if x < edge0 { 0.0 } else { 1.0 };
+        }
+        let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
 }
 
 /// Tracks the most-recent set-piece routines per team. Used to suppress
@@ -570,30 +706,88 @@ impl SetPieceHistory {
 }
 
 /// Pick a corner routine, blocking the recent-history repeat per
-/// `SetPieceHistory::should_block_corner_repeat`. If the winner is
-/// blocked, returns the next-highest scoring option.
+/// `SetPieceHistory::should_block_corner_repeat`.
+///
+/// # Why this is a draw and not an argmax
+///
+/// [`score_corner_routines`] returns a **distribution** — five per-spec
+/// base probabilities (0.22 / 0.32 / 0.22 / 0.14 / 0.10) with skill and
+/// context bumps of ±0.03-0.07 laid over them. Taking the maximum of a
+/// distribution throws the distribution away: the bumps are far too
+/// small to reorder the bases, so the answer is "penalty spot" in
+/// essentially every state of the world, and the two floor routines can
+/// never be reached at all.
+///
+/// Measured over `stats 300 14 14` before this change: near 2%, spot
+/// **82%**, far 15%, short 1%, **edge 0%**. Real corners run roughly
+/// near 15-20 / spot 25-30 / far 20 / short 15-20 / edge 10, and a side
+/// that takes the same corner eighty-two times out of a hundred is not
+/// one anybody has watched. Worse, the whole model above it was inert:
+/// an elite dead-ball taker, a gale, a 3-0 lead and a keeper who
+/// commands his box all moved the scores and none of them could move the
+/// ROUTINE.
+///
+/// Sampling the vector restores the bases as the mix and lets each bump
+/// do exactly what it is sized to do — a few points of share. Same
+/// construction as [`FreeKickResolver::decide`], for the same reason,
+/// and drawn ONCE per set piece by the caller (the award), never per
+/// tick.
+///
+/// The repeat-blocker keeps its meaning: a routine that has just failed
+/// twice running is removed from the draw rather than demoted by one
+/// place.
+///
+/// `roll` is a uniform sample in `[0, 1)` — the caller's own draw, per
+/// this module's no-RNG contract.
+///
+/// [`FreeKickResolver::decide`]: crate::r#match::player::strategies::players::ops::forward_shot_decision
 pub fn pick_corner_routine(
     scores: &CornerScores,
     history: &SetPieceHistory,
     is_home: bool,
+    roll: f32,
 ) -> CornerRoutine {
-    let winner = scores.winner();
-    if !history.should_block_corner_repeat(is_home, winner) {
-        return winner;
+    if !CornerRoutineMix::armed() {
+        let winner = scores.winner();
+        if !history.should_block_corner_repeat(is_home, winner) {
+            return winner;
+        }
+        return scores
+            .weighted()
+            .iter()
+            .filter(|(r, _)| *r != winner)
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
+            .map(|(r, _)| *r)
+            .unwrap_or(winner);
     }
-    let alternatives = [
-        (CornerRoutine::NearPost, scores.near_post),
-        (CornerRoutine::PenaltySpot, scores.penalty_spot),
-        (CornerRoutine::FarPost, scores.far_post),
-        (CornerRoutine::Short, scores.short),
-        (CornerRoutine::EdgeCutback, scores.edge_cutback),
-    ];
-    alternatives
-        .iter()
-        .filter(|(r, _)| *r != winner)
-        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
-        .map(|(r, _)| *r)
-        .unwrap_or(winner)
+
+    let mut weights = scores.weighted();
+    for (routine, w) in weights.iter_mut() {
+        if history.should_block_corner_repeat(is_home, *routine) {
+            *w = 0.0;
+        }
+        *w = w.max(0.0);
+    }
+    let total: f32 = weights.iter().map(|(_, w)| *w).sum();
+    if total <= 0.0 {
+        return scores.winner();
+    }
+    // `roll` is [0, 1); pinning the top of the range off the last
+    // bucket's edge keeps the cursor inside the vector for a caller that
+    // hands over an inclusive 1.0.
+    let mut cursor = roll.clamp(0.0, 0.999_999) * total;
+    let mut last = scores.winner();
+    for (routine, w) in weights {
+        if w <= 0.0 {
+            continue;
+        }
+        last = routine;
+        cursor -= w;
+        if cursor < 0.0 {
+            return routine;
+        }
+    }
+    last
 }
 
 /// Picks an explicit taker if they are still on the field; otherwise
@@ -617,6 +811,7 @@ pub fn pick_taker(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     #[test]
     fn fk_band_classification() {
@@ -833,26 +1028,94 @@ mod tests {
     }
 
     #[test]
-    fn long_throw_only_with_skill_in_attacking_third() {
-        // Off attacking third — never long.
+    fn long_throw_needs_the_third_the_arm_and_a_target() {
+        // Off the attacking third — never long, whoever is throwing.
         assert_eq!(
-            pick_throw_routine(20.0, false, true, true),
+            pick_throw_routine(20.0, false, 0.80, true, 0.0),
             ThrowRoutine::ShortRecycle
         );
-        // Low skill — never long.
+        // A specialist with a real target in there throws it.
         assert_eq!(
-            pick_throw_routine(8.0, true, true, true),
+            pick_throw_routine(18.0, true, 0.70, false, 0.0),
+            ThrowRoutine::LongBox
+        );
+        // Same arm, nobody worth aiming at — recycle.
+        assert_eq!(
+            pick_throw_routine(18.0, true, 0.20, false, 0.0),
             ThrowRoutine::ShortRecycle
         );
-        // High skill, attacking third, targets — long.
+        // Ordinary thrower, good target — recycle.
         assert_eq!(
-            pick_throw_routine(16.0, true, true, false),
+            pick_throw_routine(8.0, true, 0.70, false, 0.0),
+            ThrowRoutine::ShortRecycle
+        );
+    }
+
+    /// The point of removing the bar: the SAME arm answers differently
+    /// depending on what is in the box and on the division. A cliff on
+    /// the raw attribute cannot do either.
+    #[test]
+    fn the_same_arm_reads_the_target_and_the_division() {
+        // 14.5/20 is inside the band, so the target decides it.
+        assert_eq!(
+            pick_throw_routine(14.5, true, 0.75, false, 0.0),
+            ThrowRoutine::LongBox,
+            "elite target"
+        );
+        assert_eq!(
+            pick_throw_routine(14.5, true, 0.50, false, 0.0),
+            ThrowRoutine::ShortRecycle,
+            "ordinary target"
+        );
+        // 14.0 is just under the bar at the calibration division…
+        assert_eq!(
+            pick_throw_routine(14.0, true, 0.75, false, 0.0),
+            ThrowRoutine::ShortRecycle
+        );
+        // …and a genuine weapon three tiers down, where the same
+        // absolute arm out-throws everything around it.
+        assert_eq!(
+            pick_throw_routine(14.0, true, 0.75, false, -0.25),
             ThrowRoutine::LongBox
         );
-        // Chasing late, mid skill — long.
+    }
+
+    /// Monotone in the attribute: more arm is never fewer long throws.
+    /// (A cliff satisfies this too — it is the floor, not the point.)
+    #[test]
+    fn long_throw_appetite_is_monotone_in_the_attribute() {
+        let mut seen_long = false;
+        for lt in 1..=40 {
+            let long = pick_throw_routine(lt as f32 * 0.5, true, 0.70, false, 0.0)
+                == ThrowRoutine::LongBox;
+            if seen_long {
+                assert!(
+                    long,
+                    "answer flipped back at long_throws {}",
+                    lt as f32 * 0.5
+                );
+            }
+            seen_long |= long;
+        }
+        assert!(seen_long, "no arm in the range ever throws one");
+    }
+
+    /// Chasing a game late is a REASON to throw one, not a substitute
+    /// for being able to.
+    #[test]
+    fn chasing_late_lowers_the_bar_without_inventing_an_arm() {
         assert_eq!(
-            pick_throw_routine(12.0, true, false, true),
+            pick_throw_routine(14.0, true, 0.60, false, 0.0),
+            ThrowRoutine::ShortRecycle
+        );
+        assert_eq!(
+            pick_throw_routine(14.0, true, 0.60, true, 0.0),
             ThrowRoutine::LongBox
+        );
+        // A man who cannot throw it that far still cannot when chasing.
+        assert_eq!(
+            pick_throw_routine(3.0, true, 0.60, true, 0.0),
+            ThrowRoutine::ShortRecycle
         );
     }
 
@@ -885,21 +1148,74 @@ mod tests {
         assert!(!hist.should_block_corner_repeat(false, CornerRoutine::Short));
     }
 
-    #[test]
-    fn pick_corner_routine_falls_back_when_blocked() {
-        let mut hist = SetPieceHistory::default();
-        hist.record_corner(true, CornerRoutine::PenaltySpot, 0.03);
-        hist.record_corner(true, CornerRoutine::PenaltySpot, 0.04);
-        // Force PenaltySpot to be the natural winner.
-        let scores = CornerScores {
+    fn spread_scores() -> CornerScores {
+        CornerScores {
             near_post: 0.20,
             penalty_spot: 0.50,
             far_post: 0.18,
             short: 0.10,
             edge_cutback: 0.05,
-        };
-        // PenaltySpot blocked → next-best = NearPost (0.20).
-        let pick = pick_corner_routine(&scores, &hist, true);
-        assert_eq!(pick, CornerRoutine::NearPost);
+        }
+    }
+
+    #[test]
+    fn pick_corner_routine_never_returns_a_blocked_routine() {
+        let mut hist = SetPieceHistory::default();
+        hist.record_corner(true, CornerRoutine::PenaltySpot, 0.03);
+        hist.record_corner(true, CornerRoutine::PenaltySpot, 0.04);
+        let scores = spread_scores();
+        // Whatever the draw, the routine that just failed twice running
+        // is out of the hat — including at the roll that would otherwise
+        // land squarely inside its (largest) bucket.
+        for i in 0..200 {
+            let roll = i as f32 / 200.0;
+            assert_ne!(
+                pick_corner_routine(&scores, &hist, true, roll),
+                CornerRoutine::PenaltySpot,
+                "roll={roll}"
+            );
+        }
+        // …and the away side is unaffected by the home side's history.
+        assert!((0..200).any(
+            |i| pick_corner_routine(&scores, &hist, false, i as f32 / 200.0)
+                == CornerRoutine::PenaltySpot
+        ));
+    }
+
+    /// The point of the change: every routine with weight must be
+    /// REACHABLE. Under the old argmax the two smallest buckets could
+    /// not be selected in any state of the world.
+    #[test]
+    fn every_scored_routine_is_reachable() {
+        let hist = SetPieceHistory::default();
+        let scores = spread_scores();
+        let mut seen = HashSet::new();
+        for i in 0..1000 {
+            seen.insert(pick_corner_routine(&scores, &hist, true, i as f32 / 1000.0));
+        }
+        assert_eq!(seen.len(), 5, "unreachable routines: {seen:?}");
+    }
+
+    /// …and reachable in proportion to its score, so the skill and
+    /// context bumps in `score_corner_routines` move share rather than
+    /// being rounded away.
+    #[test]
+    fn routine_share_tracks_its_score() {
+        let hist = SetPieceHistory::default();
+        let scores = spread_scores();
+        let total = 0.20 + 0.50 + 0.18 + 0.10 + 0.05;
+        let n = 10_000;
+        let spot = (0..n)
+            .filter(|i| {
+                pick_corner_routine(&scores, &hist, true, *i as f32 / n as f32)
+                    == CornerRoutine::PenaltySpot
+            })
+            .count() as f32
+            / n as f32;
+        assert!(
+            (spot - 0.50 / total).abs() < 0.01,
+            "spot share {spot} vs expected {}",
+            0.50 / total
+        );
     }
 }

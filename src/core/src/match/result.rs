@@ -201,22 +201,20 @@ pub const SUBSTITUTION_CLIP_PRE_ROLL_MS: u64 = 2_000;
 /// the line, the man coming the other way, the pair of them passing at the
 /// halfway flag.
 ///
-/// ⚠ **The recorder cannot know at the mark how long the window will turn out
-/// to run**, so this is sized for the long one and is longer than an ordinary
-/// change needs. Two things decide the length: how many men are in the change,
-/// each of whom gets a [`SubstitutionBreak::BEAT_MS`] of camera, and how far
-/// the last of them has to walk once his beat lets him go. A side may change
-/// three at one stoppage, and the worst case of that is 2 x `BEAT_MS` +
-/// `PORTRAIT_MS` before the last man moves and 62 m at `ON` afterwards —
-/// twenty-three seconds. A clip cut to the typical seven or eight would stop
-/// halfway through the slow one, leading a marker to footage of a man standing
-/// in the run-off.
+/// ⚠ **The recorder cannot know at the mark how many men the window will turn
+/// out to hold**, so this is sized for the long one and is longer than an
+/// ordinary change needs. One thing decides the length now — how many men are
+/// in the change, each of whom gets a [`SubstitutionBreak::BEAT_MS`] of
+/// camera. A side may change three at one stoppage, which is 16.2 s, and a
+/// clip cut to the five and a half an ordinary change costs would stop
+/// halfway through it.
 ///
 /// What the extra seconds hold on an ordinary change is not padding either:
-/// the window closes when the last man is on, so they are the restart and the
-/// first of the play that follows it.
+/// the window closes two seconds into the last man's run, so they are the
+/// restart and the first of the play that follows it — with him still jogging
+/// into position through the middle of it, which is the part of a substitution
+/// a clip that stopped at the window would never show.
 ///
-/// [`SubstitutionBreak::BREAK_MS`]: super::SubstitutionBreak::BREAK_MS
 /// [`SubstitutionBreak::BEAT_MS`]: super::SubstitutionBreak::BEAT_MS
 pub const SUBSTITUTION_CLIP_POST_ROLL_MS: u64 = 24_000;
 
@@ -760,7 +758,7 @@ impl ResultMatchPositionData {
     /// there is nothing behind it worth two seconds of a stationary ball, and
     /// everything worth watching — the man walking off, the man coming on —
     /// happens AFTER the instant it is stamped at, for as long as
-    /// `SubstitutionBreak::BREAK_MS` says.
+    /// `SubstitutionBreak::beats_ms` says.
     ///
     /// One clip per STOPPAGE rather than per change — a double change on the
     /// same whistle is one moment and one window, and two marks against the
@@ -1126,13 +1124,6 @@ mod goal_clip_tests {
         }
         data.finish(duration_ms);
         data
-    }
-
-    fn stamps(samples: &[ResultPositionDataItem]) -> (u64, u64) {
-        (
-            samples.first().expect("a sample").timestamp,
-            samples.last().expect("a sample").timestamp,
-        )
     }
 
     /// The stamps of the samples that fall inside one window, which is what
@@ -1594,11 +1585,11 @@ mod chance_clip_tests {
     /// the whole of the window behind it.
     ///
     /// The post-roll is the load-bearing number. A substitution stops the
-    /// match for `SubstitutionBreak::BREAK_MS` and every second of what
-    /// anybody wants to see is inside that window, so a clip cut like a
-    /// goal's — five seconds either side — would end with both men still
-    /// walking and lead the viewer to a marker whose footage stops halfway
-    /// through the thing it marks.
+    /// match for its beats and then lets the football go with both men still
+    /// walking, so everything anybody wants to see is on this side of the
+    /// mark — and a clip cut like a goal's, five seconds either side, would
+    /// lead the viewer to a marker whose footage stops halfway through the
+    /// thing it marks.
     #[test]
     fn a_change_is_clipped_forwards_rather_than_backwards() {
         let mut data = ResultMatchPositionData::new().with_scope(RecordingScope::Goals);
@@ -1626,18 +1617,14 @@ mod chance_clip_tests {
                 )[..]
             )
         );
-        // The two things that decide how long a window runs: the ceiling on
-        // the walking, and the beats the camera spends on a three-man change
-        // before the last of them is even released. The clip has to outlast
-        // both, or a marker leads to footage of a man standing in the run-off.
+        // What decides how long a window runs is now one thing and one thing
+        // only: the beats the camera spends on each man coming on. The clip
+        // has to outlast a three-man change and leave something over for the
+        // restart behind it, or a marker leads to footage that stops halfway
+        // through the change it marks.
         use crate::r#match::SubstitutionBreak;
         assert!(
-            SUBSTITUTION_CLIP_POST_ROLL_MS >= SubstitutionBreak::BREAK_MS,
-            "the clip stops before a slow walk does"
-        );
-        assert!(
-            SUBSTITUTION_CLIP_POST_ROLL_MS
-                >= 2 * SubstitutionBreak::BEAT_MS + SubstitutionBreak::PORTRAIT_MS + 7_500,
+            SUBSTITUTION_CLIP_POST_ROLL_MS >= 3 * SubstitutionBreak::BEAT_MS + 7_500,
             "the clip stops before the third man of a triple change is on"
         );
     }

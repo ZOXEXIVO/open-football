@@ -1,9 +1,9 @@
 use crate::r#match::forwarders::states::{
     ForwardAssistingState, ForwardCreatingSpaceState, ForwardCrossReceivingState,
     ForwardCrossingState, ForwardDribblingState, ForwardFinishingState, ForwardHeadingState,
-    ForwardInterceptingState, ForwardPassingState, ForwardPressingState, ForwardRestingState,
-    ForwardReturningState, ForwardRunningInBehindState, ForwardRunningState, ForwardShootingState,
-    ForwardHoldingWidthState, ForwardStandingState, ForwardTacklingState, ForwardTakeBallState,
+    ForwardHoldingWidthState, ForwardInterceptingState, ForwardPassingState, ForwardPressingState,
+    ForwardRestingState, ForwardReturningState, ForwardRunningInBehindState, ForwardRunningState,
+    ForwardShootingState, ForwardStandingState, ForwardTacklingState, ForwardTakeBallState,
     ForwardWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};

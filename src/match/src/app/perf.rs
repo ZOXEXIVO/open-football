@@ -41,7 +41,7 @@
 //! about 100 µs on a page that is not cross-origin isolated — hence the
 //! window: a median over two seconds of frames is well clear of that step.
 
-use crate::config::ViewerConfig;
+use crate::app::config::ViewerConfig;
 use bevy::camera::visibility::ViewVisibility;
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
@@ -213,11 +213,11 @@ impl FrameCost {
 
     /// What one chunk of the recording cost to parse, and how big it was.
     ///
-    /// Reported from [`crate::loader`] rather than measured here, because it
-    /// does not happen on a frame: the fetch lands on the microtask queue, so
-    /// the parse falls between two animation frames and shows up in the frame
-    /// clock as one enormous `outside`. This is what says whether that was the
-    /// recording or the renderer.
+    /// Reported from [`crate::recording::loader`] rather than measured here,
+    /// because it does not happen on a frame: the fetch lands on the microtask
+    /// queue, so the parse falls between two animation frames and shows up in
+    /// the frame clock as one enormous `outside`. This is what says whether
+    /// that was the recording or the renderer.
     pub fn announce_chunk(index: usize, bytes: usize, milliseconds: f32) {
         Self::announce(&format!(
             "match viewer — chunk {index} opened: {:.1} MB of JSON, envelope in {milliseconds:.0} ms",

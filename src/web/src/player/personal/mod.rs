@@ -772,8 +772,6 @@ pub struct MindMemoryDto {
     pub text: String,
     /// True for the ones he is glad about.
     pub warm: bool,
-    /// 0..100 — how firmly held.
-    pub strength: u8,
 }
 
 /// What a player wants, and what he remembers about the place he is at.
@@ -841,7 +839,6 @@ fn get_mind(player: &Player, club_id: u32, today: NaiveDate, i18n: &I18n) -> Opt
         .map(|fact| MindMemoryDto {
             text: i18n.t(fact.claim.as_i18n_key()).to_string(),
             warm: fact.claim.valence() >= 0.0,
-            strength: (fact.strength() * 100.0).clamp(0.0, 100.0) as u8,
         })
         .collect();
 

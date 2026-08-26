@@ -36,6 +36,7 @@ use crate::r#match::player::strategies::players::ops::goalkeeper_skill::{
     GoalkeeperSkillInputs, GoalkeeperSkillProfile,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+#[cfg(feature = "match-logs")]
 use crate::r#match::player::strategies::players::ops::xg::ShotType;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
@@ -43,8 +44,6 @@ use crate::r#match::{
     MatchPlayer, OffsideLine, OffsideSnapshot, PassOriginRestart, PlayerSide,
     ResultMatchPositionData, ShotTarget,
 };
-#[cfg(feature = "match-logs")]
-use crate::match_log_info;
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::FoulCensus;
 use log::debug;
@@ -111,6 +110,63 @@ pub mod shot_accuracy_diag {
     /// anchor any centred accuracy term has to sit on.
     pub static EXECUTION_SUM: AtomicU64 = AtomicU64::new(0);
 
+    /// **The same accounting, split by what KIND of shot it was.**
+    ///
+    /// Indexed by `ShotType` in declaration order; each row is
+    /// `[struck, on frame, Σ execution_skill ×1000]`.
+    ///
+    /// Written because `heading` had no way of reaching a headed STRIKE:
+    /// the type was classified on the event and then narrowed to the two
+    /// dead balls before it reached the profile, so a header off a corner
+    /// was executed on `finishing`, `technique` and `balance` as though it
+    /// had been hit with the instep. Nothing in the harness could see
+    /// that, because every shot census in the file buckets by DISTANCE or
+    /// by the decision that produced it — never by the action.
+    ///
+    /// Read the execution column first: it says which skills the strike
+    /// was resolved on, which is the thing the fix changes. The on-frame
+    /// column is the KPI (`heading` → headed-shot conversion).
+    pub const SHOT_TYPES: usize = 10;
+    pub static BY_SHOT_TYPE: [[AtomicU64; 3]; SHOT_TYPES] =
+        [const { [const { AtomicU64::new(0) }; 3] }; SHOT_TYPES];
+    pub const SHOT_TYPE_NAMES: [&str; SHOT_TYPES] = [
+        "foot open play",
+        "header",
+        "volley",
+        "one-v-one",
+        "cutback",
+        "set-piece header",
+        "long shot",
+        "rebound",
+        "penalty",
+        "direct free kick",
+    ];
+
+    pub fn note_shot_type(slot: usize, on_frame: bool, execution_skill: f32) {
+        if slot >= SHOT_TYPES {
+            return;
+        }
+        BY_SHOT_TYPE[slot][0].fetch_add(1, Ordering::Relaxed);
+        if on_frame {
+            BY_SHOT_TYPE[slot][1].fetch_add(1, Ordering::Relaxed);
+        }
+        BY_SHOT_TYPE[slot][2].fetch_add(
+            (execution_skill.clamp(0.0, 1.0) * 1000.0) as u64,
+            Ordering::Relaxed,
+        );
+    }
+
+    /// `[[struck, on frame, Σ execution ×1000]; ShotType]`.
+    pub fn shot_type_snapshot() -> [[u64; 3]; SHOT_TYPES] {
+        let mut out = [[0u64; 3]; SHOT_TYPES];
+        for (t, row) in out.iter_mut().enumerate() {
+            for (i, slot) in row.iter_mut().enumerate() {
+                *slot = BY_SHOT_TYPE[t][i].load(Ordering::Relaxed);
+            }
+        }
+        out
+    }
+
     /// Which tier a `finishing` attribute (1-20) falls in.
     pub fn finishing_tier(finishing: f32) -> usize {
         if finishing <= 8.0 {
@@ -154,6 +210,11 @@ pub mod shot_accuracy_diag {
             c.store(0, Ordering::Relaxed);
         }
         for row in BY_FINISHING.iter() {
+            for c in row.iter() {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+        for row in BY_SHOT_TYPE.iter() {
             for c in row.iter() {
                 c.store(0, Ordering::Relaxed);
             }
@@ -3473,6 +3534,11 @@ impl PlayerEventDispatcher {
     /// of chances the player had already done the hard part of creating.
     /// Only 0.75 of the spread is given back — ambitious placement still
     /// finds the side-netting, which is what the side-netting is for.
+    ///
+    /// ⚠ Currently reached only from tests: `handle_shoot_event` inlines the
+    /// unbounded half of this and drops `max_y_error`, so the frame bound the
+    /// tests below assert is NOT live in a match.
+    #[allow(dead_code)]
     fn intended_corner_reach(placement_skill: f32, max_y_error: f32) -> f32 {
         let safe_reach =
             (GOAL_MOUTH_HALF_WIDTH - max_y_error * 0.75).max(GOAL_MOUTH_HALF_WIDTH * 0.20);
@@ -3713,10 +3779,14 @@ impl PlayerEventDispatcher {
             gk_distance,
             is_sprinting_or_recent_sprint: false,
             // Classified once, on the event, by `ShootingEventBuilder`.
-            set_piece: match shoot_event_model.shot_type {
-                t @ (ShotType::Penalty | ShotType::DirectFreeKick) => Some(t),
-                _ => None,
-            },
+            //
+            // Passed through WHOLE. It used to be narrowed to the two
+            // dead balls and everything else flattened to open play,
+            // which is why `ShotType::Header` — set at five call sites
+            // and resolved by the builder — reached the profile as a foot
+            // shot: `heading` won the aerial duel and then `finishing`
+            // struck the ball.
+            shot_type: shoot_event_model.shot_type,
             standard_shift: MatchStandard::shift(context),
         };
         let profile = {
@@ -4276,6 +4346,25 @@ impl PlayerEventDispatcher {
             shot_accuracy_diag::note_finishing(
                 shot_accuracy_diag::finishing_tier(finishing_skill * 20.0),
                 on_frame,
+            );
+            // …and by what KIND of shot it was, which is the axis the
+            // taxonomy exists for and the one nothing measured. See
+            // `shot_accuracy_diag::BY_SHOT_TYPE`.
+            shot_accuracy_diag::note_shot_type(
+                match shoot_event_model.shot_type {
+                    ShotType::FootOpenPlay => 0,
+                    ShotType::Header => 1,
+                    ShotType::Volley => 2,
+                    ShotType::OneVOne => 3,
+                    ShotType::Cutback => 4,
+                    ShotType::SetPieceHeader => 5,
+                    ShotType::LongShot => 6,
+                    ShotType::Rebound => 7,
+                    ShotType::Penalty => 8,
+                    ShotType::DirectFreeKick => 9,
+                },
+                on_frame,
+                execution_skill,
             );
         }
         let struck_apex = if shot_goes_over_bar {

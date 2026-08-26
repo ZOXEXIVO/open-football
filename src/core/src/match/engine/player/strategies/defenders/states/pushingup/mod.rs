@@ -1,7 +1,7 @@
-use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::player::PlayerSide;
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -20,8 +20,6 @@ pub struct DefenderPushingUpState {}
 
 impl StateProcessingHandler for DefenderPushingUpState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        let ball_ops = ctx.ball();
-
         // Attacking corner: centre-backs attack the delivery rather than
         // the generic push-up (which would retreat at the box edge).
         if !ctx.player.has_ball(ctx)

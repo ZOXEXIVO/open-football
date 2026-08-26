@@ -40,7 +40,8 @@ pub mod store;
 
 pub use actor::{ActorKind, ActorRef};
 pub use consolidation::{
-    ConsolidationReport, ConsolidationRule, Consolidator, EpisodeStore, FactSubject, MindHolder,
+    ConsolidationReport, ConsolidationRule, Consolidator, EpisodeStore, FactSubject, FormedFact,
+    MindHolder,
 };
 pub use episode::{
     EncodingInputs, EpisodeDomain, EpisodeFlags, EpisodeKind, EpisodeSpec, MindEpisode,
@@ -269,8 +270,6 @@ pub struct MemoryCensus {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const YEAR: EpochDay = 365;
 
     fn ctx(today: EpochDay, club: u32) -> MemoryContext {
         MemoryContext::neutral(today, club)

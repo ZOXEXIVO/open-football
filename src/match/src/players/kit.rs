@@ -1,5 +1,5 @@
-use crate::config::{PlayerInfo, TeamColors, ViewerConfig};
-use crate::textures::{Beard, FaceLayout, FaceLook, Textures};
+use crate::app::config::{PlayerInfo, TeamColors, ViewerConfig};
+use crate::art::textures::{Beard, FaceLayout, FaceLook, Textures};
 use bevy::image::Image;
 use bevy::prelude::*;
 use shared::Palette;
@@ -164,7 +164,7 @@ impl Complexion {
     /// a guess and the picture is the answer — so the guess is replaced by
     /// whichever entry of the same ramp sits closest to what the picture
     /// says, which keeps every player on the shared materials the renderer
-    /// batches by. See [`crate::portrait::Portraits::attach`].
+    /// batches by. See [`crate::players::portrait::Portraits::attach`].
     pub fn nearest_skin(tone: Vec3) -> usize {
         Self::nearest(&Palette::SKIN, tone)
     }
@@ -417,9 +417,9 @@ struct Kit {
 /// only ever four strips and a handful of appearances on the field.
 ///
 /// A resource, and kept for the whole match rather than dropped at the end of
-/// the spawn: a substitute is dressed on the way onto the pitch and not
-/// before — see [`crate::actors::Actors::take_the_field`] — so this has to
-/// still be here in the sixtieth minute.
+/// the spawn: a substitute is dressed on the way onto the pitch and not before
+/// — see [`crate::players::actors::Actors::take_the_field`] — so this has
+/// to still be here in the sixtieth minute.
 #[derive(Resource)]
 pub struct Wardrobe {
     kits: [Kit; 4],
@@ -436,12 +436,12 @@ pub struct Wardrobe {
     /// differ is baked into a texture: a printed number, a printed name and a
     /// face.
     ///
-    /// **Filled as men take the field, not up front.** The page sends both
-    /// full team sheets — eleven and seven a side, thirty-six men — and the
+    /// **Filled as men take the field, not up front.** The page sends both full
+    /// team sheets — eleven and seven a side, thirty-six men — and the
     /// fourteen on the benches are three pictures each that nobody may ever
     /// see. A face is the expensive one: a 256-square sheet painted texel by
-    /// texel through [`crate::textures::Painter`] and then mip-chained, on the
-    /// browser's main thread, before the first frame. Fourteen of those is
+    /// texel through [`crate::art::textures::Painter`] and then mip-chained, on
+    /// the browser's main thread, before the first frame. Fourteen of those is
     /// most of a second of the load spent on men who are sitting down.
     numbers: Vec<(u32, Handle<StandardMaterial>)>,
     names: Vec<(u32, Handle<StandardMaterial>)>,
@@ -698,14 +698,15 @@ impl Wardrobe {
     /// tests its way past the depth buffer.
     ///
     /// **Alpha to coverage is the same picture in the opaque phase.** With
-    /// multisampling on — see [`crate::quality`] — the hardware turns the
-    /// glyph's alpha into sample coverage, which for a cutout is what blending
-    /// was approximating in the first place; the print is binned rather than
-    /// sorted, it is drawn front to back, and it gets the depth buffer's early
-    /// rejection like everything else on the man. With multisampling off Bevy
-    /// falls back to a discard at 0.5 and the edge hardens by a texel — on a
-    /// number that lands twenty pixels wide, under an FXAA pass whose whole
-    /// job is high-contrast edges exactly like this one.
+    /// multisampling on — see [`crate::app::quality`] — the hardware turns
+    /// the glyph's alpha into sample coverage, which for a cutout is what
+    /// blending was approximating in the first place; the print is binned
+    /// rather than sorted, it is drawn front to back, and it gets the depth
+    /// buffer's early rejection like everything else on the man. With
+    /// multisampling off Bevy falls back to a discard at 0.5 and the edge
+    /// hardens by a texel — on a number that lands twenty pixels wide, under
+    /// an FXAA pass whose whole job is high-contrast edges exactly like this
+    /// one.
     ///
     /// The print floats four millimetres off the cloth (`BodyParts::
     /// PRINT_LIFT`), so writing depth from the opaque phase orders it against
@@ -737,6 +738,7 @@ mod tests {
             last_name: "Okocha".to_string(),
             position: "ST".to_string(),
             is_home: true,
+            starting: true,
             skin,
             hair,
             eyes,

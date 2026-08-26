@@ -20,8 +20,10 @@ use rand::RngExt;
 use rayon::prelude::*;
 use serde::Serialize;
 use shared::{Appearance, Region, SkinBucket, SkinDist};
+use std::env;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Random squad level range when no explicit level is passed. Covers the
@@ -388,6 +390,9 @@ struct PlayerJson {
     last_name: String,
     position: String,
     is_home: bool,
+    /// Whether he is in the starting eleven rather than on the bench — the
+    /// eleven a side that walk out before kick-off.
+    starting: bool,
     skin: u8,
     hair: u8,
     eyes: u8,
@@ -396,7 +401,14 @@ struct PlayerJson {
 impl PlayerJson {
     /// `name` indexes both tables above, so the man's name and his colouring
     /// come from the same country.
-    fn new(id: u32, shirt_number: u8, name: usize, position: &str, is_home: bool) -> PlayerJson {
+    fn new(
+        id: u32,
+        shirt_number: u8,
+        name: usize,
+        position: &str,
+        is_home: bool,
+        starting: bool,
+    ) -> PlayerJson {
         let name = name % LAST_NAMES.len();
         let look = Appearance::of(id, HOMELANDS[name]);
         PlayerJson {
@@ -405,6 +417,7 @@ impl PlayerJson {
             last_name: LAST_NAMES[name].to_string(),
             position: position.to_string(),
             is_home,
+            starting,
             skin: look.skin as u8,
             hair: look.hair as u8,
             eyes: look.eyes as u8,
@@ -448,7 +461,7 @@ struct MetadataJson {
     total_duration_ms: u64,
 }
 
-/// Mirror of `match_viewer::config::ViewerConfig`. `debug` is always on here:
+/// Mirror of `match_viewer::app::config::ViewerConfig`. `debug` is always on here:
 /// the state labels, the speed control and the ball-coordinate readout are the
 /// entire reason to look at a match in this harness rather than in the game.
 #[derive(Serialize)]
@@ -463,6 +476,14 @@ struct ViewerConfigJson<'a> {
     chances: &'a [ChanceJson],
     substitutions: &'a [SubstitutionJson],
     debug: bool,
+    /// Walk the two teams out before the replay starts.
+    ///
+    /// On by default here as well as in the game, so what the harness shows is
+    /// what a player sees. **`OF_NO_LINEUP=1` turns it off** — fifteen seconds
+    /// of ceremony in front of every run of a screenshot loop is fifteen
+    /// seconds of ceremony, and the same A/B switch is how the substitution
+    /// walk is compared against the engine without it.
+    lineup: bool,
 }
 
 #[derive(Serialize)]
@@ -504,6 +525,7 @@ impl ViewerPage {
             chances,
             substitutions,
             debug: true,
+            lineup: std::env::var("OF_NO_LINEUP").is_err(),
         };
 
         let placeholder = if VIEWER_WASM_GZ.is_empty() {
@@ -792,6 +814,291 @@ impl SquadSpread {
     }
 }
 
+/// **Pin ONE attribute across a whole side, and only that attribute.**
+///
+/// The sensitivity instrument. "Is this attribute load-bearing" is not a
+/// question the level sweep can answer — moving the level moves all
+/// forty-nine at once, so every KPI moves and none of them is
+/// attributable. The only way to see a single attribute's channel is to
+/// hold the squads identical and move that one value on one side.
+///
+/// ```text
+///   OF_PIN=<attr>:<home>:<away>[:<unit>][,<attr>:<home>:<away>[:<unit>]…]
+///   OF_PIN=flair:6:18                    home flair 6, away 18
+///   OF_PIN=marking:6:18:def              defenders only (asymmetry check)
+///   OF_PIN=teamwork:18:6,positioning:6:18    the SWAP test (see below)
+/// ```
+///
+/// `<unit>` is `all` (default), `out` (outfield), `gk`, `def`, `mid` or
+/// `fwd`. Applied AFTER the generator has retargeted the squad, so it
+/// overwrites rather than being averaged away, and it deliberately does
+/// NOT re-run `LevelSkillCurve::retarget` — the point is to move one
+/// attribute with the other forty-eight held exactly where they were.
+///
+/// Level 14's generator mean is 11.8, so `6:18` is the symmetric pin
+/// around the calibration division.
+///
+/// Note the pin therefore moves the squad's mean slightly, and so moves
+/// `MatchStandard` by about `(pin - 11.8)/49` normalised units. That is
+/// a tenth of an attribute point either way for a 6↔18 pin and it is the
+/// honest reading — the pinned side really is a fraction better.
+///
+/// Pin the SAME value on both sides (`OF_PIN=flair:6:6`) to measure the
+/// attribute's league-wide effect instead of its head-to-head one.
+///
+/// # The swap test
+///
+/// Two attributes are DEGENERATE when the engine has one channel wearing
+/// two names. Uniform squads cannot show it — every attribute is equal,
+/// so exchanging two of them is a no-op. Two runs do:
+///
+/// ```text
+///   arm A: OF_PIN=teamwork:18:6,positioning:6:18
+///   arm B: OF_PIN=teamwork:6:18,positioning:18:6
+/// ```
+///
+/// Both arms give each side the same TOTAL of the two attributes and the
+/// same squad mean; only which name carries which value changes. If the
+/// two arms come out statistically identical, the pair is one channel.
+struct SkillPin;
+
+/// Which players on a side a pin applies to.
+#[derive(Clone, Copy, PartialEq)]
+enum PinUnit {
+    All,
+    Outfield,
+    Goalkeeper,
+    Defenders,
+    Midfielders,
+    Forwards,
+}
+
+impl PinUnit {
+    fn parse(s: &str) -> PinUnit {
+        match s {
+            "out" | "outfield" => PinUnit::Outfield,
+            "gk" | "keeper" | "goalkeeper" => PinUnit::Goalkeeper,
+            "def" | "defenders" | "d" => PinUnit::Defenders,
+            "mid" | "midfielders" | "m" => PinUnit::Midfielders,
+            "fwd" | "forwards" | "f" => PinUnit::Forwards,
+            _ => PinUnit::All,
+        }
+    }
+
+    fn covers(self, pos: PlayerPositionType) -> bool {
+        let group = pos.position_group();
+        match self {
+            PinUnit::All => true,
+            PinUnit::Outfield => group != PlayerFieldPositionGroup::Goalkeeper,
+            PinUnit::Goalkeeper => group == PlayerFieldPositionGroup::Goalkeeper,
+            PinUnit::Defenders => group == PlayerFieldPositionGroup::Defender,
+            PinUnit::Midfielders => group == PlayerFieldPositionGroup::Midfielder,
+            PinUnit::Forwards => group == PlayerFieldPositionGroup::Forward,
+        }
+    }
+}
+
+/// A parsed `OF_PIN` directive.
+#[derive(Clone, Copy)]
+struct PinSpec {
+    attr: &'static str,
+    home: f32,
+    away: f32,
+    unit: PinUnit,
+}
+
+impl SkillPin {
+    fn specs() -> &'static [PinSpec] {
+        static SPECS: OnceLock<Vec<PinSpec>> = OnceLock::new();
+        SPECS.get_or_init(|| {
+            let Ok(raw) = env::var("OF_PIN") else {
+                return Vec::new();
+            };
+            raw.split(',').filter_map(Self::parse_one).collect()
+        })
+    }
+
+    fn parse_one(directive: &str) -> Option<PinSpec> {
+        let directive = directive.trim();
+        if directive.is_empty() {
+            return None;
+        }
+        let mut parts = directive.split(':');
+        let attr = parts.next()?.trim().to_ascii_lowercase();
+        let attr = Self::canonical(&attr)?;
+        let home: f32 = parts.next()?.trim().parse().ok()?;
+        let away: f32 = parts
+            .next()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(home);
+        let unit = parts
+            .next()
+            .map(|u| PinUnit::parse(u.trim()))
+            .unwrap_or(PinUnit::All);
+        eprintln!(
+            "[OF_PIN] {attr} → home {home}, away {away}  (unit: {})",
+            match unit {
+                PinUnit::All => "all",
+                PinUnit::Outfield => "outfield",
+                PinUnit::Goalkeeper => "gk",
+                PinUnit::Defenders => "def",
+                PinUnit::Midfielders => "mid",
+                PinUnit::Forwards => "fwd",
+            }
+        );
+        Some(PinSpec {
+            attr,
+            home: home.clamp(1.0, 20.0),
+            away: away.clamp(1.0, 20.0),
+            unit,
+        })
+    }
+
+    /// Map a user-typed name onto a `&'static str` key. Rejecting an
+    /// unknown name outright (rather than silently pinning nothing) is
+    /// the whole safety property: a typo in a measurement run that
+    /// quietly measures the control twice is worse than no measurement.
+    fn canonical(name: &str) -> Option<&'static str> {
+        const NAMES: &[&str] = &[
+            // Technical
+            "corners",
+            "crossing",
+            "dribbling",
+            "finishing",
+            "first_touch",
+            "free_kicks",
+            "heading",
+            "long_shots",
+            "long_throws",
+            "marking",
+            "passing",
+            "penalty_taking",
+            "tackling",
+            "technique",
+            // Mental
+            "aggression",
+            "anticipation",
+            "bravery",
+            "composure",
+            "concentration",
+            "decisions",
+            "determination",
+            "flair",
+            "leadership",
+            "off_the_ball",
+            "positioning",
+            "teamwork",
+            "vision",
+            "work_rate",
+            // Physical
+            "acceleration",
+            "agility",
+            "balance",
+            "jumping",
+            "natural_fitness",
+            "pace",
+            "stamina",
+            "strength",
+            "match_readiness",
+            // Goalkeeping (prefixed — `first_touch` and `passing` exist on
+            // both scales and must not be ambiguous)
+            "gk_aerial_reach",
+            "gk_command_of_area",
+            "gk_communication",
+            "gk_eccentricity",
+            "gk_first_touch",
+            "gk_handling",
+            "gk_kicking",
+            "gk_one_on_ones",
+            "gk_passing",
+            "gk_punching",
+            "gk_reflexes",
+            "gk_rushing_out",
+            "gk_throwing",
+        ];
+        let hit = NAMES.iter().find(|n| **n == name).copied();
+        if hit.is_none() {
+            eprintln!(
+                "[OF_PIN] unknown attribute {name:?} — this directive is DROPPED. \
+                 Nothing will be pinned for it, so the arm you are about to run is \
+                 the control. GK attributes are prefixed gk_ (gk_handling)."
+            );
+        }
+        hit
+    }
+
+    /// Apply every parsed pin to one player. `team_id` 1 is the home side.
+    fn apply(skills: &mut PlayerSkills, team_id: u32, pos: PlayerPositionType) {
+        for spec in Self::specs() {
+            Self::apply_one(skills, team_id, pos, *spec);
+        }
+    }
+
+    fn apply_one(skills: &mut PlayerSkills, team_id: u32, pos: PlayerPositionType, spec: PinSpec) {
+        if !spec.unit.covers(pos) {
+            return;
+        }
+        let v = if team_id == 1 { spec.home } else { spec.away };
+        let t = &mut skills.technical;
+        let m = &mut skills.mental;
+        let p = &mut skills.physical;
+        let g = &mut skills.goalkeeping;
+        match spec.attr {
+            "corners" => t.corners = v,
+            "crossing" => t.crossing = v,
+            "dribbling" => t.dribbling = v,
+            "finishing" => t.finishing = v,
+            "first_touch" => t.first_touch = v,
+            "free_kicks" => t.free_kicks = v,
+            "heading" => t.heading = v,
+            "long_shots" => t.long_shots = v,
+            "long_throws" => t.long_throws = v,
+            "marking" => t.marking = v,
+            "passing" => t.passing = v,
+            "penalty_taking" => t.penalty_taking = v,
+            "tackling" => t.tackling = v,
+            "technique" => t.technique = v,
+            "aggression" => m.aggression = v,
+            "anticipation" => m.anticipation = v,
+            "bravery" => m.bravery = v,
+            "composure" => m.composure = v,
+            "concentration" => m.concentration = v,
+            "decisions" => m.decisions = v,
+            "determination" => m.determination = v,
+            "flair" => m.flair = v,
+            "leadership" => m.leadership = v,
+            "off_the_ball" => m.off_the_ball = v,
+            "positioning" => m.positioning = v,
+            "teamwork" => m.teamwork = v,
+            "vision" => m.vision = v,
+            "work_rate" => m.work_rate = v,
+            "acceleration" => p.acceleration = v,
+            "agility" => p.agility = v,
+            "balance" => p.balance = v,
+            "jumping" => p.jumping = v,
+            "natural_fitness" => p.natural_fitness = v,
+            "pace" => p.pace = v,
+            "stamina" => p.stamina = v,
+            "strength" => p.strength = v,
+            "match_readiness" => p.match_readiness = v,
+            "gk_aerial_reach" => g.aerial_reach = v,
+            "gk_command_of_area" => g.command_of_area = v,
+            "gk_communication" => g.communication = v,
+            "gk_eccentricity" => g.eccentricity = v,
+            "gk_first_touch" => g.first_touch = v,
+            "gk_handling" => g.handling = v,
+            "gk_kicking" => g.kicking = v,
+            "gk_one_on_ones" => g.one_on_ones = v,
+            "gk_passing" => g.passing = v,
+            "gk_punching" => g.punching = v,
+            "gk_reflexes" => g.reflexes = v,
+            "gk_rushing_out" => g.rushing_out = v,
+            "gk_throwing" => g.throwing = v,
+            _ => {}
+        }
+    }
+}
+
 /// Position-relevant RAW skill composite (1..20) for the rating-vs-skill
 /// diagnostics. Mirrors the weights the engine's own composites use
 /// (`ops::skill_composites`) so the number means the same thing the
@@ -1019,6 +1326,9 @@ fn make_squad_simple(team_id: u32, level: u8) -> MatchSquad {
             // after the playmaker overrides so an explicitly-shaped
             // player keeps his shape, just at a jittered level.
             SquadSpread::apply(&mut player.skills, lvl);
+            // …and the single-attribute pin LAST of all, because it is
+            // the measurement and nothing may average it away.
+            SkillPin::apply(&mut player.skills, team_id, pos);
             MatchPlayer::from_player(team_id, &player, pos, false, None)
         })
         .collect();
@@ -1059,6 +1369,7 @@ fn make_squad_viewer(
                 name_offset + i,
                 pos.get_short_name(),
                 team_id == 1,
+                true,
             ));
             mp
         })
@@ -1094,6 +1405,7 @@ fn make_squad_viewer(
                 name_offset + 11 + i,
                 pos.get_short_name(),
                 team_id == 1,
+                false,
             ));
             mp
         })
@@ -2725,6 +3037,35 @@ fn print_usage() {
         "                                      slot = gk (default) | cb | cm | fw; Team 1 senior vs Team 2 youth"
     );
     eprintln!();
+    eprintln!("Environment:");
+    eprintln!(
+        "  OF_PIN=<attr>:<home>:<away>[:<unit>][,…]   hold ONE attribute across a side. The"
+    );
+    eprintln!(
+        "                                      sensitivity instrument: the level sweep moves all fifty"
+    );
+    eprintln!(
+        "                                      at once, so it can never attribute a KPI to one of them."
+    );
+    eprintln!(
+        "                                      unit = all (default) | out | gk | def | mid | fwd;"
+    );
+    eprintln!(
+        "                                      GK attributes are prefixed gk_ (gk_handling). Team 1 is HOME."
+    );
+    eprintln!(
+        "                                      Level 14's generator mean is 11.8, so 6:18 is symmetric."
+    );
+    eprintln!(
+        "                                      Two directives run the SWAP test for a suspected"
+    );
+    eprintln!(
+        "                                      degenerate pair:  OF_PIN=teamwork:18:6,positioning:6:18"
+    );
+    eprintln!(
+        "  SQUAD_SPREAD=<sd>                   within-squad quality spread in skill points (default 0)"
+    );
+    eprintln!();
     eprintln!(
         "Random level range: {}–{} inclusive.",
         RANDOM_LEVEL_MIN, RANDOM_LEVEL_MAX
@@ -3944,6 +4285,20 @@ struct LevelRow {
     draws: u32,
     high_scoring: u32,
     box_shot_share: f32,
+    /// Corners awarded, and how many of them a cross was actually struck
+    /// from. Divisional, because the corner is where the engine's
+    /// absolute constants bite hardest: the delivery deadline
+    /// (`CORNER_SHAPE_MAX_TICKS`) is a fixed 2.5 s laid over a
+    /// pace-driven fetch-and-carry, and a routine picked by argmax over
+    /// five scores can only ever return the one with the biggest base.
+    corners_awarded: u64,
+    corner_crosses: u64,
+    /// Mean seconds a corner shape held, and the share released by the
+    /// deadline rather than by somebody touching the ball.
+    corner_shape_secs: f32,
+    corner_shape_deadline_pct: f32,
+    /// Routine mix, `[near, spot, far, short, edge]`, as shares.
+    corner_routines: [f32; 5],
 }
 
 impl LevelSweep {
@@ -4020,6 +4375,37 @@ impl LevelSweep {
             );
         }
 
+        // ── The corner, per division ──────────────────────────────────
+        //
+        // Split out rather than folded into the table above because it
+        // answers a different question: not "does the engine score like
+        // football here" but "does the SET PIECE work here". The corner
+        // carries more absolute constants than anything else in the
+        // engine — a fixed delivery deadline, five fixed routine bases —
+        // and an absolute constant is exactly what prices a division
+        // instead of a player.
+        println!();
+        println!(
+            "{:>5} {:>9} {:>10} {:>9} {:>9}  {:>34}",
+            "level", "corners/m", "crosses/c", "shape s", "deadline%", "routine mix N/S/F/Sh/E %"
+        );
+        for r in &rows {
+            let n = r.matches.max(1) as f32;
+            println!(
+                "{:>5} {:>9.2} {:>10.2} {:>9.2} {:>8.0}%  {:>7.0} {:>6.0} {:>6.0} {:>6.0} {:>6.0}",
+                r.level,
+                r.corners_awarded as f32 / n,
+                r.corner_crosses as f32 / r.corners_awarded.max(1) as f32,
+                r.corner_shape_secs,
+                r.corner_shape_deadline_pct,
+                r.corner_routines[0],
+                r.corner_routines[1],
+                r.corner_routines[2],
+                r.corner_routines[3],
+                r.corner_routines[4],
+            );
+        }
+
         // ── Verdict ───────────────────────────────────────────────────
         //
         // Two numbers, and they are different questions. SPREAD is this
@@ -4069,8 +4455,10 @@ impl LevelSweep {
     fn one_level(n_matches: usize, level: u8) -> LevelRow {
         // The distance diagnostic is a process-global accumulator, so it
         // has to be zeroed BEFORE the level runs for `box%` to be this
-        // level's mix rather than the sweep's running one.
+        // level's mix rather than the sweep's running one. Same for the
+        // set-piece counters behind the corner columns.
         core::time_band_diag::reset();
+        core::mid_run_diag::reset();
 
         let outcomes: Vec<(u8, u8, TeamStats, TeamStats)> = (0..n_matches)
             .into_par_iter()
@@ -4121,6 +4509,25 @@ impl LevelSweep {
                 row.interceptions += t.interceptions;
                 row.passes_attempted += t.passes_attempted;
                 row.passes_completed += t.passes_completed;
+            }
+        }
+        {
+            use core::mid_run_diag::SetPieceDiag;
+            use std::sync::atomic::Ordering;
+            let sp = SetPieceDiag::snapshot();
+            row.corners_awarded = core::mid_run_diag::CORNERS_AWARDED.load(Ordering::Relaxed);
+            row.corner_crosses = core::mid_run_diag::CORNER_CROSS_SENT.load(Ordering::Relaxed);
+            row.corner_shape_secs = sp[16] as f32 / 100.0 / 100.0;
+            row.corner_shape_deadline_pct = if sp[18] == 0 {
+                0.0
+            } else {
+                sp[17] as f32 * 100.0 / sp[18] as f32
+            };
+            let picked: u64 = sp[0] + sp[1] + sp[2] + sp[3] + sp[4];
+            if picked > 0 {
+                for (slot, v) in row.corner_routines.iter_mut().zip(sp.iter()) {
+                    *slot = *v as f32 * 100.0 / picked as f32;
+                }
             }
         }
         eprintln!("  levels: level {} done", level);
@@ -4440,6 +4847,46 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     / 1000.0
                     / struck
             );
+        }
+        // ── SHOTS BY KIND ─────────────────────────────────────────────
+        //
+        // Every other shot census in this file buckets by DISTANCE or by
+        // the decision that produced the shot. Neither can see what the
+        // shot WAS — and the action is what decides which skills strike
+        // it. `heading` won the duel that produced a corner header and
+        // then `finishing` hit it, for as long as nothing printed this.
+        //
+        // Read `mean exec` first: it is the population anchor per action,
+        // so a header executing on the same number as a foot shot means
+        // the type is not reaching the profile at all.
+        {
+            let st = core::shot_accuracy_diag::shot_type_snapshot();
+            let total: u64 = st.iter().map(|r| r[0]).sum();
+            if total > 0 {
+                println!();
+                println!(
+                    "  SHOTS BY KIND (the action, not the distance) — {} struck:",
+                    total
+                );
+                println!(
+                    "    {:<18} {:>7} {:>7} {:>10} {:>10}",
+                    "type", "struck", "share", "on frame", "mean exec"
+                );
+                for (i, name) in core::shot_accuracy_diag::SHOT_TYPE_NAMES.iter().enumerate() {
+                    if st[i][0] == 0 {
+                        continue;
+                    }
+                    let n = st[i][0] as f32;
+                    println!(
+                        "    {:<18} {:>7} {:>6.1}% {:>9.1}% {:>10.3}",
+                        name,
+                        st[i][0],
+                        n / total as f32 * 100.0,
+                        st[i][1] as f32 / n * 100.0,
+                        st[i][2] as f32 / 1000.0 / n,
+                    );
+                }
+            }
         }
     }
     let conversion = total_goals as f32 / total_on_target.max(1) as f32 * 100.0;
@@ -5032,16 +5479,15 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             let mut h = 0i32;
             let mut a = 0i32;
             let mut prev_t = 0u64;
-            let mut add_segment =
-                |from: u64, to: u64, idx_home: usize, time_in: &mut [[f64; 2]; 3]| {
-                    // split [from, to) at the gate boundary
-                    let pre = to.min(GATE_MS).saturating_sub(from.min(GATE_MS)) as f64;
-                    let post = to.max(GATE_MS).saturating_sub(from.max(GATE_MS)) as f64;
-                    time_in[idx_home][0] += pre;
-                    time_in[2 - idx_home][0] += pre;
-                    time_in[idx_home][1] += post;
-                    time_in[2 - idx_home][1] += post;
-                };
+            let add_segment = |from: u64, to: u64, idx_home: usize, time_in: &mut [[f64; 2]; 3]| {
+                // split [from, to) at the gate boundary
+                let pre = to.min(GATE_MS).saturating_sub(from.min(GATE_MS)) as f64;
+                let post = to.max(GATE_MS).saturating_sub(from.max(GATE_MS)) as f64;
+                time_in[idx_home][0] += pre;
+                time_in[2 - idx_home][0] += pre;
+                time_in[idx_home][1] += post;
+                time_in[2 - idx_home][1] += post;
+            };
             for &(t, home_scored) in &o.goal_events {
                 let idx_home = if h > a {
                     0
@@ -8009,7 +8455,14 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 per(k[6]),
                 per(k[7])
             );
-            let ends = ["gloves", "his feet", "cleared", "to an opponent", "OUT OF PLAY", "lapsed"];
+            let ends = [
+                "gloves",
+                "his feet",
+                "cleared",
+                "to an opponent",
+                "OUT OF PLAY",
+                "lapsed",
+            ];
             let row = |base: usize, of: u64| {
                 ends.iter()
                     .enumerate()

@@ -19,7 +19,7 @@
         {% else %}
         <ol class="fm-evt-list">
             {% for event in events %}
-            <li class="fm-evt-card{% if event.is_big %} fm-evt-big{% endif %}{% if event.is_decision %} fm-evt-decision{% endif %}{% if event.is_positive %} fm-evt-positive{% elif event.is_negative %} fm-evt-negative{% else %} fm-evt-neutral{% endif %}">
+            <li class="fm-evt-card{% if event.is_big %} fm-evt-big{% endif %}{% if event.is_decision %} fm-evt-decision{% endif %}{% if event.is_mind %} fm-evt-mind{% endif %}{% if event.is_positive %} fm-evt-positive{% elif event.is_negative %} fm-evt-negative{% else %} fm-evt-neutral{% endif %}">
                 <span class="fm-evt-rail" aria-hidden="true"></span>
                 <div class="fm-evt-content">
                     <header class="fm-evt-head">
@@ -32,6 +32,9 @@
                         <div class="fm-evt-meta">
                             {% if event.is_decision %}
                             <span class="fm-evt-kind">{{ i18n.t("decisions_decision") }}</span>
+                            {% endif %}
+                            {% if event.is_mind %}
+                            <span class="fm-evt-kind fm-evt-kind-mind">{{ i18n.t("mind_note_chip") }}</span>
                             {% endif %}
                             {% if let Some(severity_label) = event.severity_label %}{% if let Some(severity_tag) = event.severity_tag %}
                             <span class="fm-evt-severity fm-evt-severity-{{ severity_tag }}">{{ severity_label }}</span>

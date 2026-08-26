@@ -619,8 +619,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 // wrong gets them when it goes wrong.
                 //
                 // Deciding and acting stay two steps, and the split is not
-                // stylistic: a change stops the match for
-                // [`SubstitutionBreak::BREAK_MS`], which must not be the
+                // stylistic: a change stops the match for its own
+                // [`SubstitutionBreak`] window, which must not be the
                 // thing that stops it — see
                 // [`Substitutions::play_is_stopped`]. Whichever of the two
                 // conditions below fires, the change still waits for the

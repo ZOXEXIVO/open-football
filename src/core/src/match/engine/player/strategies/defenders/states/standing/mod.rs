@@ -1,10 +1,10 @@
 use nalgebra::Vector3;
 
-use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
     ActivityIntensity, DefenderCondition, DefensiveLine,
 };
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,

@@ -817,8 +817,8 @@ impl Substitutions {
     /// [`changeover`](super::super::flow::touchline::changeover) for
     /// why the two halves cannot be reordered. What is new is the last block:
     /// the two men are left standing at either end of a walk, play is stopped
-    /// for [`SubstitutionBreak::BREAK_MS`], and nothing else on the pitch
-    /// moves until they have finished it.
+    /// for the beats the camera spends on them, and nothing else on the pitch
+    /// moves while it does.
     fn execute_substitution(
         field: &mut MatchField,
         context: &mut MatchContext,

@@ -1,5 +1,4 @@
 use crate::PlayerFieldPositionGroup;
-use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderGuardingState;
 use crate::r#match::midfielders::states::MidfielderState;
@@ -9,13 +8,13 @@ use crate::r#match::midfielders::states::common::{
 };
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay};
-use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
 use crate::r#match::player::strategies::common::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::player::strategies::common::players::ops::skill_composites as sc;
 use crate::r#match::player::strategies::common::states::MarkEngagement;
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::{
     ConditionContext, DefensiveDuty, GamePhase, MatchContext, MatchPlayerLite, PassEvaluator,
     PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -349,10 +348,6 @@ const SNAPSHOT_RATE: f32 = 0.55;
 /// at the strictly wider `RELEASE`.
 const MARK_BREAK_DISTANCE: f32 = MarkEngagement::ENGAGE;
 
-/// Depth of the penalty area from the goal line (16.5 m). Inside it, a
-/// midfielder arriving onto the ball is in a shooting position — same
-/// figure and same rule as the forward's box block.
-const PENALTY_AREA_DEPTH: f32 = 132.0;
 const STANDARD_SHOOTING_DISTANCE: f32 = 104.0; // 13m — standard shooting range for midfielders
 const POINT_BLANK_DISTANCE: f32 = 40.0; // 5m - must shoot, goalkeeper is right there
 

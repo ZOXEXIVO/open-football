@@ -6,9 +6,9 @@ use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
-use crate::actors::Actors;
-use crate::kit::Outfit;
-use crate::textures::FaceLayout;
+use crate::art::textures::FaceLayout;
+use crate::players::actors::Actors;
+use crate::players::kit::Outfit;
 
 /// One cross-section of a body part: an ellipse of half-widths `x` (across the
 /// body) and `z` (front to back) at height `y`, in the part's own space, and
@@ -561,10 +561,10 @@ impl Physique {
     /// Hip joint to the sole of the boot, straight-legged: the lever a
     /// stride swings through.
     ///
-    /// It is what turns ground covered into an angle at the hip and back
-    /// again, so it is the crossing between the stride model in
-    /// [`crate::actors::Actors::stride_of`] and the geometry here — and,
-    /// like [`Self::CRADLE`], a number that has to be one number.
+    /// It is what turns ground covered into an angle at the hip and back again,
+    /// so it is the crossing between the stride model in
+    /// [`crate::players::actors::Actors::stride_of`] and the geometry here —
+    /// and, like [`Self::CRADLE`], a number that has to be one number.
     pub const LEG: f32 = Self::THIGH + Self::SHIN - 0.005 + 0.038;
     /// Hip to the base of the neck.
     pub const TORSO: f32 = 0.58;
@@ -643,8 +643,9 @@ impl Physique {
 
     /// Where a ball held in ONE hand is drawn: out along the hand rather than
     /// on the wrist joint, which is where the glove BEGINS. The drawn ball is
-    /// 32 cm across — see [`crate::actors::Actors::BALL_RADIUS`] — so a centre
-    /// on the wrist swallows the whole glove and half the forearm with it.
+    /// 32 cm across — see [`crate::players::actors::Actors::BALL_RADIUS`] —
+    /// so a centre on the wrist swallows the whole glove and half the forearm
+    /// with it.
     pub fn palm(side: f32, gait: Gait) -> Vec3 {
         Self::hand(side, gait).transform_point(Vec3::new(0.0, -Self::PALM, 0.0))
     }
@@ -667,11 +668,11 @@ impl Physique {
     /// What that settle does not know about is a LIMB. `SETTLE·sin(tilt)` is
     /// right at 0° and at 90° and wrong in between, and the error goes the
     /// dangerous way: measured, a keeper landing twelve degrees off vertical
-    /// had his hips at exactly the right height and a boot **14 cm inside
-    /// the turf**, because a body rotating about its own hip drops eight
-    /// times as fast as a straight leg swings up. See
-    /// [`PlayerActor::lift`](crate::actors::PlayerActor), which is where the
-    /// ground gets the last word.
+    /// had his hips at exactly the right height and a boot **14 cm inside the
+    /// turf**, because a body rotating about its own hip drops eight times as
+    /// fast as a straight leg swings up. See
+    /// [`PlayerActor::lift`](crate::players::actors::PlayerActor), which is
+    /// where the ground gets the last word.
     pub(crate) fn underside(gait: Gait) -> [Vec3; 9] {
         let hung = |limb: Limb, side: f32, origin: Vec3| {
             let joint = Joint::new(Entity::PLACEHOLDER, limb, side, origin);
@@ -952,7 +953,7 @@ impl BodyParts {
     /// round the body — 1.45 radians at the number's height is a chord of
     /// 23 cm and an arc of 23.3, which is a real shirt number. Whoever draws
     /// the textures has to match that aspect or the glyphs come out stretched;
-    /// see [`crate::textures::Textures::number`].
+    /// see [`crate::art::textures::Textures::number`].
     const NAME_AT: f32 = 0.464;
     const NAME_HEIGHT: f32 = 0.058;
     const NAME_ARC: f32 = 1.34;
@@ -1607,8 +1608,8 @@ pub struct Gait {
     /// belong to the throw. See [`Self::throw_in`].
     pub carry: f32,
     /// 0..1: he is off his feet and committed. Only ever non-zero for a
-    /// goalkeeper — see [`crate::actors::Actors::animate`] for how a dive is
-    /// told from a run.
+    /// goalkeeper — see [`crate::players::actors::Actors::animate`] for how a
+    /// dive is told from a run.
     ///
     /// The topple itself is not here: a body going horizontal is a rotation
     /// of the WHOLE figure and belongs on [`Carriage`]. What this drives is
@@ -1766,11 +1767,11 @@ pub struct Gait {
     pub throw_in: f32,
     /// 0..1: he has just conceded.
     ///
-    /// The only thing in this rig that is not derived from the position
-    /// track, and it cannot be: eleven men standing still because they are
-    /// sick and eleven standing still because they are waiting look
-    /// identical from above. See [`Aftermath`](crate::aftermath::Aftermath)
-    /// for where the signal comes from.
+    /// The only thing in this rig that is not derived from the position track,
+    /// and it cannot be: eleven men standing still because they are sick and
+    /// eleven standing still because they are waiting look identical from
+    /// above. See [`Aftermath`](crate::players::aftermath::Aftermath) for where
+    /// the signal comes from.
     ///
     /// Drives a slump — head down, shoulders forward, and the hands either
     /// on the head or on the hips. Nobody in football reacts to conceding by
@@ -1891,26 +1892,25 @@ pub struct Gait {
     /// going**, in radians, positive to his right.
     ///
     /// The single thing that separates a footballer from a goalkeeper in
-    /// lateral movement, and the rig had no representation of it at all.
-    /// A keeper covering his line is square to the play and MEANS to be: he
+    /// lateral movement, and the rig had no representation of it at all. A
+    /// keeper covering his line is square to the play and MEANS to be: he
     /// side-steps, feet never crossing, and every constant in
     /// [`Joint::SHUFFLE_STANCE`] and below is about him. Nobody else on the
-    /// pitch is doing that. An outfielder is across his own body for one of
-    /// two reasons — he is jockeying, at walking pace, or his heading has
-    /// not finished coming round onto a run he is already on, which
-    /// [`crate::actors::Actors::PIVOT_RATE`] guarantees will happen every
-    /// time anyone changes direction at speed — and the second is the
-    /// overwhelming majority of it. **A man arcing round a turn is running,
-    /// not shuffling.** Drawn as a keeper's shuffle he crouched a foot and a
-    /// half with his feet a metre and a half apart at thirteen steps a
-    /// second, which is how it was reported: *"they move sideways like
-    /// invalids"*.
+    /// pitch is doing that. An outfielder is across his own body for one of two
+    /// reasons — he is jockeying, at walking pace, or his heading has not
+    /// finished coming round onto a run he is already on, which
+    /// [`crate::players::actors::Actors::PIVOT_RATE`] guarantees will happen
+    /// every time anyone changes direction at speed — and the second is the
+    /// overwhelming majority of it. **A man arcing round a turn is running, not
+    /// shuffling.** Drawn as a keeper's shuffle he crouched a foot and a half
+    /// with his feet a metre and a half apart at thirteen steps a second, which
+    /// is how it was reported: *"they move sideways like invalids"*.
     ///
     /// So the legs turn onto the course and the chest does not, which is
     /// what "opening the hips" means and what the hips are for. It is not a
     /// second gait with a switch between them: the course is rotated by this
     /// same angle before anything reads it (see
-    /// [`crate::actors::Actors::underfoot`]), so at a full opening the
+    /// [`crate::players::actors::Actors::underfoot`]), so at a full opening the
     /// lateral terms are all multiplied by a residual `course.x` of nearly
     /// nothing and collapse on their own, and a jockeying defender at a walk
     /// keeps every one of them.
@@ -1969,7 +1969,7 @@ impl Gait {
     /// [`Joint::pose`] switched off.
     ///
     /// Exists so an actor can carry a gait before it has ever been posed —
-    /// see [`PlayerActor::pose`](crate::actors::PlayerActor). Not a
+    /// see [`PlayerActor::pose`](crate::players::actors::PlayerActor). Not a
     /// `Default`, because three of these fields are 1 and one is a unit
     /// vector, and a zeroed `Gait` is a man with no stride length standing
     /// on a course of nowhere.
@@ -2037,10 +2037,10 @@ impl Gait {
     /// four because a product of two complements peaks at a quarter, so this
     /// is a weight and not a fraction of one.
     ///
-    /// It also does the right thing for a beaten keeper, who stops halfway
-    /// up on purpose ([`Actors::KNEELING`](crate::actors::Actors)): the
-    /// recovery parks exactly where this is largest, and what he holds is
-    /// the kneel.
+    /// It also does the right thing for a beaten keeper, who stops halfway up
+    /// on purpose ([`Actors::KNEELING`](crate::players::actors::Actors)): the
+    /// recovery parks exactly where this is largest, and what he holds is the
+    /// kneel.
     pub fn kneeling(self) -> f32 {
         (4.0 * self.rising * self.grounded).clamp(0.0, 1.0)
     }
@@ -4142,15 +4142,6 @@ impl Joint {
         range.0 + range.1 * run
     }
 
-    /// The same, sized to this particular player. Every amplitude in the
-    /// run cycle goes through here rather than through `blend` so that the
-    /// squad is a spread of runners rather than one runner drawn twenty-two
-    /// times — see `Gait::spring`. The standing end of each range is left
-    /// alone: how a man carries himself at rest is `signature`.
-    fn strides(range: (f32, f32), gait: Gait) -> f32 {
-        range.0 + range.1 * Self::cycling(gait) * gait.spring
-    }
-
     /// **How far a running body is tipped forward**, in radians, and **how
     /// far it is rocked**, likewise.
     ///
@@ -4199,11 +4190,11 @@ impl Joint {
     ///
     /// ⚠ **A sinusoid does not carry the ground.** A planted foot is
     /// stationary on the turf, so relative to a body travelling at `v` it
-    /// travels at exactly `−v` for the whole of its stance — a straight line.
-    /// A sinusoid does that at ONE INSTANT, mid-stance, which is the instant
-    /// [`crate::actors::Actors::stride_of`] fits its amplitude to and the
-    /// only instant `the_feet_carry_the_ground_he_covers` looks at. Either
-    /// side of it the cosine falls away and then changes sign. Measured
+    /// travels at exactly `−v` for the whole of its stance — a straight
+    /// line. A sinusoid does that at ONE INSTANT, mid-stance, which is the
+    /// instant [`crate::players::actors::Actors::stride_of`] fits its amplitude
+    /// to and the only instant `the_feet_carry_the_ground_he_covers` looks at.
+    /// Either side of it the cosine falls away and then changes sign. Measured
     /// across every frame in which the boot is genuinely on the grass, the
     /// planted foot carried a **mean of 18–24% of the ground the body
     /// covered** at walking and jogging pace, and **−103% at the worst point
@@ -4578,20 +4569,20 @@ impl Joint {
     /// **How far out to the side a foot will actually be planted**, in
     /// metres from the centreline.
     ///
-    /// The backstop, and the one number in the lateral gait that is not
-    /// derived from anything. Everything above it solves the side-step from
-    /// the ground the body covers, which is right and is what stops a
-    /// shuffle skating — but it is an equation, and an equation handed an
-    /// impossible demand returns an impossible answer. The demand really is
-    /// made: measured over a recording, 4.5% of the frames an outfielder is
-    /// running in have him more than 100° off his own facing, because
-    /// [`crate::actors::Actors::PIVOT_RATE`] will not let his heading come
-    /// round any faster than a body can turn. Solved honestly, a man
+    /// The backstop, and the one number in the lateral gait that is not derived
+    /// from anything. Everything above it solves the side-step from the ground
+    /// the body covers, which is right and is what stops a shuffle skating —
+    /// but it is an equation, and an equation handed an impossible demand
+    /// returns an impossible answer. The demand really is made: measured over a
+    /// recording, 4.5% of the frames an outfielder is running in have him more
+    /// than 100° off his own facing, because
+    /// [`crate::players::actors::Actors::PIVOT_RATE`] will not let his heading
+    /// come round any faster than a body can turn. Solved honestly, a man
     /// reversing at six and a half metres a second was drawn with his boots
     /// 1.88 m apart and his crown 69 cm below standing.
     ///
-    /// [`crate::body::Gait::open`] is what removes nearly all of that, by
-    /// turning his legs onto the run so there is no side-step left to solve.
+    /// [`crate::players::body::Gait::open`] is what removes nearly all of that,
+    /// by turning his legs onto the run so there is no side-step left to solve.
     /// This is what catches the rest. A step his legs cannot reach is not a
     /// step, and what gives is the step rather than the man.
     const SIDE_PLANT: f32 = 0.45;
@@ -4925,20 +4916,21 @@ impl Joint {
 /// The whole figure, hung off the actor so it can leave the ground without
 /// taking the actor's own marks with it.
 ///
-/// Everything else in this rig moves a limb against a body that is standing
-/// on the turf. A dive is the one thing that moves the body itself: the man
-/// goes horizontal and airborne, and no arrangement of hips and knees
-/// expresses that. Putting one node between the actor and the figure is what
-/// lets [`crate::actors::Actors::animate`] topple and lift the lot in one
+/// Everything else in this rig moves a limb against a body that is standing on
+/// the turf. A dive is the one thing that moves the body itself: the man goes
+/// horizontal and airborne, and no arrangement of hips and knees expresses
+/// that. Putting one node between the actor and the figure is what lets
+/// [`crate::players::actors::Actors::animate`] topple and lift the lot in one
 /// transform — while the contact shadow and the team ring, which stay
-/// children of the actor, stay flat on the grass where they belong.
-/// A part of one player worn in his own COMPLEXION: an ear, a forearm, a
-/// thigh. Everything the shared skin ramp is picked for.
+/// children of the actor, stay flat on the grass where they belong. A part of
+/// one player worn in his own COMPLEXION: an ear, a forearm, a thigh.
+/// Everything the shared skin ramp is picked for.
 ///
-/// A marker rather than a lookup because these are repainted after the fact.
-/// A real photograph of the man turns up while the match is running, and the
-/// tone in it is the tone the rest of him should be — his neck has to be the
-/// colour of his face. [`crate::portrait::Portraits::attach`] is what asks.
+/// A marker rather than a lookup because these are repainted after the fact. A
+/// real photograph of the man turns up while the match is running, and the tone
+/// in it is the tone the rest of him should be — his neck has to be the
+/// colour of his face. [`crate::players::portrait::Portraits::attach`] is what
+/// asks.
 #[derive(Component)]
 pub struct Flesh {
     pub actor: Entity,
@@ -4996,11 +4988,11 @@ impl Carriage {
     /// **How far from upright this pair of angles leaves a figure**, as the
     /// SINE of the angle between its own up-axis and the world's.
     ///
-    /// Off the composed rotation rather than off either Euler angle, so a
-    /// dive that is half across the goal and half up the pitch settles as
-    /// far as one that is all of either. Its own function because
-    /// [`PlayerActor::lift`](crate::actors::PlayerActor) needs the same
-    /// number to give the settle back as he gets up, and a formula written
+    /// Off the composed rotation rather than off either Euler angle, so a dive
+    /// that is half across the goal and half up the pitch settles as far as one
+    /// that is all of either. Its own function because
+    /// [`PlayerActor::lift`](crate::players::actors::PlayerActor) needs the
+    /// same number to give the settle back as he gets up, and a formula written
     /// down in two places does not stay written down the same way.
     pub fn tilt(pitch: f32, roll: f32) -> f32 {
         let rotation = Quat::from_rotation_x(pitch) * Quat::from_rotation_z(roll);
@@ -5021,7 +5013,7 @@ impl Carriage {
     /// at the angle a keeper kneels at it would have him a foot too low
     /// coming out of the sprawl and, once the recovery starts giving that
     /// back, a quarter of a metre too HIGH, with both boots hanging in
-    /// mid-air. See [`PlayerActor::lift`](crate::actors::PlayerActor).
+    /// mid-air. See [`PlayerActor::lift`](crate::players::actors::PlayerActor).
     pub const KNEELING: f32 = 0.50;
 
     /// The transform that tips a figure `pitch` radians over its toes and
@@ -5517,7 +5509,7 @@ pub(crate) mod skeleton {
 pub(crate) mod preview {
     use super::skeleton;
     use super::*;
-    use crate::pitch::Pitch;
+    use crate::scene::pitch::Pitch;
     use bevy::mesh::VertexAttributeValues;
 
     /// A frame buffer with a depth buffer behind it.
@@ -5965,7 +5957,7 @@ mod tests {
     use super::skeleton::step as step_of;
     use super::skeleton::*;
     use super::*;
-    use crate::kit::Complexion;
+    use crate::players::kit::Complexion;
 
     /// **A walking goalkeeper takes steps, however set he is.**
     ///
@@ -6171,7 +6163,7 @@ mod tests {
             }
         }
     }
-    use crate::actors::Actors;
+    use crate::players::actors::Actors;
     /// **How much of him moves through one cycle of each gait he actually
     /// uses**, in centimetres and degrees.
     ///
@@ -7148,7 +7140,7 @@ mod tests {
     /// than eight.
     #[test]
     fn no_two_players_run_alike() {
-        use crate::kit::Complexion;
+        use crate::players::kit::Complexion;
         let ids: Vec<u32> = (100..140).collect();
         let strides: Vec<f32> = ids.iter().map(|&id| Complexion::stride(id)).collect();
         let springs: Vec<f32> = ids.iter().map(|&id| Complexion::spring(id)).collect();

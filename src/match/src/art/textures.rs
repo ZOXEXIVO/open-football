@@ -1,4 +1,4 @@
-use crate::typeface::Stencil;
+use crate::art::typeface::Stencil;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{Image, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
@@ -8,9 +8,9 @@ use std::f32::consts::{PI, TAU};
 /// Where the features of a face land on the head mesh that carries it.
 ///
 /// Handed over by whoever built the skull (see
-/// [`crate::body::BodyParts::face_layout`]) rather than guessed here, because
-/// an eye painted at a height the mesh does not have there ends up somewhere
-/// on a cheekbone and nothing downstream can tell.
+/// [`crate::players::body::BodyParts::face_layout`]) rather than guessed here,
+/// because an eye painted at a height the mesh does not have there ends up
+/// somewhere on a cheekbone and nothing downstream can tell.
 pub struct FaceLayout {
     /// Bottom of the head's lathe and how much of it there is, in metres of
     /// the head's own space. The texture's `v` runs over exactly this.
@@ -63,7 +63,7 @@ pub struct FaceLook {
 ///
 /// Pixels rather than a URL, because by the time one of these exists the
 /// browser has already decoded, cropped and scaled the picture for us — see
-/// [`crate::portrait`], which is the only thing that builds one.
+/// [`crate::players::portrait`], which is the only thing that builds one.
 ///
 /// Straight RGBA, row-major from the TOP, and the alpha is load-bearing: a
 /// photograph arrives with its studio background keyed out and a drawn
@@ -82,11 +82,12 @@ pub struct Portrait {
     /// pupils sit IN PIXELS.
     ///
     /// Three numbers and not one of them a guess: they are measured off each
-    /// picture as it arrives (see [`crate::portrait`]). The first cut of this
-    /// assumed the framing instead — one set of constants for the whole photo
-    /// library — and the library is not framed to one standard. A head shot
-    /// cropped closer than the rest came out of it stretched half as wide
-    /// again, because a face measured at 70 pixels was being told it was 50.
+    /// picture as it arrives (see [`crate::players::portrait`]). The first cut
+    /// of this assumed the framing instead — one set of constants for the
+    /// whole photo library — and the library is not framed to one standard. A
+    /// head shot cropped closer than the rest came out of it stretched half as
+    /// wide again, because a face measured at 70 pixels was being told it was
+    /// 50.
     pub centre: f32,
     pub eyes: f32,
     pub pupils: f32,
@@ -292,7 +293,7 @@ impl Portrait {
 ///
 /// A resource as well as a return value: the playing surface and the ground
 /// beyond the touchlines are laid on consecutive frames (see
-/// [`crate::bringup`]) and the second of them has to find the sheets the
+/// [`crate::app::bringup`]) and the second of them has to find the sheets the
 /// first generated rather than generate a second pair.
 #[derive(Resource)]
 pub struct Turf {
@@ -547,9 +548,9 @@ impl Textures {
         }))
     }
 
-    /// The ring the picture comes up through when the replay cuts from one
-    /// clip to the next — see [`crate::cut`], which is the only thing that
-    /// draws it.
+    /// The ring the picture comes up through when the replay cuts from one clip
+    /// to the next — see [`crate::broadcast::cut`], which is the only thing
+    /// that draws it.
     ///
     /// White throughout with all the weight in the ALPHA, like [`Self::mask`]
     /// above it and for a second reason as well as the first: `ImageNode::color`
@@ -1371,9 +1372,9 @@ impl Textures {
     /// between one leaf and the next.
     ///
     /// The unevenness itself did not go away — it went where it can be
-    /// authored across a whole ground instead of inside a two-metre square.
-    /// See [`crate::pitch::Sward`], which carries it, the mow and the wear of a
-    /// played match in the vertices of the pitch.
+    /// authored across a whole ground instead of inside a two-metre square. See
+    /// [`crate::scene::pitch::Sward`], which carries it, the mow and the wear
+    /// of a played match in the vertices of the pitch.
     ///
     /// **Mip-chained, and sampled anisotropically.** Turf is seen at every
     /// angle down to flat-on at the far touchline, where one pixel covers
@@ -1632,9 +1633,9 @@ impl Textures {
                 let across = at(wrap(x as i64 + 1), y) - at(wrap(x as i64 - 1), y);
                 let down = at(x, wrap(y as i64 + 1)) - at(x, wrap(y as i64 - 1));
                 // A height field's normal is (-dh/du, -dh/dv, 1) normalised.
-                // Tangent space here is the one [`crate::pitch::Sward`] writes
-                // out: U on +X, V on +Z, and the green channel positive along
-                // V, which is the convention Bevy's own normal maps use.
+                // Tangent space here is the one [`crate::scene::pitch::Sward`]
+                // writes out: U on +X, V on +Z, and the green channel positive
+                // along V, which is the convention Bevy's own normal maps use.
                 let normal = Vec3::new(-across * RELIEF, -down * RELIEF, 1.0).normalize_or(Vec3::Z);
                 data.extend_from_slice(&[
                     ((normal.x * 0.5 + 0.5) * 255.0) as u8,
@@ -2164,9 +2165,9 @@ impl Painter<'_> {
         // and no modelled shading is laid over the top — the picture already
         // has a face's worth of light and shadow in it, and both corrections
         // together turned a recognisable man into a tinted approximation of
-        // one. What moves to meet the picture is the REST of him: his neck,
-        // his arms and the cap of hair on his head are all repainted from
-        // what this picture says he looks like (see `crate::portrait`).
+        // one. What moves to meet the picture is the REST of him: his neck, his
+        // arms and the cap of hair on his head are all repainted from what this
+        // picture says he looks like (see `crate::players::portrait`).
         Textures::over(painted, colour.min(Vec3::ONE), cover * alpha)
     }
 
@@ -2470,9 +2471,9 @@ impl Painter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::body::BodyParts;
-    use crate::config::PlayerInfo;
-    use crate::kit::Complexion;
+    use crate::app::config::PlayerInfo;
+    use crate::players::body::BodyParts;
+    use crate::players::kit::Complexion;
 
     fn look(beard: Beard, shaved: bool) -> FaceLook {
         FaceLook {
@@ -3028,6 +3029,7 @@ mod tests {
                     last_name: String::new(),
                     position: "ST".to_string(),
                     is_home: true,
+                    starting: true,
                     skin: index as u8,
                     hair: (index as u8 * 3) % 10,
                     eyes: (index as u8 * 5) % 8,
@@ -3088,7 +3090,7 @@ mod tests {
         // exactly the drift the generator is built to avoid — the first cut of
         // this test did restate it, the pitch was darkened, and the assertion
         // below went on passing against a colour the pitch no longer used.
-        let shade = crate::pitch::Pitch::MOWN;
+        let shade = crate::scene::pitch::Pitch::MOWN;
         let mut images = Assets::<Image>::default();
         let started = std::time::Instant::now();
         let sheets = Textures::turf(&mut images, shade);

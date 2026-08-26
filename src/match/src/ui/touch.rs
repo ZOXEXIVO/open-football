@@ -3,8 +3,8 @@
 //! Everything the replay's camera can do is reachable from a mouse and a
 //! keyboard: the right button walks the rig round the ground, the wheel works
 //! the lens, and WASD/QE fly it clear of the gantry altogether (see
-//! [`crate::camera`]). None of the three exists on a phone, and a replay is
-//! watched on phones.
+//! [`crate::broadcast::camera`]). None of the three exists on a phone, and a
+//! replay is watched on phones.
 //!
 //! This module is the other half of those controls rather than a reduced
 //! version of them. Nothing here decides what a gesture MEANS — a one-finger
@@ -21,9 +21,9 @@
 //! has actually seen a finger, writing into [`TouchDrive`] exactly what the
 //! keyboard writes into its own push vector.
 
-use crate::camera::{CameraFlight, CameraOrbit, CameraZoom};
-use crate::textures::Textures;
-use crate::timeline::Timeline;
+use crate::art::textures::Textures;
+use crate::broadcast::camera::{CameraFlight, CameraOrbit, CameraZoom};
+use crate::ui::timeline::Timeline;
 use bevy::input::touch::{Touch, Touches};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -180,10 +180,10 @@ impl TouchControls {
     /// Did a pointer land on the viewer's own controls rather than on the open
     /// pitch?
     ///
-    /// Shared with [`crate::focus`], which asks the same question of a mouse
-    /// before it reads a click as "follow that player". One description of
-    /// where the furniture is rather than two — a second copy is a second set
-    /// of numbers waiting to drift, which is the note the one-finger drag
+    /// Shared with [`crate::broadcast::focus`], which asks the same question of
+    /// a mouse before it reads a click as "follow that player". One description
+    /// of where the furniture is rather than two — a second copy is a second
+    /// set of numbers waiting to drift, which is the note the one-finger drag
     /// already carries.
     pub fn on_furniture(window: &Window, at: Vec2, pad: bool) -> bool {
         Layout::of(window).furniture(at, pad)

@@ -90,7 +90,7 @@ pub struct MatchPlayer {
     pub rating_tier: &'static str,
 }
 
-/// Mirror of `match_viewer::config::ViewerConfig`. The viewer reads its whole
+/// Mirror of `match_viewer::app::config::ViewerConfig`. The viewer reads its whole
 /// world from this document, so anything the replay needs to know about the
 /// fixture is resolved here, on the server, where the simulator data lives.
 #[derive(Serialize)]
@@ -105,6 +105,9 @@ struct ViewerConfigJson {
     chances: Vec<ChanceEventJson>,
     substitutions: Vec<SubstitutionEventJson>,
     labels: ViewerLabelsJson,
+    /// Walk the two teams out before the replay starts. Always, in the game —
+    /// only the `.dev/match` harness ever turns it off.
+    lineup: bool,
 }
 
 impl ViewerConfigJson {
@@ -194,6 +197,10 @@ struct PlayerJson {
     last_name: String,
     position: String,
     is_home: bool,
+    /// Whether he was named in the starting eleven rather than on the bench.
+    /// Only the eleven walk out before kick-off, and the recording cannot say
+    /// which eleven those were — see `match_viewer::broadcast::lineup`.
+    starting: bool,
     /// What he looks like, as indices into `shared::Palette`
     /// tables. Resolved here rather than in the viewer for the same reason
     /// the labels above are: the answer needs the country table, which lives
@@ -228,18 +235,25 @@ impl PlayerJson {
         data: &SimulatorData,
         player_ids: &[u32],
         is_home: bool,
+        starting: bool,
         number: &mut u8,
     ) {
         for player_id in player_ids {
             let Some(player) = data.player(*player_id) else {
                 continue;
             };
-            into.push(PlayerJson::of(data, player, is_home, *number));
+            into.push(PlayerJson::of(data, player, is_home, starting, *number));
             *number += 1;
         }
     }
 
-    fn of(data: &SimulatorData, player: &Player, is_home: bool, squad_number: u8) -> PlayerJson {
+    fn of(
+        data: &SimulatorData,
+        player: &Player,
+        is_home: bool,
+        starting: bool,
+        squad_number: u8,
+    ) -> PlayerJson {
         let shirt_number = player.shirt_number();
         let look = Appearance::of(player.id, CountrySkin::for_country(data, player.country_id));
         PlayerJson {
@@ -252,6 +266,7 @@ impl PlayerJson {
             last_name: player.full_name.display_last_name().to_string(),
             position: player.position().get_short_name().to_string(),
             is_home,
+            starting,
             skin: look.skin as u8,
             hair: look.hair as u8,
             eyes: look.eyes as u8,
@@ -397,6 +412,7 @@ pub async fn match_get_action(
         simulator_data,
         &result_details.left_team_players.main,
         true,
+        true,
         &mut home_number,
     );
     PlayerJson::append(
@@ -404,6 +420,7 @@ pub async fn match_get_action(
         simulator_data,
         &result_details.left_team_players.substitutes,
         true,
+        false,
         &mut home_number,
     );
 
@@ -413,12 +430,14 @@ pub async fn match_get_action(
         simulator_data,
         &result_details.right_team_players.main,
         false,
+        true,
         &mut away_number,
     );
     PlayerJson::append(
         &mut viewer_players,
         simulator_data,
         &result_details.right_team_players.substitutes,
+        false,
         false,
         &mut away_number,
     );
@@ -571,6 +590,7 @@ pub async fn match_get_action(
             loading: i18n.t("loading_match").to_string(),
             no_recording: i18n.t("match_no_recording").to_string(),
         },
+        lineup: true,
     };
 
     Ok(MatchGetTemplate {

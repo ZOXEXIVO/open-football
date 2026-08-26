@@ -5,54 +5,58 @@
 //! position chunks, rendering the pitch in 3D and driving playback all happen
 //! here, so the replay is one artefact rather than a Rust half and a JavaScript
 //! half that have to agree with each other.
+//!
+//! ## Where things live
+//!
+//! Seven groups, each with its own `mod.rs` saying what it is for:
+//!
+//! - `app` — the scaffolding between the browser tab and the replay: the
+//!   config the page hands over, staged bringup, the quality ladder, the size
+//!   the scene is drawn at and what a frame costs.
+//! - `recording` — the recorded match: its shape, the fetch that brings it
+//!   in a chunk at a time, and the playhead everything is drawn from.
+//! - `scene` — the stadium, which is there before the teams are.
+//! - `players` — the twenty-two and the football.
+//! - `broadcast` — the camera, what it is pointed at, and the two ceremonies
+//!   whose shots are written rather than followed.
+//! - `ui` — the transport bar drawn over the picture, mouse and touch.
+//! - `art` — the images and glyphs the crate paints for itself, since
+//!   nothing is loaded over the network.
+//!
+//! This file is the wiring: it holds the entry point the page calls and the
+//! one schedule every system in those groups is registered into, which is the
+//! only place their order relative to each other is stated.
 
-mod actors;
-mod aftermath;
-mod body;
-mod bringup;
-mod camera;
-mod changeover;
-mod config;
-mod cut;
-mod field;
-mod focus;
-mod kit;
-mod loader;
-mod net;
-mod perf;
-mod pitch;
-mod playback;
-mod portrait;
-mod quality;
-mod replay;
-mod sky;
-mod stage;
-mod textures;
-mod timeline;
-mod touch;
-mod typeface;
+mod app;
+mod art;
+mod broadcast;
+mod players;
+mod recording;
+mod scene;
+mod ui;
 
-use crate::actors::{Actors, BallState};
-use crate::aftermath::Aftermath;
-use crate::bringup::Bringup;
-use crate::camera::{CameraFlight, CameraOrbit, CameraZoom, TvCamera};
-use crate::changeover::ChangeoverShot;
-use crate::config::ViewerConfig;
-use crate::cut::CutFade;
-use crate::focus::{CameraSubject, FocusRing};
-use crate::loader::ChunkLoader;
-use crate::net::Netting;
-use crate::perf::FrameCost;
-use crate::pitch::{Bank, Pitch};
-use crate::playback::{EventLog, Playback, RecordedSpans};
-use crate::portrait::Portraits;
-use crate::quality::Quality;
-use crate::replay::ReplayTracks;
-use crate::sky::Sky;
-use crate::stage::Stage;
-use crate::timeline::{DebugOverlay, Timeline};
-use crate::touch::{FlightPad, TouchControls, TouchDevice, TouchDrive, TouchGesture};
-use crate::typeface::Typeface;
+use crate::app::bringup::Bringup;
+use crate::app::config::ViewerConfig;
+use crate::app::perf::FrameCost;
+use crate::app::quality::Quality;
+use crate::app::stage::Stage;
+use crate::art::typeface::Typeface;
+use crate::broadcast::camera::{CameraFlight, CameraOrbit, CameraZoom, TvCamera};
+use crate::broadcast::changeover::ChangeoverShot;
+use crate::broadcast::cut::CutFade;
+use crate::broadcast::focus::{CameraSubject, FocusRing};
+use crate::broadcast::lineup::Lineup;
+use crate::players::actors::{Actors, BallState};
+use crate::players::aftermath::Aftermath;
+use crate::players::portrait::Portraits;
+use crate::recording::loader::ChunkLoader;
+use crate::recording::playback::{EventLog, Playback, RecordedSpans};
+use crate::recording::replay::ReplayTracks;
+use crate::scene::net::Netting;
+use crate::scene::pitch::{Bank, Pitch};
+use crate::scene::sky::Sky;
+use crate::ui::timeline::{DebugOverlay, Timeline};
+use crate::ui::touch::{FlightPad, TouchControls, TouchDevice, TouchDrive, TouchGesture};
 use bevy::asset::AssetMetaCheck;
 use bevy::log::{Level, LogPlugin};
 use bevy::prelude::*;
@@ -173,6 +177,12 @@ impl MatchViewer {
             // `TvCamera::follow_play` on every frame, so it exists from the
             // first one whether or not the match had a change in it.
             .init_resource::<ChangeoverShot>()
+            // The two teams walked out before the first whistle. Registered
+            // here as well as filled by `Lineup::arm` at startup, because
+            // `TvCamera::follow_play` and `Actors::take_the_field` both take
+            // it as a `Res` and `Startup` systems have no order between them
+            // worth relying on — the same reason `Stage` is above.
+            .init_resource::<Lineup>()
             // The touch half of the same controls. `TouchDrive` is read by
             // `CameraFlight::steer` on every frame whether or not anything has
             // ever been touched, so it is registered unconditionally — the
@@ -207,6 +217,10 @@ impl MatchViewer {
                     // answer cannot change: the recording is fixed by the
                     // time the page hands it over.
                     ChangeoverShot::arm,
+                    // …and stands the two elevens up, off the team sheets.
+                    // Startup for the same reason: who started is fixed by the
+                    // time the page hands the document over.
+                    Lineup::arm,
                     Timeline::spawn,
                     // Hidden until the replay first cuts, and built here for
                     // the reason the flight stick is: a sheet assembled on the
@@ -247,6 +261,43 @@ impl MatchViewer {
             // Behind everything, so the phase the page is told about is the
             // one that has just finished rather than the one about to start.
             .add_systems(Update, Bringup::pump.after(FrameCost::leave_update))
+            // **The two teams walked out**, and the one pair of systems in
+            // this file whose place in the frame is pinned by name rather than
+            // by position in the chain below.
+            //
+            // ⚠ **`.chain()` does not reach inside a nested tuple.** The chain
+            // orders the ELEMENTS of the tuple it is called on; an element
+            // that is itself a tuple becomes an unordered group, and the
+            // systems in it end up ordered against nothing. Both of these were
+            // written that way to stay inside Bevy's maximum arity and both
+            // landed in the wrong half of the frame: `pose` ran BEFORE
+            // `Actors::follow_playhead`, so the line it stood the men in was
+            // overwritten by the recording on the same frame. It looked
+            // correct for a fortunate reason — the playhead is parked at zero
+            // for the whole ceremony and a recording has no sample there to
+            // overwrite it with — and gave itself away the moment the parked
+            // time was moved off zero.
+            //
+            // So they are named here instead, which says what each one
+            // actually needs and cannot be broken by an arity limit:
+            //
+            // - **`hold`** behind every handler that can be a viewer asking
+            //   for the football (the keyboard is the last of them, and the
+            //   transport bar and the pick are chained ahead of it) and in
+            //   front of the playhead it holds still.
+            // - **`pose`** behind the recording, which is what it overrides,
+            //   and in front of `animate`, which poses whatever it leaves.
+            .add_systems(
+                Update,
+                (
+                    Lineup::hold
+                        .after(Playback::handle_keyboard)
+                        .before(Playback::advance),
+                    Lineup::pose
+                        .after(Actors::take_the_field)
+                        .before(Actors::animate),
+                ),
+            )
             .add_systems(
                 Update,
                 // Split into two nested groups purely to stay inside

@@ -691,7 +691,7 @@ impl Ball {
         d::FATE_LIVE_TICKS.fetch_add(1, Ordering::Relaxed);
 
         let dist_x100 = (self.census_shot_dist * 100.0) as u64;
-        let mut resolve = |counter: &'static std::sync::atomic::AtomicU64, reached_goal: bool| {
+        let resolve = |counter: &'static std::sync::atomic::AtomicU64, reached_goal: bool| {
             counter.fetch_add(1, Ordering::Relaxed);
             if reached_goal {
                 d::FATE_REACHED_DIST_X100.fetch_add(dist_x100, Ordering::Relaxed);

@@ -149,12 +149,6 @@ impl RatingShape {
     const DOWN_EXPONENT: f32 = 1.23;
     const DOWN_CEILING: f32 = 2.60;
 
-    /// Map a standardised performance onto a rating.
-    #[inline]
-    fn rate(z: f32) -> f32 {
-        Self::ANCHOR + Self::delta(z)
-    }
-
     /// The signed rating movement for a standardised performance.
     /// Strictly increasing in `z` — a positive power and `tanh` are
     /// both monotone — which is what lets the position models state

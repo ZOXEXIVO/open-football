@@ -23,7 +23,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// Apex of a corner delivery, in metres. A normal in-swinger: 5 m up
     /// puts about 1.7 s between the strike and the header, which is what
     /// a real one takes and comfortably inside
-    /// [`CORNER_SHAPE_MAX_TICKS`](Self::CORNER_SHAPE_MAX_TICKS) so the
+    /// [`CornerDeadline`](crate::r#match::engine::corner_shape::CornerDeadline) so the
     /// set-piece shape holds for the whole flight.
     pub(in crate::r#match::engine::engine) const CORNER_APEX: f32 = 5.0;
 

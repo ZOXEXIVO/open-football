@@ -281,8 +281,7 @@ impl<'b> TeamOperationsImpl<'b> {
             let field_width = self.ctx.context.field_size.width as f32;
             return Some(Vector3::new(
                 (base.x + forward * Self::OVERLAP_LEAD).clamp(14.0, field_width - 14.0),
-                (base.y + flank.sign() * Self::OVERLAP_OUTSIDE)
-                    .clamp(10.0, field_height - 10.0),
+                (base.y + flank.sign() * Self::OVERLAP_OUTSIDE).clamp(10.0, field_height - 10.0),
                 0.0,
             ));
         }

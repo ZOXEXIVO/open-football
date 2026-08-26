@@ -30,8 +30,8 @@ pub use events::{
 pub use mind::{
     ActorAccount, ActorKind, ActorRef, AttributionLedger, ConsolidationReport, EncodingInputs,
     EpisodeDomain, EpisodeKind, EpochDay, FactClaim, MemoryCensus, MemoryContext, MindClock,
-    MindEpisode, MindMemory, MindOrgans, MindTickContext, MindTickReport, PlayerMind,
-    RecallContext, RecallCue, RecallResult, SemanticFact,
+    MindEpisode, MindJournal, MindMemory, MindNote, MindNoteKind, MindOrgans, MindTickContext,
+    MindTickReport, PlayerMind, RecallContext, RecallCue, RecallResult, SemanticFact,
 };
 pub use personality::{adaptation, behaviour_config, decisions, interaction, language, rapport};
 pub use squad::{plan, status};

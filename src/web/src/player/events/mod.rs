@@ -39,6 +39,7 @@ use core::TrainingEventContext;
 use core::TransferInterestContext;
 use core::TransferInterestEvidence;
 use core::TransferInterestStage;
+use core::club::player::mind;
 use serde::Deserialize;
 
 fn get_neighbor_teams(
@@ -121,6 +122,9 @@ pub struct PlayerEventDto {
     /// player's happiness feed. Drives the "Decision" chip and the card's
     /// muted ledger styling.
     pub is_decision: bool,
+    /// True for a row that came from his own head — the mind's journal of
+    /// what turned in him. Drives the "Mind" chip.
+    pub is_mind: bool,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -211,6 +215,7 @@ pub async fn player_events_action(
         .map(|l| l.slug.clone());
     let events = build_events(
         player,
+        &i18n,
         &events_i18n,
         simulator_data,
         &route_params.lang,
@@ -641,11 +646,15 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
 pub struct PlayerEventsCounter;
 
 impl PlayerEventsCounter {
-    /// Tab badge: the happiness feed plus the decision register, matching
-    /// what the page actually renders. The register folded in when the
-    /// Decisions tab was removed, so its rows count here too.
+    /// Tab badge: every source the page actually renders — the happiness
+    /// feed, the decision register, and his own journal. The register
+    /// folded in when the Decisions tab was removed; the journal when the
+    /// mind's turning points joined the feed. A badge that counts fewer
+    /// rows than the page shows is worse than no badge.
     pub fn count(player: &core::Player) -> usize {
-        Self::visible_iter(player).count() + player.decision_history.items.len()
+        Self::visible_iter(player).count()
+            + player.decision_history.items.len()
+            + player.mind.journal().len()
     }
 
     fn visible_iter(player: &core::Player) -> impl Iterator<Item = &HappinessEvent> {
@@ -674,6 +683,7 @@ impl PlayerEventsCounter {
 
 fn build_events(
     player: &core::Player,
+    i18n: &I18n,
     events_i18n: &EventI18n,
     simulator_data: &SimulatorData,
     lang: &str,
@@ -745,6 +755,7 @@ fn build_events(
                 movement: None,
                 decided_by: None,
                 is_decision: false,
+                is_mind: false,
             }
         })
         .collect();
@@ -761,11 +772,94 @@ fn build_events(
             .map(|row| DecisionRender::to_event(row, events_i18n, today)),
     );
 
-    // Stable sort, so a decision and a happiness event stamped the same day
-    // keep the feed's own order: what the player felt, then what the club
-    // put on paper.
+    // And so does his own head. Not truncated either — the journal is
+    // twelve slots that already shed their oldest note, so there is
+    // nothing left here for a reader to trim.
+    events.extend(
+        player
+            .mind
+            .journal()
+            .iter()
+            .map(|note| MindRender::to_event(note, i18n, today)),
+    );
+
+    // Stable sort, so a decision, a happiness event and a note stamped the
+    // same day keep the feed's own order: what the player felt, then what
+    // the club put on paper, then what he made of it.
     events.sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
     events
+}
+
+/// Renders a note from the player's own head as an event card.
+///
+/// The third source in this feed, and the only one written from the
+/// inside. The happiness feed is what happened *to* him and the register
+/// is what the club put on paper about him; the journal is what turned in
+/// him, which nothing else on the site can show — a want he formed, the
+/// week he finally said it out loud, the belief that crystallised out of
+/// a season of the same thing happening.
+///
+/// It deliberately does not render the *episodes* the mind also holds.
+/// Those are the same events the happiness feed already carries — the
+/// weekly sweep builds them from that very log — and showing both would
+/// print each day twice in two different voices.
+struct MindRender;
+
+impl MindRender {
+    fn to_event(note: &mind::MindNote, i18n: &I18n, today: NaiveDate) -> PlayerEventDto {
+        // The subject line: the want, or the belief.
+        let subject = if note.kind.is_about_a_want() {
+            i18n.t(note.goal.as_i18n_key()).to_string()
+        } else {
+            i18n.t(note.claim.as_i18n_key()).to_string()
+        };
+        let description = i18n
+            .t(note.kind.as_i18n_key())
+            .replace("{subject}", &subject);
+
+        // A conviction's sign is the claim's, not the note kind's:
+        // *forming* a belief is neither good news nor bad, but believing
+        // the club discarded him is.
+        let valence = if note.kind == mind::MindNoteKind::ConvictionFormed {
+            let v = note.claim.valence();
+            if v > 0.0 {
+                1
+            } else if v < 0.0 {
+                -1
+            } else {
+                0
+            }
+        } else {
+            note.kind.valence()
+        };
+
+        let date = mind::MindClock::date(note.day);
+
+        PlayerEventDto {
+            // Composed from two closed-vocabulary i18n keys, so the
+            // template's `|safe` on this field stays sound.
+            description,
+            is_positive: valence > 0,
+            is_negative: valence < 0,
+            is_big: note.kind.is_major(),
+            days_ago: DecisionRender::days_ago(date, today),
+            // Absolute, for the same reason the register is: a diary
+            // entry can be seasons old, and "847d ago" is not a date any
+            // reader converts in their head.
+            time_ago_label: date.format("%d.%m.%Y").to_string(),
+            partner_name: None,
+            partner_slug: None,
+            detail: None,
+            follow_up: None,
+            severity_label: None,
+            severity_tag: None,
+            comparison: None,
+            movement: None,
+            decided_by: None,
+            is_decision: false,
+            is_mind: true,
+        }
+    }
 }
 
 /// Renders a decision-register row as an event card.
@@ -844,6 +938,7 @@ impl DecisionRender {
             movement,
             decided_by,
             is_decision: true,
+            is_mind: false,
         }
     }
 
@@ -4611,6 +4706,102 @@ mod tests {
             missing.len(),
             missing
         );
+    }
+
+    #[test]
+    fn every_mind_note_kind_has_a_line_and_a_slot_for_its_subject() {
+        // The mind's own catalogs already ship translated — `mind_goal_*`
+        // and `mind_fact_*` have been on the personal page for a while —
+        // but the note *lines* are new, and a missing one renders as raw
+        // `mind_note_want_voiced` in the feed rather than falling back to
+        // anything. Compile-time exhaustiveness gets the match arm; this
+        // gets the copy.
+        let map = en_map();
+        let mut missing = Vec::new();
+
+        for kind in mind::MindNoteKind::ALL {
+            let key = kind.as_i18n_key();
+            let Some(line) = map.get(key) else {
+                missing.push(format!("{key} (absent)"));
+                continue;
+            };
+            // Every line that names a want or a belief has to have
+            // somewhere to put it. `None` is the one kind that never
+            // renders, so it needs no slot.
+            if *kind != mind::MindNoteKind::None && !line.contains("{subject}") {
+                missing.push(format!("{key} (no {{subject}} placeholder)"));
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "mind note copy is incomplete: {:#?}",
+            missing
+        );
+    }
+
+    #[test]
+    fn a_mind_note_renders_as_a_finished_sentence() {
+        let i18n = crate::I18nManager::new().for_lang("en");
+        let today = NaiveDate::from_ymd_opt(2026, 8, 26).unwrap();
+        let note = mind::MindNote::want(
+            mind::MindNoteKind::WantVoiced,
+            mind::GoalKind::LeaveThisClub,
+            mind::MindClock::day(NaiveDate::from_ymd_opt(2026, 8, 19).unwrap()),
+        );
+
+        let row = MindRender::to_event(&note, &i18n, today);
+
+        assert!(row.is_mind, "the row is chipped as coming from his head");
+        assert!(!row.is_decision);
+        assert!(
+            !row.description.contains("{subject}"),
+            "the placeholder was substituted: {}",
+            row.description
+        );
+        assert!(
+            !row.description.contains("mind_"),
+            "neither half of the line fell back to its raw key: {}",
+            row.description
+        );
+        assert_eq!(row.days_ago, 7);
+        assert_eq!(row.time_ago_label, "19.08.2026");
+    }
+
+    #[test]
+    fn a_conviction_takes_its_valence_from_the_belief_not_the_note() {
+        let i18n = crate::I18nManager::new().for_lang("en");
+        let today = NaiveDate::from_ymd_opt(2026, 8, 26).unwrap();
+        let day = mind::MindClock::day(today);
+
+        let sour = MindRender::to_event(
+            &mind::MindNote::conviction(mind::FactClaim::DiscardedMe, mind::ActorRef::club(7), day),
+            &i18n,
+            today,
+        );
+        let warm = MindRender::to_event(
+            &mind::MindNote::conviction(
+                mind::FactClaim::BrokeThroughHere,
+                mind::ActorRef::club(7),
+                day,
+            ),
+            &i18n,
+            today,
+        );
+
+        assert!(sour.is_negative, "being discarded is not neutral news");
+        assert!(warm.is_positive, "nor is breaking through");
+        // *Forming* a want, by contrast, is neither.
+        let formed = MindRender::to_event(
+            &mind::MindNote::want(
+                mind::MindNoteKind::WantFormed,
+                mind::GoalKind::LeaveThisClub,
+                day,
+            ),
+            &i18n,
+            today,
+        );
+        assert!(!formed.is_positive && !formed.is_negative);
     }
 
     #[test]

@@ -42,7 +42,7 @@
 //! directly rather than piping through `tee`, which block-buffers the
 //! whole run into silence.
 
-use core::club::player::mind::{GoalStatus, MemoryCensus};
+use core::club::player::mind::{GoalStatus, MemoryCensus, MindNoteKind};
 use core::utils::DateUtils;
 use core::{
     FootballSimulator, PlayerStatusType, SimulationResult, SimulatorData, Staff, StaffPosition,
@@ -231,6 +231,13 @@ struct MindCensus {
     /// says whether the emit sites are actually wired to anything.
     empty_minds: usize,
 
+    /// Notes held per senior — the trail the event feed renders.
+    diary: Spread,
+    /// Which turns actually get written. A kind stuck at zero after a
+    /// season is a turn the simulation never reaches, not a rare one —
+    /// the same reachability question the goal ladder answers.
+    note_kinds: HashMap<&'static str, usize>,
+
     /// Where every live player goal sits on the ladder.
     goal_ladder: HashMap<&'static str, usize>,
 
@@ -355,6 +362,11 @@ impl MindCensus {
             *self.goal_ladder.entry(status_label(goal.status)).or_default() += 1;
         }
 
+        self.diary.push(player.mind.journal().len() as u32);
+        for note in player.mind.journal().iter() {
+            *self.note_kinds.entry(note_label(note.kind)).or_default() += 1;
+        }
+
         // Phase 3b. `Req` is the status the transfer path acts on today;
         // `is_pressing` is what the goal stack would act on instead.
         self.pressing.push(
@@ -435,6 +447,32 @@ fn status_label(status: GoalStatus) -> &'static str {
     }
 }
 
+fn note_label(kind: MindNoteKind) -> &'static str {
+    match kind {
+        MindNoteKind::None => "None",
+        MindNoteKind::WantFormed => "WantFormed",
+        MindNoteKind::WantVoiced => "WantVoiced",
+        MindNoteKind::WantPressed => "WantPressed",
+        MindNoteKind::WantSatisfied => "WantSatisfied",
+        MindNoteKind::WantFrustrated => "WantFrustrated",
+        MindNoteKind::WantAbandoned => "WantAbandoned",
+        MindNoteKind::ConvictionFormed => "ConvictionFormed",
+    }
+}
+
+/// The diary's vocabulary in catalog order. `None` is left out: it is
+/// the store's empty slot and is never written, so printing it would
+/// invite reading a legitimate zero as a wiring failure.
+const NOTE_KINDS: [&str; 7] = [
+    "WantFormed",
+    "WantVoiced",
+    "WantPressed",
+    "WantSatisfied",
+    "WantFrustrated",
+    "WantAbandoned",
+    "ConvictionFormed",
+];
+
 /// The ladder in its own order, not the hash map's.
 const LADDER: [&str; 7] = [
     "Latent",
@@ -491,6 +529,10 @@ impl ReportPrinter {
             census.empty_minds,
             pct(census.empty_minds, census.seniors),
         );
+
+        println!("\n── the diary, players ──");
+        println!("{}", census.diary.line("notes held (cap 12)"));
+        Self::histogram(&census.note_kinds, &NOTE_KINDS, 16);
 
         println!("\n── the goal ladder, players ──");
         Self::ladder(&census.goal_ladder);
@@ -579,6 +621,22 @@ impl ReportPrinter {
             "  note: the ≤2 ms/day staff budget in docs/staff_mind.md §10 needs an\n  \
              A/B against a build with the mind compiled out; this is the whole tick."
         );
+    }
+
+    /// A counted vocabulary in its own order, zeros included — a row
+    /// missing from the map is the finding, so it has to print.
+    fn histogram(counts: &HashMap<&'static str, usize>, order: &[&str], width: usize) {
+        let total: usize = counts.values().sum();
+        for label in order {
+            let n = counts.get(label).copied().unwrap_or(0);
+            let bar = "█".repeat((pct(n, total) / 2.0).round() as usize);
+            println!(
+                "  {label:<width$} {n:>7}  {:>5.1}%  {bar}",
+                pct(n, total),
+                width = width
+            );
+        }
+        println!("  {:<width$} {total:>7}", "total", width = width);
     }
 
     fn ladder(counts: &HashMap<&'static str, usize>) {

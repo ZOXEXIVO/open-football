@@ -1,14 +1,14 @@
-use crate::actors::BallState;
-use crate::camera::{CameraFlight, CameraOrbit, CameraRig, CameraZoom};
-use crate::config::ViewerConfig;
-use crate::focus::CameraSubject;
-use crate::loader::ChunkLoader;
-use crate::perf::FrameCost;
-use crate::playback::{Playback, RecordedSpans};
-use crate::quality::{Quality, Tier};
-use crate::stage::Stage;
-use crate::textures::Textures;
-use crate::typeface::Faces;
+use crate::app::config::ViewerConfig;
+use crate::app::perf::FrameCost;
+use crate::app::quality::{Quality, Tier};
+use crate::app::stage::Stage;
+use crate::art::textures::Textures;
+use crate::art::typeface::Faces;
+use crate::broadcast::camera::{CameraFlight, CameraOrbit, CameraRig, CameraZoom};
+use crate::broadcast::focus::CameraSubject;
+use crate::players::actors::BallState;
+use crate::recording::loader::ChunkLoader;
+use crate::recording::playback::{Playback, RecordedSpans};
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::input::touch::Touches;
 use bevy::prelude::*;
@@ -110,9 +110,9 @@ impl Default for DebugOverlay {
 pub struct Timeline;
 
 impl Timeline {
-    /// Read next door as well: [`crate::touch`] lays its controls out clear of
-    /// the bar, and cuts this band out of the canvas so that a finger reaching
-    /// for the scrub rail does not also swing the camera.
+    /// Read next door as well: [`crate::ui::touch`] lays its controls out clear
+    /// of the bar, and cuts this band out of the canvas so that a finger
+    /// reaching for the scrub rail does not also swing the camera.
     pub const BAR_HEIGHT: f32 = 48.0;
     const TRACK_HEIGHT: f32 = 8.0;
     /// Height of the invisible band around the rail that actually takes the

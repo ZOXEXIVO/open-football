@@ -45,8 +45,6 @@ use crate::r#match::{
     TacticalRefreshInputs, TeamShape, TeamTacticalState,
 };
 use crate::{MatchRuntime, PlayerFieldPositionGroup};
-#[cfg(feature = "match-logs")]
-use crate::{match_log_debug, match_log_info};
 use std::time::Instant;
 
 // ───────────────────────────────────────────────────────────────────────────────

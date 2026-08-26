@@ -68,7 +68,7 @@ impl WorldNationalCompetitions {
 
         if stamped.is_empty() {
             Self::run_phase_transitions(continents);
-            Self::report_tournament_endings(continents, &crowned_before, date);
+            Self::report_tournament_endings(continents, &crowned_before);
             return Vec::new();
         }
 
@@ -85,7 +85,7 @@ impl WorldNationalCompetitions {
         }
 
         Self::run_phase_transitions(continents);
-        Self::report_tournament_endings(continents, &crowned_before, date);
+        Self::report_tournament_endings(continents, &crowned_before);
         collected
     }
 
@@ -112,11 +112,7 @@ impl WorldNationalCompetitions {
     /// Both halves are emitted. Reporting only the winners would make
     /// the summer a story for one country in thirty-two and silence for
     /// everybody who spent a month getting to a final and losing it.
-    fn report_tournament_endings(
-        continents: &mut [Continent],
-        crowned_before: &[(u32, u16)],
-        date: NaiveDate,
-    ) {
+    fn report_tournament_endings(continents: &mut [Continent], crowned_before: &[(u32, u16)]) {
         let mut champions: Vec<u32> = Vec::new();
         let mut runners_up: Vec<u32> = Vec::new();
 

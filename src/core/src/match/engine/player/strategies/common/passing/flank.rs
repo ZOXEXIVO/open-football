@@ -242,11 +242,16 @@ impl FlankPlay {
         let Some(line) = (near_post - me).try_normalize(0.01) else {
             return false;
         };
-        ctx.players().opponents().nearby(Self::BLOCK_RADIUS).any(|o| {
-            let to_opp = o.position - me;
-            let along = to_opp.dot(&line);
-            along > 0.0 && to_opp.magnitude() > 0.01 && along / to_opp.magnitude() > Self::BLOCK_ALIGNMENT
-        })
+        ctx.players()
+            .opponents()
+            .nearby(Self::BLOCK_RADIUS)
+            .any(|o| {
+                let to_opp = o.position - me;
+                let along = to_opp.dot(&line);
+                along > 0.0
+                    && to_opp.magnitude() > 0.01
+                    && along / to_opp.magnitude() > Self::BLOCK_ALIGNMENT
+            })
     }
 
     /// The team-mate who has run beyond and outside the carrier on the

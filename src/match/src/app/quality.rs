@@ -51,7 +51,7 @@
 //! visible hitch. One hitch to buy the rest of the match is a good trade; a
 //! controller that hunts between two tiers is worse than either of them.
 
-use crate::perf::FrameCost;
+use crate::app::perf::FrameCost;
 use bevy::anti_alias::fxaa::{Fxaa, Sensitivity};
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
@@ -167,8 +167,8 @@ impl Quality {
 
     /// Whether the tier has stopped moving.
     ///
-    /// Read by [`crate::stage::Stage::fit`], which holds its own ladder until
-    /// this is true so that one slow stretch does not get answered twice.
+    /// Read by [`crate::app::stage::Stage::fit`], which holds its own ladder
+    /// until this is true so that one slow stretch does not get answered twice.
     pub fn settled(&self) -> bool {
         self.settled
     }
@@ -203,7 +203,7 @@ impl Quality {
 
     /// Starts the clock the measurement runs against.
     ///
-    /// Called once, by [`crate::bringup::Bringup`], when the stadium is up
+    /// Called once, by [`crate::app::bringup::Bringup`], when the stadium is up
     /// and the recording is playing — which is the first moment a frame time
     /// means what this file thinks it means.
     pub fn start(&mut self) {

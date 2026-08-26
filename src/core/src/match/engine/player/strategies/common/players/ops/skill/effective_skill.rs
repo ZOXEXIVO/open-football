@@ -21,13 +21,19 @@
 //!      truly broken.
 //!   3. Late-game mental fatigue: after the 70th minute, condition < 45%
 //!      additionally drops decisions/concentration/composure 3–10%, with
-//!      high determination reducing that secondary penalty by up to 40%.
+//!      `concentration` (three parts) and `determination` (one) between
+//!      them reducing that secondary penalty by up to 40%. This is the
+//!      engine's only time-dependent mental channel and therefore the
+//!      one place `concentration` means what its name says: who is still
+//!      watching his man in the 85th minute.
 //!
 //! All callers route skill reads through `effective_skill_*` to make the
 //! engine actually feel the gap between a fresh elite stamina player and
 //! a wilting late-game specimen.
 
 use crate::r#match::MatchPlayer;
+use std::env::var;
+use std::sync::OnceLock;
 
 /// What kind of action the skill is being read for. Drives the size of
 /// the fatigue penalty — explosive actions (sprints, dives, tackles
@@ -154,10 +160,59 @@ fn late_game_mental_extra(player: &MatchPlayer, ctx: ActionContext) -> f32 {
     }
     // Linear penalty in [3%, 10%] as condition drops 0.45 -> 0.0.
     let raw_penalty = 0.03 + (0.45 - cond_pct) / 0.45 * 0.07;
-    // Determination knocks up to 40% off the secondary penalty.
+    // **Who holds his head in the last twenty minutes.**
+    //
+    // This whole term is the engine's only time-dependent mental
+    // channel, and `determination` used to own all 40% of its mitigation
+    // on its own. That is the wrong attribute for it. Determination is
+    // EFFORT — he keeps chasing, keeps closing, keeps going — and it
+    // already has a channel of its own for exactly that in
+    // `sc::resilience`. What this term models is ATTENTION: the last
+    // stretch of a match is where a man stops watching his runner, mis-
+    // reads a bouncing ball, plays somebody onside. The attribute that
+    // names that is `concentration`, and it had no time-dependent
+    // channel anywhere in the engine — it was a 4-18% blend weight
+    // inside a dozen composites and nothing else, so a 6/20 and an 18/20
+    // faded at exactly the same rate.
+    //
+    // Total mitigation weight is UNCHANGED at 0.40, so at the population
+    // mean (where the two attributes are equal) this is bit-for-bit the
+    // old number and no calibration moves. It only redistributes: 3:1 to
+    // the attribute that means it, 1:4 left with determination because a
+    // stubborn player genuinely does grind through the fog.
+    let sharp = (player.skills.mental.concentration / 20.0).clamp(0.0, 1.0);
     let det = (player.skills.mental.determination / 20.0).clamp(0.0, 1.0);
-    let mitigated = raw_penalty * (1.0 - det * 0.40);
-    1.0 - mitigated
+    let mitigation = if LateGameAttention::armed() {
+        sharp * 0.30 + det * 0.10
+    } else {
+        det * 0.40
+    };
+    1.0 - raw_penalty * (1.0 - mitigation)
+}
+
+/// **Who is still watching his man in the 85th minute.**
+///
+/// `OF_LATE_ATTENTION_OFF=1` gives the whole 40% mitigation back to
+/// `determination`, which is the pre-2026-08-26 engine. The A/B control
+/// for the split — see [`late_game_mental_extra`].
+///
+/// The split is exactly neutral at the population mean (the two weights
+/// still sum to 0.40), so an equal-squad run cannot see it by
+/// construction; what it moves is the SPREAD between a sharp player and a
+/// vague one, which is what `dev_match stats` with
+/// `OF_PIN=concentration:6:18` measures.
+pub struct LateGameAttention;
+
+impl LateGameAttention {
+    #[inline]
+    pub fn armed() -> bool {
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| {
+            !var("OF_LATE_ATTENTION_OFF")
+                .map(|v| v != "0" && !v.is_empty())
+                .unwrap_or(false)
+        })
+    }
 }
 
 /// Post-entry settling penalty for substitutes: a sub needs a few
@@ -457,6 +512,34 @@ mod tests {
         let early = effective_skill(&p, 15.0, ActionContext::mental(50));
         let late = effective_skill(&p, 15.0, ActionContext::mental(85));
         assert!(late < early);
+    }
+
+    /// The late-game drop is an ATTENTION channel, so `concentration` has
+    /// to carry more of its mitigation than `determination` does — that is
+    /// the whole point of the split, and a silent revert to the old
+    /// determination-only form would leave every other test passing.
+    #[test]
+    fn concentration_holds_the_late_game_better_than_determination() {
+        let hold_at_85 = |conc: f32, det: f32| {
+            let mut p = build_player(3000, 12.0, 12.0);
+            p.skills.mental.concentration = conc;
+            p.skills.mental.determination = det;
+            effective_skill(&p, 15.0, ActionContext::mental(85))
+        };
+        let sharp = hold_at_85(18.0, 6.0);
+        let stubborn = hold_at_85(6.0, 18.0);
+        let neither = hold_at_85(6.0, 6.0);
+        assert!(sharp > stubborn, "sharp {sharp} vs stubborn {stubborn}");
+        assert!(stubborn > neither, "determination still counts for something");
+        // …and none of it applies before the 70th minute.
+        let mut vague = build_player(3000, 12.0, 12.0);
+        vague.skills.mental.concentration = 6.0;
+        let mut alert = build_player(3000, 12.0, 12.0);
+        alert.skills.mental.concentration = 18.0;
+        assert_eq!(
+            effective_skill(&vague, 15.0, ActionContext::mental(50)).to_bits(),
+            effective_skill(&alert, 15.0, ActionContext::mental(50)).to_bits(),
+        );
     }
 
     #[test]

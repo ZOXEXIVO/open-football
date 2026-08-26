@@ -177,6 +177,7 @@ impl DutyAssigner<'_> {
         // reported.
         let mut unit = [(0u32, Vector3::<f32>::zeros(), false, true); MAX_UNIT];
         let mut unit_len = 0usize;
+        #[cfg(feature = "match-logs")]
         let mut markers = 0usize;
         for p in self.field.players.iter() {
             if p.team_id != self.team_id || unit_len == MAX_UNIT {
@@ -192,7 +193,10 @@ impl DutyAssigner<'_> {
             }
             unit[unit_len] = (p.id, p.position, can_mark, p.can_attempt_tackle());
             unit_len += 1;
-            markers += can_mark as usize;
+            #[cfg(feature = "match-logs")]
+            {
+                markers += can_mark as usize;
+            }
         }
         if unit_len == 0 {
             return;
@@ -210,10 +214,15 @@ impl DutyAssigner<'_> {
         // Somebody goes to the ball and somebody backs him up. These come
         // first because they are the only duties whose target is fixed;
         // everything else is a choice between men.
+        #[cfg(feature = "match-logs")]
         let mut n_press = 0usize;
+        #[cfg(feature = "match-logs")]
         let mut n_cover = 0usize;
+        #[cfg(feature = "match-logs")]
         let mut n_marks = 0usize;
+        #[cfg(feature = "match-logs")]
         let mut n_unreachable = 0usize;
+        #[cfg(feature = "match-logs")]
         let mut n_skipped_depth = 0usize;
 
         // ── Where the next touch is going to happen ──────────────────
@@ -303,7 +312,10 @@ impl DutyAssigner<'_> {
                 true,
             ) {
                 taken[i] = true;
-                n_press += 1;
+                #[cfg(feature = "match-logs")]
+                {
+                    n_press += 1;
+                }
                 Self::push(plan, unit[i].0, DefensiveDuty::Press);
             }
             // Cover is a back-line job — a forward sitting goal-side of
@@ -328,7 +340,10 @@ impl DutyAssigner<'_> {
                 true,
             ) {
                 taken[i] = true;
-                n_cover += 1;
+                #[cfg(feature = "match-logs")]
+                {
+                    n_cover += 1;
+                }
                 Self::push(plan, unit[i].0, DefensiveDuty::Cover);
             }
         }
@@ -356,7 +371,10 @@ impl DutyAssigner<'_> {
             let near_ball =
                 (p.position - self.field.ball.position).magnitude() <= Self::BALL_THREAT_RADIUS;
             if !near_goal && !near_ball {
-                n_skipped_depth += 1;
+                #[cfg(feature = "match-logs")]
+                {
+                    n_skipped_depth += 1;
+                }
                 continue; // not a threat yet
             }
             threats[threat_len] = (p.id, p.position, self.threat_score(p, own_goal));
@@ -396,11 +414,17 @@ impl DutyAssigner<'_> {
                 true,
                 false,
             ) else {
-                n_unreachable += 1;
+                #[cfg(feature = "match-logs")]
+                {
+                    n_unreachable += 1;
+                }
                 continue;
             };
             taken[i] = true;
-            n_marks += 1;
+            #[cfg(feature = "match-logs")]
+            {
+                n_marks += 1;
+            }
             Self::push(plan, unit[i].0, DefensiveDuty::Mark(opp_id));
         }
 

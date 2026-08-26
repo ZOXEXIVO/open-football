@@ -488,6 +488,14 @@ impl StaffMind {
 
         let goals = self.organs.shared.goals.review(ctx.day());
         let consolidation = self.organs.shared.memory.maybe_consolidate(&ctx.memory());
+        // A manager keeps the same diary, on the same terms. Nothing
+        // renders it yet — the staff page has no mind block at all — but
+        // the notes are authored where the turns are decided rather than
+        // waiting for a reader, because a diary that starts the day
+        // someone builds a page for it has no past to show.
+        self.organs
+            .shared
+            .journal_tick(goals.as_ref(), consolidation.as_ref(), ctx.day());
         StaffMindReport {
             goals,
             consolidation,
@@ -752,8 +760,12 @@ mod tests {
         // Three organs plus five faculties, entirely inline. Staff are
         // an order of magnitude fewer than players, so the budget is
         // generous — but it is still a budget.
+        //
+        // Raised by 200 bytes when the journal landed: twelve dated notes
+        // at sixteen bytes each, and they are the only record of the
+        // turns the goal stack prunes. Paid once, deliberately.
         assert!(
-            size_of::<StaffMind>() <= 3456,
+            size_of::<StaffMind>() <= 3656,
             "StaffMind grew to {} bytes",
             size_of::<StaffMind>()
         );

@@ -44,7 +44,6 @@
 use crate::r#match::ball::events::GoalSide;
 use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH, GoalPosition};
-use nalgebra::Vector3;
 
 /// The ball is in the goal. Set the instant it crosses the line and held
 /// until the restart — including the part of the celebration where a
@@ -212,6 +211,11 @@ impl GoalNet {
     /// (the ball rising to where the mesh is slacker) only loosens a clamp,
     /// and loosening a clamp never moves the ball.
     const RELAX_RATE: f32 = 0.06;
+    /// The metric twin of [`GoalNet::RELAX_RATE`]. Unused while the roof
+    /// panel holds a fixed give ([`GoalNet::GIVE_ROOF_METRES`]) rather than
+    /// easing toward a live one — kept beside its unit sibling so a roof
+    /// that ever starts easing cannot reach for the wrong axis.
+    #[allow(dead_code)]
     const RELAX_RATE_METRES: f32 = Self::RELAX_RATE * 0.125;
 
     /// Ease a held give toward the one the ball's present position asks for.
@@ -513,6 +517,7 @@ mod tests {
     use super::*;
     use crate::r#match::MatchFieldSize;
     use crate::r#match::engine::ball::ball::GRAVITY_PER_TICK;
+    use nalgebra::Vector3;
 
     fn goals() -> GoalPosition {
         GoalPosition::from(&MatchFieldSize::new(840, 545))

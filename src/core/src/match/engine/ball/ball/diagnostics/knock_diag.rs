@@ -130,7 +130,13 @@ impl KnockChain {
     /// the same radius `KeeperFeetDecision::PRESS_RANGE` calls pressure.
     const PRESSED: f32 = 40.0;
 
-    fn opened(keeper: u32, tick: u64, at: Vector3<f32>, pressed: bool, source: KnockSource) -> Self {
+    fn opened(
+        keeper: u32,
+        tick: u64,
+        at: Vector3<f32>,
+        pressed: bool,
+        source: KnockSource,
+    ) -> Self {
         KnockChain {
             keeper,
             contacts: 1,

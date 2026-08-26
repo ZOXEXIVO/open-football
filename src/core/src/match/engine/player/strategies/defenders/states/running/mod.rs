@@ -1,17 +1,17 @@
 use crate::PlayerFieldPositionGroup;
-use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay};
-use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
     ActivityIntensity, DefenderCondition, DefensiveLine,
 };
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay};
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
 use crate::r#match::player::strategies::common::states::MarkEngagement;
+use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
@@ -187,8 +187,8 @@ impl StateProcessingHandler for DefenderRunningState {
             // of the decision. See `FlankPlay`.
             match FlankPlay::decide(ctx) {
                 Some(FlankAction::ReleaseOutside { target }) => {
-                        #[cfg(feature = "match-logs")]
-                        crate::mid_run_diag::WideDiag::note(4);
+                    #[cfg(feature = "match-logs")]
+                    crate::mid_run_diag::WideDiag::note(4);
                     return Some(StateChangeResult::with_defender_state_and_event(
                         DefenderState::Running,
                         Event::PlayerEvent(PlayerEvent::PassTo(

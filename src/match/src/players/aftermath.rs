@@ -15,11 +15,11 @@
 //! he just folds his arms and turns round".
 //!
 //! (The turning round was real and separate: a man below
-//! [`Actors::MOVING`](crate::actors::Actors) is drawn facing the BALL, and
-//! for the conceding side the ball is behind them in their own net, rattling
-//! in the mesh. So they walked backwards out of their own goal, swivelling to
-//! keep watching it. Nobody in football watches the ball after a goal;
-//! [`Aftermath`] is also what switches that rule off.)
+//! [`Actors::MOVING`](crate::players::actors::Actors) is drawn facing the BALL,
+//! and for the conceding side the ball is behind them in their own net,
+//! rattling in the mesh. So they walked backwards out of their own goal,
+//! swivelling to keep watching it. Nobody in football watches the ball after a
+//! goal; [`Aftermath`] is also what switches that rule off.)
 //!
 //! # The signal
 //!
@@ -29,8 +29,8 @@
 //! own goals, so which side is celebrating and which is not is a lookup
 //! rather than an inference. Nothing new goes over the wire.
 
-use crate::config::ViewerConfig;
-use crate::playback::Playback;
+use crate::app::config::ViewerConfig;
+use crate::recording::playback::Playback;
 use bevy::prelude::*;
 
 /// How the two sides are feeling at the playhead.
@@ -61,15 +61,16 @@ impl Aftermath {
     const FADE_MS: f64 = 3_000.0;
     /// Below this there is nothing to draw and every consumer can
     /// short-circuit. Not zero, because the per-actor ramps in
-    /// [`Actors::animate`](crate::actors::Actors::animate) trail the
+    /// [`Actors::animate`](crate::players::actors::Actors::animate) trail the
     /// resource by a few frames.
     pub const NOTHING: f32 = 1e-3;
 
     /// Reads the playhead against the fixture's goals, once a frame.
     ///
     /// Linear scan over the goal list, which is at most a dozen entries and
-    /// usually two or three — a cursor like [`Track`](crate::replay::Track)'s
-    /// would be more code than the thing it optimised.
+    /// usually two or three — a cursor like
+    /// [`Track`](crate::recording::replay::Track)'s would be more code than the
+    /// thing it optimised.
     pub fn follow_playhead(
         config: Res<ViewerConfig>,
         playback: Res<Playback>,

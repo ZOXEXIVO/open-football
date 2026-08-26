@@ -358,6 +358,8 @@ impl StateProcessingHandler for DefenderMarkingState {
             // 0.22→0.55 sweep moved the count only 130 → 109).
             let man_is_shooting = opponent_to_mark.has_ball(ctx)
                 && (own_goal - opponent_to_mark.position).magnitude() < SHOOTING_RANGE;
+            // The unleashed target, kept only for the leash census below.
+            #[cfg(feature = "match-logs")]
             let want = desired_position;
             let desired_position = if man_is_shooting {
                 desired_position

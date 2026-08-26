@@ -421,14 +421,24 @@ impl PassEvaluator {
         let goal = ctx.player().opponent_goal_position();
         let attacking_progress = 1.0 - (goal.x - ctx.player.position.x).abs() / field_w;
         let in_attacking_third = attacking_progress >= 2.0 / 3.0;
-        if !ThrowIn::can_reach_box(long_throws, in_attacking_third) {
-            return None;
-        }
 
         // The box is the 18-yard area: 132u deep, 72u either side of the
         // centre of the goal at this engine's 1u ≈ 0.125 m.
         const BOX_DEPTH: f32 = 132.0;
         const BOX_HALF_WIDTH: f32 = 72.0;
+
+        // How far he is from the NEAREST point of that rectangle — the
+        // distance the ball actually has to travel to become a delivery.
+        // A man on the byline is throwing into it from a couple of
+        // metres; one level with the halfway line is not throwing into it
+        // at all.
+        let box_dx = ((goal.x - ctx.player.position.x).abs() - BOX_DEPTH).max(0.0);
+        let box_dy = ((goal.y - ctx.player.position.y).abs() - BOX_HALF_WIDTH).max(0.0);
+        let distance_to_box_edge = (box_dx * box_dx + box_dy * box_dy).sqrt();
+        if !ThrowIn::can_reach_box(long_throws, in_attacking_third, distance_to_box_edge) {
+            return None;
+        }
+
         let (_, max_range) = ThrowIn::range(long_throws);
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
 
@@ -472,8 +482,9 @@ impl PassEvaluator {
         let routine = pick_throw_routine(
             long_throws,
             in_attacking_third,
-            aerial >= 0.55,
+            aerial,
             chasing_late,
+            MatchStandard::shift(ctx.context),
         );
         match routine {
             ThrowRoutine::LongBox => {

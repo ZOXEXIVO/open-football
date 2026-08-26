@@ -25,9 +25,9 @@
 //! * An **edge pin**, because the mesh is tied to the frame. Without it a
 //!   ball hit into the top corner peels the netting off the crossbar.
 
-use crate::actors::{Actors, BallState};
-use crate::field::Field;
-use crate::textures::Textures;
+use crate::art::textures::Textures;
+use crate::players::actors::{Actors, BallState};
+use crate::scene::field::Field;
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::Indices;
 use bevy::prelude::*;

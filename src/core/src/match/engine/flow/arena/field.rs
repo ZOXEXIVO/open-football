@@ -138,7 +138,7 @@ impl MatchField {
 
         let size = MatchFieldSize::new(width, height);
         let (players_on_field, substitutes) =
-            setup_player_on_field(left_team_squad, right_team_squad, &size, home_team_id);
+            setup_player_on_field(left_team_squad, right_team_squad);
 
         let field = MatchField {
             size,
@@ -502,11 +502,28 @@ impl MatchField {
     /// not drawn, and a figure standing alone in the run-off for the rest of
     /// the match is exactly the scenery this is here to avoid.
     pub fn settle_touchline(&mut self, elapsed_ms: u64) {
-        let distance = SubstitutionBreak::HOME * elapsed_ms as f32
-            / crate::r#match::MATCH_TIME_INCREMENT_MS as f32;
+        let ticks = elapsed_ms as f32 / crate::r#match::MATCH_TIME_INCREMENT_MS as f32;
         for player in self.departed.iter_mut() {
             if let Some(stand) = player.touchline.as_mut() {
-                stand.settle(distance);
+                // ⚠ **A man still ON the pitch is jogging off, not strolling
+                // to his seat.**
+                //
+                // The substitution window stops on its own beats now rather
+                // than waiting for him to reach the line
+                // (`SubstitutionBreak::beats_ms`), so it hands him over
+                // wherever he has got to — usually still inside the touchline,
+                // with the match restarting around him. Walked home at
+                // `HOME` from there he ambles across the corner of the pitch
+                // for the better part of fifteen seconds; at `OFF` he is off
+                // it in two or three, which is what a substituted player
+                // does. The pace steps down once, at the line, which is the
+                // same place his errand changes.
+                let speed = if Bench::is_over_the_line(stand.at) {
+                    SubstitutionBreak::HOME
+                } else {
+                    SubstitutionBreak::OFF
+                };
+                stand.settle(speed * ticks);
             }
         }
         self.departed
@@ -526,11 +543,8 @@ impl MatchField {
 fn setup_player_on_field(
     left_team_squad: MatchSquad,
     right_team_squad: MatchSquad,
-    size: &MatchFieldSize,
-    home_team_id: u32,
 ) -> (Vec<MatchPlayer>, Vec<MatchPlayer>) {
     let setup_squad = |squad: MatchSquad, side: PlayerSide| {
-        let is_home = squad.team_id == home_team_id;
         let mut players = Vec::with_capacity(squad.main_squad.len());
         let mut subs = Vec::with_capacity(squad.substitutes.len());
 
@@ -545,7 +559,7 @@ fn setup_player_on_field(
             }
         }
 
-        for (index, mut player) in squad.substitutes.into_iter().enumerate() {
+        for mut player in squad.substitutes {
             player.side = Some(side);
             player.tactical_position.regenerate_waypoints(Some(side));
             player.rebuild_waypoint_cache();

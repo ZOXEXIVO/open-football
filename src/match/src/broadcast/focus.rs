@@ -4,15 +4,15 @@
 //!
 //! Three parts that only make sense together, which is why they share a file.
 //! [`CameraSubject`] is the fact — who, how far the shot has closed on him,
-//! and where he is standing this frame. [`crate::camera::TvCamera`] reads it
-//! instead of the ball. [`FocusRing`] is the only thing on screen that says
-//! any of it out loud: a replay that quietly stops framing the ball and gives
-//! no reason for it reads as a broken camera.
+//! and where he is standing this frame. [`crate::broadcast::camera::TvCamera`]
+//! reads it instead of the ball. [`FocusRing`] is the only thing on screen that
+//! says any of it out loud: a replay that quietly stops framing the ball and
+//! gives no reason for it reads as a broken camera.
 
-use crate::actors::PlayerActor;
-use crate::body::Physique;
-use crate::camera::CameraFlight;
-use crate::touch::{TouchControls, TouchDevice};
+use crate::broadcast::camera::CameraFlight;
+use crate::players::actors::PlayerActor;
+use crate::players::body::Physique;
+use crate::ui::touch::{TouchControls, TouchDevice};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use std::f32::consts::{FRAC_PI_2, TAU};
@@ -87,10 +87,11 @@ impl CameraSubject {
     /// own factor. One at rest, [`Self::CLOSE`] once the shot is all the way
     /// on a player.
     ///
-    /// Its own multiplier rather than a write into [`crate::camera::CameraZoom`]
-    /// on purpose: the wheel belongs to the viewer, and a follow that moved it
-    /// would either fight a hand on the wheel every frame or leave the zoom
-    /// somewhere the viewer never put it once the follow ended.
+    /// Its own multiplier rather than a write into
+    /// [`crate::broadcast::camera::CameraZoom`] on purpose: the wheel belongs
+    /// to the viewer, and a follow that moved it would either fight a hand on
+    /// the wheel every frame or leave the zoom somewhere the viewer never put
+    /// it once the follow ended.
     pub fn magnification(&self) -> f32 {
         1.0 + (Self::CLOSE - 1.0) * self.grip
     }

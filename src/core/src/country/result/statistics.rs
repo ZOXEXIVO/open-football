@@ -17,6 +17,7 @@ impl CountryResult {
     /// by id. The production tick resolves the country once and calls
     /// [`snapshot_country`] directly inside a parallel season-start pass
     /// across every just-ended-season country.
+    #[allow(dead_code)] // id-addressed entry point, kept for one-off and test callers
     pub(super) fn snapshot_player_season_statistics(data: &mut SimulatorData, country_id: u32) {
         let date = data.date.date();
         if let Some(country) = data.country_mut(country_id) {

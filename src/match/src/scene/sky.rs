@@ -11,7 +11,7 @@
 //! gradient, and a gradient is a texture 4 texels wide, not six faces that have
 //! to be generated, packed and kept in agreement at the corners.
 
-use crate::textures::Textures;
+use crate::art::textures::Textures;
 use bevy::prelude::*;
 use bevy::render::mesh::Mesh;
 use std::f32::consts::FRAC_PI_2;

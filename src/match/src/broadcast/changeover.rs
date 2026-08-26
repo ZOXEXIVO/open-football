@@ -39,13 +39,13 @@
 //! long each one stopped the match for, so the shot lasts exactly as long as
 //! the change did and not a constant somebody guessed at.
 
-use crate::actors::PlayerActor;
-use crate::camera::{CameraFlight, CameraOrbit};
-use crate::config::ViewerConfig;
-use crate::field::Field;
-use crate::focus::CameraSubject;
-use crate::pitch::Pitch;
-use crate::playback::Playback;
+use crate::app::config::ViewerConfig;
+use crate::broadcast::camera::{CameraFlight, CameraOrbit};
+use crate::broadcast::focus::CameraSubject;
+use crate::players::actors::PlayerActor;
+use crate::recording::playback::Playback;
+use crate::scene::field::Field;
+use crate::scene::pitch::Pitch;
 use bevy::prelude::*;
 use std::f32::consts::PI;
 
@@ -181,14 +181,16 @@ impl ChangeoverShot {
     const BACK_MS: f64 = 800.0;
     /// **And then he runs on, with the rig standing where it stopped.**
     ///
-    /// 2.6 s at the engine's `ON` speed is a little over twenty metres, which
-    /// is far enough onto the field to read as a man arriving. He keeps going
-    /// afterwards — the camera does not, it cuts to the next man.
+    /// Two seconds at the engine's `ON` speed is sixteen metres, which is far
+    /// enough onto the field to read as a man arriving. He keeps going
+    /// afterwards — the camera does not, it cuts to the next man, or away.
     ///
     /// ⚠ **`SubstitutionBreak::RUN_MS` is this same figure**, on the same
     /// terms as [`Self::PORTRAIT_MS`]: it is what holds the man after him
-    /// still while this runs.
-    const RUN_MS: f64 = 2_600.0;
+    /// still while this runs — and, since 2026-08-26, what ENDS the window.
+    /// The engine no longer waits for either walker to arrive, so the last
+    /// man's run is the last thing in the change and the shot stops with it.
+    const RUN_MS: f64 = 2_000.0;
     /// One man's whole turn in front of the camera. The next man's face is at
     /// the end of it.
     const BEAT_MS: f64 = Self::PORTRAIT_MS + Self::RUN_MS;
@@ -278,11 +280,11 @@ impl ChangeoverShot {
     /// [`Self::OUT`] metres beyond the line, past the boards and two metres
     /// into the near bank of seating.
     ///
-    /// ⚠ That works because [`Bank::cull`](crate::pitch::Bank) hides whichever
-    /// stand the lens is inside — and it is also why the wall is here at all.
-    /// A rig that wanders further does not merely stand behind a wall; it
-    /// makes a whole stand blink out of the picture as it crosses the front
-    /// row.
+    /// ⚠ That works because [`Bank::cull`](crate::scene::pitch::Bank) hides
+    /// whichever stand the lens is inside — and it is also why the wall is
+    /// here at all. A rig that wanders further does not merely stand behind a
+    /// wall; it makes a whole stand blink out of the picture as it crosses the
+    /// front row.
     const ACROSS: (f32, f32) = (
         -(Field::HALF_WIDTH + Self::OUT),
         Field::HALF_WIDTH + Pitch::SIDE_MARGIN - Self::PERIMETER,
@@ -290,12 +292,20 @@ impl ChangeoverShot {
 
     /// How long a change lasts when the recording does not say — a document
     /// written before the engine played substitutions out, or one made on the
-    /// instant path. See `SubstitutionInfo::break_ms`.
-    const ASSUMED_MS: f64 = 12_000.0;
+    /// instant path. One man's beat, which is what a window with one change in
+    /// it now costs exactly. See `SubstitutionInfo::break_ms`.
+    const ASSUMED_MS: f64 = Self::BEAT_MS;
     /// How long the shot lingers past the end of the change, in ms, before it
-    /// walks back to the broadcast rig. Enough to see the substitute take up
-    /// his position rather than cutting on the referee's arm.
-    const LINGER_MS: f64 = 1_200.0;
+    /// walks back to the broadcast rig.
+    ///
+    /// **Nothing.** It used to hold the touchline wide for a beat, to see the
+    /// substitute take up his position rather than cutting on the referee's
+    /// arm — but the engine no longer waits for him to get there (see
+    /// `SubstitutionBreak::beats_ms`), so there is no arrival left to wait
+    /// for: the change ends two seconds into his run and the shot ends with
+    /// it. [`Self::CLOSE_TIME`] still ramps the rig home, so it is a move
+    /// rather than a cut.
+    const LINGER_MS: f64 = 0.0;
 
     /// Group the config's substitutions into one shot per stoppage.
     ///
@@ -997,7 +1007,12 @@ mod tests {
         assert_eq!(changes.len(), 1, "one whistle is one shot");
         assert_eq!(changes[0].coming_on, vec![7, 9]);
         assert_eq!(changes[0].coming_off, vec![3, 4]);
-        assert_eq!(changes[0].to, 60_400.0 + 15_000.0 + 1_200.0);
+        // The later of the two whistles decides when the shot ends, and there
+        // is no linger past it any more — see [`ChangeoverShot::LINGER_MS`].
+        assert_eq!(
+            changes[0].to,
+            60_400.0 + 15_000.0 + ChangeoverShot::LINGER_MS
+        );
 
         let mut apart = Vec::new();
         ChangeoverShot::stage(&mut apart, 60_000.0, 14_000.0, 7, 3);
@@ -1053,6 +1068,11 @@ mod tests {
         // this long, and `SubstitutionBreak::RUN_MS` holds the men after him
         // for the rest of the beat. Neither number can be reached from this
         // crate, so both are restated and asserted.
+        //
+        // ⚠ **And `BEAT_MS` is now the whole length of the window** — the
+        // engine stops on its beats rather than waiting for either walker to
+        // arrive (`SubstitutionBreak::beats_ms`), so a shot sized off these
+        // figures is a shot sized off the footage that exists.
         assert_eq!(
             ChangeoverShot::PORTRAIT_MS,
             3_400.0,
@@ -1060,9 +1080,9 @@ mod tests {
         );
         assert_eq!(
             ChangeoverShot::RUN_MS,
-            2_600.0,
-            "the engine holds the next man for 2600"
+            2_000.0,
+            "the engine holds the next man for 2000"
         );
-        assert_eq!(ChangeoverShot::BEAT_MS, 6_000.0);
+        assert_eq!(ChangeoverShot::BEAT_MS, 5_400.0);
     }
 }
