@@ -34,6 +34,34 @@ impl Display for PlayerPositionType {
 }
 
 impl PlayerPositionType {
+    /// Every role in the game, in declaration order. Backs the
+    /// group-coverage masks and anything else that has to enumerate the
+    /// position space without hand-listing it a second time.
+    pub const ALL: [PlayerPositionType; 22] = [
+        PlayerPositionType::Goalkeeper,
+        PlayerPositionType::Sweeper,
+        PlayerPositionType::DefenderLeft,
+        PlayerPositionType::DefenderCenterLeft,
+        PlayerPositionType::DefenderCenter,
+        PlayerPositionType::DefenderCenterRight,
+        PlayerPositionType::DefenderRight,
+        PlayerPositionType::DefensiveMidfielder,
+        PlayerPositionType::MidfielderLeft,
+        PlayerPositionType::MidfielderCenterLeft,
+        PlayerPositionType::MidfielderCenter,
+        PlayerPositionType::MidfielderCenterRight,
+        PlayerPositionType::MidfielderRight,
+        PlayerPositionType::AttackingMidfielderLeft,
+        PlayerPositionType::AttackingMidfielderCenter,
+        PlayerPositionType::AttackingMidfielderRight,
+        PlayerPositionType::WingbackLeft,
+        PlayerPositionType::WingbackRight,
+        PlayerPositionType::Striker,
+        PlayerPositionType::ForwardLeft,
+        PlayerPositionType::ForwardCenter,
+        PlayerPositionType::ForwardRight,
+    ];
+
     pub fn as_i18n_key(&self) -> &'static str {
         match *self {
             PlayerPositionType::Goalkeeper => "pos_goalkeeper",
@@ -203,6 +231,133 @@ pub struct PlayerPositions {
 }
 
 const REQUIRED_POSITION_LEVEL: u8 = 5;
+
+/// How much of a player's ability survives being asked to fill a role.
+///
+/// One curve for every "could he do a job there?" read in the simulator,
+/// so squad planning, the recruitment search and the loan gates can never
+/// disagree about what a secondary position is worth. Continuous in the
+/// familiarity level rather than a natural / not-natural switch: a 17 is
+/// very nearly a natural, a 5 is a body in the right shirt.
+pub struct RoleFamiliarity;
+
+impl RoleFamiliarity {
+    /// Share of current ability a player carries into a role he holds at
+    /// `level`, 0.0..=1.0.
+    ///
+    /// The bands are the familiarity ladder — natural, accomplished,
+    /// competent, unconvincing, awkward — and join up continuously at every
+    /// boundary, so nudging a familiarity by one never moves a squad decision
+    /// by a cliff.
+    ///
+    /// Deliberately gentle. This scales ABILITY, which is not the same job as
+    /// the tactical fitness curve, where the familiarity term is one weighted
+    /// input among three: a competent midfielder asked to play on the left is
+    /// still most of the player he is, and pricing that as a third of him off
+    /// would have every club in the world reading its own shape as a crisis.
+    pub fn credit(level: u8) -> f32 {
+        let l = level as f32;
+        if level >= 18 {
+            1.0
+        } else if level >= 15 {
+            0.92 + (l - 15.0) * (0.08 / 3.0)
+        } else if level >= 12 {
+            0.80 + (l - 12.0) * (0.12 / 3.0)
+        } else if level >= 8 {
+            0.62 + (l - 8.0) * (0.18 / 4.0)
+        } else if level >= REQUIRED_POSITION_LEVEL {
+            0.50 + (l - REQUIRED_POSITION_LEVEL as f32) * (0.12 / 3.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// Best effective ability a player of `current_ability` brings to any
+    /// role in `group`, given the familiarity he holds at each. Zero when he
+    /// cannot fill the group at all.
+    ///
+    /// This is the honest answer to "how good are we there?" — a question the
+    /// squad-depth and loan gates used to answer by filtering on a player's
+    /// single primary label, which silently excluded every man who plays the
+    /// role as his second position.
+    pub fn best_in_group(
+        positions: &PlayerPositions,
+        current_ability: u8,
+        group: PlayerFieldPositionGroup,
+    ) -> u8 {
+        Self::effective_ability(current_ability, Self::best_level_in_group(positions, group))
+    }
+
+    /// Highest familiarity the player holds at any role in `group`, or zero
+    /// when he holds none.
+    pub fn best_level_in_group(positions: &PlayerPositions, group: PlayerFieldPositionGroup) -> u8 {
+        positions
+            .positions
+            .iter()
+            .filter(|p| p.position.position_group() == group)
+            .map(|p| p.level)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Effective ability a player of `current_ability` brings to a role he
+    /// holds at `level`. Zero familiarity means he cannot fill it at all.
+    pub fn effective_ability(current_ability: u8, level: u8) -> u8 {
+        (current_ability as f32 * Self::credit(level))
+            .round()
+            .clamp(0.0, 255.0) as u8
+    }
+}
+
+/// The set of roles a player can actually fill, as a bitmask over
+/// [`PlayerPositionType`].
+///
+/// The market used to ask a player's single primary label which group he
+/// belonged to, which is a different question from "can he play there".
+/// More than half of a senior population is multi-position at identical
+/// competence, so that label is an arbitrary pick among equals — and asking
+/// it who could lead a line hid every wide forward who plays centre-forward
+/// from the search. Headcount still belongs to the label (a man occupies one
+/// shirt); *quality at a role* and *who to look at* belong here.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PositionCoverage(u32);
+
+impl PositionCoverage {
+    /// Roles the player holds at playable familiarity. Mirrors
+    /// [`PlayerPositions::positions`], including its fallback to the best
+    /// listed role for a player whose every entry sits under the bar.
+    pub fn of(positions: &PlayerPositions) -> Self {
+        let mut mask = 0u32;
+        for p in &positions.positions {
+            if p.level >= REQUIRED_POSITION_LEVEL {
+                mask |= 1 << (p.position as u32);
+            }
+        }
+        if let (0, Some(best)) = (mask, positions.positions.iter().max_by_key(|p| p.level)) {
+            mask |= 1 << (best.position as u32);
+        }
+        PositionCoverage(mask)
+    }
+
+    /// Coverage of a single role — the shape a caller who only knows one
+    /// position (a synthetic fixture, a legacy adapter) can still build.
+    pub fn single(position: PlayerPositionType) -> Self {
+        PositionCoverage(1 << (position as u32))
+    }
+
+    pub fn covers(&self, position: PlayerPositionType) -> bool {
+        self.0 & (1 << (position as u32)) != 0
+    }
+
+    /// True when the player can fill any role in `group`.
+    pub fn covers_group(&self, group: PlayerFieldPositionGroup) -> bool {
+        self.0 & group.coverage_mask() != 0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0 == 0
+    }
+}
 
 impl PlayerPositions {
     pub fn positions(&self) -> Vec<PlayerPositionType> {
@@ -572,6 +727,32 @@ impl PlayerFieldPositionGroup {
     /// by [`Self::index`].
     pub const COUNT: usize = 4;
 
+    /// The four groups in [`Self::index`] order — for callers that have to
+    /// walk every group rather than the one a player is labelled with.
+    pub const ALL: [PlayerFieldPositionGroup; Self::COUNT] = [
+        PlayerFieldPositionGroup::Goalkeeper,
+        PlayerFieldPositionGroup::Defender,
+        PlayerFieldPositionGroup::Midfielder,
+        PlayerFieldPositionGroup::Forward,
+    ];
+
+    /// Bitmask of every [`PlayerPositionType`] in this group, in the layout
+    /// [`PositionCoverage`] uses. Built by walking
+    /// [`PlayerPositionType::ALL`] so it can never drift from the group
+    /// mapping itself.
+    pub fn coverage_mask(self) -> u32 {
+        let mut mask = 0u32;
+        let mut i = 0;
+        while i < PlayerPositionType::ALL.len() {
+            let position = PlayerPositionType::ALL[i];
+            if position.position_group() as u8 == self as u8 {
+                mask |= 1 << (position as u32);
+            }
+            i += 1;
+        }
+        mask
+    }
+
     /// Stable 0-based index for group-keyed lookup tables (the transfer
     /// pipeline partitions candidate pools per group so per-request scans
     /// don't walk the other three groups).
@@ -680,5 +861,149 @@ impl PlayerFieldPositionGroup {
             PlayerFieldPositionGroup::Midfielder => 4,
             PlayerFieldPositionGroup::Forward => 2,
         }
+    }
+}
+
+#[cfg(test)]
+mod role_capability_tests {
+    use super::*;
+
+    struct RoleFx;
+
+    impl RoleFx {
+        fn positions(entries: &[(PlayerPositionType, u8)]) -> PlayerPositions {
+            PlayerPositions {
+                positions: entries
+                    .iter()
+                    .map(|(position, level)| PlayerPosition {
+                        position: *position,
+                        level: *level,
+                    })
+                    .collect(),
+            }
+        }
+
+        /// The shape that started all this: a forward whose record happens to
+        /// list a wing first, so his one primary label reads Midfielder while
+        /// he leads the line at full competence.
+        fn wide_forward() -> PlayerPositions {
+            Self::positions(&[
+                (PlayerPositionType::AttackingMidfielderRight, 20),
+                (PlayerPositionType::AttackingMidfielderLeft, 20),
+                (PlayerPositionType::Striker, 20),
+            ])
+        }
+    }
+
+    #[test]
+    fn coverage_sees_every_role_the_label_hides() {
+        let player = RoleFx::wide_forward();
+        assert_eq!(
+            player.primary().unwrap().position_group(),
+            PlayerFieldPositionGroup::Midfielder,
+            "the single primary label is the first listed role — a tie-break, not a verdict"
+        );
+
+        let coverage = PositionCoverage::of(&player);
+        assert!(coverage.covers(PlayerPositionType::Striker));
+        assert!(
+            coverage.covers_group(PlayerFieldPositionGroup::Forward),
+            "a search for a centre-forward has to be able to find him"
+        );
+        assert!(coverage.covers_group(PlayerFieldPositionGroup::Midfielder));
+        assert!(!coverage.covers_group(PlayerFieldPositionGroup::Defender));
+    }
+
+    #[test]
+    fn coverage_ignores_roles_below_playable_familiarity() {
+        let dabbler = RoleFx::positions(&[
+            (PlayerPositionType::DefenderCenter, 20),
+            (PlayerPositionType::Striker, 2),
+        ]);
+        let coverage = PositionCoverage::of(&dabbler);
+        assert!(!coverage.covers(PlayerPositionType::Striker));
+        assert!(!coverage.covers_group(PlayerFieldPositionGroup::Forward));
+    }
+
+    #[test]
+    fn coverage_falls_back_to_the_best_listed_role() {
+        // Mirrors `PlayerPositions::positions`: a player whose every entry
+        // sits under the bar still has to be somewhere.
+        let raw = RoleFx::positions(&[
+            (PlayerPositionType::Goalkeeper, 3),
+            (PlayerPositionType::DefenderCenter, 4),
+        ]);
+        let coverage = PositionCoverage::of(&raw);
+        assert!(coverage.covers(PlayerPositionType::DefenderCenter));
+        assert!(!coverage.is_empty());
+    }
+
+    #[test]
+    fn group_masks_partition_the_position_space() {
+        let mut seen = 0u32;
+        for group in PlayerFieldPositionGroup::ALL {
+            let mask = group.coverage_mask();
+            assert_eq!(mask & seen, 0, "{group:?} overlaps an earlier group");
+            seen |= mask;
+        }
+        for position in PlayerPositionType::ALL {
+            assert!(
+                PositionCoverage::single(position).covers_group(position.position_group()),
+                "{position:?} must fall inside its own group's mask"
+            );
+        }
+    }
+
+    #[test]
+    fn familiarity_credit_is_continuous_and_monotone() {
+        let mut previous = 0.0_f32;
+        for level in 0..=20u8 {
+            let credit = RoleFamiliarity::credit(level);
+            assert!(
+                credit >= previous - f32::EPSILON,
+                "credit must never fall as familiarity rises (level {level})"
+            );
+            // No band boundary may move a player by more than a nudge.
+            assert!(
+                credit - previous < 0.51,
+                "level {level} is a cliff, not a curve"
+            );
+            previous = credit;
+        }
+        assert_eq!(RoleFamiliarity::credit(20), 1.0);
+        assert_eq!(RoleFamiliarity::credit(18), 1.0);
+        assert_eq!(RoleFamiliarity::credit(4), 0.0, "below playable is nothing");
+    }
+
+    #[test]
+    fn a_nominal_second_position_does_not_read_as_a_real_one() {
+        // The gap that matters: a winger who lists centre-forward at eight
+        // must not be mistaken for a centre-forward, or he papers over the
+        // very hole the club needs to fill.
+        let nominal = RoleFamiliarity::effective_ability(150, 8);
+        let natural = RoleFamiliarity::effective_ability(150, 20);
+        assert!(
+            nominal < natural,
+            "an unconvincing familiarity has to cost something"
+        );
+        assert!(
+            natural - nominal >= 30,
+            "…and enough to matter against a tier baseline"
+        );
+    }
+
+    #[test]
+    fn best_in_group_reads_the_strongest_role_the_player_holds_there() {
+        let player = RoleFx::wide_forward();
+        assert_eq!(
+            RoleFamiliarity::best_in_group(&player, 150, PlayerFieldPositionGroup::Forward),
+            150,
+            "a natural centre-forward counts fully as one, whatever he is filed under"
+        );
+        assert_eq!(
+            RoleFamiliarity::best_in_group(&player, 150, PlayerFieldPositionGroup::Defender),
+            0,
+            "and not at all where he cannot play"
+        );
     }
 }

@@ -20,3 +20,14 @@ pub use national::*;
 pub use players::{
     OdbContract, OdbHistoryItem, OdbLoan, OdbPlayer, OdbPosition, OdbReputation, PlayersOdb,
 };
+
+/// id -> display name for clubs that only appear in player career history.
+/// Built once from the compiled database; empty when the database predates
+/// the section, which just restores the old blank-club rendering.
+pub fn history_club_names() -> std::collections::HashMap<u32, String> {
+    compiled::compiled()
+        .history_clubs
+        .iter()
+        .map(|c| (c.id, c.name.clone()))
+        .collect()
+}

@@ -56,7 +56,7 @@ impl Region {
         use Region::*;
         match code.to_ascii_lowercase().as_str() {
             "se" | "no" | "dk" | "fi" | "is" | "fo" | "ee" | "lv" | "lt" => NorthEurope,
-            "gb" | "ie" => BritIsles,
+            "gb" | "ie" | "sc" | "wa" | "ei" => BritIsles,
             "fr" | "be" | "nl" | "lu" | "de" | "at" | "ch" | "li" | "ad" | "mc" | "gi" => {
                 WestEurope
             }
@@ -87,7 +87,7 @@ impl Region {
             "ng" | "gh" | "sn" | "ci" | "cm" | "cg" | "cd" | "ao" | "mz" | "zm" | "zw" | "mw"
             | "tz" | "ug" | "rw" | "bi" | "ke" | "bw" | "na" | "sz" | "ls" | "za" | "mg" | "ml"
             | "bf" | "ne" | "td" | "cf" | "ga" | "gq" | "gw" | "gm" | "sl" | "lr" | "tg" | "bj"
-            | "st" | "cv" | "km" | "re" | "yt" | "sc" | "mu" => SubSaharan,
+            | "st" | "cv" | "km" | "re" | "yt" | "xs" | "mu" => SubSaharan,
             // Unknown codes: the mixed-society mapping (white→European,
             // metis→Mestizo, black→West African) is the safest universal read
             _ => NorthAmerica,

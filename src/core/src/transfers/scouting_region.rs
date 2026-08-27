@@ -72,7 +72,7 @@ impl ScoutingRegion {
         match code {
             // Western Europe (the big 5 + neighbors)
             "gb" | "fr" | "de" | "es" | "it" | "nl" | "be" | "pt" | "at" | "ch" | "lu" | "li"
-            | "mc" | "ie" | "sc" | "gi" | "sm" | "ad" | "mt" => ScoutingRegion::WesternEurope,
+            | "mc" | "ie" | "sc" | "wa" | "ei" | "gi" | "sm" | "ad" | "mt" => ScoutingRegion::WesternEurope,
             // Scandinavia
             "se" | "no" | "dk" | "fi" | "is" | "fo" => ScoutingRegion::Scandinavia,
             // Turkey/Caucasus/Middle-East-adjacent Europe

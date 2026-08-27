@@ -602,7 +602,7 @@ impl PhysicalProfile {
             | "rs" | "me" | "ba" | "hr" | "si" | "be" | "pl" | "cz" | "sk" | "ua" | "by" | "ru" => {
                 3
             }
-            "gb" | "ie" | "sc" | "wl" | "ni" => 1,
+            "gb" | "ie" | "sc" | "wa" | "ei" => 1,
             "it" | "es" | "pt" | "fr" | "gr" | "tr" | "mt" => -1,
             "br" | "ar" | "uy" | "cl" | "py" | "bo" | "pe" | "ec" | "ve" | "co" | "mx" => -2,
             "jp" | "kr" | "cn" | "th" | "vn" | "id" | "ph" | "my" => -3,
@@ -2011,8 +2011,15 @@ fn resolve_club_display(
                 league_slug,
             );
         }
+        // Not a club this database models. Careers span the whole football
+        // world, so this is the normal case for about a third of history rows
+        // — Schalke, SPAL, Jong Ajax. The compiled `history_clubs` table names
+        // them; the slug stays empty because there is no page to link to, and
+        // the template already renders an unlinked name in that case.
         return (
-            String::new(),
+            data.history_club_name(club_id)
+                .unwrap_or_default()
+                .to_string(),
             String::new(),
             0,
             String::new(),
@@ -3752,9 +3759,33 @@ mod odb_hydration_tests {
             clubs: vec![],
             national_competitions: vec![],
             names_by_country: vec![],
+            history_club_names: std::collections::HashMap::new(),
             players_odb: None,
             index: std::sync::OnceLock::new(),
         }
+    }
+
+    /// The whole point of the `history_clubs` table: a season at a club the
+    /// tree does not model still names the club, with no slug because there is
+    /// no page to link to. Before this the row rendered completely blank.
+    #[test]
+    fn history_at_an_unmodelled_club_still_names_it() {
+        let data = crate::DatabaseLoader::load();
+        let (name, slug, reputation, league_name, league_slug) =
+            resolve_club_display(920, &data); // FC Schalke 04
+        assert_eq!(name, "FC Schalke 04");
+        assert!(slug.is_empty(), "an unmodelled club has no page to link to");
+        assert_eq!(reputation, 0);
+        assert!(league_name.is_empty() && league_slug.is_empty());
+    }
+
+    /// An id in neither table is still tolerated — empty everywhere, exactly
+    /// as before.
+    #[test]
+    fn history_at_a_wholly_unknown_club_stays_empty() {
+        let data = crate::DatabaseLoader::load();
+        let (name, slug, ..) = resolve_club_display(4_000_000_001, &data);
+        assert!(name.is_empty() && slug.is_empty());
     }
 
     fn record(id: u32, ca: u8, pa: i16, positions: Vec<(&str, u8)>) -> OdbPlayer {

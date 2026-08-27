@@ -139,7 +139,16 @@ pub async fn team_schedule_get_action(
         .collect();
 
     // Continental competition matches (Champions League, Europa League, Conference League)
-    let continental_matches = simulator_data.continental_matches_for_club(team.club_id);
+    //
+    // Continental fixtures are keyed by *club*, not by team, so every squad of
+    // the club — B, Second, U18..U23 — matches the club id. Only the Main squad
+    // actually enters the bracket, so gate on it: otherwise "Real Madrid U18"
+    // shows the first team's Champions League programme as its own.
+    let continental_matches = if team.team_type == core::TeamType::Main {
+        simulator_data.continental_matches_for_club(team.club_id)
+    } else {
+        Vec::new()
+    };
     for (comp_name, home_club_id, away_club_id, date, match_id, match_result) in continental_matches
     {
         let is_home = home_club_id == team.club_id;

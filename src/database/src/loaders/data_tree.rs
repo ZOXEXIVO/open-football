@@ -92,8 +92,8 @@ mod tests {
         let countries = CountryLoader::load();
         let tree = DataTreeLoader::load(&countries);
         // Snapshot counts of enabled leagues and their clubs in the compiled data.
-        assert_eq!(tree.leagues.len(), 94, "enabled league count changed");
-        assert_eq!(tree.clubs.len(), 1359, "enabled club count changed");
+        assert_eq!(tree.leagues.len(), 96, "enabled league count changed");
+        assert_eq!(tree.clubs.len(), 1414, "enabled club count changed");
     }
 
     #[test]
@@ -196,5 +196,40 @@ mod tests {
         assert_eq!(b.name, "Real Sociedad B");
         assert_eq!(b.slug, "real-sociedad-b");
         assert_eq!(b.league_id, Some(91));
+    }
+
+    /// A career row at a club this database does not model must still show a
+    /// name. Schalke 04 (920) has no club.json anywhere in the tree, but it is
+    /// where several modelled players spent seasons.
+    #[test]
+    fn unmodelled_history_clubs_still_have_names() {
+        let names = crate::loaders::history_club_names();
+        assert!(!names.is_empty(), "history_clubs section missing from database.db");
+        assert_eq!(names.get(&920).map(String::as_str), Some("FC Schalke 04"));
+        assert_eq!(names.get(&2247).map(String::as_str), Some("Hertha BSC"));
+
+        // ...and it must not shadow a club the tree DOES model.
+        let countries = CountryLoader::load();
+        let tree = DataTreeLoader::load(&countries);
+        // Sub-team ids count: a satellite folded into its parent is referenced
+        // by an id that survives only in teams[], and resolve_club_display looks
+        // those up before falling back to this table.
+        for club in &tree.clubs {
+            assert!(
+                !names.contains_key(&club.id),
+                "{} ({}) is modelled but also listed in history_clubs",
+                club.name,
+                club.id
+            );
+            for team in &club.teams {
+                assert!(
+                    !names.contains_key(&team.id),
+                    "{} team {} ({}) is modelled but also listed in history_clubs",
+                    club.name,
+                    team.name,
+                    team.id
+                );
+            }
+        }
     }
 }

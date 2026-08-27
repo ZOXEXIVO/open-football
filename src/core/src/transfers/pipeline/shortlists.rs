@@ -786,9 +786,19 @@ impl PipelineProcessor {
                                 shortlist.all_exhausted()
                             })
                             .unwrap_or(true);
-                        if exhausted {
+                        // A need the club has already failed to fill goes back
+                        // to the market rather than closing, exactly as it
+                        // does when a negotiation runs the list dry: one
+                        // board refusal on the last remaining name is not a
+                        // reason to stop needing a centre-forward. The count
+                        // is capped, so the retry loop terminates and the
+                        // search is picked up by the next squad evaluation.
+                        if exhausted && !req.escalation.reopens_on_exhaustion() {
                             req.board_approved = Some(false);
                             req.status = TransferRequestStatus::Abandoned;
+                        } else if exhausted {
+                            req.board_approved = None;
+                            req.status = TransferRequestStatus::Pending;
                         } else {
                             // Cleared so the next candidate gets its own
                             // hearing rather than inheriting this verdict.

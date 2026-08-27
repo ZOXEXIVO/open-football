@@ -40,6 +40,21 @@ fn main() {
     // Note: flags.css is excluded as it's already minified and very large (2.7MB)
     let css_files = ["style.css", "images.css"];
 
+    // Stylesheets the site links DIRECTLY rather than through
+    // `styles.min.css` — not bundled, but their content still has to move
+    // `CSS_VERSION`.
+    //
+    // `flags.css` is 2.8 MB of already-minified data URIs, so folding it into
+    // the bundle would triple that file for nothing. It was therefore left out
+    // of this script entirely, and that had two consequences that between them
+    // made an edit to it invisible: nothing watched the file, so `rust-embed` —
+    // which captures `assets/` at COMPILE time — kept serving the bytes from
+    // the last build; and its content never reached the hash below, so the
+    // `?v=` never moved and browsers held the copy they had already cached
+    // (CSS is served `max-age=3600`). Adding a flag could then be correct in
+    // the file and still not appear on the site.
+    let versioned_css_files = ["flags.css"];
+
     let mut combined_css = String::new();
 
     // Add a header comment
@@ -97,6 +112,22 @@ fn main() {
     // This is necessary because rust-embed embeds files at compile time
     let mut hasher = DefaultHasher::new();
     combined_css.hash(&mut hasher);
+
+    // The directly-linked stylesheets are watched and hashed, but never
+    // appended to `combined_css` — they are served as their own files.
+    for file_name in &versioned_css_files {
+        let file_path = css_dir.join(file_name);
+        if !file_path.exists() {
+            println!("cargo:warning=CSS file not found: {}", file_path.display());
+            continue;
+        }
+        println!("cargo:rerun-if-changed={}", file_path.display());
+        match fs::read(&file_path) {
+            Ok(bytes) => bytes.hash(&mut hasher),
+            Err(e) => println!("cargo:warning=Failed to read {}: {}", file_name, e),
+        }
+    }
+
     let css_hash = hasher.finish();
 
     // Write a Rust file with the hash that can be included to force recompilation

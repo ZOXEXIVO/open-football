@@ -40,12 +40,13 @@
 //! unmodified input.
 
 use crate::worker::protocol::{MatchEnvelope, MatchOutcome, Request, Response};
+use crate::worker::recording;
 use crate::worker::registry::{BatchOutcome, LatencyTimer, ReadyWorker, WorkerRegistry};
 use crate::worker::transport::Frame;
 use crate::worker::wire::{LeagueMatchWire, SquadFixtureWire, SquadWire};
 use core::MatchRuntime;
 use core::r#match::{Match, MatchDispatcher, MatchResult, MatchResultRaw, MatchSquad, Score};
-use log::{info, warn};
+use log::{debug, info, warn};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::io;
@@ -428,7 +429,12 @@ impl DistributedDispatcher {
                 Ok(items
                     .into_iter()
                     .filter_map(|o| match o {
-                        MatchOutcome::League(r) => Some(r),
+                        MatchOutcome::League { mut result, track } => {
+                            if let Some(details) = result.details.as_mut() {
+                                Self::restore_track(&worker.address, details, track);
+                            }
+                            Some(result)
+                        }
                         _ => None,
                     })
                     .collect())
@@ -611,7 +617,14 @@ impl DistributedDispatcher {
                 Ok(items
                     .into_iter()
                     .filter_map(|o| match o {
-                        MatchOutcome::Squad { idx, result } => Some((idx, result)),
+                        MatchOutcome::Squad {
+                            idx,
+                            mut result,
+                            track,
+                        } => {
+                            Self::restore_track(&worker.address, &mut result, track);
+                            Some((idx, result))
+                        }
                         _ => None,
                     })
                     .collect())
@@ -646,6 +659,37 @@ impl DistributedDispatcher {
         let mut q = pending.lock().await;
         for i in indices.into_iter().rev() {
             q.push_front(i);
+        }
+    }
+
+    /// Put a worker's replay back where the engine would have left it.
+    ///
+    /// `MatchResultRaw::position_data` arrives as `empty()` — it never crosses
+    /// the wire inside the result — so without this every remotely-played match
+    /// is stored with an empty segment list and the viewer says nothing was
+    /// recorded. Which was true, once.
+    ///
+    /// A blob that fails to decode is dropped and logged rather than raised: the
+    /// result itself is sound, and a match with no replay is a case the whole
+    /// stack already handles.
+    fn restore_track(address: &str, result: &mut MatchResultRaw, track: Option<Vec<u8>>) {
+        let Some(blob) = track else {
+            return;
+        };
+        match recording::decode(&blob) {
+            Some(data) => {
+                debug!(
+                    "remote {}: replay restored ({} KiB compressed)",
+                    address,
+                    blob.len() / 1024
+                );
+                result.position_data = data;
+            }
+            None => warn!(
+                "remote {}: replay track ({} bytes) did not decode — match kept, replay dropped",
+                address,
+                blob.len()
+            ),
         }
     }
 

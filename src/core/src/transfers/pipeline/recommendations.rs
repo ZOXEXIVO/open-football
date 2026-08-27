@@ -26,7 +26,7 @@ use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::IntegerUtils;
 use crate::{
     Country, Person, PlayerFieldPositionGroup, PlayerPositionType, PlayerStatusType,
-    ReputationLevel, WageCalculator,
+    PositionCoverage, ReputationLevel, WageCalculator,
 };
 use chrono::Duration;
 use rayon::prelude::*;
@@ -80,6 +80,59 @@ pub(in crate::transfers::pipeline) struct ListedTargetView {
     /// Most recent circulation diagnosis of why the market stalled —
     /// steers which exposure softening arm accelerates.
     pub last_block: Option<AvailabilityBlockReason>,
+}
+
+/// The buyer's need picture, one entry per position group.
+///
+/// Built once per club so the per-candidate filter can ask which of the roles
+/// a player covers this particular club is actually shopping for.
+#[derive(Debug, Clone, Copy, Default)]
+pub(in crate::transfers::pipeline) struct BuyerNeedPicture {
+    pub open_request: [bool; PlayerFieldPositionGroup::COUNT],
+    pub aging_starter: [bool; PlayerFieldPositionGroup::COUNT],
+    pub best_in_group: [u8; PlayerFieldPositionGroup::COUNT],
+}
+
+impl BuyerNeedPicture {
+    /// Which of this candidate's roles to judge the move against.
+    ///
+    /// Judging him by the group his primary label happens to fall in reads a
+    /// wide forward against the buyer's MIDFIELD — where a strong side has no
+    /// request, no room and a very high best-in-group — so he is rejected as
+    /// no upgrade, while the centre-forward shirt he would have filled goes on
+    /// unaddressed. The club's own open request comes first, then a starter
+    /// running out of career, then simply where he improves the side most.
+    /// Ties resolve to his primary label, so a single-group player is judged
+    /// exactly as before.
+    pub fn role_for(
+        &self,
+        coverage: PositionCoverage,
+        primary: PlayerFieldPositionGroup,
+    ) -> PlayerFieldPositionGroup {
+        let mut best = primary;
+        let mut best_rank = self.rank(primary);
+        for group in PlayerFieldPositionGroup::ALL {
+            if group == primary || !coverage.covers_group(group) {
+                continue;
+            }
+            let rank = self.rank(group);
+            if rank > best_rank {
+                best = group;
+                best_rank = rank;
+            }
+        }
+        best
+    }
+
+    fn rank(&self, group: PlayerFieldPositionGroup) -> (u8, u8, u8) {
+        let index = group.index();
+        (
+            self.open_request[index] as u8,
+            self.aging_starter[index] as u8,
+            // Weakest area first — that is where a signing does most good.
+            u8::MAX - self.best_in_group[index],
+        )
+    }
 }
 
 /// Buyer-side context the filter consults. One struct, one place to
@@ -455,6 +508,9 @@ impl PipelineProcessor {
             club_id: u32,
             position: PlayerPositionType,
             position_group: PlayerFieldPositionGroup,
+            /// Every group he can play in, not just the one his primary label
+            /// falls in — see [`BuyerNeedPicture::role_for`].
+            coverage: PositionCoverage,
             ability: u8,             // skill-based, not CA
             estimated_potential: u8, // estimated from age + mentals, not PA
             age: u8,
@@ -596,6 +652,7 @@ impl PipelineProcessor {
                                 club_id: club.id,
                                 position: player.position(),
                                 position_group: player.position().position_group(),
+                                coverage: PositionCoverage::of(&player.positions),
                                 ability: skill_ability,
                                 estimated_potential,
                                 age: player_age,
@@ -1084,6 +1141,16 @@ impl PipelineProcessor {
                         })
                     };
 
+                    // Built ONCE per club: `buyer_has_aging_starter` walks the
+                    // whole squad, so resolving a candidate's judged role must
+                    // not re-derive the picture per candidate.
+                    let need_picture = BuyerNeedPicture {
+                        open_request: PlayerFieldPositionGroup::ALL.map(buyer_open_request_for),
+                        aging_starter: PlayerFieldPositionGroup::ALL.map(buyer_has_aging_starter),
+                        best_in_group: PlayerFieldPositionGroup::ALL
+                            .map(|g| buyer_best_in_group.get(&g).copied().unwrap_or(0)),
+                    };
+
                     let scored_targets: Vec<(&PlayerSnapshot, f32)> = all_snapshots
                         .iter()
                         .filter_map(|p| {
@@ -1107,12 +1174,17 @@ impl PipelineProcessor {
                                 return None;
                             }
 
+                            // Judge him in the shirt this club actually wants
+                            // filled, which need not be the one his primary
+                            // label falls in.
+                            let judged_group = need_picture.role_for(p.coverage, p.position_group);
+
                             let view = ListedTargetView {
                                 ability: p.ability,
                                 estimated_potential: p.estimated_potential,
                                 age: p.age,
                                 estimated_value: p.estimated_value,
-                                position_group: p.position_group,
+                                position_group: judged_group,
                                 is_listed: p.is_listed,
                                 is_transfer_requested: p.is_transfer_requested,
                                 is_unhappy: p.is_unhappy,
@@ -1142,16 +1214,16 @@ impl PipelineProcessor {
                                 plan_total_budget: plan.total_budget,
                                 max_recommend_value,
                                 buyer_best_in_group: buyer_best_in_group
-                                    .get(&p.position_group)
+                                    .get(&judged_group)
                                     .copied()
                                     .unwrap_or(0),
-                                has_open_request: buyer_open_request_for(p.position_group),
-                                has_aging_starter: buyer_has_aging_starter(p.position_group),
+                                has_open_request: buyer_open_request_for(judged_group),
+                                has_aging_starter: buyer_has_aging_starter(judged_group),
                                 // In-window listed-star sweep: only publicly
                                 // available players (Lst/Req/Unh, or Loa+breakout).
                                 form_discovery_mode: false,
                                 fit: buyer_fit_by_group
-                                    .get(&p.position_group)
+                                    .get(&judged_group)
                                     .copied()
                                     .unwrap_or_else(SquadFitSnapshot::disabled),
                             };
@@ -1720,13 +1792,22 @@ impl PipelineProcessor {
                 if plan.is_rejected(rec.player_id, date) {
                     continue;
                 }
-                // Determine player's position group
+                // Determine the player's position group — and every group he
+                // can actually play in, so a recommendation can answer the
+                // brief the club is genuinely short in rather than the one his
+                // primary label happens to name.
                 let memory = plan.known_player(rec.player_id);
-                let player_pos_group =
+                let (player_pos_group, player_coverage) =
                     if let Some(player) = player_lookup.find_player(country, rec.player_id) {
-                        player.position().position_group()
+                        (
+                            player.position().position_group(),
+                            PositionCoverage::of(&player.positions),
+                        )
                     } else if let Some(memory) = memory {
-                        memory.position_group
+                        (
+                            memory.position_group,
+                            PositionCoverage::single(memory.position),
+                        )
                     } else {
                         continue;
                     };
@@ -1756,16 +1837,36 @@ impl PipelineProcessor {
                 // motive. A player who fits no open request falls through
                 // to the create-request branch below, whose
                 // StaffRecommendation band (18-32) is the honest label.
-                let matching_request = plan.transfer_requests.iter().find(|r| {
-                    r.position.position_group() == player_pos_group
-                        && r.status != TransferRequestStatus::Fulfilled
-                        && r.status != TransferRequestStatus::Abandoned
-                        && !r.is_emergency_free_agent_depth()
-                        && player_age.is_none_or(|age| {
-                            age >= r.preferred_age_min
-                                && age <= r.preferred_age_max.saturating_add(3)
-                        })
-                });
+                //
+                // Matched on what he can PLAY, and the most urgent such brief
+                // wins. Keying it on his primary label alone sent every
+                // versatile attacker onto whichever request his record's first
+                // entry named — so a club with an unfilled centre-forward brief
+                // and an open midfield tip kept adding forwards to the midfield
+                // list, and bought a sixth attacking midfielder while the shirt
+                // it was actually short in went unaddressed.
+                let matching_request = plan
+                    .transfer_requests
+                    .iter()
+                    .filter(|r| {
+                        player_coverage.covers_group(r.position.position_group())
+                            && r.status != TransferRequestStatus::Fulfilled
+                            && r.status != TransferRequestStatus::Abandoned
+                            && !r.is_emergency_free_agent_depth()
+                            && player_age.is_none_or(|age| {
+                                age >= r.preferred_age_min
+                                    && age <= r.preferred_age_max.saturating_add(3)
+                            })
+                    })
+                    .min_by_key(|r| {
+                        (
+                            r.priority.dashboard_sort_bucket(),
+                            // Stable among equals: his own label first, so a
+                            // single-group player is routed exactly as before.
+                            u8::from(r.position.position_group() != player_pos_group),
+                            r.id,
+                        )
+                    });
 
                 if let Some(req) = matching_request {
                     // Find the shortlist for this request

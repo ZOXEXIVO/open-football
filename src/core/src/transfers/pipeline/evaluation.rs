@@ -16,7 +16,7 @@ use crate::transfers::squad_needs::{EmergencyGroupSlot, FirstTeamSquadNeeds};
 use crate::{
     Club, ClubPhilosophy, Country, LoanSpellVerdict, MatchTacticType, Person, Player,
     PlayerFieldPositionGroup, PlayerPlanRole, PlayerPositionType, PlayerStatusType,
-    ReputationLevel, TACTICS_POSITIONS, TacticsSelector,
+    ReputationLevel, RoleFamiliarity, TACTICS_POSITIONS, TacticsSelector,
 };
 
 struct SquadEvaluation {
@@ -115,35 +115,45 @@ pub(in crate::transfers::pipeline) fn compute_group_needs(
             continue;
         }
 
-        // (2) Quality upgrade — best player at this group below tier baseline.
-        // Ambition-adjusted tolerance: a club's appetite for an upgrade
-        // scales with its standing. The base `quality_tolerance` keeps small
-        // clubs patient, but a high-reputation side shops for an upgrade when
-        // its best is merely AT the tier standard rather than clearly below
-        // it — a title contender strengthens an adequate XI instead of
-        // settling for the divisional baseline. Without this, clubs only ever
-        // shopped to patch a hole, never to get better, so an established
-        // starter at another club was almost never a target. The budget split
-        // per need and the seller-side premium still bound how many of these
-        // actually complete.
+        // (2) Quality upgrade — the WEAKEST SLOT in this group below tier
+        // baseline. Ambition-adjusted tolerance: a club's appetite for an
+        // upgrade scales with its standing. The base `quality_tolerance`
+        // keeps small clubs patient, but a high-reputation side shops for an
+        // upgrade when its best is merely AT the tier standard rather than
+        // clearly below it — a title contender strengthens an adequate XI
+        // instead of settling for the divisional baseline. Without this,
+        // clubs only ever shopped to patch a hole, never to get better, so an
+        // established starter at another club was almost never a target. The
+        // budget split per need and the seller-side premium still bound how
+        // many of these actually complete.
+        //
+        // The measure is per SLOT, not `max(CA)` over everyone wearing the
+        // group's label. A max over the group is answered by the best man in
+        // it, so a front line of three excellent wide forwards and no centre
+        // forward read as fully stocked — the one shirt nobody could fill was
+        // invisible behind the three that were. `position_coverage` has
+        // already assigned each slot the best man still available, discounted
+        // by how far from his own role he is standing, so the weakest covered
+        // slot is the honest answer to "where is this side short?".
         let baseline = PipelineProcessor::tier_starter_ca_score(rep_score, group);
         let upgrade_tolerance = quality_tolerance - (rep_score * 5.0).round() as i16;
-        // A long-term-injured player is not present quality/depth: an ageing
-        // "best in group" who's out for months shouldn't mask a genuine need,
-        // and a keeper sidelined all season shouldn't paper over GK cover.
-        let best_in_group = squad
+        // A long-term-injured player never held a slot in the first place
+        // (`position_coverage` skips him), so an ageing incumbent out for
+        // months can no longer mask a genuine need.
+        let weakest_slot = position_coverage
             .iter()
-            .filter(|p| {
-                p.primary_position.position_group() == group
-                    && !(p.is_injured && p.recovery_days > 30)
-            })
-            .map(|p| p.current_ability)
-            .max()
-            .unwrap_or(0);
-        if (best_in_group as i16) < baseline as i16 - upgrade_tolerance {
+            .filter(|(p, _, _)| p.position_group() == group)
+            .min_by_key(|(_, _, quality)| *quality)
+            .map(|(p, _, quality)| (*p, *quality));
+        if let Some((slot_pos, _)) = weakest_slot
+            .filter(|(_, quality)| (*quality as i16) < baseline as i16 - upgrade_tolerance)
+        {
             needs.push(GroupNeed {
                 group,
-                representative_pos,
+                // Name the shirt that is actually short. Recruitment matches on
+                // role capability, so this sharpens the brief without narrowing
+                // who can answer it.
+                representative_pos: slot_pos,
                 kind: NeedKind::QualityUpgrade,
             });
             continue;
@@ -515,6 +525,16 @@ impl PipelineProcessor {
         // countries got no review at all.
         let mid_season_window = Self::is_mid_season_window_for(country, date);
 
+        // Pass 0 (mut): harvest the searches that died since the last meeting,
+        // BEFORE the read pass builds this tick's requests — that ordering is
+        // what lets a fresh request be raised in the voice of a club that has
+        // tried and failed before.
+        for club in &mut country.clubs {
+            if club.transfer_plan.initialized {
+                club.transfer_plan.harvest_failed_searches(date);
+            }
+        }
+
         // Pass 1: Collect evaluations (immutable reads)
         let mut evaluations: Vec<SquadEvaluation> = Vec::new();
 
@@ -883,19 +903,39 @@ impl PipelineProcessor {
                 // small clubs).
                 .filter(|p| !(p.is_injured && p.recovery_days > 30))
                 .filter_map(|p| {
-                    // Check if player can play this position (exact or same group)
-                    let level = p.position_levels.get(&formation_pos).copied().unwrap_or(0);
-                    if level > 0 {
-                        return Some((p.player_id, level, p.current_ability));
+                    // Can he play in this part of the pitch at all, and how
+                    // good is he there?
+                    //
+                    // The quality is read off the best role he holds IN THE
+                    // SLOT'S GROUP, not off the exact shirt. Which of a
+                    // group's shirts a man wears is a shape decision, not a
+                    // recruitment one: a centre-midfielder asked to fill in
+                    // wide is still the midfielder the club has, and pricing
+                    // him as out-of-position there would have every side in
+                    // the world reading its own formation as a hole to be
+                    // bought out of. What the familiarity DOES price is the
+                    // player who only nominally covers the group — a winger
+                    // who lists centre-forward at eight is not a
+                    // centre-forward, and must not paper over a missing one.
+                    let exact = p.position_levels.get(&formation_pos).copied().unwrap_or(0);
+                    let group = formation_pos.position_group();
+                    let in_group = p
+                        .position_levels
+                        .iter()
+                        .filter(|(pos, _)| pos.position_group() == group)
+                        .map(|(_, level)| *level)
+                        .max()
+                        .unwrap_or(0);
+                    if in_group == 0 {
+                        return None;
                     }
-                    // Same position group with reduced effectiveness
-                    if p.primary_position.position_group() == formation_pos.position_group() {
-                        let reduced = (p.current_ability as u16 * 7 / 10) as u8;
-                        return Some((p.player_id, 1, reduced));
-                    }
-                    None
+                    let effective = RoleFamiliarity::effective_ability(p.current_ability, in_group);
+                    Some((p.player_id, exact, effective))
                 })
-                .max_by_key(|&(_, level, ability)| (level as u16) * 10 + ability as u16);
+                // Effective ability carries the selection; familiarity at the
+                // exact shirt only breaks ties, so a natural gets it ahead of
+                // an equally good group-mate filling in.
+                .max_by_key(|&(_, exact, effective)| (effective, exact));
 
             match best {
                 Some((pid, _level, quality)) => {
@@ -984,28 +1024,41 @@ impl PipelineProcessor {
         for need in ordered_needs {
             let group = need.group;
             let baseline = Self::tier_starter_ca_score(rep_score, group);
-            let (priority, reason, mult, min_ca, ideal_ca) = match need.kind {
+            let (base_priority, reason, min_ca, ideal_ca) = match need.kind {
                 NeedKind::FormationGap => (
                     TransferNeedPriority::Critical,
                     TransferNeedReason::FormationGap,
-                    1.5,
                     baseline.saturating_sub(12),
                     baseline,
                 ),
                 NeedKind::QualityUpgrade => (
                     TransferNeedPriority::Important,
                     TransferNeedReason::QualityUpgrade,
-                    1.0,
                     baseline.saturating_sub(8),
                     baseline.saturating_add(5),
                 ),
                 NeedKind::DepthCover => (
                     TransferNeedPriority::Optional,
                     TransferNeedReason::DepthCover,
-                    0.6,
                     baseline.saturating_sub(15),
                     baseline.saturating_sub(5),
                 ),
+            };
+            // How many times the club has already come up short here. A need
+            // raised for the first time escalates by nothing at all; one the
+            // club has been carrying since last summer is put to the board
+            // as Critical, on a wider brief and with the funding to match.
+            let escalation = club.transfer_plan.escalation_for(group, &reason, date);
+            let priority = escalation.priority(base_priority);
+            // Funding follows the priority the need is actually raised at,
+            // which for an unescalated need is exactly the multiplier its
+            // kind always carried (Critical 1.5 / Important 1.0 / Optional
+            // 0.6). An escalated search gets the bigger pot with it, instead
+            // of being labelled urgent and funded like an afterthought.
+            let mult = match priority {
+                TransferNeedPriority::Critical => 1.5,
+                TransferNeedPriority::Important => 1.0,
+                TransferNeedPriority::Optional => 0.6,
             };
 
             let alloc = (budget_per_need * mult).min(available_budget - budget_used);
@@ -1024,28 +1077,34 @@ impl PipelineProcessor {
                 // football live entirely on frees and loans signed nobody
                 // at all. The paid negotiation path is unaffected: it
                 // refuses zero-allocation requests downstream.
-                requests.push(TransferRequest::new(
+                requests.push(
+                    TransferRequest::new(
+                        next_id,
+                        need.representative_pos,
+                        priority,
+                        reason,
+                        min_ca,
+                        ideal_ca,
+                        0.0,
+                    )
+                    .escalated(escalation),
+                );
+                next_id += 1;
+                continue;
+            }
+
+            requests.push(
+                TransferRequest::new(
                     next_id,
                     need.representative_pos,
                     priority,
                     reason,
                     min_ca,
                     ideal_ca,
-                    0.0,
-                ));
-                next_id += 1;
-                continue;
-            }
-
-            requests.push(TransferRequest::new(
-                next_id,
-                need.representative_pos,
-                priority,
-                reason,
-                min_ca,
-                ideal_ca,
-                alloc,
-            ));
+                    alloc,
+                )
+                .escalated(escalation),
+            );
             next_id += 1;
             budget_used += alloc;
         }
@@ -2100,9 +2159,18 @@ impl PipelineProcessor {
     /// Minimum players a position group must retain on the main roster
     /// before any loan-out can fire — the formation footprint plus a thin
     /// rotation cushion. Shared by every loan-out path so they agree on
-    /// "too thin to let anyone leave". (Forward intentionally has no +1:
-    /// lone-striker shapes already carry the wide forwards counted here.)
-    fn group_min_needed(
+    /// "too thin to let anyone leave".
+    ///
+    /// Forward used to be the one group with no cushion, on the reasoning
+    /// that "lone-striker shapes already carry the wide forwards counted
+    /// here". They do not: AML / AMR group under `Midfielder`, so that
+    /// carve-out was counting cover the group never had. In a 4-2-3-1 it put
+    /// the floor at one, and a club with four centre-forwards could ship
+    /// three of them out and go into a season with a single striker and no
+    /// deputy. The cushion is now uniform, and matches
+    /// [`group_depth_requirement`], which had always used `+1` here — the
+    /// two had quietly disagreed about the same squad.
+    pub(in crate::transfers::pipeline) fn group_min_needed(
         group: PlayerFieldPositionGroup,
         formation_positions: &[PlayerPositionType; 11],
     ) -> usize {
@@ -2122,10 +2190,13 @@ impl PipelineProcessor {
                     .count()
                     + 1
             }
-            PlayerFieldPositionGroup::Forward => formation_positions
-                .iter()
-                .filter(|p| p.is_forward())
-                .count(),
+            PlayerFieldPositionGroup::Forward => {
+                formation_positions
+                    .iter()
+                    .filter(|p| p.is_forward())
+                    .count()
+                    + 1
+            }
         }
     }
 

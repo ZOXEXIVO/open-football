@@ -5,14 +5,31 @@
 //! and then a stream of `PlayBatch` requests.
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND};
-use crate::worker::protocol::{MatchEnvelope, MatchOutcome, PROTOCOL_VERSION, Request, Response};
+use crate::worker::protocol::{
+    MatchEnvelope, MatchOutcome, PROTOCOL_VERSION, RecordingSettings, Request, Response,
+};
+use crate::worker::recording;
 use crate::worker::registry::LatencyTimer;
 use crate::worker::transport::Frame;
 use core::MatchRuntime;
-use core::r#match::{Match, MatchResult, MatchSquad, Score};
+use core::r#match::{
+    Match, MatchResult, MatchResultRaw, MatchSquad, RecordingScope, ResultMatchPositionData, Score,
+};
 use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use tokio::net::{TcpListener, TcpStream};
+
+/// How many bytes of replay one response frame may carry.
+///
+/// [`MAX_FRAME_BYTES`](crate::worker::transport::MAX_FRAME_BYTES) is 64 MiB and
+/// a frame that exceeds it does not get sent at all — the write fails, the
+/// connection dies, and the coordinator fences a worker that was in fact
+/// perfectly healthy. A clipped track is ~100 KB compressed and a batch is tens
+/// of matches, so this is never reached in normal running; under
+/// `--match-recording-full` on a fat batch it can be. Blowing the budget costs
+/// the *replays* of the matches past it, which is a thing the viewer already
+/// knows how to say. Blowing the frame would cost the results.
+const TRACK_BUDGET_BYTES: usize = 48 * 1024 * 1024;
 
 pub struct WorkerServer {
     port: u16,
@@ -26,14 +43,13 @@ impl WorkerServer {
     /// Bind on `0.0.0.0:port` and serve connections forever. Returns
     /// only on a fatal listener error.
     pub async fn run(self) {
-        // Recording mode generates position tracks that the wire layer
-        // drops (`MatchResultRaw.position_data` is `#[serde(skip)]`).
-        // Recording is a coordinator-side feature for the local replay
-        // viewer — a worker generating it just burns CPU and RAM that
-        // never reach the wire. Force it off here, regardless of the
-        // env var / CLI flag the worker process was started with.
-        MatchRuntime::set_recordings_mode(false);
-        MatchRuntime::set_events_mode(false);
+        // A worker's own recording flags mean nothing: the machine that will
+        // serve the replay is the one that decides there should be one, and it
+        // says so on the handshake (`RecordingSettings`). Start from off so a
+        // worker that is dialled but never handshaked — or handshaked by a
+        // coordinator with recordings disabled — burns no CPU or RAM on a
+        // track nobody asked for.
+        Self::apply_recording(RecordingSettings::off());
 
         let addr = format!("0.0.0.0:{}", self.port);
         let listener = match TcpListener::bind(&addr).await {
@@ -70,6 +86,26 @@ impl WorkerServer {
             }
         }
     }
+
+    /// Push a coordinator's recording preferences onto this process's
+    /// [`MatchRuntime`] switches, which is where the engine reads them from
+    /// (`Match::play`, `FootballEngine::play_with_config`).
+    ///
+    /// Process-global, so two coordinators with different settings pointed at
+    /// one worker would fight over it. That is not a topology the registry can
+    /// produce — a coordinator opens exactly one connection per worker entry,
+    /// and a worker is listed by one coordinator — and the losing outcome is a
+    /// missing replay rather than a wrong result, so it is not worth threading
+    /// a per-batch config through the whole engine to prevent.
+    fn apply_recording(settings: RecordingSettings) {
+        MatchRuntime::set_recordings_mode(settings.positions);
+        MatchRuntime::set_events_mode(settings.events);
+        MatchRuntime::set_recording_scope(if settings.full_scope {
+            RecordingScope::Full
+        } else {
+            RecordingScope::Goals
+        });
+    }
 }
 
 struct WorkerConnection {
@@ -88,6 +124,7 @@ impl WorkerConnection {
             Request::Handshake {
                 coordinator_version,
                 protocol_version,
+                recording,
             } => {
                 let our_version = env!("CARGO_PKG_VERSION");
                 let version_ok = coordinator_version == our_version;
@@ -109,6 +146,18 @@ impl WorkerConnection {
                     Frame::write(&mut self.stream, &Response::HandshakeRejected { reason }).await?;
                     return Ok(());
                 }
+
+                WorkerServer::apply_recording(recording);
+                info!(
+                    "worker: recording positions={} events={} scope={}",
+                    recording.positions,
+                    recording.events,
+                    if recording.full_scope {
+                        "full"
+                    } else {
+                        "goals"
+                    },
+                );
 
                 let reply = Response::Handshake {
                     version: our_version.to_string(),
@@ -222,11 +271,20 @@ impl WorkerConnection {
 
         let pool = MatchRuntime::engine_pool();
 
+        // Replay bytes already committed to this response — see
+        // `TRACK_BUDGET_BYTES`.
+        let mut track_bytes = 0usize;
+        let mut dropped = 0usize;
+
         if !league.is_empty() {
             let (positions, matches): (Vec<usize>, Vec<_>) = league.into_iter().unzip();
             let results = pool.play(matches);
-            for (pos, r) in positions.into_iter().zip(results) {
-                outcomes[pos] = Some(MatchOutcome::League(r));
+            for (pos, mut r) in positions.into_iter().zip(results) {
+                let track = r
+                    .details
+                    .as_mut()
+                    .and_then(|d| Self::take_track(d, &mut track_bytes, &mut dropped));
+                outcomes[pos] = Some(MatchOutcome::League { result: r, track });
             }
         }
         if !squad.is_empty() {
@@ -244,13 +302,27 @@ impl WorkerConnection {
                 keyed.push((pos, home, away, ko));
             }
             let results = pool.play_squads_with_knockout(keyed);
-            for (pos, raw) in results {
+            for (pos, mut raw) in results {
                 let caller_idx = *caller_idx_by_pos.get(&pos).unwrap_or(&pos);
+                let track = Self::take_track(&mut raw, &mut track_bytes, &mut dropped);
                 outcomes[pos] = Some(MatchOutcome::Squad {
                     idx: caller_idx,
                     result: raw,
+                    track,
                 });
             }
+        }
+
+        if dropped > 0 {
+            warn!(
+                "worker: {} replay track(s) dropped — batch already carries {} MiB \
+                 (budget {} MiB); the matches are fine, their replays are not",
+                dropped,
+                track_bytes / (1024 * 1024),
+                TRACK_BUDGET_BYTES / (1024 * 1024),
+            );
+        } else if track_bytes > 0 {
+            debug!("worker: batch carries {} KiB of replay", track_bytes / 1024);
         }
 
         outcomes
@@ -259,18 +331,47 @@ impl WorkerConnection {
             .map(|(i, opt)| {
                 opt.unwrap_or_else(|| {
                     error!("worker: missing result at index {}", i);
-                    MatchOutcome::League(MatchResult {
-                        id: String::new(),
-                        league_id: 0,
-                        league_slug: String::new(),
-                        home_team_id: 0,
-                        away_team_id: 0,
-                        score: Score::new(0, 0),
-                        details: None,
-                        friendly: false,
-                    })
+                    MatchOutcome::League {
+                        result: MatchResult {
+                            id: String::new(),
+                            league_id: 0,
+                            league_slug: String::new(),
+                            home_team_id: 0,
+                            away_team_id: 0,
+                            score: Score::new(0, 0),
+                            details: None,
+                            friendly: false,
+                        },
+                        track: None,
+                    }
                 })
             })
             .collect()
+    }
+
+    /// Lift the replay out of a finished result and compress it for the wire,
+    /// leaving an `empty()` recorder behind — which is what the result would
+    /// have carried anyway, since `position_data` never serialises.
+    ///
+    /// Returns `None` when there was no recording (the coordinator asked for
+    /// none, or the match kept nothing) and when the response's replay budget
+    /// is already spent.
+    fn take_track(
+        result: &mut MatchResultRaw,
+        spent: &mut usize,
+        dropped: &mut usize,
+    ) -> Option<Vec<u8>> {
+        let data = std::mem::replace(&mut result.position_data, ResultMatchPositionData::empty());
+
+        if *spent >= TRACK_BUDGET_BYTES {
+            if !data.is_empty() {
+                *dropped += 1;
+            }
+            return None;
+        }
+
+        let blob = recording::encode(data)?;
+        *spent += blob.len();
+        Some(blob)
     }
 }

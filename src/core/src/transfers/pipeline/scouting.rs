@@ -23,8 +23,8 @@ use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::IntegerUtils;
 use crate::{
     Club, ClubPhilosophy, Country, Person, PlayerFieldPositionGroup, PlayerSquadStatus,
-    PlayerStatusType, StaffEventType, StaffPosition, TeamType, TransferInterestSource,
-    TransferInterestStage,
+    PlayerStatusType, PositionCoverage, StaffEventType, StaffPosition, TeamType,
+    TransferInterestSource, TransferInterestStage,
 };
 use chrono::Weekday;
 use rayon::prelude::*;
@@ -934,6 +934,7 @@ impl PipelineProcessor {
                         club_name: club.name.clone(),
                         position: player.position(),
                         position_group: player.position().position_group(),
+                        coverage: PositionCoverage::of(&player.positions),
                         age: player.age(date),
                         estimated_value: value.amount,
                         is_listed: player.statuses.has(PlayerStatusType::Lst),
@@ -1059,10 +1060,23 @@ impl PipelineProcessor {
         // are identical to the unpartitioned scan. The country-reputation
         // step-down on the foreign pool is country-constant, so it is folded
         // into the partition instead of being re-tested per assignment.
+        // A player is filed under EVERY group he can play, not just the one
+        // his primary label falls in. More than half a senior population is
+        // multi-position at identical competence, so that label is an
+        // arbitrary pick among equals — bucketing on it alone meant a
+        // striker whose record happened to list a wing first sat in the
+        // midfield bucket and no club searching for a centre-forward ever
+        // walked past him. Same relative order inside each bucket, so the
+        // filtered sequences (and the data-prefilter sort that reads them)
+        // stay deterministic.
         let mut domestic_by_group: [Vec<&PlayerSummary>; PlayerFieldPositionGroup::COUNT] =
             Default::default();
         for p in &all_players {
-            domestic_by_group[p.position_group.index()].push(p);
+            for group in PlayerFieldPositionGroup::ALL {
+                if p.coverage.covers_group(group) {
+                    domestic_by_group[group.index()].push(p);
+                }
+            }
         }
         let mut foreign_by_group: [Vec<&PlayerSummary>; PlayerFieldPositionGroup::COUNT] =
             Default::default();
@@ -1082,7 +1096,11 @@ impl PipelineProcessor {
             .copied()
             .filter(|p| p.country_reputation <= country_reputation || Self::is_openly_available(p))
         {
-            foreign_by_group[p.position_group.index()].push(p);
+            for group in PlayerFieldPositionGroup::ALL {
+                if p.coverage.covers_group(group) {
+                    foreign_by_group[group.index()].push(p);
+                }
+            }
         }
 
         // Pass 1 (PARALLEL): each club's scan is read-only — over the
@@ -1276,8 +1294,12 @@ impl PipelineProcessor {
                 };
 
                 let player_filter = |p: &&PlayerSummary| -> bool {
+                    // Capability, not label: the assignment names a shirt, and
+                    // anyone who can wear it is a candidate for it. The pools
+                    // are already bucketed the same way, so this only re-states
+                    // the contract for callers that pass an unbucketed slice.
                     if p.club_id == club.id
-                        || p.position_group != target_group
+                        || !p.coverage.covers_group(target_group)
                         || club.is_rival(p.club_id)
                     {
                         return false;

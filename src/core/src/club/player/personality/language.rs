@@ -65,7 +65,7 @@ impl Language {
     pub fn from_country_code(code: &str) -> Vec<Language> {
         match code {
             // Western Europe
-            "gb" | "ie" | "sc" => vec![Language::English],
+            "gb" | "ie" | "sc" | "wa" | "ei" => vec![Language::English],
             "es" => vec![Language::Spanish],
             "fr" => vec![Language::French],
             "de" | "at" | "ch" | "li" => vec![Language::German],

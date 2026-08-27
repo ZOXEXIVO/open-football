@@ -7,8 +7,10 @@
 //! and the current connection status. The dispatcher holds an
 //! `Arc<WorkerRegistry>` and reads the snapshot when it routes work.
 
-use crate::worker::protocol::{PROTOCOL_VERSION, Request, Response};
+use crate::worker::protocol::{PROTOCOL_VERSION, RecordingSettings, Request, Response};
 use crate::worker::transport::Frame;
+use core::MatchRuntime;
+use core::r#match::RecordingScope;
 use log::{info, warn};
 use serde::Serialize;
 use std::sync::Arc;
@@ -506,6 +508,10 @@ impl WorkerRegistry {
         let handshake = Request::Handshake {
             coordinator_version: coordinator_version.clone(),
             protocol_version: PROTOCOL_VERSION,
+            // The worker inherits this coordinator's recording switches. Read
+            // here rather than cached at startup so a worker dialled after a
+            // `MatchRuntime` change picks up the current answer.
+            recording: Self::recording_settings(),
         };
         let exchange = async {
             Frame::write(&mut stream, &handshake).await?;
@@ -593,6 +599,22 @@ impl WorkerRegistry {
                     std::mem::discriminant(&other)
                 ),
             ),
+        }
+    }
+
+    /// This coordinator's recording switches, as the worker should apply them.
+    ///
+    /// A remote worker used to be told to record nothing, because the track had
+    /// no way home and every sample it took was wasted work. It has one now, so
+    /// the worker records exactly what the coordinator would have recorded had
+    /// it played the match itself — otherwise which machine happened to pick a
+    /// fixture up would decide whether that fixture has a replay.
+    fn recording_settings() -> RecordingSettings {
+        let positions = MatchRuntime::recordings_mode();
+        RecordingSettings {
+            positions,
+            events: positions && MatchRuntime::events_mode(),
+            full_scope: matches!(MatchRuntime::recording_scope(), RecordingScope::Full),
         }
     }
 

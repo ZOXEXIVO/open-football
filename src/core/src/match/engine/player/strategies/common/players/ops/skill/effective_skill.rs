@@ -530,7 +530,10 @@ mod tests {
         let stubborn = hold_at_85(6.0, 18.0);
         let neither = hold_at_85(6.0, 6.0);
         assert!(sharp > stubborn, "sharp {sharp} vs stubborn {stubborn}");
-        assert!(stubborn > neither, "determination still counts for something");
+        assert!(
+            stubborn > neither,
+            "determination still counts for something"
+        );
         // …and none of it applies before the 70th minute.
         let mut vague = build_player(3000, 12.0, 12.0);
         vague.skills.mental.concentration = 6.0;

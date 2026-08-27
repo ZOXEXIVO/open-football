@@ -562,9 +562,9 @@ mod breakout_watch_tests {
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
         PlayerAttributes, PlayerCollection, PlayerFieldPositionGroup, PlayerPosition,
-        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerSquadStatus, StaffClubContract,
-        StaffCollection, StaffPosition, StaffStatus, StaffStub, Team, TeamCollection,
-        TeamReputation, TeamType, TrainingSchedule,
+        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerSquadStatus, PositionCoverage,
+        StaffClubContract, StaffCollection, StaffPosition, StaffStatus, StaffStub, Team,
+        TeamCollection, TeamReputation, TeamType, TrainingSchedule,
     };
     use chrono::NaiveTime;
 
@@ -709,6 +709,7 @@ mod breakout_watch_tests {
                 club_name: "Big Foreign Club".into(),
                 position: PlayerPositionType::MidfielderRight,
                 position_group: PlayerFieldPositionGroup::Midfielder,
+                coverage: PositionCoverage::single(PlayerPositionType::MidfielderRight),
                 age: 27,
                 estimated_value: 20_000_000.0,
                 is_listed: false,

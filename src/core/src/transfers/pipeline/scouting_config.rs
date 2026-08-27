@@ -850,11 +850,11 @@ impl ScoutingConfig {
 mod tests {
     use super::*;
     use crate::PlayerFieldPositionGroup;
-    use crate::PlayerPositionType;
     use crate::PlayerSquadStatus;
     use crate::club::player::language::LanguageProfile;
     use crate::transfers::ScoutingRegion;
     use crate::transfers::pipeline::SellerPlausibilityContext;
+    use crate::{PlayerPositionType, PositionCoverage};
 
     /// Test fixture: builds a `PlayerSummary` with a baseline "anonymous
     /// big-club regular" profile. Each call overrides only the fields the
@@ -906,6 +906,7 @@ mod tests {
                 club_name: "Test Club".to_string(),
                 position: PlayerPositionType::Goalkeeper,
                 position_group: PlayerFieldPositionGroup::Goalkeeper,
+                coverage: PositionCoverage::single(PlayerPositionType::Goalkeeper),
                 age: self.age,
                 estimated_value: self.estimated_value,
                 is_listed: self.is_listed,

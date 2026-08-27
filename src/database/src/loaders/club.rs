@@ -80,3 +80,18 @@ pub struct ClubTeamEntity {
     pub finance: Option<ClubFinanceEntity>,
     pub reputation: ClubReputationEntity,
 }
+
+/// A club that only ever appears in a player's career `history` — Schalke,
+/// SPAL, Jong Ajax, Barcelona B. Careers span the whole football world, so
+/// about a third of all history rows point outside the ~1,400 clubs this
+/// database models. Those rows are correct; without a name they simply render
+/// with an empty club cell, so the compiler ships this lookup (built from FM's
+/// own club table by `tools/fmf/history-clubs.js`) alongside the real clubs.
+///
+/// Deliberately id + name only: there is no league, country or squad here, and
+/// nothing links to a club that has no page.
+#[derive(Deserialize, Clone)]
+pub struct HistoryClubEntity {
+    pub id: u32,
+    pub name: String,
+}

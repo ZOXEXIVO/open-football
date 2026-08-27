@@ -6,7 +6,8 @@ use std::sync::OnceLock;
 
 pub use loaders::{
     ClubEntity, ClubTeamEntity, ContinentEntity, ContinentLoader, CountryEntity, CountryLoader,
-    DataTreeLoader, DomesticCupEntity, ForeignPlayerEntry, LeagueEntity, NamesByCountryEntity,
+    DataTreeLoader, DomesticCupEntity, ForeignPlayerEntry, HistoryClubEntity, LeagueEntity,
+    NamesByCountryEntity,
     NationalCompetitionEntity, NationalCompetitionLoader, OdbContract, OdbLoan, OdbPlayer,
     OdbPosition, OdbReputation, PlayersOdb,
 };
@@ -32,6 +33,11 @@ pub struct DatabaseEntity {
     pub national_competitions: Vec<NationalCompetitionEntity>,
 
     pub names_by_country: Vec<NamesByCountryEntity>,
+
+    /// Names for the clubs that only ever appear in a player's career
+    /// history. Not real clubs — no squad, league or page — just enough to
+    /// stop a third of every career table rendering with a blank club.
+    pub history_club_names: HashMap<u32, String>,
 
     /// Optional external player database, loaded from `players.odb` next to
     /// the binary. When present, every club referenced by at least one record
@@ -81,6 +87,13 @@ impl DatabaseEntity {
         })
     }
 
+    /// Display name for a club that exists only in career history. Checked
+    /// after `club_by_id`/`team_by_id`, never instead of them: a modelled club
+    /// resolves to its own record, with a league and a link.
+    pub fn history_club_name(&self, id: u32) -> Option<&str> {
+        self.history_club_names.get(&id).map(String::as_str)
+    }
+
     pub fn league_by_id(&self, id: u32) -> Option<&LeagueEntity> {
         self.index()
             .leagues_by_id
@@ -105,6 +118,7 @@ impl DatabaseLoader {
             clubs: tree.clubs,
             national_competitions: NationalCompetitionLoader::load(),
             names_by_country: tree.names_by_country,
+            history_club_names: loaders::history_club_names(),
             players_odb,
             index: OnceLock::new(),
         }

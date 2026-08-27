@@ -1,7 +1,7 @@
 //! Embedded compiled database (`database.db`).
 //!
 //! The whole game database — continents, countries, national competitions,
-//! leagues, clubs, names, players — is built by `open-football-database/compiler`
+//! leagues, clubs, history-club names, names, players — is built by `open-football-database/compiler`
 //! into a single gzip-compressed JSON document and embedded at compile time.
 //!
 //! Parsing happens exactly once per process via [`OnceLock`]; every `*Loader`
@@ -12,7 +12,7 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
-use super::club::ClubEntity;
+use super::club::{ClubEntity, HistoryClubEntity};
 use super::continent::ContinentEntity;
 use super::country::CountryEntity;
 use super::domestic_cup::DomesticCupEntity;
@@ -37,6 +37,11 @@ pub struct CompiledDatabase {
     pub domestic_cups: Vec<DomesticCupEntity>,
     pub leagues: Vec<LeagueEntity>,
     pub clubs: Vec<ClubEntity>,
+    /// Names for clubs that only appear in player career history. Optional —
+    /// older databases predate the field and parse to an empty list, which
+    /// just restores the old blank-club rendering.
+    #[serde(default)]
+    pub history_clubs: Vec<HistoryClubEntity>,
     pub names: Vec<NamesByCountryEntity>,
     pub players: Vec<OdbPlayer>,
 }

@@ -44,6 +44,22 @@ impl ResultPositionDataItem {
             position,
         }
     }
+
+    /// Plain-array constructor, for callers that hold coordinates but not
+    /// nalgebra — the worker wire layer lives in `web`, which has no reason to
+    /// depend on a linear-algebra crate just to move three floats.
+    pub fn from_coords(timestamp: u64, position: [f32; 3]) -> Self {
+        ResultPositionDataItem {
+            timestamp,
+            position: Vector3::new(position[0], position[1], position[2]),
+        }
+    }
+
+    /// The sample's position as a plain array. Inverse of
+    /// [`from_coords`](Self::from_coords).
+    pub fn coords(&self) -> [f32; 3] {
+        [self.position.x, self.position.y, self.position.z]
+    }
 }
 
 /// Compact serialization: [timestamp, x, y] or [timestamp, x, y, z]
@@ -383,6 +399,26 @@ enum ClipKind {
     Closing,
 }
 
+/// A finished [`ResultMatchPositionData`], reduced to the parts worth moving.
+///
+/// Exists so a recording can cross a process boundary without
+/// `ResultMatchPositionData` having to grow a `Deserialize` mirroring the
+/// bespoke `Serialize` below — that one writes the shape the *viewer* reads,
+/// which is not a shape anything reads back. Everything here is plain owned
+/// data; the transport (bincode, gzip, whatever) is the caller's business.
+#[derive(Debug, Clone)]
+pub struct RecordingParts {
+    pub ball: Vec<ResultPositionDataItem>,
+    pub players: HashMap<u32, Vec<ResultPositionDataItem>>,
+    pub passes: Vec<PassEventData>,
+    pub events: Vec<MatchEventData>,
+    pub player_states: HashMap<u32, Vec<PlayerStateEntry>>,
+    pub track_events: bool,
+    pub track_positions: bool,
+    pub scope: RecordingScope,
+    pub segments: Vec<(u64, u64)>,
+}
+
 /// Compact top-level serialization.
 /// Uses same key names as before for frontend compatibility.
 impl Serialize for ResultMatchPositionData {
@@ -444,6 +480,70 @@ impl ResultMatchPositionData {
 
     pub fn empty() -> Self {
         Self::base(false, false)
+    }
+
+    /// Take a **finished** recording apart into its transportable pieces.
+    ///
+    /// The recorder holds two kinds of state: what it has kept, and the
+    /// bookkeeping it needs while it is still keeping things — the pre-roll
+    /// queues, the open clip list, the per-player dedup table. Once
+    /// [`finish_retaining`](Self::finish_retaining) has run the second kind is
+    /// spent, so a recording reduces to the first and rebuilds from it with
+    /// nothing lost. That is what lets a match played on a remote worker send
+    /// its replay home (see `web::worker::wire`).
+    ///
+    /// Call this on a recording still being written and whatever is pending is
+    /// dropped on the floor. Don't.
+    pub fn into_parts(self) -> RecordingParts {
+        RecordingParts {
+            ball: self.ball,
+            players: self.players,
+            passes: self.passes,
+            events: self.events,
+            player_states: self.player_states,
+            track_events: self.track_events,
+            track_positions: self.track_positions,
+            scope: self.scope,
+            segments: self.segments,
+        }
+    }
+
+    /// The inverse of [`into_parts`](Self::into_parts). What comes back is a
+    /// recording that is already finished, so the pre-roll, the clip list and
+    /// the dedup table are all empty.
+    ///
+    /// [`with_scope`](Self::with_scope) is deliberately not used here: it opens
+    /// the kick-off clip, and this recording was given one on the machine that
+    /// played the match — it is already inside `segments`.
+    pub fn from_parts(parts: RecordingParts) -> Self {
+        let RecordingParts {
+            ball,
+            players,
+            passes,
+            events,
+            player_states,
+            track_events,
+            track_positions,
+            scope,
+            segments,
+        } = parts;
+
+        ResultMatchPositionData {
+            ball,
+            players,
+            passes,
+            events,
+            player_states,
+            last_state_ids: HashMap::new(),
+            track_events,
+            track_positions,
+            scope,
+            pending_ball: VecDeque::new(),
+            pending_players: HashMap::new(),
+            clips: Vec::new(),
+            segments,
+            capture_until: None,
+        }
     }
 
     /// Narrow what the recording keeps. See [`RecordingScope`].
@@ -901,8 +1001,10 @@ impl ResultMatchPositionData {
     /// rather than wait forever for a chunk that was never written. Two
     /// different matches produce it — a goalless one under
     /// [`RecordingScope::Goals`], and one that was never sampled at all
-    /// (`empty()`), which is what every match played on a remote worker looks
-    /// like once the wire has dropped its position track.
+    /// (`empty()`), which is what a match played with recordings switched off
+    /// looks like. A match played on a remote worker used to be the second of
+    /// those unconditionally; its replay now travels home beside the result
+    /// (`web::worker::recording`), so it is only ever the first.
     pub fn recorded_segments(&self) -> Option<&[(u64, u64)]> {
         if !self.track_positions {
             return Some(&[]);
@@ -1256,13 +1358,15 @@ mod goal_clip_tests {
     // was pinning is now reachable only through a recorder that was never
     // sampled at all. That is the test below.
 
-    /// A match played on a remote worker arrives at the coordinator through
-    /// `MatchResultRaw`'s `#[serde(skip)]` position track — that is, as an
-    /// `empty()` recorder, which still gets stored and still gets a metadata
-    /// file. It has to report the same "nothing here" a goalless match does,
-    /// or the viewer reads the absent segment list as "the whole match is
-    /// recorded" and spins on the loading notice waiting for chunks that were
-    /// never written.
+    /// A match played with recordings switched off still gets stored and still
+    /// gets a metadata file, off an `empty()` recorder. It has to report the
+    /// same "nothing here" a goalless match does, or the viewer reads the
+    /// absent segment list as "the whole match is recorded" and spins on the
+    /// loading notice waiting for chunks that were never written.
+    ///
+    /// This is also what `web::worker::recording::encode` refuses to send: an
+    /// unsampled track crossing the wire would arrive with `track_positions`
+    /// set and land the coordinator in exactly that trap.
     #[test]
     fn a_recording_that_was_never_sampled_reports_nothing_rather_than_everything() {
         let data = ResultMatchPositionData::empty();

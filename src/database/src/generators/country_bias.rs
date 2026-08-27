@@ -228,8 +228,8 @@ fn apply_country_bias(b: &mut [f32; SKILL_COUNT], code: &str) -> bool {
             b[SK_TECHNIQUE] = -0.5;
             b[SK_FLAIR] = -1.0;
         }
-        "ie" => {
-            // Northern Ireland / Ireland: determined, physical
+        "ie" | "ei" => {
+            // Northern Ireland / Republic of Ireland: determined, physical
             b[SK_DETERMINATION] = 1.0;
             b[SK_WORK_RATE] = 1.0;
             b[SK_BRAVERY] = 0.5;

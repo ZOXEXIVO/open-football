@@ -32,11 +32,17 @@ pub struct PenaltyShootoutKick {
 pub struct MatchResultRaw {
     pub score: Option<Score>,
 
-    /// Position-replay payload. NEVER serialised over the worker wire
-    /// — the bincode payload would balloon to many MB per match and the
-    /// recorder is only enabled for the local viewer anyway. On the
-    /// receive side an empty `ResultMatchPositionData::empty()` is
-    /// substituted in.
+    /// Position-replay payload. Never serialised *as part of a result* —
+    /// `ResultMatchPositionData` is serialise-only (its `Serialize` writes the
+    /// shape the viewer's chunk files use, which nothing reads back), and every
+    /// other consumer of a serialised result wants the score and the stat
+    /// lines, not several MB of samples. Deserialising a result therefore
+    /// always yields `ResultMatchPositionData::empty()` here.
+    ///
+    /// The distributed worker protocol, which does need the replay, carries it
+    /// alongside instead: the worker lifts the track out, compresses it, and
+    /// hangs the blob off its `MatchOutcome`; the coordinator decodes it back
+    /// into this field (`web::worker::recording`).
     #[serde(skip, default = "ResultMatchPositionData::empty")]
     pub position_data: ResultMatchPositionData,
 

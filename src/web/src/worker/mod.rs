@@ -14,9 +14,16 @@
 //!   is a handshake, then any number of play-batch requests.
 //!
 //! Wire format is bincode 2 over a 4-byte length prefix. No HTTP.
+//!
+//! A worker records what the coordinator would have recorded — it is told on
+//! the handshake — and sends each match's replay track home compressed, beside
+//! the result (`recording`). Without that a remotely-played match reaches the
+//! viewer with an empty recording and the page says nothing was recorded,
+//! because nothing was.
 
 pub mod dispatcher;
 pub mod protocol;
+pub mod recording;
 pub mod registry;
 pub mod server;
 pub mod transport;

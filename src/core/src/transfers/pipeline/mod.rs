@@ -36,7 +36,9 @@ mod processor {
     use crate::club::player::language::LanguageProfile;
     use crate::club::team::squad::SquadAssetClass;
     use crate::transfers::ScoutingRegion;
-    use crate::{PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus};
+    use crate::{
+        PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, PositionCoverage,
+    };
     use std::collections::HashMap;
 
     /// PipelineProcessor handles all daily transfer pipeline logic.
@@ -158,6 +160,12 @@ mod processor {
         pub club_name: String,
         pub position: PlayerPositionType,
         pub position_group: PlayerFieldPositionGroup,
+        /// Every role this player can actually fill, not just the group his
+        /// one primary label falls in. Recruitment searches on this: a
+        /// player's stored position order is an arbitrary pick among equally
+        /// competent roles, so asking the label alone who could lead a line
+        /// hid every wide forward who plays centre-forward from the market.
+        pub coverage: PositionCoverage,
         pub age: u8,
         pub estimated_value: f64,
         pub is_listed: bool,
@@ -351,6 +359,115 @@ impl TransferRequestStatus {
 // The coach says WHAT position and WHY; the DoF decides HOW (buy/loan)
 // ============================================================
 
+/// A need the club has raised before and failed to fill.
+///
+/// Kept on the plan rather than on the request, because the request is the
+/// thing that dies: an exhausted search stamps `Abandoned` and the next
+/// evaluation raises a brand-new one with no idea that the last three went
+/// the same way. Carrying the count outside the request is what lets a club
+/// remember it has been shopping for a centre-forward since last summer.
+#[derive(Debug, Clone)]
+pub struct UnmetNeed {
+    pub group: PlayerFieldPositionGroup,
+    pub reason: TransferNeedReason,
+    /// Searches at this position that ended with nobody signed.
+    pub failures: u8,
+    pub last_failed: NaiveDate,
+}
+
+/// How hard a club pushes on a need it has already failed to fill.
+///
+/// A recruitment department does not ask for the same centre-forward in the
+/// same voice every window. The first search is a preference. The third,
+/// after two windows of watching the same shirt go unfilled, is a problem the
+/// board hears about — and a club that could not land its first choice widens
+/// the brief rather than repeating it verbatim and losing again.
+///
+/// Without this every `QualityUpgrade` was raised at `Important` forever, and
+/// `Important` is the tier that dies on an exhausted shortlist. A club could
+/// identify the weakest position in its side, fail to fill it, and start over
+/// from exactly the same brief and exactly the same handful of unreachable
+/// names, window after window, with nothing anywhere recording that it had
+/// ever tried.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NeedEscalation {
+    failures: u8,
+}
+
+impl NeedEscalation {
+    /// Failed searches after which the need is put to the board as Critical —
+    /// the tier that re-opens on an exhausted shortlist rather than quietly
+    /// dying, and that draws the larger share of the budget.
+    const CRITICAL_AFTER: u8 = 2;
+    /// Ceiling on the count. A need the market genuinely cannot serve stops
+    /// compounding here: the club keeps asking at full urgency and full
+    /// relief, but it does not spiral, and the retry loop inside a single
+    /// window still terminates.
+    const MAX_FAILURES: u8 = 4;
+    /// Ability the club knocks off its asking bar per failed search. Three
+    /// failed windows turn "the best centre-forward in the division" into "a
+    /// centre-forward who improves us", which is how the search ends.
+    const ABILITY_RELIEF: u8 = 4;
+    /// Years the age band opens each side per failed search.
+    const AGE_RELIEF: u8 = 1;
+    /// Days after which one failure fades from the club's memory. A need that
+    /// went unfilled two seasons ago is not the same live problem as one that
+    /// went unfilled in January.
+    const MEMORY_DAYS: i64 = 270;
+
+    pub fn new(failures: u8) -> Self {
+        NeedEscalation {
+            failures: failures.min(Self::MAX_FAILURES),
+        }
+    }
+
+    /// The count as the club reads it today, one failure lighter for every
+    /// [`Self::MEMORY_DAYS`] since the last one.
+    pub fn since(failures: u8, last_failed: NaiveDate, today: NaiveDate) -> Self {
+        let elapsed = (today - last_failed).num_days().max(0);
+        let faded = (elapsed / Self::MEMORY_DAYS).min(u8::MAX as i64) as u8;
+        Self::new(failures.saturating_sub(faded))
+    }
+
+    pub fn failures(&self) -> u8 {
+        self.failures
+    }
+
+    pub fn is_escalated(&self) -> bool {
+        self.failures > 0
+    }
+
+    /// The priority the need is raised at, given how long it has gone unmet.
+    pub fn priority(&self, base: TransferNeedPriority) -> TransferNeedPriority {
+        if self.failures >= Self::CRITICAL_AFTER {
+            TransferNeedPriority::Critical
+        } else {
+            base
+        }
+    }
+
+    /// Does an exhausted shortlist send the club back to the market rather
+    /// than closing the search? True while the club is still learning
+    /// something from trying; false once the count has topped out, so the
+    /// within-window retry loop always terminates and the memory carries the
+    /// urgency into the next window instead.
+    pub fn reopens_on_exhaustion(&self) -> bool {
+        self.failures > 0 && self.failures < Self::MAX_FAILURES
+    }
+
+    pub fn relaxed_min_ability(&self, min_ability: u8) -> u8 {
+        min_ability.saturating_sub(self.failures.saturating_mul(Self::ABILITY_RELIEF))
+    }
+
+    pub fn widened_age_band(&self, age_min: u8, age_max: u8) -> (u8, u8) {
+        let relief = self.failures.saturating_mul(Self::AGE_RELIEF);
+        (
+            age_min.saturating_sub(relief).max(16),
+            age_max.saturating_add(relief).min(38),
+        )
+    }
+}
+
 /// Where a transfer request originated. Most requests come from the
 /// weekly squad evaluation (or staff recommendations) and flow through
 /// the full paid pipeline. Emergency free-agent depth requests are
@@ -390,6 +507,17 @@ pub struct TransferRequest {
     /// `TransferRequest::new` defaults to `Evaluation`; the emergency
     /// depth planner overrides it after construction.
     pub source: TransferRequestSource,
+    /// How many earlier searches for this position went unfilled. Carried on
+    /// the live request so the paths that end a search — an exhausted
+    /// shortlist, a board veto with nothing left on the list — can tell a
+    /// first attempt from a club that has been trying for a year.
+    pub escalation: NeedEscalation,
+    /// True once a dead search has been folded into the club's [`UnmetNeed`]
+    /// memory. The weekly evaluation counts each failure exactly once while
+    /// the row itself stays where it is: an abandoned request is the club's
+    /// own record of a position it shopped for and could not fill, and the
+    /// recruitment page is entitled to keep showing it.
+    pub escalation_recorded: bool,
 }
 
 impl TransferRequest {
@@ -447,7 +575,26 @@ impl TransferRequest {
             named_target: None,
             board_approved: None,
             source: TransferRequestSource::Evaluation,
+            escalation: NeedEscalation::default(),
+            escalation_recorded: false,
         }
+    }
+
+    /// Re-raise this need in the voice of a club that has failed to fill it
+    /// before: louder to the board, and less particular about who answers.
+    ///
+    /// Applied after [`Self::new`] has derived the age band, so the widening
+    /// stacks on whatever the base priority asked for rather than replacing
+    /// it. A first-attempt escalation is the identity.
+    pub fn escalated(mut self, escalation: NeedEscalation) -> Self {
+        self.priority = escalation.priority(self.priority);
+        self.min_ability = escalation.relaxed_min_ability(self.min_ability);
+        let (age_min, age_max) =
+            escalation.widened_age_band(self.preferred_age_min, self.preferred_age_max);
+        self.preferred_age_min = age_min;
+        self.preferred_age_max = age_max;
+        self.escalation = escalation;
+        self
     }
 
     /// True for emergency-planner depth requests that are serviced from
@@ -993,6 +1140,12 @@ pub struct ClubTransferPlan {
 
     pub loan_out_candidates: Vec<LoanOutCandidate>,
 
+    /// Positions the club has shopped for and failed to fill. Survives
+    /// `reset_for_window` on purpose — a need that went unanswered all summer
+    /// is exactly the thing the club should walk into January still carrying.
+    /// See [`NeedEscalation`].
+    pub unmet_needs: Vec<UnmetNeed>,
+
     /// Staged loan-availability broadcasts, keyed by player id. Seller-side
     /// "push": a National+ club offers each loan-listed player to clubs one
     /// reputation tier at a time, top-down. Empty for clubs below the
@@ -1087,6 +1240,7 @@ impl ClubTransferPlan {
             spent: 0.0,
             reserved: 0.0,
             transfer_requests: Vec::new(),
+            unmet_needs: Vec::new(),
             scouting_assignments: Vec::new(),
             scouting_reports: Vec::new(),
             shortlists: Vec::new(),
@@ -1164,6 +1318,88 @@ impl ClubTransferPlan {
         self.transfer_requests
             .iter()
             .any(|r| r.status == TransferRequestStatus::Pending)
+    }
+
+    /// What the club has learned about this need so far, faded for the time
+    /// since it last came up short.
+    pub fn escalation_for(
+        &self,
+        group: PlayerFieldPositionGroup,
+        reason: &TransferNeedReason,
+        date: NaiveDate,
+    ) -> NeedEscalation {
+        self.unmet_needs
+            .iter()
+            .find(|n| n.group == group && &n.reason == reason)
+            .map(|n| NeedEscalation::since(n.failures, n.last_failed, date))
+            .unwrap_or_default()
+    }
+
+    /// Record that a search for this position ended with nobody signed, and
+    /// hand back the count as it now stands.
+    pub fn record_unmet_need(
+        &mut self,
+        group: PlayerFieldPositionGroup,
+        reason: &TransferNeedReason,
+        date: NaiveDate,
+    ) -> NeedEscalation {
+        if let Some(existing) = self
+            .unmet_needs
+            .iter_mut()
+            .find(|n| n.group == group && &n.reason == reason)
+        {
+            // Fade first, so a failure years after the last one starts the
+            // count again rather than resuming an expired grudge.
+            let faded = NeedEscalation::since(existing.failures, existing.last_failed, date);
+            existing.failures = faded.failures().saturating_add(1);
+            existing.last_failed = date;
+            return NeedEscalation::new(existing.failures);
+        }
+        self.unmet_needs.push(UnmetNeed {
+            group,
+            reason: reason.clone(),
+            failures: 1,
+            last_failed: date,
+        });
+        NeedEscalation::new(1)
+    }
+
+    /// The club finally signed someone there — the search is over and the
+    /// memory of failing at it goes with it.
+    pub fn clear_unmet_need(&mut self, group: PlayerFieldPositionGroup) {
+        self.unmet_needs.retain(|n| n.group != group);
+    }
+
+    /// Fold every search that has died since the last meeting into the club's
+    /// memory, counting each exactly once. Returns how many were counted.
+    ///
+    /// An `Abandoned` request is a position the club identified, shopped for
+    /// and failed to fill. Nothing used to read that: the row sat here while
+    /// the dedupe filter — which ignores Abandoned — cheerfully raised an
+    /// identical request next time, on the same brief, at the same priority,
+    /// and sent it after the same handful of names it had already lost. The
+    /// rows are marked rather than removed, so the recruitment page keeps
+    /// showing what the club tried.
+    pub fn harvest_failed_searches(&mut self, date: NaiveDate) -> usize {
+        let died: Vec<(u32, PlayerFieldPositionGroup, TransferNeedReason)> = self
+            .transfer_requests
+            .iter()
+            .filter(|r| {
+                r.status == TransferRequestStatus::Abandoned
+                    && !r.escalation_recorded
+                    && !r.is_emergency_free_agent_depth()
+            })
+            .map(|r| (r.id, r.position.position_group(), r.reason.clone()))
+            .collect();
+        for (_, group, reason) in &died {
+            self.record_unmet_need(*group, reason, date);
+        }
+        for request in self.transfer_requests.iter_mut() {
+            if died.iter().any(|(id, _, _)| *id == request.id) {
+                request.escalation_recorded = true;
+            }
+        }
+        died.len()
     }
 
     pub fn reset_for_window(&mut self) {
@@ -1714,5 +1950,362 @@ mod known_player_memory_tests {
         assert!(known.confidence > 0.4);
         assert_eq!(known.official_appearances_seen, 2);
         assert_eq!(known.last_seen, d(2026, 7, 8));
+    }
+}
+
+/// A club's memory of the positions it has shopped for and failed to fill.
+#[cfg(test)]
+mod need_escalation_tests {
+    use super::*;
+
+    struct EscFx;
+
+    impl EscFx {
+        fn day(year: i32, month: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(year, month, day).unwrap()
+        }
+
+        /// A club that has just watched a centre-forward search die.
+        fn plan_after_failures(count: u8, on: NaiveDate) -> ClubTransferPlan {
+            let mut plan = ClubTransferPlan::new();
+            for _ in 0..count {
+                plan.record_unmet_need(
+                    PlayerFieldPositionGroup::Forward,
+                    &TransferNeedReason::QualityUpgrade,
+                    on,
+                );
+            }
+            plan
+        }
+
+        fn striker_request() -> TransferRequest {
+            TransferRequest::new(
+                1,
+                PlayerPositionType::Striker,
+                TransferNeedPriority::Important,
+                TransferNeedReason::QualityUpgrade,
+                129,
+                142,
+                35_000_000.0,
+            )
+        }
+    }
+
+    /// A first attempt escalates by nothing at all — the club has learned
+    /// nothing yet, so the brief it raises is the brief the calculus wrote.
+    #[test]
+    fn a_first_search_is_raised_exactly_as_before() {
+        let plain = EscFx::striker_request();
+        let escalated = EscFx::striker_request().escalated(NeedEscalation::default());
+
+        assert_eq!(escalated.priority, plain.priority);
+        assert_eq!(escalated.min_ability, plain.min_ability);
+        assert_eq!(escalated.preferred_age_min, plain.preferred_age_min);
+        assert_eq!(escalated.preferred_age_max, plain.preferred_age_max);
+        assert!(!escalated.escalation.is_escalated());
+    }
+
+    /// The bug: `QualityUpgrade` was raised at `Important` forever, and
+    /// `Important` is the tier that dies on an exhausted shortlist. A club
+    /// could identify the weakest position in its side, fail to fill it, and
+    /// start over from the same brief and the same unreachable names every
+    /// window, with nothing recording that it had ever tried.
+    #[test]
+    fn a_need_the_club_keeps_failing_is_put_to_the_board_as_critical() {
+        let day = EscFx::day(2027, 7, 1);
+        let once = EscFx::plan_after_failures(1, day).escalation_for(
+            PlayerFieldPositionGroup::Forward,
+            &TransferNeedReason::QualityUpgrade,
+            day,
+        );
+        let twice = EscFx::plan_after_failures(2, day).escalation_for(
+            PlayerFieldPositionGroup::Forward,
+            &TransferNeedReason::QualityUpgrade,
+            day,
+        );
+
+        assert_eq!(
+            once.priority(TransferNeedPriority::Important),
+            TransferNeedPriority::Important,
+            "one unlucky window is not yet a crisis"
+        );
+        assert_eq!(
+            twice.priority(TransferNeedPriority::Important),
+            TransferNeedPriority::Critical,
+            "two is a club that cannot fill the weakest position in its side"
+        );
+    }
+
+    /// A club that could not land its first choice widens the brief rather
+    /// than repeating it verbatim and losing again.
+    #[test]
+    fn each_failed_window_widens_the_brief() {
+        let mut previous = EscFx::striker_request();
+        for failures in 1..=3u8 {
+            let escalated = EscFx::striker_request().escalated(NeedEscalation::new(failures));
+            assert!(
+                escalated.min_ability < previous.min_ability,
+                "failure {failures} must lower the asking bar"
+            );
+            assert!(
+                escalated.preferred_age_max >= previous.preferred_age_max
+                    && escalated.preferred_age_min <= previous.preferred_age_min,
+                "failure {failures} must open the age band"
+            );
+            previous = escalated;
+        }
+    }
+
+    /// The retry loop has to terminate: a need the market genuinely cannot
+    /// serve stops re-opening once the count tops out, and the memory carries
+    /// the urgency into the next window instead of spinning inside this one.
+    #[test]
+    fn the_retry_loop_terminates() {
+        assert!(
+            !NeedEscalation::default().reopens_on_exhaustion(),
+            "an unescalated Important need still closes on an exhausted list"
+        );
+        assert!(NeedEscalation::new(1).reopens_on_exhaustion());
+        let capped = NeedEscalation::new(u8::MAX);
+        assert!(
+            !capped.reopens_on_exhaustion(),
+            "the count tops out and the search closes"
+        );
+        assert_eq!(
+            capped.priority(TransferNeedPriority::Important),
+            TransferNeedPriority::Critical,
+            "…while staying as urgent as it ever was"
+        );
+    }
+
+    /// A need that went unfilled two seasons ago is not the same live problem
+    /// as one that went unfilled in January.
+    #[test]
+    fn the_memory_of_a_failure_fades() {
+        let failed = EscFx::day(2026, 7, 1);
+        let plan = EscFx::plan_after_failures(2, failed);
+
+        let fresh = plan.escalation_for(
+            PlayerFieldPositionGroup::Forward,
+            &TransferNeedReason::QualityUpgrade,
+            failed,
+        );
+        assert_eq!(fresh.failures(), 2);
+
+        let much_later = plan.escalation_for(
+            PlayerFieldPositionGroup::Forward,
+            &TransferNeedReason::QualityUpgrade,
+            EscFx::day(2029, 7, 1),
+        );
+        assert_eq!(
+            much_later.failures(),
+            0,
+            "three years on, the club is not still smarting about it"
+        );
+    }
+
+    /// Signing somebody ends the search, and the memory of failing at it.
+    #[test]
+    fn filling_the_position_clears_the_memory() {
+        let day = EscFx::day(2027, 7, 1);
+        let mut plan = EscFx::plan_after_failures(2, day);
+        plan.clear_unmet_need(PlayerFieldPositionGroup::Forward);
+
+        assert_eq!(
+            plan.escalation_for(
+                PlayerFieldPositionGroup::Forward,
+                &TransferNeedReason::QualityUpgrade,
+                day,
+            )
+            .failures(),
+            0
+        );
+    }
+
+    /// The memory is per position and per motive: failing to sign a striker
+    /// says nothing about the club's search for a goalkeeper.
+    #[test]
+    fn the_memory_is_scoped_to_the_position_and_the_motive() {
+        let day = EscFx::day(2027, 7, 1);
+        let plan = EscFx::plan_after_failures(2, day);
+
+        assert_eq!(
+            plan.escalation_for(
+                PlayerFieldPositionGroup::Goalkeeper,
+                &TransferNeedReason::QualityUpgrade,
+                day,
+            )
+            .failures(),
+            0
+        );
+        assert_eq!(
+            plan.escalation_for(
+                PlayerFieldPositionGroup::Forward,
+                &TransferNeedReason::DepthCover,
+                day,
+            )
+            .failures(),
+            0
+        );
+    }
+
+    /// A need raised for a whole year must survive the window reset — it is
+    /// exactly the thing the club should walk into January still carrying.
+    #[test]
+    fn the_memory_survives_the_window_reset() {
+        let day = EscFx::day(2027, 7, 1);
+        let mut plan = EscFx::plan_after_failures(2, day);
+        plan.reset_for_window();
+
+        assert_eq!(
+            plan.escalation_for(
+                PlayerFieldPositionGroup::Forward,
+                &TransferNeedReason::QualityUpgrade,
+                day,
+            )
+            .failures(),
+            2,
+            "the requests go; what the club learned from them does not"
+        );
+    }
+}
+
+/// Folding dead searches into the club's memory.
+#[cfg(test)]
+mod failed_search_harvest_tests {
+    use super::*;
+
+    struct HarvestFx;
+
+    impl HarvestFx {
+        fn day() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2027, 7, 1).unwrap()
+        }
+
+        /// A plan carrying one centre-forward search that died unfilled.
+        fn plan_with_a_dead_striker_search() -> ClubTransferPlan {
+            let mut plan = ClubTransferPlan::new();
+            let mut request = TransferRequest::new(
+                1,
+                PlayerPositionType::Striker,
+                TransferNeedPriority::Important,
+                TransferNeedReason::QualityUpgrade,
+                129,
+                142,
+                35_000_000.0,
+            );
+            request.status = TransferRequestStatus::Abandoned;
+            plan.transfer_requests.push(request);
+            plan
+        }
+
+        fn striker_failures(plan: &ClubTransferPlan) -> u8 {
+            plan.escalation_for(
+                PlayerFieldPositionGroup::Forward,
+                &TransferNeedReason::QualityUpgrade,
+                Self::day(),
+            )
+            .failures()
+        }
+    }
+
+    #[test]
+    fn a_dead_search_is_counted_once_however_often_the_club_meets() {
+        let mut plan = HarvestFx::plan_with_a_dead_striker_search();
+
+        assert_eq!(plan.harvest_failed_searches(HarvestFx::day()), 1);
+        assert_eq!(HarvestFx::striker_failures(&plan), 1);
+
+        // The weekly evaluation runs again, and again, over the same dead row.
+        for _ in 0..5 {
+            assert_eq!(
+                plan.harvest_failed_searches(HarvestFx::day()),
+                0,
+                "the same failure must not compound every time the club meets"
+            );
+        }
+        assert_eq!(HarvestFx::striker_failures(&plan), 1);
+    }
+
+    /// The row is the club's own record of what it tried; the recruitment page
+    /// shows it, so harvesting must mark rather than remove.
+    #[test]
+    fn harvesting_leaves_the_abandoned_row_visible() {
+        let mut plan = HarvestFx::plan_with_a_dead_striker_search();
+        plan.harvest_failed_searches(HarvestFx::day());
+
+        let row = plan
+            .transfer_requests
+            .iter()
+            .find(|r| r.id == 1)
+            .expect("the abandoned request must still be on the plan");
+        assert_eq!(row.status, TransferRequestStatus::Abandoned);
+        assert!(row.escalation_recorded);
+    }
+
+    /// A live search is not a failed one.
+    #[test]
+    fn only_dead_searches_are_counted() {
+        let mut plan = HarvestFx::plan_with_a_dead_striker_search();
+        for status in [
+            TransferRequestStatus::Pending,
+            TransferRequestStatus::ScoutingActive,
+            TransferRequestStatus::Shortlisted,
+            TransferRequestStatus::Negotiating,
+            TransferRequestStatus::Fulfilled,
+        ] {
+            plan.transfer_requests[0].status = status;
+            plan.transfer_requests[0].escalation_recorded = false;
+            assert_eq!(
+                plan.harvest_failed_searches(HarvestFx::day()),
+                0,
+                "a search that is still alive (or was filled) is not a failure"
+            );
+        }
+        assert_eq!(HarvestFx::striker_failures(&plan), 0);
+    }
+
+    /// Emergency free-agent depth requests are a different machine — they carry
+    /// no budget and no scouting intent, and must not drive escalation.
+    #[test]
+    fn emergency_depth_requests_do_not_escalate() {
+        let mut plan = HarvestFx::plan_with_a_dead_striker_search();
+        plan.transfer_requests[0].source = TransferRequestSource::EmergencyFreeAgentDepth;
+
+        assert_eq!(plan.harvest_failed_searches(HarvestFx::day()), 0);
+        assert_eq!(HarvestFx::striker_failures(&plan), 0);
+    }
+
+    /// Two failed windows at the same position is what promotes the search.
+    #[test]
+    fn successive_dead_searches_accumulate() {
+        let mut plan = HarvestFx::plan_with_a_dead_striker_search();
+        plan.harvest_failed_searches(HarvestFx::day());
+
+        // A fresh window raises the need again, and it dies again.
+        let mut second = TransferRequest::new(
+            2,
+            PlayerPositionType::Striker,
+            TransferNeedPriority::Important,
+            TransferNeedReason::QualityUpgrade,
+            129,
+            142,
+            35_000_000.0,
+        );
+        second.status = TransferRequestStatus::Abandoned;
+        plan.transfer_requests.push(second);
+
+        assert_eq!(plan.harvest_failed_searches(HarvestFx::day()), 1);
+        assert_eq!(HarvestFx::striker_failures(&plan), 2);
+        assert_eq!(
+            plan.escalation_for(
+                PlayerFieldPositionGroup::Forward,
+                &TransferNeedReason::QualityUpgrade,
+                HarvestFx::day(),
+            )
+            .priority(TransferNeedPriority::Important),
+            TransferNeedPriority::Critical,
+            "two windows short of a centre-forward is a board matter"
+        );
     }
 }

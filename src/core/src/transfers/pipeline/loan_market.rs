@@ -24,7 +24,7 @@ use crate::utils::FormattingUtils;
 use crate::{
     Club, ClubPhilosophy, Country, HappinessEventCause, HappinessEventContext, HappinessEventScope,
     HappinessEventSeverity, HappinessEventType, Person, Player, PlayerFieldPositionGroup,
-    PlayerStatusType, ReputationLevel, Team, TeamType,
+    PlayerStatusType, ReputationLevel, RoleFamiliarity, Team, TeamType,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -384,53 +384,10 @@ impl PipelineProcessor {
             let team = &club.teams.teams[0];
             let rep_level = team.reputation.level();
 
-            // Critical-need override: a club whose squad is genuinely
-            // short at any position MUST scan the loan market, even
-            // outside its usual scanning window. Without this, a
-            // National-rep club that loses both senior GKs in October
-            // would otherwise wait until January to cover — leaving
-            // them fielding youth keepers for two months.
-            //
-            // Threshold: < 2 at GK, < 4 at DEF/MID, < 2 at FWD. Below
-            // these and the team genuinely cannot field a balanced
-            // matchday squad.
-            let has_critical_shortage = {
-                use crate::PlayerFieldPositionGroup as G;
-                let mut counts = [0usize; 4]; // GK, DEF, MID, FWD
-                for p in team.players.iter() {
-                    let idx = match p.position().position_group() {
-                        G::Goalkeeper => 0,
-                        G::Defender => 1,
-                        G::Midfielder => 2,
-                        G::Forward => 3,
-                    };
-                    counts[idx] += 1;
-                }
-                counts[0] < 2 || counts[1] < 4 || counts[2] < 4 || counts[3] < 2
-            };
+            let appetite = LoanBorrowerAppetite::assess(club, team, is_january);
+            let has_critical_shortage = appetite.critical_shortage;
 
-            // Determine if club should scan — philosophy overrides reputation defaults.
-            // LoanFocused clubs always scan; SignToCompete clubs almost never loan.
-            let should_scan = has_critical_shortage
-                || match &club.philosophy {
-                    ClubPhilosophy::LoanFocused => true,
-                    ClubPhilosophy::SignToCompete => {
-                        // Only loan as emergency cover in January
-                        is_january && club.finance.balance.balance < 0
-                    }
-                    _ => match rep_level {
-                        ReputationLevel::Regional
-                        | ReputationLevel::Local
-                        | ReputationLevel::Amateur => true,
-                        ReputationLevel::National => is_january || club.finance.balance.balance < 0,
-                        ReputationLevel::Continental => {
-                            is_january && club.finance.balance.balance < 0
-                        }
-                        ReputationLevel::Elite => false,
-                    },
-                };
-
-            if !should_scan {
+            if !appetite.scans {
                 continue;
             }
 
@@ -949,6 +906,9 @@ impl PipelineProcessor {
         if date.weekday() != Weekday::Mon {
             return;
         }
+        // Read the same window the borrower-side scan reads, so the appetite
+        // gate below judges a club exactly as its own scan would.
+        let is_january = Self::is_mid_season_window_for(country, date);
 
         // Players with an in-flight negotiation already have a pending
         // response: don't widen their net or open a second approach. Their
@@ -987,6 +947,9 @@ impl PipelineProcessor {
             parent_best_in_group: u8,
             group: PlayerFieldPositionGroup,
             ability: u8,
+            /// Carried so the borrower-appetite gate can hold a pushed
+            /// candidate to the age band of the request it is answering.
+            age: u8,
             is_development: bool,
             asking: f64,
         }
@@ -1070,6 +1033,7 @@ impl PipelineProcessor {
                 parent_best_in_group,
                 group,
                 ability: player.player_attributes.current_ability,
+                age: player.age(date),
                 is_development,
                 asking: listing.asking_price.amount,
             });
@@ -1207,6 +1171,17 @@ impl PipelineProcessor {
                     if team.reputation.level() != tier {
                         continue;
                     }
+                }
+                // …and the borrower has to actually want him. Reputation is
+                // what makes a club the most attractive name on the parent's
+                // list; it is not consent. Without this the push read a club
+                // whose forward line was thin as an invitation, which is
+                // precisely backwards at a side whose attack is carried by
+                // wide men filed elsewhere.
+                if !LoanBorrowerAppetite::assess(club, team, is_january)
+                    .accepts_push(club, b.group, b.ability, b.age)
+                {
+                    continue;
                 }
                 if country
                     .transfer_market
@@ -2738,6 +2713,110 @@ impl ForeignUnsolicitedLoanTarget {
     }
 }
 
+/// Whether a club is in the market for a loan at all, and on what terms.
+///
+/// The borrower-side scan and the seller-side broadcast have to agree about
+/// this. They used not to: the scan asked reputation, philosophy, window and
+/// squad shortage before it would even look, while the push asked the
+/// borrower nothing — the comment there called accepting a pushed loan "a
+/// passive response, not a planning action" and skipped every appetite gate.
+/// So a Continental club that shops the loan market only in January, and only
+/// while in the red, was handed teenagers in August by parents who had simply
+/// picked the highest-reputation name that would play them.
+struct LoanBorrowerAppetite {
+    /// The club runs its own loan scans right now.
+    scans: bool,
+    /// Some position group is below the level at which the club can field a
+    /// balanced matchday squad.
+    critical_shortage: bool,
+}
+
+impl LoanBorrowerAppetite {
+    /// Age slack a pushed candidate gets against a request's band — the same
+    /// relaxation [`PipelineProcessor::scan_loan_market`] applies when it
+    /// matches its own requests against the listed market.
+    const REQUEST_AGE_SLACK: u8 = 3;
+    /// Ability slack, likewise mirrored from the scan's `relaxed_min`.
+    const REQUEST_ABILITY_SLACK: u8 = 5;
+
+    fn assess(club: &Club, team: &Team, is_january: bool) -> Self {
+        // Critical-need override: a club whose squad is genuinely short at
+        // any position MUST scan the loan market, even outside its usual
+        // scanning window. Without this, a National-rep club that loses both
+        // senior GKs in October would otherwise wait until January to cover —
+        // leaving them fielding youth keepers for two months.
+        //
+        // Threshold: < 2 at GK, < 4 at DEF/MID, < 2 at FWD. Below these and
+        // the team genuinely cannot field a balanced matchday squad.
+        let critical_shortage = {
+            let mut counts = [0usize; PlayerFieldPositionGroup::COUNT];
+            for p in team.players.iter() {
+                counts[p.position().position_group().index()] += 1;
+            }
+            counts[0] < 2 || counts[1] < 4 || counts[2] < 4 || counts[3] < 2
+        };
+
+        // Philosophy overrides reputation defaults. LoanFocused clubs always
+        // scan; SignToCompete clubs almost never loan.
+        let scans = critical_shortage
+            || match &club.philosophy {
+                ClubPhilosophy::LoanFocused => true,
+                ClubPhilosophy::SignToCompete => {
+                    // Only loan as emergency cover in January
+                    is_january && club.finance.balance.balance < 0
+                }
+                _ => match team.reputation.level() {
+                    ReputationLevel::Regional
+                    | ReputationLevel::Local
+                    | ReputationLevel::Amateur => true,
+                    ReputationLevel::National => is_january || club.finance.balance.balance < 0,
+                    ReputationLevel::Continental => is_january && club.finance.balance.balance < 0,
+                    ReputationLevel::Elite => false,
+                },
+            };
+
+        LoanBorrowerAppetite {
+            scans,
+            critical_shortage,
+        }
+    }
+
+    /// Will this club entertain a loan somebody else brings to it?
+    ///
+    /// Answering a knock at the door is more permissive than going out
+    /// looking, so an open request at the position counts even for a club
+    /// that runs no scans of its own. What it is not is unconditional: the
+    /// candidate still has to be someone that request was asking for. A side
+    /// shopping for a centre-forward who can lead its line has not thereby
+    /// agreed to take any centre-forward alive, and a club with no request at
+    /// the position has not asked for anybody at all.
+    fn accepts_push(
+        &self,
+        club: &Club,
+        group: PlayerFieldPositionGroup,
+        candidate_ability: u8,
+        candidate_age: u8,
+    ) -> bool {
+        if self.scans || self.critical_shortage {
+            return true;
+        }
+        club.transfer_plan
+            .transfer_requests
+            .iter()
+            .filter(|r| {
+                r.status != TransferRequestStatus::Fulfilled
+                    && r.status != TransferRequestStatus::Abandoned
+                    && !r.is_emergency_free_agent_depth()
+                    && r.position.position_group() == group
+            })
+            .any(|r| {
+                candidate_ability >= r.min_ability.saturating_sub(Self::REQUEST_ABILITY_SLACK)
+                    && candidate_age >= r.preferred_age_min
+                    && candidate_age <= r.preferred_age_max.saturating_add(Self::REQUEST_AGE_SLACK)
+            })
+    }
+}
+
 /// Snapshot of the borrowing club's position-group depth — per-group
 /// ability lists plus squad caps. Used by every loan scan (domestic and
 /// foreign) for two realism gates: `has_room_for` stops the borrower
@@ -2746,18 +2825,27 @@ impl ForeignUnsolicitedLoanTarget {
 /// would sit behind a wall of clearly better names — a development loan
 /// must buy pitch time, not a bench seat.
 struct BorrowerPositionDepth {
+    /// Headcount view: who is FILED under each group. A man occupies one
+    /// shirt in the squad register however many roles he can play, so the
+    /// squad-bloat cap counts labels.
     rows: Vec<(PlayerFieldPositionGroup, usize, Vec<u8>)>,
+    /// Competition view: what every squad member is worth in each group's
+    /// roles, whatever he is filed under, discounted by how natural the role
+    /// is to him.
+    ///
+    /// The minutes gate has to read this one. Asking the label who stood
+    /// ahead of an incoming forward counted only the men whose record
+    /// happened to lead with a forward position — so a club whose front
+    /// line was three outstanding wide forwards filed as midfielders read as
+    /// having nobody up front, and became the most attractive destination in
+    /// the country for other clubs' teenage strikers precisely because its
+    /// attack looked empty.
+    role_rows: Vec<(PlayerFieldPositionGroup, Vec<u8>)>,
 }
 
 impl BorrowerPositionDepth {
     fn snapshot(team: &Team) -> Self {
-        let groups = [
-            PlayerFieldPositionGroup::Goalkeeper,
-            PlayerFieldPositionGroup::Defender,
-            PlayerFieldPositionGroup::Midfielder,
-            PlayerFieldPositionGroup::Forward,
-        ];
-        let rows = groups
+        let rows = PlayerFieldPositionGroup::ALL
             .iter()
             .map(|&group| {
                 let max = group.ideal_squad_depth();
@@ -2770,7 +2858,25 @@ impl BorrowerPositionDepth {
                 (group, max, abilities)
             })
             .collect();
-        BorrowerPositionDepth { rows }
+        let role_rows = PlayerFieldPositionGroup::ALL
+            .iter()
+            .map(|&group| {
+                let abilities: Vec<u8> = team
+                    .players
+                    .iter()
+                    .filter_map(|p| {
+                        let effective = RoleFamiliarity::best_in_group(
+                            &p.positions,
+                            p.player_attributes.current_ability,
+                            group,
+                        );
+                        (effective > 0).then_some(effective)
+                    })
+                    .collect();
+                (group, abilities)
+            })
+            .collect();
+        BorrowerPositionDepth { rows, role_rows }
     }
 
     /// Fold in-flight incoming-loan targets (`(group, ability)`) into the
@@ -2783,6 +2889,12 @@ impl BorrowerPositionDepth {
             if let Some(row) = self.rows.iter_mut().find(|(g, _, _)| g == group) {
                 row.2.push(*ability);
             }
+            // A player still being negotiated for is known only by the group
+            // he was matched on, so he joins the competition view there at
+            // face value — the same conservative reading the headcount takes.
+            if let Some(row) = self.role_rows.iter_mut().find(|(g, _)| g == group) {
+                row.1.push(*ability);
+            }
         }
         self
     }
@@ -2792,6 +2904,14 @@ impl BorrowerPositionDepth {
         group: PlayerFieldPositionGroup,
     ) -> Option<&(PlayerFieldPositionGroup, usize, Vec<u8>)> {
         self.rows.iter().find(|(g, _, _)| *g == group)
+    }
+
+    /// Competition view for `group` — see [`Self::role_rows`].
+    fn role_row(
+        &self,
+        group: PlayerFieldPositionGroup,
+    ) -> Option<&(PlayerFieldPositionGroup, Vec<u8>)> {
+        self.role_rows.iter().find(|(g, _)| *g == group)
     }
 
     /// True when adding a loan player at `group` makes sense — either
@@ -2850,8 +2970,8 @@ impl BorrowerPositionDepth {
         candidate_ability: u8,
         development: bool,
     ) -> bool {
-        match self.row(group) {
-            Some((_, _, abilities)) => {
+        match self.role_row(group) {
+            Some((_, abilities)) => {
                 let clearly_better = abilities
                     .iter()
                     .filter(|&&a| a >= candidate_ability.saturating_add(8))
@@ -2896,7 +3016,13 @@ mod borrower_gate_tests {
                 .positions(PlayerPositions {
                     positions: vec![PlayerPosition {
                         position,
-                        level: 16,
+                        // Natural. These fixtures stand for "the club's man in
+                        // that shirt", and the depth gates now read ability
+                        // through `RoleFamiliarity` — an accomplished-but-not-
+                        // natural 16 would quietly shade every incumbent down
+                        // and make the fixtures test the discount rather than
+                        // the gate.
+                        level: 20,
                     }],
                 })
                 .player_attributes(attrs)
@@ -4472,5 +4598,260 @@ mod transfer_broadcast_tests {
                 .transfer_broadcasts
                 .is_empty()
         );
+    }
+}
+
+/// The two borrower-side gates the seller's push has to respect: who is
+/// actually ahead of the incoming player, and whether the club wanted him.
+#[cfg(test)]
+mod loan_push_gate_tests {
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::transfers::pipeline::{TransferNeedPriority, TransferNeedReason, TransferRequest};
+    use crate::{
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
+        PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills, StaffCollection, TeamCollection, TeamReputation, TeamType, TrainingSchedule,
+    };
+    use chrono::{NaiveDate, NaiveTime};
+
+    struct PushFx;
+
+    impl PushFx {
+        fn player(id: u32, roles: &[(PlayerPositionType, u8)], ca: u8) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ca;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Loan".to_string(), format!("P{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(2000, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: roles
+                        .iter()
+                        .map(|(position, level)| PlayerPosition {
+                            position: *position,
+                            level: *level,
+                        })
+                        .collect(),
+                })
+                .player_attributes(attrs)
+                .build()
+                .unwrap()
+        }
+
+        fn team(players: Vec<Player>, world_rep: u16) -> Team {
+            Team::builder()
+                .id(1)
+                .league_id(Some(1))
+                .club_id(1)
+                .name("Borrower".to_string())
+                .slug("borrower".to_string())
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(players))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(world_rep, world_rep, world_rep))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap()
+        }
+
+        /// A Continental giant whose front line is carried by wide forwards
+        /// filed as midfielders, with only makeshift centre-forwards actually
+        /// wearing a forward label. Spartak's shape, in miniature.
+        fn giant_with_hidden_attack() -> Club {
+            let main = Self::team(
+                vec![
+                    // The real attack — natural centre-forwards, filed under
+                    // Midfielder because their record leads with a wing.
+                    Self::player(
+                        1,
+                        &[
+                            (PlayerPositionType::AttackingMidfielderRight, 20),
+                            (PlayerPositionType::Striker, 20),
+                        ],
+                        150,
+                    ),
+                    Self::player(
+                        2,
+                        &[
+                            (PlayerPositionType::AttackingMidfielderLeft, 20),
+                            (PlayerPositionType::Striker, 20),
+                        ],
+                        148,
+                    ),
+                    Self::player(
+                        3,
+                        &[
+                            (PlayerPositionType::AttackingMidfielderCenter, 20),
+                            (PlayerPositionType::Striker, 20),
+                        ],
+                        145,
+                    ),
+                    // …and the forward line as the label sees it.
+                    Self::player(4, &[(PlayerPositionType::Striker, 20)], 92),
+                    Self::player(5, &[(PlayerPositionType::Striker, 20)], 90),
+                    // Enough bodies elsewhere that no group is in crisis.
+                    Self::player(6, &[(PlayerPositionType::Goalkeeper, 20)], 130),
+                    Self::player(7, &[(PlayerPositionType::Goalkeeper, 20)], 125),
+                    Self::player(8, &[(PlayerPositionType::DefenderCenter, 20)], 130),
+                    Self::player(9, &[(PlayerPositionType::DefenderLeft, 20)], 130),
+                    Self::player(10, &[(PlayerPositionType::DefenderRight, 20)], 130),
+                    Self::player(11, &[(PlayerPositionType::DefensiveMidfielder, 20)], 130),
+                    Self::player(12, &[(PlayerPositionType::MidfielderCenter, 20)], 130),
+                    Self::player(13, &[(PlayerPositionType::MidfielderLeft, 20)], 130),
+                    Self::player(14, &[(PlayerPositionType::MidfielderRight, 20)], 130),
+                ],
+                7600,
+            );
+            let mut club = Club::new(
+                1,
+                "Giant FC".to_string(),
+                Location::new(1),
+                ClubFinances::new(100_000_000, Vec::new()),
+                ClubAcademy::new(10),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![main]),
+                ClubFacilities::default(),
+            );
+            club.transfer_plan.initialized = true;
+            club
+        }
+
+        fn main_team(club: &Club) -> &Team {
+            club.teams.main().expect("fixture has a main team")
+        }
+
+        /// The club's own shopping list: a centre-forward good enough to lead
+        /// the line, which is what a giant with this attack would ask for.
+        fn striker_request(min_ability: u8) -> TransferRequest {
+            TransferRequest::new(
+                1,
+                PlayerPositionType::Striker,
+                TransferNeedPriority::Important,
+                TransferNeedReason::QualityUpgrade,
+                min_ability,
+                min_ability + 13,
+                35_000_000.0,
+            )
+        }
+    }
+
+    /// The minutes gate used to count only the men FILED as forwards, so a
+    /// squad whose front line is three outstanding wide forwards read as
+    /// having nobody up front — and became the most attractive destination in
+    /// the country for other clubs' teenage strikers precisely because its
+    /// attack looked empty.
+    #[test]
+    fn a_hidden_attack_still_blocks_a_teenage_striker_loan() {
+        let club = PushFx::giant_with_hidden_attack();
+        let team = PushFx::main_team(&club);
+
+        let labelled_forwards = team
+            .players
+            .iter()
+            .filter(|p| p.position().position_group() == PlayerFieldPositionGroup::Forward)
+            .count();
+        assert_eq!(
+            labelled_forwards, 2,
+            "precondition: only the makeshift men carry a forward label"
+        );
+
+        let depth = BorrowerPositionDepth::snapshot(team);
+        assert!(
+            !depth.would_get_loan_minutes(PlayerFieldPositionGroup::Forward, 95, true),
+            "three natural centre-forwards ahead of him is not a route to minutes"
+        );
+    }
+
+    /// …and the gate still opens where the competition is genuinely thin.
+    #[test]
+    fn a_thin_attack_still_admits_a_development_loan() {
+        let club = PushFx::giant_with_hidden_attack();
+        let mut team = PushFx::main_team(&club).clone();
+        team.players.players.retain(|p| p.id > 3);
+
+        let depth = BorrowerPositionDepth::snapshot(&team);
+        assert!(
+            depth.would_get_loan_minutes(PlayerFieldPositionGroup::Forward, 95, true),
+            "with the wide forwards gone he is competing for the shirt"
+        );
+    }
+
+    /// The push used to ask the borrower nothing at all. A Continental club
+    /// that shops the loan market only in January, and only while in the red,
+    /// was handed teenagers in August because it happened to be the biggest
+    /// name that would play them.
+    #[test]
+    fn a_club_that_does_not_shop_is_not_a_destination() {
+        let club = PushFx::giant_with_hidden_attack();
+        let appetite = LoanBorrowerAppetite::assess(&club, PushFx::main_team(&club), false);
+        assert!(
+            !appetite.scans,
+            "precondition: this club runs no loan scans"
+        );
+        assert!(
+            !appetite.critical_shortage,
+            "precondition: no group is below a fieldable minimum"
+        );
+
+        assert!(
+            !appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 92, 17),
+            "reputation makes a club attractive; it is not consent"
+        );
+    }
+
+    /// An open request opens the door — but only to the player it was asking
+    /// for. A side shopping for a centre-forward who can lead its line has not
+    /// agreed to take any centre-forward alive.
+    #[test]
+    fn an_open_request_admits_only_the_player_it_asked_for() {
+        let mut club = PushFx::giant_with_hidden_attack();
+        club.transfer_plan
+            .transfer_requests
+            .push(PushFx::striker_request(129));
+        let team_rep_snapshot = PushFx::main_team(&club).reputation.world;
+        assert_eq!(team_rep_snapshot, 7600);
+
+        let appetite = LoanBorrowerAppetite::assess(&club, PushFx::main_team(&club), false);
+        assert!(
+            !appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 92, 17),
+            "a 92-rated seventeen-year-old is not what a 129-minimum brief asked for"
+        );
+        assert!(
+            appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 132, 24),
+            "…and the centre-forward it did ask for is welcome"
+        );
+        assert!(
+            !appetite.accepts_push(&club, PlayerFieldPositionGroup::Defender, 132, 24),
+            "the request was for a forward, not a defender"
+        );
+    }
+
+    /// A club that genuinely cannot field a balanced side takes what it is
+    /// offered — the emergency arm has to keep working.
+    #[test]
+    fn a_club_in_crisis_still_takes_what_it_is_offered() {
+        let club = PushFx::giant_with_hidden_attack();
+        let mut team = PushFx::main_team(&club).clone();
+        team.players
+            .players
+            .retain(|p| p.position().position_group() != PlayerFieldPositionGroup::Forward);
+
+        let appetite = LoanBorrowerAppetite::assess(&club, &team, false);
+        assert!(
+            appetite.critical_shortage,
+            "a side with no forwards at all is short"
+        );
+        assert!(appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 92, 17));
     }
 }

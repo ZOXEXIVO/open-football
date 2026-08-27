@@ -29,8 +29,9 @@ use crate::transfers::pipeline::{
 use crate::transfers::reason::TransferReason;
 use crate::utils::FormattingUtils;
 use crate::{
-    ClubPhilosophy, ClubTransferStrategy, Country, Person, Player, PlayerSquadStatus,
-    PlayerStatusType, ReputationLevel, StaffPosition, TransferStrategyContext, WageCalculator,
+    ClubPhilosophy, ClubTransferStrategy, Country, Person, Player, PlayerFieldPositionGroup,
+    PlayerSquadStatus, PlayerStatusType, ReputationLevel, StaffPosition, TransferStrategyContext,
+    WageCalculator,
 };
 
 /// Continuous buying aggressiveness from reputation ratio.
@@ -1255,6 +1256,11 @@ impl PipelineProcessor {
                 }
             }
 
+            // Position the club has just filled, if any. Collected inside the
+            // shortlist loop and acted on after it, because the loop holds the
+            // shortlists mutably for its whole body.
+            let mut filled_group: Option<PlayerFieldPositionGroup> = None;
+
             for shortlist in &mut plan.shortlists {
                 if let Some(candidate) = shortlist
                     .candidates
@@ -1270,6 +1276,7 @@ impl PipelineProcessor {
                             .find(|r| r.id == shortlist.transfer_request_id)
                         {
                             req.status = TransferRequestStatus::Fulfilled;
+                            filled_group = Some(req.position.position_group());
                             // Signing a Critical target is a real morale lift.
                             manager_satisfaction_hit += match req.priority {
                                 TransferNeedPriority::Critical => 3.0,
@@ -1303,9 +1310,20 @@ impl PipelineProcessor {
                                 .iter_mut()
                                 .find(|r| r.id == shortlist.transfer_request_id)
                             {
-                                if req.priority == TransferNeedPriority::Critical {
-                                    // Critical targets re-open — but the
-                                    // repeated failure still stings.
+                                // A Critical need re-opens, and so now does one
+                                // the club has failed at before: walking away
+                                // from the weakest position in the side after a
+                                // single unlucky shortlist is how a squad ends
+                                // up carrying the same hole for years. The
+                                // escalation count is capped, so this loop
+                                // always terminates — once it tops out the
+                                // request closes and the next squad evaluation
+                                // picks the search back up, louder.
+                                let reopens = req.priority == TransferNeedPriority::Critical
+                                    || req.escalation.reopens_on_exhaustion();
+                                if reopens {
+                                    // Re-opened — but the repeated failure
+                                    // still stings.
                                     req.status = TransferRequestStatus::Pending;
                                     manager_satisfaction_hit -= 2.0;
                                 } else {
@@ -1335,12 +1353,20 @@ impl PipelineProcessor {
                 }
             }
 
+            // The search is over: whatever the club had learned about failing
+            // to fill this position stops applying the moment somebody signs
+            // for it.
+            if let Some(group) = filled_group {
+                plan.clear_unmet_need(group);
+            }
+
             // No shortlist candidate matched and the resolved deal was a
             // completed loan — i.e. a loan-scan signing. Mark the open
             // request in that position group fulfilled so it stops re-firing
             // and stacking further loans on an already-covered position.
             if !shortlist_matched {
                 if let Some(group) = loan_filled_group {
+                    plan.clear_unmet_need(group);
                     for request in plan.transfer_requests.iter_mut() {
                         if request.position.position_group() != group {
                             continue;
