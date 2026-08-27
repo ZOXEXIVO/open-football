@@ -1,7 +1,7 @@
 use nalgebra::Vector3;
-use serde::Serialize;
 use serde::Serializer;
 use serde::ser::{SerializeMap, SerializeSeq};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 
@@ -399,24 +399,37 @@ enum ClipKind {
     Closing,
 }
 
-/// A finished [`ResultMatchPositionData`], reduced to the parts worth moving.
+/// A finished recording, already turned into the bytes that go on disk.
 ///
-/// Exists so a recording can cross a process boundary without
-/// `ResultMatchPositionData` having to grow a `Deserialize` mirroring the
-/// bespoke `Serialize` below — that one writes the shape the *viewer* reads,
-/// which is not a shape anything reads back. Everything here is plain owned
-/// data; the transport (bincode, gzip, whatever) is the caller's business.
-#[derive(Debug, Clone)]
-pub struct RecordingParts {
-    pub ball: Vec<ResultPositionDataItem>,
-    pub players: HashMap<u32, Vec<ResultPositionDataItem>>,
-    pub passes: Vec<PassEventData>,
-    pub events: Vec<MatchEventData>,
-    pub player_states: HashMap<u32, Vec<PlayerStateEntry>>,
-    pub track_events: bool,
-    pub track_positions: bool,
-    pub scope: RecordingScope,
-    pub segments: Vec<(u64, u64)>,
+/// One entry per non-empty chunk — its index, and the gzipped JSON the viewer
+/// fetches for that window — plus the metadata document that tells the viewer
+/// which chunks exist and which stretches of the match they cover.
+///
+/// Exists so the machine that *plays* a match can be the machine that bakes its
+/// replay. Serialising and compressing a track is the expensive half of storing
+/// one, and a coordinator driving a fleet of workers should not be doing it on
+/// their behalf; a worker hands these over ready to write.
+///
+/// It also closes the gap that made the split worth building. A bespoke wire
+/// shape can quietly carry more than the disk shape does — and did: the event
+/// streams escaped clipping for as long as the wire and the file were derived
+/// separately (see [`ResultMatchPositionData::finish_retaining`]). There is no
+/// room for that divergence when the wire *is* the disk bytes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordingArtifacts {
+    /// `(chunk index, gzipped chunk JSON)`, ascending. Empty windows are absent
+    /// — the index is the position on the clock, not a position in this list.
+    pub chunks: Vec<(usize, Vec<u8>)>,
+    /// The metadata document, uncompressed: a few hundred bytes, and the viewer
+    /// fetches it as plain JSON.
+    pub metadata: Vec<u8>,
+}
+
+impl RecordingArtifacts {
+    /// Total compressed size, for logging and for the wire's own accounting.
+    pub fn byte_len(&self) -> usize {
+        self.metadata.len() + self.chunks.iter().map(|(_, b)| b.len()).sum::<usize>()
+    }
 }
 
 /// Compact top-level serialization.
@@ -480,70 +493,6 @@ impl ResultMatchPositionData {
 
     pub fn empty() -> Self {
         Self::base(false, false)
-    }
-
-    /// Take a **finished** recording apart into its transportable pieces.
-    ///
-    /// The recorder holds two kinds of state: what it has kept, and the
-    /// bookkeeping it needs while it is still keeping things — the pre-roll
-    /// queues, the open clip list, the per-player dedup table. Once
-    /// [`finish_retaining`](Self::finish_retaining) has run the second kind is
-    /// spent, so a recording reduces to the first and rebuilds from it with
-    /// nothing lost. That is what lets a match played on a remote worker send
-    /// its replay home (see `web::worker::wire`).
-    ///
-    /// Call this on a recording still being written and whatever is pending is
-    /// dropped on the floor. Don't.
-    pub fn into_parts(self) -> RecordingParts {
-        RecordingParts {
-            ball: self.ball,
-            players: self.players,
-            passes: self.passes,
-            events: self.events,
-            player_states: self.player_states,
-            track_events: self.track_events,
-            track_positions: self.track_positions,
-            scope: self.scope,
-            segments: self.segments,
-        }
-    }
-
-    /// The inverse of [`into_parts`](Self::into_parts). What comes back is a
-    /// recording that is already finished, so the pre-roll, the clip list and
-    /// the dedup table are all empty.
-    ///
-    /// [`with_scope`](Self::with_scope) is deliberately not used here: it opens
-    /// the kick-off clip, and this recording was given one on the machine that
-    /// played the match — it is already inside `segments`.
-    pub fn from_parts(parts: RecordingParts) -> Self {
-        let RecordingParts {
-            ball,
-            players,
-            passes,
-            events,
-            player_states,
-            track_events,
-            track_positions,
-            scope,
-            segments,
-        } = parts;
-
-        ResultMatchPositionData {
-            ball,
-            players,
-            passes,
-            events,
-            player_states,
-            last_state_ids: HashMap::new(),
-            track_events,
-            track_positions,
-            scope,
-            pending_ball: VecDeque::new(),
-            pending_players: HashMap::new(),
-            clips: Vec::new(),
-            segments,
-            capture_until: None,
-        }
     }
 
     /// Narrow what the recording keeps. See [`RecordingScope`].
@@ -991,6 +940,42 @@ impl ResultMatchPositionData {
             samples.retain(|item| covered(item.timestamp));
             !samples.is_empty()
         });
+
+        // And the event streams, which used to escape this entirely.
+        //
+        // `add_pass_event` / `add_match_event` / `add_player_state` are gated on
+        // `track_events` and nothing else, so under `--match-events` they kept
+        // collecting through every minute no clip covers — a whole match of
+        // them behind a recording that is 224 seconds long. Nobody noticed on
+        // disk, because `store_chunks` skips a chunk when
+        // [`is_empty`](Self::is_empty) says so and that only tests `ball` and
+        // `players`: every five-minute window without football in it was
+        // dropped whole on the way out, event streams and all. A worker
+        // shipping its replay home has no such filter, and paid ~1.6 MB a match
+        // to send the coordinator something the coordinator then threw away.
+        self.passes.retain(|pass| covered(pass.timestamp));
+        self.events.retain(|event| covered(event.timestamp));
+
+        // Player states are the exception to a straight time filter. The viewer
+        // wants the state a man was already *in* when a segment opens, not only
+        // the changes inside it — that is the carry-over
+        // [`split_into_chunks`](Self::split_into_chunks) reaches back for. So
+        // each segment keeps the last transition before it starts, on top of
+        // everything covered. Entries are pushed in match order, so a reverse
+        // scan finds it.
+        self.player_states.retain(|_, entries| {
+            let anchors: Vec<usize> = segments
+                .iter()
+                .filter_map(|(start, _)| entries.iter().rposition(|e| e.timestamp < *start))
+                .collect();
+            let mut index = 0;
+            entries.retain(|entry| {
+                let keep = covered(entry.timestamp) || anchors.contains(&index);
+                index += 1;
+                keep
+            });
+            !entries.is_empty()
+        });
     }
 
     /// The parts of the match this recording covers, or `None` when it covers
@@ -1004,7 +989,7 @@ impl ResultMatchPositionData {
     /// (`empty()`), which is what a match played with recordings switched off
     /// looks like. A match played on a remote worker used to be the second of
     /// those unconditionally; its replay now travels home beside the result
-    /// (`web::worker::recording`), so it is only ever the first.
+    /// (`RecordingArtifacts`), so it is only ever the first.
     pub fn recorded_segments(&self) -> Option<&[(u64, u64)]> {
         if !self.track_positions {
             return Some(&[]);
@@ -1364,9 +1349,9 @@ mod goal_clip_tests {
     /// absent segment list as "the whole match is recorded" and spins on the
     /// loading notice waiting for chunks that were never written.
     ///
-    /// This is also what `web::worker::recording::encode` refuses to send: an
-    /// unsampled track crossing the wire would arrive with `track_positions`
-    /// set and land the coordinator in exactly that trap.
+    /// This is also what a worker refuses to bake and send: an unsampled track
+    /// crossing the wire would arrive with `track_positions` set and land the
+    /// coordinator in exactly that trap (`WorkerConnection::take_track`).
     #[test]
     fn a_recording_that_was_never_sampled_reports_nothing_rather_than_everything() {
         let data = ResultMatchPositionData::empty();
@@ -1529,6 +1514,159 @@ mod height_recording_tests {
         // 0.1 u of resolution is 1.25 cm, which was never the problem.
         assert_eq!(Quantize::ground(400.04), 400.0);
         assert_eq!(Quantize::ground(400.06), 400.1);
+    }
+}
+
+/// The streams that are not positions — passes, match events, player states —
+/// and whether clipping reaches them.
+///
+/// For a long time it did not. `add_pass_event` / `add_match_event` /
+/// `add_player_state` are gated on `track_events` and nothing else, and
+/// `finish_retaining` pruned only `ball` and `players`, so under
+/// `--match-events` a "goals only" recording carried a whole match of state
+/// transitions behind three minutes of football. On disk that was invisible:
+/// `store_chunks` drops a chunk when [`ResultMatchPositionData::is_empty`] says
+/// so, and that only tests the position streams, so every window without
+/// football in it went in the bin whole. It was not invisible on a network — a
+/// match worker paid about ten times the size of the actual recording to send
+/// the coordinator streams the coordinator then threw away.
+///
+/// Nothing downstream reads these except the viewer, which reads them out of the
+/// chunk files, so the segment list is the whole of the truth about what should
+/// survive.
+#[cfg(test)]
+mod event_stream_clip_tests {
+    use super::*;
+
+    /// A tracked recording of `duration_ms`, scoring at each time in `goals`,
+    /// with a pass, an event and a state change on every sample — dense enough
+    /// that "was this clipped" has an unambiguous answer at any instant.
+    fn record(scope: RecordingScope, duration_ms: u64, goals: &[u64]) -> ResultMatchPositionData {
+        let mut data = ResultMatchPositionData::new_with_tracking().with_scope(scope);
+        let mut t = 30;
+        let mut state = 0u16;
+        while t <= duration_ms {
+            if goals.contains(&t) {
+                data.mark_goal(t);
+            }
+            let drift = (t / 30) as f32;
+            data.add_ball_positions(t, Vector3::new(drift, 272.0, 0.0));
+            data.add_player_positions(7, t, Vector3::new(drift, 200.0, 0.0));
+            data.add_pass_event(t, 7, 11);
+            data.add_match_event(t, "tick", format!("t={}", t));
+            // A new state id every sample, so the dedup in `add_player_state`
+            // never swallows one and the stream is as dense as the samples.
+            state = state.wrapping_add(1);
+            data.add_player_state(7, t, state, &"Running");
+            t += 30;
+        }
+        data.finish(duration_ms);
+        data
+    }
+
+    fn stamps_between(stamps: impl Iterator<Item = u64>, from: u64, to: u64) -> Vec<u64> {
+        stamps.filter(|s| (from..to).contains(s)).collect()
+    }
+
+    #[test]
+    fn passes_and_events_outside_a_clip_are_dropped() {
+        let data = record(RecordingScope::Goals, 60_000, &[30_000]);
+
+        assert_eq!(
+            data.recorded_segments(),
+            Some(&[(0, 10_000), (25_000, 35_000), (50_000, 60_000)][..]),
+            "the fixture is not the recording the position tests describe"
+        );
+
+        // The two gaps between the three segments.
+        for (from, to) in [(10_001, 25_000), (35_001, 50_000)] {
+            assert!(
+                stamps_between(data.passes.iter().map(|p| p.timestamp), from, to).is_empty(),
+                "passes survived the {}..{} gap",
+                from,
+                to
+            );
+            assert!(
+                stamps_between(data.events.iter().map(|e| e.timestamp), from, to).is_empty(),
+                "match events survived the {}..{} gap",
+                from,
+                to
+            );
+        }
+
+        // And what is inside a clip is untouched: 10 seconds at 30 ms.
+        assert_eq!(
+            stamps_between(data.passes.iter().map(|p| p.timestamp), 25_000, 35_000).len(),
+            333,
+            "the goal's own clip lost passes"
+        );
+    }
+
+    /// States are the exception. The viewer needs the state a man was already in
+    /// when a clip opens, not only the changes inside it — that is the carry-over
+    /// [`ResultMatchPositionData::split_into_chunks`] reaches back for — so each
+    /// segment keeps the last transition before it starts.
+    #[test]
+    fn player_states_keep_one_anchor_per_segment_and_nothing_else() {
+        let data = record(RecordingScope::Goals, 60_000, &[30_000]);
+        let entries = data.player_states.get(&7).expect("player 7 changed state");
+        let stamps: Vec<u64> = entries.iter().map(|e| e.timestamp).collect();
+
+        // One anchor per gap, and it is the last transition before the segment
+        // opens: 24_990 for the 25_000 clip, 49_980 for the 50_000 one (the
+        // sample at 49_950 + 30, and 50_010 is already inside).
+        assert_eq!(
+            stamps_between(stamps.iter().copied(), 10_001, 25_000),
+            vec![24_990],
+            "the 25_000 clip lost its carry-over, or kept the whole gap"
+        );
+        assert_eq!(
+            stamps_between(stamps.iter().copied(), 35_001, 50_000),
+            vec![49_980],
+            "the 50_000 clip lost its carry-over, or kept the whole gap"
+        );
+
+        // The anchor is what makes this cheap: 3 segments of 10 s at 30 ms plus
+        // two anchors, against the 2,000 transitions the match actually had.
+        assert!(
+            stamps.len() < 1_100,
+            "the state stream was not clipped at all — {} entries",
+            stamps.len()
+        );
+    }
+
+    /// A full recording has no segments to prune against and keeps everything,
+    /// which is exactly what `.dev/match` reads back.
+    #[test]
+    fn a_full_recording_keeps_every_stream_whole() {
+        let data = record(RecordingScope::Full, 60_000, &[30_000]);
+
+        assert_eq!(data.recorded_segments(), None);
+        assert_eq!(data.passes.len(), 2_000);
+        assert_eq!(data.events.len(), 2_000);
+        assert_eq!(
+            data.player_states.get(&7).map(|e| e.len()),
+            Some(2_000),
+            "a full recording pruned its state stream"
+        );
+    }
+
+    /// A goalless match still has the two bookends, so the streams are clipped
+    /// to them rather than emptied — and the recording is not `is_empty`, which
+    /// is what tells a worker there is something worth sending.
+    #[test]
+    fn a_goalless_match_clips_to_the_bookends() {
+        let data = record(RecordingScope::Goals, 60_000, &[]);
+
+        assert_eq!(
+            data.recorded_segments(),
+            Some(&[(0, 10_000), (50_000, 60_000)][..])
+        );
+        assert!(
+            stamps_between(data.passes.iter().map(|p| p.timestamp), 10_001, 50_000).is_empty(),
+            "passes survived a match with no goal in it"
+        );
+        assert!(!data.is_empty());
     }
 }
 

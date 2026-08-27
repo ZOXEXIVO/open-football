@@ -40,14 +40,15 @@
 //! unmodified input.
 
 use crate::worker::protocol::{MatchEnvelope, MatchOutcome, Request, Response};
-use crate::worker::recording;
 use crate::worker::registry::{BatchOutcome, LatencyTimer, ReadyWorker, WorkerRegistry};
 use crate::worker::transport::Frame;
 use crate::worker::wire::{LeagueMatchWire, SquadFixtureWire, SquadWire};
 use core::MatchRuntime;
-use core::r#match::{Match, MatchDispatcher, MatchResult, MatchResultRaw, MatchSquad, Score};
+use core::r#match::{
+    Match, MatchDispatcher, MatchResult, MatchResultRaw, MatchSquad, RecordingArtifacts, Score,
+};
 use log::{debug, info, warn};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::io;
 use std::sync::Arc;
@@ -381,10 +382,27 @@ impl DistributedDispatcher {
     /// driven write/read future is dropped; the caller then fences the
     /// worker and discards the connection, so the half-consumed stream is
     /// never reused.
-    async fn request_with_timeout(stream: &mut TcpStream, req: &Request) -> io::Result<Response> {
+    ///
+    /// A batch's replays arrive ahead of it, one [`Response::Artifacts`] frame
+    /// each, so this drains frames until a terminal one turns up and hands the
+    /// replays back beside it keyed by the position they had in the request.
+    /// The timeout covers the whole exchange, replays included — a worker that
+    /// stops talking half way through is as fenced as one that never answered.
+    async fn request_with_timeout(
+        stream: &mut TcpStream,
+        req: &Request,
+    ) -> io::Result<(Response, HashMap<usize, RecordingArtifacts>)> {
         match tokio::time::timeout(REMOTE_BATCH_TIMEOUT, async {
             Frame::write(stream, req).await?;
-            Frame::read(stream).await
+            let mut replays = HashMap::new();
+            loop {
+                match Frame::read(stream).await? {
+                    Response::Artifacts { pos, artifacts } => {
+                        replays.insert(pos, artifacts);
+                    }
+                    terminal => return Ok((terminal, replays)),
+                }
+            }
         })
         .await
         {
@@ -418,7 +436,7 @@ impl DistributedDispatcher {
         let latency = timer.elapsed_ms();
 
         match recv {
-            Ok(Response::PlayBatch { items }) if items.len() == count => {
+            Ok((Response::PlayBatch { items }, mut replays)) if items.len() == count => {
                 info!(
                     "remote {}: completed league chunk matches={} in {} ms",
                     worker.address, count, latency
@@ -428,10 +446,11 @@ impl DistributedDispatcher {
                     .await;
                 Ok(items
                     .into_iter()
-                    .filter_map(|o| match o {
-                        MatchOutcome::League { mut result, track } => {
+                    .enumerate()
+                    .filter_map(|(pos, o)| match o {
+                        MatchOutcome::League { mut result } => {
                             if let Some(details) = result.details.as_mut() {
-                                Self::restore_track(&worker.address, details, track);
+                                Self::attach_replay(&worker.address, details, replays.remove(&pos));
                             }
                             Some(result)
                         }
@@ -441,7 +460,7 @@ impl DistributedDispatcher {
             }
             other => {
                 let reason = match other {
-                    Ok(Response::Error { reason }) => reason,
+                    Ok((Response::Error { reason }, _)) => reason,
                     Ok(_) => "unexpected response shape".to_string(),
                     Err(e) => format!("io: {}", e),
                 };
@@ -606,7 +625,7 @@ impl DistributedDispatcher {
         let latency = timer.elapsed_ms();
 
         match recv {
-            Ok(Response::PlayBatch { items }) if items.len() == count => {
+            Ok((Response::PlayBatch { items }, mut replays)) if items.len() == count => {
                 info!(
                     "remote {}: completed squad chunk matches={} in {} ms",
                     worker.address, count, latency
@@ -616,13 +635,10 @@ impl DistributedDispatcher {
                     .await;
                 Ok(items
                     .into_iter()
-                    .filter_map(|o| match o {
-                        MatchOutcome::Squad {
-                            idx,
-                            mut result,
-                            track,
-                        } => {
-                            Self::restore_track(&worker.address, &mut result, track);
+                    .enumerate()
+                    .filter_map(|(pos, o)| match o {
+                        MatchOutcome::Squad { idx, mut result } => {
+                            Self::attach_replay(&worker.address, &mut result, replays.remove(&pos));
                             Some((idx, result))
                         }
                         _ => None,
@@ -631,7 +647,7 @@ impl DistributedDispatcher {
             }
             other => {
                 let reason = match other {
-                    Ok(Response::Error { reason }) => reason,
+                    Ok((Response::Error { reason }, _)) => reason,
                     Ok(_) => "unexpected response shape".to_string(),
                     Err(e) => format!("io: {}", e),
                 };
@@ -662,35 +678,33 @@ impl DistributedDispatcher {
         }
     }
 
-    /// Put a worker's replay back where the engine would have left it.
+    /// Hang a worker's baked replay off the result so the store writes it.
     ///
     /// `MatchResultRaw::position_data` arrives as `empty()` — it never crosses
     /// the wire inside the result — so without this every remotely-played match
     /// is stored with an empty segment list and the viewer says nothing was
     /// recorded. Which was true, once.
     ///
-    /// A blob that fails to decode is dropped and logged rather than raised: the
-    /// result itself is sound, and a match with no replay is a case the whole
-    /// stack already handles.
-    fn restore_track(address: &str, result: &mut MatchResultRaw, track: Option<Vec<u8>>) {
-        let Some(blob) = track else {
+    /// Nothing is decoded or rebuilt here: the worker already produced the exact
+    /// bytes `MatchStore` would have written, so all that is left is to carry
+    /// them the last few feet. `None` is the ordinary case for a match played
+    /// with recordings off, and leaves the empty recorder in place for the store
+    /// to bake into "nothing was recorded".
+    fn attach_replay(
+        address: &str,
+        result: &mut MatchResultRaw,
+        artifacts: Option<RecordingArtifacts>,
+    ) {
+        let Some(artifacts) = artifacts else {
             return;
         };
-        match recording::decode(&blob) {
-            Some(data) => {
-                debug!(
-                    "remote {}: replay restored ({} KiB compressed)",
-                    address,
-                    blob.len() / 1024
-                );
-                result.position_data = data;
-            }
-            None => warn!(
-                "remote {}: replay track ({} bytes) did not decode — match kept, replay dropped",
-                address,
-                blob.len()
-            ),
-        }
+        debug!(
+            "remote {}: replay received — {} chunk(s), {} KiB",
+            address,
+            artifacts.chunks.len(),
+            artifacts.byte_len() / 1024
+        );
+        result.recording_artifacts = Some(artifacts);
     }
 
     fn placeholder_match_result() -> MatchResult {

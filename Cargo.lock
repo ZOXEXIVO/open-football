@@ -1855,7 +1855,7 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "0.1.0"
+version = "1.7.410"
 
 [[package]]
 name = "shlex"
@@ -2463,6 +2463,7 @@ dependencies = [
  "log",
  "match_viewer_build",
  "mime_guess",
+ "rayon",
  "reqwest",
  "rust-embed",
  "serde",

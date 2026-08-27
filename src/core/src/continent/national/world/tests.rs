@@ -267,6 +267,7 @@ fn synth_match_result(home_score: u8, away_score: u8, scorer_id: Option<u32>) ->
     MatchResultRaw {
         score: Some(synth_score(home_score, away_score)),
         position_data: ResultMatchPositionData::new(),
+        recording_artifacts: None,
         left_team_players: FieldSquad::new(),
         right_team_players: FieldSquad::new(),
         match_time_ms: 5_400_000,

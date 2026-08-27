@@ -5,31 +5,21 @@
 //! and then a stream of `PlayBatch` requests.
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND};
+use crate::r#match::stores::MatchStore;
 use crate::worker::protocol::{
     MatchEnvelope, MatchOutcome, PROTOCOL_VERSION, RecordingSettings, Request, Response,
 };
-use crate::worker::recording;
 use crate::worker::registry::LatencyTimer;
 use crate::worker::transport::Frame;
 use core::MatchRuntime;
 use core::r#match::{
-    Match, MatchResult, MatchResultRaw, MatchSquad, RecordingScope, ResultMatchPositionData, Score,
+    Match, MatchResult, MatchResultRaw, MatchSquad, RecordingArtifacts, RecordingScope,
+    ResultMatchPositionData, Score,
 };
 use log::{debug, error, info, warn};
+use rayon::prelude::*;
 use std::collections::HashMap;
 use tokio::net::{TcpListener, TcpStream};
-
-/// How many bytes of replay one response frame may carry.
-///
-/// [`MAX_FRAME_BYTES`](crate::worker::transport::MAX_FRAME_BYTES) is 64 MiB and
-/// a frame that exceeds it does not get sent at all — the write fails, the
-/// connection dies, and the coordinator fences a worker that was in fact
-/// perfectly healthy. A clipped track is ~100 KB compressed and a batch is tens
-/// of matches, so this is never reached in normal running; under
-/// `--match-recording-full` on a fat batch it can be. Blowing the budget costs
-/// the *replays* of the matches past it, which is a thing the viewer already
-/// knows how to say. Blowing the frame would cost the results.
-const TRACK_BUDGET_BYTES: usize = 48 * 1024 * 1024;
 
 pub struct WorkerServer {
     port: u16,
@@ -201,7 +191,7 @@ impl WorkerConnection {
                     // write) for the completion log below.
                     let count = items.len();
                     let timer = LatencyTimer::start();
-                    let outcomes =
+                    let (outcomes, replays) =
                         match tokio::task::spawn_blocking(move || Self::play_batch(items)).await {
                             Ok(o) => o,
                             Err(e) => {
@@ -212,11 +202,24 @@ impl WorkerConnection {
                                 continue;
                             }
                         };
+                    let replay_bytes: usize = replays.iter().map(|(_, a)| a.byte_len()).sum();
                     info!(
-                        "worker: processed batch matches={} in {} ms",
+                        "worker: processed batch matches={} in {} ms ({} replay(s), {} KiB)",
                         count,
-                        timer.elapsed_ms()
+                        timer.elapsed_ms(),
+                        replays.len(),
+                        replay_bytes / 1024,
                     );
+
+                    // Replays first, one frame each, then the batch itself. The
+                    // coordinator reads frames until it sees a terminal one, so
+                    // the order only has to be consistent — and sending them
+                    // ahead means a batch whose write dies part-way costs the
+                    // replays rather than the results.
+                    for (pos, artifacts) in replays {
+                        Frame::write(&mut self.stream, &Response::Artifacts { pos, artifacts })
+                            .await?;
+                    }
                     let resp = Response::PlayBatch { items: outcomes };
                     Frame::write(&mut self.stream, &resp).await?;
                 }
@@ -250,8 +253,15 @@ impl WorkerConnection {
     /// across every configured match thread. The worker process has
     /// no `MatchDispatcher` installed, so those calls always take the
     /// local rayon path.
-    fn play_batch(items: Vec<MatchEnvelope>) -> Vec<MatchOutcome> {
+    ///
+    /// Returns the outcomes in input order plus, separately, whatever replays
+    /// the batch produced keyed by the same position. They are separate because
+    /// they leave on separate frames — see [`Response::Artifacts`].
+    fn play_batch(
+        items: Vec<MatchEnvelope>,
+    ) -> (Vec<MatchOutcome>, Vec<(usize, RecordingArtifacts)>) {
         let mut outcomes: Vec<Option<MatchOutcome>> = (0..items.len()).map(|_| None).collect();
+        let mut tracks: Vec<(usize, ResultMatchPositionData)> = Vec::new();
 
         // Split envelopes by variant, remembering the original input
         // position so the response can be scattered back in order.
@@ -271,20 +281,14 @@ impl WorkerConnection {
 
         let pool = MatchRuntime::engine_pool();
 
-        // Replay bytes already committed to this response — see
-        // `TRACK_BUDGET_BYTES`.
-        let mut track_bytes = 0usize;
-        let mut dropped = 0usize;
-
         if !league.is_empty() {
             let (positions, matches): (Vec<usize>, Vec<_>) = league.into_iter().unzip();
             let results = pool.play(matches);
             for (pos, mut r) in positions.into_iter().zip(results) {
-                let track = r
-                    .details
-                    .as_mut()
-                    .and_then(|d| Self::take_track(d, &mut track_bytes, &mut dropped));
-                outcomes[pos] = Some(MatchOutcome::League { result: r, track });
+                if let Some(track) = r.details.as_mut().and_then(Self::take_track) {
+                    tracks.push((pos, track));
+                }
+                outcomes[pos] = Some(MatchOutcome::League { result: r });
             }
         }
         if !squad.is_empty() {
@@ -304,28 +308,28 @@ impl WorkerConnection {
             let results = pool.play_squads_with_knockout(keyed);
             for (pos, mut raw) in results {
                 let caller_idx = *caller_idx_by_pos.get(&pos).unwrap_or(&pos);
-                let track = Self::take_track(&mut raw, &mut track_bytes, &mut dropped);
+                if let Some(track) = Self::take_track(&mut raw) {
+                    tracks.push((pos, track));
+                }
                 outcomes[pos] = Some(MatchOutcome::Squad {
                     idx: caller_idx,
                     result: raw,
-                    track,
                 });
             }
         }
 
-        if dropped > 0 {
-            warn!(
-                "worker: {} replay track(s) dropped — batch already carries {} MiB \
-                 (budget {} MiB); the matches are fine, their replays are not",
-                dropped,
-                track_bytes / (1024 * 1024),
-                TRACK_BUDGET_BYTES / (1024 * 1024),
-            );
-        } else if track_bytes > 0 {
-            debug!("worker: batch carries {} KiB of replay", track_bytes / 1024);
-        }
+        // Bake the replays across every match thread rather than one at a time.
+        // Gzipping at `best` is tens of milliseconds for a clipped track and
+        // seconds for a `--match-recording-full` one, and a batch is `2 ×
+        // threads` of them; done serially on a fat batch that alone could walk
+        // into the coordinator's `REMOTE_BATCH_TIMEOUT`. The cores are sitting
+        // idle the moment the last whistle goes, so use them.
+        let artifacts = tracks
+            .into_par_iter()
+            .map(|(pos, data)| (pos, MatchStore::bake(&data)))
+            .collect::<Vec<_>>();
 
-        outcomes
+        let outcomes = outcomes
             .into_iter()
             .enumerate()
             .map(|(i, opt)| {
@@ -342,36 +346,31 @@ impl WorkerConnection {
                             details: None,
                             friendly: false,
                         },
-                        track: None,
                     }
                 })
             })
-            .collect()
+            .collect();
+
+        (outcomes, artifacts)
     }
 
-    /// Lift the replay out of a finished result and compress it for the wire,
-    /// leaving an `empty()` recorder behind — which is what the result would
-    /// have carried anyway, since `position_data` never serialises.
+    /// Lift the replay out of a finished result, leaving an `empty()` recorder
+    /// behind — which is what the result would have carried anyway, since
+    /// `position_data` never serialises.
     ///
-    /// Returns `None` when there was no recording (the coordinator asked for
-    /// none, or the match kept nothing) and when the response's replay budget
-    /// is already spent.
-    fn take_track(
-        result: &mut MatchResultRaw,
-        spent: &mut usize,
-        dropped: &mut usize,
-    ) -> Option<Vec<u8>> {
+    /// `None` means "there is nothing to send" — a recorder that was never
+    /// sampled, which is what a worker produces when the coordinator has
+    /// recordings switched off, and also what a goalless clipped match produces.
+    ///
+    /// That is not the same as sending an empty set of artifacts, and the
+    /// difference is load-bearing. Baking an unsampled recorder writes metadata
+    /// with no `segments` field at all, and the viewer reads an absent segment
+    /// list as "all of it is recorded" — it would then sit on the loading notice
+    /// waiting for chunks nobody wrote. `None` leaves the coordinator's own
+    /// `empty()` in place, which bakes to the empty segment list that makes the
+    /// viewer say so instead.
+    fn take_track(result: &mut MatchResultRaw) -> Option<ResultMatchPositionData> {
         let data = std::mem::replace(&mut result.position_data, ResultMatchPositionData::empty());
-
-        if *spent >= TRACK_BUDGET_BYTES {
-            if !data.is_empty() {
-                *dropped += 1;
-            }
-            return None;
-        }
-
-        let blob = recording::encode(data)?;
-        *spent += blob.len();
-        Some(blob)
+        (!data.is_empty()).then_some(data)
     }
 }

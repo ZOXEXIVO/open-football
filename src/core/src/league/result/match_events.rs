@@ -2826,6 +2826,7 @@ mod canonical_rating_tests {
             MatchResultRaw {
                 score: None,
                 position_data: ResultMatchPositionData::empty(),
+                recording_artifacts: None,
                 left_team_players: FieldSquad::new(),
                 right_team_players: FieldSquad::new(),
                 match_time_ms: 90 * 60 * 1000,

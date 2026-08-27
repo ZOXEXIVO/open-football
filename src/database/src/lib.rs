@@ -7,9 +7,8 @@ use std::sync::OnceLock;
 pub use loaders::{
     ClubEntity, ClubTeamEntity, ContinentEntity, ContinentLoader, CountryEntity, CountryLoader,
     DataTreeLoader, DomesticCupEntity, ForeignPlayerEntry, HistoryClubEntity, LeagueEntity,
-    NamesByCountryEntity,
-    NationalCompetitionEntity, NationalCompetitionLoader, OdbContract, OdbLoan, OdbPlayer,
-    OdbPosition, OdbReputation, PlayersOdb,
+    NamesByCountryEntity, NationalCompetitionEntity, NationalCompetitionLoader, OdbContract,
+    OdbLoan, OdbPlayer, OdbPosition, OdbReputation, PlayersOdb,
 };
 
 pub use generators::DatabaseGenerator;

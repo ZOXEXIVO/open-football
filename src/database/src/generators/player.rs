@@ -3771,8 +3771,7 @@ mod odb_hydration_tests {
     #[test]
     fn history_at_an_unmodelled_club_still_names_it() {
         let data = crate::DatabaseLoader::load();
-        let (name, slug, reputation, league_name, league_slug) =
-            resolve_club_display(920, &data); // FC Schalke 04
+        let (name, slug, reputation, league_name, league_slug) = resolve_club_display(920, &data); // FC Schalke 04
         assert_eq!(name, "FC Schalke 04");
         assert!(slug.is_empty(), "an unmodelled club has no page to link to");
         assert_eq!(reputation, 0);

@@ -16,14 +16,19 @@
 //! Wire format is bincode 2 over a 4-byte length prefix. No HTTP.
 //!
 //! A worker records what the coordinator would have recorded — it is told on
-//! the handshake — and sends each match's replay track home compressed, beside
-//! the result (`recording`). Without that a remotely-played match reaches the
-//! viewer with an empty recording and the page says nothing was recorded,
-//! because nothing was.
+//! the handshake — and sends each match's replay home beside the result.
+//! Without that a remotely-played match reaches the viewer with an empty
+//! recording and the page says nothing was recorded, because nothing was.
+//!
+//! What it sends is the finished article: the gzipped chunk files and the
+//! metadata document, baked by `MatchStore::bake` on the worker's own CPU
+//! (`RecordingArtifacts`). A worker still writes nothing to disk — it plays and
+//! it puts bytes on a socket — but the bytes it puts there are the ones the
+//! coordinator will write, so the wire and the file cannot drift apart, and the
+//! coordinator is not left gzipping the whole fleet's replays by itself.
 
 pub mod dispatcher;
 pub mod protocol;
-pub mod recording;
 pub mod registry;
 pub mod server;
 pub mod transport;

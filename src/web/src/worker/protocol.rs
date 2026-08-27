@@ -1,11 +1,13 @@
 //! Bincode message envelopes that travel over the raw-TCP frame
 //! transport (see `transport.rs`). The coordinator opens one
 //! connection per worker entry, sends `Request::Handshake` first, then
-//! any number of `Request::PlayBatch`. The worker replies one
-//! `Response` per request, in order.
+//! any number of `Request::PlayBatch`. Every request is answered by exactly one
+//! terminal `Response`, in order — a `PlayBatch` may be preceded by any number
+//! of [`Response::Artifacts`] frames carrying that batch's replays, so a reader
+//! consumes frames until a terminal one arrives.
 
 use crate::worker::wire::{LeagueMatchWire, SquadFixtureWire};
-use core::r#match::{MatchResult, MatchResultRaw};
+use core::r#match::{MatchResult, MatchResultRaw, RecordingArtifacts};
 use serde::{Deserialize, Serialize};
 
 /// Wire protocol version. Bumped when the on-wire shape changes in a
@@ -18,7 +20,10 @@ use serde::{Deserialize, Serialize};
 /// v2: added `Request::Ping` / `Response::Pong` liveness probe.
 /// v3: the handshake carries [`RecordingSettings`] and outcomes carry a
 /// compressed replay track, so a match played remotely is watchable.
-pub const PROTOCOL_VERSION: u32 = 3;
+/// v4: the replay crosses as the finished chunk files rather than a wire-only
+/// mirror of the recorder, and each one gets its own frame
+/// ([`Response::Artifacts`]) instead of sharing the batch's.
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// What the coordinator wants recorded, sent once per connection.
 ///
@@ -87,6 +92,22 @@ pub enum Response {
     HandshakeRejected {
         reason: String,
     },
+    /// One match's baked replay, sent ahead of the `PlayBatch` frame it belongs
+    /// to. `pos` indexes the request's `items`.
+    ///
+    /// A frame of its own, one per match, because a batch is `2 × threads`
+    /// matches and its replays used to have to fit *together* under
+    /// [`MAX_FRAME_BYTES`](super::transport::MAX_FRAME_BYTES). They did not
+    /// always: a worker that overran the budget dropped the surplus replays on
+    /// the floor to save the results, which is the right trade to make and the
+    /// wrong situation to be in. Framed one at a time there is no budget to
+    /// overrun — a single match's replay is a hundred and seventy kilobytes
+    /// clipped, and even a `--match-recording-full` track is well inside the
+    /// cap.
+    Artifacts {
+        pos: usize,
+        artifacts: RecordingArtifacts,
+    },
     PlayBatch {
         items: Vec<MatchOutcome>,
     },
@@ -115,23 +136,13 @@ pub enum MatchEnvelope {
 /// the input envelope's variant; the coordinator pairs results to
 /// requests by input index.
 ///
-/// The replay travels *beside* the result rather than inside it.
-/// `MatchResultRaw::position_data` is `#[serde(skip)]` and stays that way —
-/// it is the right default for every other thing that serialises a result, and
-/// the type is serialise-only besides. So the worker lifts the track out,
-/// compresses it (see [`recording`](super::recording)) and hangs the blob here;
-/// the coordinator puts it back.
+/// The replay does not travel inside the result. `MatchResultRaw::position_data`
+/// is `#[serde(skip)]` and stays that way — it is the right default for every
+/// other thing that serialises a result, and the type is serialise-only besides.
+/// It travels as its own [`Response::Artifacts`] frame, matched back to the
+/// outcome by input index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MatchOutcome {
-    League {
-        result: MatchResult,
-        /// gzipped bincode of the match's replay track, or `None` when the
-        /// coordinator asked for no recording (or the match produced none).
-        track: Option<Vec<u8>>,
-    },
-    Squad {
-        idx: usize,
-        result: MatchResultRaw,
-        track: Option<Vec<u8>>,
-    },
+    League { result: MatchResult },
+    Squad { idx: usize, result: MatchResultRaw },
 }

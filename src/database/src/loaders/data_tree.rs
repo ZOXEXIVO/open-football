@@ -204,7 +204,10 @@ mod tests {
     #[test]
     fn unmodelled_history_clubs_still_have_names() {
         let names = crate::loaders::history_club_names();
-        assert!(!names.is_empty(), "history_clubs section missing from database.db");
+        assert!(
+            !names.is_empty(),
+            "history_clubs section missing from database.db"
+        );
         assert_eq!(names.get(&920).map(String::as_str), Some("FC Schalke 04"));
         assert_eq!(names.get(&2247).map(String::as_str), Some("Hertha BSC"));
 

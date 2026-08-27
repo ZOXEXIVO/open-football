@@ -13,7 +13,7 @@ use super::score::Score;
 use super::substitution::SubstitutionInfo;
 use crate::league::LeagueMatch;
 use crate::r#match::squad::OmittedPlayer;
-use crate::r#match::{MatchSquad, ResultMatchPositionData};
+use crate::r#match::{MatchSquad, RecordingArtifacts, ResultMatchPositionData};
 use crate::{MatchTacticType, PlayerPositionType};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -39,12 +39,25 @@ pub struct MatchResultRaw {
     /// lines, not several MB of samples. Deserialising a result therefore
     /// always yields `ResultMatchPositionData::empty()` here.
     ///
-    /// The distributed worker protocol, which does need the replay, carries it
-    /// alongside instead: the worker lifts the track out, compresses it, and
-    /// hangs the blob off its `MatchOutcome`; the coordinator decodes it back
-    /// into this field (`web::worker::recording`).
+    /// The distributed worker protocol, which does need the replay, does not put
+    /// it back here at all: a worker bakes the track into the bytes the store
+    /// would have written and sends those, so a remotely-played match arrives
+    /// with this empty and `recording_artifacts` filled instead.
     #[serde(skip, default = "ResultMatchPositionData::empty")]
     pub position_data: ResultMatchPositionData,
+
+    /// The replay, already baked into the bytes that go on disk — set only when
+    /// somebody other than the storing process did the baking.
+    ///
+    /// A match played here leaves this `None` and the store bakes
+    /// `position_data` itself. A match played on a remote worker arrives with
+    /// it filled and `position_data` empty: the worker serialised and gzipped
+    /// the track on its own CPU, which is the one machine in the fleet with
+    /// spare capacity for it, and the coordinator only has to write the bytes
+    /// down. Skipped by serde for the same reason `position_data` is — it rides
+    /// beside the result on the worker protocol, not inside it.
+    #[serde(skip, default)]
+    pub recording_artifacts: Option<RecordingArtifacts>,
 
     pub left_team_players: FieldSquad,
     pub right_team_players: FieldSquad,
@@ -109,6 +122,7 @@ impl Clone for MatchResultRaw {
         MatchResultRaw {
             score: self.score.clone(),
             position_data: self.position_data.clone(),
+            recording_artifacts: self.recording_artifacts.clone(),
             left_team_players: self.left_team_players.clone(),
             right_team_players: self.right_team_players.clone(),
             match_time_ms: self.match_time_ms,
@@ -133,6 +147,7 @@ impl MatchResultRaw {
         MatchResultRaw {
             score: None,
             position_data: ResultMatchPositionData::new(),
+            recording_artifacts: None,
             left_team_players: FieldSquad::new(),
             right_team_players: FieldSquad::new(),
             match_time_ms,
@@ -155,6 +170,7 @@ impl MatchResultRaw {
         MatchResultRaw {
             score: self.score.clone(),
             position_data: ResultMatchPositionData::new(),
+            recording_artifacts: None,
             left_team_players: self.left_team_players.clone(),
             right_team_players: self.right_team_players.clone(),
             match_time_ms: self.match_time_ms,

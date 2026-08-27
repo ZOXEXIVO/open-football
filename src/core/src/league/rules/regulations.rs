@@ -325,6 +325,7 @@ mod tests {
         let raw = MatchResultRaw {
             score: Some(Score::new(1, 2)),
             position_data: ResultMatchPositionData::empty(),
+            recording_artifacts: None,
             left_team_players: FieldSquad::new(),
             right_team_players: FieldSquad::new(),
             match_time_ms: 90 * 60 * 1000,
