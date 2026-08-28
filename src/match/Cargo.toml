@@ -112,6 +112,27 @@ web-sys = { version = "0.3", features = [
     # Focusing the canvas on load, so the flight keys answer the first press.
     "HtmlElement",
     "FocusOptions",
+    # The stadium's own sound, synthesised in the browser rather than
+    # downloaded — see `sound/mod.rs`, which explains why `bevy_audio` is
+    # absent from the feature list above and why nothing here is a file. The
+    # whole soundtrack is these nodes and four seconds of pink noise the crate
+    # generates for itself.
+    "AudioContext",
+    "AudioContextState",
+    "BaseAudioContext",
+    "AudioNode",
+    "AudioParam",
+    "AudioDestinationNode",
+    "AudioBuffer",
+    "AudioBufferSourceNode",
+    "AudioScheduledSourceNode",
+    "BiquadFilterNode",
+    "BiquadFilterType",
+    "DynamicsCompressorNode",
+    "GainNode",
+    "OscillatorNode",
+    "OscillatorType",
+    "StereoPannerNode",
 ] }
 serde = { version = "1", features = ["derive"] }
 # `raw_value` so a chunk can be opened in two passes: the envelope now, each

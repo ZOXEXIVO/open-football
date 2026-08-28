@@ -583,7 +583,11 @@ impl Netting {
     /// LINE. Allowing even a ball's radius of slack there lets the miss
     /// back in: a shot that goes wide crosses the plane of the goal line
     /// exactly, which is the frame the artefact was drawn on.
-    fn inside_a_goal(ball: Vec3) -> bool {
+    /// `pub(crate)` so the soundtrack can ask the SAME question rather than
+    /// asking its own: the paragraphs above are there because "in the goal"
+    /// has exactly one answer in this crate, and a second copy of the rule is
+    /// how the net comes to rustle for a ball the mix says went wide.
+    pub(crate) fn inside_a_goal(ball: Vec3) -> bool {
         // Distance past the nearer goal line — negative out on the pitch.
         let past_line = ball.x.abs() - Field::HALF_LENGTH;
         past_line > 0.0

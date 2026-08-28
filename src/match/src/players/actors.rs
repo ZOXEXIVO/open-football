@@ -743,7 +743,13 @@ impl Actors {
     const BALL_TELEPORT: f32 = 45.0;
     /// How close the ball has to be to count as struck by this player — within
     /// a stride of him.
-    const STRIKE_REACH: f32 = 1.7;
+    ///
+    /// `pub(crate)` because the soundtrack's own softer detector uses the same
+    /// reach — see [`Soundtrack::brushed`](crate::sound::matchday::Soundtrack).
+    /// It deliberately does NOT reuse the speed gates below, which are what it
+    /// exists to be gentler than, but "close enough to have touched it" is one
+    /// question with one answer.
+    pub(crate) const STRIKE_REACH: f32 = 1.7;
     /// And how fast it has to be leaving. Below this it is a touch, a trap or
     /// a ball rolling past, none of which a player opens his body up for.
     const STRUCK: f32 = 7.0;
@@ -762,7 +768,13 @@ impl Actors {
     const TOUCHED: f32 = 4.5;
     /// Ball speed, in metres per second, that counts as hit as hard as anybody
     /// hits one — the top of the swing. Measured p90 of a recorded match.
-    const HAMMERED: f32 = 38.0;
+    ///
+    /// `pub(crate)` because the soundtrack weighs a contact against the same
+    /// number the swing does — see
+    /// [`Soundtrack::contact`](crate::sound::matchday::Soundtrack). A second
+    /// figure for "hit as hard as anybody hits one" is how the picture and the
+    /// sound come to disagree about which of them was a shot.
+    pub(crate) const HAMMERED: f32 = 38.0;
     /// Height, in metres, above which a ball is being met with a head.
     ///
     /// A footballer is drawn 1.79 m to the crown with his eyes at 1.66, so a
@@ -2200,7 +2212,13 @@ impl Actors {
     /// Deliberately conservative in both directions: everything that is not
     /// clearly one of the two falls back to a kick, which is what the
     /// overwhelming majority of the fourteen strikes a minute actually are.
-    fn strike_kind(at: Vec3, before: f32) -> Strike {
+    ///
+    /// `pub(crate)` so the soundtrack asks the SAME question rather than
+    /// forming a second opinion about what a header is — see
+    /// [`Soundtrack::brushed`](crate::sound::matchday::Soundtrack). A boot
+    /// sound over a picture of a man heading it is exactly the kind of
+    /// disagreement two copies of this rule would produce.
+    pub(crate) fn strike_kind(at: Vec3, before: f32) -> Strike {
         let dead = before < Self::DEAD_BALL;
         let touchline = Field::HALF_WIDTH - at.z.abs() < Self::TOUCHLINE_REACH;
         if dead && touchline && at.y < Self::AIRBORNE {

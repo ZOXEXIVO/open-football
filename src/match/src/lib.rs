@@ -22,6 +22,8 @@
 //! - `ui` — the transport bar drawn over the picture, mouse and touch.
 //! - `art` — the images and glyphs the crate paints for itself, since
 //!   nothing is loaded over the network.
+//! - `sound` — the ball being struck, synthesised in the browser for the
+//!   same reason `art` paints its own pixels.
 //!
 //! This file is the wiring: it holds the entry point the page calls and the
 //! one schedule every system in those groups is registered into, which is the
@@ -33,6 +35,7 @@ mod broadcast;
 mod players;
 mod recording;
 mod scene;
+mod sound;
 mod ui;
 
 use crate::app::bringup::Bringup;
@@ -55,6 +58,7 @@ use crate::recording::replay::ReplayTracks;
 use crate::scene::net::Netting;
 use crate::scene::pitch::{Bank, Pitch};
 use crate::scene::sky::Sky;
+use crate::sound::matchday::{Soundtrack, Speakers};
 use crate::ui::timeline::{DebugOverlay, Timeline};
 use crate::ui::touch::{FlightPad, TouchControls, TouchDevice, TouchDrive, TouchGesture};
 use bevy::asset::AssetMetaCheck;
@@ -197,6 +201,16 @@ impl MatchViewer {
             // every frame whether or not the recording has any holes in it at
             // all, so it exists from the first one. See `cut`.
             .init_resource::<CutFade>()
+            // What the ball has already been heard doing, and whether anybody
+            // wants to hear it at all. Registered here rather than opened at
+            // startup on purpose: the audio engine behind it is not created
+            // until the replay is actually running, so a viewer who never
+            // presses play never makes the browser open one. See `sound`.
+            .init_resource::<Soundtrack>()
+            // …and its other half, which holds JavaScript handles and so
+            // cannot be a `Resource` at all — `Speakers` is the one non-send
+            // thing in the app.
+            .init_non_send::<Speakers>()
             .add_systems(
                 Startup,
                 (
@@ -296,6 +310,28 @@ impl MatchViewer {
                     Lineup::pose
                         .after(Actors::take_the_field)
                         .before(Actors::animate),
+                ),
+            )
+            // **The soundtrack**, named here for the same reason the pair
+            // above are: both of the twenty-system groups below are full, and
+            // what these two need is a place in the frame rather than a place
+            // in a list.
+            //
+            // - **the mute chip** ahead of the paint, so a click on it is
+            //   answered on the frame it happened rather than the next one.
+            // - **the ball** behind `Actors::follow_playhead`, which is what
+            //   settles `BallState` — where the ball is, how fast it is going
+            //   and the strike that is coming — and in front of
+            //   `Playback::end_frame`, which clears the `seeked` flag it reads
+            //   to know its idea of the ball's velocity is worthless.
+            .add_systems(
+                Update,
+                (
+                    Timeline::handle_sound.before(Timeline::paint_chips),
+                    Soundtrack::follow_playhead
+                        .after(Actors::follow_playhead)
+                        .after(Timeline::handle_sound)
+                        .before(Playback::end_frame),
                 ),
             )
             .add_systems(

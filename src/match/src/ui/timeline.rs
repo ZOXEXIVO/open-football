@@ -9,6 +9,7 @@ use crate::broadcast::focus::CameraSubject;
 use crate::players::actors::BallState;
 use crate::recording::loader::ChunkLoader;
 use crate::recording::playback::{Playback, RecordedSpans};
+use crate::sound::matchday::Soundtrack;
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::input::touch::Touches;
 use bevy::prelude::*;
@@ -65,6 +66,15 @@ pub struct StatesButton;
 
 #[derive(Component)]
 pub struct CameraResetButton;
+
+/// Turns the ground off.
+///
+/// Armed — lit — while the sound is ON, which is the way round the other
+/// chips on this bar work: a chip is lit when the thing it names is happening.
+/// It also means the one state a viewer needs to find in a hurry, "this tab is
+/// what is making the noise", is the visible one.
+#[derive(Component)]
+pub struct SoundButton;
 
 /// One of the small labelled buttons flanking the scrub track.
 ///
@@ -439,6 +449,36 @@ impl Timeline {
                         Text::new("1x"),
                         Self::chip_font(),
                         TextColor(Self::INK),
+                    ));
+
+                    // The stadium. Sits with the transport rather than with
+                    // the camera controls because that is what it belongs to:
+                    // it is the other half of pressing play, and a replay
+                    // that has started making a noise in a background tab is
+                    // the one thing on this bar somebody may need to reach
+                    // without reading it. Upper case for the reason RESET is
+                    // — the bar draws with faces the crate compiles in, and
+                    // eleven-pixel capitals are the more legible of the two.
+                    bar.spawn((
+                        SoundButton,
+                        // Lit from the first frame: the sound is on unless
+                        // somebody turns it off. Nothing is audible until the
+                        // replay is running, so this can never be a page that
+                        // starts shouting on its own — see `sound`.
+                        Chip { armed: true },
+                        Interaction::default(),
+                        Self::chip(60.0),
+                        BackgroundColor(Self::ARMED),
+                        BorderColor::all(Self::ARMED_EDGE),
+                    ))
+                    .with_child((
+                        Text::new("SOUND"),
+                        Self::chip_font(),
+                        TextColor(Self::INK),
+                        TextLayout {
+                            linebreak: LineBreak::NoWrap,
+                            ..default()
+                        },
                     ));
 
                     // Puts the camera back on the gantry. The rig can now be
@@ -847,6 +887,31 @@ impl Timeline {
             } else {
                 playback.playing = !playback.playing;
             }
+        }
+    }
+
+    /// Mutes and unmutes the ground, and keeps the chip showing which it is.
+    ///
+    /// One system for both halves rather than a handler and a refresh like the
+    /// camera reset next door, because unlike that one the answer is not
+    /// derived from anything: this button IS the state, so the press and the
+    /// light are the same fact and splitting them would only give two systems
+    /// a chance to disagree.
+    /// `Changed<Interaction>` and not a bare read, for the reason
+    /// [`Self::handle_toggle`] wants it: `Pressed` is a state and not an
+    /// event, so a held button is `Pressed` on every frame of the hold and a
+    /// toggle read off it would flip the sound sixty times a second.
+    pub fn handle_sound(
+        mut button: Query<(&Interaction, &mut Chip), (Changed<Interaction>, With<SoundButton>)>,
+        mut soundtrack: ResMut<Soundtrack>,
+    ) {
+        for (interaction, mut chip) in &mut button {
+            if *interaction == Interaction::Pressed {
+                soundtrack.muted = !soundtrack.muted;
+            }
+            chip.set_if_neq(Chip {
+                armed: !soundtrack.muted,
+            });
         }
     }
 
