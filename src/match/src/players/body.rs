@@ -361,6 +361,18 @@ impl Sculptor {
         base
     }
 
+    /// The same, for a piece that has to be turned and carried into place
+    /// first: a finger off a knuckle, a thumb off the side of a palm.
+    ///
+    /// A lathe can only be built about its own axis, and five digits pointing
+    /// five different ways are five axes. They are still ONE mesh, though,
+    /// because they never move relative to the hand on an outfield player —
+    /// which is the whole reason they can be afforded at all. See
+    /// [`Self::joined`] for what an entity costs.
+    fn placed(base: Mesh, part: Mesh, at: Transform) -> Mesh {
+        Self::joined(base, part.transformed_by(at))
+    }
+
     /// A rounded lump — a hand, a boot, the ball of a joint — sized on each
     /// axis.
     ///
@@ -861,7 +873,9 @@ pub struct BodyParts {
     /// The band round the end of a sleeve, in the trim colour.
     cuff: Handle<Mesh>,
     forearm: Handle<Mesh>,
-    hand: Handle<Mesh>,
+    /// A bare hand, left and right — see [`BodyParts::hand`] for why it is a
+    /// pair rather than one mesh used twice. Indexed by side, `[0]` left.
+    hand: [Handle<Mesh>; 2],
     /// A keeper's glove. Its own mesh rather than a scaled hand: the whole
     /// point of the thing is that it is broad and flat, and the two of them
     /// splayed at the end of a dive are what says *catching* from the stand.
@@ -957,9 +971,9 @@ impl BodyParts {
         Ring::squared(0.442, 0.1935, 0.1220, 0.000, 2.30),
         Ring::squared(0.484, 0.2000, 0.1140, -0.006, 2.15),
         Ring::squared(0.514, 0.2030, 0.1070, -0.007, 2.05),
-        Ring::squared(0.534, 0.1955, 0.1010, -0.007, 2.00),
-        Ring::squared(0.552, 0.1700, 0.0930, -0.007, 2.00),
-        Ring::squared(0.568, 0.1180, 0.0820, -0.008, 2.00),
+        Ring::squared(0.534, 0.1995, 0.1010, -0.007, 2.00),
+        Ring::squared(0.552, 0.1760, 0.0930, -0.007, 2.00),
+        Ring::squared(0.568, 0.1230, 0.0820, -0.008, 2.00),
         Ring::squared(0.582, 0.0745, 0.0690, -0.011, 2.00),
     ];
 
@@ -1219,34 +1233,26 @@ impl BodyParts {
             // the single most robotic thing on the whole figure and the first
             // thing anybody looking at one saw.
             //
-            // **And its widest point had to come UP.** A shoulder seam sits
-            // on the acromion, which in this rig is the torso's crest at
-            // world 1.464; the sleeve's fullest ring was 5.7 cm below it, so
-            // the line from the crest out to the edge of the sleeve fell at
-            // sixty degrees and every player had the sloping, rounded
-            // shoulders of a doll. Pulled up level with the joint it falls at
-            // thirty-eight, and the arm below it drops very nearly straight —
-            // which is a squared shoulder, and is the other half of what tells
-            // a man's outline from a woman's.
-            sleeve: meshes.add(Sculptor::part(&[
-                Ring::squared(0.058, 0.0180, 0.0175, 0.000, 2.05),
-                Ring::squared(0.044, 0.0360, 0.0345, 0.000, 2.15),
-                Ring::squared(0.028, 0.0620, 0.0580, 0.000, 2.25),
-                Ring::squared(0.010, 0.0770, 0.0715, 0.000, 2.35),
-                Ring::squared(-0.022, 0.0832, 0.0762, 0.001, 2.40),
-                Ring::squared(-0.080, 0.0715, 0.0668, 0.003, 2.30),
-                Ring::squared(-0.126, 0.0648, 0.0612, 0.004, 2.25),
-            ])),
+            // **The top of it is a SPHERE on the joint** — see
+            // [`Self::SHOULDER_CAP`], which is the whole of why an arm stops
+            // reading as a hinge.
+            sleeve: meshes.add(Sculptor::part(&Self::sleeve(&[
+                Ring::squared(-0.018, 0.0788, 0.0722, 0.001, 2.30),
+                Ring::squared(-0.048, 0.0800, 0.0730, 0.002, 2.32),
+                Ring::squared(-0.085, 0.0736, 0.0684, 0.003, 2.28),
+                Ring::squared(-0.118, 0.0668, 0.0628, 0.004, 2.25),
+                Ring::squared(-0.142, 0.0605, 0.0570, 0.004, 2.22),
+            ]))),
             // And the band round the end of it. The same trim as the collar,
             // and the pair of them together are what say "kit" rather than
             // "coloured shape" at any distance a face is legible from. Rolled
             // under at the hem, the way a sewn edge is, so it does not end in
             // a flat washer hanging round the arm.
             cuff: meshes.add(Sculptor::part(&[
-                Ring::squared(-0.096, 0.0722, 0.0678, 0.0034, 2.28),
-                Ring::squared(-0.126, 0.0678, 0.0640, 0.0040, 2.25),
-                Ring::squared(-0.142, 0.0642, 0.0606, 0.0040, 2.22),
-                Ring::squared(-0.150, 0.0578, 0.0546, 0.0040, 2.20),
+                Ring::squared(-0.108, 0.0712, 0.0668, 0.0034, 2.26),
+                Ring::squared(-0.136, 0.0666, 0.0628, 0.0040, 2.24),
+                Ring::squared(-0.152, 0.0630, 0.0594, 0.0040, 2.22),
+                Ring::squared(-0.160, 0.0568, 0.0536, 0.0040, 2.20),
             ])),
             // The elbow is the NARROW point of an arm and the forearm's belly
             // sits below it. Started at its widest, as this did, the forearm
@@ -1304,56 +1310,7 @@ impl BodyParts {
                     Vec3::new(0.0, -0.006, -0.001),
                 ),
             )),
-            // A HAND, rather than the egg it was.
-            //
-            // An ellipsoid 10 cm long on the end of a 2.4 cm wrist is a
-            // mitten on a stick, and the step where the two met was visible on
-            // every outfield player in the squad. A hand is 18 cm from the
-            // wrist to the fingertip, it is three centimetres thick and nine
-            // across the knuckles, and it hangs with the palm turned in to the
-            // thigh — so its BROAD axis is front-to-back here and not across,
-            // which is the opposite of the way this was modelled. One part
-            // still, with the fingers as a tapered paddle: twenty of these
-            // take the field at once and a keeper is the only man on it whose
-            // hands anybody watches (see [`Self::finger`]).
-            //
-            // The offsets are a CURL. A hand hanging off a walking man is not
-            // a flat blade: the fingers fall in toward the palm, so the back
-            // of the hand comes round through three and a half centimetres
-            // between the knuckles and the tips while the palm side barely
-            // moves. Modelled straight it is a paddle, and a paddle on the end
-            // of each arm is worth more of the doll than its size suggests.
-            //
-            // And the thumb, which is what says HAND rather than mitten — the
-            // same argument [`Limb::Thumb`] makes for a keeper's glove, except
-            // that twenty of these are on the pitch at once, so it is merged
-            // into the hand's own buffer rather than hung off it as two more
-            // entities per player. It can be, because a relaxed arm hangs with
-            // the palm turned in to the thigh and the thumb pointing FORWARD:
-            // on the +z edge, where one mesh serves both hands. Anywhere
-            // across the body and it would have to be chiral.
-            hand: meshes.add(Sculptor::joined(
-                // The top two rings cross the forearm's own last one from
-                // inside to outside, so the hand covers the rim the forearm
-                // ends on instead of stepping in from it. Written the other
-                // way round — which it was — the wrist draws as a bright ring
-                // and the hand as a separate object hung under it.
-                Sculptor::part(&[
-                    Ring::squared(0.056, 0.0210, 0.0205, 0.000, 2.05),
-                    Ring::squared(0.038, 0.0300, 0.0298, 0.001, 2.15),
-                    Ring::squared(0.012, 0.0250, 0.0330, 0.002, 2.35),
-                    Ring::squared(-0.024, 0.0205, 0.0388, 0.004, 2.50),
-                    Ring::squared(-0.062, 0.0186, 0.0412, 0.008, 2.55),
-                    Ring::squared(-0.098, 0.0166, 0.0378, 0.015, 2.50),
-                    Ring::squared(-0.126, 0.0142, 0.0312, 0.021, 2.38),
-                    Ring::squared(-0.144, 0.0110, 0.0230, 0.026, 2.22),
-                    Ring::squared(-0.155, 0.0068, 0.0132, 0.029, 2.08),
-                ]),
-                Sculptor::ellipsoid_at(
-                    Vec3::new(0.0125, 0.0360, 0.0175),
-                    Vec3::new(0.0, -0.050, 0.0360),
-                ),
-            )),
+            hand: [Self::hand(-1.0), Self::hand(1.0)].map(|mesh| meshes.add(mesh)),
             // Cuff, back of the hand, then the padded palm out to the
             // fingertips. Half again as long as a bare hand and nearly twice
             // as wide, which is what a keeper's glove is: at this range the
@@ -1415,16 +1372,14 @@ impl BodyParts {
             // Cut the same four millimetres looser than the limb inside it
             // that the short one is — two nearly tangent surfaces crossing
             // each other draw as a ragged sawtooth no depth buffer can fix.
-            sleeve_long: meshes.add(Sculptor::part(&[
-                Ring::squared(0.056, 0.0285, 0.0275, 0.000, 2.10),
-                Ring::squared(0.040, 0.0610, 0.0570, 0.000, 2.20),
-                Ring::squared(0.016, 0.0810, 0.0745, 0.000, 2.35),
-                Ring::squared(-0.022, 0.0855, 0.0782, 0.001, 2.40),
-                Ring::squared(-0.085, 0.0632, 0.0600, 0.002, 2.20),
-                Ring::squared(-0.155, 0.0570, 0.0540, 0.002, 2.15),
-                Ring::squared(-0.228, 0.0522, 0.0500, 0.002, 2.10),
-                Ring::squared(-0.292, 0.0482, 0.0466, 0.002, 2.10),
-            ])),
+            sleeve_long: meshes.add(Sculptor::part(&Self::sleeve(&[
+                Ring::squared(-0.018, 0.0788, 0.0722, 0.001, 2.30),
+                Ring::squared(-0.048, 0.0782, 0.0716, 0.002, 2.28),
+                Ring::squared(-0.090, 0.0648, 0.0614, 0.002, 2.20),
+                Ring::squared(-0.155, 0.0578, 0.0548, 0.002, 2.15),
+                Ring::squared(-0.228, 0.0526, 0.0504, 0.002, 2.10),
+                Ring::squared(-0.292, 0.0484, 0.0468, 0.002, 2.10),
+            ]))),
             sleeve_forearm: meshes.add(Sculptor::part(&[
                 Ring::squared(0.050, 0.0448, 0.0432, 0.000, 2.10),
                 Ring::squared(0.008, 0.0512, 0.0482, 0.000, 2.15),
@@ -1656,6 +1611,165 @@ impl BodyParts {
 
     fn seat() -> Vec<Ring> {
         Sculptor::curved(&Self::SEAT)
+    }
+
+    /// **The shoulder is a BALL on the joint**, and the sleeve is that ball
+    /// with an arm hanging out of the bottom of it.
+    ///
+    /// The one thing a lathe about the arm's own axis cannot draw is a
+    /// shoulder. A tube — which is what every sleeve here was — is wide at the
+    /// joint and stays wide going up, so it has to be cut off somewhere, and
+    /// wherever it is cut off it drives into the side of the shirt as a wall.
+    /// Reported 2026-08-28 off the live renderer: *"the arms are attached to
+    /// the body like hinges"*. That is exactly what it was — a rounded pod
+    /// bolted onto each side of the chest, with a hard dark groove between the
+    /// pod and the cloth running from the collar down to the armpit, because
+    /// at the join the sleeve's surface faced INWARD and the shirt's faced out
+    /// and the two met at something near a hundred and fifty degrees.
+    ///
+    /// A sphere centred on the joint fixes it for two separate reasons:
+    ///
+    /// * It is the only shape that is wide at the joint and narrows BOTH ways,
+    ///   so it can be buried in the shirt at the top and take over from it
+    ///   further out. Near its pole the surface is nearly horizontal, which is
+    ///   what the top of a shoulder is — so it comes out of the cloth at about
+    ///   twenty-five degrees instead of a hundred and fifty, and what is left
+    ///   of the join is a soft crease over the top of the arm running down
+    ///   into the armpit. Which is where a shirt has a sleeve seam.
+    /// * A sphere about the pivot is **invariant under the joint it hangs
+    ///   from**. The arm swings, the ball does not move, and the shoulder
+    ///   stays filled at every angle — including the ones that used to open
+    ///   the armpit, a man with both arms over his head.
+    ///
+    /// The HEIGHT of it is not free. The pole sits that far above the joint on
+    /// the arm's own axis, which is [`Physique::SHOULDER_SPREAD`] out from the
+    /// middle, and it has to stay INSIDE the shirt or it draws a pimple on the
+    /// top of the shoulder: the shirt passes 0.176 wide at world 1.498, so
+    /// anything over 0.078 breaks out. 0.074 leaves a centimetre of burial.
+    ///
+    /// Across, it can afford six millimetres more, and takes them — 0.256 out
+    /// from the middle, which is 51 cm over the pair and the figure a man's
+    /// shoulders are actually measured by. That the cap is a near-sphere
+    /// rather than a sphere costs nothing, because the axis it is stretched on
+    /// is the one the arm's SWING leaves alone: a rotation about x mixes the
+    /// other two. Only the spread turns it, and the spread is small.
+    const SHOULDER_CAP: Vec3 = Vec3::new(0.0800, 0.0740, 0.0760);
+
+    /// **A hand with fingers on it**, which is the only version of a hand that
+    /// survives a camera at arm's length.
+    ///
+    /// It was an ellipsoid, then a tapered paddle with a thumb-shaped lump on
+    /// the front of it, and neither is a hand: the thing the eye counts is
+    /// FOUR gaps, and no amount of shaping one lump produces them. Four
+    /// fingers and a thumb, each its own lathe about its own axis, turned into
+    /// place and merged into the palm's buffer — so the whole hand is still
+    /// ONE entity and one draw call per arm, which is the only reason twenty
+    /// outfield players can afford it (see [`Sculptor::joined`] on what the
+    /// frame is actually spent on, and [`Limb::Finger`] for the keeper, whose
+    /// digits have to articulate and therefore cannot be merged).
+    ///
+    /// **It is chiral, and that is why there are two of them.** A relaxed hand
+    /// hangs with the palm turned in to the thigh and the fingers falling
+    /// toward it — inward, which is `−x` on the right arm and `+x` on the
+    /// left. The wrist's frame is not mirrored between the sides (nothing in
+    /// [`Joint::pose`] rolls the arm), so one mesh cannot serve both: built
+    /// once for each `side`, the curl and the thumb come out as mirror images
+    /// the way hands do. A negative scale would have done it in one mesh and
+    /// would also have turned every triangle inside out.
+    fn hand(side: f32) -> Mesh {
+        /// One finger, root at the knuckle and pointing down its own −y.
+        const FINGER: [Ring; 7] = [
+            Ring::oval(0.012, 0.0096, 0.0100),
+            Ring::oval(-0.014, 0.0100, 0.0104),
+            Ring::oval(-0.040, 0.0092, 0.0095),
+            Ring::oval(-0.062, 0.0084, 0.0087),
+            Ring::oval(-0.078, 0.0074, 0.0076),
+            Ring::oval(-0.087, 0.0058, 0.0060),
+            Ring::oval(-0.092, 0.0028, 0.0029),
+        ];
+        /// Index, middle, ring, little: where along the knuckle line it sits,
+        /// how far down the knuckle is, how long the digit is against the
+        /// middle one, and how far it is curled.
+        ///
+        /// The knuckle line runs front to back here, not across, because the
+        /// palm faces the thigh — the index is the digit nearest the thumb and
+        /// the thumb is forward. The four are not the same length and they do
+        /// not curl the same amount; a hand where they are is a comb.
+        const DIGITS: [(f32, f32, f32, f32); 4] = [
+            (0.0280, -0.062, 0.86, 0.34),
+            (0.0094, -0.068, 1.00, 0.37),
+            (-0.0094, -0.066, 0.94, 0.41),
+            (-0.0275, -0.058, 0.76, 0.47),
+        ];
+        /// And the thumb, which comes off the SIDE of the palm rather than the
+        /// end of it, is shorter and thicker than a finger, and opposes the
+        /// other four. It is what says hand rather than mitten.
+        const THUMB: [Ring; 5] = [
+            Ring::oval(0.014, 0.0126, 0.0130),
+            Ring::oval(-0.016, 0.0130, 0.0134),
+            Ring::oval(-0.042, 0.0116, 0.0119),
+            Ring::oval(-0.060, 0.0098, 0.0100),
+            Ring::oval(-0.070, 0.0060, 0.0062),
+        ];
+
+        // The palm: from up inside the forearm to the heads of the
+        // metacarpals, where the fingers take over.
+        //
+        // The top two rings cross the forearm's own last one from inside to
+        // outside, so the hand covers the rim the forearm ends on instead of
+        // stepping in from it. Written the other way round — which it was —
+        // the wrist draws as a bright ring and the hand as a separate object
+        // hung under it.
+        let mut hand = Sculptor::part(&[
+            Ring::squared(0.056, 0.0210, 0.0205, 0.000, 2.05),
+            Ring::squared(0.038, 0.0300, 0.0298, 0.001, 2.15),
+            Ring::squared(0.012, 0.0252, 0.0332, 0.002, 2.35),
+            Ring::squared(-0.024, 0.0206, 0.0392, 0.004, 2.50),
+            Ring::squared(-0.052, 0.0192, 0.0416, 0.006, 2.55),
+            Ring::squared(-0.072, 0.0172, 0.0400, 0.009, 2.50),
+            Ring::squared(-0.086, 0.0138, 0.0344, 0.011, 2.40),
+        ]);
+        for (along, drop, length, curl) in DIGITS {
+            let digit: Vec<Ring> = FINGER
+                .iter()
+                .map(|ring| Ring {
+                    y: ring.y * length,
+                    ..*ring
+                })
+                .collect();
+            hand = Sculptor::placed(
+                hand,
+                Sculptor::part_at(&digit, Sculptor::BLOB_SIDES),
+                Transform::from_translation(Vec3::new(0.0, drop, along))
+                    .with_rotation(Quat::from_rotation_z(-side * curl)),
+            );
+        }
+        Sculptor::placed(
+            hand,
+            Sculptor::part_at(&THUMB, Sculptor::BLOB_SIDES),
+            Transform::from_translation(Vec3::new(-side * 0.004, -0.020, 0.0250))
+                .with_rotation(Quat::from_rotation_z(-side * 0.52) * Quat::from_rotation_x(-0.62)),
+        )
+    }
+
+    /// A sleeve: the cap above, and whatever hangs below it.
+    ///
+    /// The cap's rings are the sphere's own profile rather than a hand-written
+    /// approximation of it, because the two properties that make it work —
+    /// the pole landing inside the shirt, and the surface being invariant as
+    /// the arm swings — are properties of a SPHERE and of nothing that merely
+    /// looks like one.
+    fn sleeve(arm: &[Ring]) -> Vec<Ring> {
+        let cap = Self::SHOULDER_CAP;
+        let mut rings: Vec<Ring> = [1.000f32, 0.892, 0.703, 0.432, 0.108]
+            .into_iter()
+            .map(|height| {
+                let round = (1.0 - height * height).max(0.0).sqrt();
+                Ring::oval(cap.y * height, cap.x * round, cap.z * round)
+            })
+            .collect();
+        rings.extend_from_slice(arm);
+        rings
     }
 
     fn shin() -> Vec<Ring> {
@@ -5439,7 +5553,7 @@ impl Footballer {
                                     Mesh3d(if keeper {
                                         parts.glove.clone()
                                     } else {
-                                        parts.hand.clone()
+                                        parts.hand[usize::from(side > 0.0)].clone()
                                     }),
                                     MeshMaterial3d(outfit.hands.clone()),
                                     Transform::from_translation(wrist),
@@ -6102,7 +6216,11 @@ pub(crate) mod preview {
             }
             let hand = fore * skeleton::step(Limb::Wrist, side, wrist, gait);
             draw(
-                if keeper { &parts.glove } else { &parts.hand },
+                if keeper {
+                    &parts.glove
+                } else {
+                    &parts.hand[usize::from(side > 0.0)]
+                },
                 hand,
                 if keeper { TRIM } else { SKIN },
             );
@@ -8736,10 +8854,13 @@ mod tests {
             pointing,
         ];
         // Front-on, and from the man's right — the hand the poses above are
-        // asymmetric about.
-        let bearings = [PI, PI / 2.0];
+        // asymmetric about. Then the same two for a BARE hand, which is the
+        // one twenty men on the pitch are wearing and which has its own four
+        // fingers and its own thumb (see [`BodyParts::hand`]); the poses are a
+        // keeper's, but a hand is a hand.
+        let bearings = [(PI, true), (PI / 2.0, true), (PI, false), (PI / 2.0, false)];
         let mut sheet = vec![0u8; WIDE * poses.len() * TALL * bearings.len() * 4];
-        for (row, bearing) in bearings.into_iter().enumerate() {
+        for (row, (bearing, keeper)) in bearings.into_iter().enumerate() {
             for (column, gait) in poses.into_iter().enumerate() {
                 let hand = Physique::glove(1.0, gait);
                 let mut canvas = Canvas::new(WIDE, TALL);
@@ -8758,7 +8879,7 @@ mod tests {
                     // lens only aims up and down, and moving the figure to
                     // the origin centres it at every bearing at once.
                     Transform::from_translation(Vec3::new(-hand.x, 0.0, -hand.z)),
-                    true,
+                    keeper,
                 );
                 let pixels = canvas.pixels();
                 let stride = WIDE * poses.len();
@@ -9064,14 +9185,16 @@ mod tests {
     /// visibly on a chest, and the corner is precisely where the shape is.
     /// [`Sculptor::SIDES`] and [`Sculptor::CURVE`] are the two knobs; both
     /// went up together, because a mesh that is fine round and coarse along
-    /// looks worse than one that is evenly coarse.
+    /// looks worse than one that is evenly coarse. Then 104k → 134k for five
+    /// digits on each bare hand — see [`BodyParts::hand`], and note that the
+    /// hand was not in this count at all until then.
     ///
     /// It is affordable because of what it does NOT change: every mesh here is
     /// shared by all twenty-two players, so this is a few hundred thousand
     /// vertices in memory ONCE, and the ~400 draw calls a squad costs are set
     /// by the number of PARTS, not by their resolution — measured, the frame
     /// is per-entity bound and near enough resolution-insensitive. A GPU
-    /// drawing twenty-two of these is putting through about 2.3 million
+    /// drawing twenty-two of these is putting through about 3 million
     /// triangles a frame.
     #[test]
     fn a_footballer_is_worth_his_triangles() {
@@ -9099,6 +9222,9 @@ mod tests {
             &parts.sleeve,
             &parts.cuff,
             &parts.forearm,
+            // The bare hand, which is what twenty of the twenty-two wear and
+            // which this used to leave out of the count altogether.
+            &parts.hand[1],
             &parts.glove,
             &parts.shorts_leg,
             &parts.thigh,
@@ -9112,7 +9238,7 @@ mod tests {
 
         let footballer = single + 2 * paired;
         assert!(
-            (80_000..130_000).contains(&footballer),
+            (80_000..150_000).contains(&footballer),
             "a footballer is {footballer} triangles"
         );
         // And nothing in him is a hidden extravagance: no single part is worth
