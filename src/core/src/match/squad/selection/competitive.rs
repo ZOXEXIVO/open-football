@@ -1,4 +1,5 @@
 use crate::club::player::ManagerPromiseKind;
+use crate::club::staff::goalkeeping::KeeperSelectionBrief;
 use crate::club::staff::{CoachDecisionEngine, CoachSelectionContext};
 use crate::club::{PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
@@ -70,6 +71,11 @@ pub(crate) struct SelectionScoringContext<'a> {
     /// engine's `SuccessionPlanning` selection read. Empty when the
     /// caller didn't compute it (legacy entry points / tests).
     pub succession_heirs: &'a [u32],
+    /// The goalkeeping department's word: the declared pecking order and
+    /// any live request to play a particular keeper. `None` for a club that
+    /// has never reviewed its keeper room, and for every legacy entry point
+    /// — keeper selection then behaves exactly as it always did.
+    pub keeper_brief: Option<KeeperSelectionBrief>,
 }
 
 impl SelectionScoringContext<'_> {
@@ -1731,6 +1737,18 @@ impl SelectionScoringContext<'_> {
             })
     }
 
+    /// The goalkeeping department's contribution to a keeper's score, or
+    /// zero when the club has no department or nothing to say about him.
+    ///
+    /// This is the channel through which the manager listens to his
+    /// goalkeeping coach, and the only one — everything the department can
+    /// do to a team sheet passes through this one bounded, signed term.
+    fn keeper_brief_adjustment(&self, player: &Player) -> f32 {
+        self.keeper_brief
+            .map(|brief| brief.selection_adjustment(player.id, self.match_importance))
+            .unwrap_or(0.0)
+    }
+
     fn pick_best_goalkeeper<'p>(
         &self,
         available: &[&'p Player],
@@ -1746,16 +1764,18 @@ impl SelectionScoringContext<'_> {
         // boost on cup nights but vanishing for league games, so the #1 GK
         // isn't displaced by a workload signal that doesn't apply to keepers.
         //
-        // The future-aware pathway layer is deliberately NOT mixed in here.
-        // Keeper minutes are a single-slot, high-variance call: a green young
-        // keeper handed a start on a development nudge concedes goals an
-        // outfield prospect's positional cameo never would. Rotating a rested
-        // backup into an early/dead cup tie is already handled by
-        // `domestic_cup_goalkeeper_adjustment`, which is opponent- and
-        // stage-gated; the pathway pull would add no realistic signal a #1
-        // keeper's CA edge doesn't already encode, only risk. Youth keeper
-        // development is served instead by reliably naming them on the bench
-        // (see `ensure_backup_goalkeeper`) so they travel with the squad.
+        // The generic future-aware pathway layer is still deliberately NOT
+        // mixed in here, and for the reason it always was: keeper minutes
+        // are a single-slot, high-variance call, and an outfielder's
+        // positional-cameo nudge is the wrong instrument for the one shirt
+        // a team cannot rotate. What replaces it is a decision rather than
+        // a nudge — the goalkeeping department's brief. It carries a
+        // declared pecking order, so the number one keeps his place through
+        // the form and freshness noise this argmax used to flip on, and it
+        // carries the specialist's request to play a particular young
+        // keeper, priced high enough to seat a better man and gated hard by
+        // what is at stake so it can only ever happen in a game the club
+        // can afford. See `club::staff::goalkeeping`.
         available
             .iter()
             .filter(|p| !used_ids.contains(&p.id))
@@ -1768,6 +1788,7 @@ impl SelectionScoringContext<'_> {
                             .engine
                             .development_minutes_bonus(p, self.match_importance)
                         + self.cup_goalkeeper(p)
+                        + self.keeper_brief_adjustment(p)
                         + self.want_away_adjustment(p)
                 };
                 score(a).partial_cmp(&score(b)).unwrap_or(Ordering::Equal)

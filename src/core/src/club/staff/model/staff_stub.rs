@@ -1,4 +1,5 @@
 use crate::club::PersonBehaviour;
+use crate::club::staff::goalkeeping::KeeperRoomPlan;
 use crate::club::staff::mind::StaffMind;
 use crate::club::staff::mind::organs::judgements::CoachDecisionState;
 use crate::club::staff::{CoachMemoryStore, CoachSquadPlan};
@@ -98,6 +99,7 @@ impl StaffStub {
             specialization_days: [0; 4],
             coach_memory: CoachMemoryStore::new(),
             squad_plan: CoachSquadPlan::new(),
+            keeper_plan: KeeperRoomPlan::new(),
             decision_state: CoachDecisionState::unbound(),
             mind: StaffMind::new(),
         };

@@ -911,6 +911,9 @@ pub struct BodyParts {
     /// on, both lying on the shirt's own profile.
     number: Handle<Mesh>,
     name: Handle<Mesh>,
+    /// …and the same name again, round the front of him. Worn for the
+    /// pre-match line-up only — see [`FrontPrint`].
+    name_front: Handle<Mesh>,
 }
 
 impl BodyParts {
@@ -1104,6 +1107,23 @@ impl BodyParts {
     const NAME_AT: f32 = 0.464;
     const NAME_HEIGHT: f32 = 0.058;
     const NAME_ARC: f32 = 1.34;
+    /// …and where the walk-out print goes round the FRONT, which is not the
+    /// same height (2026-08-29, maintainer: *"make shirt front text some
+    /// upper"*).
+    ///
+    /// The back print is set to clear the number under it, so it sits across
+    /// the shoulder blades — mid-back. Carried straight round to the front,
+    /// that lands in the middle of a man's chest, which is where a sponsor
+    /// goes and not where a name does. Up here it reads as a band under the
+    /// collar, which is what a training top or a warm-up shirt carries.
+    ///
+    /// ⚠ **The ceiling is the collar, not taste.** The neck band starts at
+    /// 0.5775 and the whole taper from the shoulder crest into it happens
+    /// inside seven centimetres, so a panel whose top edge went much above
+    /// 0.55 would be printed on a surface that is turning away from the lens
+    /// as fast as it is rising. This puts the top edge at 0.541, a good three
+    /// centimetres clear, and there is a test.
+    pub(crate) const NAME_FRONT_AT: f32 = 0.512;
     const NUMBER_AT: f32 = 0.316;
     const NUMBER_HEIGHT: f32 = 0.190;
     /// Came in from 1.45 when the back of the shirt stopped being an ellipse.
@@ -1490,6 +1510,24 @@ impl BodyParts {
                 Self::NAME_AT,
                 Self::NAME_HEIGHT,
                 -FRAC_PI_2,
+                Self::NAME_ARC,
+                Self::PRINT_LIFT,
+            )),
+            // The same panel and the same arc, half a turn round the body and
+            // carried up under the collar — so the print across his chest is
+            // the print across his shoulders in the same lettering at the same
+            // size, and not a second piece of art to keep in step. See
+            // [`Self::NAME_FRONT_AT`] for the one thing that does differ.
+            //
+            // `decal` reads its columns from the bearing outward in both
+            // directions, so the lettering runs left to right for whoever is
+            // looking at that side of him: at the back a player's right is on
+            // the reader's left, and at the front it is on the reader's right.
+            name_front: meshes.add(Sculptor::decal(
+                &Self::shirt(),
+                Self::NAME_FRONT_AT,
+                Self::NAME_HEIGHT,
+                FRAC_PI_2,
                 Self::NAME_ARC,
                 Self::PRINT_LIFT,
             )),
@@ -5315,6 +5353,28 @@ pub struct Thatch {
     pub actor: Entity,
 }
 
+/// **His name across the front of the shirt**, which he wears for the walk-out
+/// and nothing else.
+///
+/// A real shirt carries a sponsor there and a real player's name only on his
+/// back, so this is a line-up convention rather than a kit: the ceremony's pass
+/// comes down the FRONT of the line at four metres, and the man it is on should
+/// be named by the thing the camera is already looking at rather than by a
+/// caption floating over his head. See
+/// [`Lineup::wear_the_name`](crate::broadcast::lineup::Lineup::wear_the_name),
+/// which is the only thing that ever shows it — the panel is spawned `Hidden`
+/// and goes back to hidden when the ceremony hands the pitch over.
+///
+/// It costs one mesh entity per player and nothing at all while it is off: the
+/// print shares its owner's existing name material, so it does not so much as
+/// break the batch the back print is drawn in.
+///
+/// A bare marker, unlike [`Flesh`] and [`Thatch`] — those carry their owner
+/// because a photograph arriving mid-match has to find one man's parts, and
+/// this is only ever switched for the whole squad at once.
+#[derive(Component)]
+pub struct FrontPrint;
+
 #[derive(Component)]
 pub struct Carriage {
     /// The actor this figure belongs to; the dive is kept there.
@@ -5469,8 +5529,17 @@ impl Footballer {
                 if let Some(name) = outfit.name.clone() {
                     torso.spawn((
                         Mesh3d(parts.name.clone()),
+                        MeshMaterial3d(name.clone()),
+                        Transform::default(),
+                    ));
+                    // …and the same print round the front, off for the whole
+                    // match bar the walk-out. See [`FrontPrint`].
+                    torso.spawn((
+                        FrontPrint,
+                        Mesh3d(parts.name_front.clone()),
                         MeshMaterial3d(name),
                         Transform::default(),
+                        Visibility::Hidden,
                     ));
                 }
                 torso.spawn((
@@ -7988,24 +8057,54 @@ mod tests {
     /// centimetres off a torso at its corners, which is what made the number
     /// read as a card pinned to a footballer. Measured as the ellipse radius
     /// each vertex lands at: 1.0 is the cloth itself.
+    ///
+    /// ⚠ **The walk-out print is the same panel round the front**, so it is
+    /// checked here rather than in a test of its own — the two have to keep
+    /// lying on the same cloth, and the only thing that differs between them is
+    /// which side of the man they are on and which way they face. Winding is
+    /// the trap: [`Sculptor::decal`] runs its columns outward from the bearing
+    /// in both directions, so a panel that is wound correctly at −π/2 is not
+    /// automatically wound correctly at +π/2, and one that is not is drawn from
+    /// inside the player.
     #[test]
     fn the_print_lies_on_the_shirt() {
-        for panel in [
+        let panel = |at: f32, height: f32, bearing: f32, arc: f32| {
             Sculptor::decal(
                 &BodyParts::shirt(),
-                BodyParts::NUMBER_AT,
-                BodyParts::NUMBER_HEIGHT,
-                -FRAC_PI_2,
-                BodyParts::NUMBER_ARC,
+                at,
+                height,
+                bearing,
+                arc,
                 BodyParts::PRINT_LIFT,
+            )
+        };
+        for (panel, front) in [
+            (
+                panel(
+                    BodyParts::NUMBER_AT,
+                    BodyParts::NUMBER_HEIGHT,
+                    -FRAC_PI_2,
+                    BodyParts::NUMBER_ARC,
+                ),
+                false,
             ),
-            Sculptor::decal(
-                &BodyParts::shirt(),
-                BodyParts::NAME_AT,
-                BodyParts::NAME_HEIGHT,
-                -FRAC_PI_2,
-                BodyParts::NAME_ARC,
-                BodyParts::PRINT_LIFT,
+            (
+                panel(
+                    BodyParts::NAME_AT,
+                    BodyParts::NAME_HEIGHT,
+                    -FRAC_PI_2,
+                    BodyParts::NAME_ARC,
+                ),
+                false,
+            ),
+            (
+                panel(
+                    BodyParts::NAME_FRONT_AT,
+                    BodyParts::NAME_HEIGHT,
+                    FRAC_PI_2,
+                    BodyParts::NAME_ARC,
+                ),
+                true,
             ),
         ] {
             let positions = panel
@@ -8022,21 +8121,69 @@ mod tests {
                     (1.0..1.06).contains(&radius),
                     "{point:?} sits at {radius} of the shirt's own radius"
                 );
-                // On the BACK of it, which is where print goes.
-                assert!(point[2] < shirt.offset, "print on the front: {point:?}");
+                // …and on the side of him it was asked for.
+                if front {
+                    assert!(
+                        point[2] > shirt.offset,
+                        "walk-out print on the back: {point:?}"
+                    );
+                } else {
+                    assert!(point[2] < shirt.offset, "print on the front: {point:?}");
+                }
             }
             // And it faces outward, or it is drawn from inside the player.
             let normals = panel
                 .attribute(Mesh::ATTRIBUTE_NORMAL)
                 .and_then(|values| values.as_float3())
                 .expect("panel has normals");
-            let outward = normals.iter().filter(|normal| normal[2] < -0.5).count();
+            let away = if front { 1.0 } else { -1.0 };
+            let outward = normals
+                .iter()
+                .filter(|normal| normal[2] * away > 0.5)
+                .count();
             assert!(
                 outward > normals.len() / 2,
-                "the panel is wound inside out: {outward} of {} face backwards",
+                "the panel is wound inside out: {outward} of {} face away from him",
                 normals.len()
             );
         }
+    }
+
+    /// **The walk-out print stops short of the collar.**
+    ///
+    /// It is carried up under the neck on purpose — mid-chest is where a
+    /// sponsor goes — and the only thing stopping it going further is the neck
+    /// band, which starts at 0.5775 with the whole taper from the shoulder
+    /// crest packed into the seven centimetres below it. A panel that reached
+    /// into that would be printed on cloth turning away from the lens as fast
+    /// as it rises, and would then be printed over by the collar itself.
+    ///
+    /// Checked against the collar's own first ring rather than a number typed
+    /// twice, so moving one moves the test.
+    #[test]
+    fn the_walk_out_print_stops_short_of_the_collar() {
+        const COLLAR_AT: f32 = 0.5775;
+        let top = BodyParts::NAME_FRONT_AT + BodyParts::NAME_HEIGHT * 0.5;
+        assert!(
+            top < COLLAR_AT - 0.02,
+            "the print's top edge is at {top}, inside the collar at {COLLAR_AT}"
+        );
+        // …and it is genuinely higher than the print on his back, which is the
+        // whole reason it has a constant of its own.
+        assert!(
+            BodyParts::NAME_FRONT_AT > BodyParts::NAME_AT + 0.02,
+            "the walk-out print is not carried up off the back print's height"
+        );
+        // Still on the cloth at that height: the shirt is 19 cm across up
+        // there and the panel's arc has to land on a section, not on the
+        // shoulder ball either side of it.
+        let section = Sculptor::section(&BodyParts::shirt(), top);
+        assert!(
+            section.x > 0.17 && section.z > 0.09,
+            "the shirt has narrowed to {} x {} under the print",
+            section.x,
+            section.z
+        );
     }
 
     /// **The shirt hangs over the shorts, and it has to keep doing it while

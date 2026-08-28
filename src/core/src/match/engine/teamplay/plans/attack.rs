@@ -138,23 +138,63 @@ impl BoxSlot {
     /// back post, and holding at the top of the box. Four men breaking
     /// at once along four lines is what a defensive line cannot cover;
     /// four men standing on four dots is what it is built for.
+    ///
+    /// # …but only if the four dots are four different places
+    ///
+    /// The first cut of these was 88/128/102/178 deep at 4/−20/−34/+40
+    /// across, and the four runs it describes are the right four. The
+    /// geometry was not: the near-post man waited **3.7 m** from the
+    /// far-post man and 5.8 m from the spot, so three of the four held
+    /// inside one triangle with sides of four to six metres.
+    ///
+    /// That is the pile-up you see in a replay, and it is worse than it
+    /// looks, because a marker who is goal-side of one of them is
+    /// goal-side of all three. Measured over twelve fixtures at level 14
+    /// (`dev_match stats`, SPACING CENSUS), with the ball in the final
+    /// third: a clump of four-plus bodies inside 3 m existed on **55% of
+    /// ticks**, the side in possession averaged **11.1 m** to its nearest
+    /// team-mate against a real 15-20, and it had **0.18 unmarked
+    /// team-mates ahead of the ball** against a real one to three. There
+    /// was nobody to pass forward to because everybody forward was
+    /// standing in the same square of grass.
+    ///
+    /// The holding points below are spread to 7.5-23 m apart — the
+    /// finishing points are deliberately left alone, because converging
+    /// on a delivery is what the run is FOR — and the two that moved are
+    /// the two that were wrong about the football as well as about the
+    /// spacing:
+    ///
+    /// * the back-post runner held 4 m off centre, which is not the back
+    ///   post, it is the six-yard box. A blind-side runner holds wide of
+    ///   the far post where the covering centre-half cannot watch him and
+    ///   the ball at the same time, and comes across onto it;
+    /// * the spot runner held 2.5 m off centre and 16 m out, directly
+    ///   behind the near-post man and running the same line as him. He
+    ///   belongs at the top of the area, arriving straight down the
+    ///   middle — which is both the movement it is named for and the one
+    ///   direction none of the other three covers.
     fn wait_offsets(self, ball_side: f32) -> (f32, f32) {
         match self {
             // Starts central, attacks ACROSS the front defender to the
             // near post. The run that beats a marker watching the ball.
-            BoxSlot::NearPost => (88.0, ball_side * 4.0),
-            // Arrives late into the spot from the edge of the D — the
-            // most-scored-from movement in football, and the reason the
-            // spot itself has to be empty until the ball is struck.
-            BoxSlot::PenaltySpot => (128.0, ball_side * -20.0),
-            // Holds narrow, in the cover shadow of the far centre-half,
-            // and peels away to the back post as the ball is delivered.
-            BoxSlot::FarPost => (102.0, ball_side * -34.0),
+            BoxSlot::NearPost => (88.0, ball_side * 8.0),
+            // Arrives late into the spot from the TOP of the area, and
+            // straight down the middle — the most-scored-from movement in
+            // football, and the reason the spot itself has to be empty
+            // until the ball is struck.
+            BoxSlot::PenaltySpot => (146.0, ball_side * -6.0),
+            // Holds WIDE on the blind side, beyond the far post, where
+            // the covering centre-half cannot watch him and the ball at
+            // the same time — and comes ACROSS onto the back post as the
+            // delivery goes. The one run in the four that is mostly
+            // lateral, which is why a line set up for the other three
+            // cannot pick it up.
+            BoxSlot::FarPost => (88.0, ball_side * -106.0),
             // The one man who must NOT dive in. He holds outside the D —
             // 22 m, deeper than any of the other three wait at — so the
             // cutback has somebody arriving onto it at pace rather than
             // somebody already standing on the spot it is played to.
-            BoxSlot::CutbackEdge => (178.0, ball_side * 40.0),
+            BoxSlot::CutbackEdge => (180.0, ball_side * 52.0),
         }
     }
 
@@ -905,6 +945,63 @@ mod box_slot_tests {
                     dot < 0.95,
                     "{a:?} and {b:?} attack their slots along the same line"
                 );
+            }
+        }
+    }
+
+    /// **Four places, not one.** Two occupants standing inside a few
+    /// metres of each other are one occupant as far as a defence is
+    /// concerned — one marker is goal-side of both — and it is the
+    /// HOLDING points that decide this, because that is where the four
+    /// of them spend the possession.
+    ///
+    /// Measured at 3.7 m between the near-post and far-post holds, which
+    /// is the pile-up in front of goal restated as a number. 56u = 7 m
+    /// is the floor: close enough that a delivery can still find two of
+    /// them, far enough that one defender cannot.
+    #[test]
+    fn the_four_hold_four_different_places() {
+        /// Nearest two holding points, in units. 56u = 7 m.
+        const MIN_HOLD_GAP: f32 = 56.0;
+        for ball_side in [-1.0_f32, 1.0] {
+            let holds: Vec<(BoxSlot, f32, f32)> = BoxSlot::ALL
+                .into_iter()
+                .map(|s| {
+                    let (d, l) = s.wait_offsets(ball_side);
+                    (s, d, l)
+                })
+                .collect();
+            for (i, (a, ad, al)) in holds.iter().enumerate() {
+                for (b, bd, bl) in holds.iter().skip(i + 1) {
+                    let gap = ((ad - bd).powi(2) + (al - bl).powi(2)).sqrt();
+                    assert!(
+                        gap >= MIN_HOLD_GAP,
+                        "{a:?} holds {gap}u ({}m) from {b:?} — one marker covers both",
+                        gap * 0.125
+                    );
+                }
+            }
+        }
+    }
+
+    /// …and every one of them is still ON the pitch and inside the area
+    /// he is supposed to be attacking. A holding point 11 m off centre
+    /// is a back-post run; one 25 m off centre is a throw-in.
+    #[test]
+    fn every_hold_is_inside_the_penalty_area_width() {
+        /// Half the width of a penalty area, in units: 20.15 m.
+        const HALF_BOX: f32 = 161.0;
+        /// …and its depth, 16.5 m, plus the edge-of-the-D allowance the
+        /// cutback slot deliberately holds outside.
+        const MAX_DEPTH: f32 = 200.0;
+        for ball_side in [-1.0_f32, 1.0] {
+            for slot in BoxSlot::ALL {
+                let (depth, lateral) = slot.wait_offsets(ball_side);
+                assert!(
+                    lateral.abs() <= HALF_BOX,
+                    "{slot:?} holds {lateral}u off centre — outside the area"
+                );
+                assert!(depth <= MAX_DEPTH, "{slot:?} holds {depth}u from goal");
             }
         }
     }

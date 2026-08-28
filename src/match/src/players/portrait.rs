@@ -623,23 +623,73 @@ pub struct Portraits {
     /// fetches resolve on the JS microtask queue, which has no access to the
     /// ECS — same arrangement as [`crate::recording::loader::ChunkLoader`].
     inbox: Arc<Mutex<Vec<(u32, Portrait)>>>,
+    /// Men who have been dressed and not yet asked about, oldest first. See
+    /// [`Self::ask`], which is what takes them off it.
+    outbox: VecDeque<(u32, Vec<(String, Framing)>)>,
+    /// Real seconds still to run before the next request goes out.
+    cooldown: f32,
 }
 
 impl Portraits {
+    /// **How many arrivals are folded in on one frame.** See [`Self::attach`],
+    /// which measures what a face costs and why one is the answer: a photograph
+    /// repaints a 256-square sheet and its mip chain, about six milliseconds of
+    /// this thread, and a frame in this replay is two and a half.
+    const A_FRAME: usize = 1;
+
+    /// **Real seconds between one request for a photograph and the next.**
+    ///
+    /// ⚠ **Pacing [`Self::attach`] is not enough on its own, and this is the
+    /// other half of it.** Cutting a head shot out of its card — keying the
+    /// studio off it, bleeding the edge, hunting for the pupils — happens in
+    /// the `async` task that fetched it, on the microtask queue, where no
+    /// budget kept in the ECS can reach it. Twenty-two requests fired within a
+    /// few frames of each other come back from one host within a few
+    /// milliseconds of each other, and the browser then runs twenty-two of
+    /// those continuations back to back with nothing between them: measured, a
+    /// single **114 ms** frame in the middle of the ceremony's pass, with the
+    /// folding already paced to one a frame. Answered a quarter of a second
+    /// apart, the same squad cost 14–17 ms at its worst.
+    ///
+    /// A tenth of a second is six frames of clear air at sixty hertz between
+    /// one photograph and the next — a decode and a fold are about fifteen
+    /// milliseconds of this thread between them — and it puts a whole squad on
+    /// the pitch inside two and a half seconds, which is well inside the
+    /// walk-out and long before the pass reaches anybody.
+    ///
+    /// ⚠ It also keeps the pictures **out of the recording's way**. A browser
+    /// opens six connections to a host and the pictures come from the same one
+    /// the replay does; sent in one burst ahead of the chunks, they queue the
+    /// match itself behind them. Measured against a deliberately slow library,
+    /// the first chunk landed eleven seconds late.
+    ///
+    /// It is measured on [`Time<Real>`] rather than in frames because frames
+    /// are not a unit of time here: this replay runs at four hundred a second
+    /// on the machine it was written on, where twenty-two frames is fifty-five
+    /// milliseconds and no spacing at all.
+    const SPACING: f32 = 0.10;
+
     /// An empty mailbox and the ramp to move players along it.
     pub fn waiting(wardrobe: &Wardrobe) -> Portraits {
         Portraits {
             faces: Vec::new(),
             complexions: wardrobe.complexions(),
             inbox: Arc::new(Mutex::new(Vec::new())),
+            outbox: VecDeque::new(),
+            cooldown: 0.0,
         }
     }
 
-    /// Send for one man's picture, now that there is a body to put it on.
+    /// Put one man's picture on the list to be sent for, now that there is a
+    /// body to put it on.
     ///
     /// Idempotent, because the thing calling it is a system: a second call for
     /// a player already sent for does nothing rather than starting a second
     /// fetch of the same head.
+    ///
+    /// ⚠ **The request does not go out here** — see [`Self::ask`], which spaces
+    /// them out. A squad is dressed a few men a frame, so doing it here put
+    /// twenty-two image requests on the wire inside a fifth of a second.
     pub fn send_for(&mut self, player: &PlayerInfo, face: Handle<StandardMaterial>) {
         if self.faces.iter().any(|(id, _)| *id == player.id) {
             return;
@@ -661,9 +711,35 @@ impl Portraits {
         if sources.is_empty() {
             return;
         }
+        self.outbox.push_back((player.id, sources));
+    }
 
-        let id = player.id;
-        let inbox = self.inbox.clone();
+    /// **Asks for the next photograph, no more often than [`Self::SPACING`].**
+    ///
+    /// One request at a time, oldest first, so the squad is photographed in the
+    /// order it walked out. Everything about why is on [`Self::SPACING`]: what
+    /// this is really spacing out is not the fetch but the work that follows
+    /// it, which happens off the ECS where nothing else can pace it.
+    ///
+    /// Idle for all but the opening seconds of a match — the outbox is filled
+    /// as the squad is dressed and never again.
+    pub fn ask(time: Res<Time<Real>>, portraits: Option<ResMut<Portraits>>) {
+        let Some(mut portraits) = portraits else {
+            return;
+        };
+        if portraits.outbox.is_empty() {
+            return;
+        }
+        portraits.cooldown -= time.delta_secs();
+        if portraits.cooldown > 0.0 {
+            return;
+        }
+        portraits.cooldown = Self::SPACING;
+
+        let Some((id, sources)) = portraits.outbox.pop_front() else {
+            return;
+        };
+        let inbox = portraits.inbox.clone();
         spawn_local(async move {
             for (url, framing) in sources {
                 if let Some(picture) = Self::picture(&url, framing).await {
@@ -688,6 +764,24 @@ impl Portraits {
     /// The sheet is painted again from scratch rather than edited: the one he
     /// is wearing lives on the GPU and cannot be read back. It costs a quarter
     /// of a million texels once per player per match.
+    ///
+    /// ⚠ **One a frame**, and the reason is that quarter of a million texels.
+    /// Twenty-two pictures of the same squad are asked for within a few frames
+    /// of each other and come back over one connection to one host, so they
+    /// land in a burst — and the whole burst used to be folded on the frame the
+    /// last of them arrived. Measured in the browser against a local library on
+    /// an RTX 3080 Ti, eighteen faces cost **105 ms in a single frame**: six
+    /// dropped at sixty hertz, in a replay whose every other frame is two and a
+    /// half milliseconds. It lands during the pre-match ceremony, because that
+    /// is when a squad is dressed, and the ceremony's pass along the faces is a
+    /// moving camera — which is precisely the shot a dropped frame shows up in.
+    ///
+    /// Paced, the same burst is eighteen frames of six milliseconds and the pan
+    /// does not miss a refresh. Nothing is lost by the wait: the face a man is
+    /// already wearing is the one the viewer drew for him, so a frame later is
+    /// a frame later and not a frame of nothing. Same argument, same shape, as
+    /// [`Actors::take_the_field`](crate::players::actors::Actors::take_the_field)'s
+    /// dressing budget.
     pub fn attach(
         portraits: Option<Res<Portraits>>,
         config: Res<ViewerConfig>,
@@ -701,7 +795,12 @@ impl Portraits {
             return;
         };
         let arrivals: Vec<(u32, Portrait)> = match portraits.inbox.lock() {
-            Ok(mut inbox) => inbox.drain(..).collect(),
+            // Taken from the FRONT, so a squad is photographed in the order it
+            // was sent for rather than backwards.
+            Ok(mut inbox) => {
+                let taking = Self::A_FRAME.min(inbox.len());
+                inbox.drain(..taking).collect()
+            }
             Err(_) => Vec::new(),
         };
         if arrivals.is_empty() {

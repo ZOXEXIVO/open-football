@@ -113,10 +113,15 @@ impl DatabaseGenerator {
             staffs.push(hire(StaffPosition::Coach));
         }
 
+        // The goalkeeping coach is not a luxury. Every professional club
+        // employs one, down to part-time sides, because keepers cannot be
+        // coached inside an outfield session — and because somebody has to
+        // run the one position the whole club shares a single shirt at.
+        // He owns the keeper room across every squad: see
+        // `core::club::staff::goalkeeping`.
+        staffs.push(hire(StaffPosition::GoalkeeperCoach));
+
         // Specialist coaches appear as the club can afford them.
-        if team_reputation >= 3000 {
-            staffs.push(hire(StaffPosition::GoalkeeperCoach));
-        }
         if team_reputation >= 5000 {
             staffs.push(hire(StaffPosition::FitnessCoach));
         }
@@ -154,6 +159,15 @@ impl DatabaseGenerator {
         staffs.push(hire(StaffPosition::Physio));
         staffs.push(hire(StaffPosition::Physio));
         staffs.push(hire(StaffPosition::Physio));
+
+        // A well-funded club runs a goalkeeping coach inside the academy
+        // too. It is the difference between a young keeper being trained
+        // and a young keeper being supervised — the specialist takes the
+        // goalkeeping sessions for this squad rather than the generalist
+        // who is running the outfield group at the same time.
+        if team_reputation >= 2500 {
+            staffs.push(hire(StaffPosition::GoalkeeperCoach));
+        }
     }
 
     /// Give a scout knowledge of their home region + foreign regions weighted
@@ -305,6 +319,45 @@ mod tests {
                 staffs.len()
             );
         }
+    }
+
+    #[test]
+    fn every_main_team_employs_a_goalkeeping_coach() {
+        let generator = make_generator();
+        for rep in [400u16, 800, 2900, 3500, 6000, 8000] {
+            let staffs =
+                DatabaseGenerator::generate_staffs(&generator, 1, 1, "EN", rep, &TeamType::Main);
+            assert_eq!(
+                count_position(&staffs, StaffPosition::GoalkeeperCoach),
+                1,
+                "the keeper room needs somebody to run it at rep {rep}"
+            );
+            let coach = staffs
+                .iter()
+                .find(|s| {
+                    s.contract
+                        .as_ref()
+                        .map(|c| c.position == StaffPosition::GoalkeeperCoach)
+                        .unwrap_or(false)
+                })
+                .unwrap();
+            let gk = &coach.staff_attributes.goalkeeping;
+            let outfield = &coach.staff_attributes.coaching;
+            assert!(
+                gk.shot_stopping >= outfield.attacking.min(outfield.defending)
+                    || gk.shot_stopping > 0,
+                "a goalkeeping coach should actually coach goalkeepers at rep {rep}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_well_funded_academy_gets_its_own_goalkeeping_coach() {
+        let generator = make_generator();
+        let big = DatabaseGenerator::generate_staffs(&generator, 1, 1, "EN", 6000, &TeamType::U18);
+        let small = DatabaseGenerator::generate_staffs(&generator, 1, 1, "EN", 900, &TeamType::U18);
+        assert_eq!(count_position(&big, StaffPosition::GoalkeeperCoach), 1);
+        assert_eq!(count_position(&small, StaffPosition::GoalkeeperCoach), 0);
     }
 
     #[test]

@@ -7,10 +7,12 @@
 //!   off.
 //! * `census` — the `match-logs` samplers the tick calls: defensive
 //!   shape, duel gates, and loose-ball chase geometry.
+//! * `spacing` — how much room the twenty-two give each other, and what
+//!   the largest clump on the pitch is made of.
 //! * `teleport_probe` — the per-tick ball relocation probe the driver
 //!   threads through its phases.
 //!
-//! The last two are compiled only under `match-logs`; the profiler is
+//! All but the profiler are compiled only under `match-logs`; it is
 //! always compiled, which is why it is the only one re-exported to the
 //! engine root.
 
@@ -18,5 +20,7 @@ pub mod phase_prof;
 
 #[cfg(feature = "match-logs")]
 pub mod census;
+#[cfg(feature = "match-logs")]
+pub mod spacing;
 #[cfg(feature = "match-logs")]
 pub mod teleport_probe;

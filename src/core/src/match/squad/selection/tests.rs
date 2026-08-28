@@ -2939,6 +2939,7 @@ fn gk_unit_ctx<'a>(
         competition: super::SelectionCompetition::League,
         game_model: None,
         succession_heirs: &[],
+        keeper_brief: None,
     }
 }
 
@@ -3388,6 +3389,7 @@ fn prospect_bench_fit_uses_simulation_date() {
         competition: super::SelectionCompetition::League,
         game_model: None,
         succession_heirs: &[],
+        keeper_brief: None,
     };
     // 22 on the simulation date (born 2023) → the 0.65 prospect tier. Against
     // the wall clock he'd read as a small child (the 1.0 tier), so a wall-clock
@@ -4464,5 +4466,171 @@ fn development_guest_keeper_yields_to_own_keeper_behind_plan() {
         starting_goalkeeper_id(&result),
         Some(2),
         "the starved own keeper reclaims the gloves ahead of the guest"
+    );
+}
+
+// ========== The goalkeeping department at the team sheet ==========
+//
+// The department's whole reach into a matchday is one signed term inside
+// `pick_best_goalkeeper`. These are A/B tests around it: the same squad and
+// the same fixture, run once with the department silent and once with it
+// speaking, so nothing but the brief can explain the difference.
+
+/// A realistic senior keeper room with a boy behind it: a number one, a
+/// deputy who is if anything rated a shade higher, an experienced third,
+/// and an academy keeper a long way back — the shape a real club carries,
+/// and the shape the department is built to manage.
+fn keeper_room_roster() -> Vec<Player> {
+    let date = Utc::now().date_naive();
+    let mut players = vec![
+        make_test_player(1, &[(PlayerPositionType::Goalkeeper, 20)], 160, date),
+        make_test_player(2, &[(PlayerPositionType::Goalkeeper, 20)], 164, date),
+        make_test_player(3, &[(PlayerPositionType::Goalkeeper, 19)], 130, date),
+        make_test_player(4, &[(PlayerPositionType::Goalkeeper, 17)], 115, date),
+    ];
+    let outfield = [
+        PlayerPositionType::DefenderLeft,
+        PlayerPositionType::DefenderCenterLeft,
+        PlayerPositionType::DefenderCenterRight,
+        PlayerPositionType::DefenderRight,
+        PlayerPositionType::MidfielderLeft,
+        PlayerPositionType::MidfielderCenterLeft,
+        PlayerPositionType::MidfielderCenterRight,
+        PlayerPositionType::MidfielderRight,
+        PlayerPositionType::ForwardLeft,
+        PlayerPositionType::Striker,
+        PlayerPositionType::ForwardRight,
+    ];
+    for (idx, position) in outfield.iter().enumerate() {
+        players.push(make_test_player(
+            20 + idx as u32,
+            &[(*position, 16)],
+            130,
+            date,
+        ));
+    }
+    // `make_test_player` stamps skills but leaves the generator's random
+    // reputation and match sharpness alone, and `goalkeeper_score` reads
+    // both. Pin them across the keeper room so these tests measure the
+    // department's word and nothing else.
+    for player in players.iter_mut().filter(|p| p.positions.is_goalkeeper()) {
+        player.player_attributes.current_reputation = 2000;
+        player.player_attributes.home_reputation = 2000;
+        player.player_attributes.world_reputation = 2000;
+        player.skills.physical.match_readiness = 15.0;
+    }
+    players
+}
+
+fn brief_ctx(importance: f32, brief: Option<KeeperSelectionBrief>) -> SelectionContext {
+    SelectionContext {
+        match_importance: importance,
+        keeper_brief: brief,
+        ..SelectionContext::default()
+    }
+}
+
+fn settled_room_brief(nominated: Option<u32>) -> KeeperSelectionBrief {
+    KeeperSelectionBrief {
+        number_one: Some(1),
+        deputy: Some(2),
+        third: Some(3),
+        nominated,
+        authority: 0.85,
+    }
+}
+
+#[test]
+fn the_declared_number_one_keeps_his_place_over_a_marginally_better_deputy() {
+    let staff = generate_test_staff();
+    let team = cup_team(keeper_room_roster());
+
+    // With no department, the argmax simply takes the higher-rated keeper.
+    let unadvised = SquadSelector::select_with_context(&team, &staff, &[], &brief_ctx(0.70, None));
+    assert_eq!(
+        starting_goalkeeper_id(&unadvised),
+        Some(2),
+        "without a declared order the shirt follows the score"
+    );
+
+    // With one, the number one keeps the shirt he was given.
+    let advised = SquadSelector::select_with_context(
+        &team,
+        &staff,
+        &[],
+        &brief_ctx(0.70, Some(settled_room_brief(None))),
+    );
+    assert_eq!(
+        starting_goalkeeper_id(&advised),
+        Some(1),
+        "a keeper does not lose his place to a handful of ability points"
+    );
+}
+
+#[test]
+fn the_goalkeeping_coach_gets_his_prospect_a_start_in_a_dead_rubber() {
+    let staff = generate_test_staff();
+    let team = cup_team(keeper_room_roster());
+
+    // The prospect is fifty ability points off the number one. Nothing in
+    // the ordinary scoring will ever pick him.
+    let unadvised = SquadSelector::select_with_context(&team, &staff, &[], &brief_ctx(0.18, None));
+    assert_ne!(
+        starting_goalkeeper_id(&unadvised),
+        Some(4),
+        "on merit alone a boy that far behind never plays"
+    );
+
+    // The department asks for him, in a fixture where the club can afford it.
+    let advised = SquadSelector::select_with_context(
+        &team,
+        &staff,
+        &[],
+        &brief_ctx(0.18, Some(settled_room_brief(Some(4)))),
+    );
+    assert_eq!(
+        starting_goalkeeper_id(&advised),
+        Some(4),
+        "the nomination is a decision, not a preference"
+    );
+}
+
+#[test]
+fn the_nomination_is_worth_nothing_when_the_result_matters() {
+    let staff = generate_test_staff();
+    let team = cup_team(keeper_room_roster());
+
+    let result = SquadSelector::select_with_context(
+        &team,
+        &staff,
+        &[],
+        &brief_ctx(0.88, Some(settled_room_brief(Some(4)))),
+    );
+    assert_eq!(
+        starting_goalkeeper_id(&result),
+        Some(1),
+        "the number one plays the games that matter, whoever is being groomed"
+    );
+    assert!(
+        benched_as_goalkeeper(&result, 2),
+        "and the deputy is the man on the bench"
+    );
+}
+
+#[test]
+fn a_manager_who_does_not_listen_picks_his_own_keeper() {
+    let staff = generate_test_staff();
+    let team = cup_team(keeper_room_roster());
+
+    // The same request from a department the manager has no time for.
+    let mut brief = settled_room_brief(Some(4));
+    brief.authority = 0.0;
+
+    let result =
+        SquadSelector::select_with_context(&team, &staff, &[], &brief_ctx(0.18, brief.into()));
+    assert_ne!(
+        starting_goalkeeper_id(&result),
+        Some(4),
+        "advice nobody acts on changes nothing"
     );
 }

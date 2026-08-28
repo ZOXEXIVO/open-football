@@ -1,7 +1,9 @@
+pub mod goalkeeping;
 pub mod routes;
 
 use crate::common::default_handler::{COMPUTER_NAME, CPU_BRAND, CPU_CORES, CSS_VERSION};
 use crate::teams::newspaper::NewspaperCounter;
+use crate::teams::staff::goalkeeping::{GoalkeepingDepartmentView, GoalkeepingPanel};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -42,6 +44,9 @@ pub struct TeamStaffTemplate {
     /// Printed items waiting on the newspaper tab, for the tabbar badge.
     pub newspaper_count: usize,
     pub staff_groups: Vec<StaffGroup>,
+    /// The goalkeeping department, when the club has reviewed its keeper
+    /// room. `None` collapses the panel entirely.
+    pub goalkeeping: Option<GoalkeepingDepartmentView>,
 }
 
 pub struct StaffGroup {
@@ -267,6 +272,7 @@ pub async fn team_staff_action(
             || team.team_type == core::TeamType::U18,
         newspaper_count: NewspaperCounter::count(simulator_data, team),
         staff_groups,
+        goalkeeping: GoalkeepingPanel::for_team(simulator_data, team),
     })
 }
 

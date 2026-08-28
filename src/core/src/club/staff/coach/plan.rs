@@ -26,6 +26,7 @@ use chrono::NaiveDate;
 
 use crate::club::person::Person;
 use crate::club::player::statistics::StuckCareerScan;
+use crate::club::staff::goalkeeping::{KeeperRoomPlan, KeeperTier};
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::{Player, PlayerCollection, PlayerFieldPositionGroup};
 
@@ -159,6 +160,24 @@ impl CoachSquadPlan {
         players: &PlayerCollection,
         today: NaiveDate,
     ) -> Vec<(u32, PlannedRole)> {
+        self.revise_with_keepers(players, None, today)
+    }
+
+    /// As [`Self::revise`], but with the goalkeeping department's standing
+    /// plan in hand.
+    ///
+    /// The coach does not rank his keepers himself. There is one shirt, the
+    /// queue for it runs across every squad the club owns, and the man who
+    /// watches all of them has already written the order down — so where a
+    /// keeper room plan exists the coach reads it rather than re-deriving a
+    /// pecking order from this squad's depth chart, which cannot see the
+    /// under-eighteens and cannot tell a third keeper from a stalled career.
+    pub fn revise_with_keepers(
+        &mut self,
+        players: &PlayerCollection,
+        keepers: Option<&KeeperRoomPlan>,
+        today: NaiveDate,
+    ) -> Vec<(u32, PlannedRole)> {
         let ranks = SquadDepthRanks::build(players, today);
         let mut changes = Vec::new();
 
@@ -167,7 +186,8 @@ impl CoachSquadPlan {
             if player.is_on_loan() {
                 continue;
             }
-            let role = Self::derive_role(player, &ranks, today);
+            let role = Self::keeper_role(player, keepers)
+                .unwrap_or_else(|| Self::derive_role(player, &ranks, today));
             let previous = self.entries.get(&player.id).map(|e| e.role);
             if previous != Some(role) {
                 changes.push((player.id, role));
@@ -193,6 +213,42 @@ impl CoachSquadPlan {
 
         self.last_revised = Some(today);
         changes
+    }
+
+    /// A keeper's role, read off the goalkeeping department's plan.
+    ///
+    /// `None` for outfielders, for keepers the department has no view on,
+    /// and whenever no department exists — the caller then falls back to
+    /// the ordinary depth-chart read, exactly as before.
+    ///
+    /// The mapping is the point. A squad depth chart can only say "third
+    /// best keeper here", which for a settled thirty-five-year-old third
+    /// choice reads as a stalled career and used to put him in the shop
+    /// window. The department says what he actually is: the cover, and the
+    /// senior voice in the goalkeeping group.
+    fn keeper_role(player: &Player, keepers: Option<&KeeperRoomPlan>) -> Option<PlannedRole> {
+        let plan = keepers?;
+        if player.position().position_group() != PlayerFieldPositionGroup::Goalkeeper {
+            return None;
+        }
+        // A manager-pinned keeper is in the plans by definition, and the pin
+        // outranks the specialist's opinion.
+        if player.is_force_match_selection {
+            return Some(PlannedRole::Starter);
+        }
+        if plan.heir() == Some(player.id) {
+            return Some(PlannedRole::SuccessionHeir);
+        }
+        match plan.tier_of(player.id)? {
+            KeeperTier::NumberOne => Some(PlannedRole::Starter),
+            KeeperTier::Deputy => Some(PlannedRole::CupKeeper),
+            KeeperTier::Third => Some(PlannedRole::Cover),
+            KeeperTier::Pathway => Some(PlannedRole::DevelopmentPathway),
+            // The department is watching him but has not put him on the
+            // pathway, and it has no opinion about a keeper it wants moved
+            // on. Both fall back to the ordinary read.
+            KeeperTier::Academy | KeeperTier::Surplus => None,
+        }
     }
 
     /// The coach's read of one player.

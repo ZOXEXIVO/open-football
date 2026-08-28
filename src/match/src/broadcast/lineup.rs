@@ -10,18 +10,22 @@
 //!
 //! 1. **The home eleven, from behind, held still** for [`Lineup::TEAM_HOLD`].
 //!    The frame holds that team and no more of the line, so eleven names are
-//!    on the screen at once. It is also what is up while the squad is being
-//!    dressed — see [`Act::Assembling`], the one beat with no fixed length.
+//!    on the screen at once — the eleven printed across their shoulders. It is
+//!    also what is up while the squad is being dressed — see
+//!    [`Act::Assembling`], the one beat with no fixed length.
 //! 2. **Cut, and the away eleven the same way.**
 //! 3. **Cut round to the front, and one long pass along the whole line** at
 //!    eye level — slow enough to look at each man as he goes by.
 //!
-//! ⚠ **The two team shots caption the WHOLE eleven; the pass captions only the
-//! man it is on.** That is the difference between a team sheet and a name
-//! super, and it is what lets the static beats promise legible names at all:
-//! eleven men across a frame leaves the print on a shirt a few dozen pixels
-//! wide, and the plate above a man's head is the same size whatever the lens
-//! is doing. See [`Caption`].
+//! ⚠ **No plate is drawn over anybody for any of it**, and that is not an
+//! omission — it is where the names come from. The ceremony names its men off
+//! the shirts they are standing in: the print across the shoulders in the two
+//! shots, which are taken from BEHIND the line for exactly that reason, and a
+//! print across the FRONT of the shirt — the same panel, the same lettering,
+//! worn for the walk-out and nothing else — in the pass along the faces. The
+//! name plate that follows a footballer through the match is held back until
+//! the ceremony hands the pitch over. See [`Lineup::wear_the_name`] and
+//! [`FrontPrint`](crate::players::body::FrontPrint).
 //!
 //! ## What it costs the replay, which is nothing
 //!
@@ -56,6 +60,7 @@ use crate::app::config::{PlayerInfo, ViewerConfig};
 use crate::broadcast::camera::{CameraFlight, CameraOrbit, TvCamera};
 use crate::broadcast::focus::CameraSubject;
 use crate::players::actors::{PlayerActor, Undressed};
+use crate::players::body::FrontPrint;
 use crate::recording::loader::ChunkLoader;
 use crate::recording::playback::Playback;
 use crate::scene::field::Field;
@@ -69,7 +74,8 @@ struct Stand {
     id: u32,
     /// Which side of the line he belongs to. Carried here rather than looked
     /// up on [`ViewerConfig`] because the two static beats are ABOUT the
-    /// split: one frames a side, and the caption follows the same rule.
+    /// split: one static beat frames a side, and the shot list is written in
+    /// terms of it.
     home: bool,
     at: Vec3,
     heading: f32,
@@ -81,23 +87,6 @@ struct Shot {
     stand: Vec3,
     aim: Vec3,
     lens: f32,
-}
-
-/// **Whose name is on the screen**, which is not the same question as who is
-/// in the frame.
-///
-/// A held shot of one team exists so its team sheet can be read, so it names
-/// all eleven; a pass down the line is on one man at a time and naming
-/// everybody it can see would put a wall of text over the football. See
-/// [`Lineup::captions`].
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-enum Caption {
-    #[default]
-    Nobody,
-    /// Every man of one side.
-    Team(bool),
-    /// The one man the pass is on.
-    Man(u32),
 }
 
 /// Which beat the ceremony is on.
@@ -145,8 +134,6 @@ pub struct Lineup {
     /// This frame's camera, or `None` when the ceremony does not have the
     /// picture.
     shot: Option<Shot>,
-    /// …and whose name goes over it. See [`Caption`].
-    caption: Caption,
 }
 
 impl Lineup {
@@ -275,15 +262,21 @@ impl Lineup {
     /// The ceremony is wall-clock — the playhead is parked for all of it, so
     /// there is no match time to measure it in and the transport speed does
     /// not touch it — and this is the one number the length of it comes out
-    /// of: twenty-three metres of travel at just under a metre a second is
-    /// twenty-three seconds. `glide` runs the middle of that at about 1.25.
+    /// of: twenty-three metres of travel at seven tenths of a metre a second
+    /// is thirty-three seconds. `glide` runs the middle of that at about 0.88.
     ///
-    /// Walked back three times on the maintainer's instruction (2026-08-26):
-    /// to a THIRD of the six metres a second the pass opened at — a man and a
-    /// half of frame per second, fast enough to read a name off a shirt and
-    /// much too fast to look at anybody — then 30% slower, and 30% slower
-    /// again. A man now takes the better part of a second to cross the frame.
-    const PACE: f32 = 0.98;
+    /// Walked back four times on the maintainer's instruction, and every one
+    /// of them the same instruction: to a THIRD of the six metres a second the
+    /// pass opened at (2026-08-26) — a man and a half of frame per second,
+    /// fast enough to read a name off a shirt and much too fast to look at
+    /// anybody — then 30% slower, 30% slower again, and 30% slower once more
+    /// (2026-08-29). The lens now takes a second and a quarter to travel from
+    /// one man to the next, and the whole ceremony runs a little under forty
+    /// seconds.
+    ///
+    /// ⚠ Which is long, and deliberately survivable: every way of asking for
+    /// the football ends it on the frame it is asked — see [`Self::hold`].
+    const PACE: f32 = 0.686;
     /// **How long the wide will wait for the last man to be dressed**, in real
     /// seconds, before it starts anyway.
     ///
@@ -293,11 +286,6 @@ impl Lineup {
     /// browser stops to link, and a machine that takes four seconds over that
     /// must not also be a machine where the football never starts.
     const PATIENCE: f32 = 6.0;
-    /// How near the middle of the frame a man has to be to get the caption, in
-    /// metres. [`Self::SPACING`], so exactly one man has it for the whole
-    /// length of a pass and nobody has it over the gap between the teams or
-    /// past either end.
-    const SPOTLIGHT: f32 = Self::SPACING;
     /// How much of a full smoothstep a dolly leans into its move.
     ///
     /// ⚠ **Not all of it.** A smoothstep starts and ends at rest, and on a
@@ -526,23 +514,7 @@ impl Lineup {
             .map(|window| window.width() / window.height().max(1.0))
             .filter(|shape| shape.is_finite() && *shape > 0.1)
             .unwrap_or(Self::FRAME);
-        let shot = lineup.shot_at(into, frame);
-        lineup.caption = lineup.caption_at(into, &shot);
-        lineup.shot = Some(shot);
-    }
-
-    /// Whose name goes over this frame. See [`Caption`].
-    fn caption_at(&self, into: f32, shot: &Shot) -> Caption {
-        if into < Self::TEAM_HOLD {
-            return Caption::Team(true);
-        }
-        if into < Self::TEAM_HOLD * 2.0 {
-            return Caption::Team(false);
-        }
-        match self.nearest_to(shot.aim) {
-            Some(id) => Caption::Man(id),
-            None => Caption::Nobody,
-        }
+        lineup.shot = Some(lineup.shot_at(into, frame));
     }
 
     /// Hands the replay back.
@@ -555,7 +527,6 @@ impl Lineup {
     fn release(&mut self, playback: &mut Playback, restore: bool) {
         self.act = Act::Releasing;
         self.shot = None;
-        self.caption = Caption::Nobody;
         if !restore {
             return;
         }
@@ -624,6 +595,43 @@ impl Lineup {
                     }
                     actor.at_ease();
                 }
+            }
+        }
+    }
+
+    /// **Puts the name across the front of the shirt on for the walk-out, and
+    /// takes it off again.**
+    ///
+    /// The print is the same one as the back of the shirt — same panel, same
+    /// lettering, same material — half a turn round the body, and it is the
+    /// only thing naming anybody during the ceremony: the plate that follows a
+    /// footballer through the match is held back for all of it (see
+    /// [`Actors::place_labels`](crate::players::actors::Actors::place_labels)).
+    /// Which is what the two halves of the shot list were always for — the
+    /// static beats are shot from BEHIND the line, where the back print is, and
+    /// the pass comes down the front at four metres, where this one is.
+    ///
+    /// Every print in the squad, not only the line's, and it does not have to
+    /// be choosier than that: [`Self::pose`] hides every man who is not in the
+    /// row outright, so a substitute wearing his name is a substitute nobody
+    /// can see. `on()` is the whole test — the print is worn while the ceremony
+    /// has the picture and at no other moment of the match.
+    ///
+    /// Written only on a change, like the contact shadows and the name plates:
+    /// this is twenty-two comparisons a frame and, for all but two frames of a
+    /// match, twenty-two writes it does not do.
+    pub fn wear_the_name(
+        lineup: Res<Lineup>,
+        mut prints: Query<&mut Visibility, With<FrontPrint>>,
+    ) {
+        let wanted = if lineup.on() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        for mut visibility in &mut prints {
+            if *visibility != wanted {
+                *visibility = wanted;
             }
         }
     }
@@ -751,32 +759,9 @@ impl Lineup {
         along * along * (3.0 - 2.0 * along)
     }
 
-    /// The man nearest the middle of the frame, if the frame is on the line at
-    /// all. See [`Self::SPOTLIGHT`].
-    fn nearest_to(&self, aim: Vec3) -> Option<u32> {
-        self.row
-            .iter()
-            .map(|stand| (stand.id, (stand.at.x - aim.x).abs()))
-            .filter(|(_, gap)| *gap <= Self::SPOTLIGHT)
-            .min_by(|left, right| left.1.total_cmp(&right.1))
-            .map(|(id, _)| id)
-    }
-
     /// True while the ceremony owns the picture.
     pub fn on(&self) -> bool {
         self.shot.is_some()
-    }
-
-    /// Whether this man's name plate is drawn. Everybody else's is held back
-    /// for as long as the ceremony is on — see [`Caption`].
-    pub fn captions(&self, id: u32) -> bool {
-        match self.caption {
-            Caption::Nobody => false,
-            Caption::Team(home) => self
-                .stand_of(id)
-                .is_some_and(|stand| stand.home == home),
-            Caption::Man(man) => man == id,
-        }
     }
 
     /// Where the camera stands and what it looks at, or `None` to leave the
@@ -905,9 +890,9 @@ mod tests {
     #[test]
     fn every_man_is_turned_at_the_main_stand() {
         for stand in &walked_out().row {
-            let facing = Vec3::new(stand.heading.sin(), 0.0, stand.heading.cos());
             // The gantry is behind the negative-z touchline, and so is the
             // pass that comes round to their faces.
+            let facing = facing(stand);
             assert!(facing.z < -0.99, "he is not facing the stand: {facing:?}");
         }
     }
@@ -930,19 +915,9 @@ mod tests {
             .expect("a pass has frames in it")
     }
 
-    /// How many men have their name on the screen `at` seconds in.
-    fn named(lineup: &Lineup, at: f32) -> usize {
-        let shot = lineup.shot_at(at, Lineup::FRAME);
-        let over = Lineup {
-            row: lineup.row.clone(),
-            caption: lineup.caption_at(at, &shot),
-            ..default()
-        };
-        lineup
-            .row
-            .iter()
-            .filter(|stand| over.captions(stand.id))
-            .count()
+    /// Which way `man` is turned, flat.
+    fn facing(man: &Stand) -> Vec3 {
+        Vec3::new(man.heading.sin(), 0.0, man.heading.cos())
     }
 
     /// Every man of one side is inside the frame a team shot holds, and nobody
@@ -984,7 +959,6 @@ mod tests {
     #[test]
     fn the_team_shots_are_behind_them_and_the_pass_is_in_front() {
         let lineup = walked_out();
-        let facing = |stand: &Stand| Vec3::new(stand.heading.sin(), 0.0, stand.heading.cos());
         // Each static beat stands behind the side it is looking at.
         //
         // ⚠ Measured against the MIDDLE of that side, because the camera
@@ -1100,11 +1074,35 @@ mod tests {
         );
     }
 
+    /// **Every man is shown a side of his shirt that has his name on it, and
+    /// the pass goes by all of them.**
+    ///
+    /// ⚠ **This is the whole naming contract now that no plate is drawn.** The
+    /// ceremony captions nobody — it names its men off the print they are
+    /// wearing — so the promise the shot list has to keep is that each beat is
+    /// on a side of the shirt that carries the name: the back in the two static
+    /// shots, the front in the pass. Checked for every man rather than for the
+    /// middle of the line, because it is the ends that a shot fails at.
     #[test]
-    fn the_lens_goes_past_every_man_and_every_man_is_named_in_a_team_shot() {
+    fn every_man_shows_the_camera_a_side_of_his_shirt_with_his_name_on_it() {
         let lineup = walked_out();
         let total = lineup.total();
         for stand in &lineup.row {
+            // His own side's held shot, from behind — the back print.
+            let at = if stand.home {
+                Lineup::TEAM_HOLD * 0.5
+            } else {
+                Lineup::TEAM_HOLD * 1.5
+            };
+            let shot = lineup.shot_at(at, Lineup::FRAME);
+            let to_lens = (shot.stand - stand.at).with_y(0.0).normalize();
+            assert!(
+                to_lens.dot(facing(stand)) < -0.85,
+                "{} is not showing his back to his own team shot: {to_lens:?}",
+                stand.id
+            );
+
+            // …and the pass, which comes down the front — the walk-out print.
             let mut passed = false;
             for step in 0..=2_000 {
                 let shot = lineup.shot_at(total * step as f32 / 2_000.0, Lineup::FRAME);
@@ -1113,43 +1111,47 @@ mod tests {
                 }
             }
             assert!(passed, "{} never had the pass go by", stand.id);
-            // …and he had his name on the screen in his own team's shot before
-            // it did.
-            let at = if stand.home {
-                Lineup::TEAM_HOLD * 0.5
-            } else {
-                Lineup::TEAM_HOLD * 1.5
-            };
-            let shot = lineup.shot_at(at, Lineup::FRAME);
-            assert_eq!(lineup.caption_at(at, &shot), Caption::Team(stand.home));
+            let level = level_with(&lineup, stand);
+            let to_lens = (level.stand - stand.at).with_y(0.0).normalize();
+            assert!(
+                to_lens.dot(facing(stand)) > 0.9,
+                "{} does not face the pass as it goes by: {to_lens:?}",
+                stand.id
+            );
         }
     }
 
+    /// **The walk-out print has to be IN the frame of the pass, not merely
+    /// facing it.**
+    ///
+    /// The pass is framed on a man's eyes and the print sits below them, so a
+    /// lens tight enough to be a portrait would put his name off the bottom
+    /// edge and the beat would name nobody at all. This is the bound that
+    /// stops [`Lineup::FRONT_LENS`] being tightened past the thing the beat is
+    /// for — and the one that has to be re-read whenever
+    /// [`BodyParts::NAME_FRONT_AT`] moves.
     #[test]
-    fn a_team_shot_names_its_whole_eleven_and_the_pass_names_one_man() {
+    fn the_pass_holds_the_print_across_the_chest_in_frame() {
+        use crate::players::body::{BodyParts, Physique};
         let lineup = walked_out();
-        // Eleven names on a team shot — that is what it is for.
-        assert_eq!(named(&lineup, Lineup::TEAM_HOLD * 0.5), 11);
-        assert_eq!(named(&lineup, Lineup::TEAM_HOLD * 1.5), 11);
-        // …and at most one down the pass, where twenty-two would be a wall of
-        // text over the football.
-        //
-        // ⚠ **And AT LEAST one for most of it**, which is the half of this
-        // that a "no more than one" bound will happily let through: a pass
-        // that names nobody at all satisfies it perfectly and is the bug.
-        let from = Lineup::TEAM_HOLD * 2.0;
-        let steps = 400;
-        let mut anybody = 0;
-        for step in 0..=steps {
-            let at = from + (lineup.walk_seconds() - 1e-3) * step as f32 / steps as f32;
-            let count = named(&lineup, at);
-            assert!(count <= 1, "{count} names at {at} s");
-            anybody += count;
+        // Where the walk-out print actually is, in the world: its own height
+        // up the torso, on a man of nominal build.
+        let print = Physique::HIP + BodyParts::NAME_FRONT_AT;
+        for stand in &lineup.row {
+            let shot = level_with(&lineup, stand);
+            // The frame's half-angle up, out of the lens the pass is held on.
+            let up = TvCamera::FOV / shot.lens * 0.5;
+            let to_print = Vec3::new(stand.at.x, print, stand.at.z) - shot.stand;
+            let axis = (shot.aim - shot.stand).normalize();
+            let flat = to_print.with_y(0.0).length().max(1e-3);
+            let below = ((shot.stand.y - print) / flat).atan();
+            let aimed = (axis.y / axis.with_y(0.0).length().max(1e-3)).atan().abs();
+            assert!(
+                below + aimed < up,
+                "{}'s name is {below} below a lens aimed {aimed} down, in a {up} frame",
+                stand.id
+            );
         }
-        assert!(
-            anybody > steps * 3 / 4,
-            "the pass named somebody on only {anybody} of {steps} frames"
-        );
     }
 
     #[test]

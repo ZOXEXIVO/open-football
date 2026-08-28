@@ -10,6 +10,8 @@
 //! * [`forward_shot_decision`] — the shoot / hold / lay-off decision
 //!   itself, plus the striking-range, poise, carry and free-kick models
 //!   behind it. Owns the `*_diag` counters `dev_match` reads.
+//! * [`support`] — where an off-ball team-mate offers himself to the
+//!   man on the ball: the angle, and the distance that has a floor.
 //! * [`shooting`] — the context-bound facade the states call
 //!   (`in_shooting_range`, `should_shoot_over_pass`, …).
 //! * [`xg`] — chance quality, shared by the pre-shot gate and the
@@ -20,6 +22,7 @@ pub mod forward_shot_decision;
 pub mod movement;
 pub mod passing;
 pub mod shooting;
+pub mod support;
 pub mod xg;
 
 pub use box_movement::*;
@@ -27,4 +30,5 @@ pub use forward_shot_decision::*;
 pub use movement::*;
 pub use passing::*;
 pub use shooting::*;
+pub use support::*;
 pub use xg::*;

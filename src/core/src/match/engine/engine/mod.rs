@@ -313,6 +313,11 @@ mod types;
 // reachable as `crate::r#match::phase_prof`.
 pub use diagnostics::phase_prof;
 
+// …and the spacing census the harness reads, on the same footing as the
+// other `match-logs` diagnostics re-exported from the crate root.
+#[cfg(feature = "match-logs")]
+pub use diagnostics::spacing;
+
 // The flat type surface. Listed rather than globbed so that the names the
 // engine root carries onward are visible here — and so that no group
 // module name leaks into that root namespace alongside them.

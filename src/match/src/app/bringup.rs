@@ -38,8 +38,20 @@
 //! and a bar. The last one is `ready`, which is what takes the overlay off —
 //! deliberately not the first drawn frame, because the frame the squad first
 //! appears on is itself one of the four expensive ones.
+//!
+//! ⚠ **And "the squad appeared" means DRAWN, not dressed.** The two used to be
+//! the same frame and are not any more: the pre-match line-up
+//! ([`crate::broadcast::lineup`]) asks for the whole starting eleven to be
+//! built the moment the page opens, so a man is dressed while the recording is
+//! still in flight and stands `Hidden` for as long as it takes to arrive. The
+//! shader his kit needs is not linked when he is built — it is linked the first
+//! time a render pass has to DRAW him. Reading "ready" off the dressing put the
+//! overlay away eight seconds early and dropped the four-second link into the
+//! opening shot of the ceremony, which is the one place in the replay it is
+//! guaranteed to be noticed. See [`Self::squad_on_screen`].
 
 use crate::app::quality::Quality;
+use crate::players::actors::{PlayerActor, Undressed};
 use crate::recording::loader::ChunkLoader;
 use bevy::prelude::*;
 
@@ -54,9 +66,8 @@ pub struct Bringup {
     /// [`Self::COURSES`] the structure is up and only the recording is
     /// outstanding.
     course: usize,
-    /// Whether anybody has taken the field yet — set by
-    /// [`crate::players::actors::Actors::take_the_field`], which is where the
-    /// squad's own pipelines are queued.
+    /// Whether a footballer has been DRAWN yet — see [`Self::squad_on_screen`],
+    /// which is careful about why being dressed is not the same question.
     squad_out: bool,
     /// When the squad came out, on the real clock. See [`Self::SETTLE`].
     settle_at: Option<f32>,
@@ -162,10 +173,26 @@ impl Bringup {
         self.warming >= Self::WARM_UP
     }
 
-    /// Noted by [`crate::players::actors::Actors::take_the_field`] the first
-    /// time it dresses anybody.
-    pub fn squad_took_the_field(&mut self) {
-        self.squad_out = true;
+    /// **Has a footballer been drawn yet**, which is the question the settle
+    /// clock is actually asking.
+    ///
+    /// ⚠ **Not "has anybody been dressed".** Dressing a man queues his
+    /// materials; it does not compile the shader they need, because nothing has
+    /// asked to draw him yet. The link happens in the render pass of the first
+    /// frame he is VISIBLE, and with the line-up ceremony in front of the match
+    /// those two frames are seconds apart — the eleven are built as the page
+    /// opens and shown when the recording lands. Asked the wrong question the
+    /// overlay came off with an empty pitch behind it and the four-second link
+    /// fell into the ceremony's first shot.
+    ///
+    /// Undressed men are excluded because a body is what carries the meshes: a
+    /// man with no meshes cannot queue a pipeline however visible he is.
+    fn squad_on_screen(
+        squad: &Query<&Visibility, (With<PlayerActor>, Without<Undressed>)>,
+    ) -> bool {
+        squad
+            .iter()
+            .any(|visibility| *visibility != Visibility::Hidden)
     }
 
     /// Advances the course and keeps the page's readout current.
@@ -177,6 +204,7 @@ impl Bringup {
         mut quality: ResMut<Quality>,
         loader: Res<ChunkLoader>,
         time: Res<Time<Real>>,
+        squad: Query<&Visibility, (With<PlayerActor>, Without<Undressed>)>,
     ) {
         if bringup.told == Some(Phase::Ready) {
             return;
@@ -199,6 +227,13 @@ impl Bringup {
             }
             return;
         }
+
+        // Registered behind the whole `Update` chain, so this is the frame's
+        // own answer and not the previous one's: the ceremony stands the line
+        // up and the replay reveals whoever is on the pitch well before this
+        // runs. Latched, because a man can go back off — a substitute, or the
+        // ceremony handing the pitch over — and the shader stays linked.
+        bringup.squad_out |= Self::squad_on_screen(&squad);
 
         if bringup.squad_out {
             let now = time.elapsed_secs();

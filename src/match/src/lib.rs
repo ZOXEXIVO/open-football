@@ -301,6 +301,10 @@ impl MatchViewer {
             //   front of the playhead it holds still.
             // - **`pose`** behind the recording, which is what it overrides,
             //   and in front of `animate`, which poses whatever it leaves.
+            // - **`wear_the_name`** behind `hold`, which is what decides
+            //   whether the ceremony has the picture this frame, and behind
+            //   `take_the_field`, which is what spawns the print in the first
+            //   place — a man dressed this frame wears his name this frame.
             .add_systems(
                 Update,
                 (
@@ -310,6 +314,19 @@ impl MatchViewer {
                     Lineup::pose
                         .after(Actors::take_the_field)
                         .before(Actors::animate),
+                    Lineup::wear_the_name
+                        .after(Lineup::hold)
+                        .after(Actors::take_the_field),
+                    // **Ahead of the fold**, so a request that comes due this
+                    // frame is on the wire before the answer to the last one
+                    // is painted onto a face — the two are the halves of one
+                    // budget and belong in one frame's order, not two.
+                    //
+                    // Named here for the same reason the line-up's systems
+                    // are: the group below is at Bevy's twenty-tuple limit,
+                    // and nesting a pair inside it would leave both ordered
+                    // against nothing at all.
+                    Portraits::ask.before(Portraits::attach),
                 ),
             )
             // **The soundtrack**, named here for the same reason the pair

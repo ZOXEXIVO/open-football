@@ -153,7 +153,7 @@ impl TeamTraining {
         if let Some(sessions) = weekly_plan.sessions.get(&current_weekday) {
             for session in sessions {
                 let session_results =
-                    Self::execute_training_session(team, coach, session, date, facility_quality);
+                    Self::execute_training_session(team, session, date, facility_quality);
                 result.player_results.extend(session_results);
             }
         }
@@ -164,9 +164,11 @@ impl TeamTraining {
         result
     }
 
+    /// Run one session. The coach is resolved per participant rather than
+    /// per session, because a keeper's day belongs to the goalkeeping coach
+    /// whatever is on the outfield programme.
     fn execute_training_session(
         team: &Team,
-        coach: &Staff,
         session: &TrainingSession,
         date: NaiveDateTime,
         facility_quality: f32,
@@ -188,6 +190,13 @@ impl TeamTraining {
         let is_tactical_session = TrainingBondGate::is_tactical(&session.session_type);
 
         for player in participants {
+            // Who actually takes him. A keeper works with the goalkeeping
+            // coach; everybody else with the squad's training coach, which
+            // is the `coach` argument. See
+            // [`StaffCollection::training_coach_for`].
+            let coach = team
+                .staffs
+                .training_coach_for(&team.team_type, player.position().position_group());
             let mut r = PlayerTraining::train(player, coach, session, date, facility_quality);
             r.effects.scale_gains(chem_factor);
             // Coach-player bond gates absorption per polish task #4 —
@@ -219,39 +228,35 @@ impl TeamTraining {
         results
     }
 
-    /// Credit the coach with specialization days for each participant's
-    /// position group. Called after training, so the coach develops deep
-    /// expertise over time in whichever groups they spend most sessions on.
-    fn accrue_coach_specialization(team: &mut Team, coach_id: u32, participant_ids: &[u32]) {
-        // Build a multiset of groups trained this session.
-        let mut group_counts: [u32; 4] = [0; 4];
+    /// Credit each coach with specialization days for the position groups
+    /// he actually took. Called after training, so a coach develops deep
+    /// expertise over time in whichever groups he spends most sessions on —
+    /// and a goalkeeping coach, who takes only one group ever, becomes a
+    /// keeper specialist within a couple of seasons.
+    fn accrue_coach_specialization(
+        team: &mut Team,
+        coach_by_player: &HashMap<u32, (u32, f32)>,
+        fallback_coach_id: u32,
+        participant_ids: &[u32],
+    ) {
+        // Which coach ran which group today. One day each, however many
+        // players were in the group — what matters is whether he ran it.
+        let mut ran: Vec<(u32, PlayerFieldPositionGroup)> = Vec::new();
         for pid in participant_ids {
             if let Some(player) = team.players.find(*pid) {
                 let group = player.position().position_group();
-                let idx = match group {
-                    PlayerFieldPositionGroup::Goalkeeper => 0,
-                    PlayerFieldPositionGroup::Defender => 1,
-                    PlayerFieldPositionGroup::Midfielder => 2,
-                    PlayerFieldPositionGroup::Forward => 3,
-                };
-                group_counts[idx] += 1;
+                let coach_id = coach_by_player
+                    .get(pid)
+                    .map(|(id, _)| *id)
+                    .unwrap_or(fallback_coach_id);
+                if !ran.contains(&(coach_id, group)) {
+                    ran.push((coach_id, group));
+                }
             }
         }
-        // Credit the coach with ONE specialization day for each group that
-        // had participants. Multiple players don't double-count — what
-        // matters is whether the coach ran that group today.
-        if let Some(coach) = team.staffs.find_mut(coach_id) {
-            if group_counts[0] > 0 {
-                coach.accrue_specialization(PlayerFieldPositionGroup::Goalkeeper, 1);
-            }
-            if group_counts[1] > 0 {
-                coach.accrue_specialization(PlayerFieldPositionGroup::Defender, 1);
-            }
-            if group_counts[2] > 0 {
-                coach.accrue_specialization(PlayerFieldPositionGroup::Midfielder, 1);
-            }
-            if group_counts[3] > 0 {
-                coach.accrue_specialization(PlayerFieldPositionGroup::Forward, 1);
+        for (coach_id, group) in ran {
+            if let Some(coach) = team.staffs.find_mut(coach_id) {
+                coach.accrue_specialization(group, 1);
             }
         }
     }
@@ -341,6 +346,19 @@ impl TeamTraining {
         // coach's id in `PlayerTraining::train` / `CoachPlayerBond` — if
         // the accrual landed on the head coach instead, a club with a
         // dedicated training coach would never close either feedback loop.
+        //
+        // Resolved per player, not per squad: a keeper's coach is the
+        // goalkeeping specialist, so his rapport has to accrue with the man
+        // he actually spends the morning with.
+        let coach_for = |player_id: u32| -> Option<(u32, f32)> {
+            let group = team.players.find(player_id)?.position().position_group();
+            let coach = team.staffs.training_coach_for(&team.team_type, group);
+            Some((coach.id, coach.recent_performance.training_effectiveness))
+        };
+        let coach_by_player: HashMap<u32, (u32, f32)> = participant_ids
+            .iter()
+            .filter_map(|&id| coach_for(id).map(|c| (id, c)))
+            .collect();
         let session_coach = team.staffs.training_coach(&team.team_type);
         let coach_id = session_coach.id;
         let coach_effectiveness = session_coach.recent_performance.training_effectiveness;
@@ -349,8 +367,12 @@ impl TeamTraining {
         // Small positive drift + shared_days increment, even if no other
         // events fire this tick.
         for &player_id in &participant_ids {
+            let with = coach_by_player
+                .get(&player_id)
+                .map(|(id, _)| *id)
+                .unwrap_or(coach_id);
             if let Some(player) = team.players.find_mut(player_id) {
-                player.rapport.accrue_training_day(coach_id, sim_date, 1);
+                player.rapport.accrue_training_day(with, sim_date, 1);
             }
         }
 
@@ -358,7 +380,7 @@ impl TeamTraining {
         // group covered in this session. Over hundreds of sessions a coach
         // organically becomes a "midfield specialist" or "striker clinic"
         // without any manual assignment.
-        Self::accrue_coach_specialization(team, coach_id, &participant_ids);
+        Self::accrue_coach_specialization(team, &coach_by_player, coach_id, &participant_ids);
 
         // Calculate average morale change across training results
         let total_morale: f32 = training_results
@@ -372,11 +394,15 @@ impl TeamTraining {
             0.0
         };
 
-        // Positive training session: update coach-player relationships
+        // Positive training session: update coach-player relationships —
+        // each player's with the coach who actually took him.
         if avg_morale > 0.0 {
-            let relationship_boost = 0.01 + coach_effectiveness * 0.02; // 0.01 to 0.03
-
             for &player_id in &participant_ids {
+                let (with, effectiveness) = coach_by_player
+                    .get(&player_id)
+                    .copied()
+                    .unwrap_or((coach_id, coach_effectiveness));
+                let relationship_boost = 0.01 + effectiveness * 0.02; // 0.01 to 0.03
                 if let Some(player) = team.players.find_mut(player_id) {
                     let change = RelationshipChange::positive(
                         ChangeType::CoachingSuccess,
@@ -384,7 +410,7 @@ impl TeamTraining {
                     );
                     player
                         .relations
-                        .update_staff_relationship(coach_id, change, sim_date);
+                        .update_staff_relationship(with, change, sim_date);
                 }
             }
         }

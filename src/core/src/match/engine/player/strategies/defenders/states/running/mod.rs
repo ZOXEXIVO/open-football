@@ -6,6 +6,7 @@ use crate::r#match::defenders::states::common::{
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay};
+use crate::r#match::player::strategies::common::players::ops::clearance::ClearanceCall;
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
@@ -918,41 +919,25 @@ impl DefenderRunningState {
     }
 
     pub fn should_clear(&self, ctx: &StateProcessingContext) -> bool {
-        // Clear if in own penalty area under REAL pressure, and only if
-        // this defender is not the sort who plays out of it.
+        // In his own penalty area, the call belongs to `ClearanceCall` —
+        // the squeeze, the danger, whether the out is genuinely an out,
+        // and the man's own willingness to play through it.
         //
-        // The test was `in_own_penalty_area() && opponents().exists(30.0)`
-        // — 30u is 3.75 m, which in a defended penalty area is true of
-        // essentially every touch a defender takes. So every centre-half
-        // hoofed every ball he received in his own box, whoever he was:
-        // measured 15.2 clearances per defender per match against a real
-        // ~3.5. It also asked nothing about the man. `buildup_profile`
-        // already models exactly this distinction — and
-        // `must_clear_under_pressure()` was being consulted on the
-        // PASSING path while the far busier running path ignored it.
+        // What was here asked whether an opponent was within 14u (1.75 m)
+        // and whether `find_best_pass_option_with_distance(220.0)` came up
+        // empty. The first is a man practically standing on you and the
+        // second is almost never true, so a centre-half surrounded in his
+        // own six-yard box went looking for a twenty-metre pass: measured
+        // 0.61 clearances per defender per match against a real ~3.5.
         //
-        // Real defending: a ball-playing centre-half under close pressure
-        // looks for the out and only clears when there isn't one; a
-        // limited one clears on principle. Both clear when nobody is
-        // available. 14u (1.75 m) is a man actually on you rather than a
-        // man in the same part of the pitch.
-        if ctx.ball().in_own_penalty_area() && ctx.players().opponents().exists(14.0) {
-            let def_profile = DefenderSkillProfile::from_ctx(ctx);
-            // Same search as the emergency branch, for the same reason:
-            // `find_safe_pass_option()` only looks 6.25 m and so reports
-            // "no pass" whenever the nearest team-mate is a normal
-            // distance away.
-            if def_profile.must_clear_under_pressure()
-                || ctx
-                    .player()
-                    .passing()
-                    .find_best_pass_option_with_distance(220.0)
-                    .is_none()
-            {
-                #[cfg(feature = "match-logs")]
-                crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(0);
-                return true;
-            }
+        // The threshold before that one was 30u with no test of the man
+        // at all, and it produced 15.2 per defender. Both numbers are the
+        // same mistake — a cliff standing in for a reading — which is why
+        // the replacement is a model rather than a third threshold.
+        if ctx.ball().in_own_penalty_area() && ClearanceCall::now(ctx) {
+            #[cfg(feature = "match-logs")]
+            crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag::ClearDiag::note(0);
+            return true;
         }
 
         // Clear if congested anywhere (not just boundaries)

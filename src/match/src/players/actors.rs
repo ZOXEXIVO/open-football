@@ -1,4 +1,3 @@
-use crate::app::bringup::Bringup;
 use crate::app::config::{PlayerInfo, ViewerConfig};
 use crate::app::stage::Backdrop;
 use crate::art::textures::Textures;
@@ -996,12 +995,6 @@ impl Actors {
     /// technical area, which the engine puts 2.1 m out. See
     /// [`Self::place_labels`].
     const PLATE_TOUCHLINE: f32 = 1.0;
-    /// How far above a man's crown his caption sits during the pre-match
-    /// line-up, in screen pixels — the height of the plate itself, so the text
-    /// clears his head rather than resting on it. See [`Self::place_labels`],
-    /// which explains why the one shot in the replay that frames a man from
-    /// the chest up cannot hang a plate off his boots.
-    const CAPTION_RISE: f32 = 16.0;
     /// The band of heights, in metres, that means a ball is in a goalkeeper's
     /// gloves.
     ///
@@ -1498,7 +1491,6 @@ impl Actors {
     /// the batch every player sharing his complexion is drawn in.
     pub fn take_the_field(
         mut commands: Commands,
-        mut bringup: ResMut<Bringup>,
         playback: Res<Playback>,
         config: Res<ViewerConfig>,
         lineup: Res<Lineup>,
@@ -1564,11 +1556,6 @@ impl Actors {
                 player.is_goalkeeper(),
             );
             commands.entity(entity).remove::<Undressed>();
-            // The kit, the boots and the face are the last materials in the
-            // scene, and the shader they need is the last one the browser has
-            // to stop and compile. The page's loading overlay is held until a
-            // frame has been drawn past it — see [`Bringup::pump`].
-            bringup.squad_took_the_field();
             dressed += 1;
         }
     }
@@ -3316,7 +3303,7 @@ impl Actors {
         camera: Single<(&Camera, &Transform), With<Camera3d>>,
         window: Single<&Window, With<PrimaryWindow>>,
         lineup: Res<Lineup>,
-        actors: Query<(&PlayerActor, &Transform, &Visibility)>,
+        actors: Query<(&Transform, &Visibility), With<PlayerActor>>,
         mut labels: Query<(&PlayerLabel, &mut Node, &mut Visibility), Without<PlayerActor>>,
     ) {
         let (camera, camera_transform) = *camera;
@@ -3353,7 +3340,7 @@ impl Actors {
         };
 
         for (label, mut node, mut visibility) in &mut labels {
-            let Ok((actor, actor_transform, actor_visibility)) = actors.get(label.actor) else {
+            let Ok((actor_transform, actor_visibility)) = actors.get(label.actor) else {
                 settle(&mut visibility, Visibility::Hidden);
                 continue;
             };
@@ -3361,17 +3348,15 @@ impl Actors {
                 settle(&mut visibility, Visibility::Hidden);
                 continue;
             }
-            // **While the teams are being walked out, the shot says who is
-            // named.**
+            // **Nobody is captioned while the teams are being walked out.**
             //
-            // A held shot of one eleven names all eleven — reading the team
-            // sheet off it is the whole point of the beat, and eleven men
-            // across a frame leaves the print on a shirt too small to be that
-            // team sheet on its own. A pass down the line names the one man it
-            // is on: twenty-two plates over twenty-two men four feet apart is
-            // a wall of text with the football behind it.
-            // See [`Lineup::captions`](crate::broadcast::lineup::Lineup).
-            if lineup.on() && !lineup.captions(actor.id) {
+            // The ceremony names its men off their own shirts — the back print
+            // in the two shots taken from behind the line, and a print across
+            // the front of the shirt, worn for the walk-out alone, in the pass
+            // along the faces. A plate on top of that is a second name in a
+            // shot whose whole subject is a man's kit and his face. See
+            // [`Lineup::wear_the_name`](crate::broadcast::lineup::Lineup::wear_the_name).
+            if lineup.on() {
                 settle(&mut visibility, Visibility::Hidden);
                 continue;
             }
@@ -3436,22 +3421,12 @@ impl Actors {
             let crown = crown * to_plate;
             let stature = (boots.y - crown.y).abs().max(6.0);
             let left = Val::Px((boots.x - 44.0).round());
-            // **A caption hangs ABOVE the head; a name plate hangs below the
-            // boots.**
-            //
-            // Below is right for the whole of the match, where a plate under a
-            // man's feet is a label on the grass he is standing on and cannot
-            // collide with the ball above him. It is wrong for the one shot
-            // that frames a man from the chest up: the line-up's faces pass
-            // stands four metres off its subject, so his boots are a good way
-            // below the bottom edge and the caption goes with them — measured
-            // on a rendered pass, every caption of it landed off screen or
-            // under the transport bar.
-            let top = if lineup.on() {
-                Val::Px((crown.y - stature * Self::LABEL_GAP - Self::CAPTION_RISE).round())
-            } else {
-                Val::Px((boots.y + stature * Self::LABEL_GAP).round())
-            };
+            // A plate hangs below the boots, which is a label on the grass a
+            // man is standing on and cannot collide with the ball above him.
+            // There is no second case: the one shot in the replay that framed a
+            // man too close for that — the line-up's pass along the faces —
+            // does not draw plates at all any more.
+            let top = Val::Px((boots.y + stature * Self::LABEL_GAP).round());
             if node.left != left || node.top != top {
                 node.left = left;
                 node.top = top;

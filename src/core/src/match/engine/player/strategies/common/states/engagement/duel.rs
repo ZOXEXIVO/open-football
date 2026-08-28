@@ -146,9 +146,37 @@ impl TackleDecision {
     /// for the same reason: this is a per-DECISION rate, and the marking
     /// work put far more defenders into duels inside their own area, so
     /// the same rate produced a different number of penalties per match.
-    const BOX_RESTRAINT: f32 = 0.14;
+    ///
+    /// ⚠ 0.14 → 0.32, BECAUSE 0.14 WAS NOT RESTRAINT, IT WAS ABSENCE.
+    ///
+    /// Measured over twelve fixtures at level 14, the commitment
+    /// probability inside a defender's own area was **0.040 against 0.101
+    /// in open play** — a defender challenged the ball less than half as
+    /// often in the one part of the pitch where a goal is about to be
+    /// conceded. What that produces is visible in a replay and was the
+    /// complaint that opened this work: an attacker with the ball in the
+    /// penalty area, 1.39 defenders inside three metres of him, and only
+    /// 72% of those ticks carrying a live challenge — bodies standing
+    /// around a man they are not trying to dispossess.
+    ///
+    /// The restraint being modelled is real, and it is real about the
+    /// KIND of challenge, not about whether to make one. A professional
+    /// in his own box stays on his feet, blocks with the front foot and
+    /// does not go through the man; he does not stand off and watch. So
+    /// the volume comes back and the cost per challenge goes down with
+    /// it: `DefenderTacklingState`'s own in-box foul multiplier moves
+    /// 0.06 → 0.032 in the same change, which holds the penalty rate
+    /// roughly where it was calibrated (~1.8% of box challenges, against
+    /// a real ~2.5% of which not all come from tackles) while roughly
+    /// doubling how often somebody actually goes and gets it.
+    ///
+    /// `necessity` already multiplies a box duel by up to 2.9, so at 0.32
+    /// a defender in his own area commits at about the same per-second
+    /// rate as one in midfield — which is the floor of what the football
+    /// asks for, not the ceiling.
+    const BOX_RESTRAINT: f32 = 0.32;
     /// …and when he is the last man, where the challenge has to be made.
-    const BOX_RESTRAINT_LAST_MAN: f32 = 0.60;
+    const BOX_RESTRAINT_LAST_MAN: f32 = 0.72;
 
     /// How often the decision is taken while containing, in AI ticks.
     ///

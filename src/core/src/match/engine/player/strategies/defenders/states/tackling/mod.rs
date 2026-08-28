@@ -457,8 +457,25 @@ impl DefenderTacklingState {
         // — he goes in with his feet and not through the man — which is
         // a tendency rather than a floor, and lets the attributes
         // upstream reach the outcome again.
+        //
+        // ⚠ 0.06 → 0.032, PAIRED WITH `TackleDecision::BOX_RESTRAINT`.
+        //
+        // That constant went 0.14 → 0.32 because a defender was
+        // challenging the carrier in his own area less than half as often
+        // as in open play, which is not how anybody defends a penalty
+        // box. This is a per-CHALLENGE rate and the challenge count
+        // roughly doubles with it, so holding it at 0.06 would have
+        // bought the defending with penalties: the pair together keep the
+        // per-match penalty rate near where it was calibrated.
+        //
+        // It is also the more honest of the two numbers. The whole reason
+        // a defender may commit inside his own box is that he commits
+        // DIFFERENTLY there — front foot, ball first, no follow-through —
+        // and the rate at which that produces a spot kick is the thing
+        // this line is for. ~1.8% of box challenges, against a real ~2.5%
+        // of which the shirt-pull path owns a share of its own.
         if in_own_box {
-            base_foul *= 0.06;
+            base_foul *= 0.032;
         }
         // Self-preservation on a booking: a player carrying a yellow
         // measurably tones the challenges down (and managers hook the
@@ -480,11 +497,30 @@ impl DefenderTacklingState {
         // cards/match (real ~0.15) — violent conduct is a
         // once-in-ten-matches event, not an every-match one, and the
         // typical failed tackle is just a normal foul.
+        //
+        // …and the severity TAIL is damped in your own box for the same
+        // reason the foul rate above it is. The red-card challenge is the
+        // lunge in midfield and the professional foul on a breakaway; the
+        // last-ditch block in your own area is the one challenge a
+        // defender makes with his weight back, because he already knows
+        // what going through the man costs there. Measured over the
+        // change that let defenders challenge in their own box at all
+        // (`TackleDecision::BOX_RESTRAINT` 0.14 → 0.32), reds went 0.00 →
+        // 0.42 a match against a real 0.15-0.20 on a twelve-fixture
+        // sample — small, but pointing the one way this pair of changes
+        // could plausibly push it.
+        let box_severity = if in_own_box { 0.30 } else { 1.0 };
         let severity = if !committed_foul {
             FoulSeverity::Normal
-        } else if aggression01 > 0.75 && !tackle_success && rng.random::<f32>() < 0.008 {
+        } else if aggression01 > 0.75
+            && !tackle_success
+            && rng.random::<f32>() < 0.008 * box_severity
+        {
             FoulSeverity::Violent
-        } else if !tackle_success && aggression01 > 0.55 && rng.random::<f32>() < 0.16 {
+        } else if !tackle_success
+            && aggression01 > 0.55
+            && rng.random::<f32>() < 0.16 * box_severity
+        {
             FoulSeverity::Reckless
         } else {
             FoulSeverity::Normal

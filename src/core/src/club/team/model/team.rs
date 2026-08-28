@@ -222,6 +222,11 @@ impl Team {
     /// squad with no manager in the seat simply has no plan, and every
     /// consumer falls back to its previous behaviour.
     fn revise_coach_squad_plan(&mut self, date: NaiveDate) {
+        // The goalkeeping department's order, read before the coach's plan
+        // is taken so the two borrows of the staff list don't overlap. Only
+        // the squad that holds the plan sees it; a keeper elsewhere in the
+        // club is planned for by his own side's depth chart as before.
+        let keepers = self.staffs.keeper_plan().cloned();
         let Some(coach) = self.staffs.head_coach_mut() else {
             return;
         };
@@ -229,7 +234,7 @@ impl Team {
             return;
         }
         let mut plan = std::mem::take(&mut coach.squad_plan);
-        let changes = plan.revise(&self.players, date);
+        let changes = plan.revise_with_keepers(&self.players, keepers.as_ref(), date);
         if let Some(coach) = self.staffs.head_coach_mut() {
             coach.squad_plan = plan;
         }

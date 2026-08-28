@@ -9726,6 +9726,60 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         }
     }
 
+    // ── SPACING CENSUS ─────────────────────────────────────────────────
+    // How much room the twenty-two give each other. The screenshot
+    // complaint — "a bunch of players running around in large groups" —
+    // is a claim about this and nothing else, and no other counter can
+    // answer it: `nearest mate` is a per-player minimum, so a five-man
+    // pile and a chain of pairs read identically. See `spacing_diag`.
+    {
+        use core::spacing_diag::{SpacingCensus, SpacingReport};
+        let (all, final_third) = SpacingCensus::snapshot();
+        if all.samples > 0 {
+            println!();
+            println!("--- SPACING CENSUS (sampled 4x/s while somebody is carrying the ball) ---");
+            let row = |label: &str, r: &SpacingReport| {
+                if r.samples == 0 {
+                    return;
+                }
+                println!(
+                    "  {label}  ({} samples)\n    \
+                     biggest clump (bodies inside 3 m of each other) {:.2}   \
+                     4+ on {:.0}% of ticks, 6+ on {:.0}%   {:.1} m from the ball\n    \
+                     …made of  DEF {:.0}%  MID {:.0}%  FWD {:.0}%   \
+                     ({:.2} with the ball, {:.2} without)\n    \
+                     side in possession: nearest team-mate {:.1} m (real 15-20), \
+                     under 5 m on {:.0}% of players\n    \
+                     within 15 m of the ball: {:.2} of ours, {:.2} of theirs   \
+                     (real ~2-3 / ~2-4)\n    \
+                     FREE (no opponent inside 8 m): {:.2} of ours, {:.2} of them ahead of the ball \
+                     (real 3-5 / 1-3)\n    \
+                     attacking side spans {:.0} m wide x {:.0} m deep",
+                    r.samples,
+                    r.clump_size,
+                    r.clump_ge4_share * 100.0,
+                    r.clump_ge6_share * 100.0,
+                    r.clump_ball_gap_m,
+                    r.clump_line_share[1] * 100.0,
+                    r.clump_line_share[2] * 100.0,
+                    r.clump_line_share[3] * 100.0,
+                    r.clump_attacking,
+                    r.clump_defending,
+                    r.mate_gap_m,
+                    r.mate_under5_share * 100.0,
+                    r.swarm_attacking,
+                    r.swarm_defending,
+                    r.free,
+                    r.free_ahead,
+                    r.att_width_m,
+                    r.att_depth_m,
+                );
+            };
+            row("ALL PLAY  ", &all);
+            row("FINAL THIRD", &final_third);
+        }
+    }
+
     // ── TEAM SHAPE CENSUS ──────────────────────────────────────────────
     // Where the match time actually goes, state by state, and how far out
     // of the team's shape a player is while he is there. The `paths` mode

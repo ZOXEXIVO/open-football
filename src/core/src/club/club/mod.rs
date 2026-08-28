@@ -1,4 +1,5 @@
 mod finances;
+mod goalkeeping;
 mod graduation;
 mod squad;
 mod utilization;
@@ -601,6 +602,14 @@ impl Club {
 
             // Monthly: audit squad utilization and list underused players
             self.audit_squad_utilization(date);
+
+            // Monthly: the goalkeeping department reviews the whole keeper
+            // room — first team, reserves and academy together, because
+            // there is only one shirt and the queue for it runs across every
+            // squad the club owns. Runs after the utilization audit so the
+            // pecking order it declares is the last word on a keeper's
+            // standing that month.
+            self.review_goalkeeping_department(date);
         }
 
         // Season start: reset player states and graduate academy players

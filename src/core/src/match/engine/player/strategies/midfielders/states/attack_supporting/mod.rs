@@ -4,6 +4,7 @@ use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
     ActivityIntensity, Interception, MidfieldPlay, MidfielderCondition,
 };
+use crate::r#match::player::strategies::common::players::ops::support::SupportOffer;
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
@@ -371,21 +372,42 @@ impl MidfielderAttackSupportingState {
                 box_entry_point.clamp_to_field(field_width, field_height)
             }
             AttackingRunType::SupportRun => {
-                // Supporting run to create passing option
-                let support_angle = if player_position.y < ball_position.y {
-                    -30.0_f32.to_radians()
-                } else {
-                    30.0_f32.to_radians()
-                };
-
-                let support_distance = 40.0;
-                let support_offset = Vector3::new(
-                    support_distance * support_angle.cos() * attacking_direction,
-                    support_distance * support_angle.sin(),
-                    0.0,
-                );
-
-                (ball_position + support_offset).clamp_to_field(field_width, field_height)
+                // Supporting run to create a passing option.
+                //
+                // ⚠ THE DISTANCE USED TO BE 40u — FIVE METRES.
+                //
+                // At five metres the supporting midfielder is inside the
+                // cover shadow of whoever is pressing the carrier, the
+                // pass beats nobody, and the two of them plus their
+                // markers are four bodies in a three-metre circle. This
+                // state is 10.3% of every AI tick in the match, so that
+                // one number is a large part of what a replay shows as
+                // players milling about the ball. `SupportOffer` puts a
+                // floor of 9.5 m under it and keeps the midfielder's own
+                // bearing from the carrier, so two supporters approaching
+                // from different sides stay on different sides. The
+                // forwards' outlet reads the same model.
+                ctx.ball()
+                    .owner_id()
+                    .and_then(|id| ctx.context.players.by_id(id))
+                    .and_then(|carrier| SupportOffer::target(ctx, carrier.position))
+                    .unwrap_or_else(|| {
+                        // No carrier — the ball is loose or in flight, so
+                        // there is nobody to offer to. Hold a supporting
+                        // angle off the ball itself at the same range.
+                        let lateral = if player_position.y < ball_position.y {
+                            -SupportOffer::near() * 0.5
+                        } else {
+                            SupportOffer::near() * 0.5
+                        };
+                        ball_position
+                            + Vector3::new(
+                                SupportOffer::near() * 0.85 * attacking_direction,
+                                lateral,
+                                0.0,
+                            )
+                    })
+                    .clamp_to_field(field_width, field_height)
             }
             AttackingRunType::DiagonalRun => {
                 // Diagonal run to exploit space between defenders

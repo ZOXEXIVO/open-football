@@ -12,6 +12,7 @@ pub(crate) mod scoring;
 #[cfg(test)]
 mod tests;
 
+use crate::club::staff::goalkeeping::KeeperSelectionBrief;
 use crate::club::staff::{
     CoachDecisionEngine, CoachProfile, CoachStrategy, StrategyDeriver, StrategyInputs,
 };
@@ -88,6 +89,13 @@ pub struct SelectionContext {
     /// a too-short season own players build deficits too slowly to evict
     /// visiting guests. Only the rotation selector reads this.
     pub season_matches_played: Option<f32>,
+    /// The goalkeeping department's word for this fixture — who the
+    /// declared number one is, who the deputy is, and whether the
+    /// specialist has asked for a particular keeper to be played. `None`
+    /// when the club has never reviewed its keeper room, in which case
+    /// goalkeeper selection behaves exactly as it did before the
+    /// department existed. See [`crate::club::staff::goalkeeping`].
+    pub keeper_brief: Option<KeeperSelectionBrief>,
 }
 
 /// Competition context for squad selection. Replaces inferring the cup
@@ -225,6 +233,7 @@ impl Default for SelectionContext {
             game_model: None,
             development_guest_ids: Vec::new(),
             season_matches_played: None,
+            keeper_brief: None,
         }
     }
 }
@@ -437,6 +446,7 @@ impl SquadSelector {
             competition: ctx.competition,
             game_model: game_model_ref,
             succession_heirs: &succession_heirs,
+            keeper_brief: ctx.keeper_brief,
         };
 
         let main_squad = scx.select_starting_eleven(team.id, &available);
@@ -731,6 +741,7 @@ impl SquadSelector {
             competition: SelectionCompetition::League,
             game_model: None,
             succession_heirs: &[],
+            keeper_brief: None,
         }
     }
 }

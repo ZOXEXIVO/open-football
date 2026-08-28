@@ -1,6 +1,7 @@
 use super::Club;
 use super::WageReliefSale;
 use crate::club::player::statistics::StuckCareerScan;
+use crate::club::staff::goalkeeping::{KeeperAdvice, KeeperRoomPlan};
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext, SquadEvidenceContext};
 use crate::shared::{Currency, CurrencyValue};
@@ -71,6 +72,14 @@ impl Club {
         // promote rather than loaned away.
         let main_floor = MainPromotionFloor::snapshot(&self.teams.teams[main_idx]);
 
+        // The goalkeeping department's say over its own keepers. Two things
+        // this audit cannot work out on its own: that the boy it is about to
+        // farm out is the one the first team has just started travelling
+        // with, and that the twenty-one-year-old it is about to leave alone
+        // has three keepers ahead of him and needs a season of men's
+        // football. Both are the specialist's judgement, already made.
+        let keepers = KeeperLoanView::of(self.keeper_plan(), date);
+
         // The main squad is included. Excluding it left the club's largest
         // roster — the one that actually holds the frozen-out senior
         // players — outside the only sweep that reads MINUTES at all: every
@@ -98,18 +107,21 @@ impl Club {
             // not stagnate in the youth squad.
             let plays_league_football = team.league_id.is_some() && !team.team_type.is_youth();
             if !plays_league_football {
-                Self::collect_surplus_loans(team, ti, &mut loan_players);
+                Self::collect_surplus_loans(team, ti, &keepers, &mut loan_players);
                 if team.team_type.is_youth() {
                     Self::collect_youth_development_loans(
                         team,
                         ti,
                         &main_floor,
+                        &keepers,
                         date,
                         &mut loan_players,
                     );
                 }
+                Self::collect_keeper_department_loans(team, ti, &keepers, &mut loan_players);
                 continue;
             }
+            Self::collect_keeper_department_loans(team, ti, &keepers, &mut loan_players);
 
             // A senior reserve side (B / Second / Reserve) plays real league
             // football, so its regulars are never idle and the minutes-based
@@ -731,6 +743,7 @@ impl Club {
     fn collect_surplus_loans(
         team: &Team,
         team_idx: usize,
+        keepers: &KeeperLoanView,
         loan_players: &mut Vec<(usize, u32, String)>,
     ) {
         for group in [
@@ -764,7 +777,9 @@ impl Club {
             // Keep the best `keep` by observable level; the rest are surplus.
             active.sort_by(|a, b| b.1.cmp(&a.1));
             for (player_id, _, pinned) in active.into_iter().skip(keep) {
-                if !pinned {
+                // A keeper the goalkeeping department is building around
+                // is not surplus, however many keepers sit on this roster.
+                if !pinned && !keepers.protects(player_id) {
                     loan_players.push((
                         team_idx,
                         player_id,
@@ -772,6 +787,40 @@ impl Club {
                     ));
                 }
             }
+        }
+    }
+
+    /// Keepers the goalkeeping department has asked to be sent out for
+    /// minutes.
+    ///
+    /// The depth-based passes cannot reach these men. A twenty-one-year-old
+    /// third choice on the reserve side is not positional surplus (the group
+    /// is not over-depth), is not below the promotion floor by enough to be
+    /// a blocked youth-team prospect, and plays league football so the idle
+    /// sweep never sees him — and he is nonetheless a keeper with three men
+    /// in front of him and a career going nowhere. That is the standard
+    /// route in real football and it was the one route the club could not
+    /// choose deliberately.
+    fn collect_keeper_department_loans(
+        team: &Team,
+        team_idx: usize,
+        keepers: &KeeperLoanView,
+        loan_players: &mut Vec<(usize, u32, String)>,
+    ) {
+        for player in team.players.iter() {
+            if !keepers.wants_out(player.id) {
+                continue;
+            }
+            if player.is_on_loan()
+                || player.contract.is_none()
+                || player.is_force_match_selection
+                || player.statuses.has(PlayerStatusType::Lst)
+                || player.statuses.has(PlayerStatusType::Loa)
+                || loan_players.iter().any(|(_, id, _)| *id == player.id)
+            {
+                continue;
+            }
+            loan_players.push((team_idx, player.id, "dec_reason_young_develop".to_string()));
         }
     }
 
@@ -790,6 +839,7 @@ impl Club {
         team: &Team,
         team_idx: usize,
         main_floor: &MainPromotionFloor,
+        keepers: &KeeperLoanView,
         date: NaiveDate,
         loan_players: &mut Vec<(usize, u32, String)>,
     ) {
@@ -815,6 +865,10 @@ impl Club {
                         && !p.statuses.has(PlayerStatusType::Lst)
                         && !p.statuses.has(PlayerStatusType::Loa)
                         && !loan_players.iter().any(|(_, id, _)| *id == p.id)
+                        // The keeper the first team has started travelling
+                        // with is not stagnating in the youth side — he is
+                        // exactly where the club decided to put him.
+                        && !keepers.protects(p.id)
                 })
                 .map(|p| (p.id, p.age(date), p.player_attributes.current_ability))
                 .collect();
@@ -844,6 +898,69 @@ impl Club {
                 remaining -= 1;
             }
         }
+    }
+}
+
+/// The goalkeeping department's say over which keepers this audit may move.
+///
+/// Two judgements the audit cannot make for itself, both of them specialist
+/// ones. Which keeper the club is actively building around — he is not
+/// surplus and he is not stagnating, whatever the depth chart says, because
+/// the first team has just started naming him. And which keeper is blocked
+/// badly enough that a season of men's football elsewhere is the only thing
+/// left to give him — a judgement about the whole keeper room, not about
+/// this one squad's depth at a position.
+///
+/// An empty plan protects nobody and asks for nobody, so a club that has
+/// never reviewed its keeper room gets exactly the audit it always had.
+struct KeeperLoanView {
+    protected: HashSet<u32>,
+    wanted_out: HashSet<u32>,
+}
+
+impl KeeperLoanView {
+    fn of(plan: Option<&KeeperRoomPlan>, today: NaiveDate) -> Self {
+        let mut protected: HashSet<u32> = HashSet::new();
+        let mut wanted_out: HashSet<u32> = HashSet::new();
+        let Some(plan) = plan else {
+            return KeeperLoanView {
+                protected,
+                wanted_out,
+            };
+        };
+
+        for (player_id, assignment) in plan.assignments() {
+            if assignment.tier.promises_minutes() || assignment.tier.is_senior_group() {
+                protected.insert(player_id);
+            }
+        }
+        protected.extend(plan.heir());
+        protected.extend(plan.nominated(today));
+
+        for advice in plan.recommendations() {
+            if advice.advice != KeeperAdvice::LoanHimOutForMinutes {
+                continue;
+            }
+            if let Some(id) = advice.player_id {
+                wanted_out.insert(id);
+            }
+        }
+        // A keeper cannot be both. The department's own review never says
+        // both about one man, but a plan read mid-revision could.
+        wanted_out.retain(|id| !protected.contains(id));
+
+        KeeperLoanView {
+            protected,
+            wanted_out,
+        }
+    }
+
+    fn protects(&self, player_id: u32) -> bool {
+        self.protected.contains(&player_id)
+    }
+
+    fn wants_out(&self, player_id: u32) -> bool {
+        self.wanted_out.contains(&player_id)
     }
 }
 

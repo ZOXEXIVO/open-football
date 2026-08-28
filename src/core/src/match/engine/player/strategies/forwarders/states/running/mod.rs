@@ -12,6 +12,7 @@ use crate::r#match::player::strategies::common::players::ops::box_movement::BoxM
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     BallCarry, ShotDecision, evaluate_forward_shot_decision,
 };
+use crate::r#match::player::strategies::common::players::ops::support::SupportOffer;
 use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::player::strategies::common::states::TackleEngagement;
 use crate::r#match::player::strategies::common::team::WideChannel;
@@ -1285,58 +1286,6 @@ impl StateProcessingHandler for ForwardRunningState {
             let field_height = ctx.context.field_size.height as f32;
             let ball_distance = ctx.ball().distance();
 
-            // SUPPORT PRESSURED TEAMMATE: carrier has the ball but is
-            // under pressure — offer a close safe outlet. Previously
-            // when the carrier was being chased we did nothing (or
-            // drifted away due to the ANTI-FOLLOWING rule), leaving
-            // them no pass option and causing the dribble-flicker the
-            // user saw. Now: if a teammate has the ball AND is in
-            // trouble AND I'm reachable, move to a support spot 20u
-            // from them on the side opposite the nearest defender.
-            if ctx.team().is_control_ball() && ball_distance < 80.0 && ball_distance > 6.0 {
-                if let Some(carrier) = ctx
-                    .players()
-                    .teammates()
-                    .all()
-                    .find(|t| ctx.ball().owner_id() == Some(t.id))
-                {
-                    // Is the carrier being pressured?
-                    let nearest_opp_to_carrier = ctx
-                        .players()
-                        .opponents()
-                        .all()
-                        .map(|opp| (opp.position, (opp.position - carrier.position).magnitude()))
-                        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
-                    if let Some((opp_pos, opp_dist)) = nearest_opp_to_carrier {
-                        if opp_dist < 15.0 {
-                            // Support target: 22u from carrier, on the
-                            // side AWAY from the defender. Gives a
-                            // clean pass angle.
-                            let carrier_to_opp = (opp_pos - carrier.position).normalize();
-                            let support_offset = -carrier_to_opp * 22.0;
-                            // Bias slightly toward goal so the support
-                            // pass is progressive, not purely lateral.
-                            let to_goal = (ctx.player().opponent_goal_position()
-                                - carrier.position)
-                                .normalize();
-                            let support_target =
-                                carrier.position + support_offset * 0.7 + to_goal * 10.0;
-                            let clamped = Vector3::new(
-                                support_target.x.clamp(30.0, field_width - 30.0),
-                                support_target.y.clamp(40.0, field_height - 40.0),
-                                0.0,
-                            );
-                            let to_target = clamped - ctx.player.position;
-                            if to_target.magnitude() > 3.0 {
-                                let direction = to_target.normalize();
-                                let speed = ctx.player.skills.physical.pace * 0.85;
-                                return Some(direction * speed * fatigue_factor);
-                            }
-                        }
-                    }
-                }
-            }
-
             // ASSIGNED BOX SLOT: once the team plan has given this forward
             // a patch of the box, that is where he goes. It supersedes the
             // generic spread below for the duration of the attack.
@@ -1350,6 +1299,19 @@ impl StateProcessingHandler for ForwardRunningState {
             // occupying. The plan assigns exclusive destinations across
             // the whole side, which is the only thing that stops bodies
             // converging in front of goal.
+            //
+            // ⚠ THIS USED TO SIT BELOW THE SUPPORT BRANCH, AND THAT ORDER
+            // WAS THE CLUSTER.
+            //
+            // A man with a patch of the box has a job, and coming back to
+            // stand beside the carrier is not it — `AttackPlan` says as
+            // much in as many words: `near_support` is "the short outlet,
+            // deliberately NOT a box occupant". With the support branch
+            // first, every forward inside 10 m of a pressed carrier
+            // abandoned his slot to go and stand next to him, and the
+            // pressure census says a carrier in the attacking third has
+            // somebody inside 2 m on 60% of ticks. The plan was being
+            // overruled almost every time it mattered.
             if let Some(slot) = ctx.team().my_box_slot() {
                 // Occupying the slot is not the same as being available
                 // in it. A defender whose whole job is to stand on this
@@ -1365,20 +1327,42 @@ impl StateProcessingHandler for ForwardRunningState {
                 return Some(BoxMovement::steer(ctx, slot) * fatigue_factor);
             }
 
-            // ANTI-FOLLOWING: If very close to ball carrier, spread away
-            // Use hysteresis: start spreading at 25, stop at 45 to prevent oscillation
-            if ball_distance < 25.0 && ctx.team().is_control_ball() {
-                let away_from_ball = (ctx.player.position - ball_pos).normalize();
-                let lateral = Vector3::new(-away_from_ball.y, away_from_ball.x, 0.0);
-                let spread_target = ctx.player.position + away_from_ball * 30.0 + lateral * 15.0;
-                let clamped = Vector3::new(
-                    spread_target.x.clamp(30.0, field_width - 30.0),
-                    spread_target.y.clamp(40.0, field_height - 40.0),
-                    0.0,
-                );
-                let direction = (clamped - ctx.player.position).normalize();
-                let speed = ctx.player.skills.physical.pace * 0.5;
-                return Some(direction * speed * fatigue_factor);
+            // OFFER HIM SOMETHING: a forward the plan has given no patch
+            // of the box is the short outlet, and the outlet stands at an
+            // angle at a DISTANCE. `SupportOffer` owns both, and the
+            // midfielders' own support run reads the same model, so the
+            // two cannot drift apart about what supporting means.
+            //
+            // ⚠ THIS REPLACES TWO RULES, AND BOTH WERE WRONG THE SAME WAY.
+            //
+            // "SUPPORT PRESSURED TEAMMATE" sent him to stand 2-3 m off a
+            // pressed carrier, and "ANTI-FOLLOWING" then pushed him
+            // blindly away from the ball plus a lateral nudge whenever he
+            // got inside 3 m. One pulled him in, the other shoved him
+            // out, neither knew where a passing option belongs, and the
+            // two of them together are most of what a replay shows as
+            // players milling around the ball. The offer below has a
+            // floor of 9.5 m and keeps his own bearing, so he stays on
+            // whichever side of the carrier he was already on.
+            if ctx.team().is_control_ball() && ball_distance < SupportOffer::far() {
+                if let Some(carrier) = ctx
+                    .players()
+                    .teammates()
+                    .all()
+                    .find(|t| ctx.ball().owner_id() == Some(t.id))
+                {
+                    if let Some(target) = SupportOffer::target(ctx, carrier.position) {
+                        return Some(
+                            SteeringBehavior::Arrive {
+                                target,
+                                slowing_distance: 24.0,
+                            }
+                            .calculate(ctx.player)
+                            .velocity
+                                * fatigue_factor,
+                        );
+                    }
+                }
             }
 
             let attacking_direction = match ctx.player.side {

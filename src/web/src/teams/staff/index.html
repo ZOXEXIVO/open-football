@@ -4,6 +4,73 @@
 
 {% block content %}
 <div class="fm-page">
+    {% if let Some(gk) = goalkeeping %}
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("goalkeeping_department") }}</h3>
+            <span class="fm-panel-count">{{ gk.rows.len() }}</span>
+        </div>
+        <table class="fm-squad fm-staff-table">
+            <thead>
+                <tr>
+                    <th class="st-name">{{ i18n.t("name") }}</th>
+                    <th class="st-role">{{ i18n.t("keeper_standing") }}</th>
+                    <th class="st-nat">{{ i18n.t("squad") }}</th>
+                    <th class="st-age">{{ i18n.t("age") }}</th>
+                    <th class="st-contract">{{ i18n.t("keeper_planned_share") }}</th>
+                    <th class="st-wage">{{ i18n.t("apps") }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in gk.rows %}
+                <tr>
+                    <td class="st-name">
+                        <a href="/{{ lang }}/players/{{ row.player_id }}">{{ row.name }}</a>
+                        {% if row.is_nominated %}<span class="fm-badge fm-badge-wnt" title="{{ i18n.t("gk_advice_give_him_a_senior_start") }}">{{ i18n.t("keeper_nominated_short") }}</span>{% endif %}
+                        {% if row.is_heir %}<span class="fm-badge fm-badge-yth" title="{{ i18n.t("planned_role_succession_heir") }}">{{ i18n.t("keeper_heir_short") }}</span>{% endif %}
+                    </td>
+                    <td class="st-role">{{ i18n.t(row.tier_key) }}</td>
+                    <td class="st-nat"><a href="/{{ lang }}/teams/{{ row.squad_slug }}">{{ row.squad }}</a></td>
+                    <td class="st-age">{{ row.age }}</td>
+                    <td class="st-contract">{{ row.planned_share }}%</td>
+                    <td class="st-wage">{{ row.senior_apps }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <div class="fm-empty">
+            {% if let Some(coach_id) = gk.coach_id %}
+            <a href="/{{ lang }}/staff/{{ coach_id }}">{{ gk.coach_name }}</a>
+            {% else %}
+            {{ gk.coach_name }} &mdash; {{ i18n.t("keeper_no_specialist") }}
+            {% endif %}
+            &middot; {{ i18n.t("keeper_coach_influence") }} {{ gk.authority }}%
+            &middot; {{ i18n.t("keeper_succession") }}: {{ i18n.t(gk.succession_key) }}
+        </div>
+        {% if !gk.advice.is_empty() %}
+        <table class="fm-squad fm-staff-table">
+            <thead>
+                <tr>
+                    <th class="st-role">{{ i18n.t("keeper_recommendation") }}</th>
+                    <th class="st-name">{{ i18n.t("name") }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in gk.advice %}
+                <tr>
+                    <td class="st-role"><span class="fm-badge {{ item.urgency_class }}">&nbsp;</span> {{ i18n.t(item.advice_key) }}</td>
+                    <td class="st-name">
+                        {% if let Some(player_id) = item.player_id %}
+                        <a href="/{{ lang }}/players/{{ player_id }}">{{ item.player_name }}</a>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </section>
+    {% endif %}
     {% if staff_groups.is_empty() %}
     <section class="fm-panel">
         <div class="fm-panel-head">

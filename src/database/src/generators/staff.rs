@@ -48,12 +48,15 @@ impl StaffGenerator {
         let salary_min = (1000.0 + rep_factor * 20000.0) as i32;
         let salary_max = (5000.0 + rep_factor * 150000.0) as i32;
 
+        let mut attributes = Self::generate_staff_attributes(rep_factor);
+        Self::specialize(&mut attributes, &position, rep_factor);
+
         Staff::new(
             STAFF_ID_SEQUENCE.fetch_add(1, Ordering::SeqCst),
             FullName::new(self.generate_first_name(), self.generate_last_name()),
             country_id,
             NaiveDate::from_ymd_opt(year as i32, month, day).unwrap(),
-            Self::generate_staff_attributes(rep_factor),
+            attributes,
             Some(StaffClubContract::new(
                 IntegerUtils::random(salary_min, salary_max) as u32,
                 NaiveDate::from_ymd_opt(now.year() + IntegerUtils::random(1, 5), 3, 14).unwrap(),
@@ -101,6 +104,42 @@ impl StaffGenerator {
             mental_focus: get_random_mental(5),
             physical_focus: get_random_physical(4),
         }
+    }
+
+    /// Lift the attributes a role is actually hired for into the upper half
+    /// of the club's band.
+    ///
+    /// Every staff member was drawn uniformly across every attribute, so a
+    /// club could — and routinely did — employ a goalkeeping coach who was
+    /// worse at coaching goalkeepers than three of its outfield coaches.
+    /// Nothing read the role's attributes, so nothing ever noticed. The
+    /// goalkeeping department does read them: a man's standing with the
+    /// manager is built out of `relevance_score_for`, and a specialist who
+    /// is not a specialist would make the whole department noise.
+    ///
+    /// Deliberately narrow. The same uniform draw is wrong for every
+    /// specialist role, but physiotherapy feeds injury calibration and
+    /// judging-ability feeds the shortlists, so those bands are left exactly
+    /// where the existing calibration put them.
+    fn specialize(attributes: &mut StaffAttributes, position: &StaffPosition, rep_factor: f32) {
+        if *position != StaffPosition::GoalkeeperCoach {
+            return;
+        }
+        let attr_min = (rep_factor * 8.0) as i32;
+        let attr_max = (6 + (rep_factor * 14.0) as i32).min(20);
+        let floor = (attr_min + attr_max) / 2;
+        let specialist = || IntegerUtils::random(floor, attr_max) as u8;
+
+        let gk = &mut attributes.goalkeeping;
+        gk.shot_stopping = gk.shot_stopping.max(specialist());
+        gk.handling = gk.handling.max(specialist());
+        gk.distribution = gk.distribution.max(specialist());
+
+        // Judging a keeper is the other half of the job — he is the man
+        // who says whether the boy in the under-eighteens is ready.
+        let knowledge = &mut attributes.knowledge;
+        knowledge.judging_player_ability = knowledge.judging_player_ability.max(specialist());
+        knowledge.judging_player_potential = knowledge.judging_player_potential.max(specialist());
     }
 
     fn generate_staff_attributes(rep_factor: f32) -> StaffAttributes {

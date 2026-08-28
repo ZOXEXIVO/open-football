@@ -3,6 +3,7 @@ extern crate rand;
 use crate::club::mind::organs::goals::GoalKind;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::mind::verdict::{MindOption, ReasonSet};
+use crate::club::staff::goalkeeping::KeeperRoomPlan;
 use crate::club::staff::mind::organs::judgements::CoachDecisionState;
 use crate::club::staff::mind::{StaffMind, StaffTickContext};
 use crate::club::staff::{CoachMemoryStore, CoachSquadPlan};
@@ -100,6 +101,15 @@ pub struct Staff {
     /// behaviour on an empty plan.
     pub squad_plan: CoachSquadPlan,
 
+    /// The goalkeeping department's standing plan, held by whoever runs it
+    /// — the goalkeeping coach where the club employs one, the manager
+    /// where it does not. Covers every keeper at the club rather than one
+    /// squad's, because there is only one shirt and the queue for it runs
+    /// from the first team down to the under-eighteens. Empty by default,
+    /// and every consumer falls back to its previous behaviour on an empty
+    /// plan. See [`crate::club::staff::goalkeeping`].
+    pub keeper_plan: KeeperRoomPlan,
+
     /// His running impressions of the squad he works with, and the two
     /// accumulators that go with them — emotional heat and trigger
     /// pressure.
@@ -168,6 +178,32 @@ impl StaffCollection {
             Some(_) => self.get_by_id(responsibility_coach.unwrap()),
             None => self.get_by_position(StaffPosition::Coach),
         }
+    }
+
+    /// The coach a player of `group` actually works with day to day.
+    ///
+    /// For everybody but a keeper this is the squad's training coach. A
+    /// keeper's day is not: goalkeeping cannot be coached inside an
+    /// outfield session, so at every club that employs a specialist the
+    /// keepers spend the morning with him and nobody else. Until this
+    /// existed, `GoalkeeperTraining` sessions read the goalkeeping
+    /// attributes of whichever generalist happened to hold the training
+    /// responsibility — an unrelated random number — so employing an
+    /// excellent goalkeeping coach did nothing for a club's keepers.
+    ///
+    /// Falls back to the training coach when the club has no specialist,
+    /// which is exactly the old behaviour.
+    pub fn training_coach_for(
+        &self,
+        team_type: &TeamType,
+        group: PlayerFieldPositionGroup,
+    ) -> &Staff {
+        if group == PlayerFieldPositionGroup::Goalkeeper {
+            if let Some(specialist) = self.goalkeeper_coach() {
+                return specialist;
+            }
+        }
+        self.training_coach(team_type)
     }
 
     pub fn head_coach(&self) -> &Staff {
@@ -333,6 +369,73 @@ impl StaffCollection {
             StaffPosition::FirstTeamCoach,
             StaffPosition::Coach,
         ])
+    }
+
+    /// The goalkeeping specialist, when the club employs one.
+    ///
+    /// Deliberately strict — no fallback to a generalist coach. A club with
+    /// no goalkeeping coach genuinely has no goalkeeping department, and
+    /// that difference between a well-funded club and a small one is one
+    /// worth keeping: the manager then holds the opinion himself, less well
+    /// and with nobody at the under-eighteens on his behalf.
+    pub fn goalkeeper_coach(&self) -> Option<&Staff> {
+        self.find_by_any_position(&[StaffPosition::GoalkeeperCoach])
+    }
+
+    /// Whoever holds the goalkeeping department's plan: the specialist when
+    /// there is one, otherwise whoever runs the dressing room. Somebody
+    /// always has a view of who the number one is, even where nobody is
+    /// employed to have it.
+    pub fn goalkeeping_lead(&self) -> Option<&Staff> {
+        self.goalkeeper_coach().or_else(|| self.social_head_coach())
+    }
+
+    /// Mutable counterpart of [`Self::goalkeeping_lead`]. Walks the same
+    /// chain so the review writes its plan onto the same man the matchday
+    /// brief reads it from. `None` only when every seat is vacant.
+    pub fn goalkeeping_lead_mut(&mut self) -> Option<&mut Staff> {
+        let positions = [
+            StaffPosition::GoalkeeperCoach,
+            StaffPosition::Manager,
+            StaffPosition::CaretakerManager,
+            StaffPosition::AssistantManager,
+            StaffPosition::FirstTeamCoach,
+            StaffPosition::Coach,
+        ];
+        // Ordered preference, not roster order — the specialist owns the
+        // plan wherever he sits in the staff list.
+        for position in positions {
+            if let Some(idx) = self.staffs.iter().position(|s| {
+                s.contract
+                    .as_ref()
+                    .map(|c| c.position == position)
+                    .unwrap_or(false)
+            }) {
+                return Some(&mut self.staffs[idx]);
+            }
+        }
+        None
+    }
+
+    /// The goalkeeping department's standing plan, as anyone outside the
+    /// staff module should read it. Empty when nobody has reviewed the
+    /// keeper room yet.
+    ///
+    /// Preferring the current lead but falling back to any holder: the desk
+    /// moves when a club hires a specialist or changes manager, and a club's
+    /// pecking order is not supposed to reset because of that. The review
+    /// keeps exactly one live plan, so the fallback only ever fires in the
+    /// gap between a staff change and the next review.
+    pub fn keeper_plan(&self) -> Option<&KeeperRoomPlan> {
+        self.goalkeeping_lead()
+            .map(|s| &s.keeper_plan)
+            .filter(|p| !p.is_empty())
+            .or_else(|| {
+                self.staffs
+                    .iter()
+                    .map(|s| &s.keeper_plan)
+                    .find(|p| !p.is_empty())
+            })
     }
 
     /// Mutable counterpart of `manager`.
@@ -547,6 +650,7 @@ impl Staff {
             specialization_days: [0; 4],
             coach_memory: CoachMemoryStore::new(),
             squad_plan: CoachSquadPlan::new(),
+            keeper_plan: KeeperRoomPlan::new(),
             decision_state: CoachDecisionState::unbound(),
             mind: StaffMind::new(),
         }
