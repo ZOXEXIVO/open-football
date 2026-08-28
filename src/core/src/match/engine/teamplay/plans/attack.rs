@@ -114,6 +114,61 @@ impl BoxSlot {
         }
     }
 
+    /// Where the occupant **waits** while the delivery is still being
+    /// worked, in the same frame as [`Self::offsets`].
+    ///
+    /// # A striker does not stand on the spot he means to finish from
+    ///
+    /// [`Self::offsets`] is where the ball is going. Standing there and
+    /// waiting for it is the one thing a centre-forward is coached never
+    /// to do, for two reasons a defender exploits immediately: the
+    /// occupant is in the marker's field of view for the whole
+    /// possession, and he is stationary when the ball arrives, so the
+    /// defender — who is moving — gets to it first.
+    ///
+    /// Every one of the four is therefore a PAIR of points. He holds the
+    /// waiting one, which is deeper and in the defender's back, and
+    /// attacks the finishing one as the ball is delivered. The gap
+    /// between the two is the run, and it is 4-6 m in every case: far
+    /// enough to be a genuine movement the marker has to react to,
+    /// short enough that it is an arrival rather than a sprint.
+    ///
+    /// The four runs deliberately point in four different directions —
+    /// across the near post, forward into the spot, peeling off to the
+    /// back post, and holding at the top of the box. Four men breaking
+    /// at once along four lines is what a defensive line cannot cover;
+    /// four men standing on four dots is what it is built for.
+    fn wait_offsets(self, ball_side: f32) -> (f32, f32) {
+        match self {
+            // Starts central, attacks ACROSS the front defender to the
+            // near post. The run that beats a marker watching the ball.
+            BoxSlot::NearPost => (88.0, ball_side * 4.0),
+            // Arrives late into the spot from the edge of the D — the
+            // most-scored-from movement in football, and the reason the
+            // spot itself has to be empty until the ball is struck.
+            BoxSlot::PenaltySpot => (128.0, ball_side * -20.0),
+            // Holds narrow, in the cover shadow of the far centre-half,
+            // and peels away to the back post as the ball is delivered.
+            BoxSlot::FarPost => (102.0, ball_side * -34.0),
+            // The one man who must NOT dive in. He holds outside the D —
+            // 22 m, deeper than any of the other three wait at — so the
+            // cutback has somebody arriving onto it at pace rather than
+            // somebody already standing on the spot it is played to.
+            BoxSlot::CutbackEdge => (178.0, ball_side * 40.0),
+        }
+    }
+
+    /// Which flank the ball is on: `+1` on the high-`y` side. Every
+    /// lateral offset is mirrored through it, so "near post" is the near
+    /// one from wherever the ball actually is.
+    pub fn ball_side(ball_y: f32, field_height: f32) -> f32 {
+        if ball_y >= field_height / 2.0 {
+            1.0
+        } else {
+            -1.0
+        }
+    }
+
     /// Where this slot actually is on the pitch.
     pub fn target(
         self,
@@ -122,12 +177,30 @@ impl BoxSlot {
         field_height: f32,
         forward_dir: f32,
     ) -> Vector3<f32> {
-        let ball_side = if ball_y >= field_height / 2.0 {
-            1.0
-        } else {
-            -1.0
-        };
-        let (depth, lateral) = self.offsets(ball_side);
+        let (depth, lateral) = self.offsets(Self::ball_side(ball_y, field_height));
+        Self::place(goal, field_height, forward_dir, depth, lateral)
+    }
+
+    /// Where its occupant waits for the ball to be delivered. See
+    /// [`Self::wait_offsets`].
+    pub fn wait_target(
+        self,
+        goal: Vector3<f32>,
+        ball_y: f32,
+        field_height: f32,
+        forward_dir: f32,
+    ) -> Vector3<f32> {
+        let (depth, lateral) = self.wait_offsets(Self::ball_side(ball_y, field_height));
+        Self::place(goal, field_height, forward_dir, depth, lateral)
+    }
+
+    fn place(
+        goal: Vector3<f32>,
+        field_height: f32,
+        forward_dir: f32,
+        depth: f32,
+        lateral: f32,
+    ) -> Vector3<f32> {
         Vector3::new(
             goal.x - forward_dir * depth,
             (goal.y + lateral).clamp(12.0, field_height - 12.0),
@@ -766,5 +839,73 @@ mod rest_defence_tests {
             screen > far_fb + AHEAD - 70.0,
             "the screen is out-ranked by his own advancement"
         );
+    }
+}
+
+#[cfg(test)]
+mod box_slot_tests {
+    use super::BoxSlot;
+
+    /// **Every slot is a pair of points, and the run between them is a
+    /// real one.** The waiting point has to be genuinely further from
+    /// goal than the finishing point, or the occupant is standing where
+    /// the ball is going — the defect `BoxMovement` exists to fix — and
+    /// the gap has to be an arrival rather than a sprint or a shuffle.
+    ///
+    /// Stated as a test because both halves are easy to break by nudging
+    /// one number: pulling a waiting point in to "get him closer to
+    /// goal" silently deletes the movement, and pushing one out to "make
+    /// the run bigger" turns a striker's arrival into a 20 m sprint he
+    /// cannot time.
+    #[test]
+    fn every_slot_waits_behind_the_point_it_attacks() {
+        // Both flanks, because the lateral offsets are mirrored.
+        for ball_side in [-1.0_f32, 1.0] {
+            for slot in BoxSlot::ALL {
+                let (finish_depth, finish_lat) = slot.offsets(ball_side);
+                let (wait_depth, wait_lat) = slot.wait_offsets(ball_side);
+                assert!(
+                    wait_depth > finish_depth,
+                    "{slot:?} waits level with or ahead of the ball's destination"
+                );
+                let run =
+                    ((wait_depth - finish_depth).powi(2) + (wait_lat - finish_lat).powi(2)).sqrt();
+                // 4-6 m: far enough that the marker has to react, short
+                // enough to be an arrival. 32u = 4 m, 56u = 7 m.
+                assert!(
+                    (32.0..=56.0).contains(&run),
+                    "{slot:?} run is {run}u ({}m), outside the arrival band",
+                    run * 0.125
+                );
+            }
+        }
+    }
+
+    /// …and the four of them break along four DIFFERENT lines, which is
+    /// the whole reason a box has four places in it. Two occupants
+    /// running the same line are one occupant as far as a defence is
+    /// concerned.
+    #[test]
+    fn the_four_runs_point_in_four_directions() {
+        let ball_side = 1.0_f32;
+        let lines: Vec<(BoxSlot, f32, f32)> = BoxSlot::ALL
+            .into_iter()
+            .map(|slot| {
+                let (fd, fl) = slot.offsets(ball_side);
+                let (wd, wl) = slot.wait_offsets(ball_side);
+                let (dx, dy) = (fd - wd, fl - wl);
+                let n = (dx * dx + dy * dy).sqrt().max(0.001);
+                (slot, dx / n, dy / n)
+            })
+            .collect();
+        for (i, (a, ax, ay)) in lines.iter().enumerate() {
+            for (b, bx, by) in lines.iter().skip(i + 1) {
+                let dot = ax * bx + ay * by;
+                assert!(
+                    dot < 0.95,
+                    "{a:?} and {b:?} attack their slots along the same line"
+                );
+            }
+        }
     }
 }

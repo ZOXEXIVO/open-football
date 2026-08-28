@@ -12,6 +12,10 @@ use crate::transfers::market::{
 };
 use crate::transfers::negotiation::NegotiationStatus;
 use crate::transfers::offer::{TransferClause, TransferOffer};
+use crate::transfers::pipeline::loan_interest::{
+    BorrowerTaste, DestinationAppeal, GroupPressure, InterestDraw, LoanApproachMemory,
+    LoanCandidateProfile,
+};
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
 };
@@ -136,6 +140,14 @@ impl PipelineProcessor {
 
     pub fn scan_loan_market(country: &mut Country, date: NaiveDate) {
         let is_january = Self::is_mid_season_window_for(country, date);
+
+        // Age out expired approach standoffs and stale loan-placement rows
+        // before anything reads them. `prune_rejected` had no caller at all, so
+        // the scouting reject list it also trims grew for the life of the world
+        // — the entries expired logically but never left the vector.
+        for club in &mut country.clubs {
+            club.transfer_plan.prune_rejected(date);
+        }
 
         // Collect available loan listings (Pass 1 read)
         struct LoanListing {
@@ -376,7 +388,12 @@ impl PipelineProcessor {
         let mut actions: Vec<LoanScanAction> = Vec::new();
         let pending_loans = Self::pending_incoming_loans_by_club(country);
 
-        for club in &country.clubs {
+        // Rotate who looks first. The per-pass dedup below is "has anybody
+        // claimed him yet", so registration order was first refusal on the
+        // whole market — the lowest-id club took the pick of every listing,
+        // every tick, forever.
+        for club_idx in InterestDraw::visit_order(country.clubs.len()) {
+            let club = &country.clubs[club_idx];
             if club.teams.teams.is_empty() {
                 continue;
             }
@@ -443,6 +460,53 @@ impl PipelineProcessor {
                     !borrower_depth.has_room_for(group, loan_ability, development)
                 };
 
+            // What this club actually wants, as opposed to what is simply
+            // available. Composed from the board's own recruitment policy —
+            // which already existed and which the loan market read none of, so
+            // every club ranked the market identically and converged on the
+            // same name. `interest_in` runs only on candidates the gates have
+            // already passed; it decides preference, never eligibility.
+            let taste = BorrowerTaste::of(
+                club,
+                club.teams
+                    .teams
+                    .iter()
+                    .map(|t| {
+                        t.staffs
+                            .resolve_for_transfers()
+                            .best_scout_judging_ability()
+                    })
+                    .max()
+                    .unwrap_or(5),
+                avg_ability,
+                max_loan_fee,
+            );
+            let open_request_groups: Vec<PlayerFieldPositionGroup> = plan
+                .transfer_requests
+                .iter()
+                .filter(|r| {
+                    r.status != TransferRequestStatus::Fulfilled
+                        && r.status != TransferRequestStatus::Abandoned
+                })
+                .map(|r| r.position.position_group())
+                .collect();
+            // Scarcity pressure per group, so a club a man short at the back
+            // wants a defender more than it wants the best name on the list.
+            let thinness_of = |group: PlayerFieldPositionGroup| -> f32 {
+                GroupPressure::thinness(borrower_depth.headcount(group), group)
+            };
+            let profile_of = |l: &LoanListing, fee: f64| -> LoanCandidateProfile {
+                LoanCandidateProfile {
+                    player_id: l.player_id,
+                    true_ability: l.ability,
+                    age: l.age,
+                    is_development: l.is_development,
+                    fee,
+                    group_thinness: thinness_of(l.position_group),
+                    answers_open_request: open_request_groups.contains(&l.position_group),
+                }
+            };
+
             // Check unfulfilled transfer requests first. Emergency
             // free-agent depth requests are excluded — they're
             // serviced by the free-agent matcher only, not by loans.
@@ -479,7 +543,7 @@ impl PipelineProcessor {
                     .saturating_add(3)
                     .min(MAX_LOAN_TARGET_AGE);
 
-                if let Some(best) = loan_listings
+                let qualified: Vec<&LoanListing> = loan_listings
                     .iter()
                     .filter(|l| {
                         l.club_id != club.id
@@ -489,6 +553,7 @@ impl PipelineProcessor {
                             && l.age <= relaxed_age_max
                             && l.age >= request.preferred_age_min
                             && l.asking_price * 0.8 <= max_loan_fee
+                            && !plan.is_loan_approach_barred(l.player_id, date)
                             && !country
                                 .transfer_market
                                 .has_active_negotiation_for(l.player_id, club.id)
@@ -522,8 +587,24 @@ impl PipelineProcessor {
                             }
                             .is_plausible()
                     })
-                    .max_by_key(|l| l.ability)
-                {
+                    .collect();
+
+                // Everything left has cleared every gate. Which of them the
+                // club goes for is a matter of preference, so it is drawn in
+                // proportion to interest rather than taken as the top row of an
+                // ability sort — the argmax made this a fixed pairing that
+                // repeated until the listing disappeared.
+                let weighted: Vec<(u32, f32)> = qualified
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, l)| {
+                        taste
+                            .interest_in(&profile_of(l, l.asking_price * 0.8))
+                            .map(|score| (i as u32, score))
+                    })
+                    .collect();
+
+                if let Some(best) = InterestDraw::pick(&weighted).map(|i| qualified[i as usize]) {
                     let reason = TransferReason::key(request.reason.as_signing_reason_key());
                     actions.push(LoanScanAction {
                         club_id: club.id,
@@ -553,7 +634,7 @@ impl PipelineProcessor {
             // Small clubs (always) and National clubs in critical
             // shortage scan for available loan players.
             if (is_small_club || has_critical_shortage) && scans_this_club < max_scans {
-                let mut opps: Vec<&LoanListing> = loan_listings
+                let opps: Vec<&LoanListing> = loan_listings
                     .iter()
                     .filter(|l| {
                         l.club_id != club.id
@@ -563,6 +644,7 @@ impl PipelineProcessor {
                             // match-practice loan leans on the minutes gate.
                             && (l.is_development || l.ability >= avg_ability.saturating_sub(5))
                             && l.asking_price * 0.8 <= max_loan_fee
+                            && !plan.is_loan_approach_barred(l.player_id, date)
                             && !country
                                 .transfer_market
                                 .has_active_negotiation_for(l.player_id, club.id)
@@ -586,9 +668,35 @@ impl PipelineProcessor {
                             .is_plausible()
                     })
                     .collect();
-                opps.sort_by(|a, b| b.ability.cmp(&a.ability));
 
-                for opp in opps.iter().take(max_scans - scans_this_club) {
+                // Weighted sample without replacement, in place of "sort by
+                // ability, take the top N" — which returned the same N in the
+                // same order for as long as the listings stood.
+                let weighted: Vec<(u32, f32)> = opps
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, l)| {
+                        taste
+                            .interest_in(&profile_of(l, l.asking_price * 0.8))
+                            .map(|score| (i as u32, score))
+                    })
+                    .collect();
+
+                // Draw a surplus and walk it: the slate is filtered once, so
+                // without a running group check one pass could open three
+                // negotiations for the same position — which the scan's own
+                // `scanned_position_groups` bookkeeping exists to prevent and
+                // the old sort-and-take quietly allowed. Over-drawing keeps the
+                // club's full scan budget usable despite the extra constraint.
+                let wanted = max_scans - scans_this_club;
+                for idx in InterestDraw::pick_several(&weighted, (wanted * 4).min(weighted.len())) {
+                    if scans_this_club >= max_scans {
+                        break;
+                    }
+                    let opp = opps[idx as usize];
+                    if scanned_position_groups.contains(&opp.position_group) {
+                        continue;
+                    }
                     actions.push(LoanScanAction {
                         club_id: club.id,
                         player_id: opp.player_id,
@@ -605,7 +713,7 @@ impl PipelineProcessor {
 
             // January extra: even National clubs look for opportunistic loans
             if is_january && scans_this_club < max_scans && !is_small_club {
-                if let Some(opp) = loan_listings
+                let mid_season: Vec<&LoanListing> = loan_listings
                     .iter()
                     .filter(|l| {
                         l.club_id != club.id
@@ -615,6 +723,7 @@ impl PipelineProcessor {
                             // match-practice loan leans on the minutes gate.
                             && (l.is_development || l.ability >= avg_ability.saturating_sub(8))
                             && l.asking_price * 0.8 <= max_loan_fee
+                            && !plan.is_loan_approach_barred(l.player_id, date)
                             && !country
                                 .transfer_market
                                 .has_active_negotiation_for(l.player_id, club.id)
@@ -637,8 +746,19 @@ impl PipelineProcessor {
                             }
                             .is_plausible()
                     })
-                    .max_by_key(|l| l.ability)
-                {
+                    .collect();
+
+                let weighted: Vec<(u32, f32)> = mid_season
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, l)| {
+                        taste
+                            .interest_in(&profile_of(l, l.asking_price * 0.8))
+                            .map(|score| (i as u32, score))
+                    })
+                    .collect();
+
+                if let Some(opp) = InterestDraw::pick(&weighted).map(|i| mid_season[i as usize]) {
                     actions.push(LoanScanAction {
                         club_id: club.id,
                         player_id: opp.player_id,
@@ -670,7 +790,7 @@ impl PipelineProcessor {
                         | ReputationLevel::Amateur
                 )
             {
-                let mut cold: Vec<&LoanListing> = unsolicited_targets
+                let cold: Vec<&LoanListing> = unsolicited_targets
                     .iter()
                     .filter(|l| {
                         l.club_id != club.id
@@ -680,6 +800,7 @@ impl PipelineProcessor {
                             && l.parent_rep > borrower_world_rep
                             && l.age <= MAX_LOAN_TARGET_AGE
                             && l.asking_price * 0.8 <= max_loan_fee
+                            && !plan.is_loan_approach_barred(l.player_id, date)
                             && !country
                                 .transfer_market
                                 .has_active_negotiation_for(l.player_id, club.id)
@@ -712,13 +833,32 @@ impl PipelineProcessor {
                             )
                     })
                     .collect();
-                cold.sort_by(|a, b| b.ability.cmp(&a.ability));
 
-                // Terminal branch for this club: `take` already caps the
-                // approaches at the per-club scan budget, and nothing after
-                // this reads the counter or the scanned-groups set, so no
-                // further bookkeeping is needed.
-                for tgt in cold.iter().take(max_scans - scans_this_club) {
+                let weighted: Vec<(u32, f32)> = cold
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, l)| {
+                        taste
+                            .interest_in(&profile_of(l, l.asking_price * 0.8))
+                            .map(|score| (i as u32, score))
+                    })
+                    .collect();
+
+                // Terminal branch for this club: the draw is already capped at
+                // the per-club scan budget, and nothing after this reads the
+                // counter or the scanned-groups set, so the only bookkeeping
+                // left is the within-draw group guard.
+                let mut cold_groups: Vec<PlayerFieldPositionGroup> = Vec::new();
+                let wanted = max_scans - scans_this_club;
+                for idx in InterestDraw::pick_several(&weighted, (wanted * 4).min(weighted.len())) {
+                    if cold_groups.len() >= wanted {
+                        break;
+                    }
+                    let tgt = cold[idx as usize];
+                    if cold_groups.contains(&tgt.position_group) {
+                        continue;
+                    }
+                    cold_groups.push(tgt.position_group);
                     actions.push(LoanScanAction {
                         club_id: club.id,
                         player_id: tgt.player_id,
@@ -863,6 +1003,17 @@ impl PipelineProcessor {
                     negotiation.reason = action.reason.clone();
                     negotiation.player_name = p_name;
                     negotiation.selling_club_name = sc_name;
+                }
+
+                // The club has made its move on this target; it does not
+                // reopen the file next Monday. Stamped whatever the outcome —
+                // if the bid succeeds the player is on loan and filtered out
+                // anyway, and if it fails this is exactly the repeat approach
+                // that made one club look welded to one player.
+                if let Some(buyer) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
+                    buyer
+                        .transfer_plan
+                        .record_loan_approach(action.player_id, date);
                 }
 
                 debug!(
@@ -1119,24 +1270,35 @@ impl PipelineProcessor {
             // "best passer" naturally falls to a lower club only when no higher
             // one has room. Cover / surplus loans keep the staged high → low
             // cascade and are placed at the current broadcast tier.
+            let Some(parent_club) = country.clubs.iter().find(|c| c.id == b.parent_club_id) else {
+                continue;
+            };
             let restrict_tier = if b.is_development {
                 None
             } else {
-                match country
-                    .clubs
-                    .iter()
-                    .find(|c| c.id == b.parent_club_id)
-                    .and_then(|c| c.transfer_plan.loan_broadcasts.get(&b.player_id))
+                match parent_club
+                    .transfer_plan
+                    .loan_broadcasts
+                    .get(&b.player_id)
                     .map(|br| br.tier)
                 {
                     Some(t) => Some(t),
                     None => continue,
                 }
             };
+            let parent_placements = &parent_club.transfer_plan.loan_placements;
 
-            // Highest world reputation among clubs that would actually play him
-            // wins — the strongest environment that still guarantees minutes.
-            let mut best: Option<(u32, u16)> = None;
+            // Score every club that would actually play him, then draw one.
+            //
+            // This used to be `max_by_key` on `reputation.world`, which is the
+            // most static number in the model: for a given loanee the same club
+            // won it every Monday, and a failed bid changed nothing, so the
+            // parent re-offered him to the club that had just said no. Worse,
+            // reputation alone is not what a parent is choosing on — a prospect
+            // is placed where he will play and be coached, and no borrower
+            // should become a farm team. [`DestinationAppeal`] weighs all of
+            // that; the gates below are untouched.
+            let mut destinations: Vec<(u32, f32)> = Vec::new();
             for club in &country.clubs {
                 if club.id == b.parent_club_id || club.is_rival(b.parent_club_id) {
                     continue;
@@ -1192,6 +1354,18 @@ impl PipelineProcessor {
                 if claimed_loans.contains(&(club.id, b.group)) {
                     continue;
                 }
+                // A club that has already gone in for this player and got
+                // nowhere is not the place to send him again this month. Same
+                // standoff the borrower's own scans respect, read from the
+                // other side of the deal — without it the push could re-offer
+                // the same name to the same club every Monday, which is the
+                // pairing that made one borrower look welded to one target.
+                if club
+                    .transfer_plan
+                    .is_loan_approach_barred(b.player_id, date)
+                {
+                    continue;
+                }
                 let borrower_rep = team.reputation.world;
                 let depth = BorrowerPositionDepth::snapshot(team)
                     .with_pending_loans(pending_loans.get(&club.id).map_or(&[], |v| v.as_slice()));
@@ -1210,12 +1384,25 @@ impl PipelineProcessor {
                 {
                     continue;
                 }
-                match best {
-                    Some((_, best_rep)) if borrower_rep <= best_rep => {}
-                    _ => best = Some((club.id, borrower_rep)),
-                }
+                destinations.push((
+                    club.id,
+                    DestinationAppeal {
+                        borrower_rep,
+                        borrower_league_rep: level.borrower_league_rep,
+                        parent_league_rep: b.parent_league_rep,
+                        minutes_headroom: depth.minutes_headroom(b.group, b.ability),
+                        training_rating: club.facilities.training.to_rating(),
+                        existing_placements: LoanApproachMemory::crowding_at(
+                            parent_placements,
+                            club.id,
+                            date,
+                        ),
+                        is_development: b.is_development,
+                    }
+                    .score(),
+                ));
             }
-            if let Some((borrower_id, _)) = best {
+            if let Some(borrower_id) = InterestDraw::pick(&destinations) {
                 actions.push(PushAction {
                     borrower_id,
                     player_id: b.player_id,
@@ -1281,6 +1468,30 @@ impl PipelineProcessor {
                     negotiation.reason = TransferReason::key("signing_reason_loan_broadcast");
                     negotiation.player_name = p_name;
                     negotiation.selling_club_name = sc_name;
+                }
+                // Remember where this went. Read back by `DestinationAppeal`
+                // as crowding, so the parent spreads its loanees around
+                // instead of re-offering to whoever topped the ranking last
+                // week — including when that club had just turned him down.
+                if let Some(parent) = country
+                    .clubs
+                    .iter_mut()
+                    .find(|c| c.id == action.selling_club_id)
+                {
+                    parent
+                        .transfer_plan
+                        .record_loan_placement(action.borrower_id, date);
+                }
+                // The borrower has this name in front of it now; its own scans
+                // shouldn't independently chase the same player next tick.
+                if let Some(borrower) = country
+                    .clubs
+                    .iter_mut()
+                    .find(|c| c.id == action.borrower_id)
+                {
+                    borrower
+                        .transfer_plan
+                        .record_loan_approach(action.player_id, date);
                 }
                 debug!(
                     "Loan broadcast: parent {} placed listed player {} at borrower {}",
@@ -1804,12 +2015,12 @@ impl PipelineProcessor {
 
         // Position-group partition for the request loop below — each
         // request used to walk the whole filtered pool to reject the
-        // other three groups candidate by candidate. Relative order
-        // inside a group is preserved, so `max_by_key` (last max on
-        // ties) picks the same player as the flat scan. The proactive
+        // other three groups candidate by candidate. The proactive
         // development pickup after the request loop crosses groups and
-        // keeps using the flat `foreign_loans` — chaining group slices
-        // there would reorder tie-breaks.
+        // keeps using the flat `foreign_loans`. Selection is a weighted
+        // draw over the whole qualified slate either way, so the
+        // partition is a cost saving and nothing more — it no longer
+        // has to preserve an ordering for a tie-break to land on.
         let mut foreign_loans_by_group: [Vec<&PlayerSummary>; PlayerFieldPositionGroup::COUNT] =
             Default::default();
         for p in &foreign_loans {
@@ -1834,7 +2045,11 @@ impl PipelineProcessor {
         let active_counts = country.transfer_market.active_negotiation_counts();
         let active_pairs = country.transfer_market.active_negotiation_pairs();
 
-        for club in &country.clubs {
+        // Rotate first refusal, as the domestic scan does: the per-pass dedup
+        // below is "has anybody claimed him yet", so registration order handed
+        // the lowest-id club the pick of the continent every tick.
+        for club_idx in InterestDraw::visit_order(country.clubs.len()) {
+            let club = &country.clubs[club_idx];
             if club.teams.teams.is_empty() {
                 continue;
             }
@@ -1921,6 +2136,60 @@ impl PipelineProcessor {
             // needed here.
             let buyer_loan_ctx = BuyerPlausibilityContext::build(country, club);
 
+            // Same preference model the domestic scan uses. The cross-border
+            // branches ranked on `(same_region, skill_ability)`, which made the
+            // continent's single strongest listed prospect the one target every
+            // eligible club in the region opened with.
+            let taste = BorrowerTaste::of(
+                club,
+                club.teams
+                    .teams
+                    .iter()
+                    .map(|t| {
+                        t.staffs
+                            .resolve_for_transfers()
+                            .best_scout_judging_ability()
+                    })
+                    .max()
+                    .unwrap_or(5),
+                avg_ability,
+                max_loan_fee,
+            );
+            let open_request_groups: Vec<PlayerFieldPositionGroup> = plan
+                .transfer_requests
+                .iter()
+                .filter(|r| {
+                    r.status != TransferRequestStatus::Fulfilled
+                        && r.status != TransferRequestStatus::Abandoned
+                })
+                .map(|r| r.position.position_group())
+                .collect();
+            // Cultural proximity stays a preference, as it was — but as a
+            // weight on interest rather than a lexicographic key that no
+            // amount of quality could outrank.
+            let foreign_interest = |p: &PlayerSummary, fee: f64| -> Option<f32> {
+                taste
+                    .interest_in(&LoanCandidateProfile {
+                        player_id: p.player_id,
+                        true_ability: p.skill_ability,
+                        age: p.age,
+                        is_development: ForeignUnsolicitedLoanTarget::is_development(p.age),
+                        fee,
+                        group_thinness: GroupPressure::thinness(
+                            borrower_position_depth.headcount(p.position_group),
+                            p.position_group,
+                        ),
+                        answers_open_request: open_request_groups.contains(&p.position_group),
+                    })
+                    .map(|score| {
+                        if p.region == club_region {
+                            score * 1.45
+                        } else {
+                            score
+                        }
+                    })
+            };
+
             for request in unfulfilled {
                 if scans >= max_scans {
                     break;
@@ -1937,10 +2206,11 @@ impl PipelineProcessor {
                 // be in a scout's known region, and be a realistic move
                 // (players don't go from Serie A to the Nigerian league)
                 let team_rep = team.reputation.world;
-                if let Some(best) = foreign_loans_by_group[pos_group.index()]
+                let qualified: Vec<&&PlayerSummary> = foreign_loans_by_group[pos_group.index()]
                     .iter()
                     .filter(|p| {
                         !club.is_rival(p.club_id)
+                            && !plan.is_loan_approach_barred(p.player_id, date)
                             && p.position_group == request.position.position_group()
                             && p.skill_ability >= relaxed_min
                             && p.age <= request
@@ -2012,14 +2282,18 @@ impl PipelineProcessor {
                                 Some(TransferPlausibilityVerdict::HardReject(_))
                             )
                     })
-                    .max_by_key(|p| {
-                        // Prefer culturally closer destinations: a club in
-                        // the borrower's own region outranks a marginally
-                        // better-rated alternative on another continent.
-                        let same_region = p.region == club_region;
-                        (same_region as u8, p.skill_ability)
+                    .collect();
+
+                let weighted: Vec<(u32, f32)> = qualified
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, p)| {
+                        foreign_interest(p, p.estimated_value * 0.1 * 0.8)
+                            .map(|score| (i as u32, score))
                     })
-                {
+                    .collect();
+
+                if let Some(best) = InterestDraw::pick(&weighted).map(|i| *qualified[i as usize]) {
                     let loan_fee = FormattingUtils::round_fee(best.estimated_value * 0.1 * 0.8);
                     // Same shape as the domestic request scan — the empty
                     // `format!` here dropped the request's "why" from every
@@ -2054,12 +2328,13 @@ impl PipelineProcessor {
             // Bounded by the same per-club scan budget as the request path.
             let team_rep = team.reputation.world;
             if scans < max_scans {
-                if let Some(best) = foreign_loans
+                let prospects: Vec<&&PlayerSummary> = foreign_loans
                     .iter()
                     .filter(|p| {
                         p.is_loan_listed
                             && ForeignUnsolicitedLoanTarget::is_development(p.age)
                             && !club.is_rival(p.club_id)
+                            && !plan.is_loan_approach_barred(p.player_id, date)
                             && !scanned_position_groups.contains(&p.position_group)
                             && p.estimated_value * 0.1 <= max_loan_fee
                             && !active_pairs.contains(&(p.player_id, club.id))
@@ -2103,14 +2378,21 @@ impl PipelineProcessor {
                                 Some(TransferPlausibilityVerdict::HardReject(_))
                             )
                     })
-                    .max_by_key(|p| {
-                        // Same-region destinations first, then raw quality —
-                        // the continent's own prospects circulate locally
-                        // before a further-flung club is considered.
-                        let same_region = p.region == club_region;
-                        (same_region as u8, p.skill_ability)
+                    .collect();
+
+                // Same-region prospects still circulate locally first — that
+                // preference now lives in the weight, so a genuinely better fit
+                // on another continent is reachable instead of unreachable.
+                let weighted: Vec<(u32, f32)> = prospects
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, p)| {
+                        foreign_interest(p, p.estimated_value * 0.1 * 0.8)
+                            .map(|score| (i as u32, score))
                     })
-                {
+                    .collect();
+
+                if let Some(best) = InterestDraw::pick(&weighted).map(|i| *prospects[i as usize]) {
                     // Terminal branch for this club: nothing after this reads
                     // the scan counter or the scanned-groups set, so the loan
                     // action is all that's needed.
@@ -2202,6 +2484,15 @@ impl PipelineProcessor {
                     // in-flight loan visible to the position cap.
                     negotiation.loan_target_profile =
                         Some((action.player.position_group, action.player.skill_ability));
+                }
+
+                // Same standoff the domestic scan stamps — a club that has
+                // moved for a foreign target doesn't reopen the file the
+                // following tick.
+                if let Some(buyer) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
+                    buyer
+                        .transfer_plan
+                        .record_loan_approach(action.player.player_id, date);
                 }
 
                 debug!(
@@ -2983,6 +3274,44 @@ impl BorrowerPositionDepth {
             }
             None => true,
         }
+    }
+
+    /// How clearly the candidate would be first choice here, 0..1 — the same
+    /// competition view [`Self::would_get_loan_minutes`] gates on, read as a
+    /// margin instead of a verdict.
+    ///
+    /// The gate can only answer "he would play"; a parent choosing between two
+    /// clubs that both clear it wants to know *how well*. 1.0 is nobody in the
+    /// building within eight CA of him, and the figure falls off continuously
+    /// as better players stack up in front — so "walks straight into the side"
+    /// outranks "scrapes ahead of the incumbent" without either being barred.
+    fn minutes_headroom(&self, group: PlayerFieldPositionGroup, candidate_ability: u8) -> f32 {
+        match self.role_row(group) {
+            Some((_, abilities)) => {
+                let ahead = abilities
+                    .iter()
+                    .filter(|&&a| a >= candidate_ability.saturating_add(8))
+                    .count() as f32;
+                let comparable = abilities
+                    .iter()
+                    .filter(|&&a| {
+                        a < candidate_ability.saturating_add(8)
+                            && a.saturating_add(8) > candidate_ability
+                    })
+                    .count() as f32;
+                // A man clearly better costs a full place in the queue; a peer
+                // costs a third of one, because he is competition rather than a
+                // wall.
+                (1.0 / (1.0 + ahead + comparable * 0.33)).clamp(0.0, 1.0)
+            }
+            None => 1.0,
+        }
+    }
+
+    /// Headcount filed under `group` — the squad-register view, for scarcity
+    /// pressure.
+    fn headcount(&self, group: PlayerFieldPositionGroup) -> usize {
+        self.row(group).map(|(_, _, a)| a.len()).unwrap_or(0)
     }
 }
 

@@ -3,6 +3,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::{Image, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+use shared::Palette;
 use std::f32::consts::{PI, TAU};
 
 /// Where the features of a face land on the head mesh that carries it.
@@ -301,6 +302,541 @@ pub struct Turf {
     pub albedo: Handle<Image>,
     /// Which way each leaf is facing, as a tangent-space normal map.
     pub relief: Handle<Image>,
+}
+
+/// One spectator's head, and the arithmetic that paints it.
+///
+/// **A whole head unwrapped, not a face stuck on the front of one.** `u` runs
+/// right round the skull — the nose at the middle of the tile and the back of
+/// the head at both its edges — and `v` from the crown down to the collar, so
+/// the hair, the ears, the jaw and the neck are painted in the same pass as
+/// the eyes and every one of them lands where the geometry under it actually
+/// is. Before this the tile was a portrait pasted on the one face of a boxed
+/// head that looked at the pitch, with the sides and the crown taking a flat
+/// skin colour. That is fine at a hundred metres and it is a ground full of
+/// masks the moment a lens is walked into a stand, which is the whole
+/// complaint this answers.
+///
+/// **The tile is not spent evenly round the head.** [`CrowdPalette::head_uv`]
+/// runs `u` as the square root of the angle, which hands the front ninety
+/// degrees half the width of the tile: a wrap that paid the back of a skull
+/// the same texels as a pair of eyes would spend three quarters of itself on
+/// hair.
+///
+/// **Every measurement below is a FRACTION of the tile rather than a texel
+/// count** — the same discipline [`Painter`] keeps for the players' heads,
+/// where the features are given in metres. A face written in texels is a face
+/// that has to be redrawn by hand the day the tile changes size, and one that
+/// silently stops being a face if nobody does.
+///
+/// It is still read at four pixels by most of the ground, and the DARK MARKS
+/// — a cap of hair, two eyes, a mouth — are still what survives down there.
+/// The difference is that they are no longer all there is: the shading, the
+/// nose and the ears cost nothing at that distance, because the mip chain has
+/// already averaged them into the one brown the far end is drawn in (see
+/// [`Textures::crowd`]), and they are the entire picture at three metres.
+struct Face {
+    skin: Vec3,
+    hair: Vec3,
+    iris: Vec3,
+    /// No hair on top. One in five, which is about the rate in a stand that is
+    /// mostly men over thirty, and it is the cheapest variety there is: a bald
+    /// head reads as a different person at a distance where no feature
+    /// resolves. The sides and the back stay — a bald man is not a hairless
+    /// one — so the silhouette does not change with it.
+    bald: bool,
+    /// How much of a beard, `0` clean-shaven through stubble to `1` full.
+    beard: f32,
+    /// A hat, where he brought one. Painted over the hair rather than modelled,
+    /// so it changes the colour of the silhouette without changing its shape.
+    hat: Option<Vec3>,
+}
+
+impl Face {
+    /// **Down the tile**: `0` at the crown of the skull, `1` under the collar.
+    ///
+    /// Laid out on the canons rather than by eye, because they are what a face
+    /// IS: the eyes halfway between the crown and the chin, and the three
+    /// thirds — hairline to brow, brow to the base of the nose, nose to chin —
+    /// each the same height. Placed by eye they came out a tenth of a head too
+    /// low, which is the difference between a man and a puppet.
+    ///
+    /// Tied to the rings the head is turned on as well:
+    /// [`Crowd::SKULL`](crate::scene::crowd::Crowd) puts the widest ring of
+    /// the lathe at 0.43, which is where [`Self::EYES`] is — because the
+    /// widest part of a skull is the cheekbone and the cheekbone is at eye
+    /// level.
+    const HAIRLINE: f32 = 0.245;
+    const BROW: f32 = 0.372;
+    const EYES: f32 = 0.430;
+    const NOSTRILS: f32 = 0.585;
+    const MOUTH: f32 = 0.672;
+    const CHIN: f32 = 0.790;
+    /// Where the neck goes into the collar of whatever he came in.
+    const COLLAR: f32 = 0.900;
+    /// How far down the hair carries at the temples, before it stops being a
+    /// hairline at all and becomes the back of his head.
+    const TEMPLE: f32 = 0.44;
+
+    /// **Round the tile**: `0` at the nose, `1` at the back of the skull.
+    ///
+    /// Not an angle, and that is the trap. `u` is the SQUARE ROOT of the angle
+    /// (see [`CrowdPalette::head_uv`]), so a tile fraction `t` is `PI·t²`
+    /// radians round from the nose and `0.099·sin` of that across a face — the
+    /// numbers below are all checked back through that, against the same
+    /// millimetres [`Painter`] gives the players. An eye written where it
+    /// looked right on the sheet came out five centimetres off the mid-line,
+    /// which is a lemur.
+    ///
+    /// Past [`Self::FRONT`] the surface has turned edge-on to anybody looking
+    /// at it, and a feature smeared round there reads as a smudge on the side
+    /// of a skull. Everything belonging to the FACE stops there; hair, beards
+    /// and ears, which genuinely go round a head, do not.
+    const FRONT: f32 = 0.60;
+    /// The centre of each eye from the mid-line, and the half-width and
+    /// half-height of the opening.
+    const APART: f32 = 0.309;
+    const OPEN_WIDE: f32 = 0.095;
+    const OPEN_TALL: f32 = 0.030;
+    /// The iris, and the pupil in it: round the head, then down it.
+    const IRIS: (f32, f32) = (0.036, 0.023);
+    const PUPIL: (f32, f32) = (0.016, 0.010);
+    /// How far the brow runs, from the bridge of the nose outward; how thick
+    /// it is; and how far the outer end rides above the inner one — a brow
+    /// without that angle reads as a fringe.
+    const BROW_INNER: f32 = 0.170;
+    const BROW_OUTER: f32 = 0.424;
+    const BROW_THICK: f32 = 0.019;
+    const BROW_RISE: f32 = 0.029;
+    /// Half-width of the nose at the nostrils, and where the hollows either
+    /// side of it fall.
+    const NOSE_WIDE: f32 = 0.227;
+    const BESIDE_NOSE: f32 = 0.250;
+    const MOUTH_WIDE: f32 = 0.289;
+    /// The ear: how far round it sits, and how far it reaches either way.
+    const EAR: (f32, f32) = (0.700, 0.082);
+    /// Never a pure white and never a pure black. The two together are the
+    /// highest-contrast pair in the whole scene, and twenty thousand of them
+    /// read as a wall of dots rather than as people.
+    const SCLERA: Vec3 = Vec3::new(0.74, 0.72, 0.69);
+    const LASH: Vec3 = Vec3::new(0.10, 0.08, 0.07);
+    const INK: Vec3 = Vec3::new(0.05, 0.04, 0.04);
+
+    /// The colour of one texel of the tile.
+    fn at(&self, x: u32, y: u32, tile: u32) -> Vec3 {
+        // Texel CENTRES, so a band given as 0.40..0.46 covers the texels whose
+        // middles fall inside it rather than the ones it clips a corner off.
+        let down = (y as f32 + 0.5) / tile as f32;
+        let across = (x as f32 + 0.5) / tile as f32 - 0.5;
+        // How far round the head this texel is, and which side of the nose.
+        let turn = (across * 2.0).abs();
+
+        let mut paint = self.skin * self.shading(down, turn);
+        if turn < Self::FRONT {
+            paint = self.brows(self.eyes(paint, down, turn), down, turn);
+            paint = self.nose(paint, down, turn);
+            paint = self.mouth(paint, down, turn);
+        }
+        paint = self.ear(paint, down, turn);
+        paint = self.whiskers(paint, down, turn);
+        paint = self.scalp(paint, down, across, turn, tile);
+
+        // The collar. A neck has to end in something or it ends in a ring of
+        // bare skin sitting on a coat, which is the one join in a figure that
+        // a lens can be walked right up to.
+        paint = Textures::shade(paint, 0.55 * Self::hard(down - Self::COLLAR, tile));
+        // …and a shave off one side of him, so the two halves of a head are
+        // not a mirror image of each other. What gives a generated face away
+        // fastest is perfect symmetry.
+        Textures::shade(
+            paint,
+            0.03 * (1.0 + across.signum()) * Textures::smooth((turn - 0.20) / 0.60),
+        )
+    }
+
+    /// An edge ramped over about a texel rather than stepped. At sixteen
+    /// texels a step was all that could be afforded and every feature was a
+    /// rectangle; at sixty-four a step is a staircase, and a staircase is what
+    /// says "drawn by a machine".
+    fn hard(inside: f32, tile: u32) -> f32 {
+        Textures::smooth(inside * tile as f32 / 1.5 + 0.5)
+    }
+
+    /// A soft elliptical blob, `1` at its middle and gone by its own edge —
+    /// which is most of what a face is made of at this size.
+    fn blob(across: f32, down: f32, wide: f32, tall: f32) -> f32 {
+        Textures::smooth(1.0 - Vec2::new(across / wide, down / tall).length())
+    }
+
+    /// **The relief a head carries before anything is drawn on it**, as a
+    /// multiplier.
+    ///
+    /// One directional light with no shadow map lights a lathe as a lathe, so
+    /// every bit of a face's own modelling — the temple falling away, the jaw
+    /// in its own shade, the brow ridge catching the light, the cheekbone
+    /// under the eye and the hollow below it — has to be in the paint. Without
+    /// it the features sit on a flat disc. The same argument
+    /// `Painter::shading` makes for the players, and mostly the same numbers:
+    /// a crowd is made of the same people the teams are.
+    fn shading(&self, down: f32, turn: f32) -> f32 {
+        let turned = Textures::smooth(turn / 0.72);
+        let mut shade = 1.0 - 0.26 * turned;
+        // Under the jaw and down the neck, which is in the head's own shadow
+        // for the whole match.
+        shade *= 1.0 - 0.34 * Textures::smooth((down - Self::CHIN + 0.020) / 0.060);
+        // The brow ridge, which catches the light…
+        shade *= 1.0
+            + 0.06 * Textures::smooth(1.0 - (down - Self::BROW).abs() / 0.030) * (1.0 - turned);
+        // …the cheekbone under the eye, which catches it too…
+        shade *= 1.0 + 0.05 * Self::blob(turn - 0.30, down - Self::EYES - 0.055, 0.22, 0.045);
+        // …and the hollow of the cheek below that.
+        shade * (1.0 - 0.07 * Self::blob(turn - 0.34, down - Self::NOSTRILS + 0.010, 0.20, 0.050))
+    }
+
+    fn eyes(&self, base: Vec3, down: f32, turn: f32) -> Vec3 {
+        let sideways = turn - Self::APART;
+        // Positive ABOVE the eye line, which is the way round every other
+        // measurement of a face is written.
+        let rise = Self::EYES - down;
+
+        // The socket first: a soft shadow for the eye to sit in. Without one,
+        // two white almonds on a flat plane read as buttons.
+        let socket = Textures::shade(base, 0.16 * Self::blob(sideways, rise + 0.008, 0.115, 0.075));
+
+        // The opening: a lens, wider than it is tall and pointed at both
+        // corners, which is the shape that still says *eye* at ten texels
+        // across. An ellipse says *bead*.
+        let lid = Self::OPEN_TALL * (1.0 - (sideways / Self::OPEN_WIDE).powi(2)).max(0.0).sqrt();
+        if lid <= 0.0 || rise.abs() > lid {
+            return socket;
+        }
+        // The upper lid throws a shadow across the top of it — the one thing
+        // that stops an eye reading as a hole punched in a mask.
+        let mut colour = Textures::shade(Self::SCLERA, 0.34 * (rise / lid).max(0.0).powf(0.6));
+        let ball = Vec2::new(sideways / Self::IRIS.0, (rise - 0.004) / Self::IRIS.1).length();
+        if ball < 1.0 {
+            // A dark limbal ring round a lighter iris: the rim is most of what
+            // makes an eye colour legible at all once the iris itself is four
+            // texels wide.
+            colour = Textures::over(
+                self.iris * 0.5,
+                self.iris,
+                Textures::smooth((1.0 - ball) / 0.40),
+            );
+        }
+        if Vec2::new(sideways / Self::PUPIL.0, (rise - 0.004) / Self::PUPIL.1).length() < 1.0 {
+            colour = Self::INK;
+        }
+        // The catchlight — the single cheapest thing in the whole figure that
+        // makes it look alive.
+        if Vec2::new((sideways + 0.013) / 0.015, (rise - 0.010) / 0.010).length() < 1.0 {
+            colour = Vec3::splat(0.94);
+        }
+        // And the lash line along the top lid.
+        if rise > lid - 0.007 {
+            colour = Textures::over(colour, Self::LASH, 0.8);
+        }
+        colour
+    }
+
+    fn brows(&self, base: Vec3, down: f32, turn: f32) -> Vec3 {
+        if !(Self::BROW_INNER..Self::BROW_OUTER).contains(&turn) {
+            return base;
+        }
+        let along = (turn - Self::BROW_INNER) / (Self::BROW_OUTER - Self::BROW_INNER);
+        // The outer end rides higher, and the arch peaks two thirds of the way
+        // out rather than at the end of it.
+        let line = Self::BROW - Self::BROW_RISE * along * (2.0 - along) + 0.008;
+        let thick = Self::BROW_THICK * (1.0 - 0.55 * along * along);
+        Textures::over(
+            base,
+            // A shade of the hair rather than a shadow of the skin: the brow
+            // is the feature that survives longest as a head minifies, for the
+            // reason `Complexion::face` gives on the pitch.
+            self.hair.lerp(self.skin, 0.16),
+            Textures::smooth((thick - (down - line).abs()) / 0.011),
+        )
+    }
+
+    /// The nose, whole.
+    ///
+    /// A player's is a mesh of its own and all his face carries is what it
+    /// does to the skin AROUND it; a spectator's head is a lathe with no room
+    /// for one, so this has to be the shape as well: a lit ridge, the hollows
+    /// either side, the wings at the nostrils, and the shadow the tip drops
+    /// onto the lip — which at ten texels is most of what says there is a nose
+    /// there at all.
+    fn nose(&self, base: Vec3, down: f32, turn: f32) -> Vec3 {
+        let along = Textures::smooth((down - Self::BROW) / 0.090)
+            * (1.0 - Textures::smooth((down - Self::NOSTRILS) / 0.050));
+        let mut colour = Textures::over(
+            base,
+            self.skin * 1.09,
+            0.55 * along * Textures::smooth(1.0 - turn / (Self::NOSE_WIDE * 0.55)),
+        );
+        colour = Textures::shade(
+            colour,
+            // Tapered at BOTH ends of its run, not just the bottom: left to
+            // fade only where the nose does, the hollow reaches from the brow
+            // to the lip as a dark stripe under each eye, and a face with two
+            // of those is a face that has been crying.
+            0.10
+                * along
+                * Textures::smooth(along.min(1.0 - along) * 3.4)
+                * Textures::smooth(1.0 - (turn - Self::BESIDE_NOSE).abs() / 0.060),
+        );
+        colour = Textures::shade(
+            colour,
+            0.16
+                * Self::blob(
+                    turn - Self::NOSE_WIDE * 0.86,
+                    down - Self::NOSTRILS + 0.006,
+                    0.075,
+                    0.022,
+                ),
+        );
+        Textures::shade(
+            colour,
+            0.24 * Self::blob(turn, down - Self::NOSTRILS - 0.012, Self::NOSE_WIDE * 1.15, 0.026),
+        )
+    }
+
+    fn mouth(&self, base: Vec3, down: f32, turn: f32) -> Vec3 {
+        // Lips are the skin with the blood closer to the surface: darker and a
+        // good deal redder, and the same relation whatever the tone underneath
+        // — which is why this is derived rather than picked.
+        let lip = (self.skin * 0.80 + Vec3::new(0.12, 0.015, 0.02)).min(Vec3::ONE);
+        let mut colour = Textures::over(
+            base,
+            lip,
+            0.85 * Self::blob(turn, down - Self::MOUTH, Self::MOUTH_WIDE, 0.040),
+        );
+        // The line between them, which is the feature…
+        colour = Textures::over(
+            colour,
+            self.skin * 0.34,
+            Self::blob(turn, down - Self::MOUTH, Self::MOUTH_WIDE * 0.94, 0.015),
+        );
+        // …and the shadow under the lower lip, which does as much work as the
+        // line does.
+        Textures::shade(
+            colour,
+            0.16 * Self::blob(turn, down - Self::MOUTH - 0.050, Self::MOUTH_WIDE * 0.80, 0.022),
+        )
+    }
+
+    /// The ear. No geometry to hang it on — a head is a lathe and an ear costs
+    /// four more courses of one — so it is painted where the lathe is already
+    /// turning away, which is exactly where an ear is anyway.
+    fn ear(&self, base: Vec3, down: f32, turn: f32) -> Vec3 {
+        let at = down - Self::EYES - 0.045;
+        let colour = Textures::over(
+            base,
+            self.skin * 1.05,
+            0.60 * Self::blob(turn - Self::EAR.0, at, Self::EAR.1, 0.090),
+        );
+        Textures::shade(
+            colour,
+            0.30 * Self::blob(turn - Self::EAR.0, at, Self::EAR.1 * 0.45, 0.048),
+        )
+    }
+
+    /// A beard, where there is one.
+    ///
+    /// Cut along a line that hugs the jaw across the chin and then turns up
+    /// the side of the face, which is an EASE and not a straight rise — a
+    /// straight one puts a sharp V under the chin and has the beard up under
+    /// the eye three centimetres out. The same shape `Painter::whiskers` cuts
+    /// for the players.
+    fn whiskers(&self, base: Vec3, down: f32, turn: f32) -> Vec3 {
+        if self.beard <= 0.0 {
+            return base;
+        }
+        let line = Self::MOUTH + 0.050 - 0.21 * Textures::smooth(turn / 0.52);
+        let cover = Textures::smooth((down - line) / 0.045)
+            * (1.0 - Textures::smooth((down - Self::CHIN - 0.055) / 0.045))
+            * (1.0 - Textures::smooth((turn - 0.66) / 0.10));
+        // The moustache is the same growth above the mouth rather than below
+        // it, and head-on it is the half that says "beard".
+        let tache = Textures::smooth((down - Self::MOUTH + 0.060) / 0.018)
+            * (1.0 - Textures::smooth((down - Self::MOUTH + 0.014) / 0.014))
+            * Textures::smooth(1.0 - turn / (Self::MOUTH_WIDE * 1.15));
+        Textures::over(
+            base,
+            self.skin.lerp(self.hair, 0.85),
+            self.beard * cover.max(tache),
+        )
+    }
+
+    /// The hair, and whatever he put on over it.
+    fn scalp(&self, base: Vec3, down: f32, across: f32, turn: f32, tile: u32) -> Vec3 {
+        // A cap over the crown that carries down past the temples and covers
+        // the whole back of the head. Bald heads keep the temples — a bald man
+        // is not a hairless one — which is also what keeps the silhouette from
+        // changing with it.
+        let top = if self.bald { 0.0 } else { Self::HAIRLINE };
+        let line = top
+            + (Self::TEMPLE - top) * Textures::smooth((turn - 0.38) / 0.24)
+            + (Self::COLLAR - Self::TEMPLE) * Textures::smooth((turn - 0.64) / 0.20)
+            // Waved a little, because a hairline ruled straight across a
+            // forehead is the one detail that reads as a wig at any distance.
+            + 0.008 * (across * 29.0).sin() * (1.0 - Textures::smooth((turn - 0.50) / 0.30));
+        let hair = Self::hard(line - down, tile);
+        let mut colour = Textures::over(base, self.hair, hair);
+        // A highlight, not a multiple of the colour, which is what a specular
+        // is: black hair times anything is still black, and a whole head of it
+        // reads as a hole cut in the stand.
+        colour = Textures::over(
+            colour,
+            self.hair.lerp(Vec3::splat(0.36), 0.45),
+            hair * 0.38 * Textures::smooth(((across * 26.0 + down * 7.0).sin() - 0.35) / 0.65),
+        );
+
+        let Some(hat) = self.hat else {
+            return colour;
+        };
+        let brim = Self::HAIRLINE + 0.055;
+        let under = Self::hard(brim - down, tile);
+        colour = Textures::over(colour, hat, under);
+        // The turn-up round the bottom of a woolly hat, and the shadow its
+        // edge throws on the forehead under it.
+        colour = Textures::over(
+            colour,
+            hat * 1.20,
+            under * Textures::smooth((down - brim + 0.055) / 0.020),
+        );
+        Textures::shade(
+            colour,
+            0.26 * Textures::smooth((down - brim) / 0.012)
+                * (1.0 - Textures::smooth((down - brim - 0.050) / 0.040)),
+        )
+    }
+}
+
+/// The colours a crowd is drawn from, and where each one sits on the strip.
+///
+/// Handed out together because they are one thing: the sheet is a run of flat
+/// swatches whose only meaning is the index into it, so a mesh holding a `uv`
+/// it worked out against a different swatch count would dress every spectator
+/// in somebody else's coat. See [`Textures::crowd`].
+pub struct CrowdPalette {
+    pub sheet: Handle<Image>,
+    /// Head tiles. They come first along the sheet.
+    heads: usize,
+    /// Neutral outerwear, which follows them.
+    coats: usize,
+    /// …the home club's own colours…
+    ///
+    /// A group of its own rather than a few more entries mixed into the coats,
+    /// because who wears them is not a matter of chance: it depends on which
+    /// bank a man is sitting in. See
+    /// [`Stature::allegiance`](crate::scene::crowd::Stature::allegiance).
+    club: usize,
+    /// …and the visitors', last. Worn in exactly one place — the block of the
+    /// far end their supporters were given.
+    visiting: usize,
+    /// Texels across one tile — what a half-texel inset is measured in.
+    tile: f32,
+}
+
+impl CrowdPalette {
+    /// The middle of the `pick`th head's FLAT tile, wrapped: his skin as one
+    /// colour, which is what the back of his hand is painted with.
+    ///
+    /// The exact texel centre, which is what makes a palette safe to sample
+    /// with a linear filter: at the centre of a solid tile the four taps of
+    /// the bilinear fetch land on the same colour and it comes back unmixed.
+    /// Every corner of the hand shares this, so the fetch has no gradient
+    /// across it either and the hardware reads it at mip zero.
+    pub fn head(&self, pick: u32) -> Vec2 {
+        self.flat(pick as usize % self.heads)
+    }
+
+    /// …of the `pick`th NEUTRAL coat, which is what most of a ground wears.
+    pub fn coat(&self, pick: u32) -> Vec2 {
+        self.flat(self.heads + pick as usize % self.coats)
+    }
+
+    /// …of the `pick`th tile in the HOME club's colours, for the ones who came
+    /// dressed for it.
+    pub fn colours(&self, pick: u32) -> Vec2 {
+        self.flat(self.heads + self.coats + pick as usize % self.club)
+    }
+
+    /// …and of the `pick`th tile in the VISITORS'.
+    pub fn visitors(&self, pick: u32) -> Vec2 {
+        self.flat(self.heads + self.coats + self.club + pick as usize % self.visiting)
+    }
+
+    /// How many tiles there are altogether, which is what a `u` is measured
+    /// against.
+    fn tiles(&self) -> f32 {
+        (self.heads + self.coats + self.club + self.visiting) as f32
+    }
+
+    /// **Where one point on the `pick`th head lands on his own tile.**
+    ///
+    /// `turn` is how far round the skull the point is, `-1` and `1` at the
+    /// back of the head and `0` at the nose; `down` is how far down the tile
+    /// it belongs, `0` at the crown and `1` under the collar — read off the
+    /// ring that carries it, not off its height, so the face gets the share of
+    /// the tile a face deserves and the neck does not.
+    ///
+    /// **`u` is the SQUARE ROOT of the turn**, and that is the whole of what
+    /// makes a wrapped head worth doing at this size. Spread evenly, sixty-four
+    /// texels round a skull leaves the front ninety degrees — which is all a
+    /// lens is ever pointed at — with sixteen of them, and an eye two texels
+    /// wide is a smudge again. The root gives that quarter of the head half of
+    /// the tile: thirty-two texels across a face, an eye four across, a pupil
+    /// two. The cost is at the back, where the hair is one colour and could
+    /// have been drawn at any resolution at all.
+    ///
+    /// This is also the one place in the crowd where a `uv` varies across a
+    /// triangle, and that too is deliberate: it is what lets the hardware pick
+    /// a mip level for a head, so a face six pixels wide resolves to its own
+    /// average instead of to whichever texel the sample point happened to land
+    /// on. See [`Textures::crowd`], which builds the chain that answers it.
+    ///
+    /// Inset half a texel all round, because the tiles share a sheet: sampled
+    /// right to the edge the filter reaches into the neighbour, and every face
+    /// wears a sliver of the next man's hair.
+    pub fn head_uv(&self, pick: u32, turn: f32, down: f32) -> Vec2 {
+        let column = pick as usize % self.heads;
+        let span = 1.0 / self.tiles();
+        let inset = span * 0.5 / self.tile;
+        let (left, right) = (column as f32 * span + inset, (column + 1) as f32 * span - inset);
+        let across = 0.5 + 0.5 * turn.signum() * turn.abs().clamp(0.0, 1.0).sqrt();
+
+        // The drawn heads are the TOP half of the sheet and the flat colours
+        // the bottom, so `v` runs over the first row only.
+        let inset = 0.25 / self.tile;
+        Vec2::new(
+            left + (right - left) * across,
+            (down * 0.5).clamp(inset, 0.5 - inset),
+        )
+    }
+
+    /// The centre of a tile in the sheet's bottom row, which is where the flat
+    /// colours live.
+    fn flat(&self, tile: usize) -> Vec2 {
+        Vec2::new((tile as f32 + 0.5) / self.tiles(), 0.75)
+    }
+}
+
+#[cfg(test)]
+impl CrowdPalette {
+    /// A palette with nothing behind it, for the parts of the crowd that only
+    /// ever ask it where a tile is.
+    pub fn of_swatches(heads: usize, coats: usize, club: usize, visiting: usize) -> Self {
+        CrowdPalette {
+            sheet: Handle::default(),
+            heads,
+            coats,
+            club,
+            visiting,
+            tile: 64.0,
+        }
+    }
 }
 
 pub struct Textures;
@@ -693,9 +1229,9 @@ impl Textures {
     /// below it.
     ///
     /// The outlines come from [`Stencil`], which is to say from the same face
-    /// the player's own label is set in. Everything on this player is now drawn
-    /// with one typeface; what is left of the 5×7 grid below belongs to the
-    /// hoardings, where a pixel letterform is the point rather than a limit.
+    /// the player's own label is set in. Everything on this player is drawn
+    /// with one typeface — and so, since [`Self::hoarding`] followed the shirts
+    /// off the 5×7 grid, is everything behind him.
     fn lettering(
         images: &mut Assets<Image>,
         text: &str,
@@ -926,277 +1462,292 @@ impl Textures {
         base * (1.0 - amount.clamp(0.0, 1.0))
     }
 
-    /// How much of this texel the text covers, 0..1, supersampled `samples`
-    /// squared. `left`/`top` place the first glyph's top-left corner and
-    /// `cell` is the size of one grid unit, both in texels.
-    fn ink(
-        glyphs: &[[u8; 7]],
-        x: u32,
-        y: u32,
-        left: f32,
-        top: f32,
-        cell: f32,
-        samples: u32,
-    ) -> f32 {
-        let mut hits = 0u32;
-        for sub_y in 0..samples {
-            for sub_x in 0..samples {
-                let sample = Vec2::new(
-                    x as f32 + (sub_x as f32 + 0.5) / samples as f32,
-                    y as f32 + (sub_y as f32 + 0.5) / samples as f32,
-                );
-                if Self::glyph_covers(glyphs, (sample.x - left) / cell, (sample.y - top) / cell) {
-                    hits += 1;
+    /// Lays a rounded rectangle into an alpha mask: the shape of the logo tile
+    /// on a perimeter board, and — with a radius of half its own thickness —
+    /// of the pill that divides the lockup.
+    ///
+    /// Signed distance rather than the supersampling the glyph grid used to do
+    /// here: the shape is analytic, so the exact distance to its edge is both
+    /// cheaper than sixteen inside/outside tests a texel and a better edge than
+    /// they gave. Feathered over one texel, which is all antialiasing a hard
+    /// edge means at this size.
+    ///
+    /// Ink already in the mask survives where it is darker, so a tile and the
+    /// letters over it can share one buffer.
+    fn rounded(
+        coverage: &mut [u8],
+        width: u32,
+        height: u32,
+        centre: Vec2,
+        half: Vec2,
+        radius: f32,
+    ) {
+        // A radius past either half-extent is not a rounder rectangle, it is a
+        // shape that turns inside out.
+        let radius = radius.min(half.x).min(half.y);
+        // The box the corners are struck from: the full half-extent pulled in
+        // by the radius on both axes.
+        let core = (half - Vec2::splat(radius)).max(Vec2::ZERO);
+        for y in 0..height {
+            for x in 0..width {
+                let offset = (Vec2::new(x as f32 + 0.5, y as f32 + 0.5) - centre).abs() - core;
+                // Outside the core box on both axes this is the distance to a
+                // corner, on one axis the distance to a side, and on neither a
+                // negative depth into the middle.
+                let distance =
+                    offset.max(Vec2::ZERO).length() + offset.x.max(offset.y).min(0.0) - radius;
+                let alpha = 1.0 - Self::smooth(distance + 0.5);
+                if alpha > 0.0 {
+                    let target = &mut coverage[(y * width + x) as usize];
+                    *target = (*target).max((alpha * 255.0) as u8);
                 }
             }
         }
-        hits as f32 / (samples * samples) as f32
     }
 
-    /// Width of a run of glyphs in grid units — 5 columns each with one column
-    /// of air between them, and no trailing air.
-    fn span(glyphs: &[[u8; 7]]) -> f32 {
-        (glyphs.len() as f32 * 6.0 - 1.0).max(0.0)
+    /// A panel of flat colour — the whole of what a board carries when the face
+    /// behind its lockup cannot be read. See [`Self::advert`].
+    fn plain(width: u32, height: u32, colour: Vec3) -> Vec<u8> {
+        [
+            (colour.x * 255.0) as u8,
+            (colour.y * 255.0) as u8,
+            (colour.z * 255.0) as u8,
+            255,
+        ]
+        .repeat((width * height) as usize)
     }
 
-    /// Whether the glyph grid is inked at this point, in grid units with the
-    /// origin at the top-left of the first glyph.
-    fn glyph_covers(glyphs: &[[u8; 7]], column: f32, row: f32) -> bool {
-        if !(0.0..7.0).contains(&row) || column < 0.0 {
-            return false;
-        }
-        let index = (column / 6.0) as usize;
-        let Some(glyph) = glyphs.get(index) else {
-            return false;
-        };
-        let local = column - index as f32 * 6.0;
-        if local >= 5.0 {
-            return false;
-        }
-        glyph[row as usize] & (1 << (4 - local as u8)) != 0
-    }
-
-    /// One 5×7 pattern per character. Unknown characters come back blank,
-    /// which prints as a space rather than as a missing-glyph box — a
-    /// hoarding is not a place to report a typo.
-    fn glyphs(text: &str) -> Vec<[u8; 7]> {
-        text.chars().map(Self::glyph).collect()
-    }
-
-    fn glyph(character: char) -> [u8; 7] {
-        const BLANK: [u8; 7] = [0; 7];
-        match character.to_ascii_uppercase() {
-            digit @ '0'..='9' => Self::DIGITS[digit as usize - '0' as usize],
-            letter @ 'A'..='Z' => Self::LETTERS[letter as usize - 'A' as usize],
-            '-' => [0, 0, 0, 0b01110, 0, 0, 0],
-            '.' => [0, 0, 0, 0, 0, 0b01100, 0b01100],
-            ':' => [0, 0b01100, 0b01100, 0, 0b01100, 0b01100, 0],
-            '/' => [
-                0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000,
-            ],
-            _ => BLANK,
-        }
-    }
-
-    /// 5×7 glyphs, one `u8` per row, high bit leftmost.
-    const DIGITS: [[u8; 7]; 10] = [
-        [
-            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
-        ],
-        [
-            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
-        ],
-        [
-            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
-        ],
-        [
-            0b11111, 0b00010, 0b00100, 0b00010, 0b00001, 0b10001, 0b01110,
-        ],
-        [
-            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
-        ],
-        [
-            0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110,
-        ],
-        [
-            0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
-        ],
-        [
-            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
-        ],
-        [
-            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
-        ],
-        [
-            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100,
-        ],
-    ];
-
-    /// 5×7 capitals, sharing the row format and the renderer with the digits
-    /// above. `A` first; index with `letter - 'A'`.
-    const LETTERS: [[u8; 7]; 26] = [
-        [
-            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
-        ], // A
-        [
-            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
-        ], // B
-        [
-            0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
-        ], // C
-        [
-            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
-        ], // D
-        [
-            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
-        ], // E
-        [
-            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
-        ], // F
-        [
-            0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111,
-        ], // G
-        [
-            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
-        ], // H
-        [
-            0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
-        ], // I
-        [
-            0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100,
-        ], // J
-        [
-            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
-        ], // K
-        [
-            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
-        ], // L
-        [
-            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
-        ], // M
-        [
-            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
-        ], // N
-        [
-            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
-        ], // O
-        [
-            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
-        ], // P
-        [
-            0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101,
-        ], // Q
-        [
-            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
-        ], // R
-        [
-            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
-        ], // S
-        [
-            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
-        ], // T
-        [
-            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
-        ], // U
-        [
-            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
-        ], // V
-        [
-            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001,
-        ], // W
-        [
-            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
-        ], // X
-        [
-            0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100,
-        ], // Y
-        [
-            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111,
-        ], // Z
-    ];
-
-    /// One advertising panel for the perimeter boards, to be tiled along
-    /// them: the wordmark in lit white on the board's own dark tone, with an
-    /// accent rule under it.
+    /// One advertising panel for the perimeter boards, to be tiled along them:
+    /// the project's mark, its name and its address, set as one lockup on the
+    /// board's own dark tone.
     ///
-    /// **The height is the constraint, not the width.** A board is 0.95 m
-    /// tall and lands about 60 px on screen from the near touchline and 22 px
-    /// from the far one, so 64 texels tall is roughly 1:1 where it matters
-    /// and a mild minification where it does not. There are no mipmaps in
-    /// this scene — see [`Self::seats`] and [`Self::number`], which are sized
-    /// against the same problem — and a sharper board would crawl and sparkle
-    /// along the touchline every time the camera panned, which is the one
-    /// thing that would make advertising look worse than no advertising.
+    /// # The face
     ///
-    /// The panel is therefore 512 × 64 for roughly 7.6 m of hoarding, which
-    /// puts the cap height at half the board and the text at a size a
-    /// broadcast camera can actually read.
-    pub fn hoarding(images: &mut Assets<Image>, text: &str) -> Handle<Image> {
-        const WIDTH: u32 = 512;
-        const HEIGHT: u32 = 64;
-        const SAMPLES: u32 = 4;
-        /// Share of the panel width the wordmark is allowed, so consecutive
-        /// panels do not run into each other where they tile.
+    /// The lettering used to come off a hand-rolled 5×7 grid — the last of the
+    /// viewer's pixel type, left here long after the shirts moved to real
+    /// outlines. A ground where the squad is set in Outfit and the boards
+    /// around them are set on graph paper reads as two different games, which
+    /// is the same argument [`Self::lettering`] makes about a number next to a
+    /// name. So a board now goes through [`Stencil`] as well, and there is one
+    /// typeface in the scene.
+    ///
+    /// # Sizing
+    ///
+    /// **The height is the constraint, not the width.** A board is 0.95 m tall
+    /// and lands about 60 px on screen from the near touchline and 22 px from
+    /// the far one. The panel used to be 64 texels tall for exactly that — one
+    /// texel on one pixel where it matters — because a sharper sheet with no
+    /// mip chain under it would crawl and sparkle along the touchline every
+    /// time the camera panned, which is the one thing that would make
+    /// advertising look worse than no advertising.
+    ///
+    /// There is a chain under it now, and anisotropy over it, so the sheet can
+    /// be sampled for the camera that walks up to a board rather than for the
+    /// one on the halfway line: 1024 × 128 for the same 7.6 m of hoarding.
+    /// Both axes doubled together, so a texel stays square and the lockup is
+    /// neither stretched nor squashed.
+    pub fn hoarding(
+        images: &mut Assets<Image>,
+        mark: &str,
+        name: &str,
+        address: &str,
+    ) -> Handle<Image> {
+        const WIDTH: u32 = 1024;
+        const HEIGHT: u32 = 128;
+
+        // Chained for the same reason the seating is: these ring the pitch and
+        // are seen almost edge-on from a low rig, where a repeated wordmark
+        // undersampled along its own length is a row of sparkling confetti.
+        let mut image = Self::mipped(
+            WIDTH,
+            HEIGHT,
+            Self::advert(WIDTH, HEIGHT, mark, name, address),
+        );
+        // Tiled along boards of two different lengths, so the repeat lives in
+        // the sampler and the count in each board's `uv_transform`.
+        if let ImageSampler::Descriptor(descriptor) = &mut image.sampler {
+            descriptor.address_mode_u = ImageAddressMode::Repeat;
+            // A perimeter board is the most foreshortened surface in the scene:
+            // it runs straight away from a camera standing at the touchline,
+            // and plain trilinear filtering picks a mip level from the WIDER of
+            // the two directions a texel is stretched over. So the far half of
+            // every board was read out of a level that had already averaged the
+            // lettering away, and no amount of drawing the panel better would
+            // have shown up down there. Same trade — and the same "free on
+            // essentially every device" — as [`Self::tiled`] makes for the
+            // turf.
+            descriptor.anisotropy_clamp = 16;
+        }
+        images.add(image)
+    }
+
+    /// The panel's texels, apart from the image they end up in — so a board can
+    /// be dumped and LOOKED at without building 28 MB of wasm, which is the
+    /// only way to review a lockup at all. See `textures::tests::dump_hoarding`.
+    fn advert(width: u32, height: u32, mark: &str, name: &str, address: &str) -> Vec<u8> {
+        /// Share of the panel width the lockup may use. What is left is the air
+        /// between one repeat and the next, and it has to be clearly wider than
+        /// any gap inside the lockup or the boards read as one run-on sentence
+        /// instead of as a panel that repeats.
         const MARGIN: f32 = 0.88;
-        /// Cap height as a fraction of the board — a real perimeter wordmark
-        /// runs about half of one.
-        const CAP: f32 = 0.46;
-        /// Air between the baseline and the accent rule, and the rule's own
-        /// thickness, both in grid units.
-        const RULE_GAP: f32 = 0.9;
-        const RULE_THICKNESS: f32 = 0.5;
+        /// The logo tile and its corner radius, as shares of the board's height
+        /// and of the tile's own side. The radius is `favicon.svg`'s, which is
+        /// 10 on a 64 box.
+        const TILE: f32 = 0.72;
+        const CORNER: f32 = 0.16;
+        /// Cap height of the initials inside the tile, as a share of its side.
+        /// A mark is mostly air; crowd the letters to the edge and it stops
+        /// reading as a logo and starts reading as a third word.
+        const MARK: f32 = 0.44;
+        /// The two text sizes, as shares of the board's height — and they are
+        /// ink ABOVE the baseline, not boxes to fit into. The name and the
+        /// address sit on ONE baseline, so what makes the address secondary is
+        /// how far up it reaches.
+        ///
+        /// These are nominal, and the fit below scales the whole lockup down to
+        /// the panel — so raising one of them does not simply enlarge it, it
+        /// buys that piece a bigger share of a fixed width. A first cut asked
+        /// for 0.40 and 0.24 and printed a 33 cm wordmark on a 95 cm board,
+        /// which is a caption; a perimeter sponsor sets its name at 40 cm and
+        /// up, and the address is what gives way for it.
+        const NAME: f32 = 0.50;
+        const ADDRESS: f32 = 0.22;
+        /// Air between the mark, the name, the divider and the address.
+        const GAP: f32 = 0.26;
+        /// The divider: a thin pill, about as tall as the wordmark's own ink.
+        const RULE: f32 = 0.05;
+        const RULE_HEIGHT: f32 = 0.46;
+        /// Tracking for each of the three lines — see [`Stencil::set`] for why
+        /// this is not one number. A shirt's 0.08 is loose on purpose; a
+        /// wordmark wants to hold together as a word, and an address set at
+        /// half its size wants the air back.
+        const MARK_TRACKING: f32 = 0.04;
+        const NAME_TRACKING: f32 = 0.02;
+        const ADDRESS_TRACKING: f32 = 0.06;
 
         // Exactly the board's own colour, so the seam between an advertised
         // panel and the plain structure behind it never shows.
         let ground = Vec3::new(0.200, 0.230, 0.300);
         let letters = Vec3::new(0.95, 0.96, 0.99);
-        // The seats' cyan. One accent runs through this ground rather than
-        // three unrelated brand colours.
-        let accent = Vec3::new(0.160, 0.600, 0.720);
+        // The mark's own teal — `favicon.svg`'s #0e637f — lifted for a dark
+        // ground. At its web value the tile is barely a shade off the board it
+        // sits on, and the logo reads as two letters floating in the middle of
+        // nothing; lifted, it is a tile with a mark in it.
+        let brand = Vec3::new(0.075, 0.470, 0.590);
+        // One accent for the divider and the address, out of the same family as
+        // the tile and the seats. Pale rather than saturated: this is the
+        // smallest lettering on the board and it has to survive being 22 px
+        // away.
+        let accent = Vec3::new(0.42, 0.78, 0.88);
 
-        let glyphs = Self::glyphs(text);
-        let span = Self::span(&glyphs);
-        let cell = ((WIDTH as f32 * MARGIN) / span.max(1.0)).min(HEIGHT as f32 * CAP / 7.0);
-        let left = (WIDTH as f32 - span * cell) * 0.5;
-        // Wordmark and rule centred as one block, so the panel does not sit
-        // high on the board with a band of empty ground under it.
-        let rule = (cell * RULE_THICKNESS).max(1.5);
-        let block = 7.0 * cell + RULE_GAP * cell + rule;
-        let top = (HEIGHT as f32 - block) * 0.5;
+        let (Some(mark), Some(name), Some(address)) = (
+            Stencil::set(mark, MARK_TRACKING),
+            Stencil::set(name, NAME_TRACKING),
+            Stencil::set(address, ADDRESS_TRACKING),
+        ) else {
+            // Nothing the compiled-in face can draw, which would mean no text
+            // anywhere in the viewer rather than a problem with this panel. A
+            // plain board is the right way to lose it: the perimeter is still
+            // there, it simply carries no advertising.
+            return Self::plain(width, height, ground);
+        };
 
-        // A rule the width of the wordmark, a little under it.
-        let rule_top = top + (7.0 + RULE_GAP) * cell;
-        let rule_bottom = rule_top + rule;
+        // Everything at its nominal size first, and then the whole lockup
+        // scaled by however much of the panel it turned out to want. Fitting
+        // the pieces one at a time instead would let the wordmark and the
+        // address disagree about how hard each had been squeezed, which is
+        // exactly what makes a lockup look assembled rather than drawn.
+        let board = height as f32;
+        let tile = TILE * board;
+        let gap = GAP * board;
+        let rule = RULE * board;
+        let name_scale = NAME * board / name.rise();
+        let address_scale = ADDRESS * board / address.rise();
+        let run = tile
+            + gap
+            + name.span() * name_scale
+            + gap
+            + rule
+            + gap
+            + address.span() * address_scale;
+        let fit = (width as f32 * MARGIN / run).min(1.0);
 
-        let mut data = Vec::with_capacity((WIDTH * HEIGHT * 4) as usize);
-        for y in 0..HEIGHT {
-            let on_rule = (y as f32 + 0.5) >= rule_top && (y as f32 + 0.5) < rule_bottom;
-            for x in 0..WIDTH {
-                let within = (x as f32 + 0.5) >= left && (x as f32 + 0.5) < left + span * cell;
-                let ink = Self::ink(&glyphs, x, y, left, top, cell, SAMPLES);
-                let mut colour = ground + (letters - ground) * ink;
-                if on_rule && within {
-                    colour = accent;
-                }
-                data.extend_from_slice(&[
-                    (colour.x * 255.0) as u8,
-                    (colour.y * 255.0) as u8,
-                    (colour.z * 255.0) as u8,
-                    255,
-                ]);
-            }
+        let tile = tile * fit;
+        let gap = gap * fit;
+        let rule = rule * fit;
+        let name_scale = name_scale * fit;
+        let address_scale = address_scale * fit;
+
+        // One baseline under the name and the address both, with the ink of the
+        // pair of them — the taller line's rise, the deeper line's drop —
+        // centred on the board. A centred ink box's own middle is the middle of
+        // the panel, which is what the tile and the divider centre on too.
+        let rise = name.rise() * name_scale;
+        let drop = (name.drop() * name_scale).max(address.drop() * address_scale);
+        let baseline = (board + rise - drop) * 0.5;
+        let middle = board * 0.5;
+
+        // Three layers, composited in this order at the end: the tile under
+        // everything, the accent over it, the white lettering over both. They
+        // only actually overlap where the initials cross the tile, which is the
+        // one place the order has to be right.
+        let mut tiles = vec![0u8; (width * height) as usize];
+        let mut accents = vec![0u8; (width * height) as usize];
+        let mut ink = vec![0u8; (width * height) as usize];
+
+        let mut left = (width as f32 - run * fit) * 0.5;
+        Self::rounded(
+            &mut tiles,
+            width,
+            height,
+            Vec2::new(left + tile * 0.5, middle),
+            Vec2::splat(tile * 0.5),
+            tile * CORNER,
+        );
+        // The initials centre in the tile rather than sitting on the lockup's
+        // baseline: a mark is a picture of two letters, not the first word of
+        // the line.
+        let mark_scale = MARK * tile / mark.rise();
+        mark.draw(
+            &mut ink,
+            width,
+            height,
+            left + (tile - mark.span() * mark_scale) * 0.5,
+            middle + (mark.rise() - mark.drop()) * mark_scale * 0.5,
+            mark_scale,
+        );
+        left += tile + gap;
+
+        name.draw(&mut ink, width, height, left, baseline, name_scale);
+        left += name.span() * name_scale + gap;
+
+        // A pill rather than a bar: at this thickness a square end is two stray
+        // texels and reads as a nick in the rule.
+        Self::rounded(
+            &mut accents,
+            width,
+            height,
+            Vec2::new(left + rule * 0.5, middle),
+            Vec2::new(rule * 0.5, RULE_HEIGHT * board * fit * 0.5),
+            rule * 0.5,
+        );
+        left += rule + gap;
+
+        address.draw(&mut accents, width, height, left, baseline, address_scale);
+
+        let mut data = Vec::with_capacity((width * height * 4) as usize);
+        for index in 0..(width * height) as usize {
+            let mut colour = Self::over(ground, brand, tiles[index] as f32 / 255.0);
+            colour = Self::over(colour, accent, accents[index] as f32 / 255.0);
+            colour = Self::over(colour, letters, ink[index] as f32 / 255.0);
+            data.extend_from_slice(&[
+                (colour.x * 255.0) as u8,
+                (colour.y * 255.0) as u8,
+                (colour.z * 255.0) as u8,
+                255,
+            ]);
         }
-
-        // Chained for the same reason the seating is: these ring the pitch and
-        // are seen almost edge-on from a low rig, where a repeated wordmark
-        // undersampled along its own length is a row of sparkling confetti.
-        let mut image = Self::mipped(WIDTH, HEIGHT, data);
-        // Tiled along boards of two different lengths, so the repeat lives in
-        // the sampler and the count in each board's `uv_transform`.
-        if let ImageSampler::Descriptor(descriptor) = &mut image.sampler {
-            descriptor.address_mode_u = ImageAddressMode::Repeat;
-        }
-        images.add(image)
+        data
     }
 
     /// Goal netting: a grid of cords on a transparent ground.
@@ -1679,11 +2230,45 @@ impl Textures {
         Self::mipped_as(width, height, base, TextureFormat::Rgba8Unorm)
     }
 
+    /// A chain for a sheet of TILES, stopped where one texel is one tile.
+    ///
+    /// The stopping point is the whole of it. A tile is a power of two across
+    /// and sits on a multiple of its own width, so every box filter down to
+    /// that level takes its four taps from inside a single tile and two tiles
+    /// never average together — the chain is a per-tile chain that happens to
+    /// be packed as one image. One level further and a texel would straddle
+    /// two of them, which for a palette is the end of it being a palette.
+    ///
+    /// So the coarsest level is exactly one texel per tile, holding that
+    /// tile's own average, and a spectator's head at the far side of the
+    /// ground resolves to his own skin rather than to the mean of the sheet.
+    /// See [`Self::crowd`], which is the only caller and carries the argument.
+    fn mipped_tiles(width: u32, height: u32, base: Vec<u8>, tile: u32) -> Image {
+        Self::mipped_capped(
+            width,
+            height,
+            base,
+            TextureFormat::Rgba8UnormSrgb,
+            tile.trailing_zeros() + 1,
+        )
+    }
+
     fn mipped_as(width: u32, height: u32, base: Vec<u8>, format: TextureFormat) -> Image {
+        Self::mipped_capped(width, height, base, format, u32::MAX)
+    }
+
+    fn mipped_capped(
+        width: u32,
+        height: u32,
+        base: Vec<u8>,
+        format: TextureFormat,
+        cap: u32,
+    ) -> Image {
         let mut levels: Vec<(u32, u32, Vec<u8>)> = vec![(width, height, base)];
-        while levels
-            .last()
-            .is_some_and(|(across, down, _)| *across > 1 || *down > 1)
+        while (levels.len() as u32) < cap
+            && levels
+                .last()
+                .is_some_and(|(across, down, _)| *across > 1 || *down > 1)
         {
             let (across, down, source) = levels.last().expect("seeded above");
             let (across, down) = (*across, *down);
@@ -1894,6 +2479,282 @@ impl Textures {
         // frame after the pitch. Which is the whole of what "the camera does
         // not move smoothly" is made of, as much as any frame rate.
         images.add(Self::mipped(WIDTH, HEIGHT, data))
+    }
+
+
+    /// Every colour a spectator is painted in, as one strip of flat swatches.
+    ///
+    /// **A palette rather than a set of materials, and a texture rather than
+    /// vertex colours**, for two separate reasons and both of them measured.
+    ///
+    /// A material each would put a draw call behind every shade in the ground,
+    /// and this viewer's frame is spent per ENTITY and not per pixel — see
+    /// [`crate::app::perf`], where the same scene costs the same 3.9 ms at
+    /// 720p and at 4K. The crowd is one mesh per bank precisely so it does
+    /// not, so a spectator's colour cannot live on his material.
+    ///
+    /// Vertex colours would carry it for nothing — except that a mesh with
+    /// `ATTRIBUTE_COLOR` on it is a different vertex layout, and a different
+    /// vertex layout is a different render pipeline: a FIFTH PBR shader for
+    /// the browser to link, four to six seconds of frozen tab on the first
+    /// open of a session (see [`crate::app::bringup`], which has the trace).
+    /// A `uv` into a palette costs nothing at all — the stands already carry
+    /// one — and the crowd draws through the same program the terracing does.
+    ///
+    /// **Two rows of tiles.** The bottom is the flat colours — one solid
+    /// block each, which is what a torso, a sleeve and the back of a hand are
+    /// painted with. The top is the same heads UNWRAPPED: hair, ears, brows, a
+    /// pair of eyes, a nose, a mouth, a beard on some and a hat on some, laid
+    /// out right round the skull. [`CrowdPalette::head_uv`] is what reads it.
+    ///
+    /// A face is worth drawing at all because of where a lens ends up. The
+    /// near terrace is thirty metres from a pitch-side camera and a head there
+    /// is twenty pixels across, which is plenty for two eyes to read as a
+    /// person rather than as a bead — and the free camera flies, so the same
+    /// head is two hundred pixels across the moment anybody walks it into a
+    /// stand. **Sixty-four texels** is set by the second of those: with `u`
+    /// stretched toward the front it puts about thirty texels across a face,
+    /// an eye four across and a pupil two, which is the coarsest a head can be
+    /// drawn at and still hold up at arm's length. It was sixteen, set by the
+    /// first alone, and at sixteen a face at three metres is nine enormous
+    /// squares.
+    ///
+    /// **Mip-chained, but only down to one texel per TILE.** The chain is what
+    /// makes a drawn face safe: a head six pixels wide against a sixty-four
+    /// texel tile is undersampled ten times over, and point-sampled it does
+    /// not blur, it SWIMS — resampling to a different pair of eyes every frame
+    /// the camera moves, which is the exact failure [`Self::seats`] documents
+    /// for the seats behind them. But a chain run to the bottom would average
+    /// neighbouring TILES together, and two levels past that the whole sheet
+    /// is one brown — a crowd whose colour converges to a single average at
+    /// distance is a car park.
+    ///
+    /// Both are had by stopping the chain where a texel is exactly one tile.
+    /// Tiles are a power of two wide and aligned to it, so every box filter
+    /// down to that level falls INSIDE a tile and no two tiles ever meet; the
+    /// coarsest level is each tile's own average — a face resolving to skin
+    /// darkened a little by its own eyes, which is what a face at a hundred
+    /// metres is. See [`Self::mipped_tiles`].
+    ///
+    /// Heads first, then clothing. `home` is the shirt the ground's own
+    /// support turns up in, so it is dealt several tiles rather than one: a
+    /// real stand is mostly coats, with the club's colour running through it
+    /// in enough quantity to tell you whose ground you are at.
+    pub fn crowd(
+        images: &mut Assets<Image>,
+        home: Color,
+        trim: Color,
+        visitor: Color,
+        visitor_trim: Color,
+    ) -> CrowdPalette {
+        /// Texels across one tile, and so down one row. See the note above for
+        /// why sixty-four and not sixteen.
+        const TILE: u32 = 64;
+        /// **What a crowd wears over whatever else it is wearing**: winter
+        /// coats, in the greys, greens, dark blues and browns people actually
+        /// own. This is most of a ground and all of the main stands.
+        ///
+        /// Deliberately low in saturation. The club's colours below have to be
+        /// the only bright thing in a stand or the eye reads the crowd as
+        /// bunting — and, more to the point, a fan end only reads as one
+        /// because the seats either side of it do NOT.
+        ///
+        /// Sixteen of them, and the variety that pays is in the VALUE: what
+        /// tells one spectator from his neighbour at a hundred metres is light
+        /// against dark, and a coat that is a third grey rather than a quarter
+        /// grey is a coat nobody will ever resolve. So the run goes from
+        /// near-black to pale and only wanders off the greys where a real
+        /// wardrobe does — olive, navy, brown, burgundy.
+        ///
+        /// It was ten, which was enough while a spectator was a rectangle and
+        /// the whole of him was one of these. He is a body, two sleeves and a
+        /// pair of hands now, all cut from the same tile, so the coat carries
+        /// more of the figure than it used to and a repeat is correspondingly
+        /// easier to see.
+        const COATS: [Color; 16] = [
+            Color::srgb(0.145, 0.160, 0.205),
+            Color::srgb(0.235, 0.235, 0.245),
+            Color::srgb(0.355, 0.345, 0.330),
+            Color::srgb(0.185, 0.150, 0.125),
+            Color::srgb(0.300, 0.245, 0.195),
+            Color::srgb(0.115, 0.130, 0.155),
+            Color::srgb(0.430, 0.415, 0.385),
+            Color::srgb(0.170, 0.220, 0.165),
+            Color::srgb(0.560, 0.545, 0.520),
+            Color::srgb(0.135, 0.175, 0.245),
+            Color::srgb(0.085, 0.090, 0.100),
+            Color::srgb(0.265, 0.180, 0.180),
+            Color::srgb(0.215, 0.240, 0.255),
+            Color::srgb(0.400, 0.330, 0.245),
+            Color::srgb(0.495, 0.500, 0.535),
+            Color::srgb(0.230, 0.205, 0.150),
+        ];
+        /// How many different people are in the stand.
+        ///
+        /// Twenty-four, against twelve complexions, ten hair colours and eight
+        /// irises, so the pairings do not repeat before any of the ramps does.
+        /// It is a small number for a crowd of twenty thousand and it does not
+        /// need to be a big one: what tells two spectators apart at any
+        /// distance this is seen from is the coat, and there are sixteen of
+        /// those over the top of these — the same reasoning as [`Beard`] on
+        /// the pitch, where four beards do the work of a hundred faces.
+        ///
+        /// It was fourteen. What bought the other ten was the tile: at sixteen
+        /// texels the heads differed by a complexion and a cap of hair and a
+        /// fifteenth would have been a repeat of the second, and at sixty-four
+        /// there is a beard, a hat, a bald crown and an iris in each of them
+        /// as well — enough combinations that the run is now short of the
+        /// variety rather than past it.
+        const HEADS: usize = 24;
+        /// What a share of them came in, over the hair: a woollen hat in the
+        /// colours or in whatever else, which is most of what a winter crowd
+        /// has on its head.
+        const HATS: [Color; 4] = [
+            Color::srgb(0.120, 0.130, 0.150),
+            Color::srgb(0.330, 0.150, 0.140),
+            Color::srgb(0.480, 0.455, 0.420),
+            Color::srgb(0.150, 0.230, 0.330),
+        ];
+
+        // Complexions and hair off the SHARED ramps — the same tables every
+        // player on the pitch is painted from, so a crowd is made of the same
+        // people the teams are rather than out of a second set of colours that
+        // could drift away from the first.
+        let coat = |colour: Color| {
+            let entry = colour.to_srgba();
+            Vec3::new(entry.red, entry.green, entry.blue)
+        };
+        let ramp = |table: &[&str], index: usize, fallback: Vec3| -> Vec3 {
+            table
+                .get(index)
+                .and_then(|hex| Srgba::hex(hex).ok())
+                .map(|entry| Vec3::new(entry.red, entry.green, entry.blue))
+                .unwrap_or(fallback)
+        };
+        let faces: Vec<Face> = (0..HEADS)
+            .map(|person| Face {
+                // Spread across the whole complexion ramp rather than taken
+                // off the front of it: a stand drawn from the first six
+                // entries is a stand of one ethnicity.
+                skin: ramp(
+                    &Palette::SKIN,
+                    person * Palette::SKIN.len() / HEADS,
+                    Vec3::new(0.78, 0.62, 0.48),
+                ),
+                // A different stride through each of the other two ramps, so
+                // complexion, hair and eyes are not one draw wearing three
+                // hats — the trap `Complexion::face` documents on the pitch,
+                // where a correlated pair gives a whole stand one look.
+                hair: ramp(
+                    &Palette::HAIR,
+                    person * 7 % Palette::HAIR.len(),
+                    Vec3::new(0.06, 0.06, 0.06),
+                ),
+                iris: ramp(
+                    &Palette::EYES,
+                    person * 5 % Palette::EYES.len(),
+                    Vec3::new(0.24, 0.19, 0.14),
+                ),
+                bald: person % 5 == 0,
+                // Clean-shaven, stubble, or the full thing. Stubble is the
+                // most common of the three in a real stand and it is also the
+                // one that survives minification best — it moves the average
+                // of the whole jaw rather than drawing a shape on it.
+                beard: match person % 4 {
+                    0 => 0.45,
+                    3 => 1.0,
+                    _ => 0.0,
+                },
+                hat: (person % 3 == 1)
+                    .then(|| coat(HATS[person / 3 % HATS.len()])),
+            })
+            .collect();
+
+        // A head's tile in the flat row is his HANDS, and nothing else: the
+        // head itself is skinned off the drawn row the whole way round now, so
+        // this is only ever read by the disc that closes the end of a sleeve.
+        // Taken down a tenth, because that is where it is — a hand at the end
+        // of an arm hanging at somebody's side is in the shade of his own
+        // body, and left at full strength it is the brightest thing in the
+        // stand and reads as a badge sewn to his coat.
+        let mut flat: Vec<Vec3> = faces.iter().map(|face| face.skin * 0.88).collect();
+        let heads = faces.len();
+        flat.extend(COATS.iter().copied().map(coat));
+        let coats = flat.len() - heads;
+
+        // **A side's colours**, as six tiles rather than one.
+        //
+        // An end painted in a single colour is a flat sheet of it, which is
+        // the one thing an end is not: the same red is a replica two seasons
+        // old, a scarf, a bobble hat and a coat somebody bought in the shop
+        // last week, and what carries that at a hundred metres is the VALUE
+        // running through it. So the shirt is dealt at three strengths — as
+        // printed, worn-in, and caught by the light — and the trim is what an
+        // end's stripes and scarves are.
+        //
+        // **Weighted rather than one tile each.** The mesh picks a tile evenly,
+        // so the run has to carry the weights itself: three parts the shirt as
+        // it comes, one each of the two shades, one of the trim. Dealt evenly,
+        // a quarter of an away end turned up in the SECOND colour — a block of
+        // white where a block of green belonged, which is not what a travelling
+        // support looks like from any distance.
+        let shirts = |kit: Color, trim: Color| {
+            let kit = coat(kit);
+            [
+                kit,
+                kit,
+                kit,
+                kit * 0.72,
+                kit.lerp(Vec3::ONE, 0.22),
+                coat(trim),
+            ]
+        };
+        flat.extend_from_slice(&shirts(home, trim));
+        let club = flat.len() - heads - coats;
+
+        // …and the same for the side that travelled. They get a block of one
+        // end and nothing else in the ground, which is what an away allocation
+        // is — see [`Stature::away_section`](crate::scene::crowd::Stature).
+        flat.extend_from_slice(&shirts(visitor, visitor_trim));
+        let visiting = flat.len() - heads - coats - club;
+
+        let columns = flat.len() as u32;
+        let (width, height) = (columns * TILE, TILE * 2);
+        let mut data = vec![0u8; (width * height * 4) as usize];
+        let mut put = |x: u32, y: u32, colour: Vec3| {
+            let at = ((y * width + x) * 4) as usize;
+            data[at] = (colour.x.clamp(0.0, 1.0) * 255.0) as u8;
+            data[at + 1] = (colour.y.clamp(0.0, 1.0) * 255.0) as u8;
+            data[at + 2] = (colour.z.clamp(0.0, 1.0) * 255.0) as u8;
+            data[at + 3] = 255;
+        };
+
+        for (column, block) in flat.iter().enumerate() {
+            let left = column as u32 * TILE;
+            // The drawn face on top, where there is one; the flat colour
+            // repeated up there for a coat, which nothing ever samples but
+            // which must not be a hole in the mip chain.
+            let face = faces.get(column);
+            for y in 0..TILE {
+                for x in 0..TILE {
+                    let painted = match face {
+                        Some(face) => face.at(x, y, TILE),
+                        None => *block,
+                    };
+                    put(left + x, y, painted);
+                    put(left + x, TILE + y, *block);
+                }
+            }
+        }
+
+        CrowdPalette {
+            sheet: images.add(Self::mipped_tiles(width, height, data, TILE)),
+            heads,
+            coats,
+            club,
+            visiting,
+            tile: TILE as f32,
+        }
     }
 
     /// The gradient the sky dome is skinned with, read top to bottom: zenith at
@@ -2474,6 +3335,131 @@ mod tests {
     use crate::app::config::PlayerInfo;
     use crate::players::body::BodyParts;
     use crate::players::kit::Complexion;
+
+    /// The crowd's drawn faces share one sheet with the flat colours every
+    /// other surface of a spectator is painted in, so the one thing that can
+    /// go wrong is a `uv` reaching out of its own tile — and it would not look
+    /// like a bug. It would look like every man in the ground wearing a sliver
+    /// of the next one's hair, which is exactly the kind of thing that gets
+    /// explained away as "the crowd looks a bit muddy".
+    #[test]
+    fn a_spectators_face_stays_inside_his_own_tile() {
+        const HEADS: usize = 24;
+        const COATS: usize = 16;
+        const CLUB: usize = 6;
+        const AWAY: usize = 6;
+        let palette = CrowdPalette::of_swatches(HEADS, COATS, CLUB, AWAY);
+        let tiles = (HEADS + COATS + CLUB + AWAY) as f32;
+
+        for person in 0..HEADS as u32 {
+            let (left, right) = (person as f32 / tiles, (person + 1) as f32 / tiles);
+            // Right round the head and from the crown to under the collar —
+            // the whole wrap, not just the part a face is drawn on.
+            let corners = [-1.0f32, -0.5, 0.0, 0.5, 1.0]
+                .into_iter()
+                .flat_map(|turn| {
+                    [0.0f32, 0.5, 1.0].map(|down| palette.head_uv(person, turn, down))
+                });
+            for corner in corners {
+                assert!(
+                    corner.x > left && corner.x < right,
+                    "face {person} reaches to {} outside {left}..{right}",
+                    corner.x
+                );
+                // …and stays in the TOP row of the sheet, which is the half
+                // the faces are drawn in. The bottom half is flat colour, and
+                // a face that dipped into it would be half a portrait and half
+                // a paint chip.
+                assert!(corner.y > 0.0 && corner.y < 0.5, "face {person} at v {}", corner.y);
+            }
+            // The nose is the middle of the tile and the back of the head is
+            // both its edges — the wrap's whole contract, and the one thing
+            // that would put a man's ear where his eye belongs.
+            let nose = palette.head_uv(person, 0.0, 0.5).x;
+            assert!(
+                (nose - (left + right) * 0.5).abs() < 1e-5,
+                "face {person} has its nose at {nose}, not at {}",
+                (left + right) * 0.5
+            );
+            let (back_left, back_right) = (
+                palette.head_uv(person, -1.0, 0.5).x,
+                palette.head_uv(person, 1.0, 0.5).x,
+            );
+            // Within a texel of each edge — which is the inset, and the whole
+            // of what may separate them from it.
+            let texel = 1.0 / tiles / 64.0;
+            assert!(
+                back_left - left < texel && right - back_right < texel,
+                "the back of head {person} is at {back_left}..{back_right}, not at {left}..{right}"
+            );
+
+            // His flat skin is the SAME tile in the bottom row, sampled dead
+            // centre — it is what the back of his hand is painted with, and a
+            // texel centre is what keeps the tile unmixed under a linear
+            // filter.
+            let flat = palette.head(person);
+            assert!(flat.y > 0.5, "flat head {person} at v {}", flat.y);
+            assert!(
+                (flat.x * tiles - (person as f32 + 0.5)).abs() < 1e-4,
+                "flat head {person} is not on a texel centre: {}",
+                flat.x * tiles
+            );
+        }
+
+        // Coats follow the heads along the sheet, and the club's colours
+        // follow the coats. The three groups are picked from separately — an
+        // overlap would put a man in the wrong end's clothes.
+        for coat in 0..COATS as u32 {
+            let at = palette.coat(coat).x * tiles;
+            assert!(
+                at > HEADS as f32 && at < (HEADS + COATS) as f32,
+                "coat {coat} landed outside the coats at {at}"
+            );
+        }
+        for colours in 0..CLUB as u32 {
+            let at = palette.colours(colours).x * tiles;
+            assert!(
+                at > (HEADS + COATS) as f32,
+                "club colour {colours} landed among the coats at {at}"
+            );
+        }
+    }
+
+    /// **The chain has to stop where a texel is one tile.** One level further
+    /// and a texel straddles two tiles, the palette stops being a palette, and
+    /// a couple of levels past that the whole crowd is one brown.
+    ///
+    /// It is a silent failure in both directions — too few levels and the
+    /// faces swim, too many and the colour drains out — and neither shows up
+    /// anywhere except on screen at a distance, so it is pinned here.
+    #[test]
+    fn the_crowd_sheet_stops_mipping_where_a_texel_is_a_tile() {
+        const TILE: u32 = 16;
+        const COLUMNS: u32 = 29;
+        let (width, height) = (COLUMNS * TILE, TILE * 2);
+        let sheet = Textures::mipped_tiles(
+            width,
+            height,
+            vec![128; (width * height * 4) as usize],
+            TILE,
+        );
+
+        // 464x32 → 232x16 → 116x8 → 58x4 → 29x2, which is one texel per tile.
+        assert_eq!(sheet.texture_descriptor.mip_level_count, 5);
+
+        // …and the buffer holds exactly those levels, or wgpu rejects the
+        // upload and the whole crowd is untextured.
+        let wanted: usize = (0..5)
+            .map(|level| {
+                let (across, down) = (
+                    (width >> level).max(1) as usize,
+                    (height >> level).max(1) as usize,
+                );
+                across * down * 4
+            })
+            .sum();
+        assert_eq!(sheet.data.as_ref().map(Vec::len), Some(wanted));
+    }
 
     fn look(beard: Beard, shaved: bool) -> FaceLook {
         FaceLook {
@@ -3059,6 +4045,163 @@ mod tests {
         let path = std::path::Path::new(&directory).join("faces.rgba");
         std::fs::write(&path, &sheet).expect("wrote the sheet");
         println!("{}x{} at {}", across, HEIGHT, path.display());
+    }
+
+    /// One printed perimeter panel, addressed by column and row.
+    struct Board {
+        panel: Vec<u8>,
+    }
+
+    impl Board {
+        /// The panel `Textures::hoarding` builds, at the size it builds it and
+        /// carrying the strings the ground actually carries.
+        const WIDTH: u32 = 1024;
+        const HEIGHT: u32 = 128;
+
+        fn print() -> Self {
+            Self {
+                panel: Textures::advert(
+                    Self::WIDTH,
+                    Self::HEIGHT,
+                    "OF",
+                    "OpenFootball",
+                    "open-football.org",
+                ),
+            }
+        }
+
+        fn texel(&self, x: u32, y: u32) -> [u8; 3] {
+            let at = ((y * Self::WIDTH + x) * 4) as usize;
+            [self.panel[at], self.panel[at + 1], self.panel[at + 2]]
+        }
+
+        /// The first and last column this colour is printed in, or `None` if it
+        /// is nowhere on the board. Matched with a little slack: the interior
+        /// of a shape is exactly its layer's colour, but only after a round
+        /// trip through `over` and back to a byte.
+        fn columns(&self, colour: [u8; 3]) -> Option<(u32, u32)> {
+            let mut found: Option<(u32, u32)> = None;
+            for x in 0..Self::WIDTH {
+                for y in 0..Self::HEIGHT {
+                    let texel = self.texel(x, y);
+                    if (0..3).all(|channel| texel[channel].abs_diff(colour[channel]) <= 2) {
+                        found = Some(match found {
+                            Some((first, _)) => (first, x),
+                            None => (x, x),
+                        });
+                        break;
+                    }
+                }
+            }
+            found
+        }
+    }
+
+    /// The lockup has to fit INSIDE its panel with air to spare. A board is one
+    /// texture repeated along a hundred metres of touchline, so a lockup that
+    /// runs to the edge is not clipped — it runs straight into the next copy of
+    /// itself, and the whole perimeter reads as one unbroken sentence instead
+    /// of as a panel that repeats. The check is the margin band: the outermost
+    /// columns must be the board's own colour and nothing else.
+    #[test]
+    fn the_advert_leaves_air_between_one_panel_and_the_next() {
+        /// Comfortably inside `advert`'s own margin, so this pins the air
+        /// rather than restating the constant.
+        const BAND: u32 = Board::WIDTH / 24;
+
+        let board = Board::print();
+        let ground = board.texel(0, 0);
+        for x in 0..BAND {
+            for y in 0..Board::HEIGHT {
+                assert_eq!(
+                    board.texel(x, y),
+                    ground,
+                    "the lockup reaches the left edge of the panel at {x},{y}"
+                );
+                let mirrored = Board::WIDTH - 1 - x;
+                assert_eq!(
+                    board.texel(mirrored, y),
+                    ground,
+                    "the lockup reaches the right edge of the panel at {mirrored},{y}"
+                );
+            }
+        }
+    }
+
+    /// And all three pieces have to be on it, in the order the lockup is
+    /// written in: mark, name, address. Each is drawn into a layer of its own
+    /// and composited by colour, so a piece that quietly fails to set — a face
+    /// that will not load, a scale that comes out zero, a baseline off the
+    /// bottom of the panel — leaves a board that still looks like a board and
+    /// is missing a third of itself.
+    #[test]
+    fn the_advert_carries_a_mark_a_name_and_an_address() {
+        // The three layer colours, as `advert` mixes them at full coverage.
+        let tile = [19, 119, 150];
+        let letters = [242, 244, 252];
+        let accent = [107, 198, 224];
+
+        let board = Board::print();
+        let (mark_from, _) = board
+            .columns(tile)
+            .expect("the logo tile is not on the board");
+        let (name_from, name_to) = board
+            .columns(letters)
+            .expect("nothing is printed in white on the board");
+        let (_, address_to) = board
+            .columns(accent)
+            .expect("neither the divider nor the address is on the board");
+
+        assert!(
+            mark_from < name_from,
+            "the mark starts at {mark_from} and the lettering at {name_from}: the logo is not \
+             leading the lockup"
+        );
+        assert!(
+            address_to > name_to,
+            "the white lettering ends at {name_to} and the accent at {address_to}: the address \
+             is not closing the lockup"
+        );
+    }
+
+    /// A perimeter board is a piece of graphic design, and the only questions
+    /// worth asking about one — does the lockup hold together, is the address
+    /// still readable at the size the wordmark leaves it — are questions for an
+    /// eye. The two tests above pin the arithmetic; this is how the picture
+    /// gets looked at.
+    ///
+    /// ```text
+    /// MATCH_AD_DUMP=<dir> cargo test --lib dump_hoarding -- --ignored --nocapture
+    /// ```
+    ///
+    /// Writes `hoarding.rgba` — three panels side by side, which is the only
+    /// way to see whether the air between one repeat and the next is doing its
+    /// job — with its dimensions on stdout, for whatever turns raw pixels into
+    /// a picture.
+    #[test]
+    #[ignore = "writes a file; run by hand when the board changes"]
+    fn dump_hoarding() {
+        const REPEATS: usize = 3;
+
+        let Ok(directory) = std::env::var("MATCH_AD_DUMP") else {
+            panic!("set MATCH_AD_DUMP to a directory");
+        };
+
+        let board = Board::print();
+        let across = Board::WIDTH as usize * REPEATS;
+        let mut sheet = vec![0u8; across * Board::HEIGHT as usize * 4];
+        for repeat in 0..REPEATS {
+            for row in 0..Board::HEIGHT as usize {
+                let from = row * Board::WIDTH as usize * 4;
+                let to = (row * across + repeat * Board::WIDTH as usize) * 4;
+                sheet[to..to + Board::WIDTH as usize * 4]
+                    .copy_from_slice(&board.panel[from..from + Board::WIDTH as usize * 4]);
+            }
+        }
+
+        let path = std::path::Path::new(&directory).join("hoarding.rgba");
+        std::fs::write(&path, &sheet).expect("wrote the sheet");
+        println!("{}x{} at {}", across, Board::HEIGHT, path.display());
     }
 
     /// One tile of turf, and the same tile four across so the seam has

@@ -215,11 +215,98 @@ struct ListingCensus {
     ages: Vec<i64>,
 }
 
+/// Who lends to whom, and how repetitively.
+///
+/// The market can post healthy loan *volume* and still be a fixed
+/// permutation underneath — the same parent sending its prospects to the
+/// same borrower every window, because the pipeline chose destinations with
+/// an argmax over a number that barely moves. Volume alone cannot see that;
+/// these counters can.
+#[derive(Debug, Default)]
+struct LoanFlowCensus {
+    /// Loans out per (parent, borrower) pair.
+    pairs: HashMap<(u32, u32), usize>,
+    /// Total loans out per parent club.
+    per_parent: HashMap<u32, usize>,
+    /// Total loans in per borrowing club.
+    per_borrower: HashMap<u32, usize>,
+}
+
+impl LoanFlowCensus {
+    /// Parents that lent at least this often are the ones whose habits are
+    /// worth reading — below it, "all my loans went to one club" is small
+    /// numbers rather than a pattern.
+    const MIN_LOANS_FOR_HABIT: usize = 3;
+
+    fn record(&mut self, from_club_id: u32, to_club_id: u32) {
+        *self.pairs.entry((from_club_id, to_club_id)).or_insert(0) += 1;
+        *self.per_parent.entry(from_club_id).or_insert(0) += 1;
+        *self.per_borrower.entry(to_club_id).or_insert(0) += 1;
+    }
+
+    /// Mean share of a lending club's loans that landed at its single
+    /// most-used destination, over parents past [`Self::MIN_LOANS_FOR_HABIT`].
+    /// 1.0 means every such parent used exactly one borrower; the lower the
+    /// better, floored by how many plausible destinations actually exist.
+    fn mean_top_destination_share(&self) -> f64 {
+        let mut shares = Vec::new();
+        for (parent, total) in &self.per_parent {
+            if *total < Self::MIN_LOANS_FOR_HABIT {
+                continue;
+            }
+            let top = self
+                .pairs
+                .iter()
+                .filter(|((from, _), _)| from == parent)
+                .map(|(_, n)| *n)
+                .max()
+                .unwrap_or(0);
+            shares.push(top as f64 / *total as f64);
+        }
+        if shares.is_empty() {
+            return 0.0;
+        }
+        shares.iter().sum::<f64>() / shares.len() as f64
+    }
+
+    /// Mean number of distinct destinations used by those same parents.
+    fn mean_distinct_destinations(&self) -> f64 {
+        let mut counts = Vec::new();
+        for (parent, total) in &self.per_parent {
+            if *total < Self::MIN_LOANS_FOR_HABIT {
+                continue;
+            }
+            counts.push(self.pairs.keys().filter(|(from, _)| from == parent).count() as f64);
+        }
+        if counts.is_empty() {
+            return 0.0;
+        }
+        counts.iter().sum::<f64>() / counts.len() as f64
+    }
+
+    /// Pairs that repeated at least `n` times — the literal "this club keeps
+    /// taking that club's players" reading.
+    fn pairs_repeating(&self, n: usize) -> usize {
+        self.pairs.values().filter(|c| **c >= n).count()
+    }
+
+    /// Share of all loans absorbed by the single busiest borrower in the
+    /// world. A market with one universal destination shows up here.
+    fn busiest_borrower_share(&self) -> f64 {
+        let total: usize = self.per_borrower.values().sum();
+        if total == 0 {
+            return 0.0;
+        }
+        self.per_borrower.values().copied().max().unwrap_or(0) as f64 / total as f64
+    }
+}
+
 #[derive(Debug, Default)]
 struct MarketReport {
     players: PlayerCensus,
     moves: MoveCensus,
     listings: ListingCensus,
+    loan_flow: LoanFlowCensus,
     live_negotiations: usize,
     clubs: usize,
     free_agents: usize,
@@ -317,6 +404,7 @@ impl MarketCensus {
                         TransferType::Loan(_) => {
                             report.moves.loan += 1;
                             entry.1 += 1;
+                            report.loan_flow.record(t.from_club_id, t.to_club_id);
                         }
                         TransferType::Free => {
                             report.moves.free += 1;
@@ -618,6 +706,34 @@ impl ReportPrinter {
                 "turnover: {mean_in:.1} in / {mean_out:.1} out per club per season  \
                  (~{:.0}% of a 25-man squad)",
                 mean_in * 100.0 / 25.0,
+            );
+        }
+
+        // Is the loan market a market, or a fixed permutation? Volume above
+        // says nothing about this: a pipeline that picks destinations by
+        // argmax over a near-constant reputation posts the same throughput
+        // while sending the same players to the same clubs every window.
+        let lf = &report.loan_flow;
+        if !lf.pairs.is_empty() {
+            println!("\n-- loan flow (who lends to whom) --");
+            println!(
+                "lending clubs {}  |  borrowing clubs {}  |  distinct pairs {}",
+                lf.per_parent.len(),
+                lf.per_borrower.len(),
+                lf.pairs.len(),
+            );
+            println!(
+                "parents with {}+ loans: mean {:.2} distinct destinations, \
+                 {:.0}% of their loans to their top one",
+                LoanFlowCensus::MIN_LOANS_FOR_HABIT,
+                lf.mean_distinct_destinations(),
+                lf.mean_top_destination_share() * 100.0,
+            );
+            println!(
+                "repeat pairs: {} used 3+ times, {} used 5+  |  busiest borrower takes {:.1}% of all loans",
+                lf.pairs_repeating(3),
+                lf.pairs_repeating(5),
+                lf.busiest_borrower_share() * 100.0,
             );
         }
 

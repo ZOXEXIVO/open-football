@@ -5,6 +5,7 @@ use crate::club::player::language::{Language, LanguageProfile};
 use crate::transfers::ScoutingRegion;
 use crate::transfers::pipeline::breakout::LeaguePerformanceLookup;
 use crate::transfers::pipeline::helpers::ClubGroupRanks;
+use crate::transfers::pipeline::loan_interest::InterestDraw;
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferMoveStage, TransferPlausibilityBuilder,
     TransferPlausibilityVerdict,
@@ -341,7 +342,7 @@ impl PipelineProcessor {
             );
 
             // Score each youth/reserve team from other clubs by how many matching players it has
-            let mut team_scores: Vec<(u32, u32, u32, usize)> = Vec::new(); // (team_id, club_id, team_idx_for_ref, score)
+            let mut team_scores: Vec<(u32, u32, u32, usize)> = Vec::new(); // (team_id, club_id, tiebreak, score)
 
             for other_club in &country.clubs {
                 if other_club.id == club.id {
@@ -389,8 +390,16 @@ impl PipelineProcessor {
                 }
             }
 
-            // Sort by score descending
-            team_scores.sort_by(|a, b| b.3.cmp(&a.3));
+            // Sort by score descending. The score is a small integer, so ties
+            // are the common case — and a stable sort resolved every one of
+            // them by club registration order, sending the scouts to the same
+            // fixtures week after week. A per-pass tiebreak, drawn once per row
+            // so the comparator stays a valid total order, rotates which of the
+            // equally-worthwhile matches actually get watched.
+            for row in team_scores.iter_mut() {
+                row.2 = IntegerUtils::random(0, 10_000) as u32;
+            }
+            team_scores.sort_by(|a, b| b.3.cmp(&a.3).then(b.2.cmp(&a.2)));
 
             // Assign scouts to the best-scoring teams
             let assignments_to_make = team_scores.len().min(max_assignments);
@@ -1434,12 +1443,49 @@ impl PipelineProcessor {
                     let target = if !already_observed_ids.is_empty()
                         && IntegerUtils::random(0, 100) < re_observe_chance
                     {
-                        // Prefer re-observing a known player
-                        matching
+                        // Go back to a player already on the watch list —
+                        // preferring the one seen LEAST. This used to take the
+                        // first match in prefilter order, which is a fixed
+                        // choice: the scout re-watched the same single name
+                        // every time the re-observe branch fired, so his
+                        // confidence deepened on one player and the rest of his
+                        // list stayed at one viewing forever. Weighting by how
+                        // little he has seen a man spreads the coverage the way
+                        // a scout actually builds a picture, and the draw keeps
+                        // it from being another fixed order.
+                        let seen: Vec<(&&PlayerSummary, f32)> = matching
                             .iter()
-                            .find(|p| already_observed_ids.contains(&p.player_id))
-                            .or_else(|| matching.first())
-                            .unwrap()
+                            .filter(|p| already_observed_ids.contains(&p.player_id))
+                            .map(|p| {
+                                let times = assignment
+                                    .observations
+                                    .iter()
+                                    .find(|o| o.player_id == p.player_id)
+                                    .map(|o| o.observation_count)
+                                    .unwrap_or(0);
+                                // The draw raises weights to its own sharpness
+                                // exponent, so take the root here: the odds a
+                                // man gets the next viewing then fall as a
+                                // plain inverse of how often he has already
+                                // been seen. A scout catches up on the names he
+                                // knows least without ever abandoning the one
+                                // he most wants a second look at.
+                                (
+                                    p,
+                                    (1.0 / (1.0 + times as f32))
+                                        .powf(1.0 / InterestDraw::SHARPNESS),
+                                )
+                            })
+                            .collect();
+                        let slate: Vec<(u32, f32)> = seen
+                            .iter()
+                            .enumerate()
+                            .map(|(i, (_, w))| (i as u32, *w))
+                            .collect();
+                        match InterestDraw::pick(&slate) {
+                            Some(i) => seen[i as usize].0,
+                            None => matching.first().unwrap(),
+                        }
                     } else {
                         // Discover new player — reputation-weighted selection
                         // Famous players are more visible to scouts (media coverage, word of mouth)

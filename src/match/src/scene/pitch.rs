@@ -1,4 +1,6 @@
+use crate::app::config::ViewerConfig;
 use crate::art::textures::{Textures, Turf};
+use crate::scene::crowd::{Spectators, Stand, Stature, Terrace};
 use crate::scene::field::Field;
 use crate::scene::net::Netting;
 use bevy::asset::RenderAssetUsages;
@@ -577,6 +579,26 @@ impl Pitch {
     pub const SIDE_MARGIN: f32 = 3.4;
     pub const END_MARGIN: f32 = 4.6;
 
+    /// **Depth of one row of terracing**, front to back.
+    ///
+    /// 0.95 m, which is a real row of seats — the number is set by where a
+    /// person's knees go, and every ground in the world lands between 0.80 and
+    /// 0.95. It was 1.25 while the banks were low and depth was free; it is
+    /// not free now. A bank's depth is what stands between the back row and
+    /// the broadcast gantry, which is parked at `HALF_WIDTH + SETBACK` — 82 m
+    /// from the centre spot — and a rake that runs past it puts the lens
+    /// inside the terracing.
+    ///
+    /// At 0.95 the tallest touchline bank finishes at 72 m and clears it.
+    const TREAD: f32 = 0.95;
+
+    /// **How thick a step's slab is**, as a multiple of the riser.
+    ///
+    /// Comfortably over one, so each step overlaps the one below it and the
+    /// flight comes out as a solid bank rather than as a stack of shelves with
+    /// daylight between them.
+    const SLAB: f32 = 1.9;
+
     /// The pitch as the mower left it: the shade the grass lies in going away
     /// from the roller, and the shade of the same grass lying back toward it.
     ///
@@ -802,14 +824,27 @@ impl Pitch {
         Netting::spawn(&mut commands, &mut meshes, &mut materials, &mut images);
     }
 
-    /// Hoardings, stands and the ground they stand on — the last course.
+    /// Hoardings, stands, the people in them and the ground they all stand on
+    /// — the last course.
+    ///
+    /// The one course that reads the fixture. How much stadium there is comes
+    /// off the venue the page handed over, so a cup final and an under-18s
+    /// friendly are not played in the same building — see
+    /// [`Stature`](crate::scene::crowd::Stature).
     pub fn build_stands(
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
         mut images: ResMut<Assets<Image>>,
+        config: Res<ViewerConfig>,
     ) {
-        Self::spawn_ground(&mut commands, &mut meshes, &mut materials, &mut images);
+        Self::spawn_ground(
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+            &mut images,
+            &config,
+        );
     }
 
     fn spawn_markings(
@@ -905,12 +940,15 @@ impl Pitch {
         meshes: &mut Assets<Mesh>,
         materials: &mut Assets<StandardMaterial>,
         images: &mut Assets<Image>,
+        venue: &ViewerConfig,
     ) {
+        let stature = Stature::of(&venue.venue);
+
         const HOARDING_HEIGHT: f32 = 0.95;
         const HOARDING_DEPTH: f32 = 0.14;
         // How wide one advert reads on the boards, in metres. Matched to the
-        // panel `Textures::hoarding` draws — 512 texels against 64 for the
-        // 0.95 m height — so a texel is square and the wordmark is neither
+        // panel `Textures::hoarding` draws — 1024 texels against 128 for the
+        // 0.95 m height — so a texel is square and the lockup is neither
         // stretched nor squashed.
         const AD_PANEL: f32 = 7.6;
 
@@ -938,9 +976,10 @@ impl Pitch {
 
         // What the boards actually advertise. One panel, tiled — which is what
         // a ground with a single perimeter sponsor looks like, and the only
-        // honest thing to put here: this is the project's own address, not an
-        // invented brand.
-        let advert = Textures::hoarding(images, "OPEN-FOOTBALL.ORG");
+        // honest thing to put here: this is the project's own mark, name and
+        // address, not an invented brand. Set in the same face as the shirts
+        // in front of them; see `Textures::hoarding`.
+        let advert = Textures::hoarding(images, "OF", "OpenFootball", "open-football.org");
 
         let along = Field::HALF_LENGTH + Self::END_MARGIN;
         let across = Field::HALF_WIDTH + Self::SIDE_MARGIN;
@@ -1034,7 +1073,7 @@ impl Pitch {
                     base_color_texture: Some(advert.clone()),
                     // Perimeter boards at a floodlit ground are lit panels,
                     // and the emissive TEXTURE is what keeps that honest: the
-                    // wordmark glows and the dark ground behind it does not,
+                    // lockup glows and the dark ground behind it does not,
                     // where a flat emissive would have the whole board give
                     // off light like a lightbox.
                     //
@@ -1060,8 +1099,8 @@ impl Pitch {
             commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(trim.clone())));
         }
 
-        // Four banks of seating. Empty: no crowd, just the structure, and
-        // open to the sky — none of these stands is roofed.
+        // Four banks of seating, open to the sky — none of these stands is
+        // roofed.
         //
         // These were one tilted slab each — a smooth ramp, which from the
         // camera is a flat grey triangle and reads as scenery rather than as
@@ -1080,50 +1119,99 @@ impl Pitch {
             ..default()
         });
 
-        let across_span = along * 2.0 + 30.0;
-        let end_span = across * 2.0 + 24.0;
+        // …and the people on them, in the colours of BOTH sides: the home
+        // club's through the ends and scattered down the touchlines, and the
+        // visitors' in the one block of the far end their support was given.
+        // One palette and one material for the whole stadium; see
+        // [`Spectators`].
+        let spectators = Spectators::dressed(
+            images,
+            materials,
+            (
+                venue.home.background_color(Color::srgb(0.10, 0.16, 0.34)),
+                venue.home.foreground_color(Color::WHITE),
+            ),
+            (
+                venue.away.background_color(Color::srgb(0.70, 0.25, 0.00)),
+                venue.away.foreground_color(Color::WHITE),
+            ),
+        );
 
-        // Both touchlines. The near one used to be left out because the
-        // broadcast gantry hangs over it and a stand there is a wall
-        // across the shot — but the rig walks all the way round the
-        // ground now, so leaving it out is a hole in the stadium from
-        // three quarters of the arc. It is built like the others and
-        // `Bank::cull` takes out whichever one the lens is inside, which
-        // is what standing in a stand actually looks like.
-        for turn in [0.0, PI] {
-            Self::spawn_stand(
-                commands,
-                meshes,
-                &seating,
-                &trim,
-                across_span,
-                across + 2.1,
-                26.5,
-                13.4,
-                turn,
-            );
-        }
-        // Both ends, rotated a quarter turn so their rows recede down the x
-        // axis instead of the z one — one each way, which is what puts them
+        // How far each bank wraps past the corner of the playing surface. A
+        // great ground carries its terracing well round the corners; a village
+        // one stops at the goal line, and left at the full wrap would read as
+        // a running track rather than as a small stadium.
+        let touchline_span = along * 2.0 + stature.overhang(6.0, 30.0);
+        let end_span = across * 2.0 + stature.overhang(4.0, 24.0);
+
+        // The four banks as the flights of steps they are: how far round, how
+        // far back off the paint, how many rows at a GREAT ground, and how
+        // high one step is. What `stature` does to the row count is the whole
+        // difference between Old Trafford and an academy pitch.
+        //
+        // **A great ground is 34 rows and 24 m of stand**, up from 21 and
+        // 13.4. Thirteen metres is a lower tier, and a bowl built to only that
+        // reads as a low wall with a great deal of sky over it whoever is
+        // playing — which is what a Moscow derby looked like.
+        //
+        // The rake that gets there is steeper than a staircase: 0.72 m up for
+        // 0.95 m back is 37°, and no step anybody walks up is built like that.
+        // It is not pretending to be one. A real ground reaches this height by
+        // STACKING tiers — a lower bowl, a cantilever, an upper ring — and one
+        // rake standing in for three is the trade this scene makes, so the
+        // rake is pitched at the steepest a real upper tier is built to rather
+        // than at the shallowest a step can be. The alternative is depth, and
+        // there is none to spend: see [`Self::TREAD`].
+        //
+        // The two touchlines first. The near one used to be left out because
+        // the broadcast gantry hangs over it and a stand there is a wall
+        // across the shot — but the rig walks all the way round the ground
+        // now, so leaving it out is a hole in the stadium from three quarters
+        // of the arc. It is built like the others and `Bank::cull` takes out
+        // whichever one the lens is inside, which is what standing in a stand
+        // actually looks like.
+        //
+        // Then both ends, rotated a quarter turn so their rows recede down the
+        // x axis instead of the z one — one each way, which is what puts them
         // behind opposite goals.
-        for turn in [FRAC_PI_2, -FRAC_PI_2] {
+        for (bank, (stand, turn, length, from, most, riser)) in [
+            (Stand::Side, 0.0, touchline_span, across + 2.1, 34, 0.72),
+            (Stand::Side, PI, touchline_span, across + 2.1, 34, 0.72),
+            (Stand::HomeEnd, FRAC_PI_2, end_span, along + 2.4, 31, 0.70),
+            (Stand::AwayEnd, -FRAC_PI_2, end_span, along + 2.4, 31, 0.70),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let terrace = Terrace {
+                length,
+                rows: stature.rows(most),
+                riser,
+                tread: Self::TREAD,
+                from,
+                slab: Self::SLAB,
+            };
             Self::spawn_stand(
                 commands,
                 meshes,
                 &seating,
                 &trim,
-                end_span,
-                along + 2.4,
-                23.5,
-                11.4,
+                &spectators,
+                &terrace,
+                stature,
+                stand,
                 turn,
+                // Anything that differs per bank. Without it all four draw the
+                // same crowd in the same places and the two ends are visibly
+                // one photograph.
+                bank as u32 + 1,
             );
         }
     }
 
-    /// One bank of empty seating, built in its own local space — rows
-    /// receding along +Z and climbing in +Y from the front row at the origin
-    /// — and then turned to face the pitch.
+    /// One bank of seating and the people in it, built in its own local space
+    /// — rows receding along +Z and climbing in +Y from the front row at the
+    /// origin — and then turned to face the pitch.
     ///
     /// `turn` is the rotation about Y that points the stand inward: zero for
     /// the far side, a quarter turn either way for the ends.
@@ -1133,17 +1221,13 @@ impl Pitch {
         meshes: &mut Assets<Mesh>,
         seating: &Handle<StandardMaterial>,
         trim: &Handle<StandardMaterial>,
-        length: f32,
-        from: f32,
-        run: f32,
-        rise: f32,
+        spectators: &Spectators,
+        terrace: &Terrace,
+        stature: Stature,
+        stand: Stand,
         turn: f32,
+        seed: u32,
     ) {
-        /// Depth of one row of seats, front to back. Real terracing is about
-        /// 0.8 m; a little deeper here keeps the row count — and so the
-        /// entity count — sensible for a background element that spends most
-        /// of its life in the fog.
-        const TREAD: f32 = 1.25;
         /// Fraction of the way up the lit walkway runs.
         const TIER: f32 = 0.35;
         /// How far above the back row the cull still counts a camera as being
@@ -1151,21 +1235,33 @@ impl Pitch {
         ///
         /// This is NOT the height of anything. The banks are open and their
         /// structure stops at the crest — but a lens above the crest is not
-        /// therefore looking over the stand. The broadcast rest shot sits at
-        /// `TvCamera::HEIGHT`, 18 m up and 82 m out, which clears a touchline
-        /// bank's 13.4 m crest by nearly five metres and is still looking
-        /// straight THROUGH its back rows at the play. So the ceiling is a
-        /// sightline margin, and it has to stay above that shot: cut it back
-        /// to the crest and the near stand reappears across the default view,
+        /// therefore looking over the stand. So the ceiling is a sightline
+        /// margin, and it has to stay above the broadcast rest shot, which
+        /// sits at `TvCamera::HEIGHT`: 18 m up and 82 m out. Cut it back to
+        /// the crest and the near stand reappears across the default view,
         /// which is the one thing [`Bank`] exists to prevent.
         ///
         /// It used to be the height of the back wall, which happened to serve.
         /// With the wall gone the number has to be justified on its own.
+        ///
+        /// Measured off the CREST, which is the fixture's to decide (see
+        /// [`Stature`]) — and that is right rather than merely convenient.
+        /// It means the margin does different work at either end of the ladder
+        /// and does the right thing at both:
+        ///
+        /// - **A great ground** is 24 m of stand, well over the gantry on its
+        ///   own, so the near bank is hidden with margin to spare. The number
+        ///   below is not what carries that case any more; the height is. (It
+        ///   was, back when a full bank was 13.4 m and cleared the 18 m shot
+        ///   by nearly five metres, which is what this constant was sized for.)
+        /// - **A village ground** is a five-step terrace three and a half
+        ///   metres high, which does not reach the sightline at all — so the
+        ///   near bank correctly stays in frame. There is nothing there to be
+        ///   a wall, and you can see clean over it.
+        ///
+        /// ⚠ That second case is what keeps the crowd's rear faces alive; see
+        /// [`Figures::FACES`](crate::scene::crowd).
         const SIGHTLINE_CLEARANCE: f32 = 7.3;
-
-        let rows = (run / TREAD).round().max(4.0);
-        let riser = rise / rows;
-        let rows = rows as usize;
 
         // Every row of this bank, in ONE buffer.
         //
@@ -1181,18 +1277,22 @@ impl Pitch {
         // moves, and it is culled as a unit anyway — `Bank::cull` hides the
         // whole bank or none of it, and no row was ever in shot without the
         // rows either side of it.
-        let mut terrace = Mesh::from(Cuboid::new(length, riser * 1.9, TREAD * 0.96));
-        for row in 1..rows {
-            let up = riser * row as f32;
-            let back = TREAD * row as f32;
-            terrace
-                .merge(
-                    &Mesh::from(Cuboid::new(length, riser * 1.9, TREAD * 0.96))
-                        .translated_by(Vec3::new(0.0, up, back)),
-                )
+        let step = || {
+            Mesh::from(Cuboid::new(
+                terrace.length,
+                terrace.riser * terrace.slab,
+                terrace.tread * 0.96,
+            ))
+        };
+        let mut flight = step();
+        for row in 1..terrace.rows {
+            let offset = terrace.slab_centre(row) - terrace.slab_centre(0);
+            flight
+                .merge(&step().translated_by(offset))
                 .expect("every row is the same cuboid");
         }
-        let terrace = meshes.add(terrace);
+        let flight = meshes.add(flight);
+        let foot = terrace.slab_centre(0);
 
         // The bank's own extent, so `Bank::cull` can tell whether the
         // lens has walked into this one. A metre of slack either side of the
@@ -1201,9 +1301,9 @@ impl Pitch {
         let bank_extent = Bank {
             // World → local is the inverse of the placement turn.
             frame: Quat::from_rotation_y(-turn),
-            flank: length * 0.5 + 1.0,
-            near: from,
-            top: rise + SIGHTLINE_CLEARANCE,
+            flank: terrace.length * 0.5 + 1.0,
+            near: terrace.from,
+            top: terrace.crest() + SIGHTLINE_CLEARANCE,
         };
 
         let placement = Transform::from_rotation(Quat::from_rotation_y(turn));
@@ -1215,22 +1315,39 @@ impl Pitch {
             // The merged flight, placed where its first row used to sit — the
             // rest are built off that one inside the mesh.
             bank.spawn((
-                Mesh3d(terrace.clone()),
+                Mesh3d(flight.clone()),
                 MeshMaterial3d(seating.clone()),
-                Transform::from_xyz(0.0, riser * 0.5, from + TREAD * 0.5),
+                Transform::from_translation(foot),
             ));
+
+            // The crowd, as one more mesh on the same steps. A child of the
+            // bank rather than a thing of its own, so `Bank::cull` takes the
+            // people out with the structure they are sitting on.
+            if let Some(crowd) = spectators.seat(meshes, terrace, stature, stand, seed) {
+                bank.spawn(crowd);
+            }
 
             // The walkway that splits the tiers. Deliberately not along the
             // crest — the camera looks UP at these from below their top, so a
             // line drawn on the crest is never in shot. A third of the way up
             // is, and it is the one thing that stops the background reading as
             // a flat wall.
-            let tier_row = rows as f32 * TIER;
-            bank.spawn((
-                Mesh3d(meshes.add(Cuboid::new(length, 0.5, 1.1))),
-                MeshMaterial3d(trim.clone()),
-                Transform::from_xyz(0.0, riser * tier_row, from + TREAD * tier_row),
-            ));
+            //
+            // Only where there are two tiers to split: on a five-step terrace
+            // it lands on the second step, which is not a tier break but a
+            // stripe painted across a low wall — and reads as one.
+            if Stature::tiered(terrace.rows) {
+                let tier = terrace.rows as f32 * TIER;
+                bank.spawn((
+                    Mesh3d(meshes.add(Cuboid::new(terrace.length, 0.5, 1.1))),
+                    MeshMaterial3d(trim.clone()),
+                    Transform::from_xyz(
+                        0.0,
+                        terrace.riser * tier,
+                        terrace.from + terrace.tread * tier,
+                    ),
+                ));
+            }
 
             // No back wall. There used to be one — a slab of pale concrete
             // standing seven metres above the back row — on the reasoning that

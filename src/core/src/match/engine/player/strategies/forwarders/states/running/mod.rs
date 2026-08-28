@@ -8,6 +8,7 @@ use crate::r#match::midfielders::states::common::LaneAhead;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
+use crate::r#match::player::strategies::common::players::ops::box_movement::BoxMovement;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     BallCarry, ShotDecision, evaluate_forward_shot_decision,
 };
@@ -1349,32 +1350,19 @@ impl StateProcessingHandler for ForwardRunningState {
             // occupying. The plan assigns exclusive destinations across
             // the whole side, which is the only thing that stops bodies
             // converging in front of goal.
-            if let Some(slot_target) = ctx.team().my_box_slot_target() {
+            if let Some(slot) = ctx.team().my_box_slot() {
                 // Occupying the slot is not the same as being available
                 // in it. A defender whose whole job is to stand on this
                 // forward's goal-side shoulder solves a stationary target
                 // by standing still, which is why forwards' share of
                 // shots collapsed once man-marking started working.
                 //
-                // `MarkerEvasion` keeps the assignment and changes the
-                // ANGLE he attacks it from — blind side, seam, and the
-                // check-and-spin — bounded so he never evades his way out
-                // of the zone the team plan gave him.
-                let target = MarkerEvasion::evade(ctx, slot_target);
-                let dist = (target - ctx.player.position).magnitude();
-                if dist < 6.0 {
-                    return Some(Vector3::zeros());
-                }
-                return Some(
-                    SteeringBehavior::Arrive {
-                        target,
-                        slowing_distance: 15.0,
-                    }
-                    .calculate(ctx.player)
-                    .velocity
-                        * fatigue_factor
-                        * MarkerEvasion::burst(ctx),
-                );
+                // `BoxMovement` owns the whole behaviour — the staged
+                // approach, the zone-working cadence, the marker evasion
+                // and the run onto the delivery — so this state and
+                // `CreatingSpace` cannot hold different opinions about
+                // what occupying a box slot looks like.
+                return Some(BoxMovement::steer(ctx, slot) * fatigue_factor);
             }
 
             // ANTI-FOLLOWING: If very close to ball carrier, spread away

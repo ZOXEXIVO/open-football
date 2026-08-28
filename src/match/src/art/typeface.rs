@@ -167,19 +167,50 @@ impl Stencil {
     /// caller sees as an unprinted shirt rather than as a panic.
     pub fn mask(text: &str, width: u32, height: u32, margin: f32, cap: f32) -> Vec<u8> {
         let mut coverage = vec![0u8; (width * height) as usize];
-        let Some(font) = FontRef::from_index(Self::face_for(text), 0) else {
+        let Some(line) = Self::set(text, Self::TRACKING) else {
             return coverage;
         };
 
+        let scale = (width as f32 * margin / line.span())
+            .min(height as f32 * cap / (line.rise() + line.drop()));
+        let left = (width as f32 - line.span() * scale) * 0.5;
+        // The ink box is what is centred, and the baseline is not in the middle
+        // of it: it sits `drop` up from the bottom of that box.
+        let baseline = (height as f32 + (line.rise() - line.drop()) * scale) * 0.5;
+        line.draw(&mut coverage, width, height, left, baseline, scale);
+
+        coverage
+    }
+
+    /// Sets one line of `text` — picks its face, lays its glyphs out along a
+    /// baseline and measures how far the ink reaches — without deciding how
+    /// big it is or where it goes.
+    ///
+    /// `tracking` is the air between letters as a share of the size. It is a
+    /// parameter rather than [`Self::TRACKING`] because the three places this
+    /// is set want three different values: a shirt is tracked out well past a
+    /// paragraph's so a name does not close into a dark bar at the distance the
+    /// camera watches from, a wordmark on a perimeter board wants rather less
+    /// than that, and an address set at half the wordmark's size wants more
+    /// again — small type needs air, not less of it.
+    ///
+    /// `None` when the face cannot be read at all, or when nothing in `text`
+    /// has an outline to draw. Callers print an unlettered shirt or an unlit
+    /// board rather than panicking.
+    pub fn set(text: &str, tracking: f32) -> Option<Stencilled> {
+        let face = Self::face_for(text);
+        let font = FontRef::from_index(face, 0)?;
+
         let charmap = font.charmap();
         let advances = font.glyph_metrics(&[]).scale(Self::REFERENCE);
-        let tracking = Self::REFERENCE * Self::TRACKING;
+        let tracking = Self::REFERENCE * tracking;
 
         let mut context = ScaleContext::new();
-        // Unhinted on purpose, here and again below: the panel is stretched
-        // over a curved sheet of cloth and then drawn at whatever size the
-        // camera is standing at, so there is no pixel grid for hinting to snap
-        // to and its only effect would be to make the letters uneven.
+        // Unhinted on purpose, here and again in [`Stencilled::draw`]: the
+        // panel is stretched over a curved sheet of cloth, or hung along a
+        // touchline and looked at from every angle there is, so there is no
+        // pixel grid for hinting to snap to and its only effect would be to
+        // make the letters uneven.
         let mut measure = context
             .builder(font)
             .size(Self::REFERENCE)
@@ -216,54 +247,17 @@ impl Stencil {
         // The last letter's tracking is air off the end of the line, not part
         // of it: left in, every line would sit that far left of centre.
         let span = (pen - tracking).max(1.0);
-        let tall = rise + drop;
-        if run.is_empty() || tall <= 0.0 {
-            return coverage;
+        if run.is_empty() || rise + drop <= 0.0 {
+            return None;
         }
 
-        let scale = (width as f32 * margin / span).min(height as f32 * cap / tall);
-        let size = Self::REFERENCE * scale;
-        let left = (width as f32 - span * scale) * 0.5;
-        // The ink box is what is centred, and the baseline is not in the middle
-        // of it: it sits `drop` up from the bottom of that box.
-        let baseline = (height as f32 + (rise - drop) * scale) * 0.5;
-
-        let mut scaler = context.builder(font).size(size).hint(false).build();
-        let mut render = Render::new(&[Source::Outline]);
-        render.format(Format::Alpha);
-
-        for (glyph, offset) in run {
-            let x = left + offset * scale;
-            // The fractional part goes to the rasteriser rather than being
-            // rounded away, so letters land where the spacing put them instead
-            // of snapping to whole texels and printing unevenly.
-            let whole = x.floor();
-            render.offset(Vector::new(x - whole, 0.0));
-            let Some(image) = render.render(&mut scaler, glyph) else {
-                continue;
-            };
-            let origin_x = whole as i32 + image.placement.left;
-            let origin_y = baseline as i32 - image.placement.top;
-            for row in 0..image.placement.height as i32 {
-                let y = origin_y + row;
-                if y < 0 || y >= height as i32 {
-                    continue;
-                }
-                for column in 0..image.placement.width as i32 {
-                    let x = origin_x + column;
-                    if x < 0 || x >= width as i32 {
-                        continue;
-                    }
-                    let ink = image.data[(row * image.placement.width as i32 + column) as usize];
-                    let target = &mut coverage[(y as u32 * width + x as u32) as usize];
-                    // Letters can overlap at this tracking on a tight panel;
-                    // the darker of the two wins rather than the later one.
-                    *target = (*target).max(ink);
-                }
-            }
-        }
-
-        coverage
+        Some(Stencilled {
+            face,
+            run,
+            span,
+            rise,
+            drop,
+        })
     }
 
     /// Whether the face this would be set in can draw every character of it.
@@ -289,6 +283,108 @@ impl Stencil {
             Typeface::OUTFIT
         } else {
             Typeface::MANROPE
+        }
+    }
+}
+
+/// One line of text with its outlines already measured, ready to be drawn at
+/// whatever size and wherever in a mask the caller decides.
+///
+/// [`Stencil::mask`] fits a line to a box on its own, which is all a shirt ever
+/// asks for. A perimeter board is a LOCKUP — a mark, a wordmark and an address
+/// that have to share a baseline and add up to a width — and lining those up
+/// means knowing how big each of them is BEFORE any of them is drawn. So
+/// measuring and drawing are two steps, and `mask` is now the small one built
+/// on top of them.
+///
+/// Every measurement here is in units of [`Stencil::REFERENCE`]; multiply by
+/// the scale the caller settles on to get texels.
+pub struct Stencilled {
+    /// The face the whole line is set in, picked once for the reason
+    /// [`Faces::face_for`] gives.
+    face: &'static [u8],
+    /// Each glyph and where along the line it starts.
+    run: Vec<(u16, f32)>,
+    span: f32,
+    rise: f32,
+    drop: f32,
+}
+
+impl Stencilled {
+    /// How long the line is: the start of the first letter to the end of the
+    /// last, with the trailing tracking left off.
+    pub fn span(&self) -> f32 {
+        self.span
+    }
+
+    /// How far the ink reaches above the baseline — measured, not looked up.
+    /// See [`Stencil::mask`] for why the face's own ascent is the wrong number
+    /// to fit against.
+    pub fn rise(&self) -> f32 {
+        self.rise
+    }
+
+    /// And below it: a descender, or zero for a line that has none.
+    pub fn drop(&self) -> f32 {
+        self.drop
+    }
+
+    /// Paints the line into `coverage`, a `width` × `height` alpha mask, with
+    /// the start of the line at `left` and its baseline at `baseline` — both in
+    /// texels — at `scale` texels to the reference unit.
+    ///
+    /// Ink already in the mask survives where it is darker, so several lines,
+    /// or a line over a mark, can go into one buffer.
+    pub fn draw(
+        &self,
+        coverage: &mut [u8],
+        width: u32,
+        height: u32,
+        left: f32,
+        baseline: f32,
+        scale: f32,
+    ) {
+        let Some(font) = FontRef::from_index(self.face, 0) else {
+            return;
+        };
+        let mut context = ScaleContext::new();
+        let mut scaler = context
+            .builder(font)
+            .size(Stencil::REFERENCE * scale)
+            .hint(false)
+            .build();
+        let mut render = Render::new(&[Source::Outline]);
+        render.format(Format::Alpha);
+
+        for (glyph, offset) in &self.run {
+            let x = left + offset * scale;
+            // The fractional part goes to the rasteriser rather than being
+            // rounded away, so letters land where the spacing put them instead
+            // of snapping to whole texels and printing unevenly.
+            let whole = x.floor();
+            render.offset(Vector::new(x - whole, 0.0));
+            let Some(image) = render.render(&mut scaler, *glyph) else {
+                continue;
+            };
+            let origin_x = whole as i32 + image.placement.left;
+            let origin_y = baseline as i32 - image.placement.top;
+            for row in 0..image.placement.height as i32 {
+                let y = origin_y + row;
+                if y < 0 || y >= height as i32 {
+                    continue;
+                }
+                for column in 0..image.placement.width as i32 {
+                    let x = origin_x + column;
+                    if x < 0 || x >= width as i32 {
+                        continue;
+                    }
+                    let ink = image.data[(row * image.placement.width as i32 + column) as usize];
+                    let target = &mut coverage[(y as u32 * width + x as u32) as usize];
+                    // Letters can overlap at this tracking on a tight panel;
+                    // the darker of the two wins rather than the later one.
+                    *target = (*target).max(ink);
+                }
+            }
         }
     }
 }

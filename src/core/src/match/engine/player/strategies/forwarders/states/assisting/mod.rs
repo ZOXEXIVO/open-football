@@ -1,5 +1,6 @@
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
+use crate::r#match::player::strategies::common::players::ops::box_movement::BoxMovement;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -109,6 +110,18 @@ impl StateProcessingHandler for ForwardAssistingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // An assigned patch of the box outranks the generic support
+        // position, and it has to be honoured HERE as well as in
+        // `CreatingSpace` — the two bounce off each other roughly every
+        // sixteen ticks (see the note in `process`), so a slot honoured
+        // in one and ignored in the other means the occupant spends half
+        // his ticks being staged toward the box and the other half being
+        // pulled to a fixed point 11 m off the goal line. See
+        // `BoxMovement`.
+        if let Some(slot) = ctx.team().my_box_slot() {
+            return Some(BoxMovement::steer(ctx, slot));
+        }
+
         // Take up a supporting position in the box, not the goal itself.
         //
         // This used to `Arrive` at `opponent_goal_position()` — a fixed

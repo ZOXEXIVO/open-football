@@ -4,6 +4,7 @@ mod circulation;
 mod evaluation;
 mod exposure;
 mod helpers;
+mod loan_interest;
 mod loan_market;
 mod negotiations;
 pub(crate) mod plausibility;
@@ -1198,6 +1199,25 @@ pub struct ClubTransferPlan {
     /// Prevents re-scouting the same dud repeatedly in the same window.
     pub rejected_players: Vec<(u32, NaiveDate)>,
 
+    /// Loan targets this club has already moved for, and how often.
+    ///
+    /// A loan approach used to leave no trace whatsoever, so the next scan
+    /// re-ran the same decision against the same market and re-approached the
+    /// same player — every cycle, for as long as he stayed listed. Stamped
+    /// when the approach is made rather than when it fails, because that is
+    /// where the calendar date is in hand and because a club that has just
+    /// made its move does not reopen the file the following Monday either way.
+    /// See [`LoanStandoff`] and [`loan_interest::LoanApproachMemory`].
+    pub loan_approach_standoffs: Vec<LoanStandoff>,
+
+    /// Where this club has recently offered players on loan —
+    /// (borrower_club_id, date), one row per placement. Read by the
+    /// seller-side push so a parent spreads its loanees around instead of
+    /// turning the single highest-reputation club that will take them into a
+    /// farm team. Pruned past
+    /// [`loan_interest::LoanApproachMemory::PLACEMENT_MEMORY_DAYS`].
+    pub loan_placements: Vec<(u32, NaiveDate)>,
+
     /// Reports carried over between transfer windows — a persistent shadow
     /// squad built up over time. On window start these seed new shortlists
     /// instead of forcing a cold-start scouting pass each cycle.
@@ -1221,6 +1241,24 @@ pub struct ClubTransferPlan {
     pub next_monitoring_id: u32,
     /// Monotonic id allocator for `RecruitmentMeeting`.
     pub next_meeting_id: u32,
+}
+
+/// One club's standoff on one loan target: when it will look at him again,
+/// and how many times it has already gone in for him.
+///
+/// The count is the point. A single flat cooldown stops the weekly repeat but
+/// leaves a club circling the same name for a whole window; carrying the tally
+/// past the deadline lets each fresh rebuff push the next look further out, so
+/// a pursuit that keeps failing fades instead of cycling. The row therefore
+/// outlives its own expiry — it is discarded only once the club has genuinely
+/// forgotten about him.
+#[derive(Debug, Clone)]
+pub struct LoanStandoff {
+    pub player_id: u32,
+    /// Date the club will consider him again.
+    pub until: NaiveDate,
+    /// Approaches made so far. Drives the escalation curve.
+    pub approaches: u8,
 }
 
 /// A scouting report preserved past its originating assignment, used to
@@ -1259,6 +1297,8 @@ impl ClubTransferPlan {
             last_evaluation_date: None,
             initialized: false,
             rejected_players: Vec::new(),
+            loan_approach_standoffs: Vec::new(),
+            loan_placements: Vec::new(),
             shadow_reports: Vec::new(),
             known_players: Vec::new(),
             scout_monitoring: Vec::new(),
@@ -1292,6 +1332,52 @@ impl ClubTransferPlan {
     /// Purge expired entries.
     pub fn prune_rejected(&mut self, date: NaiveDate) {
         self.rejected_players.retain(|(_, until)| *until > date);
+        // Standoff rows outlive their own deadline so the approach tally
+        // survives to escalate the next look; they go once the club has
+        // genuinely forgotten the pursuit.
+        self.loan_approach_standoffs.retain(|s| {
+            (date - s.until).num_days() <= loan_interest::LoanApproachMemory::FORGET_DAYS
+        });
+        self.loan_placements.retain(|(_, when)| {
+            (date - *when).num_days() <= loan_interest::LoanApproachMemory::PLACEMENT_MEMORY_DAYS
+        });
+    }
+
+    /// True while this club is standing off `player_id` after moving for him.
+    pub fn is_loan_approach_barred(&self, player_id: u32, date: NaiveDate) -> bool {
+        self.loan_approach_standoffs
+            .iter()
+            .any(|s| s.player_id == player_id && s.until > date)
+    }
+
+    /// Record that the club has moved for a loan target. The standoff
+    /// lengthens each time it comes back to the same name, so a fruitless
+    /// pursuit fades out instead of repeating weekly.
+    pub fn record_loan_approach(&mut self, player_id: u32, date: NaiveDate) {
+        match self
+            .loan_approach_standoffs
+            .iter_mut()
+            .find(|s| s.player_id == player_id)
+        {
+            Some(existing) => {
+                existing.approaches = existing.approaches.saturating_add(1);
+                let until = date
+                    + Duration::days(loan_interest::LoanApproachMemory::rebuff_days(
+                        existing.approaches,
+                    ));
+                existing.until = until.max(existing.until);
+            }
+            None => self.loan_approach_standoffs.push(LoanStandoff {
+                player_id,
+                until: date + Duration::days(loan_interest::LoanApproachMemory::rebuff_days(1)),
+                approaches: 1,
+            }),
+        }
+    }
+
+    /// Remember that a loanee went to `borrower_club_id`.
+    pub fn record_loan_placement(&mut self, borrower_club_id: u32, date: NaiveDate) {
+        self.loan_placements.push((borrower_club_id, date));
     }
 
     pub fn available_budget(&self) -> f64 {
@@ -2307,5 +2393,98 @@ mod failed_search_harvest_tests {
             TransferNeedPriority::Critical,
             "two windows short of a centre-forward is a board matter"
         );
+    }
+}
+
+#[cfg(test)]
+mod loan_standoff_tests {
+    use super::*;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    /// Moving for a target takes him off the club's own board for a while.
+    /// Without this the next scan re-ran the same decision against the same
+    /// market and approached him again, week after week.
+    #[test]
+    fn an_approach_bars_the_target_for_a_while() {
+        let mut plan = ClubTransferPlan::new();
+        let day = d(2026, 7, 6);
+        assert!(!plan.is_loan_approach_barred(500, day));
+
+        plan.record_loan_approach(500, day);
+        assert!(plan.is_loan_approach_barred(500, day));
+        assert!(
+            plan.is_loan_approach_barred(500, day + Duration::days(6)),
+            "a week later he must still be off the board"
+        );
+        assert!(
+            !plan.is_loan_approach_barred(501, day),
+            "the bar is per target, not blanket"
+        );
+    }
+
+    /// The standoff must expire — a target is never blacklisted for good.
+    #[test]
+    fn the_standoff_lapses() {
+        let mut plan = ClubTransferPlan::new();
+        let day = d(2026, 7, 6);
+        plan.record_loan_approach(500, day);
+        assert!(!plan.is_loan_approach_barred(500, day + Duration::days(150)));
+    }
+
+    /// Coming back for the same name repeatedly pushes the next look further
+    /// out, so a fruitless pursuit fades instead of cycling. The tally has to
+    /// survive the pruning that clears the expired deadline, which is what
+    /// makes the escalation reachable at all.
+    #[test]
+    fn repeat_approaches_escalate_across_a_prune() {
+        let mut plan = ClubTransferPlan::new();
+        let first_day = d(2026, 7, 6);
+        plan.record_loan_approach(500, first_day);
+        let first_span = (plan.loan_approach_standoffs[0].until - first_day).num_days();
+
+        // Let it lapse, then run the daily prune the scan performs.
+        let second_day = first_day + Duration::days(first_span + 1);
+        plan.prune_rejected(second_day);
+        assert_eq!(
+            plan.loan_approach_standoffs.len(),
+            1,
+            "the lapsed row must be kept so the tally survives"
+        );
+        assert!(!plan.is_loan_approach_barred(500, second_day));
+
+        plan.record_loan_approach(500, second_day);
+        let second_span = (plan.loan_approach_standoffs[0].until - second_day).num_days();
+        assert!(
+            second_span > first_span,
+            "second approach should stand off longer: {second_span} vs {first_span}"
+        );
+        assert_eq!(plan.loan_approach_standoffs[0].approaches, 2);
+    }
+
+    /// …but the club does eventually forget, or a player approached once in
+    /// 2026 would still be escalating in 2030.
+    #[test]
+    fn a_long_lapsed_standoff_is_forgotten() {
+        let mut plan = ClubTransferPlan::new();
+        let day = d(2026, 7, 6);
+        plan.record_loan_approach(500, day);
+        plan.prune_rejected(day + Duration::days(400));
+        assert!(plan.loan_approach_standoffs.is_empty());
+    }
+
+    /// Placements decay so last season's loanee doesn't block this season's
+    /// pathway forever.
+    #[test]
+    fn placements_age_out() {
+        let mut plan = ClubTransferPlan::new();
+        let day = d(2026, 7, 6);
+        plan.record_loan_placement(77, day);
+        plan.prune_rejected(day + Duration::days(10));
+        assert_eq!(plan.loan_placements.len(), 1);
+        plan.prune_rejected(day + Duration::days(400));
+        assert!(plan.loan_placements.is_empty());
     }
 }

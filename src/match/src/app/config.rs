@@ -32,6 +32,14 @@ pub struct ViewerConfig {
     /// side of the boundary is what lets the viewer stay free of i18n.
     #[serde(default)]
     pub labels: ViewerLabels,
+    /// **The ground this was played at** — how much of one there is, and how
+    /// many came to it.
+    ///
+    /// Absent on a document written before the stands answered to the
+    /// fixture, which reads as a full-size ground with an ordinary gate in
+    /// it: exactly the stadium every match used to be played in.
+    #[serde(default)]
+    pub venue: VenueInfo,
     /// Turns on the engine-facing overlays the `.dev/match` harness needs:
     /// per-player state names, a playback-speed control and a live readout of
     /// the ball's engine coordinates. Off for the game itself, where none of
@@ -66,6 +74,55 @@ impl Default for ViewerLabels {
             second_half: "2nd".to_string(),
             loading: "Loading match…".to_string(),
             no_recording: "Nothing was recorded in this match".to_string(),
+        }
+    }
+}
+
+/// The ground, as the four facts that decide what is built round the pitch.
+///
+/// Every one of them is a FACT about the fixture rather than a decision about
+/// the scene: how big a stand that comes to is
+/// [`Stature`](crate::scene::crowd::Stature)'s to say, on this side, where the
+/// stand is. The page that serves the document cannot know how many rows of
+/// concrete a twelve-thousand-seat ground is, and should not have to.
+#[derive(Deserialize)]
+#[serde(default)]
+pub struct VenueInfo {
+    /// What the home club's ground holds. Never zero in the game — the
+    /// simulator seeds a capacity for every club that has no recorded one —
+    /// but zero is read here as "nobody said" and falls back to a full-size
+    /// stadium.
+    pub capacity: u32,
+    /// What it typically draws. Zero where nobody has ever counted, which is
+    /// read as an ordinary gate rather than as an empty ground.
+    pub attendance: u32,
+    /// World reputation of the side whose ground it is, on the simulator's
+    /// 0..10_000 scale.
+    pub reputation: u16,
+    /// …and of the side visiting it.
+    ///
+    /// Who is coming is half of what decides whether a ground fills. Nobody
+    /// buys a ticket to watch the home team in the abstract, and the same
+    /// stand is three quarters empty for a midweek game against the bottom
+    /// club and full for the one that matters.
+    pub visitor: u16,
+    /// Whether this is an age-restricted fixture. A club's under-18s play at
+    /// the training ground whoever their parent club is, and Manchester
+    /// United's youth team does not fill Old Trafford.
+    pub youth: bool,
+}
+
+impl Default for VenueInfo {
+    /// A great ground, comfortably full — which is what the viewer built for
+    /// every match before there was anything to say about the venue, and so
+    /// what a document written before this field gets.
+    fn default() -> Self {
+        VenueInfo {
+            capacity: 60_000,
+            attendance: 50_000,
+            reputation: 10_000,
+            visitor: 10_000,
+            youth: false,
         }
     }
 }
@@ -260,6 +317,7 @@ impl ViewerConfig {
             chances: Vec::new(),
             substitutions: Vec::new(),
             labels: ViewerLabels::default(),
+            venue: VenueInfo::default(),
             debug: false,
             lineup: true,
         }

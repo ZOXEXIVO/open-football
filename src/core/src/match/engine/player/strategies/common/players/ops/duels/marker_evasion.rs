@@ -73,11 +73,102 @@ impl MarkerEvasion {
     /// 1.5 m shift without ever being beaten — attacker separation did
     /// not move at all. Real movement buys 3-5 m at the moment the pass
     /// is played, which is 0.37 of ~64u.
+    ///
+    /// ⚠ This number was fitted against a cadence that never reversed
+    /// (see [`Self::live_cadence`]), so it prices a *fixed* offset a
+    /// marker's `Arrive` can track. Whoever switches the cadence on has
+    /// to re-read it, because a reversing offset is a different
+    /// quantity: the marker must cover the whole swing rather than settle
+    /// on one end of it. `OF_EVASION_OFFSET` overrides it so that re-fit
+    /// costs no rebuild — though note the sweep already run there
+    /// (64 → 40 → 28) moved goals and left SHOTS pinned, so the size is
+    /// not the whole answer.
     const MAX_OFFSET: f32 = 64.0;
-    /// Period of the check-and-spin, in ticks. ~2.2 s is the real cadence
-    /// of a centre-forward's double movement — long enough for the marker
-    /// to commit to the first move.
-    const DOUBLE_MOVE_PERIOD: f32 = 220.0;
+
+    #[inline]
+    fn max_offset() -> f32 {
+        use std::sync::OnceLock;
+        static R: OnceLock<f32> = OnceLock::new();
+        *R.get_or_init(|| {
+            std::env::var("OF_EVASION_OFFSET")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(Self::MAX_OFFSET)
+        })
+    }
+
+    /// Period of the check-and-spin, in **milliseconds of match time**.
+    /// ~2.2 s is the real cadence of a centre-forward's double movement —
+    /// long enough for the marker to commit to the first move.
+    ///
+    /// ⚠ **THE SPIN DOES NOT HAPPEN**, and has not since this was
+    /// written. The period is applied to `in_state_time`, which resets on
+    /// every state transition, and the states this runs in churn:
+    /// `CreatingSpace` bounces through `Assisting` and back — a
+    /// documented, load-bearing two-cycle worth ~15,000 round trips per
+    /// three matches. Measured mean `in_state_time` at a forward's
+    /// box-slot movement tick is **21** (`dev_match stats`,
+    /// box-occupancy census), or 0.095 of a cycle, and
+    /// [`Self::CHECK_FRACTION`] is 0.35 — so every attacker in the game
+    /// is permanently in the *check* half. He shows for the ball and
+    /// never spins off, which is exactly the movement the module docs
+    /// call "the single most common way a centre-forward gets free".
+    ///
+    /// A rhythm has to run off a clock state churn cannot reset, and the
+    /// corrected one is written and tested. It is **gated**, not applied
+    /// — see [`Self::live_cadence`] for the measurement that says why,
+    /// and what a future campaign has to re-read to turn it on.
+    const DOUBLE_MOVE_PERIOD_MS: u64 = 2200;
+
+    /// …and how much of that cycle is the CHECK. The shorter half by
+    /// design — showing short is a feint, and the spin is the movement
+    /// it buys. See the balancing note at the double-movement term: the
+    /// two halves are unequal in time and must still be equal in
+    /// displacement, or the cadence is a permanent drift.
+    const CHECK_FRACTION: f32 = 0.35;
+
+    /// Whether the check-and-spin runs on a clock state churn cannot
+    /// reset — which is to say, whether it runs at all.
+    ///
+    /// # ⚠ DEFAULT OFF, AND THAT IS A MEASURED DEBT, NOT AN OVERSIGHT
+    ///
+    /// The mis-keying documented on [`Self::DOUBLE_MOVE_PERIOD_MS`] is a
+    /// real bug and the fix below is a one-line correction. It is left
+    /// switched off because turning it on is not a movement change, it
+    /// is a **chance-economy change**, and paying for it needs a
+    /// calibration campaign this switch exists to make possible.
+    ///
+    /// Measured at level 14, 30 matches an arm, one binary, with
+    /// everything else held (`dev_match stats 30 14 14`):
+    ///
+    /// | arm | shots/team | goals/match |
+    /// |---|---|---|
+    /// | as shipped (phase stuck) | 13.5 | 2.69 |
+    /// | live cadence | 17.1 | 3.87 |
+    ///
+    /// Against a real ~13 shots and ~2.65 goals, so the second row is
+    /// 45% too many goals. Two candidate explanations were tested and
+    /// **both measured null**, which is why this is a campaign and not a
+    /// coefficient:
+    ///
+    /// * *The offset is too big now.* [`Self::MAX_OFFSET`] was sized
+    ///   against a cadence that never reversed. Sweeping it 64 → 40 → 28
+    ///   moved goals 3.57 → 3.34 → 2.97 but left shots pinned at
+    ///   17.2/17.0 — so the size is not what changed the supply.
+    /// * *The cadence has a net direction.* It did, and it is fixed
+    ///   below; on its own it moved shots 17.0 → 17.1.
+    ///
+    /// What is left is the reversal itself: an attacker whose target
+    /// jumps every 2.2 s is in motion for far more of the match, and
+    /// motion is receptions. That is correct football and the engine
+    /// wants it — but the shot bars, the xG floor and the save model
+    /// were all fitted against a front line that stood still, so they
+    /// have to be re-read before it can be switched on.
+    fn live_cadence() -> bool {
+        use std::sync::OnceLock;
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var("OF_EVASION_LIVE_CADENCE").is_ok())
+    }
 
     /// The man marking this attacker, if anybody is.
     ///
@@ -209,13 +300,45 @@ impl MarkerEvasion {
         // decisions — the marker commits to the first and is beaten by
         // the second. Amplitude is the attacker's timing, so a poor mover
         // shuffles and an elite one genuinely goes.
-        let phase = (ctx.in_state_time as f32 / Self::DOUBLE_MOVE_PERIOD).fract();
-        let checking = phase < 0.35;
+        let phase = if Self::live_cadence() {
+            // The match clock, reduced modulo the period before it
+            // reaches an `f32` (by the 90th minute it is 5.4 million,
+            // where one 10 ms tick is worth ~fifteen ULPs of the
+            // quotient). Per-player offset from his id, or every
+            // attacker on the pitch checks and spins in lockstep.
+            let offset = (ctx.player.id % 13) as f32 / 13.0;
+            let cycle = (ctx.context.total_match_time % Self::DOUBLE_MOVE_PERIOD_MS) as f32
+                / Self::DOUBLE_MOVE_PERIOD_MS as f32;
+            (cycle + offset).fract()
+        } else {
+            (ctx.in_state_time as f32 / Self::DOUBLE_MOVE_PERIOD_MS as f32).fract()
+        };
+        let checking = phase < Self::CHECK_FRACTION;
         let to_ball_from_me = (ball - me).try_normalize(0.01).unwrap_or(blind_side);
+        // **A double movement is a movement, not a drift.** The two
+        // halves are deliberately unequal in TIME — the check is a feint
+        // and the spin is what it buys — so equal amplitudes leave the
+        // term with a net direction of `2f - 1 = -0.30` away from the
+        // ball, applied on every off-ball tick of every attacker. That
+        // is not a cadence, it is a standing instruction to push beyond
+        // the ball, and it is worth real ground: the offset is a third
+        // of `max_offset`, so a permanently-biased one shifts the whole
+        // front line goal-ward.
+        //
+        // Scaling the longer half by `f / (1 - f)` makes the two halves
+        // equal in DISPLACEMENT while staying unequal in time, which is
+        // what the movement actually is: a sharp check, a longer settle
+        // back through where he started, and no net travel over a cycle.
+        //
+        // ⚠ Inert while `live_cadence` is off, since a stuck phase never
+        // reaches this half — and MEASURED NULL when it is on: it moved
+        // shots 17.0 → 17.1 a team, i.e. it is not the reason unsticking
+        // the cadence inflates the chance supply. Kept because the term
+        // is wrong without it, not because it bought anything.
         let double_move = if checking {
             to_ball_from_me
         } else {
-            -to_ball_from_me
+            -to_ball_from_me * (Self::CHECK_FRACTION / (1.0 - Self::CHECK_FRACTION))
         };
 
         // ── Weighting ────────────────────────────────────────────────
@@ -229,7 +352,7 @@ impl MarkerEvasion {
         // where the space is, the check-and-spin is how you get into it.
         let effort = read.tightness * read.edge;
         let offset = (blind_side * 0.32 + seam * 0.20 + double_move * 0.48) * effort;
-        let scaled = offset * Self::MAX_OFFSET;
+        let scaled = offset * Self::max_offset();
 
         let field_w = ctx.context.field_size.width as f32;
         let field_h = ctx.context.field_size.height as f32;

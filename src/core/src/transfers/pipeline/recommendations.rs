@@ -11,6 +11,7 @@ use crate::transfers::pipeline::exposure::{
     FreeAgentRecommendationSignals, OpportunisticFreeAgentScout,
 };
 use crate::transfers::pipeline::helpers::CountryPlayerLookup;
+use crate::transfers::pipeline::loan_interest::{ClubOpinion, InterestDraw};
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, EffectivePlayerReputation, TransferPlausibilityBuilder,
     TransferPlausibilityVerdict,
@@ -1091,6 +1092,12 @@ impl PipelineProcessor {
                         .map(|s| s.id)
                         .or_else(|| resolved.scouts.first().map(|s| s.id))
                         .unwrap_or(team.staffs.head_coach().id);
+                    // How good the club's eyes are — the spread on every
+                    // "which of these do we like best" read below.
+                    let listed_recommender_judging = resolved
+                        .director_of_football
+                        .map(|s| s.staff_attributes.knowledge.judging_player_ability)
+                        .unwrap_or_else(|| resolved.best_scout_judging_ability());
 
                     // Per-group squad-fit projection at the buying club —
                     // cached so the filter doesn't re-scan the squad N times.
@@ -1359,7 +1366,22 @@ impl PipelineProcessor {
                                         && !plausibility_rejects(p.id, false)
                                 })
                                 .collect();
-                            fa_targets.sort_by(|a, b| b.ability.cmp(&a.ability));
+                            // Rank on what this club's recruitment department
+                            // BELIEVES, not on true ability — the same
+                            // correction the DoF bargain hunt above already
+                            // carries. A true-ability sort made every club with
+                            // an opportunistic slot free recommend the same
+                            // name, then dressed the report up with a noise
+                            // term that changed nothing about the choice.
+                            fa_targets.sort_by(|a, b| {
+                                ClubOpinion::of(club.id, b.id, listed_recommender_judging)
+                                    .believed_ability(b.ability)
+                                    .partial_cmp(
+                                        &ClubOpinion::of(club.id, a.id, listed_recommender_judging)
+                                            .believed_ability(a.ability),
+                                    )
+                                    .unwrap_or(Ordering::Equal)
+                            });
 
                             let remaining = opportunistic_cap - current_recs;
                             for target in fa_targets.iter().take(remaining.min(2)) {
@@ -1480,7 +1502,7 @@ impl PipelineProcessor {
                                 .judging_player_potential;
 
                             // ── Cheap loan targets (loan-listed players the club could afford) ──
-                            let mut loan_targets: Vec<&PlayerSnapshot> = all_snapshots
+                            let loan_targets: Vec<&PlayerSnapshot> = all_snapshots
                                 .iter()
                                 .filter(|p| {
                                     p.club_id != club.id
@@ -1496,9 +1518,31 @@ impl PipelineProcessor {
                                         && !plausibility_rejects(p.id, true)
                                 })
                                 .collect();
-                            loan_targets.sort_by(|a, b| b.ability.cmp(&a.ability));
+                            // A weighted draw over what this coach BELIEVES,
+                            // rather than the top three rows of a true-ability
+                            // sort: every club read the loan market off the
+                            // same ordering and floated the same three names,
+                            // week after week, until the listings moved. No
+                            // pre-sort — the slate carries the scores.
+                            let loan_slate: Vec<(u32, f32)> = loan_targets
+                                .iter()
+                                .enumerate()
+                                .map(|(i, p)| {
+                                    (
+                                        i as u32,
+                                        ClubOpinion::of(club.id, p.id, coach_judging)
+                                            .believed_ability(p.ability)
+                                            / 100.0,
+                                    )
+                                })
+                                .collect();
+                            let loan_picks: Vec<&PlayerSnapshot> =
+                                InterestDraw::pick_several(&loan_slate, remaining.min(3))
+                                    .into_iter()
+                                    .map(|i| loan_targets[i as usize])
+                                    .collect();
 
-                            for target in loan_targets.iter().take(remaining.min(3)) {
+                            for target in loan_picks.iter() {
                                 let ability_error = (20i16 - coach_judging as i16).max(1) as i32;
                                 let potential_error =
                                     (20i16 - coach_judging_pot as i16).max(1) as i32;
@@ -1561,7 +1605,15 @@ impl PipelineProcessor {
                                             && !plausibility_rejects(p.id, false)
                                     })
                                     .collect();
-                                free_targets.sort_by(|a, b| b.ability.cmp(&a.ability));
+                                free_targets.sort_by(|a, b| {
+                                    ClubOpinion::of(club.id, b.id, coach_judging)
+                                        .believed_ability(b.ability)
+                                        .partial_cmp(
+                                            &ClubOpinion::of(club.id, a.id, coach_judging)
+                                                .believed_ability(a.ability),
+                                        )
+                                        .unwrap_or(Ordering::Equal)
+                                });
 
                                 for target in free_targets.iter().take(remaining_after_loans.min(2))
                                 {
@@ -1628,8 +1680,18 @@ impl PipelineProcessor {
                                             && !plausibility_rejects(p.id, true)
                                     })
                                     .collect();
+                                // Believed ceiling, not the true one. Potential
+                                // is the least visible thing about a player, so
+                                // a shared true-potential ordering was the
+                                // strongest convergence of the lot.
                                 game_time_seekers.sort_by(|a, b| {
-                                    b.estimated_potential.cmp(&a.estimated_potential)
+                                    ClubOpinion::of(club.id, b.id, coach_judging_pot)
+                                        .believed_ability(b.estimated_potential)
+                                        .partial_cmp(
+                                            &ClubOpinion::of(club.id, a.id, coach_judging_pot)
+                                                .believed_ability(a.estimated_potential),
+                                        )
+                                        .unwrap_or(Ordering::Equal)
                                 });
 
                                 for target in

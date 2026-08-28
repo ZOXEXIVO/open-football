@@ -3554,6 +3554,27 @@ mod development_pathway_tests {
                 .find(|c| c.id == BORROWER_ID)
                 .unwrap();
             borrower.transfer_plan.initialized = true;
+
+            // Give the selling club a real forward line. Selling the prospect
+            // leaves its squad empty, and an empty squad clears every
+            // borrower-side gate — so the seller was itself a legal destination
+            // and could win the placement draw, which is not what this test is
+            // about. Two forwards clearly ahead of the prospect fail the
+            // minutes gate there and leave exactly one realistic taker.
+            if let Some(seller) = country
+                .clubs
+                .iter_mut()
+                .find(|c| c.id == DevPathwayFixtures::SELLER_ID)
+            {
+                if let Some(team) = seller.teams.teams.first_mut() {
+                    team.players
+                        .players
+                        .push(DevPathwayFixtures::player(110, 1997, 80));
+                    team.players
+                        .players
+                        .push(DevPathwayFixtures::player(111, 1998, 80));
+                }
+            }
         }
 
         // 1. Permanent prospect purchase → staged AND listed (window open).

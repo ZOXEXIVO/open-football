@@ -15,6 +15,26 @@ use web_sys::{
     BiquadFilterType, GainNode, OscillatorType, StereoPannerNode,
 };
 
+/// What just happened to the ball, as the instrument cares about it.
+///
+/// The two halves of a pass, and the only two things this crate makes a noise
+/// for. Everything a player does to the ball while it stays his — the touches
+/// that carry it up the pitch — is deliberately silent; see
+/// [`Soundtrack`](super::matchday::Soundtrack), which is what decides.
+#[derive(Clone, Copy)]
+pub enum Meeting {
+    /// **Sent away**: a pass, a clearance, a shot. What it was struck with
+    /// carries the colour.
+    Struck(Strike),
+    /// **Taken under control**: a first touch, a trap, a chest-down. The ball
+    /// is being STOPPED rather than sent, so there is no crack in it — a
+    /// cushioned contact is mostly the low body of the ball dying, with just
+    /// enough edge left to say a boot was involved. It has to be audibly the
+    /// quieter of the two: over a match the ear should hear a pass go and a
+    /// pass arrive, in that order, and never mistake which was which.
+    Received,
+}
+
 /// What one contact with the ball sounds like.
 ///
 /// Two layers, because a real one has two: a low **body** — the ball's own
@@ -50,11 +70,40 @@ impl Knock {
     /// rather than thumps. Scaling gain alone gives a quiet shot and a loud
     /// shot that are obviously the same sound twice.
     ///
-    /// **Every level here is generous, and the floor is the reason.** The
-    /// first cut put a five-metre square ball at a third of the level of a
-    /// shot and it could not be heard at all; a pass between two centre-halves
-    /// is most of what happens in a football match, and it has to arrive.
-    fn of(kind: Strike, weight: f32) -> Knock {
+    /// **A shot has to arrive harder than a pass, and the levels alone will
+    /// not do it.** Ramped straight off `weight`, the hardest strike in
+    /// football came out about three decibels over an ordinary pass — and
+    /// then the limiter, whose threshold both of them cleared, pulled that
+    /// down to almost nothing. So two things carry it: the ramp below gets a
+    /// second term that only opens above the pace a ball is struck AT GOAL
+    /// with, and the whole table is scaled so that even the hardest one peaks
+    /// just under the limiter and is never touched by it.
+    ///
+    /// Six decibels between a pass and a shot. Plainly the same sound —
+    /// nothing about the timbre moves with it — and plainly harder.
+    fn of(meeting: Meeting, weight: f32) -> Knock {
+        // How much of this was a strike at goal rather than a ball played
+        // somewhere, 0..1.
+        let driven = Self::driven(weight);
+        let kind = match meeting {
+            Meeting::Struck(kind) => kind,
+            // Cushioned: lower, longer and well down on anything struck. A
+            // first touch takes the pace OFF the ball, and a reception that
+            // cracks like a pass is the thing that would make a move sound
+            // like it happened twice. No `driven` term at all — receiving a
+            // rocket is not a hard contact, it is a man absorbing one.
+            Meeting::Received => {
+                return Knock {
+                    from: 108.0,
+                    to: 46.0,
+                    fall: 0.075,
+                    edge: 700.0,
+                    q: 0.7,
+                    snap: 0.030,
+                    level: 0.16 + 0.10 * weight,
+                };
+            }
+        };
         match kind {
             // The full range: a ball rolled five metres and a shot struck at
             // forty are both this, and they sound nothing alike.
@@ -65,10 +114,12 @@ impl Knock {
                 edge: 1300.0 + 2200.0 * weight,
                 q: 0.9,
                 snap: 0.028 + 0.032 * weight,
-                level: 0.55 + 0.45 * weight,
+                level: 0.24 + 0.14 * weight + 0.24 * driven,
             },
             // Duller and lower than any boot: a head has no hard surface on
             // it, and the sound is mostly the ball rather than the contact.
+            // It gets a share of the drive — a header at goal is struck — but
+            // a smaller one, because a neck cannot do what a leg does.
             Strike::Head => Knock {
                 from: 122.0,
                 to: 60.0,
@@ -76,12 +127,13 @@ impl Knock {
                 edge: 640.0,
                 q: 0.6,
                 snap: 0.048,
-                level: 0.46 + 0.24 * weight,
+                level: 0.20 + 0.12 * weight + 0.10 * driven,
             },
             // A goalkeeper's throw and a throw-in: hands, not boots. Well
             // down, and they have to be — a match has forty-odd throw-ins in
             // it and every one of them cracking like a shot is a match that
-            // sounds wrong in a way nobody can name.
+            // sounds wrong in a way nobody can name. Nobody shoots with a
+            // throw, so there is no drive in it either.
             Strike::Throw | Strike::ThrowIn => Knock {
                 from: 100.0,
                 to: 64.0,
@@ -89,9 +141,30 @@ impl Knock {
                 edge: 940.0,
                 q: 0.5,
                 snap: 0.038,
-                level: 0.26 + 0.14 * weight,
+                level: 0.11 + 0.06 * weight,
             },
         }
+    }
+
+    /// Where the pace of a strike stops being a ball played somewhere and
+    /// starts being a ball hit at goal, as a share of
+    /// [`Actors::HAMMERED`](crate::players::actors::Actors).
+    ///
+    /// 0.55 of the p90 is about 21 metres a second, which is above a driven
+    /// cross and below anything anybody would call a shot.
+    const DRIVEN: f32 = 0.55;
+
+    /// How much of a strike is drive, 0..1 — smooth across
+    /// [`Self::DRIVEN`] rather than switched at it.
+    ///
+    /// A step here would put a cliff in the middle of the one range the ear
+    /// spends the match comparing: two balls struck a metre a second apart
+    /// would land a full step in level apart, which reads as two different
+    /// sounds rather than as two shots. Smoothstep has zero slope at both
+    /// ends, so a hard pass grows into a shot instead of becoming one.
+    fn driven(weight: f32) -> f32 {
+        let over = ((weight - Self::DRIVEN) / (1.0 - Self::DRIVEN)).clamp(0.0, 1.0);
+        over * over * (3.0 - 2.0 * over)
     }
 }
 
@@ -160,15 +233,23 @@ impl Mixer {
             .ok()?;
 
         let out = context.destination();
-        // A limiter, not a compressor — see the note on the struct. The
-        // threshold sits near the top of the scale and the ratio is steep, so
-        // it is transparent until something actually would have clipped.
+        // A limiter, not a compressor — see the note on the struct.
+        //
+        // ⚠ **The threshold has to sit ABOVE the loudest single sound in the
+        // match, not below it.** At -3 dB it was under the peak of a hard
+        // shot AND under the peak of an ordinary pass, so it pulled the two
+        // of them down to within a couple of decibels of each other — which
+        // is a limiter doing exactly its job and destroying the one
+        // distinction the mix is for. [`Knock`] is now scaled so the hardest
+        // strike in football peaks just under this; what is left for the
+        // limiter is the case it exists for, which is three contacts landing
+        // in the same instant.
         let ceiling = context.create_dynamics_compressor().ok()?;
-        ceiling.threshold().set_value(-3.0);
-        ceiling.knee().set_value(3.0);
-        ceiling.ratio().set_value(14.0);
-        ceiling.attack().set_value(0.002);
-        ceiling.release().set_value(0.12);
+        ceiling.threshold().set_value(-1.0);
+        ceiling.knee().set_value(1.0);
+        ceiling.ratio().set_value(20.0);
+        ceiling.attack().set_value(0.001);
+        ceiling.release().set_value(0.10);
         ceiling.connect_with_audio_node(&out).ok()?;
 
         let master = context.create_gain().ok()?;
@@ -266,8 +347,8 @@ impl Mixer {
     /// worth the trouble: an impact placed by the renderer lands up to a frame
     /// late and, worse, jitters, and the ear reads jitter on a percussive
     /// sound as a different sound.
-    pub fn touch(&self, kind: Strike, weight: f32, pan: f32, delay: f32) {
-        let knock = Knock::of(kind, weight.clamp(0.0, 1.0));
+    pub fn touch(&self, meeting: Meeting, weight: f32, pan: f32, delay: f32) {
+        let knock = Knock::of(meeting, weight.clamp(0.0, 1.0));
         let at = self.context.current_time() + (delay.max(0.0) as f64).max(Self::LOOKAHEAD);
         let Some(panner) = self.aim(pan) else {
             return;
@@ -411,8 +492,8 @@ mod knocks {
     /// impact sound synthesised.
     #[test]
     fn a_shot_is_brighter_than_a_touch_and_not_merely_louder() {
-        let touch = Knock::of(Strike::Boot, 0.0);
-        let shot = Knock::of(Strike::Boot, 1.0);
+        let touch = Knock::of(Meeting::Struck(Strike::Boot), 0.0);
+        let shot = Knock::of(Meeting::Struck(Strike::Boot), 1.0);
         assert!(shot.level > touch.level, "a shot is louder");
         assert!(shot.edge > touch.edge * 2.0, "a shot cracks");
         assert!(shot.snap > touch.snap, "and it rings on");
@@ -421,24 +502,99 @@ mod knocks {
     /// **The softest touch in the match still has to arrive.** A five-metre
     /// square ball is most of what happens in football, and the first cut of
     /// this put it far enough down that it could not be heard at all.
+    ///
+    /// An ABSOLUTE floor, deliberately, and not a share of the loudest thing
+    /// in the mix. It was written as a ratio while a crowd was masking
+    /// everything; there is no crowd now, so what decides whether a gentle
+    /// pass can be heard is its own level against silence — and holding it as
+    /// a ratio would have blocked the whole point of
+    /// [`Knock::driven`](super::Knock), which is to open a gap above it.
     #[test]
     fn the_gentlest_pass_is_still_well_up_in_the_mix() {
-        let softest = Knock::of(Strike::Boot, 0.0);
-        let hardest = Knock::of(Strike::Boot, 1.0);
+        let softest = Knock::of(Meeting::Struck(Strike::Boot), 0.0);
         assert!(
-            softest.level > hardest.level * 0.5,
-            "a pass at {} against a shot at {} is inaudible",
-            softest.level,
-            hardest.level
+            softest.level > 0.20,
+            "a pass at {} is inaudible against silence",
+            softest.level
         );
+    }
+
+    /// **A shot has to land harder than a pass.** Six decibels — a doubling
+    /// of amplitude — which is plainly more without being a different sound.
+    ///
+    /// The weights are real: `weight` is the ball's speed over
+    /// [`Actors::HAMMERED`](crate::players::actors::Actors), so 0.37 is a
+    /// fourteen-metre-a-second pass and 1.0 is the hardest anybody strikes
+    /// one.
+    #[test]
+    fn a_shot_lands_about_six_decibels_over_a_pass() {
+        let pass = Knock::of(Meeting::Struck(Strike::Boot), 0.37).level;
+        let shot = Knock::of(Meeting::Struck(Strike::Boot), 1.0).level;
+        let decibels = 20.0 * (shot / pass).log10();
+        assert!(
+            (5.0..7.5).contains(&decibels),
+            "a shot is {decibels:.1} dB over a pass, wanted about six"
+        );
+    }
+
+    /// …and it has to stay under the limiter, or the limiter takes the six
+    /// decibels straight back off again — which is what it was doing.
+    ///
+    /// The two layers of a contact overlap at the front, so the peak that
+    /// reaches the bus is worth about half again the table's figure. The
+    /// ceiling is at -1 dBFS.
+    #[test]
+    fn the_hardest_strike_in_football_still_clears_the_ceiling() {
+        let hardest = Knock::of(Meeting::Struck(Strike::Boot), 1.0);
+        let peak = hardest.level * 1.45;
+        assert!(peak < 0.95, "a shot peaks at {peak} and would be squashed");
+    }
+
+    /// The rise into a shot is a curve, not a step. Two balls struck a metre
+    /// a second apart must not land a whole step in level apart.
+    #[test]
+    fn the_drive_grows_in_rather_than_switching_on() {
+        assert_eq!(
+            Knock::driven(Knock::DRIVEN),
+            0.0,
+            "nothing at the threshold"
+        );
+        assert_eq!(Knock::driven(1.0), 1.0, "and all of it at the top");
+        // Either side of the threshold, and either side of the top, the curve
+        // is flat — which is what stops it reading as two sounds.
+        let just_over = Knock::driven(Knock::DRIVEN + 0.02);
+        assert!(just_over < 0.02, "a cliff at the threshold: {just_over}");
+        assert!(Knock::driven(0.98) > 0.99, "and one at the top");
+        // …and monotone in between.
+        let mut last = 0.0;
+        for step in 0..=20 {
+            let now = Knock::driven(step as f32 / 20.0);
+            assert!(now >= last, "the drive went backwards at {step}");
+            last = now;
+        }
+    }
+
+    /// **The two halves of a pass have to be told apart by ear.** A move is
+    /// heard as a ball going and a ball arriving, and the arrival is the
+    /// quieter, duller of the two — it is the pace coming OFF the ball.
+    #[test]
+    fn a_reception_is_the_quieter_half_of_a_pass() {
+        let sent = Knock::of(Meeting::Struck(Strike::Boot), 0.35);
+        let taken = Knock::of(Meeting::Received, 0.35);
+        assert!(
+            taken.level < sent.level,
+            "the arrival is under the departure"
+        );
+        assert!(taken.edge < sent.edge * 0.7, "and duller: nothing cracks");
+        assert!(taken.fall > sent.fall, "the ball dies rather than leaves");
     }
 
     /// A header has no hard surface in it, so it must not be allowed to crack
     /// like a boot however hard the ball was moving afterwards.
     #[test]
     fn a_head_never_cracks() {
-        let header = Knock::of(Strike::Head, 1.0);
-        let volley = Knock::of(Strike::Boot, 1.0);
+        let header = Knock::of(Meeting::Struck(Strike::Head), 1.0);
+        let volley = Knock::of(Meeting::Struck(Strike::Boot), 1.0);
         assert!(header.edge < volley.edge * 0.5);
         assert!(header.level < volley.level);
     }
@@ -448,12 +604,12 @@ mod knocks {
     /// weight, or the mix fills up with them.
     #[test]
     fn a_throw_in_stays_out_of_the_way() {
-        let loudest_throw = Knock::of(Strike::ThrowIn, 1.0);
-        let softest_boot = Knock::of(Strike::Boot, 0.0);
+        let loudest_throw = Knock::of(Meeting::Struck(Strike::ThrowIn), 1.0);
+        let softest_boot = Knock::of(Meeting::Struck(Strike::Boot), 0.0);
         assert!(loudest_throw.level < softest_boot.level);
         assert_eq!(
-            Knock::of(Strike::Throw, 0.5).level,
-            Knock::of(Strike::ThrowIn, 0.5).level,
+            Knock::of(Meeting::Struck(Strike::Throw), 0.5).level,
+            Knock::of(Meeting::Struck(Strike::ThrowIn), 0.5).level,
             "both are hands, and sound like it"
         );
     }

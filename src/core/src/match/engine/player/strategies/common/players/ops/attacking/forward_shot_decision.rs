@@ -252,6 +252,113 @@ pub mod mid_run_diag {
     pub static EVASION_TIGHT_X1000: AtomicU64 = AtomicU64::new(0);
     pub static EVASION_EDGE_X1000: AtomicU64 = AtomicU64::new(0);
 
+    /// **What a forward given a patch of the box actually does with it.**
+    /// The instrument for "he stands in the penalty area and never moves":
+    /// every counter is sampled at the box-slot branch of a forward's
+    /// off-ball `velocity()`, which is the one place the team plan's
+    /// assignment turns into motion.
+    ///
+    /// * `SLOT_TICKS`  — off-ball ticks with a slot assigned.
+    /// * `SLOT_FROZEN` — of those, the ones that returned a ZERO velocity.
+    /// * `SLOT_SPEED`  — mean speed over the same ticks.
+    /// * `SLOT_GAP`    — mean distance from the slot he was given.
+    /// * `SLOT_MARKED` — ticks with an opponent inside `MarkerEvasion`'s
+    ///   read radius, i.e. the ticks on which the evasion can do anything
+    ///   at all. The gap between this and `SLOT_TICKS` is how much box
+    ///   occupancy has NO movement generator behind it.
+    /// * `SLOT_OPP`    — mean distance to the nearest opponent.
+    pub static SLOT_TICKS: AtomicU64 = AtomicU64::new(0);
+    pub static SLOT_FROZEN: AtomicU64 = AtomicU64::new(0);
+    pub static SLOT_SPEED_X1000: AtomicU64 = AtomicU64::new(0);
+    pub static SLOT_GAP_X100: AtomicU64 = AtomicU64::new(0);
+    pub static SLOT_MARKED: AtomicU64 = AtomicU64::new(0);
+    pub static SLOT_OPP_X100: AtomicU64 = AtomicU64::new(0);
+    /// Mean attacking progress of the BALL on those ticks (0 at our own
+    /// goal line, 1 at theirs), x1000. The number that separates "he is
+    /// attacking the box" from "he is living in it": a man on a box slot
+    /// while the ball is still at 0.4 is camped, not arriving.
+    pub static SLOT_BALL_PROGRESS_X1000: AtomicU64 = AtomicU64::new(0);
+    /// …and his own distance to the goal he is attacking.
+    pub static SLOT_TO_GOAL_X100: AtomicU64 = AtomicU64::new(0);
+    /// Ticks where he was inside the box (≤132u ≈ 16.5 m) while the ball
+    /// had NOT reached the final third. The camped counter.
+    pub static SLOT_CAMPED: AtomicU64 = AtomicU64::new(0);
+    /// Mean `in_state_time` on those ticks — the double-movement in
+    /// `MarkerEvasion` is keyed on it with a 220-tick period, so a small
+    /// mean means the check-and-spin never reaches its spin.
+    pub static SLOT_STATE_TIME: AtomicU64 = AtomicU64::new(0);
+
+    pub struct BoxSlotDiag;
+
+    impl BoxSlotDiag {
+        #[allow(clippy::too_many_arguments)]
+        pub fn note(
+            frozen: bool,
+            speed: f32,
+            gap: f32,
+            marked: bool,
+            nearest_opp: f32,
+            ball_progress: f32,
+            to_goal: f32,
+            in_state_time: u64,
+        ) {
+            SLOT_TICKS.fetch_add(1, Ordering::Relaxed);
+            if frozen {
+                SLOT_FROZEN.fetch_add(1, Ordering::Relaxed);
+            }
+            if marked {
+                SLOT_MARKED.fetch_add(1, Ordering::Relaxed);
+            }
+            if to_goal <= 132.0 && ball_progress < 0.667 {
+                SLOT_CAMPED.fetch_add(1, Ordering::Relaxed);
+            }
+            SLOT_SPEED_X1000.fetch_add((speed.max(0.0) * 1000.0) as u64, Ordering::Relaxed);
+            SLOT_GAP_X100.fetch_add((gap.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+            SLOT_OPP_X100.fetch_add((nearest_opp.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+            SLOT_BALL_PROGRESS_X1000.fetch_add(
+                (ball_progress.clamp(0.0, 1.0) * 1000.0) as u64,
+                Ordering::Relaxed,
+            );
+            SLOT_TO_GOAL_X100.fetch_add((to_goal.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+            SLOT_STATE_TIME.fetch_add(in_state_time, Ordering::Relaxed);
+        }
+
+        /// `(ticks, frozen, mean_speed, mean_gap, marked, mean_nearest_opp,
+        /// mean_ball_progress, mean_to_goal, camped, mean_in_state_time)`
+        pub fn snapshot() -> (u64, u64, f32, f32, u64, f32, f32, f32, u64, f32) {
+            let n = SLOT_TICKS.load(Ordering::Relaxed).max(1) as f32;
+            (
+                SLOT_TICKS.load(Ordering::Relaxed),
+                SLOT_FROZEN.load(Ordering::Relaxed),
+                SLOT_SPEED_X1000.load(Ordering::Relaxed) as f32 / 1000.0 / n,
+                SLOT_GAP_X100.load(Ordering::Relaxed) as f32 / 100.0 / n,
+                SLOT_MARKED.load(Ordering::Relaxed),
+                SLOT_OPP_X100.load(Ordering::Relaxed) as f32 / 100.0 / n,
+                SLOT_BALL_PROGRESS_X1000.load(Ordering::Relaxed) as f32 / 1000.0 / n,
+                SLOT_TO_GOAL_X100.load(Ordering::Relaxed) as f32 / 100.0 / n,
+                SLOT_CAMPED.load(Ordering::Relaxed),
+                SLOT_STATE_TIME.load(Ordering::Relaxed) as f32 / n,
+            )
+        }
+
+        pub fn reset() {
+            for c in [
+                &SLOT_TICKS,
+                &SLOT_FROZEN,
+                &SLOT_SPEED_X1000,
+                &SLOT_GAP_X100,
+                &SLOT_MARKED,
+                &SLOT_OPP_X100,
+                &SLOT_BALL_PROGRESS_X1000,
+                &SLOT_TO_GOAL_X100,
+                &SLOT_CAMPED,
+                &SLOT_STATE_TIME,
+            ] {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
     pub struct EvasionDiag;
 
     impl EvasionDiag {
@@ -3464,6 +3571,7 @@ pub mod mid_run_diag {
         ChaseDiag::reset();
         ClearDiag::reset();
         EvasionDiag::reset();
+        BoxSlotDiag::reset();
         SetPieceDiag::reset();
         for c in [
             &RUNNER_BOX_TICKS,

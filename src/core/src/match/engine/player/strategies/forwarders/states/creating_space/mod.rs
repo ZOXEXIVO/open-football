@@ -1,7 +1,7 @@
 use crate::TacticalStyle;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
-use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
+use crate::r#match::player::strategies::common::players::ops::box_movement::BoxMovement;
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
@@ -136,24 +136,14 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         // midfielders arriving into the same area, so a forward's channel
         // and an arriving midfielder's were free to be the same patch of
         // grass. The team plan de-duplicates across the whole side.
-        if let Some(slot_target) = ctx.team().my_box_slot_target() {
-            // Creating space against a man who is marking you IS the
-            // marker evasion — blind side, seam, check-and-spin. See
-            // `MarkerEvasion`.
-            let target = MarkerEvasion::evade(ctx, slot_target);
-            let dist = (target - ctx.player.position).magnitude();
-            if dist < 6.0 {
-                return Some(Vector3::zeros());
-            }
-            return Some(
-                SteeringBehavior::Arrive {
-                    target,
-                    slowing_distance: 20.0,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    * MarkerEvasion::burst(ctx),
-            );
+        if let Some(slot) = ctx.team().my_box_slot() {
+            // Occupying a patch of the box is a job with a shape to it —
+            // approach, hold in the defender's back, then attack the
+            // delivery — and it is owned by `BoxMovement` so the two
+            // off-ball forward states cannot drift apart about what it
+            // means. This used to steer straight at the slot coordinate
+            // and freeze within 6u of it.
+            return Some(BoxMovement::steer(ctx, slot));
         }
 
         // DEPTH comes from the team block; this state chooses the LANE.

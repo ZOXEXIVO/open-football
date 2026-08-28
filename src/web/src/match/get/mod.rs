@@ -105,6 +105,7 @@ struct ViewerConfigJson {
     chances: Vec<ChanceEventJson>,
     substitutions: Vec<SubstitutionEventJson>,
     labels: ViewerLabelsJson,
+    venue: VenueJson,
     /// Walk the two teams out before the replay starts. Always, in the game —
     /// only the `.dev/match` harness ever turns it off.
     lineup: bool,
@@ -143,6 +144,74 @@ impl TeamColorsJson {
             foreground: club
                 .map(|c| c.colors.foreground.clone())
                 .unwrap_or_else(|| "#ffffff".to_string()),
+        }
+    }
+}
+
+/// **The ground the fixture was played at**, for the viewer to build a stadium
+/// out of.
+///
+/// Facts, not decisions: how many the ground holds, how many usually come, how
+/// well thought of the two sides are, and whether this is an age-restricted
+/// fixture at all. What that comes to in rows of concrete and
+/// coats in the stands is the viewer's, since it is the only end that knows how
+/// big a row is — see `match_viewer::scene::crowd::Stature`.
+#[derive(Serialize)]
+struct VenueJson {
+    capacity: u32,
+    attendance: u32,
+    reputation: u16,
+    /// The VISITORS, which is half of what decides whether a ground fills.
+    visitor: u16,
+    youth: bool,
+}
+
+impl VenueJson {
+    /// The ground belongs to the HOME side, and so do the first three of
+    /// these. The last two are about the fixture rather than the venue.
+    ///
+    /// That flag is read off both teams because a youth fixture is a youth
+    /// fixture whoever hosted it — the two academies of two great clubs meet
+    /// on a training pitch, not in either of their stadiums.
+    ///
+    /// An international tie carries country IDs rather than team ones, so
+    /// there is no ground to look up: those are played at a national stadium,
+    /// which is what the default already describes.
+    fn for_fixture(data: &SimulatorData, home_team_id: u32, away_team_id: u32) -> Self {
+        let Some(home) = data.team(home_team_id) else {
+            return VenueJson::default();
+        };
+        let ground = data
+            .club(home.club_id)
+            .map(|club| &club.facilities)
+            .map(|f| (f.stadium_capacity, f.average_attendance))
+            .unwrap_or_default();
+
+        let away = data.team(away_team_id);
+        VenueJson {
+            capacity: ground.0,
+            attendance: ground.1,
+            reputation: home.reputation.world,
+            // An unknown visitor is read as a peer, which leaves the gate at
+            // whatever the club ordinarily draws.
+            visitor: away.map_or(home.reputation.world, |away| away.reputation.world),
+            youth: home.team_type.is_youth()
+                || away.is_some_and(|away| away.team_type.is_youth()),
+        }
+    }
+}
+
+impl Default for VenueJson {
+    /// A great ground, comfortably full — the stadium the viewer built for
+    /// every match before there was a venue to describe, and what an
+    /// international tie is played in.
+    fn default() -> Self {
+        VenueJson {
+            capacity: 60_000,
+            attendance: 50_000,
+            reputation: 10_000,
+            visitor: 10_000,
+            youth: false,
         }
     }
 }
@@ -589,6 +658,15 @@ pub async fn match_get_action(
             second_half: i18n.t("second_half").to_string(),
             loading: i18n.t("loading_match").to_string(),
             no_recording: i18n.t("match_no_recording").to_string(),
+        },
+        venue: if is_international {
+            VenueJson::default()
+        } else {
+            VenueJson::for_fixture(
+                simulator_data,
+                match_result.home_team_id,
+                match_result.away_team_id,
+            )
         },
         lineup: true,
     };

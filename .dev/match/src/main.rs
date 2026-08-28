@@ -475,6 +475,7 @@ struct ViewerConfigJson<'a> {
     goals: &'a [GoalJson],
     chances: &'a [ChanceJson],
     substitutions: &'a [SubstitutionJson],
+    venue: VenueJson,
     debug: bool,
     /// Walk the two teams out before the replay starts.
     ///
@@ -490,6 +491,46 @@ struct ViewerConfigJson<'a> {
 struct ViewerColorsJson {
     background: &'static str,
     foreground: &'static str,
+}
+
+/// The ground the fixture is played at, which decides how much stadium the
+/// viewer builds and how many people it puts in it.
+///
+/// A great ground by default, because that is the picture the rest of this
+/// harness is compared against. **`OF_SMALL_GROUND=1` plays the same match at
+/// a non-league one** — five steps of terracing, a short wrap and a thin
+/// crowd — which is the A/B switch for the other end of
+/// `match_viewer::scene::crowd::Stature`, the same way `OF_NO_LINEUP` is for
+/// the walk-out.
+#[derive(Serialize)]
+struct VenueJson {
+    capacity: u32,
+    attendance: u32,
+    reputation: u16,
+    visitor: u16,
+    youth: bool,
+}
+
+impl VenueJson {
+    fn from_env() -> Self {
+        if std::env::var("OF_SMALL_GROUND").is_ok() {
+            VenueJson {
+                capacity: 1_400,
+                attendance: 620,
+                reputation: 2_100,
+                visitor: 2_300,
+                youth: false,
+            }
+        } else {
+            VenueJson {
+                capacity: 62_000,
+                attendance: 54_000,
+                reputation: 9_400,
+                visitor: 9_200,
+                youth: false,
+            }
+        }
+    }
 }
 
 /// Builds the one page the harness serves: a score header, a canvas, and the
@@ -524,6 +565,7 @@ impl ViewerPage {
             goals,
             chances,
             substitutions,
+            venue: VenueJson::from_env(),
             debug: true,
             lineup: std::env::var("OF_NO_LINEUP").is_err(),
         };
@@ -9862,6 +9904,39 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 } else {
                     0.0
                 }
+            );
+        }
+        // What a forward given a patch of the box actually does with it.
+        // `frozen` is the headline: the share of his box occupancy spent
+        // at a literal zero velocity, i.e. standing in the penalty area.
+        use core::mid_run_diag::BoxSlotDiag;
+        let (
+            slot_n,
+            frozen,
+            slot_speed,
+            slot_gap,
+            slot_marked,
+            slot_opp,
+            ball_progress,
+            to_goal,
+            camped,
+            state_time,
+        ) = BoxSlotDiag::snapshot();
+        if slot_n > 0 {
+            println!(
+                "  box occupancy: {:.1}% of slot ticks FROZEN, mean speed {:.3} u/tick, {:.1}m from the slot, {:.0}% with a marker in range, nearest opponent {:.1}m ({slot_n} ticks)",
+                frozen as f64 / slot_n as f64 * 100.0,
+                slot_speed,
+                slot_gap * 0.125,
+                slot_marked as f64 / slot_n as f64 * 100.0,
+                slot_opp * 0.125,
+            );
+            println!(
+                "  …timing: ball at {:.2} of the way up the pitch, occupant {:.1}m from goal, {:.1}% of ticks CAMPED (in the box with the ball outside the final third), mean in-state {:.0} ticks",
+                ball_progress,
+                to_goal * 0.125,
+                camped as f64 / slot_n as f64 * 100.0,
+                state_time,
             );
         }
         use core::mid_run_diag::DefenceDiag;

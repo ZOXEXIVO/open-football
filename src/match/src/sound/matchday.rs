@@ -1,36 +1,41 @@
 //! The player: what the ball does, turned into what it sounds like.
 //!
-//! Nothing new is fetched and nothing new is recorded. Both signals come off
-//! facts the viewer was already drawing from:
+//! # Only the two ends of a pass
 //!
-//! - **the ball being struck** — [`BallState::impact`], which the animation
-//!   rig already reads AHEAD of the playhead so a footballer can take a
-//!   backswing. The same lookahead is what lets a contact be scheduled on the
-//!   audio clock instead of fired on a frame.
-//! - **the ball in the netting** — [`Netting::inside_a_goal`], the one place
-//!   in the crate that owns what "in the goal" means, borrowed rather than
-//!   re-derived.
+//! A footballer touches the ball about fourteen times a minute and almost all
+//! of those touches are him carrying it — the knocks that take a dribble up
+//! the pitch. Played, they are a rattle under the whole match, and they were
+//! reported as exactly that. **A move has two moments worth hearing: the ball
+//! being sent, and the ball arriving.** Everything in between is a man
+//! running with it, and it is silent here.
 //!
-//! # Two detectors, and why the second one has to exist
+//! # How the two are told apart
 //!
-//! [`Actors::next_impact`](crate::players::actors::Actors) is built to decide
-//! whether to swing a leg, and it is deliberately strict: the ball has to
-//! leave above 4.5 m/s AND at 1.6 times the speed it arrived at. That is the
-//! right test for an animation — a man does not wind up to stroke a ball five
-//! metres sideways — and the wrong one for sound, because **that stroke is
-//! most of what happens in a football match** and it is silent under those
-//! gates.
+//! Not by how hard the ball was hit — a dribble knocked into space and a short
+//! pass leave the boot at the same speed, and no threshold separates them. By
+//! **who ends up with it**, which is a different question and one the viewer
+//! can simply look up: the whole recording is already in memory, so where the
+//! ball and a given player will be in three quarters of a second is a read
+//! rather than a guess. That is [`Soundtrack::keeps_it`], and it answers both
+//! halves at once:
 //!
-//! So [`Soundtrack::brushed`] runs alongside it with the physical test
-//! instead: the ball's momentum changed while somebody was within reach of it.
-//! Both feed one dedupe, so a contact loud enough for the rig to see is played
-//! once and not twice.
+//! - a contact after which the striker **still has the ball** is a dribble
+//!   touch — silent;
+//! - a contact after which he **does not** is the ball being sent — a pass
+//!   out;
+//! - a player gaining the ball and **still having it** a moment later has
+//!   received it — a pass in. One who does not had it roll past him.
+//!
+//! It is the same trick the animation rig already runs on this recording to
+//! give a footballer a backswing — see
+//! [`Track::position_ahead`](crate::recording::replay::Track).
 
-use crate::players::actors::{Actors, BallState, Strike};
+use crate::players::actors::{Actors, BallState};
 use crate::recording::playback::Playback;
+use crate::recording::replay::ReplayTracks;
 use crate::scene::field::Field;
 use crate::scene::net::Netting;
-use crate::sound::mixer::Mixer;
+use crate::sound::mixer::{Meeting, Mixer};
 use bevy::prelude::*;
 
 /// The browser's audio engine, once it has been persuaded to hand one over.
@@ -73,21 +78,47 @@ impl Speakers {
     }
 }
 
-/// What the soundtrack has already played, so that it does not play it again.
+/// A sound the match has earned, worked out and then handed to the mixer.
+///
+/// Returned rather than played on the spot so the two rules that decide it —
+/// which are about football, not about audio — can be checked without a
+/// browser to make a noise in.
+struct Cue {
+    meeting: Meeting,
+    /// How hard, 0..1.
+    weight: f32,
+    /// Where across the picture, -1..1.
+    pan: f32,
+    /// Seconds of REAL time from now. Non-zero only on the path that reads
+    /// the strike before it happens.
+    delay: f32,
+}
+
+/// Who has the ball, and what has already been played about it.
 #[derive(Resource, Default)]
 pub struct Soundtrack {
     /// Whether the viewer has asked for quiet. Owned here rather than in the
     /// transport bar because the bar is a view of it: the chip reads this and
     /// writes it, and everything else only reads.
     pub muted: bool,
+    /// **The last man to have had the ball**, which is not the same as the man
+    /// within reach of it now — see [`Soundtrack::possession`] for why it has
+    /// to be sticky. `None` only before anybody has touched it.
+    holder: Option<u32>,
+    /// Whether the ball leaving the current holder has already been heard.
+    ///
+    /// The pass out is normally played off the animation rig's lookahead, on
+    /// time and a tenth of a second before the ball is anywhere; the fallback
+    /// below fires on possession actually being lost, which is later. This is
+    /// what stops the two from both playing.
+    spoken: bool,
     /// Match time of the contact already handed to the mixer, so a strike
     /// that stays visible in the lookahead for several frames is played once.
-    /// `None` when nothing is armed.
     struck: Option<f64>,
     /// Whether the ball was inside a goal on the previous frame.
     netted: bool,
-    /// What the ball was doing on the previous frame. The soft-touch detector
-    /// is a test on how much this changed — see [`Soundtrack::brushed`].
+    /// What the ball was doing on the previous frame, so the fallback knows
+    /// how hard it was sent.
     carried: Vec3,
 }
 
@@ -98,43 +129,51 @@ impl Soundtrack {
     /// number and nothing else.
     const LEVEL: f32 = 1.0;
 
+    /// How long after a contact the recording is asked who has the ball, in
+    /// milliseconds of match time.
+    ///
+    /// Long enough that a pass has unmistakably left its man — even a gentle
+    /// five-metre ball is most of the way to its target by now — and short
+    /// enough that a dribbler has not yet caught up with and re-touched a
+    /// knock, which would make his own dribble look like a pass he received
+    /// back.
+    const SETTLE_MS: f64 = 750.0;
+
+    /// …and how far the ball may be from him at that moment and still be his,
+    /// in metres.
+    ///
+    /// A man running with the ball knocks it a stride or two ahead and stays
+    /// with it; over three quarters of a second even a long knock leaves him
+    /// no further behind than this. A ball he has actually passed is six
+    /// metres away by then at the gentlest weight anybody passes at.
+    const STILL_HIS: f32 = 3.5;
+
     /// How far apart in match time two contacts have to be to be two
     /// contacts.
     ///
     /// The lookahead re-derives the coming strike every frame off a 30 ms
     /// probe (see [`Actors::next_impact`](crate::players::actors::Actors)), so
     /// the instant it reports wobbles by up to a probe's width while the
-    /// playhead closes on it. Anything inside this window is taken to be the
-    /// same strike seen again — which is also what keeps the two detectors
-    /// from playing one touch twice, and stops a scramble in a six-yard box
-    /// from machine-gunning.
+    /// playhead closes on it. Anything inside this window is the same strike
+    /// seen again.
     const REARM_MS: f64 = 120.0;
 
-    /// The smallest change in the ball's motion that is worth a sound, in
-    /// metres per second.
+    /// The slowest a ball can leave somebody and count as having been sent,
+    /// in metres per second.
     ///
-    /// Low on purpose: this is the number that decides whether a five-metre
-    /// square ball is audible, and that pass is the most common event in a
-    /// football match. Set below the softest thing a player does to a ball on
-    /// purpose and above the noise in a recorded path.
-    const NUDGE: f32 = 1.6;
-
-    /// …and the same floor expressed as an acceleration, for the frames where
-    /// that is the tighter test.
-    ///
-    /// Gravity changes a ball by 9.81 m/s every second, so a single frame at
-    /// 16x covers a quarter of that and would trip [`Self::NUDGE`] on a ball
-    /// nobody has gone near. Two and a half g is comfortably above anything
-    /// gravity and drag can do together and far below what a boot does.
-    const GRAVITY_MARGIN: f32 = 24.5;
+    /// Only the fallback needs it — the lookahead path knows the answer
+    /// outright. Set below the gentlest thing anybody passes at, because the
+    /// possession test has already done the work of deciding this was a pass;
+    /// all this rules out is a ball trickling out of play off a shin.
+    const SENT: f32 = 2.5;
 
     /// How far a contact at the goal line is panned. A broadcast mix is
     /// nearly mono; this is enough to place a kick and not enough to notice
     /// it being placed.
     const SPREAD: f32 = 0.55;
 
-    /// Once a frame: works out what the ball has just had done to it and tells
-    /// the mixer.
+    /// Once a frame: works out what has become of the ball and tells the
+    /// mixer.
     ///
     /// Runs behind [`Actors::follow_playhead`], which is what settles
     /// [`BallState`], and ahead of [`Playback::end_frame`], which clears the
@@ -142,7 +181,7 @@ impl Soundtrack {
     pub fn follow_playhead(
         playback: Res<Playback>,
         ball: Res<BallState>,
-        time: Res<Time>,
+        mut tracks: ResMut<ReplayTracks>,
         mut soundtrack: ResMut<Soundtrack>,
         mut speakers: NonSendMut<Speakers>,
     ) {
@@ -170,130 +209,154 @@ impl Soundtrack {
         // — lands the playhead somewhere it has not been playing towards.
         // Everything this resource remembers is about the stretch of match it
         // just left: the strike that was armed for the frame after this one is
-        // now forty minutes away, and the ball's velocity across the jump is
-        // not a velocity at all.
+        // now forty minutes away, and whoever had the ball no longer does.
         if playback.seeked {
             soundtrack.resync(&ball);
             return;
         }
 
-        // Seconds of MATCH time this frame covered, which is the clock the
-        // ball's own velocity is measured on.
-        let step = (time.delta_secs() * playback.speed).max(1e-4);
-        soundtrack.contact(&playback, &ball, step, mixer);
+        let sent = soundtrack.sent(&playback, &ball, &mut tracks);
+        let changed = soundtrack.possession(playback.time_ms, &ball, &mut tracks);
+        for cue in [sent, changed].into_iter().flatten() {
+            mixer.touch(cue.meeting, cue.weight, cue.pan, cue.delay);
+        }
         soundtrack.netting(&ball, mixer);
         soundtrack.carried = ball.velocity;
     }
 
-    /// Both detectors, into one dedupe.
-    fn contact(&mut self, playback: &Playback, ball: &BallState, step: f32, mixer: &Mixer) {
-        // The rig's own, read AHEAD of the playhead. `delay` is seconds of
-        // MATCH time until contact and the audio clock runs in real seconds,
-        // so it is divided by the playback speed on the way across: at 8x a
-        // kick a tenth of a second away is twelve milliseconds away, and
-        // handing the mixer the match figure would put every impact further
-        // behind the picture the faster the replay ran.
-        if let Some(impact) = ball.impact {
-            let contact = impact.contact;
-            let when = playback.time_ms + (contact.delay as f64) * 1000.0;
-            if self.arm(when) {
-                mixer.touch(
-                    contact.kind,
-                    Self::weight(contact.velocity.length()),
-                    Self::across(contact.at.x),
-                    contact.delay / playback.speed.max(0.01),
-                );
-            }
+    /// **The ball being sent**, off the animation rig's own lookahead.
+    ///
+    /// This is the path that lands on time: the rig reads the coming strike
+    /// ahead of the playhead so a footballer can take a backswing, and the
+    /// same reading lets the sound be SCHEDULED on the audio clock rather than
+    /// fired on the frame it happens to be noticed. `delay` is seconds of
+    /// MATCH time and the audio clock runs in real seconds, so it is divided
+    /// by the playback speed on the way across.
+    ///
+    /// A contact the striker still owns three quarters of a second later is a
+    /// man running with the ball. It is armed — so the fallback and the
+    /// lookahead do not both count it — and then not played.
+    fn sent(
+        &mut self,
+        playback: &Playback,
+        ball: &BallState,
+        tracks: &mut ReplayTracks,
+    ) -> Option<Cue> {
+        let impact = ball.impact?;
+        let contact = impact.contact;
+        let when = playback.time_ms + (contact.delay as f64) * 1000.0;
+        if !self.arm(when) {
+            return None;
         }
+        if Self::keeps_it(tracks, impact.by, when).unwrap_or(false) {
+            // His own ball, still. The dribble is the thing this crate is
+            // quiet about.
+            return None;
+        }
+        self.spoken = true;
+        Some(Cue {
+            meeting: Meeting::Struck(contact.kind),
+            weight: Self::weight(contact.velocity.length()),
+            pan: Self::across(contact.at.x),
+            delay: contact.delay / playback.speed.max(0.01),
+        })
+    }
 
-        // …and the ones it is built to ignore, which happen now rather than
-        // in a hundred milliseconds.
-        if let Some((kind, change)) = self.brushed(ball, step)
-            && self.arm(playback.time_ms)
-        {
-            mixer.touch(
-                kind,
-                Self::weight(change),
-                Self::across(ball.position.x),
-                0.0,
-            );
+    /// **The ball arriving**, and the backstop for it leaving.
+    ///
+    /// Runs off possession changing hands rather than off a contact, which is
+    /// what makes it exact about the two moments that matter and blind to
+    /// everything between them.
+    ///
+    /// ⚠ **The holder is sticky, and has to be.** He is the last man to have
+    /// had the ball, not the man within reach of it right now — a dribbler
+    /// knocks it three metres ahead and is out of reach of his own ball for
+    /// most of every stride. Clearing the holder each time that happens turns
+    /// one carried ball into a pass out and a pass in per touch, which is the
+    /// rattle this whole file exists to remove.
+    fn possession(&mut self, now: f64, ball: &BallState, tracks: &mut ReplayTracks) -> Option<Cue> {
+        match Self::owner(ball) {
+            // Nobody within reach: travelling, loose, or knocked ahead of the
+            // man running with it.
+            None => {
+                let holder = self.holder?;
+                // Normally the going has already been heard — [`Self::sent`]
+                // fires a tenth of a second earlier off the lookahead — so
+                // this speaks only for the passes the rig's own gates are too
+                // strict to see. And only if he really has given it up.
+                if self.spoken
+                    || self.carried.length() <= Self::SENT
+                    || Self::keeps_it(tracks, holder, now).unwrap_or(false)
+                    || !self.arm(now)
+                {
+                    return None;
+                }
+                self.spoken = true;
+                Some(Cue {
+                    meeting: Meeting::Struck(Actors::strike_kind(
+                        ball.position,
+                        self.carried.length(),
+                    )),
+                    weight: Self::weight(self.carried.length()),
+                    pan: Self::across(ball.position.x),
+                    delay: 0.0,
+                })
+            }
+            // The man who already had it, back on his own ball between
+            // touches. Nothing has changed hands and nothing is played.
+            Some(taker) if self.holder == Some(taker) => None,
+            // Somebody else has it — but only if he still has it in a moment.
+            // A ball rolling past a man's feet puts him nearest for three
+            // frames and is not a touch at all.
+            Some(taker) => {
+                self.holder = Some(taker);
+                self.spoken = false;
+                Self::keeps_it(tracks, taker, now)
+                    .unwrap_or(false)
+                    .then(|| Cue {
+                        meeting: Meeting::Received,
+                        weight: Self::weight(self.carried.length()),
+                        pan: Self::across(ball.position.x),
+                        delay: 0.0,
+                    })
+            }
         }
     }
 
-    /// **A touch the rig's own detector is built to ignore.**
+    /// **Does `id` still have the ball a moment after `when`?**
     ///
-    /// The test is the physical one: the ball's momentum changed, and
-    /// somebody was within reach of it when it did. Nothing else on a football
-    /// pitch can change it that fast — gravity and drag are smooth, and the
-    /// proximity gate is what keeps a bounce off the turf out of the mix.
+    /// The one question this module turns on, and the recording can simply be
+    /// asked it — see the note at the top of the file. `None` when either
+    /// track has nothing to say that far ahead, which is the honest answer at
+    /// the very end of a clip; both callers read that as "he does not", so a
+    /// contact at the edge of a recording is played rather than swallowed.
+    fn keeps_it(tracks: &mut ReplayTracks, id: u32, when: f64) -> Option<bool> {
+        let settled = when + Self::SETTLE_MS;
+        let ball = tracks.ball.position_ahead(settled)?;
+        let man = tracks.players.get_mut(&id)?.position_ahead(settled)?;
+        let ball = Field::to_world(ball[0], ball[1], ball[2]);
+        let man = Field::to_world(man[0], man[1], man[2]);
+        // Across the ground only: a ball over his head is still his.
+        Some(Vec2::new(ball.x - man.x, ball.z - man.z).length() <= Self::STILL_HIS)
+    }
+
+    /// Who is carrying the ball, if anybody.
     ///
-    /// Returns what it was struck with and by how much the motion changed, in
-    /// metres per second, which is the same currency
-    /// [`Self::weight`] reads a recorded strike in.
-    fn brushed(&self, ball: &BallState, step: f32) -> Option<(Strike, f32)> {
-        // In the gloves. Whatever happens to the ball now is the keeper
-        // carrying it, and `BallState` is displacing it to his hands anyway.
-        if ball.held_by.is_some() || !ball.on_pitch {
+    /// [`Actors::STRIKE_REACH`] rather than a radius of this module's own:
+    /// "close enough to have played it" is one question with one answer, and
+    /// the rig already owns it.
+    fn owner(ball: &BallState) -> Option<u32> {
+        if !ball.on_pitch {
             return None;
         }
-
-        // ⚠ **The engine PUTS the ball down for a restart, a catch or a block
-        // rather than moving it there**, and `Actors` blanks the velocity to
-        // exactly zero when it sees that jump — see
-        // [`Track::teleported`](crate::recording::replay::Track). Measured
-        // across the blanking, a ball flying at twenty metres a second looks
-        // like a twenty-metre-a-second contact, and there is a player standing
-        // over the ball at most restarts. So the frame the velocity is thrown
-        // away is not a frame anything can be read from.
-        //
-        // The cost is a ball trapped stone dead out of a fast pass, which
-        // loses its touch. The rig misses that one too — it is a DROP in
-        // speed, and `next_impact` only looks for a rise.
-        if ball.velocity == Vec3::ZERO && self.carried.length() > Self::NUDGE {
-            return None;
+        // In the gloves he is holding it whatever the distance says — the
+        // drawn ball is displaced to his hands and the recorded one is not.
+        if let Some(keeper) = ball.held_by {
+            return Some(keeper);
         }
-
-        let (_, range) = ball.nearest?;
-        if range > Actors::STRIKE_REACH {
-            return None;
-        }
-
-        let change = (ball.velocity - self.carried).length();
-        // Whichever of the two floors is higher wins, so this stays a test of
-        // "something hit it" at every playback speed. See
-        // [`Self::GRAVITY_MARGIN`].
-        if change < Self::NUDGE.max(Self::GRAVITY_MARGIN * step) {
-            return None;
-        }
-
-        // **A bounce off the turf is not a touch**, and it is otherwise the
-        // biggest false positive here: a ball dropping onto the grass beside a
-        // player reverses eight metres a second of vertical in one frame,
-        // which sails past every test above.
-        //
-        // What separates the two is the ground plane. Turf takes the vertical
-        // and hands back most of it; the two horizontal components come
-        // through very nearly unaltered. Nothing a footballer does to a ball
-        // leaves them alone — even a ball trapped dead straight down loses its
-        // run. So a change that is ALL vertical, low enough to be the pitch,
-        // is the pitch.
-        let flat = Vec2::new(
-            ball.velocity.x - self.carried.x,
-            ball.velocity.z - self.carried.z,
-        )
-        .length();
-        if ball.position.y < Actors::BALL_RADIUS * 2.0 && flat < Self::NUDGE * 0.5 {
-            return None;
-        }
-
-        // Read off the same geometry the rig reads it off, rather than a
-        // second opinion about what a header is: `before` is how fast the ball
-        // was going into the contact, which is what separates a throw-in from
-        // a pass down the line.
-        Some((
-            Actors::strike_kind(ball.position, self.carried.length()),
-            change,
-        ))
+        ball.nearest
+            .filter(|(_, range)| *range <= Actors::STRIKE_REACH)
+            .map(|(id, _)| id)
     }
 
     /// The ball crossing into the netting, on the frame it does.
@@ -306,7 +369,7 @@ impl Soundtrack {
     }
 
     /// Whether a contact at this match time is a new one, and remembers it if
-    /// so. The single gate both detectors go through.
+    /// so. The single gate both paths go through.
     fn arm(&mut self, when: f64) -> bool {
         if self
             .struck
@@ -342,167 +405,267 @@ impl Soundtrack {
     /// a noise about any of it.
     fn resync(&mut self, ball: &BallState) {
         self.struck = None;
+        self.spoken = false;
+        self.holder = Self::owner(ball);
         self.netted = ball.on_pitch && Netting::inside_a_goal(ball.position);
         self.carried = ball.velocity;
     }
 }
 
 /// The rules here that are about a football match rather than about audio:
-/// what counts as a touch, and what counts as the same touch twice.
+/// who has the ball, and which of the things done to it are worth hearing.
 #[cfg(test)]
-mod touches {
+mod possession {
     use super::*;
+    use crate::recording::replay::Sample;
 
-    /// A ball on the deck doing `now`, with the nearest man `range` away.
-    fn ball(now: Vec3, range: f32) -> BallState {
+    /// A ball on the deck, `range` metres from player 7.
+    fn ball(range: f32) -> BallState {
         BallState {
             position: Vec3::new(0.0, 0.2, 0.0),
             on_pitch: true,
-            velocity: now,
             nearest: Some((7, range)),
             ..default()
         }
     }
 
-    /// A soundtrack that watched the ball doing `was` on the previous frame —
-    /// which is where the detector's other half lives.
-    fn after(was: Vec3) -> Soundtrack {
-        Soundtrack {
-            carried: was,
+    /// Engine units for a distance in metres along the pitch.
+    fn units(metres: f32) -> f32 {
+        metres / Field::METERS_PER_UNIT
+    }
+
+    /// A straight run from one point to another over a second, sampled at the
+    /// recorder's own 30 ms step.
+    ///
+    /// ⚠ **The step matters.** A track whose samples are further apart than
+    /// [`INTERPOLATION_GAP_MS`](crate::recording::replay) is HELD rather than
+    /// interpolated — the recorder drops samples that repeat a position, so a
+    /// wide gap means the thing was standing still. A fixture written with two
+    /// samples a second apart therefore describes nobody moving at all, which
+    /// is how this file's first pass "proved" that a twelve-metre pass never
+    /// left its man.
+    ///
+    /// Metres in, engine units out: `x` and `y` are the 0.125 m grid.
+    fn run(from: (f32, f32), to: (f32, f32), height: f32) -> Vec<Sample> {
+        const STEP_MS: u32 = 30;
+        const OVER_MS: u32 = 1_000;
+        (0..=OVER_MS / STEP_MS)
+            .map(|step| {
+                let t = step * STEP_MS;
+                let f = (t as f32 / OVER_MS as f32).min(1.0);
+                Sample {
+                    t,
+                    x: units(from.0 + (to.0 - from.0) * f),
+                    y: units(from.1 + (to.1 - from.1) * f),
+                    // Height is already metric — the one axis that is not the
+                    // grid. See `Field::to_world`.
+                    z: height * f,
+                }
+            })
+            .collect()
+    }
+
+    /// A recording of one ball and player 7, each running a straight line.
+    fn recording(ball: Vec<Sample>, man: Vec<Sample>) -> ReplayTracks {
+        let mut tracks = ReplayTracks::default();
+        tracks.ball.merge(ball);
+        tracks.players.entry(7).or_default().merge(man);
+        tracks
+    }
+
+    /// **The whole point.** A man carrying the ball knocks it ahead and runs
+    /// after it, so three quarters of a second later it is still at his feet —
+    /// and that touch must not be played.
+    #[test]
+    fn a_dribbler_still_has_the_ball_and_so_makes_no_sound() {
+        // Ball knocked from 100 to 104 m along the pitch; he follows it from
+        // 99 to 103.2. Under a metre apart when the question is asked.
+        let mut tracks = recording(
+            run((100.0, 30.0), (104.0, 30.0), 0.0),
+            run((99.0, 30.0), (103.2, 30.0), 0.0),
+        );
+        assert_eq!(
+            Soundtrack::keeps_it(&mut tracks, 7, 0.0),
+            Some(true),
+            "his own knock was heard as a pass"
+        );
+    }
+
+    /// …and the same knock, once he has actually passed it, is not his any
+    /// more. Even a gentle five-metre ball is well clear of him by then.
+    #[test]
+    fn a_pass_has_left_its_man() {
+        let mut tracks = recording(
+            run((100.0, 30.0), (112.0, 30.0), 0.0),
+            // He plays it and stops.
+            run((99.5, 30.0), (100.5, 30.0), 0.0),
+        );
+        assert_eq!(Soundtrack::keeps_it(&mut tracks, 7, 0.0), Some(false));
+    }
+
+    /// …and the shortest thing anybody would call a pass is still a pass. A
+    /// five-metre ball is clear of the man who played it well before the
+    /// question is asked, which is what lets the whole test work without a
+    /// threshold on how hard the ball was hit.
+    #[test]
+    fn even_a_five_metre_ball_has_left_him() {
+        let mut tracks = recording(
+            run((100.0, 30.0), (105.0, 30.0), 0.0),
+            run((99.6, 30.0), (99.9, 30.0), 0.0),
+        );
+        assert_eq!(Soundtrack::keeps_it(&mut tracks, 7, 0.0), Some(false));
+    }
+
+    /// A ball over a man's head is still a ball he is under. The test is
+    /// across the ground, not through the air.
+    #[test]
+    fn height_does_not_take_the_ball_off_him() {
+        let mut tracks = recording(
+            // Straight up off his own boot and hanging over him.
+            run((100.0, 30.0), (100.5, 30.0), 6.0),
+            run((100.0, 30.0), (100.2, 30.0), 0.0),
+        );
+        assert_eq!(Soundtrack::keeps_it(&mut tracks, 7, 0.0), Some(true));
+    }
+
+    /// Nothing streamed yet is not "he lost it" — but both callers read it as
+    /// a sound worth playing, because a contact at the very edge of a clip is
+    /// better heard than swallowed.
+    #[test]
+    fn a_track_that_says_nothing_is_not_a_dribble() {
+        let mut nothing = ReplayTracks::default();
+        assert_eq!(Soundtrack::keeps_it(&mut nothing, 7, 0.0), None);
+        assert!(!Soundtrack::keeps_it(&mut nothing, 7, 0.0).unwrap_or(false));
+    }
+
+    /// Possession is the rig's own reach, and a ball out of play belongs to
+    /// nobody however close somebody is standing.
+    #[test]
+    fn who_has_the_ball() {
+        assert_eq!(Soundtrack::owner(&ball(0.5)), Some(7));
+        assert_eq!(Soundtrack::owner(&ball(Actors::STRIKE_REACH + 0.1)), None);
+
+        let mut gone = ball(0.5);
+        gone.on_pitch = false;
+        assert_eq!(Soundtrack::owner(&gone), None);
+
+        // A keeper holding it owns it whatever the recorded distance says:
+        // the drawn ball is displaced into his gloves and the recorded one is
+        // not, so the range can read as anything.
+        let mut gathered = ball(9.0);
+        gathered.held_by = Some(1);
+        assert_eq!(Soundtrack::owner(&gathered), Some(1));
+    }
+
+    /// ⚠ **The bug this design nearly shipped with.** A dribbler knocks the
+    /// ball three metres ahead, so for most of every stride it is out of his
+    /// reach and possession reads as nobody's. Taken at face value that is a
+    /// pass out and then a pass in, per touch, for the whole run — the exact
+    /// rattle the file exists to remove. The holder has to be sticky.
+    #[test]
+    fn a_knock_ahead_of_himself_is_not_a_pass_and_back() {
+        // He is running with it and stays with it, as `keeps_it` sees.
+        let mut tracks = recording(
+            run((100.0, 30.0), (104.0, 30.0), 0.0),
+            run((99.0, 30.0), (103.2, 30.0), 0.0),
+        );
+        let mut soundtrack = Soundtrack {
+            holder: Some(7),
+            carried: Vec3::new(5.0, 0.0, 0.0),
             ..default()
-        }
-    }
+        };
 
-    /// **The whole reason this detector exists.** A five-metre square ball off
-    /// a ball that was already rolling fails both of the animation rig's gates
-    /// — it leaves under 4.5 m/s and nowhere near 1.6x what it arrived at —
-    /// and it is the most common event in a football match.
-    #[test]
-    fn a_small_pass_off_a_rolling_ball_is_a_touch() {
-        // Rolling at 3 m/s, played square at 4 m/s across it.
-        let was = Vec3::new(3.0, 0.0, 0.0);
-        let now = Vec3::new(0.0, 0.0, 4.0);
-        let soundtrack = after(was);
-        let struck = soundtrack.brushed(&ball(now, 0.4), 1.0 / 60.0);
+        // Mid-knock: the ball is three metres in front of him, so nobody is
+        // within reach of it.
+        let loose = BallState {
+            position: Vec3::new(0.0, 0.1, 0.0),
+            on_pitch: true,
+            nearest: Some((7, 3.0)),
+            ..default()
+        };
         assert!(
-            struck.is_some(),
-            "the commonest pass in football was silent"
+            soundtrack.possession(0.0, &loose, &mut tracks).is_none(),
+            "his own knock was played as a pass out"
         );
-        // …and it is quiet, which is the other half of being right about it.
-        let (kind, change) = struck.expect("a touch");
-        assert!(
-            matches!(kind, Strike::Boot),
-            "a square ball is struck with a boot"
-        );
-        assert!(
-            Soundtrack::weight(change) < 0.25,
-            "a square ball is not a shot"
-        );
-    }
+        assert_eq!(soundtrack.holder, Some(7), "it is still his ball");
 
-    /// A ball nobody is near is doing whatever the air and the turf are doing
-    /// to it, and none of that is a contact.
-    #[test]
-    fn nothing_within_reach_is_nothing_at_all() {
-        let was = Vec3::new(10.0, 2.0, 0.0);
-        let now = Vec3::new(10.0, -6.0, 0.0);
+        // …and catching up with it is not receiving a pass.
         assert!(
-            after(was)
-                .brushed(&ball(now, Actors::STRIKE_REACH + 0.5), 1.0 / 60.0)
+            soundtrack
+                .possession(0.0, &ball(0.5), &mut tracks)
                 .is_none(),
-            "a bounce with nobody near it was played as a touch"
+            "catching his own knock was played as a reception"
         );
     }
 
-    /// Gravity must not become a touch at speed. A frame at 16x covers a
-    /// quarter of a second, over which gravity alone changes the ball by
-    /// 2.5 m/s — comfortably past the standing floor.
+    /// …while the ball actually leaving him, to a man who keeps it, is the
+    /// pair of sounds a move is supposed to make.
     #[test]
-    fn gravity_is_never_a_touch_however_fast_the_replay_runs() {
-        let step = 0.25; // one frame at 16x
-        let was = Vec3::new(6.0, 4.0, 0.0);
-        let now = was - Vec3::new(0.0, 9.81 * step, 0.0);
+    fn a_pass_is_heard_going_and_arriving() {
+        let mut gone = recording(
+            run((100.0, 30.0), (112.0, 30.0), 0.0),
+            run((99.5, 30.0), (100.5, 30.0), 0.0),
+        );
+        let mut soundtrack = Soundtrack {
+            holder: Some(7),
+            carried: Vec3::new(12.0, 0.0, 0.0),
+            ..default()
+        };
+
+        let away = BallState {
+            position: Vec3::new(0.0, 0.1, 0.0),
+            on_pitch: true,
+            nearest: Some((7, 4.0)),
+            ..default()
+        };
+        let out = soundtrack
+            .possession(0.0, &away, &mut gone)
+            .expect("the ball leaving him is a sound");
+        assert!(matches!(out.meeting, Meeting::Struck(_)));
+        assert!(soundtrack.spoken, "and it is not said twice");
+
+        // Now a different man gets it and keeps it.
+        let mut taken = recording(
+            run((112.0, 30.0), (113.0, 30.0), 0.0),
+            run((112.4, 30.0), (113.2, 30.0), 0.0),
+        );
+        let mut receiving = Soundtrack {
+            holder: Some(3),
+            carried: Vec3::new(9.0, 0.0, 0.0),
+            ..default()
+        };
+        let arrival = receiving
+            .possession(0.0, &ball(0.4), &mut taken)
+            .expect("the ball arriving is a sound");
+        assert!(matches!(arrival.meeting, Meeting::Received));
+        assert_eq!(receiving.holder, Some(7));
+    }
+
+    /// A ball that merely rolls past a man's boots put him nearest for three
+    /// frames. He never had it, so nothing arrived.
+    #[test]
+    fn a_ball_rolling_past_a_man_is_not_a_reception() {
+        let mut through = recording(
+            run((100.0, 30.0), (112.0, 30.0), 0.0),
+            run((100.2, 30.0), (100.6, 30.0), 0.0),
+        );
+        let mut soundtrack = Soundtrack {
+            holder: Some(3),
+            carried: Vec3::new(12.0, 0.0, 0.0),
+            ..default()
+        };
         assert!(
-            after(was).brushed(&ball(now, 0.5), step).is_none(),
-            "a falling ball was played as a touch at 16x"
+            soundtrack
+                .possession(0.0, &ball(0.6), &mut through)
+                .is_none()
         );
-        // The same fall at 1x is far below the floor as well.
-        let slow = 1.0 / 60.0;
-        let dropped = was - Vec3::new(0.0, 9.81 * slow, 0.0);
-        assert!(after(was).brushed(&ball(dropped, 0.5), slow).is_none());
-    }
-
-    /// …and a real boot at that same speed still is one.
-    #[test]
-    fn a_strike_still_lands_at_sixteen_times_speed() {
-        let was = Vec3::new(2.0, 0.0, 0.0);
-        let now = Vec3::new(-18.0, 3.0, 0.0);
-        assert!(after(was).brushed(&ball(now, 0.3), 0.25).is_some());
-    }
-
-    /// The turf takes the vertical and hands most of it back, and leaves the
-    /// run alone. A player standing over a bouncing ball is common, and this
-    /// is otherwise the loudest thing in the mix that never happened.
-    #[test]
-    fn a_bounce_off_the_grass_is_not_a_touch() {
-        let was = Vec3::new(4.0, -8.5, 1.0);
-        let bounced = Vec3::new(4.0, 6.0, 1.0);
-        let mut on_the_deck = ball(bounced, 0.9);
-        on_the_deck.position.y = Actors::BALL_RADIUS;
-        assert!(
-            after(was).brushed(&on_the_deck, 1.0 / 60.0).is_none(),
-            "the pitch was played as a pass"
-        );
-
-        // …but a volley met at the same instant is a contact, because a boot
-        // takes the run off it as well as the drop.
-        let struck = Vec3::new(-9.0, 6.0, 1.0);
-        let mut met = ball(struck, 0.9);
-        met.position.y = Actors::BALL_RADIUS;
-        assert!(after(was).brushed(&met, 1.0 / 60.0).is_some());
-    }
-
-    /// …and the same bounce up in the air — off a head, off a knee — is a
-    /// contact, because nothing up there is the pitch.
-    #[test]
-    fn a_ball_turned_over_above_the_grass_is_a_contact() {
-        let was = Vec3::new(4.0, -8.5, 1.0);
-        let now = Vec3::new(4.0, 6.0, 1.0);
-        let mut airborne = ball(now, 0.9);
-        airborne.position.y = 1.6;
-        assert!(after(was).brushed(&airborne, 1.0 / 60.0).is_some());
-    }
-
-    /// ⚠ The engine PLACES the ball for a restart and the velocity is blanked
-    /// to zero when it does. There is a player standing over the ball at most
-    /// restarts, so read as a contact this is a goal kick that cracks like a
-    /// volley on the frame the ball is put down.
-    #[test]
-    fn a_placement_is_not_a_contact() {
-        let flying = Vec3::new(0.0, -14.0, 6.0);
-        let placed = Vec3::ZERO;
-        assert!(
-            after(flying)
-                .brushed(&ball(placed, 0.6), 1.0 / 60.0)
-                .is_none(),
-            "the engine putting the ball down was played as a strike"
-        );
-    }
-
-    /// A ball in a goalkeeper's hands is being carried, not struck.
-    #[test]
-    fn a_ball_in_the_gloves_is_quiet() {
-        let was = Vec3::new(9.0, 0.0, 0.0);
-        let mut held = ball(Vec3::new(1.0, 0.0, 3.0), 0.2);
-        held.held_by = Some(1);
-        assert!(after(was).brushed(&held, 1.0 / 60.0).is_none());
     }
 
     /// The lookahead reports the same coming kick on every frame until the
-    /// playhead reaches it, and the soft detector sees the same contact from
-    /// the other side. It has to be played once.
+    /// playhead reaches it, and the possession backstop sees the same pass
+    /// from the other side. It has to be played once.
     #[test]
-    fn one_contact_is_one_sound_however_many_detectors_saw_it() {
+    fn one_pass_is_one_sound_however_many_paths_saw_it() {
         let mut soundtrack = Soundtrack::default();
         // The frames a strike 120 ms away is visible on, as the playhead
         // closes: the instant it lands on stays put, give or take a probe.
@@ -514,37 +677,35 @@ mod touches {
             }
         }
         assert_eq!(played, 1, "the same strike was played {played} times");
-        // The soft detector, firing at the moment the ball is actually hit,
-        // is inside the same window and must not add a second.
-        assert!(!soundtrack.arm(120.0), "both detectors played one touch");
-        // The next touch in the move is its own sound.
+        // The backstop, firing when the ball actually clears him, is inside
+        // the same window and must not add a second.
+        assert!(!soundtrack.arm(120.0));
+        // The next pass in the move is its own sound.
         assert!(soundtrack.arm(520.0));
     }
 
-    /// A scrub throws the bookkeeping away rather than firing it: the velocity
-    /// across a jump is not a velocity, and the strike that was armed is now
-    /// somewhere else in the match.
+    /// A scrub throws the bookkeeping away rather than firing it, and adopts
+    /// whoever has the ball where it landed — so the first frame after a jump
+    /// is not heard as a reception.
     #[test]
     fn a_seek_adopts_the_world_without_making_a_noise() {
         let mut soundtrack = Soundtrack {
             struck: Some(1_000.0),
-            carried: Vec3::new(20.0, 0.0, 0.0),
+            spoken: true,
+            holder: Some(3),
             netted: true,
+            carried: Vec3::new(20.0, 0.0, 0.0),
             ..default()
         };
-        let landed = BallState {
-            position: Vec3::new(0.0, 0.1, 0.0),
-            on_pitch: true,
-            velocity: Vec3::new(2.0, 0.0, 0.0),
-            ..default()
-        };
-        soundtrack.resync(&landed);
+        soundtrack.resync(&ball(0.5));
         assert_eq!(soundtrack.struck, None);
-        assert_eq!(soundtrack.carried, landed.velocity);
-        assert!(
-            !soundtrack.netted,
-            "the ball is not in a goal at the centre spot"
+        assert!(!soundtrack.spoken);
+        assert_eq!(
+            soundtrack.holder,
+            Some(7),
+            "whoever has it where we landed already has it"
         );
+        assert!(!soundtrack.netted);
     }
 
     /// The pitch's length runs across the picture, and both ends have to land

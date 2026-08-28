@@ -57,6 +57,7 @@ use crate::transfers::pipeline::breakout::{
     BreakoutInputs, BreakoutPerformanceSignal, LeaguePerformanceLookup,
 };
 use crate::transfers::pipeline::circulation::BuyerScan;
+use crate::transfers::pipeline::loan_interest::InterestDraw;
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
 };
@@ -434,7 +435,20 @@ impl PipelineProcessor {
                 .collect();
             scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
 
-            for (cand, _score) in scored.iter().take(Self::BREAKOUT_WATCH_PER_PASS) {
+            // Draw the names to file rather than taking the top rows. The
+            // acceptance score is built from the same public form data every
+            // club can see, so a straight top-N had every eligible buyer in the
+            // country open a file on the same two players in the same week —
+            // and re-file them the next week, since the ordering doesn't move
+            // while the form doesn't. The gates above are unchanged; this is
+            // only which of the players they already approved get watched.
+            let slate: Vec<(u32, f32)> = scored
+                .iter()
+                .enumerate()
+                .map(|(i, (_, score))| (i as u32, *score))
+                .collect();
+            let drawn = InterestDraw::pick_several(&slate, Self::BREAKOUT_WATCH_PER_PASS);
+            for (cand, _score) in drawn.into_iter().map(|i| &scored[i as usize]) {
                 let s = &cand.summary;
                 actions.push(WatchAction {
                     club_id: club.id,

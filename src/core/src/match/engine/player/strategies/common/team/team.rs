@@ -1,3 +1,4 @@
+use crate::r#match::player::strategies::common::players::ops::box_movement::BoxMovement;
 use crate::r#match::{
     AttackPlan, BoxSlot, CoachInstruction, DefensiveDuty, DefensivePlan, Flank, GamePhase,
     MatchCoach, MatchPlayerLite, PlayerSide, StateProcessingContext, TeamShape, TeamTacticalState,
@@ -162,17 +163,21 @@ impl<'b> TeamOperationsImpl<'b> {
         }
     }
 
-    /// Where this player's assigned box slot actually is. `None` when he
-    /// has no slot in the current attack.
+    /// **Where his assigned box slot wants him right now.** `None` when
+    /// he has no slot in the current attack.
+    ///
+    /// Not the slot's coordinate: [`BoxMovement::hold`] stages him from
+    /// his place in the block, through the point he waits at, to the
+    /// patch itself, as the ball comes. A slot is handed out from
+    /// `Progression` onward so the run can START early — returning the
+    /// finishing point from the moment it is handed out is what made it
+    /// FINISH early instead, and put a forward inside 16.5 m of goal for
+    /// 39% of a match. See `BoxMovement`.
     pub fn my_box_slot_target(&self) -> Option<Vector3<f32>> {
         let slot = self.my_box_slot()?;
         #[cfg(feature = "match-logs")]
         crate::mid_run_diag::PlanDiag::note_slot_tick();
-        let goal = self.ctx.player().opponent_goal_position();
-        let field_height = self.ctx.context.field_size.height as f32;
-        let forward_dir = self.ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
-        let ball_y = self.ctx.tick_context.positions.ball.position.y;
-        Some(slot.target(goal, ball_y, field_height, forward_dir))
+        Some(BoxMovement::hold(self.ctx, slot))
     }
 
     /// This side's live positional block.
