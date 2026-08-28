@@ -101,23 +101,21 @@ impl MarkerEvasion {
     /// ~2.2 s is the real cadence of a centre-forward's double movement —
     /// long enough for the marker to commit to the first move.
     ///
-    /// ⚠ **THE SPIN DOES NOT HAPPEN**, and has not since this was
-    /// written. The period is applied to `in_state_time`, which resets on
-    /// every state transition, and the states this runs in churn:
-    /// `CreatingSpace` bounces through `Assisting` and back — a
-    /// documented, load-bearing two-cycle worth ~15,000 round trips per
-    /// three matches. Measured mean `in_state_time` at a forward's
-    /// box-slot movement tick is **21** (`dev_match stats`,
-    /// box-occupancy census), or 0.095 of a cycle, and
-    /// [`Self::CHECK_FRACTION`] is 0.35 — so every attacker in the game
-    /// is permanently in the *check* half. He shows for the ball and
-    /// never spins off, which is exactly the movement the module docs
-    /// call "the single most common way a centre-forward gets free".
+    /// ⚠ **THE SPIN USED NOT TO HAPPEN AT ALL.** The period was applied
+    /// to `in_state_time`, which resets on every state transition, and
+    /// the states this runs in churn: `CreatingSpace` bounces through
+    /// `Assisting` and back — a documented, load-bearing two-cycle worth
+    /// ~15,000 round trips per three matches. Measured mean
+    /// `in_state_time` at a forward's box-slot movement tick was **21**
+    /// (`dev_match stats`, box-occupancy census), or 0.095 of a cycle,
+    /// against a [`Self::CHECK_FRACTION`] of 0.35 — so every attacker in
+    /// the game sat permanently in the *check* half. He showed for the
+    /// ball and never spun off, which is exactly the movement the module
+    /// docs call "the single most common way a centre-forward gets free".
     ///
-    /// A rhythm has to run off a clock state churn cannot reset, and the
-    /// corrected one is written and tested. It is **gated**, not applied
-    /// — see [`Self::live_cadence`] for the measurement that says why,
-    /// and what a future campaign has to re-read to turn it on.
+    /// A rhythm has to run off a clock state churn cannot reset, so it
+    /// runs off the match clock — see [`Self::live_cadence`] for what
+    /// switching it on cost and where that was paid.
     const DOUBLE_MOVE_PERIOD_MS: u64 = 2200;
 
     /// …and how much of that cycle is the CHECK. The shorter half by
@@ -128,46 +126,38 @@ impl MarkerEvasion {
     const CHECK_FRACTION: f32 = 0.35;
 
     /// Whether the check-and-spin runs on a clock state churn cannot
-    /// reset — which is to say, whether it runs at all.
+    /// reset — which is to say, whether it runs at all. **On**, with
+    /// `OF_EVASION_LEGACY` to put the stuck phase back for an A/B.
     ///
-    /// # ⚠ DEFAULT OFF, AND THAT IS A MEASURED DEBT, NOT AN OVERSIGHT
+    /// # What turning it on cost, and where that was paid
     ///
-    /// The mis-keying documented on [`Self::DOUBLE_MOVE_PERIOD_MS`] is a
-    /// real bug and the fix below is a one-line correction. It is left
-    /// switched off because turning it on is not a movement change, it
-    /// is a **chance-economy change**, and paying for it needs a
-    /// calibration campaign this switch exists to make possible.
+    /// Unsticking the phase is one line, but it is not a movement change
+    /// — it is a **chance-supply** change, because an attacker whose
+    /// target reverses every 2.2 s is in motion for far more of the match
+    /// and motion is receptions. Measured at level 14, one binary,
+    /// everything else held: shots went 13.5 → 17.1 a team and goals
+    /// 2.69 → 3.87, against a real ~13 and ~2.65.
     ///
-    /// Measured at level 14, 30 matches an arm, one binary, with
-    /// everything else held (`dev_match stats 30 14 14`):
-    ///
-    /// | arm | shots/team | goals/match |
-    /// |---|---|---|
-    /// | as shipped (phase stuck) | 13.5 | 2.69 |
-    /// | live cadence | 17.1 | 3.87 |
-    ///
-    /// Against a real ~13 shots and ~2.65 goals, so the second row is
-    /// 45% too many goals. Two candidate explanations were tested and
-    /// **both measured null**, which is why this is a campaign and not a
-    /// coefficient:
+    /// Two cheaper explanations were tested first and **both measured
+    /// null**, which is what made this a calibration campaign rather than
+    /// a coefficient:
     ///
     /// * *The offset is too big now.* [`Self::MAX_OFFSET`] was sized
     ///   against a cadence that never reversed. Sweeping it 64 → 40 → 28
     ///   moved goals 3.57 → 3.34 → 2.97 but left shots pinned at
     ///   17.2/17.0 — so the size is not what changed the supply.
-    /// * *The cadence has a net direction.* It did, and it is fixed
-    ///   below; on its own it moved shots 17.0 → 17.1.
+    /// * *The cadence has a net direction.* It did, and it is fixed at
+    ///   the double-movement term below; on its own it moved shots
+    ///   17.0 → 17.1.
     ///
-    /// What is left is the reversal itself: an attacker whose target
-    /// jumps every 2.2 s is in motion for far more of the match, and
-    /// motion is receptions. That is correct football and the engine
-    /// wants it — but the shot bars, the xG floor and the save model
-    /// were all fitted against a front line that stood still, so they
-    /// have to be re-read before it can be switched on.
+    /// The surplus is supply, so it was paid where supply is set: the
+    /// shot decision. See `SHOT_BAR_BASE`, which was re-titrated against
+    /// this movement model — the front line it was originally fitted
+    /// against stood still.
     fn live_cadence() -> bool {
         use std::sync::OnceLock;
-        static ON: OnceLock<bool> = OnceLock::new();
-        *ON.get_or_init(|| std::env::var("OF_EVASION_LIVE_CADENCE").is_ok())
+        static LEGACY: OnceLock<bool> = OnceLock::new();
+        !*LEGACY.get_or_init(|| std::env::var("OF_EVASION_LEGACY").is_ok())
     }
 
     /// The man marking this attacker, if anybody is.

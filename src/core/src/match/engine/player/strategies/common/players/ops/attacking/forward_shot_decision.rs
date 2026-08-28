@@ -5044,7 +5044,133 @@ impl ShotBarPopulation {
 /// ACCURACY, not volume: on-target sits at 31% against a real 33%, and
 /// closing that alone would carry the total the rest of the way without
 /// another shot being taken.
-const SHOT_BAR_BASE: f32 = 0.912;
+///
+/// # 2026-08-28 — 0.912 → 0.945, re-titrated against a front line that MOVES
+///
+/// This bar was fitted against attackers who stood still. They did,
+/// literally: `MarkerEvasion`'s check-and-spin was keyed on
+/// `in_state_time`, which state churn resets, so every attacker in the
+/// game sat permanently in the *check* half and never spun off — see
+/// `MarkerEvasion::live_cadence`. Fixing that is a **supply** change, and
+/// supply is what this constant sets, so it is what pays for it.
+///
+/// Sweep under the live cadence, level 14, one binary, n=60 an arm:
+///
+/// | base | shots/team | goals | on-target | saves/on-target |
+/// |---|---|---|---|---|
+/// | 0.912 | 15.8 | 3.15 | 29.0% | 65.7% |
+/// | **0.945** | **13.2** | **2.79** | **32.4%** | **67.4%** |
+/// | 0.965 | 12.4 | 2.63 | 29.9% | 64.7% |
+/// | 0.985 | 11.2 | 2.15 | 29.6% | 67.8% |
+///
+/// ~0.079 shots a team per thousandth, which is the sensitivity this
+/// note already quoted, so the knob has not changed shape.
+///
+/// Confirmed against the previous behaviour as a control arm
+/// (`OF_EVASION_LEGACY`), same binary. Pooled over three runs of the new
+/// arm (n=60/150/300) and two of the control (n=60/150) — quoting one
+/// run would misread it, because the harness is unseeded and the same
+/// config read 13.2 / 13.8 / 14.2 shots on its three:
+///
+/// | | control (0.912, stuck) | 0.945, live | real |
+/// |---|---|---|---|
+/// | shots/team | 14.1 | 13.7 | ~13 |
+/// | goals/match | 2.82 | 2.76 | ~2.65 |
+/// | on-target | 29.3% | **31.0%** | ~33% |
+/// | on-target→goal | 34.1% | **32.5%** | ~30% |
+/// | saves/on-target | 66.0% | **67.5%** | ~67% |
+/// | shots per xG | 22.3 | **21.0** | ~10 |
+/// | 6-11 m share | 14.5% | **17.6%** | ~25% |
+/// | 22-30 m share | 18.8% | **16.2%** | ~13% |
+///
+/// Read it as: **volume and the goal total are HELD at the level this
+/// constant was already calibrated to, and every quality axis moved
+/// toward real.** The first two rows are inside the run-to-run floor and
+/// nothing should be claimed from them; the last six are the change.
+///
+/// The accuracy line is the one the paragraph above asked for, and it
+/// arrived from the movement rather than from this knob: an attacker who
+/// loses his marker strikes from a better position, so more of what he
+/// hits is on target and less of it is a speculative 22-30 m effort.
+///
+/// Divisional flatness moved with it (`levels 40 6 18 4`, both arms):
+/// goal spread across the pyramid 0.60 → 0.42, shots/team from 11.1-12.3
+/// to a flat 13.6-13.8, save% from an 8-point spread to 3. ⚠ Both arms
+/// still print FAIL at the 0.40 tolerance, and at n=40 a level that
+/// verdict means nothing — the harness wants n=300 and goals carry an SE
+/// of ~0.27 here. The PAIRED comparison is what is being claimed.
+///
+/// Landed at 0.945 rather than 0.955 (13.4 shots, 2.59 goals, and a
+/// slightly better mix again) on the same reasoning the paragraph above
+/// used to reject 0.920: the goal total carries the scoreline
+/// distribution, and 0.945 holds the operating point this constant was
+/// last deliberately set to. `OF_SHOT_BAR` overrides it so the next
+/// titration costs no rebuild — and the honest next move is 0.955,
+/// which the mix preferred and only the goal total argued against.
+///
+/// # 2026-08-28 — 0.945 → 0.985, re-titrated against a midfield that PASSES
+///
+/// ⚠ **This is a second, independent re-titration on top of the one
+/// above, and it is not a refinement of it — it pays for a different
+/// supply change.** See `midfielders::states::common::role`: the
+/// midfielder's on-ball tree had no notion of who he was, so 92.4% of
+/// every on-ball tick he had ended in CARRY, he took 56.4% of every shot
+/// in the game and scored 61.4% of every goal against a 32% target, and
+/// the engine had no way of expressing a through ball at all. Giving him
+/// a role, a ball into space and a reason to release the run turns a man
+/// running the ball into the box into a man passing it there — and a
+/// pass arrives instantly at 91% accuracy where a carry arrives slowly
+/// and can be tackled. That is a **supply** change, which is what this
+/// constant sets.
+///
+/// Paired A/B on one binary, `OF_MID_LEGACY=1` against live, three runs
+/// an arm at `dev_match stats 140 14 14` (the harness repeats to ±0.15
+/// goals, so single runs cannot see effects this size):
+///
+/// | | legacy midfield | new midfield, 0.945 | new midfield, **0.985** | real |
+/// |---|---|---|---|---|
+/// | goals/match | 2.81 | 3.82 | **3.09** | ~2.5 |
+/// | shots/team | 14.1 | 17.0 | **13.7** | ~13 |
+/// | xG/team | 0.66 | 0.88 | **0.74** | ~1.3 |
+/// | on-target | 30.2% | 31.7% | **31.5%** | ~33% |
+/// | outside-box share | 53.4% | 44.8% | **42.5%** | ~40% |
+/// | MID / FWD goals | 51% / 46% | 37% / 61% | **35% / 63%** | 32% / 58% |
+///
+/// Read it the way the note above reads its own table: **the volume is
+/// held where this constant was calibrated to hold it, and every quality
+/// axis moves toward real.** The midfield stops finishing its own attacks
+/// and starts supplying them, the shot mix comes in off the 22-30 m band,
+/// and the goal total pays 0.28 for it.
+///
+/// That 0.28 is worth naming precisely, because it is NOT this
+/// constant's to fix: goals track xG at **4.2×** in both arms (3.09/0.74
+/// against 2.81/0.66), so anything that raises chance QUALITY toward the
+/// real 1.3 xG a team raises the goal total with it until that multiplier
+/// is dealt with. The bar can only take volume, and past 0.985 it stops
+/// taking even that — 0.995 measured an identical 13.7 shots.
+///
+/// Sweep on the live arm, one run each: 0.975 → 3.14 goals / 14.6 shots,
+/// **0.985 → 3.09 / 13.7**, 0.995 → 3.11 / 13.7.
+const SHOT_BAR_BASE: f32 = 0.985;
+
+/// `SHOT_BAR_BASE`, with `OF_SHOT_BAR` allowed to override it.
+///
+/// The knob is steep (~0.08 shots a team per thousandth) and the whole
+/// distance mix has to be re-read at every step, so a titration is many
+/// arms — and the harness's own noise floor means the arms have to be
+/// the same binary or the comparison is worthless. Same idiom as
+/// `MatchStandard::reference`. Read once per process.
+#[inline]
+fn shot_bar_base() -> f32 {
+    use std::sync::OnceLock;
+    static R: OnceLock<f32> = OnceLock::new();
+    *R.get_or_init(|| {
+        std::env::var("OF_SHOT_BAR")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(SHOT_BAR_BASE)
+    })
+}
 /// The base the three reliefs, the spread and the floor were all sized
 /// against. Changing this re-shapes the bar; changing `SHOT_BAR_BASE`
 /// does not.
@@ -6352,7 +6478,7 @@ pub fn evaluate_forward_shot_decision(
     // and scaled as a whole. The mix the long titration rounds shaped is
     // preserved under any level, and `SHOT_BAR_BASE` moves volume alone.
     let shape = RELIEF_REFERENCE_BASE + spread * 0.24 - range_ease;
-    let level = SHOT_BAR_BASE / RELIEF_REFERENCE_BASE;
+    let level = shot_bar_base() / RELIEF_REFERENCE_BASE;
     // …and the whole thing is then priced against the standard of
     // football being played, so the bar means the same thing in the
     // fourth tier as it does in the Champions League. See
@@ -6581,7 +6707,38 @@ pub fn find_cutback_to_arriving_runner(ctx: &StateProcessingContext) -> Option<M
         // strike (18u ≈ 2.3m — a tracking defender one stride away blocks
         // the cutback lane or the shot). A tracked runner is exactly the
         // case where the real forward keeps the shot himself.
-        if ctx.tick_context.grid.opponents(t.id, 30.0).count() >= 1 {
+        // ⚠ …AND THE CODE ASKED FOR MORE THAN THE NOTE ABOVE DOES.
+        //
+        // The prose says 18u ≈ 2.3 m; the constant said 30u = 3.75 m, and
+        // against a defence that marks (measured: **81% of attacker
+        // off-ball ticks have a marker, mean tightness 0.75**) the extra
+        // metre and a half is the whole gate. Over 140 matches at level
+        // 14 the cutback fired **three times in total, and not once from
+        // a forward** — the single most reliable way a real team scores,
+        // switched off by a constant that did not match its own comment.
+        //
+        // 18u restores the documented intent: a defender inside one
+        // stride blocks the lane or the strike, and beyond it the runner
+        // has the yard he needs. The second body is kept out separately,
+        // so this cannot slide back to the old "two men within a metre"
+        // gate that let every arriving runner qualify.
+        const STRIKE_ROOM: f32 = 18.0;
+        const CROWD_ROOM: f32 = 30.0;
+        if ctx
+            .tick_context
+            .grid
+            .opponents(
+                t.id,
+                if crate::r#match::midfielders::states::common::MidfieldPlay::legacy() {
+                    CROWD_ROOM
+                } else {
+                    STRIKE_ROOM
+                },
+            )
+            .count()
+            >= 1
+            || ctx.tick_context.grid.opponents(t.id, CROWD_ROOM).count() >= 2
+        {
             continue;
         }
         if !ctx.player().has_clear_pass(t.id) {

@@ -1,4 +1,5 @@
 pub mod carry;
+pub mod role;
 
 use crate::r#match::StateProcessingContext;
 use crate::r#match::engine::player::strategies::common::{
@@ -8,6 +9,7 @@ use crate::r#match::engine::player::strategies::common::{
 use crate::r#match::midfielders::states::MidfielderState;
 
 pub use carry::{LaneAhead, TakeOn, U_PER_M};
+pub use role::{Archetype, MidfieldPlay, MidfieldRole, MidfieldSkillView};
 
 /// Where a midfielder's shape position is, and whether he is far enough
 /// off it to be worth a recovery run.
@@ -162,9 +164,10 @@ pub mod onball_diag {
         NoDecision = 21,
         ForcedTakeOn = 22,
         FlankRelease = 23,
+        ThroughBall = 24,
     }
 
-    pub const EXITS: usize = 24;
+    pub const EXITS: usize = 25;
     pub const NAMES: [&str; EXITS] = [
         "corner",
         "snapshot-shot",
@@ -190,6 +193,7 @@ pub mod onball_diag {
         "no-decision (hold)",
         "DRIBBLE (forced)",
         "pass:flank-release",
+        "pass:THROUGH-BALL",
     ];
 
     const ZERO: AtomicU64 = AtomicU64::new(0);
@@ -278,6 +282,7 @@ pub mod onball_diag {
         NoDecision,
         ForcedTakeOn,
         FlankRelease,
+        ThroughBall,
     }
 
     #[inline(always)]

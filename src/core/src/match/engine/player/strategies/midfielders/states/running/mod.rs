@@ -4,10 +4,11 @@ use crate::r#match::midfielders::states::MidfielderGuardingState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::onball_diag::{self, Exit};
 use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, LaneAhead, MidfielderCondition, Opportunity, ShapeStation, TakeOn, U_PER_M,
+    ActivityIntensity, LaneAhead, MidfieldPlay, MidfieldRole, MidfielderCondition, Opportunity,
+    ShapeStation, TakeOn, U_PER_M,
 };
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay};
+use crate::r#match::player::strategies::common::passing::{FlankAction, FlankPlay, ThroughBall};
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
@@ -456,6 +457,18 @@ impl StateProcessingHandler for MidfielderRunningState {
             let coach = ctx.team().coach_instruction();
             let can_shoot = ctx.team().can_shoot();
 
+            // **Who this midfielder is.** Read once at the top of the
+            // on-ball tree and threaded through every branch below that
+            // used to treat a holding midfielder and a number ten as the
+            // same footballer — which was all of them. See
+            // [`MidfieldRole`]: the engine dispatches every midfielder
+            // into this one function and nothing in it had ever read his
+            // slot, so the deep man shot from 22 m and the ten recycled
+            // sideways. `from_ctx` is memoised on the frozen tick
+            // snapshot, so this costs nothing the tree was not about to
+            // spend on the profile anyway.
+            let role = MidfieldRole::of(ctx, &MidfielderSkillProfile::from_ctx(ctx));
+
             // ── Midfielder snapshot under pressure ─────────────────────
             //
             // Same asymmetric pattern as the forward snapshot in
@@ -534,7 +547,70 @@ impl StateProcessingHandler for MidfielderRunningState {
             // a forward, and no single player monopolises the attempts.
             // Hoisted above the possession / recycle defaults so a real
             // opening isn't recycled back to a forward.
-            if can_shoot && distance_to_goal <= MAX_SHOOTING_DISTANCE {
+            // ── HOW FAR OUT HE IS ENTITLED TO STRIKE IT ──────────────
+            //
+            // The gate above is a REACHABILITY bound — 40 m, where the
+            // helper itself calls a strike hopeless — and it is the same
+            // 40 m for the holding midfielder and for the number ten.
+            // That is the last place in the tree where the two were still
+            // the same player, and it is the one that showed most:
+            // measured over 140 matches, **49.4% of every midfield shot
+            // came from 16.5-22 m** and midfielders scored **61.4% of all
+            // goals against a target of 32%**, while forwards took 37.2%
+            // against 58%. The engine's midfield was not creating; it was
+            // finishing, from range, instead of the men in front of it.
+            //
+            // This is not a bar on the shot — the helper still owns
+            // whether he hits it, with its xG floor, its willingness roll
+            // and its pass-EV deferral untouched. It is a bar on the
+            // RANGE, which is what a role actually decides in football: a
+            // regista does not shoot from twenty-five yards and an
+            // arriving eight does, and neither of them is thinking about
+            // expected goals when he decides that. Beyond his range the
+            // tree simply carries on to the creative branches below,
+            // which is where a deep midfielder's answer lives.
+            //
+            // Continuous, and it never closes: the worst licence still
+            // reaches `STANDARD_SHOOTING_DISTANCE` (13 m), so a holding
+            // midfielder with the ball at the edge of the six-yard box
+            // shoots like anybody else.
+            //
+            // ⚠ AND THIS IS THE MOST EXPENSIVE NUMBER IN THE PASS —
+            // don't widen it without re-reading the goal total.
+            //
+            // Fitted on `dev_match stats 140 14 14`:
+            //
+            // | midfielder's range | goals | shots/team | MID 22-30 m |
+            // |---|---|---|---|
+            // | **linear from 13 m** | **3.51** | **16.9** | 0.5% |
+            // | floor at the box edge | 3.83 | 17.4 | 4.0% |
+            // | `powf(0.75)` from 13 m | 3.96 / 3.97 | 18.3 | 2.9% |
+            //
+            // ⚠ Single runs except the last, and the harness carries
+            // **±0.15 goals of sampling at this n** — three runs of one
+            // build read 3.51 / 3.81 / 3.61. Two consecutive runs of the
+            // `powf` arm agreeing to 0.01 is a coincidence and was very
+            // nearly read as precision. The ORDERING above is what the
+            // table supports; the gaps are one sigma each. Re-fit against
+            // `OF_MID_LEGACY`, which prices the whole pass properly.
+            //
+            // Every attempt to give the midfield its 22-30 m shot back
+            // costs a third to a half of a goal a match, because the
+            // shots it adds are not only the long ones: a midfielder who
+            // is allowed to strike it from range enters this whole block
+            // more often, and the block contains the close-range tiers
+            // too. `StrikingRange::of` inside the helper already gives
+            // each man his own reach off `long_shots` / technique /
+            // strength — this gate is the ROLE on top of that, and the
+            // role is the half that was missing.
+            let strike_range = if MidfieldPlay::legacy() {
+                MAX_SHOOTING_DISTANCE
+            } else {
+                (STANDARD_SHOOTING_DISTANCE
+                    + role.shooting * (MAX_SHOOTING_DISTANCE - STANDARD_SHOOTING_DISTANCE))
+                    .min(MAX_SHOOTING_DISTANCE)
+            };
+            if can_shoot && distance_to_goal <= strike_range {
                 #[cfg(feature = "match-logs")]
                 {
                     use std::sync::atomic::Ordering;
@@ -734,7 +810,26 @@ impl StateProcessingHandler for MidfielderRunningState {
                             defence,
                             nearest_opponent,
                             sp.expected_xg(distance_to_goal, true),
-                        );
+                        )
+                        // …and whether arriving to finish is his game at
+                        // all. The tier is named for the ARRIVING RUNNER
+                        // and every term in it was about the space and
+                        // the chance; none of them was about the man. A
+                        // holding midfielder who has ended up at the
+                        // penalty spot is not the player the move was
+                        // built around, and he takes the shot at a
+                        // discount rather than at the same rate as the
+                        // eight whose run it was.
+                        //
+                        // Never a veto — the worst licence still shoots
+                        // half as often as the best, which is what a
+                        // sitter in front of an open goal deserves from
+                        // anybody.
+                        * if MidfieldPlay::legacy() {
+                            1.0
+                        } else {
+                            0.52 + role.shooting * 0.62
+                        };
                 // 2026-08-16: the `shots_taken <= 2` anti-monopoly cap is
                 // REMOVED. A midfielder who has already had two efforts is
                 // not thereby barred from a clear chance at the penalty
@@ -746,6 +841,43 @@ impl StateProcessingHandler for MidfielderRunningState {
                 // decision on this tree, so a runner who declines does not
                 // re-ask on the next tick and walk the gate down.
                 if clear_good {
+                    // ── …UNLESS SOMEBODY IS SQUARE OF HIM ─────────────
+                    //
+                    // This tier bypasses the shot helper entirely — its
+                    // own note above says so — and with it the helper's
+                    // pass-EV deferral, the one place the engine asks
+                    // "is a team-mate better placed than me?". So the
+                    // arriving midfielder inside eleven metres shot
+                    // every time, including with an unmarked striker
+                    // four metres square of him, which is the one ball
+                    // no footballer alive gets wrong.
+                    //
+                    // It shows in the totals rather than in the tier.
+                    // Once the role gate stopped midfielders shooting
+                    // from twenty-two metres they arrived inside eleven
+                    // with the ball instead, and this tier — unbounded
+                    // by anything but geometry — took **984 of the 6-11 m
+                    // shots against 275 before**, which was the whole of
+                    // the goal surplus that came with the fix. The
+                    // answer is not to send him back out to twenty-two
+                    // metres. It is that from eleven, with a better man
+                    // beside him, he gives it.
+                    if let Some(square) = (!MidfieldPlay::legacy())
+                        .then(|| self.find_square_ball(ctx, distance_to_goal))
+                        .flatten()
+                    {
+                        onball_diag::record(Exit::ShootLayoff);
+                        return Some(StateChangeResult::with_midfielder_state_and_event(
+                            MidfielderState::Standing,
+                            Event::PlayerEvent(PlayerEvent::PassTo(
+                                PassingEventContext::new()
+                                    .with_from_player_id(ctx.player.id)
+                                    .with_to_player_id(square.id)
+                                    .with_reason("MID_SQUARE_BALL")
+                                    .build(ctx),
+                            )),
+                        ));
+                    }
                     #[cfg(feature = "match-logs")]
                     {
                         use std::sync::atomic::Ordering;
@@ -953,6 +1085,47 @@ impl StateProcessingHandler for MidfielderRunningState {
             let goal_dist = ctx.ball().distance_to_opponent_goal();
             let field_width = ctx.context.field_size.width as f32;
             let ownership_ticks = ctx.tick_context.ball.ownership_duration;
+
+            // ── THE BALL THAT BEATS A LINE ────────────────────────────
+            //
+            // Asked before he does anything else with it, because that is
+            // when a footballer asks it: head up on the first touch, is
+            // anybody in behind? If there is, the ball goes; if there
+            // isn't, he gets on with the rest of the tree.
+            //
+            // The engine had no way of playing this ball at all. Every
+            // pass it emits is aimed at a team-mate's CURRENT POSITION and
+            // then led along his CURRENT VELOCITY, which is a ball to
+            // feet — so a ball slid into grass that nobody is standing in
+            // yet was not expressible. The one function that claimed to
+            // find one, `MidfielderPassingState::find_breakthrough_pass_option`,
+            // required TWO OPPONENTS STANDING IN THE PASSING LANE before
+            // it would call a pass line-breaking, i.e. it fired only for
+            // a ball played through a crowd and never for the ball played
+            // into an empty channel. See [`ThroughBall`] for the solve.
+            //
+            // Gated on his creative licence rather than on his position:
+            // a deep midfielder who can see it plays it, an advanced one
+            // who cannot does not. The bar inside is drawn once per
+            // possession, so declining is a decision and not a dice roll
+            // he can re-take next tick.
+            if !MidfieldPlay::legacy() && ownership_ticks > 5 && ctx.ball().has_stable_possession()
+            {
+                if let Some(ball) = ThroughBall::find(ctx, role.creation) {
+                    onball_diag::record(Exit::ThroughBall);
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(ball.target_id)
+                                .with_target_point(ball.aim_point)
+                                .with_reason(ball.kind.reason())
+                                .build(ctx),
+                        )),
+                    ));
+                }
+            }
 
             // ── THE MAN IN FRONT ──────────────────────────────────────
             //
@@ -1183,13 +1356,151 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
-            const CARRY_ROOM: f32 = 0.55;
+            // ⚠ …AND ROOM IN FRONT IS A REASON TO RUN, NOT A REASON TO
+            // STOP LOOKING.
+            //
+            // Everything above is right and it was still not enough,
+            // because the test was a single number about the GRASS and
+            // carried nothing at all about the man. Measured over 140
+            // matches at level 14: **CARRY took 92.4% of every on-ball
+            // tick a midfielder had**, progressive carries ran **73.5 per
+            // midfielder per match against a real ~2** and successful
+            // dribbles 18.1 against ~1. The ball reached the final third
+            // by being run there, every time, by whoever happened to have
+            // it — which is the whole of "the midfield creates nothing":
+            // a man running with the ball is a man not playing a pass.
+            //
+            // Two things enter, and both are football rather than
+            // calibration.
+            //
+            // **Whose job it is.** A holding midfielder driving out of
+            // his own half is how a side gets countered, and a wide
+            // player beating his full-back is most of what he is out
+            // there for. [`MidfieldRole::carry`] carries that, and it is
+            // his ABILITY scaled by his station — so a regista with
+            // wonderful feet still releases it, because carrying is not
+            // what he is for.
+            //
+            // **Whether a better ball is on.** `better_placed_gain` is
+            // already the continuous "somebody ahead of me is freer and
+            // closer to goal" read that `should_pass` uses; here it is
+            // simply subtracted, weighted by how well this player sees
+            // it. A carrier with nobody ahead of him keeps running. One
+            // with a team-mate in space beyond him gives it, which is
+            // the entire behaviour the census says the engine never had.
+            //
+            // **And the closer to goal, the less a carry is worth.**
+            //
+            // Territory is in every other risk decision in this tree —
+            // the take-on has it, `should_pass` has it — and the carry
+            // had none: the same amount of grass licensed the same run
+            // in his own half and in the opposition penalty area. In the
+            // final third that is the wrong football twice over. The ball
+            // travels faster than the man, so a carry there costs the
+            // one thing the attack has left; and defenders are close
+            // enough that the grass in front of him is a moment old.
+            //
+            // Measured, it is also where the surplus lives. Capping the
+            // deep midfielder's shooting RANGE (above) did not stop him
+            // shooting — it moved him: Tier-1 `MID_CLEAR_CHANCE` went
+            // **309 shots to 909** while the midfield's total stayed
+            // flat, because a man who may not strike it from twenty-two
+            // metres simply carried to nine and struck it there. Nine
+            // metres converts four times as well, so the goal total went
+            // with him. The answer is that the carry is what should have
+            // ended, not that the shot should have been longer.
+            //
+            // Fitted on `dev_match stats 140 14 14`, three arms:
+            //
+            // | final-third term | goals | shots/team | MID / FWD goals |
+            // |---|---|---|---|
+            // | none (flat 0.55) | 4.56 | 20.2 | 50% / 50% |
+            // | 0.42 | 2.88 | 15.3 | 27% / 73% |
+            // | **0.28** | 3.5-3.8 | 16.9 | 45% / 53% |
+            //
+            // (Single runs, ±0.15 goals of sampling — read the ordering,
+            // not the gaps. The shipped number is confirmed against
+            // `OF_MID_LEGACY` in the paired A/B on `SHOT_BAR_BASE`.)
+            //
+            // The flat bar leaves the midfield finishing its own attacks
+            // (the fault this whole pass exists to remove); 0.42 hands
+            // the game to the forwards so completely that the midfield
+            // stops being a scoring line at all, against a target of
+            // 32%. The term is the dial between those two, and it is a
+            // footballing dial rather than an arbitrary one: it says how
+            // much sooner a man gives the ball up as he gets closer to
+            // the goal.
+            const CARRY_BAR: f32 = 0.52;
+            const CARRY_BAR_FINAL_THIRD: f32 = 0.28;
+            let progress = 1.0 - (goal_dist / field_width).clamp(0.0, 1.0);
+            let bar = CARRY_BAR + progress.powf(1.6) * CARRY_BAR_FINAL_THIRD;
+            let outlet = if MidfieldPlay::legacy() {
+                0.0
+            } else {
+                self.better_placed_gain(ctx, goal_dist)
+            };
+            let (carry_urge, bar) = if MidfieldPlay::legacy() {
+                (lane.openness, 0.55)
+            } else {
+                (
+                    lane.openness * (0.72 + role.carry * 0.52)
+                        - outlet * (0.34 + mid_profile.progressive_selection * 0.62),
+                    bar,
+                )
+            };
             if goal_dist > POINT_BLANK_DISTANCE
                 && goal_dist < field_width * 0.85
-                && lane.openness > CARRY_ROOM
+                && carry_urge > bar
             {
                 onball_diag::record(Exit::Carry);
                 return None;
+            }
+
+            // …and a refused carry is a PASS, not a pause.
+            //
+            // ⚠ THIS IS THE HALF THAT MAKES THE GATE ABOVE MEAN
+            // ANYTHING. `Exit::Carry` and `Exit::NoDecision` both end in
+            // `return None`, and `velocity()` drives the carrier at the
+            // goal either way — so a refused carry that falls through to
+            // the bottom of the tree is **still a carry**, just an
+            // unlabelled one. The first cut of this gate proved it:
+            // `CARRY` fell from 92.4% of on-ball ticks to 79.8%,
+            // `no-decision` rose from 5.5% to 16.8%, and progressive
+            // carries moved 73.5 → 71.6. Nothing had changed on the
+            // pitch; only the census row.
+            //
+            // So the refusal has to move the ball. Every branch below
+            // this one carries its own clock (`ownership_ticks > 15`) and
+            // its own bar, and none of them is the sentence a footballer
+            // is actually saying here: *I am not running with this, so
+            // it goes.*
+            //
+            // ⚠ …TO SOMEBODY. Made unconditional this becomes "release
+            // on every tick the run is not on", which is not a decision
+            // either: passes went **1053 → 1276 a team** against a real
+            // ~500 and the midfield stopped being a scoring line at all
+            // (26.8% of goals against a 32% target, with the forwards on
+            // 72.7% against 58%). A carrier with nobody better placed and
+            // no run on keeps it and looks again — that is what the rest
+            // of the tree is for.
+            const RELEASE_OUTLET: f32 = 0.20;
+            if !MidfieldPlay::legacy()
+                && outlet > RELEASE_OUTLET
+                && ctx.ball().has_stable_possession()
+            {
+                if let Some((target, _)) = self.find_best_pass_option(ctx) {
+                    onball_diag::record(Exit::ShouldPass);
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Running,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(target.id)
+                                .with_reason("MID_HEAD_UP_RELEASE")
+                                .build(ctx),
+                        )),
+                    ));
+                }
             }
 
             // SWITCH PLAY: the ball side is crowded and the far flank is
@@ -1217,7 +1528,27 @@ impl StateProcessingHandler for MidfielderRunningState {
             //
             // Switches are how you move the point of attack while you are
             // still building. Inside 22 m the point of attack is the goal.
-            if settled && ctx.ball().has_stable_possession() {
+            //
+            // ⚠ THAT SENTENCE DESCRIBED A GATE THAT WAS NEVER WRITTEN.
+            // There is no distance term anywhere below it, and measured
+            // over 140 matches the switch was the largest pass-emitting
+            // branch in the whole tree — **542 a match across the two
+            // sides, 271 per team**, more than every forward pass in the
+            // tree combined, against a real handful. A ball played from
+            // the edge of the box to the opposite touchline is not a
+            // switch of play; it is an attack being abandoned.
+            //
+            // 176u is the 22 m the note asks for. Inside it the ball goes
+            // toward the goal — the cutback, the cross and the through
+            // ball above all live in that band and were being pre-empted
+            // by this one.
+            const SWITCH_BUILD_UP_RANGE: f32 = 176.0;
+            let switch_range = if MidfieldPlay::legacy() {
+                0.0
+            } else {
+                SWITCH_BUILD_UP_RANGE
+            };
+            if settled && ctx.ball().has_stable_possession() && goal_dist > switch_range {
                 let field_height = ctx.context.field_size.height as f32;
                 let field_center_y = field_height / 2.0;
                 let ball_top = ctx.player.position.y < field_center_y;
@@ -2025,6 +2356,77 @@ impl MidfielderRunningState {
         urge >= bar
     }
 
+    /// **The squarer ball.** A team-mate inside the area with a plainly
+    /// better sight of goal than the man on the ball has.
+    ///
+    /// Deliberately narrow, because this vetoes a shot: he has to be
+    /// materially closer in, materially straighter on, genuinely
+    /// unmarked, and reachable. Anything less and the carrier takes it
+    /// himself, which is also football — the pass across the six-yard
+    /// box that nobody was asking for is how chances get thrown away.
+    ///
+    /// Unlike `find_cutback_to_arriving_runner` this is not restricted
+    /// to central midfielders: the man square of an arriving eight is
+    /// usually the centre-forward, and he was the one player the engine
+    /// could never find.
+    fn find_square_ball<'a>(
+        &self,
+        ctx: &StateProcessingContext<'a>,
+        my_goal_distance: f32,
+    ) -> Option<MatchPlayerLite> {
+        /// He has to be this much closer to goal to be worth the pass
+        /// (~2.5 m), and inside the area himself.
+        const CLOSER: f32 = 20.0;
+        const IN_THE_AREA: f32 = 132.0;
+        /// …with nobody within a stride of him (~2.5 m). Same figure the
+        /// cutback finder uses for "unmarked", so the two agree about
+        /// what the word means.
+        const UNMARKED: f32 = 20.0;
+        /// …and a better ANGLE, not just a shorter distance: half the
+        /// width of the six-yard box either side of centre is where a
+        /// square ball is worth playing.
+        const ANGLE_GAIN: f32 = 12.0;
+
+        let goal = ctx.player().opponent_goal_position();
+        let field_height = ctx.context.field_size.height as f32;
+        let centre_y = field_height * 0.5;
+        let my_offset = (ctx.player.position.y - centre_y).abs();
+
+        let mut best: Option<(MatchPlayerLite, f32)> = None;
+        for t in ctx.players().teammates().nearby(160.0) {
+            if t.tactical_positions.is_goalkeeper() {
+                continue;
+            }
+            let theirs = (goal - t.position).magnitude();
+            if theirs > IN_THE_AREA || theirs > my_goal_distance - CLOSER {
+                continue;
+            }
+            let their_offset = (t.position.y - centre_y).abs();
+            if their_offset > my_offset - ANGLE_GAIN {
+                continue;
+            }
+            if ctx
+                .tick_context
+                .grid
+                .opponents(t.id, UNMARKED)
+                .next()
+                .is_some()
+            {
+                continue;
+            }
+            if !ctx.player().has_clear_pass(t.id) {
+                continue;
+            }
+            // The best of them is the one with the shortest, straightest
+            // sight of goal.
+            let score = -(theirs + their_offset);
+            if best.as_ref().map(|(_, s)| score > *s).unwrap_or(true) {
+                best = Some((t, score));
+            }
+        }
+        best.map(|(t, _)| t)
+    }
+
     /// How much better placed the best outlet is, 0..1 — the continuous
     /// form of `has_better_positioned_teammate`'s yes/no.
     fn better_placed_gain(&self, ctx: &StateProcessingContext, current_distance: f32) -> f32 {
@@ -2469,5 +2871,73 @@ impl MidfielderRunningState {
         }
 
         best.map(|(t, _)| t)
+    }
+}
+
+#[cfg(test)]
+mod role_gate_tests {
+    use super::{MAX_SHOOTING_DISTANCE, POINT_BLANK_DISTANCE, STANDARD_SHOOTING_DISTANCE};
+
+    /// Reproduces the two role-driven expressions in `process` without a
+    /// `StateProcessingContext`, which cannot be fixtured here. Kept
+    /// beside the real ones deliberately, on the same footing as
+    /// `arriving_runner_tests`: if the live form changes and these do
+    /// not, the tests below stop describing the engine.
+    fn strike_range(role_shooting: f32) -> f32 {
+        (STANDARD_SHOOTING_DISTANCE
+            + role_shooting * (MAX_SHOOTING_DISTANCE - STANDARD_SHOOTING_DISTANCE))
+            .min(MAX_SHOOTING_DISTANCE)
+    }
+
+    fn carry_bar(progress: f32) -> f32 {
+        0.52 + progress.powf(1.6) * 0.28
+    }
+
+    /// **A holding midfielder and a number ten are not the same
+    /// footballer.** They were: `process` dispatches every midfielder
+    /// down one tree and nothing in it read his slot, so the deep man
+    /// shot from 22 m at the same rate as the man arriving in the box.
+    /// Measured, midfielders scored 61.4% of every goal against a 32%
+    /// target and 49.4% of their shots came from 16.5-22 m.
+    #[test]
+    fn the_deep_man_shoots_from_closer_than_the_advanced_one() {
+        let holder = strike_range(0.10);
+        let eight = strike_range(0.30);
+        let ten = strike_range(0.60);
+        assert!(holder < eight && eight < ten, "{holder} {eight} {ten}");
+        // …in metres, so the football is legible: 1u = 0.125 m.
+        assert!((14.0..18.0).contains(&(holder / 8.0)), "{}", holder / 8.0);
+        assert!((25.0..34.0).contains(&(ten / 8.0)), "{}", ten / 8.0);
+    }
+
+    /// It is a bar on the RANGE and never on the shot. Every midfielder
+    /// keeps a real shooting range, and none of them gets one longer
+    /// than the distance the helper itself calls hopeless.
+    #[test]
+    fn the_range_never_closes_and_never_runs_away() {
+        for r in [0.0_f32, 0.25, 0.5, 0.75, 1.0, 1.5] {
+            let range = strike_range(r);
+            assert!(range >= STANDARD_SHOOTING_DISTANCE, "{range}");
+            assert!(range <= MAX_SHOOTING_DISTANCE, "{range}");
+            assert!(range > POINT_BLANK_DISTANCE);
+        }
+    }
+
+    /// **Territory belongs in the carry.** The take-on has it and
+    /// `should_pass` has it; the carry had none, so the same patch of
+    /// grass licensed the same run in a player's own half and in the
+    /// opposition penalty area. It is the term that stops a midfielder
+    /// running the ball into the six-yard box — measured, that single
+    /// behaviour moved the goal total by half a goal a match.
+    #[test]
+    fn a_carry_costs_more_the_closer_it_gets_to_goal() {
+        let own_half = carry_bar(0.2);
+        let middle = carry_bar(0.5);
+        let final_third = carry_bar(0.85);
+        assert!(own_half < middle && middle < final_third);
+        // …and the bar stays a bar: reachable at every point on the
+        // pitch by a carrier with a genuinely open lane, or the branch
+        // would simply be off.
+        assert!(final_third < 1.0, "{final_third}");
     }
 }

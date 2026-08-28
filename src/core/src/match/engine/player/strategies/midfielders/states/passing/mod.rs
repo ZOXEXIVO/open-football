@@ -1,9 +1,10 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, MidfielderCondition, Opportunity,
+    ActivityIntensity, MidfieldPlay, MidfieldRole, MidfielderCondition, Opportunity,
 };
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::common::passing::ThroughBall;
 use crate::r#match::player::strategies::common::players::ops::forward_shot_decision::{
     ShotDecision, evaluate_forward_shot_decision,
 };
@@ -14,7 +15,6 @@ use crate::r#match::{
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-use std::cmp::Ordering;
 
 /// Edge of the penalty area (16.5 m) and the distance beyond which the
 /// shot helper itself calls a strike hopeless (35 m).
@@ -80,21 +80,39 @@ impl StateProcessingHandler for MidfielderPassingState {
         let min_scan_time: u64 = if under_pressure { 2 } else { 5 };
 
         if ctx.in_state_time >= min_scan_time {
-            if !ctx.ball().on_own_side() {
-                // First, look for high-value breakthrough passes (for skilled players)
-                if let Some(breakthrough_target) = self.find_breakthrough_pass_option(ctx) {
-                    // Execute the high-quality breakthrough pass
-                    return Some(StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(breakthrough_target.id)
-                                .with_reason("MID_PASSING_BREAKTHROUGH")
-                                .build(ctx),
-                        )),
-                    ));
-                }
+            // First, the ball that beats a line.
+            //
+            // This used to be `find_breakthrough_pass_option`, which
+            // asked `would_pass_break_defensive_lines` — a function that
+            // returns **false unless at least two opponents are standing
+            // in the passing lane**. So the "breakthrough" pass was, by
+            // construction, only ever a ball played THROUGH A CROWD, and
+            // never the ball slid into an empty channel that the phrase
+            // describes. It also aimed at the receiver's feet, where a
+            // through ball's whole point is the grass in front of him.
+            // The `!on_own_side` fence went with it: a ball out of your
+            // own half that puts a man in behind is the best pass in
+            // football, not one to be refused on territory.
+            //
+            // See [`ThroughBall`], which solves the meeting point, checks
+            // he is onside when it is struck and that he wins the race to
+            // it, and aims at a POINT rather than at a man.
+            let role = MidfieldRole::of(ctx, &MidfielderSkillProfile::from_ctx(ctx));
+            if let Some(ball) = (!MidfieldPlay::legacy())
+                .then(|| ThroughBall::find(ctx, role.creation))
+                .flatten()
+            {
+                return Some(StateChangeResult::with_midfielder_state_and_event(
+                    MidfielderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::new()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(ball.target_id)
+                            .with_target_point(ball.aim_point)
+                            .with_reason(ball.kind.reason())
+                            .build(ctx),
+                    )),
+                ));
             }
 
             // Find the best regular pass option with improved logic
@@ -220,45 +238,8 @@ impl StateProcessingHandler for MidfielderPassingState {
 }
 
 impl MidfielderPassingState {
-    /// Find breakthrough pass opportunities for players with high vision
-    fn find_breakthrough_pass_option<'a>(
-        &self,
-        ctx: &StateProcessingContext<'a>,
-    ) -> Option<MatchPlayerLite> {
-        let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
-        // Continuous gate: only midfielders whose progressive selection
-        // crosses the through-ball threshold (vision/decisions/passing
-        // blend curved against poor finishers).
-        if !mid_profile.allows_through_ball() {
-            return None;
-        }
-        let vision_range = ctx.player.skills.mental.vision * 20.0;
-        let teammates = ctx.players().teammates();
-
-        // Fused filter + max_by — no intermediate Vec allocation.
-        teammates
-            .all()
-            .filter(|teammate| {
-                let velocity = ctx.tick_context.positions.players.velocity(teammate.id);
-                let is_moving_forward = velocity.magnitude() > 1.0;
-                let is_attacking_player = teammate.tactical_positions.is_forward()
-                    || teammate.tactical_positions.is_midfielder();
-                let distance = (teammate.position - ctx.player.position).magnitude();
-                let would_break_lines = self.would_pass_break_defensive_lines(ctx, teammate);
-
-                distance < vision_range
-                    && is_moving_forward
-                    && is_attacking_player
-                    && would_break_lines
-            })
-            .max_by(|a, b| {
-                let a_value = self.calculate_breakthrough_value(ctx, a);
-                let b_value = self.calculate_breakthrough_value(ctx, b);
-                a_value.partial_cmp(&b_value).unwrap_or(Ordering::Equal)
-            })
-    }
-
-    /// Improved best pass option finder that prevents clustering
+    /// Best ordinary pass on — the ball to feet, as against the ball
+    /// into space above.
     fn find_best_pass_option<'a>(
         &self,
         ctx: &StateProcessingContext<'a>,
@@ -266,98 +247,6 @@ impl MidfielderPassingState {
         PassEvaluator::find_best_pass_option(ctx, 400.0)
     }
 
-    /// Improved space calculation around player
-    fn calculate_improved_space_score(
-        &self,
-        ctx: &StateProcessingContext,
-        teammate: &MatchPlayerLite,
-    ) -> f32 {
-        // Single scan at max distance, bucket by distance zones
-        let mut very_close_opponents = 0;
-        let mut close_opponents = 0;
-        let mut medium_opponents = 0;
-        for (_id, dist) in ctx.tick_context.grid.opponents(teammate.id, 15.0) {
-            if dist < 5.0 {
-                very_close_opponents += 1;
-            } else if dist < 10.0 {
-                close_opponents += 1;
-            } else {
-                medium_opponents += 1;
-            }
-        }
-
-        // Calculate weighted score
-        let space_score: f32 = 1.0
-            - (very_close_opponents as f32 * 0.5)
-            - (close_opponents as f32 * 0.3)
-            - (medium_opponents as f32 * 0.1);
-
-        space_score.max(0.0)
-    }
-
-    /// Check if pass would break defensive lines
-    fn would_pass_break_defensive_lines(
-        &self,
-        ctx: &StateProcessingContext,
-        teammate: &MatchPlayerLite,
-    ) -> bool {
-        let player_pos = ctx.player.position;
-        let teammate_pos = teammate.position;
-        let pass_direction = (teammate_pos - player_pos).normalize();
-        let pass_distance = (teammate_pos - player_pos).magnitude();
-
-        // Count only — no need to materialise a Vec of player refs.
-        let opponents_between = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opponent| {
-                let to_opponent = opponent.position - player_pos;
-                let projection_distance = to_opponent.dot(&pass_direction);
-
-                if projection_distance <= 0.0 || projection_distance >= pass_distance {
-                    return false;
-                }
-
-                let projected_point = player_pos + pass_direction * projection_distance;
-                let perp_distance = (opponent.position - projected_point).magnitude();
-
-                perp_distance < 8.0
-            })
-            .count();
-
-        if opponents_between >= 2 {
-            let mid_profile = MidfielderSkillProfile::from_ctx(ctx);
-            // Skill-curved tolerance: elite playmakers accept tighter
-            // windows, poor passers should be capped at 2 even with a
-            // generous geometry.
-            let max_opponents = 2.0 + mid_profile.progressive_selection * 2.5;
-            return opponents_between as f32 <= max_opponents;
-        }
-
-        false
-    }
-
-    /// Calculate breakthrough value
-    fn calculate_breakthrough_value(
-        &self,
-        ctx: &StateProcessingContext,
-        teammate: &MatchPlayerLite,
-    ) -> f32 {
-        let goal_distance = (teammate.position - ctx.player().opponent_goal_position()).magnitude();
-        let field_width = ctx.context.field_size.width as f32;
-
-        let goal_distance_value = 1.0 - (goal_distance / field_width).clamp(0.0, 1.0);
-        let space_value = self.calculate_improved_space_score(ctx, teammate);
-
-        let player = ctx.player();
-        let target_skills = player.skills(teammate.id);
-        let finishing_skill = target_skills.technical.finishing / 20.0;
-
-        (goal_distance_value * 0.5) + (space_value * 0.3) + (finishing_skill * 0.2)
-    }
-
-    /// Check for clear passing lanes with improved logic
     #[allow(dead_code)]
     fn has_clear_passing_lane(
         &self,
@@ -548,9 +437,7 @@ impl MidfielderPassingState {
 
     /// Check if should adjust position
     fn should_adjust_position(&self, ctx: &StateProcessingContext) -> bool {
-        self.find_best_pass_option(ctx).is_none()
-            && self.find_breakthrough_pass_option(ctx).is_none()
-            && !self.is_under_heavy_pressure(ctx)
+        self.find_best_pass_option(ctx).is_none() && !self.is_under_heavy_pressure(ctx)
     }
 
     /// Calculate better position for passing

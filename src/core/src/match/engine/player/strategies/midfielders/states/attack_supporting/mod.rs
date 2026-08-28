@@ -1,7 +1,8 @@
 use crate::PlayerSkills;
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
-    ActivityIntensity, Interception, MidfielderCondition,
+    ActivityIntensity, Interception, MidfieldPlay, MidfielderCondition,
 };
 use crate::r#match::player::strategies::common::team::WideChannel;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
@@ -534,46 +535,107 @@ impl MidfielderAttackSupportingState {
         target
     }
 
-    // Add new helper to determine run type
+    /// **What kind of run he makes** — the off-ball half of the through
+    /// ball. Somebody has to be going, or there is nothing to play.
+    ///
+    /// This was five hard cliffs on raw attributes: `off_the_ball > 14.0
+    /// && pace > 14.0` for the run in behind, `anticipation > 13.0` for
+    /// the late box run, `pace > 13.0` for the overlap. Two faults, and
+    /// both are the ones this codebase has removed everywhere else.
+    ///
+    /// They are **absolute reads**, so which runs a side makes is decided
+    /// by its division rather than by its players — the fault
+    /// [`MatchStandard`] exists to remove, and the same one that made the
+    /// arriving-runner tier 44% of every shot at level 6 and 2% at level
+    /// 18. And they are **cliffs**: two midfielders a tenth of a point
+    /// apart in off-the-ball made completely different runs from the same
+    /// position, for ever, which is what "scripted" looks like from the
+    /// stands.
+    ///
+    /// Replaced by an argmax over continuous scores. Deterministic — this
+    /// is called from `velocity()` on every tick and a roll here would
+    /// make the run flicker — but smooth in every input, so a player near
+    /// the boundary between two runs drifts between them as the picture
+    /// changes instead of switching on a hundredth.
     fn determine_run_type(
         &self,
         ctx: &StateProcessingContext,
         distance_to_goal: f32,
     ) -> AttackingRunType {
         let field_width = ctx.context.field_size.width as f32;
-        let player_skills = &ctx.player.skills;
+        let s = &ctx.player.skills;
 
-        // Player attributes affect run selection
-        let pace = player_skills.physical.pace;
-        let off_the_ball = player_skills.mental.off_the_ball;
-        let anticipation = player_skills.mental.anticipation;
+        // Control arm — the cliffs exactly as they were, so `OF_MID_LEGACY`
+        // prices the off-ball half of this pass as well as the on-ball
+        // half. Not a model; a copy kept for measurement, the same way
+        // `OF_EVASION_LEGACY` keeps one.
+        if MidfieldPlay::legacy() {
+            if distance_to_goal < field_width * 0.25 {
+                return if s.mental.off_the_ball > 14.0 && s.physical.pace > 14.0 {
+                    AttackingRunType::ThroughBall
+                } else if s.mental.anticipation > 13.0 {
+                    AttackingRunType::LateBoxRun
+                } else {
+                    AttackingRunType::SupportRun
+                };
+            }
+            if distance_to_goal < field_width * 0.5 {
+                return if self.check_wide_space(ctx) && s.physical.pace > 13.0 {
+                    AttackingRunType::OverlapRun
+                } else if s.mental.off_the_ball > 12.0 {
+                    AttackingRunType::DiagonalRun
+                } else {
+                    AttackingRunType::SupportRun
+                };
+            }
+            return AttackingRunType::SupportRun;
+        }
 
-        // Close to goal - make decisive runs
-        if distance_to_goal < field_width * 0.25 {
-            if off_the_ball > 14.0 && pace > 14.0 {
-                AttackingRunType::ThroughBall
-            } else if anticipation > 13.0 {
-                AttackingRunType::LateBoxRun
-            } else {
-                AttackingRunType::SupportRun
+        // Priced against the standard of football in this match, so a
+        // fast midfielder is fast relative to the men he is playing
+        // against rather than relative to a number.
+        let shift = MatchStandard::shift(ctx.context);
+        let peer = |v: f32| ((v / 20.0).clamp(0.0, 1.0) - shift).clamp(0.0, 1.0);
+        let pace = peer(s.physical.pace);
+        let off_ball = peer(s.mental.off_the_ball);
+        let anticipation = peer(s.mental.anticipation);
+        let work_rate = peer(s.mental.work_rate);
+
+        // How advanced the ATTACK is — the ball, not the man. 1.0 at the
+        // goal line, 0 at the halfway line.
+        let advanced = 1.0 - (distance_to_goal / (field_width * 0.5)).clamp(0.0, 1.0);
+        // The band where the overlap and the diagonal live: the middle
+        // of the pitch, fading out at both ends.
+        let building = (1.0 - (advanced - 0.35).abs() / 0.45).clamp(0.0, 1.0);
+
+        // The run in behind is the one the whole through-ball model
+        // depends on, and it is worth most exactly where it is hardest:
+        // deep enough that the defence has to turn, high enough that
+        // beating them is a chance.
+        let in_behind = (off_ball * 0.55 + pace * 0.45) * advanced;
+        let late_box = (anticipation * 0.60 + off_ball * 0.40) * advanced * 0.92;
+        let overlap = if self.check_wide_space(ctx) {
+            (pace * 0.65 + work_rate * 0.35) * building
+        } else {
+            0.0
+        };
+        let diagonal = off_ball * building * 0.85;
+        // The default. A support run is never wrong, so it sets the bar
+        // the others have to clear rather than being one of them.
+        const SUPPORT: f32 = 0.30;
+
+        let mut best = (SUPPORT, AttackingRunType::SupportRun);
+        for (score, run) in [
+            (in_behind, AttackingRunType::ThroughBall),
+            (late_box, AttackingRunType::LateBoxRun),
+            (overlap, AttackingRunType::OverlapRun),
+            (diagonal, AttackingRunType::DiagonalRun),
+        ] {
+            if score > best.0 {
+                best = (score, run);
             }
         }
-        // Middle third - varied runs
-        else if distance_to_goal < field_width * 0.5 {
-            let has_space_wide = self.check_wide_space(ctx);
-
-            if has_space_wide && pace > 13.0 {
-                AttackingRunType::OverlapRun
-            } else if off_the_ball > 12.0 {
-                AttackingRunType::DiagonalRun
-            } else {
-                AttackingRunType::SupportRun
-            }
-        }
-        // Build-up phase - support play
-        else {
-            AttackingRunType::SupportRun
-        }
+        best.1
     }
 
     // Add helper to calculate lateral adjustment for runs

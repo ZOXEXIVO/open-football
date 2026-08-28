@@ -148,6 +148,30 @@ impl Soundtrack {
     /// metres away by then at the gentlest weight anybody passes at.
     const STILL_HIS: f32 = 3.5;
 
+    /// **How high the ball may be and still be AT a man rather than over
+    /// him**, in metres.
+    ///
+    /// ⚠ **Without a ceiling, possession is a shadow on the grass.** The
+    /// range in `BallState::nearest` is measured across the ground — the rig
+    /// has no use for the other axis, because a shadow is where a man stands
+    /// over the ball — so a cross six metres up is owned by every player it
+    /// flies OVER. Each one takes the ball off whoever actually played it and
+    /// clears `spoken` over somebody who never touched it, the backstop fires
+    /// a strike in mid-flight, and the arrival is either heard while the ball
+    /// is still in the air above the man or, once he is already the holder
+    /// when it lands, never heard at all. A cross, a clearance, a goal kick
+    /// and a ball over the top are all that shape, which is how the long
+    /// game came to be the silent half of the match.
+    ///
+    /// The number is the engine's, not one of this module's own: a player is
+    /// 1.8 m to the head and reaches 2.2 m with both feet down, a jump takes
+    /// that to between 2.5 m and 3.1 m depending on how well he leaps, and
+    /// the engine stops letting him CLAIM a ball at 2.8 m — which is this
+    /// same question asked where possession is actually decided. Anything
+    /// higher is in flight, and a ball in flight belongs to nobody until it
+    /// comes down.
+    const OVERHEAD: f32 = 2.8;
+
     /// How far apart in match time two contacts have to be to be two
     /// contacts.
     ///
@@ -344,7 +368,10 @@ impl Soundtrack {
     ///
     /// [`Actors::STRIKE_REACH`] rather than a radius of this module's own:
     /// "close enough to have played it" is one question with one answer, and
-    /// the rig already owns it.
+    /// the rig already owns it. It owns one AXIS of it, though — the reach is
+    /// a distance across the grass — so the height the rig has no use for is
+    /// added here, and it is the difference between a man on the ball and a
+    /// man a ball is flying over. See [`Self::OVERHEAD`].
     fn owner(ball: &BallState) -> Option<u32> {
         if !ball.on_pitch {
             return None;
@@ -353,6 +380,9 @@ impl Soundtrack {
         // drawn ball is displaced to his hands and the recorded one is not.
         if let Some(keeper) = ball.held_by {
             return Some(keeper);
+        }
+        if ball.position.y > Self::OVERHEAD {
+            return None;
         }
         ball.nearest
             .filter(|(_, range)| *range <= Actors::STRIKE_REACH)
@@ -417,6 +447,7 @@ impl Soundtrack {
 #[cfg(test)]
 mod possession {
     use super::*;
+    use crate::players::actors::Strike;
     use crate::recording::replay::Sample;
 
     /// A ball on the deck, `range` metres from player 7.
@@ -555,6 +586,100 @@ mod possession {
         let mut gathered = ball(9.0);
         gathered.held_by = Some(1);
         assert_eq!(Soundtrack::owner(&gathered), Some(1));
+    }
+
+    /// ⚠ **A ball in flight belongs to nobody it passes over.** The reach is
+    /// a distance across the grass, so a cross six metres up reads as being
+    /// at the feet of every man under it. See [`Soundtrack::OVERHEAD`].
+    #[test]
+    fn a_ball_in_flight_belongs_to_nobody_it_passes_over() {
+        let mut over = ball(0.4);
+        over.position.y = 6.0;
+        assert_eq!(Soundtrack::owner(&over), None, "it is over him, not at him");
+
+        // Dropping onto him it is his again, a shade before it lands — which
+        // is when a man plays a dropping ball.
+        over.position.y = Soundtrack::OVERHEAD - 0.4;
+        assert_eq!(Soundtrack::owner(&over), Some(7));
+
+        // And a ball met with the head is a ball he reached.
+        over.position.y = 1.9;
+        assert_eq!(Soundtrack::owner(&over), Some(7), "he can head that");
+    }
+
+    /// **The long game was the silent half of the match.** A cross flies over
+    /// a man on its way to the far post: taken across the grass alone he owns
+    /// it while it is six metres above him, which costs the man who crossed
+    /// it the ball and plays the arrival into thin air — and then leaves the
+    /// real arrival silent, because by the time it lands he is already the
+    /// holder and nothing has changed hands.
+    #[test]
+    fn a_cross_is_heard_arriving_and_not_before() {
+        let mut taken = recording(
+            run((112.0, 30.0), (113.0, 30.0), 0.0),
+            run((112.4, 30.0), (113.2, 30.0), 0.0),
+        );
+        let mut soundtrack = Soundtrack {
+            holder: Some(3),
+            // The ball leaving him has already been heard off the lookahead.
+            spoken: true,
+            carried: Vec3::new(18.0, 0.0, 0.0),
+            ..default()
+        };
+
+        let mut over = ball(0.4);
+        over.position.y = 6.0;
+        assert!(
+            soundtrack.possession(0.0, &over, &mut taken).is_none(),
+            "the ball was heard arriving while it was still in the air"
+        );
+        assert_eq!(
+            soundtrack.holder,
+            Some(3),
+            "a man it flew over took it off the man who crossed it"
+        );
+
+        // …and now it comes down on him.
+        let arrival = soundtrack
+            .possession(0.0, &ball(0.4), &mut taken)
+            .expect("the cross arriving is a sound");
+        assert!(matches!(arrival.meeting, Meeting::Received));
+        assert_eq!(soundtrack.holder, Some(7));
+    }
+
+    /// **An aerial contact is heard on its way out.** The lookahead never
+    /// sees a header — the ball does not multiply its speed, it turns round —
+    /// so the backstop is the whole of it: he is under the dropping ball, he
+    /// does not keep it, and the moment it climbs off his head it has left
+    /// him. Before the ceiling above, it never left him at all: it was still
+    /// within a stride of him across the grass while it was three metres up.
+    #[test]
+    fn a_header_is_heard_when_it_leaves_him() {
+        // Headed twenty metres back the way it came, climbing as it goes.
+        let mut cleared = recording(
+            run((100.0, 30.0), (80.0, 30.0), 4.0),
+            run((100.0, 30.0), (100.5, 30.0), 0.0),
+        );
+        let mut soundtrack = Soundtrack {
+            holder: Some(7),
+            carried: Vec3::new(-14.0, 6.0, 0.0),
+            ..default()
+        };
+
+        let climbing = BallState {
+            position: Vec3::new(0.0, 3.0, 0.0),
+            on_pitch: true,
+            nearest: Some((7, 0.8)),
+            ..default()
+        };
+        let out = soundtrack
+            .possession(0.0, &climbing, &mut cleared)
+            .expect("the header leaving him is a sound");
+        assert!(
+            matches!(out.meeting, Meeting::Struck(Strike::Head)),
+            "a ball off the top of his head was played as a boot"
+        );
+        assert!(soundtrack.spoken, "and it is not said twice");
     }
 
     /// ⚠ **The bug this design nearly shipped with.** A dribbler knocks the

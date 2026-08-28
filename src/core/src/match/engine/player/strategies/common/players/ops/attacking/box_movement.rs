@@ -148,10 +148,12 @@ impl BoxMovement {
     /// permanent and the spin never happens. A rhythm has to run off a
     /// clock that state churn cannot reset.
     ///
-    /// That cadence has a corrected clock of its own now, but it is
-    /// gated off pending a chance-economy re-fit — see
-    /// `MarkerEvasion::live_cadence`. This one is live, and is why an
-    /// occupant keeps moving whether or not anybody is marking him.
+    /// That cadence runs off the match clock too now — see
+    /// `MarkerEvasion::live_cadence` for what unsticking it cost and
+    /// where that was paid. The two are still separate jobs: the
+    /// check-and-spin is a CONTEST against a man who is holding you, and
+    /// this is the habit an occupant keeps whether or not anybody is
+    /// close enough to contest.
     const WORK_PERIOD_MS: u64 = 4000;
 
     /// How far he works his zone, in game units. Everybody moves — the
