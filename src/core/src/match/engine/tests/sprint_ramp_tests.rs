@@ -8,10 +8,11 @@
 //!      ramp existed the integrator allowed a full stop-to-sprint change
 //!      in 1–2 AI ticks, so a 6 and an 18 differed by ~2 cm off a
 //!      standing start and every race was settled by top speed alone.
-//!   2. The ramp is in a HUMAN band — a standing start takes on the
-//!      order of a second to top speed, not milliseconds and not ten
-//!      seconds. Bounds are deliberately loose; the exact fit belongs to
-//!      calibration, not to a unit test.
+//!   2. The ramp is a BUILD, not a teleport — a standing start takes
+//!      tenths of a second to top speed, not the old 20–40 ms teleport
+//!      and not ten seconds of treacle. Bounds are deliberately loose;
+//!      the exact dose is calibration (see `ACCEL_PEAK_FLOOR_MS2`'s
+//!      titration history), not a unit test's business.
 //!   3. Braking/turning outruns accelerating (eccentric beats
 //!      concentric), which is what keeps arrivals crisp.
 //!   4. Fatigue shrinks burst: the same player at broken condition ramps
@@ -106,15 +107,17 @@ fn higher_acceleration_reaches_top_speed_sooner() {
 }
 
 #[test]
-fn standing_start_takes_a_human_time_to_top_speed() {
-    // Population-mean burst: 90% of top speed within 0.4–2.4 s
-    // (20–120 AI ticks at 20 ms). Both edges matter: the low bound is
-    // the old instant-ramp defect, the high bound is a treacle engine.
+fn standing_start_is_a_build_not_a_teleport() {
+    // Population-mean burst: 90% of top speed within 0.12–2.4 s (6–120
+    // AI ticks at 20 ms). Both edges matter: the low bound is the old
+    // instant-ramp defect (1–2 ticks), the high bound is a treacle
+    // engine. The dose currently sits at the fast end deliberately —
+    // the titration history lives on `ACCEL_PEAK_FLOOR_MS2`.
     let mut avg = build_runner(12.0, 12.0, 9500);
     let t = ticks_to_speed(&mut avg, 0.90);
     assert!(
-        (20..=120).contains(&t),
-        "mean standing start should take 0.4–2.4 s to 90% top speed, got {t} AI ticks"
+        (6..=120).contains(&t),
+        "mean standing start should take 0.12–2.4 s to 90% top speed, got {t} AI ticks"
     );
 }
 
@@ -200,9 +203,10 @@ fn sprint_reversal_transits_brake_then_reaccelerates() {
     }
     let t = reversed_at.expect("player never completed the reversal");
     // A full sprint reversal is slower than a standing start (more
-    // speed to shed than to gain) but still resolves within ~3 s.
+    // speed to shed than to gain) but still resolves within ~3 s —
+    // and takes more than a couple of ticks (the old twitch flip).
     assert!(
-        (25..=150).contains(&t),
-        "sprint reversal should take 0.5–3 s, got {t} AI ticks"
+        (8..=150).contains(&t),
+        "sprint reversal should take 0.16–3 s, got {t} AI ticks"
     );
 }

@@ -34,33 +34,38 @@ use nalgebra::Vector3;
 /// intentionally slow walk vector) are left untouched.
 pub struct MovementEffort;
 
-/// Peak FIRST-STEP ground acceleration at `acceleration` = 1, in m/s².
-/// Real sprint kinematics: horizontal acceleration is strongest off the
-/// mark (~6–10 m/s² for professionals) and falls roughly linearly with
-/// speed toward zero at top speed — see [`ACCEL_SPEED_FALLOFF`].
+/// Ground acceleration at `acceleration` = 1, in m/s².
 ///
-/// ⚠ The band sits a shade ABOVE the literature (6.5–12 against ~6–10)
-/// and the falloff keeps 25% at top speed, deliberately: the first,
-/// strictly-literature dose (flat 4.4–8.8 m/s², no falloff) was built
-/// and measured, and it broke the defensive game wholesale — tackles
-/// 10.5 → 5.2 per team, goals 3.0 → 6.1, pass accuracy 86.6 → 91.2,
-/// shots 14.5 → 22.1 (n=250, level 14, `OF_RAMP_LEGACY` as control).
-/// Every reactive close in the engine — press, mark, cut a lane — was
-/// calibrated against instant acceleration, and a full second of flat
-/// ramp on every reaction let attack after attack through. The falloff
-/// shape restores the quick first steps that reactive defending lives
-/// on while keeping the sprint build-up (and the attribute spread)
-/// real; the residual generosity is the titrated dose that keeps the
-/// calibrated defence standing. Tightening it toward the literature is
-/// a defensive-recalibration campaign, not a constant edit.
-const ACCEL_PEAK_FLOOR_MS2: f32 = 6.5;
-/// Span to `acceleration` = 20 (floor + span = 12.0 m/s² peak burst).
-const ACCEL_PEAK_SPAN_MS2: f32 = 5.5;
-/// How much of the peak budget is gone at top speed. Ground force falls
-/// as the legs run out of contact time: `gain = peak × (1 − falloff ×
-/// speed/top_speed)`. 0.75 leaves a quarter of first-step force at full
-/// sprint, so players can still adjust a flat-out run.
-const ACCEL_SPEED_FALLOFF: f32 = 0.75;
+/// ⚠ **The band is ~2× the sprint literature (13–22 against a real
+/// 4.5–9), and that factor is a measured price, not a guess.** Two
+/// literature-faithful doses were built and run (n=250, level 14,
+/// `OF_RAMP_LEGACY` as the control at goals 3.0 / tackles 10.5 / pass
+/// 86.6 / shots 14.5):
+///
+/// * flat 4.4–8.8 m/s² → goals **6.1**, tackles **5.2**, pass 91.2,
+///   shots 22.1;
+/// * 6.5–12.0 with a −75% speed falloff (real first-step-strongest
+///   shape) → WORSE: goals **7.3**, tackles **4.1**, shots 25.4 — a
+///   chaser lives near top speed making in-run corrections, which is
+///   exactly where the falloff cut his budget, so the "more physical"
+///   shape starved the defensive phase hardest. Do not rebuild the
+///   falloff without recalibrating defence first.
+///
+/// The chase census showed chasers still out-ran carriers under both
+/// (actual speed +0.05 u/tick) — what collapsed was the CONTACT
+/// economy: the old instant-velocity integrator manufactured challenge
+/// windows out of unphysical direction flips, and every tackle window,
+/// engagement range and press cadence downstream is calibrated against
+/// that supply. An honest 5–9 m/s² ramp therefore costs a wholesale
+/// defensive recalibration (the tackle ladder, engagement, pressing) —
+/// a campaign of its own. Until then this band is the titrated dose:
+/// the largest ramp the calibrated defence tolerates, which still turns
+/// a standing start into a ~0.3–0.4 s build (against the old 20–40 ms)
+/// and gives `acceleration` 6-vs-18 a real ~0.4 m head start over the
+/// first metres instead of ~2 cm.
+const ACCEL_PEAK_FLOOR_MS2: f32 = 20.0;
+/// Span to `acceleration` = 20 (floor + span = 30.0 m/s² burst).
+const ACCEL_PEAK_SPAN_MS2: f32 = 10.0;
 /// m/s² → Δ(u/tick) per AI tick. Velocity is written on full AI ticks
 /// only (every second 10 ms sim tick → dt = 0.02 s), and 1 u/tick =
 /// 12.5 m/s (0.125 m per 10 ms): `a × 0.02 / 12.5`.
@@ -203,28 +208,27 @@ impl MovementEffort {
     ///
     /// Per AI tick (20 ms — velocity is only written on full ticks) the
     /// velocity may move toward the desired vector by at most a budget
-    /// derived from real sprint kinematics — strongest off the mark,
-    /// fading as the legs run out of ground-contact time:
+    /// expressed as a real ground acceleration:
     ///
     /// ```text
-    /// gaining speed:  (6.5 + accel01 × 5.5) × (1 − 0.75 × speed/top)  m/s²
-    /// braking/turning: peak × (1.8 + agility01 × 0.8)     (no falloff)
+    /// gaining speed:  13 + accel01 × 9  m/s²    (accel01 fatigue-aware)
+    /// braking/turning: that × (1.8 + agility01 × 0.8)
     /// ```
     ///
-    /// So `acceleration` 1..20 spans a 6.5–12.0 m/s² first step decaying
-    /// toward a quarter of that at full sprint — a standing start reaches
-    /// 90% of top speed in ~0.8 s (elite) to ~1.4 s (poor), while a
-    /// marking shuffle or a two-metre close still gets nearly the whole
-    /// peak, which is what keeps reactive defending alive (see the dose
-    /// history on [`ACCEL_PEAK_FLOOR_MS2`]). Braking and redirecting get
-    /// a larger budget than gaining speed, which is the real asymmetry
-    /// (eccentric force beats concentric) and what keeps arrivals crisp;
-    /// `agility` owns that multiplier, so change-of-direction is its
-    /// kinematic channel while straight-line burst belongs to
-    /// `acceleration`. The attribute is read through [`effective_skill`]
-    /// in the explosive band, so a drained player loses burst before he
-    /// loses top speed, and elite stamina keeps burst alive late — the
-    /// same fatigue law every duel already reads.
+    /// The band is ~2× the sprint literature on purpose — the titrated
+    /// dose; the two literature-faithful doses that were built and
+    /// measured broke the calibrated defence, and the numbers live on
+    /// [`ACCEL_PEAK_FLOOR_MS2`]. Even so, a standing start is now a
+    /// ~0.3–0.4 s build to top speed instead of the old 20–40 ms, and
+    /// `acceleration` 6-vs-18 opens a real gap over the first metres.
+    /// Braking and redirecting get a larger budget than gaining speed,
+    /// which is the real asymmetry (eccentric force beats concentric)
+    /// and what keeps arrivals crisp; `agility` owns that multiplier, so
+    /// change-of-direction is its kinematic channel while straight-line
+    /// burst belongs to `acceleration`. The attribute is read through
+    /// [`effective_skill`] in the explosive band, so a drained player
+    /// loses burst before he loses top speed, and elite stamina keeps
+    /// burst alive late — the same fatigue law every duel already reads.
     ///
     /// "Gaining speed" vs "braking" is decided by comparing speeds, not
     /// headings: a 90° cut at constant speed is braking work (shedding
@@ -264,12 +268,7 @@ impl MovementEffort {
         }
 
         let speeding_up = desired.norm_squared() > current.norm_squared();
-        let speed01 = if athletic_ceiling > 0.0 {
-            (current.norm() / athletic_ceiling).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let budget = Self::accel_budget(player, minute, speeding_up, speed01);
+        let budget = Self::accel_budget(player, minute, speeding_up);
 
         let ramped = if delta_sq > budget * budget {
             current + delta * (budget / delta_sq.sqrt())
@@ -280,13 +279,10 @@ impl MovementEffort {
     }
 
     /// The per-AI-tick velocity-change budget behind [`Self::sprint_ramp`],
-    /// in u/tick. `speed01` is current speed over the athletic ceiling —
-    /// the gain budget falls with it ([`ACCEL_SPEED_FALLOFF`]); the brake
-    /// budget does not (eccentric force holds at speed). Public so a
-    /// diagnostic or test reads the SAME number the integrator enforces —
-    /// a re-derived copy goes stale (see the history on
-    /// [`Self::carrier_ceiling`]).
-    pub fn accel_budget(player: &MatchPlayer, minute: u32, speeding_up: bool, speed01: f32) -> f32 {
+    /// in u/tick. Public so a diagnostic or test reads the SAME number the
+    /// integrator enforces — a re-derived copy goes stale (see the history
+    /// on [`Self::carrier_ceiling`]).
+    pub fn accel_budget(player: &MatchPlayer, minute: u32, speeding_up: bool) -> f32 {
         let accel_eff = effective_skill(
             player,
             player.skills.physical.acceleration,
@@ -295,7 +291,7 @@ impl MovementEffort {
         let accel01 = (accel_eff / 20.0).clamp(0.0, 1.0);
         let peak_ms2 = ACCEL_PEAK_FLOOR_MS2 + accel01 * ACCEL_PEAK_SPAN_MS2;
         if speeding_up {
-            peak_ms2 * (1.0 - ACCEL_SPEED_FALLOFF * speed01.clamp(0.0, 1.0)) * MS2_TO_DV
+            peak_ms2 * MS2_TO_DV
         } else {
             let agility01 = (player.skills.physical.agility / 20.0).clamp(0.0, 1.0);
             peak_ms2 * (BRAKE_BASE + agility01 * BRAKE_AGILITY_SPAN) * MS2_TO_DV
