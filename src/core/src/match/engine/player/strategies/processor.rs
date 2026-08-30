@@ -14,7 +14,7 @@ use crate::r#match::player::state::PlayerState::{Defender, Forward, Goalkeeper, 
 use crate::r#match::player::strategies::common::PlayerOperationsImpl;
 use crate::r#match::player::strategies::common::PlayersOperationsImpl;
 use crate::r#match::player::strategies::common::states::{
-    CornerHold, KeeperReleaseSpace, RestartCarry,
+    CornerHold, KeeperReleaseSpace, RestartCarry, ThrowInDelivery,
 };
 use crate::r#match::player::transition::TransitionSource;
 use crate::r#match::player_context::LooseBallChase;
@@ -280,6 +280,13 @@ impl PlayerFieldPositionGroup {
         if RestartHold::taker(tick_context) == Some(player.id) {
             return false;
         }
+        // …and the mirror of the Law 15 bar in `should_force_takeball`:
+        // a thrower who cannot claim his own throw yields the chase, or
+        // he stands in `TakeBall` over a ball nothing will ever let him
+        // have while the man who should be collecting it stands off.
+        if tick_context.ball.recollect_blocked_player == Some(player.id) {
+            return true;
+        }
         // Mirror of the receiving rule in `should_force_takeball`: the
         // intended receiver holds the chase however close a teammate
         // gets, and his teammates drop it. The two must agree or a
@@ -439,6 +446,18 @@ impl PlayerFieldPositionGroup {
         // are not allowed to have. See `BallMetadata::restart_taker`.
         if let Some(taker) = RestartHold::taker(tick_context) {
             return taker == player.id;
+        }
+
+        // **And a throw-in he took himself is a ball HE is not allowed to
+        // have** — Law 15, until somebody else plays it. The ownership
+        // layer already refuses him the claim
+        // (`Ball::blocked_recollect_player`), but refusing the claim
+        // without calling off the chase is the worst of both: he is the
+        // man nearest the touchline, so he wins the race to his own
+        // throw, stands over the ball he may not take, and the delivery
+        // dies there. See `BallMetadata::recollect_blocked_player`.
+        if tick_context.ball.recollect_blocked_player == Some(player.id) {
+            return false;
         }
 
         // A pass in the air belongs to its target — see the deadlock
@@ -726,6 +745,19 @@ impl<'p> StateProcessor<'p> {
             Self::note_keeper_motion(&processing_ctx, result.velocity);
             Self::note_keeper_excursion(&processing_ctx);
             Self::note_keeper_retreat(&processing_ctx, result.velocity);
+        }
+
+        // **He is taking a throw-in.** Ahead of the handler and instead
+        // of it: the ball is in his hands and rides on his position, so
+        // anything his state machine would do with it — a dribble, a run
+        // into the shape, a step towards a marker — walks the throw-in
+        // away from the line. See [`ThrowInDelivery`].
+        if ThrowInDelivery::taking(&processing_ctx) {
+            result.velocity = Some(Vector3::zeros());
+            if let Some(throw) = ThrowInDelivery::deliver(&processing_ctx) {
+                result.events.add(throw);
+            }
+            return result;
         }
 
         if let Some(change) = handler.process(&processing_ctx) {

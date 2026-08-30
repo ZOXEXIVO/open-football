@@ -7,11 +7,20 @@
 //! and hands both URLs over in the config. This module does the rest: fetch,
 //! decode, cut the background off, and repaint one face sheet.
 //!
-//! Nothing here is on the critical path. The generated face goes onto every
-//! player at spawn and stands until a picture arrives; a picture that 404s,
-//! that the browser refuses to read across an origin, or that never comes back
-//! at all simply never replaces it. Which is the only way to load a face over
-//! a network into a match that has already kicked off.
+//! Nothing here is on the critical path. A player takes the field with his own
+//! complexion on a bare head and this puts a face on it a few frames later; a
+//! picture that 404s, that the browser refuses to read across an origin, or
+//! that never comes back at all simply leaves him as he is. Which is the only
+//! way to load a face over a network into a match that has already kicked off.
+//!
+//! **A face here is a PICTURE OF THE MAN or it is nothing.** The viewer can
+//! draw a face — eyes, brows, a jaw, a beard, all off his id — and for a while
+//! it did, as the thing to look at until his photograph landed. It is not a
+//! lesser version of a photograph, though; it is a different thing, and a
+//! squad wearing a mix of the two reads as half the men being somebody and
+//! half being nobody. The page has a picture for everybody — a photograph for
+//! a real footballer, the portrait it draws for a regen — so the two sources
+//! below are what a head gets, in that order, and there is no third.
 
 use crate::app::config::{PlayerInfo, ViewerConfig};
 use crate::art::textures::{Portrait, Textures};
@@ -840,6 +849,12 @@ impl Portraits {
             if let Some((_, material)) = portraits.faces.iter().find(|(face, _)| *face == id) {
                 let sheet = images.add(Textures::photographed_face(&layout, &look, &picture));
                 if let Some(mut material) = materials.get_mut(material) {
+                    // The base colour has been carrying his complexion, which
+                    // is what a head with no picture on it is painted in. A
+                    // base colour MULTIPLIES the texture over it, so leaving a
+                    // tan there would put the man's own skin through his own
+                    // photograph twice.
+                    material.base_color = Color::WHITE;
                     material.base_color_texture = Some(sheet);
                 }
             }

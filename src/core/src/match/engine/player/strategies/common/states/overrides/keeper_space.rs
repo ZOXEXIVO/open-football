@@ -85,6 +85,20 @@ impl KeeperReleaseSpace {
         // a match against the ~7,300 opponent-in-area ticks it should have,
         // i.e. one team's keeper was protected and the other's was not.
         let holder_id = ctx.tick_context.ball.current_owner?;
+        // ⚠ **And he has to be a KEEPER.** `held_in_hands` used to be a
+        // goalkeeper's flag and nothing else, so the owner check above was
+        // the whole test. A throw-in's taker holds the ball in his hands
+        // too now (see [`ThrowInDelivery`](super::ThrowInDelivery)), and
+        // without this a throw taken deep in a side's own corner backed
+        // the opposition out of a penalty area nobody was standing in.
+        if !ctx
+            .context
+            .players
+            .by_id(holder_id)
+            .is_some_and(|p| p.tactical_position.current_position.is_goalkeeper())
+        {
+            return None;
+        }
         let holder_side = ctx
             .tick_context
             .positions

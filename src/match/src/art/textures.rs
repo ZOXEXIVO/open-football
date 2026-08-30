@@ -1207,6 +1207,154 @@ impl Textures {
         /// and this is that shape.
         const WIDTH: u32 = 176;
         const HEIGHT: u32 = 40;
+
+        let printed = Self::as_printed(name)?;
+        Some(Self::lettering(images, &printed, WIDTH, HEIGHT, 0.94, 0.88))
+    }
+
+    /// **The walk-out name, set on a plate rather than straight onto the
+    /// cloth**: a rounded rectangle in the kit's print colour with the surname
+    /// knocked out of it in the shirt's own colour.
+    ///
+    /// The back of the shirt is lettering and nothing else, because that is
+    /// what a shirt is. The FRONT carries this instead (2026-08-30, maintainer:
+    /// *"on red-white team i want see white rectangle with rounded corners and
+    /// red text"*), and the inversion is the point: the ceremony's pass comes
+    /// down the line at four metres with eleven men in the same strip, and a
+    /// white-on-blue name is one more thing on a blue chest while a white plate
+    /// is a shape the eye finds before it reads anything. Every accreditation
+    /// badge, every squad-number patch and every warm-up top on earth does the
+    /// same.
+    ///
+    /// # Why the colours are baked in and not left to the material
+    ///
+    /// [`Self::lettering`] paints white and lets [`Wardrobe::printed`] tint the
+    /// whole panel off the strip, which works exactly as long as a print is ONE
+    /// colour. This one is two, and the second is behind the first. So the
+    /// texels carry the colours and the material is left white; the panel is
+    /// per-player anyway, since the name is.
+    ///
+    /// [`Wardrobe::printed`]: crate::players::kit::Wardrobe
+    pub fn name_plate(
+        images: &mut Assets<Image>,
+        name: &str,
+        plate: Color,
+        ink: Color,
+    ) -> Option<Handle<Image>> {
+        /// Half again as tall as the back panel for the same lettering: the
+        /// air above and below the letters is the plate. Matches the shape of
+        /// [`BodyParts::NAME_FRONT_ARC`] × `NAME_FRONT_HEIGHT` — 25 cm by 7.6
+        /// — or the whole thing prints stretched.
+        ///
+        /// [`BodyParts::NAME_FRONT_ARC`]: crate::players::body::BodyParts
+        const WIDTH: u32 = 176;
+        const HEIGHT: u32 = 54;
+        /// Letters the same size on the plate as off it: the back print sets
+        /// 0.88 of 40 texels — 5.1 cm of cloth — and this is that same 5.1 cm
+        /// out of the 7.6 the taller panel covers.
+        const CAP: f32 = 0.67;
+        /// …and narrower than the back print's 0.94, because the plate has to
+        /// get round the outside of them.
+        const MARGIN: f32 = 0.80;
+        /// How far the plate stands off the lettering, in texels: out to the
+        /// sides, where it is clamped by the panel's own edge, and top and
+        /// bottom, where the plate is a fixed band so that eleven men in a row
+        /// wear the same one whether or not their names have a descender.
+        const PAD_X: f32 = 13.0;
+        const BLEED: f32 = 2.0;
+        /// The narrowest a plate may be, in texels, however short the name on
+        /// it. LI padded by [`PAD_X`] alone comes out very nearly square, which
+        /// does not read as a name badge; this holds it to about three halves
+        /// of its own height, which does.
+        ///
+        /// [`PAD_X`]: Self::name_plate
+        const NARROWEST: f32 = 76.0;
+        /// The corner radius, as a share of the plate's height. A patch, not a
+        /// pill: enough that the corner is visibly turned at four metres and
+        /// not so much that the shape stops being a rectangle.
+        const CORNER: f32 = 0.24;
+        /// Coverage below this is a glyph's antialiased skirt rather than the
+        /// glyph, and including it in the ink box would grow the plate by a
+        /// texel or two of nothing.
+        const INKED: u8 = 24;
+
+        let printed = Self::as_printed(name)?;
+        let glyphs = Stencil::mask(&printed, WIDTH, HEIGHT, MARGIN, CAP);
+
+        // Where the lettering actually reaches across the panel. Fitting is
+        // done to the WIDEST of the two constraints, so a short name is held
+        // off the margin by the cap and its plate must not be a full-width
+        // band; measuring is the only way to know which happened.
+        let mut from = WIDTH as f32;
+        let mut to = 0.0f32;
+        for (index, coverage) in glyphs.iter().enumerate() {
+            if *coverage >= INKED {
+                let column = (index as u32 % WIDTH) as f32;
+                from = from.min(column);
+                to = to.max(column + 1.0);
+            }
+        }
+        if from >= to {
+            return None;
+        }
+        let left = (from - PAD_X).max(BLEED);
+        let right = (to + PAD_X).min(WIDTH as f32 - BLEED);
+        // Grown about its own middle rather than about the panel's, so a plate
+        // that had to be pushed off one edge does not walk back onto it. The
+        // lettering is centred, so on everything but a clamped plate the two
+        // are the same point anyway.
+        let centre = Vec2::new(
+            ((left + right) * 0.5).clamp(
+                BLEED + NARROWEST * 0.5,
+                WIDTH as f32 - BLEED - NARROWEST * 0.5,
+            ),
+            HEIGHT as f32 * 0.5,
+        );
+        let half = Vec2::new(
+            (right - left).max(NARROWEST) * 0.5,
+            (HEIGHT as f32 - BLEED * 2.0) * 0.5,
+        );
+
+        // The plate's own mask, painted by the same signed-distance routine the
+        // perimeter boards use — so a shirt and a hoarding round the same corner
+        // the same way, and there is one rounded rectangle in the crate.
+        let mut cover = vec![0u8; (WIDTH * HEIGHT) as usize];
+        Self::rounded(
+            &mut cover,
+            WIDTH,
+            HEIGHT,
+            centre,
+            half,
+            half.y * 2.0 * CORNER,
+        );
+
+        let plate = plate.to_srgba();
+        let ink = ink.to_srgba();
+        let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+
+        let mut data = Vec::with_capacity((WIDTH * HEIGHT * 4) as usize);
+        for texel in 0..(WIDTH * HEIGHT) as usize {
+            // The glyph decides the colour and the plate decides whether there
+            // is anything there at all — the lettering is a hole in the plate,
+            // so it can never reach outside one.
+            let letter = glyphs[texel] as f32 / 255.0;
+            let mix = |plate: f32, ink: f32| channel(plate + (ink - plate) * letter);
+            data.extend_from_slice(&[
+                mix(plate.red, ink.red),
+                mix(plate.green, ink.green),
+                mix(plate.blue, ink.blue),
+                cover[texel],
+            ]);
+        }
+        Some(images.add(Self::image(WIDTH, HEIGHT, data)))
+    }
+
+    /// The surname as any panel on the shirt will set it: folded to what the
+    /// face can draw, and cut to a length a shirt printer would accept.
+    ///
+    /// `None` when nothing survives, and the shirt then goes out with its
+    /// number alone rather than with a row of blanks.
+    fn as_printed(name: &str) -> Option<String> {
         /// Past this a name is set so small it is a smudge either way, and
         /// real shirts abbreviate rather than shrink indefinitely.
         const LETTERS: usize = 16;
@@ -1218,7 +1366,7 @@ impl Textures {
         if printed.trim().is_empty() {
             return None;
         }
-        Some(Self::lettering(images, &printed, WIDTH, HEIGHT, 0.94, 0.88))
+        Some(printed)
     }
 
     /// White glyphs on transparent, centred and sized to fill the image.
@@ -1338,6 +1486,14 @@ impl Textures {
     /// around it — the head narrows by a third between the cheekbone and the
     /// chin, so a feature laid out in `uv` is a different size at every height
     /// it could sit at. See [`FaceLayout`] for the crossing between the two.
+    /// ⚠ **Nobody takes the field wearing one of these.** A face on the pitch
+    /// is a picture of the man or it is nothing — see
+    /// [`crate::players::portrait`] — so the only caller left is the dump that
+    /// puts a drawn head beside a photographed one to compare them. The paint
+    /// itself is very much alive: [`Self::photographed_face`] lays the picture
+    /// over this same sheet, and everything the camera never saw is still what
+    /// this draws.
+    #[cfg(test)]
     pub fn face(images: &mut Assets<Image>, layout: &FaceLayout, look: &FaceLook) -> Handle<Image> {
         images.add(Self::face_sheet(layout, look, None))
     }
@@ -4128,6 +4284,98 @@ mod tests {
         }
     }
 
+    /// **The walk-out plate is the strip inverted, and it is a plate.**
+    ///
+    /// Three things can go wrong with it and none of them would look like a
+    /// bug from four metres: the two colours could come out the same way round
+    /// as the back print, in which case the plate is invisible on the shirt;
+    /// the rounded rectangle could fail to fill, in which case the ceremony
+    /// draws bare lettering again and nobody notices which of the two panels
+    /// they are looking at; and it could grow past the panel it is printed on,
+    /// which cuts the plate off with a hard edge along the seam. So the test
+    /// takes the picture apart and asks for all three.
+    #[test]
+    fn the_walk_out_name_is_set_on_a_plate_of_the_print_colour() {
+        let mut images = Assets::<Image>::default();
+        let shirt = Color::srgb(0.78, 0.08, 0.10);
+        let print = Color::WHITE;
+        let handle = Textures::name_plate(&mut images, "Petrov", print, shirt)
+            .expect("a printable name is printable");
+        let plate = images.get(&handle).expect("the plate was added");
+        let (width, height) = (plate.width(), plate.height());
+        let texels = plate.data.as_ref().expect("the plate carries pixels");
+        let texel = |x: u32, y: u32| {
+            let at = ((y * width + x) * 4) as usize;
+            [texels[at], texels[at + 1], texels[at + 2], texels[at + 3]]
+        };
+
+        // Every corner of the panel is off the plate — the corners are turned,
+        // and the plate does not reach the edge in any case.
+        for (x, y) in [
+            (0, 0),
+            (width - 1, 0),
+            (0, height - 1),
+            (width - 1, height - 1),
+        ] {
+            assert_eq!(texel(x, y)[3], 0, "the plate reaches the corner at {x},{y}");
+        }
+        // The middle of it is opaque, and it is the PRINT colour rather than
+        // the shirt's — which is the inversion, and the whole point.
+        let middle = texel(width / 2, 2 + (height - 4) / 8);
+        assert_eq!(middle[3], 255, "the plate has a hole in the middle of it");
+        assert!(
+            middle[0] > 200 && middle[1] > 200 && middle[2] > 200,
+            "the plate is not the print colour: {middle:?}"
+        );
+        // And somewhere inside it there is lettering in the shirt's own colour.
+        let inked = (0..width * height)
+            .map(|index| texel(index % width, index / width))
+            .filter(|texel| texel[3] > 128 && texel[0] > 150 && texel[1] < 80 && texel[2] < 80)
+            .count();
+        assert!(
+            inked > 40,
+            "only {inked} texels of the plate are set in the shirt colour"
+        );
+    }
+
+    /// A plate has to fit the panel it is printed on whatever is written on it:
+    /// a name long enough to fill the row still has to leave the rounded corner
+    /// somewhere the shirt can show it, and a name of two letters must not come
+    /// out as a square badge.
+    #[test]
+    fn a_plate_fits_its_panel_whatever_the_name() {
+        let mut images = Assets::<Image>::default();
+        for name in ["Li", "Petrov", "Vandenbroucke", "Papastathopoulos"] {
+            let handle =
+                Textures::name_plate(&mut images, name, Color::WHITE, Color::BLACK).unwrap();
+            let plate = images.get(&handle).unwrap();
+            let (width, height) = (plate.width(), plate.height());
+            let texels = plate.data.as_ref().unwrap();
+            let (mut left, mut right) = (width as i64, -1i64);
+            for index in 0..width * height {
+                if texels[(index * 4 + 3) as usize] > 128 {
+                    left = left.min((index % width) as i64);
+                    right = right.max((index % width) as i64);
+                }
+            }
+            assert!(left >= 1, "{name}'s plate runs off the left of the panel");
+            assert!(
+                right <= width as i64 - 2,
+                "{name}'s plate runs off the right of the panel"
+            );
+            // Wider than it is tall, and by enough to read as a badge rather
+            // than as a box.
+            let across = (right - left + 1) as f32;
+            assert!(
+                across > height as f32 * 1.4,
+                "{name}'s plate is {across} by {height}, which is a square"
+            );
+        }
+        // Nothing to print, nothing printed — the walk-out then shows the same
+        // bare chest the back of the shirt shows.
+        assert!(Textures::name_plate(&mut images, "のぞみ", Color::WHITE, Color::BLACK).is_none());
+    }
+
     /// And all three pieces have to be on it, in the order the lockup is
     /// written in: mark, name, address. Each is drawn into a layer of its own
     /// and composited by colour, so a piece that quietly fails to set — a face
@@ -4336,3 +4584,4 @@ mod tests {
         }
     }
 }
+

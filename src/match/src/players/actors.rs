@@ -1505,7 +1505,6 @@ impl Actors {
         // In match time, so the lead is the same stretch of football however
         // fast it is being watched.
         let horizon = playback.time_ms + f64::from(Self::DRESSING_LEAD * playback.speed.max(0.1));
-        let layout = BodyParts::face_layout();
         let mut dressed = 0;
 
         // **A cut has no budget.** Most recordings are not a film of the match
@@ -1546,7 +1545,7 @@ impl Actors {
                 continue;
             };
 
-            let outfit = wardrobe.outfit(player, &mut materials, &mut images, &layout);
+            let outfit = wardrobe.outfit(player, &mut materials, &mut images);
             portraits.send_for(player, outfit.face.clone());
             Footballer::assemble(
                 &mut commands,

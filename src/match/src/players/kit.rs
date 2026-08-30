@@ -1,5 +1,5 @@
 use crate::app::config::{PlayerInfo, TeamColors, ViewerConfig};
-use crate::art::textures::{Beard, FaceLayout, FaceLook, Textures};
+use crate::art::textures::{Beard, FaceLook, Textures};
 use bevy::image::Image;
 use bevy::prelude::*;
 use shared::Palette;
@@ -391,7 +391,8 @@ pub struct Outfit {
     pub trim: Handle<StandardMaterial>,
     pub boots: Handle<StandardMaterial>,
     pub skin: Handle<StandardMaterial>,
-    /// The head, which is his own: skin with a face painted on it.
+    /// The head, which is his own: his complexion until his picture arrives
+    /// and lands on this very material — see [`crate::players::portrait`].
     pub face: Handle<StandardMaterial>,
     pub hands: Handle<StandardMaterial>,
     pub hair: Handle<StandardMaterial>,
@@ -400,6 +401,9 @@ pub struct Outfit {
     /// whose name has nothing the shirt printer can set.
     pub number: Option<Handle<StandardMaterial>>,
     pub name: Option<Handle<StandardMaterial>>,
+    /// The same name as a walk-out plate: inverted, and so a material of its
+    /// own rather than the one above. `None` on the same terms as `name`.
+    pub name_front: Option<Handle<StandardMaterial>>,
 }
 
 /// One strip, as materials.
@@ -432,6 +436,11 @@ pub struct Wardrobe {
     /// no longer all made at once and the strips they come off are otherwise
     /// long gone by the time a substitute needs one.
     prints: [Color; 4],
+    /// …and the cloth each prints ON, which the walk-out plate needs as the
+    /// colour of its LETTERING — the plate is the print colour and the name is
+    /// knocked out of it. See
+    /// [`Textures::name_plate`](crate::art::textures::Textures::name_plate).
+    cloths: [Color; 4],
     /// The three materials that cannot be shared, because what makes them
     /// differ is baked into a texture: a printed number, a printed name and a
     /// face.
@@ -445,6 +454,7 @@ pub struct Wardrobe {
     /// most of a second of the load spent on men who are sitting down.
     numbers: Vec<(u32, Handle<StandardMaterial>)>,
     names: Vec<(u32, Handle<StandardMaterial>)>,
+    plates: Vec<(u32, Handle<StandardMaterial>)>,
     faces: Vec<(u32, Handle<StandardMaterial>)>,
 }
 
@@ -488,9 +498,9 @@ impl Wardrobe {
             .collect();
         let boots: Vec<Handle<StandardMaterial>> = Complexion::BOOTS
             .iter()
-            .map(|color| Self::cloth(materials, *color, 0.35))
+            .map(|color| Self::moulded(materials, *color, 0.35))
             .collect();
-        let gloves = Self::cloth(materials, Self::GLOVES, 0.7);
+        let gloves = Self::moulded(materials, Self::GLOVES, 0.7);
 
         // One kit per (side, keeper) pairing: the only four strips that can
         // take the field.
@@ -500,21 +510,28 @@ impl Wardrobe {
             Strip::keeper(Self::KEEPERS[0]),
             Strip::keeper(Self::KEEPERS[1]),
         ];
+        // Rougher than they look on a swatch, and for the same reason the
+        // reflectance is low (see [`Self::cloth`]): a knitted jersey scatters
+        // over most of a hemisphere, and the numbers that read as fabric under
+        // one directional light are the ones with almost no lobe left in them.
+        // Socks are the roughest thing on the man and stay where they were.
         let kits = [0, 1, 2, 3].map(|index| Kit {
-            shirt: Self::cloth(materials, strips[index].shirt, 0.72),
-            shorts: Self::cloth(materials, strips[index].shorts, 0.75),
+            shirt: Self::cloth(materials, strips[index].shirt, 0.80),
+            shorts: Self::cloth(materials, strips[index].shorts, 0.82),
             socks: Self::cloth(materials, strips[index].socks, 0.88),
-            trim: Self::cloth(materials, strips[index].trim, 0.70),
+            trim: Self::cloth(materials, strips[index].trim, 0.78),
         });
 
         let blob = Textures::blob(images);
         Wardrobe {
             prints: [0, 1, 2, 3].map(|index| strips[index].print),
+            cloths: [0, 1, 2, 3].map(|index| strips[index].shirt),
             kits,
             // Empty. Every one of these is painted the first time the man it
             // belongs to is dressed — see the note on the fields.
             numbers: Vec::new(),
             names: Vec::new(),
+            plates: Vec::new(),
             faces: Vec::new(),
             skin,
             hair,
@@ -562,9 +579,8 @@ impl Wardrobe {
         player: &PlayerInfo,
         materials: &mut Assets<StandardMaterial>,
         images: &mut Assets<Image>,
-        layout: &FaceLayout,
     ) -> Outfit {
-        self.paint(player, materials, images, layout);
+        self.paint(player, materials, images);
 
         let kit = &self.kits[Self::strip_index(player)];
         let skin = self.skin[Complexion::skin(player)].clone();
@@ -585,19 +601,22 @@ impl Wardrobe {
             } else {
                 skin.clone()
             },
-            // Every player has a face; falling back to bare skin would be a
-            // head with nothing on the front of it, which is worse than any
-            // face this could draw.
+            // Painted by `paint` above, so the fallback is unreachable — and
+            // it is the shared ramp entry rather than a material of his own,
+            // which is the one thing a face must never be: a picture folded
+            // into it would go onto every player wearing that complexion.
             face: own(&self.faces).unwrap_or_else(|| skin.clone()),
             skin,
             hair: self.hair[Complexion::hair(player)].clone(),
             hair_style: Complexion::hair_style(player.id),
             number: own(&self.numbers),
             name: own(&self.names),
+            name_front: own(&self.plates),
         }
     }
 
-    /// Paints this player's number, name and face, once.
+    /// Paints this player's number, name and plate, and gives him the material
+    /// his face will arrive on, once.
     ///
     /// Split out of [`Self::outfit`] because it is the only part of dressing a
     /// man that is expensive, and because the early return is the whole
@@ -609,7 +628,6 @@ impl Wardrobe {
         player: &PlayerInfo,
         materials: &mut Assets<StandardMaterial>,
         images: &mut Assets<Image>,
-        layout: &FaceLayout,
     ) {
         if self.faces.iter().any(|(id, _)| *id == player.id) {
             return;
@@ -625,8 +643,32 @@ impl Wardrobe {
             let printed = Self::printed(materials, ink, texture);
             self.names.push((player.id, printed));
         }
-        let texture = Textures::face(images, layout, &Complexion::face(player));
-        let painted = Self::flesh_texture(materials, texture);
+        // The walk-out plate, whose two colours are the strip's the other way
+        // round. Painted alongside the back print rather than when the ceremony
+        // starts: the ceremony IS the first thing in the recording, so putting
+        // it off would only move the cost into the frame the camera is already
+        // panning down the line in.
+        let cloth = self.cloths[Self::strip_index(player)];
+        if let Some(texture) = Textures::name_plate(images, &player.last_name, ink, cloth) {
+            let plated = Self::plated(materials, texture);
+            self.plates.push((player.id, plated));
+        }
+        // His head: a material of his own, in his own complexion, with nothing
+        // painted on the front of it yet.
+        //
+        // **A face on this pitch is a PHOTOGRAPH**, and the sheet the viewer
+        // could draw for him is not a second-best version of one — it is a
+        // different thing, and a squad wearing a mix of the two reads as half
+        // the men being somebody and half being nobody. So the picture is the
+        // only thing that ever goes on a head: the page serves a photograph
+        // for a real footballer and a drawn portrait for a regen, both of them
+        // pictures of the man, and [`Portraits::attach`] lays whichever came
+        // back over this material a few frames later.
+        //
+        // It has to be his own material even while it carries no picture,
+        // because that handle is what the arrival is folded into — see
+        // [`Portraits::send_for`], which is handed this and holds it.
+        let painted = Self::flesh(materials, Complexion::face(player).skin);
         self.faces.push((player.id, painted));
     }
 
@@ -634,7 +676,38 @@ impl Wardrobe {
         self.shadow.clone()
     }
 
+    /// # Why cloth is barely specular
+    ///
+    /// Half of what read as an inflated balloon on the shirt and the shorts
+    /// was never the geometry: a `StandardMaterial` leaves `reflectance` at
+    /// 0.5, which is a dielectric with a glassy 4% normal-incidence Fresnel,
+    /// and a broad soft highlight rolling across every big convex panel is
+    /// exactly the cue the eye uses to read a surface as pressurised. Compare
+    /// [`Self::flesh`], which deliberately asks for 0.35 to get a trace of
+    /// specular back on an arm.
+    ///
+    /// A jersey is matte and dry and its highlight is diffuse. 0.18 puts the
+    /// sheen most of the way out, and what is left of the shading on a chest
+    /// is the shape of the chest.
     fn cloth(
+        materials: &mut Assets<StandardMaterial>,
+        color: Color,
+        roughness: f32,
+    ) -> Handle<StandardMaterial> {
+        materials.add(StandardMaterial {
+            base_color: color,
+            perceptual_roughness: roughness,
+            reflectance: 0.18,
+            metallic: 0.0,
+            ..default()
+        })
+    }
+
+    /// The two things on a footballer that are NOT fabric: a boot and a
+    /// keeper's glove. Both are moulded surfaces with a real sheen on them —
+    /// a boot is the shiniest thing on the pitch — so they keep the specular
+    /// [`Self::cloth`] gives up.
+    fn moulded(
         materials: &mut Assets<StandardMaterial>,
         color: Color,
         roughness: f32,
@@ -653,21 +726,6 @@ impl Wardrobe {
             perceptual_roughness: 0.62,
             // Skin is not a diffuse surface: a trace of specular is the
             // difference between an arm and a painted stick.
-            reflectance: 0.35,
-            metallic: 0.0,
-            ..default()
-        })
-    }
-
-    /// The same, but with the colour coming out of an image — a face.
-    fn flesh_texture(
-        materials: &mut Assets<StandardMaterial>,
-        texture: Handle<Image>,
-    ) -> Handle<StandardMaterial> {
-        materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            base_color_texture: Some(texture),
-            perceptual_roughness: 0.62,
             reflectance: 0.35,
             metallic: 0.0,
             ..default()
@@ -719,6 +777,27 @@ impl Wardrobe {
         let ink = ink.to_srgba();
         materials.add(StandardMaterial {
             base_color: Color::srgba(ink.red, ink.green, ink.blue, 1.0),
+            base_color_texture: Some(texture),
+            alpha_mode: AlphaMode::AlphaToCoverage,
+            perceptual_roughness: 0.85,
+            ..default()
+        })
+    }
+
+    /// The walk-out plate: the same cutout, and the same reasons for it, with
+    /// the tint taken OFF.
+    ///
+    /// A plate is two colours — the band and the name knocked out of it — and a
+    /// `base_color` can only be one, so
+    /// [`Textures::name_plate`](crate::art::textures::Textures::name_plate)
+    /// paints both into the texels and this leaves them alone. White is the
+    /// identity for that multiply, not a colour choice.
+    fn plated(
+        materials: &mut Assets<StandardMaterial>,
+        texture: Handle<Image>,
+    ) -> Handle<StandardMaterial> {
+        materials.add(StandardMaterial {
+            base_color: Color::WHITE,
             base_color_texture: Some(texture),
             alpha_mode: AlphaMode::AlphaToCoverage,
             perceptual_roughness: 0.85,

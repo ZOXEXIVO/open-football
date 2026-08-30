@@ -823,7 +823,23 @@ pub struct BallMetadata {
     /// pressing states (there is nothing to press) and by anything that
     /// would otherwise treat the keeper as a carrier who can be closed
     /// down. See `Ball::held_in_hands`.
+    ///
+    /// …and, since the throw-in became a throw, in the THROWER's hands
+    /// for the second or two he stands on the line looking for a
+    /// team-mate. The two are the same situation for everything that
+    /// reads this — a man holding the ball with both hands who nobody may
+    /// take it off — which is why they share the flag; where they differ
+    /// is `throw_taker` below.
     pub held_in_hands: bool,
+    /// **The man taking a throw-in right now**, from the tick he picks the
+    /// ball up on the touchline until somebody else plays it.
+    ///
+    /// Read by [`ThrowInDelivery`](crate::r#match::player::strategies::
+    /// common::states::ThrowInDelivery), which is the only thing that may
+    /// move him while it is set: he is not dribbling, marking or making a
+    /// run, he is standing over the line with the ball in his hands.
+    /// See `Ball::throw_in_taker`.
+    pub throw_taker: Option<u32>,
     /// `(player, team)` of the team-mate whose deliberate kick or throw-in
     /// was the last touch, if the last touch was one. Feeds the back-pass
     /// half of `BallOperationsImpl::handling_verdict`.
@@ -909,6 +925,7 @@ impl BallMetadata {
         self.recollect_blocked_player = field.ball.blocked_recollect_player();
         self.delivered_by = field.ball.own_delivery_player();
         self.held_in_hands = field.ball.held_in_hands;
+        self.throw_taker = field.ball.throw_in_taker;
         self.aerial_contest_winner = field.ball.aerial_contest_winner;
         self.restart_taker = field.ball.awaiting_restart.map(|r| r.taker_id);
         self.restart_carrier = field
@@ -950,6 +967,7 @@ impl From<&MatchField> for BallMetadata {
             recollect_blocked_player: None,
             delivered_by: None,
             held_in_hands: false,
+            throw_taker: None,
             deliberate_kick_by: None,
             hands_released_by: None,
             aerial_contest_winner: None,

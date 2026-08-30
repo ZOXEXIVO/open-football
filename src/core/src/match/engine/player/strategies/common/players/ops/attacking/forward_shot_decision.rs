@@ -3922,6 +3922,24 @@ pub mod mid_run_diag {
     /// `OF_DEAD_BALL=off` measures the same quantity it removes.
     pub static RESTARTS: [AtomicU64; 20] = [const { AtomicU64::new(0) }; 20];
 
+    /// **What the throw-in actually DID**, which the row above cannot see:
+    /// it counts throw-ins awarded and how far the taker walked, and then
+    /// stops at the moment he picks the ball up.
+    ///
+    /// Reported from the viewer: *"a player throws the ball in to
+    /// himself"*. There was no instrument that could confirm or refuse
+    /// that — a throw-in is an ordinary pass by an ordinary carrier once
+    /// the restart resolves, so it leaves no trace of its own anywhere.
+    ///
+    /// Slots: 0 throw-ins taken (the thrower has the ball on the line),
+    /// 1 of those he never released — he carried it into play and was
+    /// eventually dispossessed, 2 throws actually delivered, 3 of those
+    /// the THROWER himself was first to touch again (Law 15's offence),
+    /// 4 of those a team-mate received, 5 Σ of the distance the ball
+    /// travelled from the spot to that first touch, in units, 6 Σ of the
+    /// ticks between the throw being taken and it.
+    pub static THROW_DELIVERY: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
+
     /// The two legs a corner is now walked rather than teleported, in game
     /// units: `(fetch Σ, carry Σ, carries begun, carry-at-pickup Σ)`. See
     /// `RestartCensus::note_corner_walk`.
@@ -4163,9 +4181,63 @@ pub mod mid_run_diag {
             RESTARTS[10].fetch_add(1, Ordering::Relaxed);
         }
 
+        /// One throw-in actually TAKEN — the thrower has the ball in his
+        /// hands on the line. Distinct from slot 0, which counts throw-ins
+        /// AWARDED: a restart that times out is awarded and never taken.
+        pub fn note_throw_taken() {
+            THROW_DELIVERY[0].fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// **What became of one throw-in**, read off the first touch after
+        /// the thrower got the ball that was not his own release.
+        ///
+        /// `released` is false when he never let go of it at all — he
+        /// carried the ball into play and somebody eventually took it off
+        /// him, which is not a throw-in. `by_the_thrower` is Law 15's
+        /// offence: he threw it and then ran onto it himself.
+        pub fn note_throw_outcome(
+            released: bool,
+            by_the_thrower: bool,
+            same_team: bool,
+            travelled: f32,
+            held_ticks: u64,
+        ) {
+            if !released {
+                THROW_DELIVERY[1].fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            THROW_DELIVERY[2].fetch_add(1, Ordering::Relaxed);
+            THROW_DELIVERY[5].fetch_add(travelled.max(0.0) as u64, Ordering::Relaxed);
+            THROW_DELIVERY[6].fetch_add(held_ticks, Ordering::Relaxed);
+            if by_the_thrower {
+                THROW_DELIVERY[3].fetch_add(1, Ordering::Relaxed);
+            } else if same_team {
+                THROW_DELIVERY[4].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
         pub fn snapshot() -> [u64; 20] {
             let mut out = [0u64; 20];
             for (slot, c) in out.iter_mut().zip(RESTARTS.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+
+        /// One AI tick with a thrower standing over the ball, and whether
+        /// he had anybody to throw it to. The pair says which half of the
+        /// delivery is failing when a throw does not happen: nobody free,
+        /// or nobody ever asked.
+        pub fn note_throw_scan(had_target: bool) {
+            THROW_DELIVERY[7].fetch_add(1, Ordering::Relaxed);
+            if had_target {
+                THROW_DELIVERY[8].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        pub fn throw_snapshot() -> [u64; 12] {
+            let mut out = [0u64; 12];
+            for (slot, c) in out.iter_mut().zip(THROW_DELIVERY.iter()) {
                 *slot = c.load(Ordering::Relaxed);
             }
             out

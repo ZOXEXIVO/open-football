@@ -17,6 +17,10 @@
 //! * [`loose_ball`] — [`LooseBallChase`]: keep a race a race. The
 //!   `TakeBall` states' plain separation pointed away from the rival,
 //!   which is to say away from the ball.
+//! * [`throw_in`] — [`ThrowInDelivery`]: the man on the touchline with
+//!   the ball in his hands. Without it there is no throw-in at all: the
+//!   taker was an ordinary carrier, and 99.7% of throw-ins were carried
+//!   into play rather than thrown.
 //!
 //! The first three are applied at the single point every state's
 //! movement converges on (`StateProcessor::process_inner`), and the
@@ -28,8 +32,10 @@ pub mod corner_hold;
 pub mod keeper_space;
 pub mod loose_ball;
 pub mod restart_carry;
+pub mod throw_in;
 
 pub use corner_hold::*;
 pub use keeper_space::*;
 pub use loose_ball::*;
 pub use restart_carry::*;
+pub use throw_in::*;

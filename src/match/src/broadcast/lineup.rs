@@ -1135,8 +1135,10 @@ mod tests {
         use crate::players::body::{BodyParts, Physique};
         let lineup = walked_out();
         // Where the walk-out print actually is, in the world: its own height
-        // up the torso, on a man of nominal build.
-        let print = Physique::HIP + BodyParts::NAME_FRONT_AT;
+        // up the torso, on a man of nominal build. The BOTTOM edge of it, not
+        // the middle — it is a plate now, and half its height is a real
+        // centimetre and a half of something the pass has to hold.
+        let print = Physique::HIP + BodyParts::NAME_FRONT_AT - BodyParts::NAME_FRONT_HEIGHT * 0.5;
         for stand in &lineup.row {
             let shot = level_with(&lineup, stand);
             // The frame's half-angle up, out of the lens the pass is held on.

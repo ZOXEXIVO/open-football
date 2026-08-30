@@ -565,6 +565,33 @@ impl Ball {
             context.current_tick(),
             true,
         );
+        // **The throw is his until somebody else plays it** — Law 15, and
+        // the reason it has to be stamped here rather than at the award is
+        // that this is the tick he actually gets the ball. Stamped AFTER
+        // `record_touch`, because that call is the pick-up and the pick-up
+        // is not a second touch. See [`Ball::throw_in_taker`].
+        if await_state.origin == PassOriginRestart::ThrowIn {
+            self.throw_in_taker = Some(await_state.taker_id);
+            // **In his hands, and not at his feet.** He fetched it by
+            // hand and he throws it with both hands; the seconds in
+            // between are the only ones in a match when an outfielder
+            // legally holds the ball, and every consequence of the flag
+            // is the right one for them — the ball rides at 1.15 m where
+            // the viewer draws a man holding it rather than dribbling it
+            // (`Ball::carry_height`), no claim, tackle or interception
+            // may take it off him, and the press stands down instead of
+            // closing a man who is not in play yet.
+            //
+            // `note_release` lowers it again on the throw itself.
+            self.held_in_hands = true;
+            #[cfg(feature = "match-logs")]
+            {
+                self.throw_in_spot = self.position;
+                self.throw_in_tick = context.current_tick();
+                self.throw_in_team = Some(taker.team_id);
+                RestartCensus::note_throw_taken();
+            }
+        }
         // **A corner only becomes a corner here** — the taker on the arc
         // with the ball at his feet, several seconds after it was awarded.
         // Both of these used to be armed at the award because that WAS the

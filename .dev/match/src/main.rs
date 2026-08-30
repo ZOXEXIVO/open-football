@@ -9575,6 +9575,36 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 r[8] as f64 / n_matches as f64 / 100.0
             );
         }
+        // What the throw actually DID. Everything above stops at the
+        // moment the thrower picks the ball up; this is the delivery.
+        let t = RestartCensus::throw_snapshot();
+        if t[0] > 0 {
+            let pc = |n: u64, d: u64| n as f64 * 100.0 / d.max(1) as f64;
+            println!(
+                "  {:.1} taken/match: CARRIED IN, never thrown {:.1} ({:.1}%) — must be ~0; \
+                 actually thrown {:.1} ({:.1}%)",
+                per(t[0]),
+                per(t[1]),
+                pc(t[1], t[0]),
+                per(t[2]),
+                pc(t[2], t[0])
+            );
+            println!(
+                "  of the throws: TO HIMSELF {:.1}% (Law 15 — must be 0), to a team-mate {:.1}%, \
+                 to an opponent {:.1}%   mean {:.1} m, {:.1} s in the air",
+                pc(t[3], t[2]),
+                pc(t[4], t[2]),
+                pc(t[2].saturating_sub(t[3] + t[4]), t[2]),
+                t[5] as f64 / t[2].max(1) as f64 * 0.125,
+                t[6] as f64 / t[2].max(1) as f64 / 100.0
+            );
+            println!(
+                "  scan: {:.1} thrower-ticks/match past the look-up, {:.0}% of them with a \
+                 team-mate to throw to",
+                per(t[7]),
+                pc(t[8], t[7])
+            );
+        }
         if r[5] > 0 {
             println!(
                 "  offside: {:.1} snapshots/match → {:.2} GIVEN   (real ~4-6 given)",

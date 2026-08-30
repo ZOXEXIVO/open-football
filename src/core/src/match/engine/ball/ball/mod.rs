@@ -390,6 +390,32 @@ pub struct Ball {
     /// Read by the delayed-offside resolver. Resets to OpenPlay on any
     /// non-restart pass or once the pass-window expires.
     pub pass_origin_restart: PassOriginRestart,
+    /// **The man who took the throw-in that is in progress**, from the
+    /// moment the restart is taken until anybody else plays the ball.
+    ///
+    /// Law 15: *"the thrower must not touch the ball again until it has
+    /// touched another player."* Nothing in the engine knew that — the
+    /// throw was an ordinary pass by an ordinary carrier, so the thrower
+    /// was free to run onto his own delivery, and being the nearest man
+    /// to the touchline he very often got there first. That is the
+    /// reported *"he throws the ball in to himself"*.
+    ///
+    /// [`Self::last_release_player_id`] is the same shape and cannot be
+    /// reused for it: that bar lifts as soon as the ball has travelled
+    /// five metres, which is exactly the throw a thrower must not chase.
+    /// Cleared by [`Self::record_touch`] the moment somebody else is on
+    /// the ball, which is precisely when the law lifts.
+    pub throw_in_taker: Option<u32>,
+    /// Where and when the throw-in in progress was taken from, so the
+    /// census can say how far it travelled and how long he held it.
+    #[cfg(feature = "match-logs")]
+    pub throw_in_spot: Vector3<f32>,
+    #[cfg(feature = "match-logs")]
+    pub throw_in_tick: u64,
+    /// The throwing side, so the census can tell a throw that found a
+    /// team-mate from one an opponent read.
+    #[cfg(feature = "match-logs")]
+    pub throw_in_team: Option<u32>,
     /// Set at pass-kick. Lives for the pass window (~220 ticks) and the
     /// offside resolver fires the call only when the receiver becomes
     /// active (touches the ball or claims). Cleared on resolution,
@@ -758,6 +784,13 @@ impl Ball {
             last_touch_was_controlled: false,
             current_tick_cached: 0,
             pass_origin_restart: PassOriginRestart::OpenPlay,
+            throw_in_taker: None,
+            #[cfg(feature = "match-logs")]
+            throw_in_spot: Vector3::new(x, y, 0.0),
+            #[cfg(feature = "match-logs")]
+            throw_in_tick: 0,
+            #[cfg(feature = "match-logs")]
+            throw_in_team: None,
             offside_snapshot: None,
             pending_pass_origin: None,
             pending_pass_target: None,
@@ -836,6 +869,20 @@ impl Ball {
         self.last_release_from_hands && self.last_release_player_id == Some(keeper_id)
     }
 
+    /// **The thrower whose throw-in is still in the air** — he has let go
+    /// of it and nobody else has played it yet, so Law 15 bars him from
+    /// touching it again.
+    ///
+    /// Holding the ball before he throws it is not a second touch, which
+    /// is why this asks for the release as well as the award:
+    /// [`Self::throw_in_taker`] alone is true from the moment he picks the
+    /// ball up. Between the two, everything that sends a man at a loose
+    /// ball must leave this one alone.
+    pub fn thrower_awaiting_second_touch(&self) -> Option<u32> {
+        let thrower = self.throw_in_taker?;
+        (self.last_release_player_id == Some(thrower)).then_some(thrower)
+    }
+
     /// Height the ball rides at while it is being carried, in metres.
     ///
     /// At a player's feet normally — and at CHEST HEIGHT in a keeper's
@@ -904,14 +951,35 @@ impl Ball {
         const MIN_TRAVEL: f32 = 40.0;
         /// 2 s. Deadlock escape — see above.
         const MAX_BLOCK_TICKS: u64 = 200;
+        /// …and the throw-in's, which has to be longer because its bar is
+        /// not about a ball that went nowhere. 6 s covers any throw and
+        /// still cannot deadlock: past it the ball is a loose ball nobody
+        /// has come for, and the offence has stopped being one anybody
+        /// watching would recognise.
+        const THROW_BLOCK_TICKS: u64 = 600;
 
         let releaser = self.last_release_player_id?;
+        // **Law 15.** The thrower may not touch his own throw until it
+        // has touched another player — with no distance in it at all,
+        // which is exactly where the general bar below stops being the
+        // right rule: that one lifts once the ball has gone five metres,
+        // and a throw that has gone five metres is precisely the one he
+        // must not run onto. See [`Self::throw_in_taker`].
+        let his_own_throw = self.throw_in_taker == Some(releaser);
+        let ceiling = if his_own_throw {
+            THROW_BLOCK_TICKS
+        } else {
+            MAX_BLOCK_TICKS
+        };
         if self
             .current_tick_cached
             .saturating_sub(self.last_release_tick)
-            > MAX_BLOCK_TICKS
+            > ceiling
         {
             return None;
+        }
+        if his_own_throw {
+            return Some(releaser);
         }
         let dx = self.position.x - self.last_release_position.x;
         let dy = self.position.y - self.last_release_position.y;
@@ -1033,6 +1101,40 @@ impl Ball {
                     (self.position - origin).magnitude(),
                     self.pass_target_player_id == Some(player_id),
                 );
+            }
+        }
+        // **Law 15's second-touch bar, and the census of it.** The throw
+        // belongs to its thrower until another player is on the ball, and
+        // this is the touch that settles which of the three things
+        // happened to it: he was robbed before he ever let go of it, he
+        // ran onto his own throw (the offence), or somebody received it.
+        //
+        // ⚠ **Ahead of the release-id clear below, which is what the
+        // question is asked of.** That block nulls `last_release_player_id`
+        // on the first touch by anybody else — which is precisely the
+        // touch this wants to classify — so asked afterwards, every
+        // delivered throw reads as one its thrower never let go of.
+        //
+        // The throw's OWN touch is not any of the three: `note_release`
+        // runs a line ahead of `note_deliberate_kick` at the pass site, so
+        // it is the one that arrives on the release tick itself.
+        if let Some(thrower) = self.throw_in_taker {
+            let released = self.last_release_player_id == Some(thrower);
+            let is_the_throw = released && player_id == thrower && tick == self.last_release_tick;
+            #[cfg(feature = "match-logs")]
+            if !is_the_throw {
+                crate::mid_run_diag::RestartCensus::note_throw_outcome(
+                    released,
+                    player_id == thrower,
+                    Some(team_id) == self.throw_in_team,
+                    (self.position - self.throw_in_spot).magnitude(),
+                    tick.saturating_sub(self.throw_in_tick),
+                );
+            }
+            #[cfg(not(feature = "match-logs"))]
+            let _ = is_the_throw;
+            if player_id != thrower {
+                self.throw_in_taker = None;
             }
         }
         // Somebody else has been on the ball — whatever the last releaser
@@ -1377,6 +1479,7 @@ impl Ball {
         self.last_touch_tick = 0;
         self.last_touch_was_controlled = false;
         self.pass_origin_restart = PassOriginRestart::OpenPlay;
+        self.throw_in_taker = None;
         self.offside_snapshot = None;
         self.last_completed_pass_passer_id = None;
         self.last_completed_pass_receiver_id = None;
