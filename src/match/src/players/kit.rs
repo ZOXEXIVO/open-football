@@ -1,8 +1,64 @@
 use crate::app::config::{PlayerInfo, TeamColors, ViewerConfig};
 use crate::art::textures::{Beard, FaceLook, Textures};
+use bevy::asset::RenderAssetUsages;
 use bevy::image::Image;
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use shared::Palette;
+
+/// One square of the wardrobe sheet: which cloth (or skin) a run of a merged
+/// mesh's triangles is painted from.
+///
+/// # Why a sheet exists at all
+///
+/// The viewer's frame is spent per ENTITY, and half the entities on a
+/// footballer were separate for exactly one reason: they wore a different
+/// material than the part they are welded to — a trim cuff on a shirt sleeve
+/// on a skin arm, a shorts leg on a thigh. A mesh takes one material, so
+/// merging those parts means one material that can answer with several
+/// colours, and the smallest device that does that is a strip of texels with
+/// every vertex of a part pointed at its own texel.
+///
+/// Every vertex of a region maps to the CENTRE of its texel and every
+/// triangle therefore interpolates a constant, so no filtering, mip or
+/// atlas-bleed caveat applies — the sheet behaves exactly like the flat
+/// colours it replaces. Roughness rides the same slots in a second strip
+/// (see [`Wardrobe::roughness_sheet`]), so the cloth keeps its matte and the
+/// skin its faint sheen inside one material.
+#[derive(Clone, Copy)]
+pub enum Swatch {
+    Skin,
+    Shirt,
+    Trim,
+    Shorts,
+    Socks,
+}
+
+impl Swatch {
+    /// How many texels wide a sheet is. Eight rather than the five in use, so
+    /// the layout has room without every sheet in memory changing shape.
+    pub const SPAN: usize = 8;
+
+    fn slot(self) -> usize {
+        match self {
+            Swatch::Skin => 0,
+            Swatch::Shirt => 1,
+            Swatch::Trim => 2,
+            Swatch::Shorts => 3,
+            Swatch::Socks => 4,
+        }
+    }
+
+    /// The UV every vertex of a region carries: the centre of its texel.
+    pub fn uv(self) -> [f32; 2] {
+        [(self.slot() as f32 + 0.5) / Self::SPAN as f32, 0.5]
+    }
+
+    /// How rough each slot's surface is — the numbers the separate materials
+    /// used to carry, moved into texels. See [`Wardrobe::cloth`] for why
+    /// cloth sits high and [`Wardrobe::flesh`] for why skin does not.
+    const ROUGHNESS: [f32; Self::SPAN] = [0.62, 0.80, 0.78, 0.82, 0.88, 0.82, 0.82, 0.82];
+}
 
 /// The colours one side takes the field in.
 struct Strip {
@@ -384,11 +440,21 @@ impl Complexion {
 /// with the rest of the squad.
 #[derive(Clone)]
 pub struct Outfit {
-    pub shirt: Handle<StandardMaterial>,
-    pub shorts: Handle<StandardMaterial>,
-    pub socks: Handle<StandardMaterial>,
-    /// Collar and cuffs.
-    pub trim: Handle<StandardMaterial>,
+    /// Every stitch of the strip that is nobody's skin — shirt with its
+    /// collar, shorts, socks with their turnover — as ONE sheeted material
+    /// per strip. The parts that used to wear shirt, trim, shorts and socks
+    /// separately are merged meshes now, each region pointed at its
+    /// [`Swatch`].
+    pub kit: Handle<StandardMaterial>,
+    /// The same sheet with this player's own complexion in the skin slot,
+    /// for the merged parts that show both cloth and the man inside it — a
+    /// sleeved arm, a thigh with the leg of the shorts on it. Shared by
+    /// everybody of his strip and tone.
+    pub limb: Handle<StandardMaterial>,
+    /// Which of the four strips he is wearing, kept so the portrait repaint
+    /// can ask [`Wardrobe::limb_sheet`] for the same strip in the
+    /// photographed tone — see [`crate::players::body::DressedFlesh`].
+    pub strip: usize,
     pub boots: Handle<StandardMaterial>,
     pub skin: Handle<StandardMaterial>,
     /// The head, which is his own: his complexion until his picture arrives
@@ -406,14 +472,6 @@ pub struct Outfit {
     pub name_front: Option<Handle<StandardMaterial>>,
 }
 
-/// One strip, as materials.
-struct Kit {
-    shirt: Handle<StandardMaterial>,
-    shorts: Handle<StandardMaterial>,
-    socks: Handle<StandardMaterial>,
-    trim: Handle<StandardMaterial>,
-}
-
 /// Every material the twenty-two players need, built once.
 ///
 /// Sharing them is what keeps a pitch full of footballers down to a couple of
@@ -426,7 +484,23 @@ struct Kit {
 /// to still be here in the sixtieth minute.
 #[derive(Resource)]
 pub struct Wardrobe {
-    kits: [Kit; 4],
+    /// One sheeted material per strip — see [`Swatch`] for what a sheet is.
+    /// This one paints the four cloths and is shared by a whole side, so the
+    /// merged torso and legs batch exactly as widely as the old flat kit
+    /// materials did.
+    kit_sheets: [Handle<StandardMaterial>; 4],
+    /// The same sheets with a real complexion in the skin slot, one per
+    /// (strip, tone) pairing that has actually taken the field. Filled as men
+    /// are dressed, like the faces below, because 4 strips by 12 tones is a
+    /// wardrobe of forty-eight and a match wears a handful of them.
+    limb_sheets: Vec<((usize, usize), Handle<StandardMaterial>)>,
+    /// The colours each strip's sheet is painted from — shirt, trim, shorts,
+    /// socks — kept because a limb sheet is painted on demand, long after the
+    /// `Strip`s themselves are gone.
+    wear: [[Color; 4]; 4],
+    /// One roughness strip for every sheet in the wardrobe: the slots are
+    /// the same everywhere, so the surface qualities are too.
+    roughness_sheet: Handle<Image>,
     skin: Vec<Handle<StandardMaterial>>,
     hair: Vec<Handle<StandardMaterial>>,
     boots: Vec<Handle<StandardMaterial>>,
@@ -510,23 +584,42 @@ impl Wardrobe {
             Strip::keeper(Self::KEEPERS[0]),
             Strip::keeper(Self::KEEPERS[1]),
         ];
-        // Rougher than they look on a swatch, and for the same reason the
-        // reflectance is low (see [`Self::cloth`]): a knitted jersey scatters
-        // over most of a hemisphere, and the numbers that read as fabric under
-        // one directional light are the ones with almost no lobe left in them.
-        // Socks are the roughest thing on the man and stay where they were.
-        let kits = [0, 1, 2, 3].map(|index| Kit {
-            shirt: Self::cloth(materials, strips[index].shirt, 0.80),
-            shorts: Self::cloth(materials, strips[index].shorts, 0.82),
-            socks: Self::cloth(materials, strips[index].socks, 0.88),
-            trim: Self::cloth(materials, strips[index].trim, 0.78),
+        // The cloth roughnesses the old flat materials carried — jersey 0.80,
+        // trim 0.78, shorts 0.82, socks roughest of all at 0.88 — now live in
+        // [`Swatch::ROUGHNESS`] and ride every sheet as texels, so a merged
+        // shirt keeps reading as knit and a sock as terry inside one
+        // material. See [`Self::cloth`] for why they all sit that high.
+        let wear =
+            [0, 1, 2, 3].map(|index| {
+                [
+                    strips[index].shirt,
+                    strips[index].trim,
+                    strips[index].shorts,
+                    strips[index].socks,
+                ]
+            });
+        let roughness_sheet = images.add(Self::roughness_image());
+        // The kit sheets carry a mid-table complexion in their skin slot. No
+        // cloth-only merge ever points a vertex there — it exists so the slot
+        // is never uninitialised, and a keeper's sleeve-buried arm painted
+        // from it by mistake would come out a plausible arm rather than a
+        // magenta one.
+        let neutral = Complexion::tone(Palette::SKIN[Palette::SKIN.len() / 2]);
+        let kit_sheets = [0, 1, 2, 3].map(|index| {
+            let sheet = images.add(Self::sheet_image(neutral, &wear[index]));
+            // Cloth end to end, so the sheet keeps the cloth's own dead
+            // specular — see [`Self::cloth`] for the number.
+            Self::sheeted(materials, sheet, roughness_sheet.clone(), 0.18)
         });
 
         let blob = Textures::blob(images);
         Wardrobe {
             prints: [0, 1, 2, 3].map(|index| strips[index].print),
             cloths: [0, 1, 2, 3].map(|index| strips[index].shirt),
-            kits,
+            kit_sheets,
+            limb_sheets: Vec::new(),
+            wear,
+            roughness_sheet,
             // Empty. Every one of these is painted the first time the man it
             // belongs to is dressed — see the note on the fields.
             numbers: Vec::new(),
@@ -556,6 +649,125 @@ impl Wardrobe {
         self.skin.clone()
     }
 
+    /// The sheet for a merged limb — this strip's cloth with this complexion
+    /// in the skin slot — painted the first time anybody wears the pairing
+    /// and handed back whole every time after, so a substitute in a common
+    /// tone lands in the batch his team-mates are already drawn in.
+    ///
+    /// Public alongside [`Self::complexions`] and on the same argument: a
+    /// photograph re-tones a player after the fact, and the repaint has to
+    /// come back HERE for the sheet in the new tone rather than minting a
+    /// material of his own. See
+    /// [`Portraits::attach`](crate::players::portrait::Portraits::attach).
+    pub fn limb_sheet(
+        &mut self,
+        strip: usize,
+        tone: usize,
+        materials: &mut Assets<StandardMaterial>,
+        images: &mut Assets<Image>,
+    ) -> Handle<StandardMaterial> {
+        let strip = strip.min(self.wear.len() - 1);
+        let tone = tone.min(Palette::SKIN.len() - 1);
+        if let Some((_, sheet)) = self
+            .limb_sheets
+            .iter()
+            .find(|(pairing, _)| *pairing == (strip, tone))
+        {
+            return sheet.clone();
+        }
+        let sheet = images.add(Self::sheet_image(
+            Complexion::tone(Palette::SKIN[tone]),
+            &self.wear[strip],
+        ));
+        // The skin's reflectance rather than the cloth's, because the skin is
+        // the half of these merges that cannot afford to lose it: a trace of
+        // specular is the difference between an arm and a painted stick (see
+        // [`Self::flesh`]). The cloth regions carry a fourfold-of-nearly-
+        // nothing extra — at their roughness the lobe is spread too wide to
+        // read as sheen, where the arm's loss would read at once.
+        let material = Self::sheeted(materials, sheet, self.roughness_sheet.clone(), 0.35);
+        self.limb_sheets.push(((strip, tone), material.clone()));
+        material
+    }
+
+    /// One [`Swatch`] strip as pixels: the complexion, then the four cloths,
+    /// then padding in the last cloth so a stray UV lands on kit rather than
+    /// on black.
+    fn sheet_image(skin: Color, wear: &[Color; 4]) -> Image {
+        let mut texels = Vec::with_capacity(Swatch::SPAN * 4);
+        let slots = [skin, wear[0], wear[1], wear[2], wear[3]];
+        for slot in 0..Swatch::SPAN {
+            let colour = slots.get(slot).unwrap_or(&wear[2]).to_srgba();
+            texels.extend_from_slice(&[
+                (colour.red * 255.0).round() as u8,
+                (colour.green * 255.0).round() as u8,
+                (colour.blue * 255.0).round() as u8,
+                255,
+            ]);
+        }
+        Image::new(
+            Extent3d {
+                width: Swatch::SPAN as u32,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            texels,
+            // The colours are authored in sRGB exactly as the flat materials'
+            // `base_color`s were, so the sampled texel and the old uniform
+            // decode to the same number.
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD,
+        )
+    }
+
+    /// And the matching surface strip: roughness in the green channel, where
+    /// the standard material reads it, metal in the blue, which nothing on a
+    /// footballer is. Linear, not sRGB — these are numbers, not colours.
+    fn roughness_image() -> Image {
+        let mut texels = Vec::with_capacity(Swatch::SPAN * 4);
+        for slot in 0..Swatch::SPAN {
+            texels.extend_from_slice(&[
+                0,
+                (Swatch::ROUGHNESS[slot] * 255.0).round() as u8,
+                0,
+                255,
+            ]);
+        }
+        Image::new(
+            Extent3d {
+                width: Swatch::SPAN as u32,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            texels,
+            TextureFormat::Rgba8Unorm,
+            RenderAssetUsages::RENDER_WORLD,
+        )
+    }
+
+    /// A sheet as a material. White base and unit roughness, because the
+    /// texels are the values: the standard material multiplies both straight
+    /// through, so the identity is what keeps the swatches meaning what they
+    /// say.
+    fn sheeted(
+        materials: &mut Assets<StandardMaterial>,
+        sheet: Handle<Image>,
+        roughness: Handle<Image>,
+        reflectance: f32,
+    ) -> Handle<StandardMaterial> {
+        materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: Some(sheet),
+            perceptual_roughness: 1.0,
+            metallic_roughness_texture: Some(roughness),
+            metallic: 0.0,
+            reflectance,
+            ..default()
+        })
+    }
+
     fn strip_index(player: &PlayerInfo) -> usize {
         match (player.is_goalkeeper(), player.is_home) {
             (false, true) => 0,
@@ -582,8 +794,10 @@ impl Wardrobe {
     ) -> Outfit {
         self.paint(player, materials, images);
 
-        let kit = &self.kits[Self::strip_index(player)];
-        let skin = self.skin[Complexion::skin(player)].clone();
+        let strip = Self::strip_index(player);
+        let tone = Complexion::skin(player);
+        let skin = self.skin[tone].clone();
+        let limb = self.limb_sheet(strip, tone, materials, images);
         let own = |table: &Vec<(u32, Handle<StandardMaterial>)>| {
             table
                 .iter()
@@ -591,10 +805,9 @@ impl Wardrobe {
                 .map(|(_, material)| material.clone())
         };
         Outfit {
-            shirt: kit.shirt.clone(),
-            shorts: kit.shorts.clone(),
-            socks: kit.socks.clone(),
-            trim: kit.trim.clone(),
+            kit: self.kit_sheets[strip].clone(),
+            limb,
+            strip,
             boots: self.boots[Complexion::boots(player.id)].clone(),
             hands: if player.is_goalkeeper() {
                 self.gloves.clone()
@@ -852,6 +1065,70 @@ mod tests {
         // And the face built off them is still a face.
         let look = Complexion::face(&stray);
         assert_eq!(look.skin, Complexion::tone(Palette::SKIN[11]));
+    }
+
+    /// A sheet is the flat kit colours by other means, so the texel a merged
+    /// shirt samples has to BE the shirt colour the separate material carried
+    /// — to the one sRGB byte the trip through a texture costs. A sheet that
+    /// drifted would repaint every merged part on the pitch and nothing else
+    /// would notice: the materials compile, the batches draw, the club just
+    /// comes out in the wrong colours.
+    #[test]
+    fn the_sheet_answers_in_the_strips_own_colours() {
+        let colors = TeamColors {
+            background: "#132257".to_string(),
+            foreground: "#ffffff".to_string(),
+        };
+        let strip = Strip::outfield(&colors, Wardrobe::HOME_FALLBACK);
+        let sheet = Wardrobe::sheet_image(
+            Complexion::tone(Palette::SKIN[3]),
+            &[strip.shirt, strip.trim, strip.shorts, strip.socks],
+        );
+        let texel = |swatch: Swatch| {
+            let x = (swatch.uv()[0] * Swatch::SPAN as f32) as usize;
+            let data = sheet.data.as_ref().expect("the sheet has pixels");
+            Color::srgb_u8(data[x * 4], data[x * 4 + 1], data[x * 4 + 2])
+        };
+        let close = |painted: Color, worn: Color| {
+            let (painted, worn) = (painted.to_srgba(), worn.to_srgba());
+            (painted.red - worn.red).abs() < 0.005
+                && (painted.green - worn.green).abs() < 0.005
+                && (painted.blue - worn.blue).abs() < 0.005
+        };
+        assert!(close(texel(Swatch::Shirt), strip.shirt), "the shirt drifted");
+        assert!(close(texel(Swatch::Trim), strip.trim), "the trim drifted");
+        assert!(
+            close(texel(Swatch::Shorts), strip.shorts),
+            "the shorts drifted"
+        );
+        assert!(close(texel(Swatch::Socks), strip.socks), "the socks drifted");
+        assert!(
+            close(texel(Swatch::Skin), Complexion::tone(Palette::SKIN[3])),
+            "the skin drifted"
+        );
+    }
+
+    /// …and the surface strip keeps each cloth's own roughness where the
+    /// separate materials wrote it, in the green channel the standard
+    /// material reads.
+    #[test]
+    fn the_roughness_strip_holds_each_cloths_grain() {
+        let strip = Wardrobe::roughness_image();
+        let data = strip.data.as_ref().expect("the strip has pixels");
+        for (swatch, wanted) in [
+            (Swatch::Skin, 0.62f32),
+            (Swatch::Shirt, 0.80),
+            (Swatch::Shorts, 0.82),
+            (Swatch::Socks, 0.88),
+        ] {
+            let x = (swatch.uv()[0] * Swatch::SPAN as f32) as usize;
+            let painted = data[x * 4 + 1] as f32 / 255.0;
+            assert!(
+                (painted - wanted).abs() < 0.01,
+                "{painted} where {wanted} belongs"
+            );
+            assert_eq!(data[x * 4 + 2], 0, "nothing on a footballer is metal");
+        }
     }
 
     /// Two players from opposite ends of the world are not the same colour,

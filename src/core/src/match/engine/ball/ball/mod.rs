@@ -965,6 +965,8 @@ impl Ball {
         // right rule: that one lifts once the ball has gone five metres,
         // and a throw that has gone five metres is precisely the one he
         // must not run onto. See [`Self::throw_in_taker`].
+        // `throw_in_taker` is only ever stamped while `ThrowIn::armed()`,
+        // so the switch reaches this without a second read of it.
         let his_own_throw = self.throw_in_taker == Some(releaser);
         let ceiling = if his_own_throw {
             THROW_BLOCK_TICKS
@@ -1069,6 +1071,52 @@ impl Ball {
         Vector3::new(dir.x * speed, dir.y * speed, vz)
     }
 
+    /// **Somebody is on the ball: settle the throw-in in progress.**
+    ///
+    /// The throw belongs to its thrower until another player plays it
+    /// ([`Self::throw_in_taker`]), and this is the moment that ends —
+    /// booking which of the three things happened to it on the way:
+    /// he was robbed before he ever let go of it, he ran onto his own
+    /// throw (Law 15's offence), or somebody received it.
+    ///
+    /// Called from two places, because the engine has two ways of putting
+    /// a man on the ball and only one of them is a touch:
+    /// [`Self::record_touch`], and `secure_ball_for` — the chokepoint for
+    /// a tackle, a gain-ball and an owner change, which grants ownership
+    /// **without** recording a touch. Left to the first alone, a throw
+    /// collected by a tackler was never settled at all: the bar stayed
+    /// armed against the thrower long after the ball had changed hands,
+    /// and the census read the delivery as one he never made.
+    ///
+    /// The throw's OWN release is not a settlement: `note_release` runs a
+    /// line ahead of `note_deliberate_kick` at the pass site, so his own
+    /// touch arrives on the release tick itself and is skipped.
+    pub fn settle_throw_in(&mut self, player_id: u32, team_id: Option<u32>, tick: u64) {
+        let Some(thrower) = self.throw_in_taker else {
+            return;
+        };
+        let released = self.last_release_player_id == Some(thrower);
+        let is_the_throw = released && player_id == thrower && tick == self.last_release_tick;
+        #[cfg(feature = "match-logs")]
+        if !is_the_throw {
+            crate::mid_run_diag::RestartCensus::note_throw_outcome(
+                released,
+                player_id == thrower,
+                team_id.is_some() && team_id == self.throw_in_team,
+                (self.position - self.throw_in_spot).magnitude(),
+                tick.saturating_sub(self.throw_in_tick),
+                self.held_in_hands,
+            );
+        }
+        #[cfg(not(feature = "match-logs"))]
+        {
+            let _ = (is_the_throw, team_id);
+        }
+        if player_id != thrower {
+            self.throw_in_taker = None;
+        }
+    }
+
     /// Record a meaningful touch. Drives restart resolution. `controlled`
     /// distinguishes a clean reception from a deflection / failed save.
     pub fn record_touch(&mut self, player_id: u32, team_id: u32, tick: u64, controlled: bool) {
@@ -1103,40 +1151,14 @@ impl Ball {
                 );
             }
         }
-        // **Law 15's second-touch bar, and the census of it.** The throw
-        // belongs to its thrower until another player is on the ball, and
-        // this is the touch that settles which of the three things
-        // happened to it: he was robbed before he ever let go of it, he
-        // ran onto his own throw (the offence), or somebody received it.
+        // **Law 15's bar lifts here**, and the throw's outcome is booked.
         //
         // ⚠ **Ahead of the release-id clear below, which is what the
         // question is asked of.** That block nulls `last_release_player_id`
         // on the first touch by anybody else — which is precisely the
-        // touch this wants to classify — so asked afterwards, every
-        // delivered throw reads as one its thrower never let go of.
-        //
-        // The throw's OWN touch is not any of the three: `note_release`
-        // runs a line ahead of `note_deliberate_kick` at the pass site, so
-        // it is the one that arrives on the release tick itself.
-        if let Some(thrower) = self.throw_in_taker {
-            let released = self.last_release_player_id == Some(thrower);
-            let is_the_throw = released && player_id == thrower && tick == self.last_release_tick;
-            #[cfg(feature = "match-logs")]
-            if !is_the_throw {
-                crate::mid_run_diag::RestartCensus::note_throw_outcome(
-                    released,
-                    player_id == thrower,
-                    Some(team_id) == self.throw_in_team,
-                    (self.position - self.throw_in_spot).magnitude(),
-                    tick.saturating_sub(self.throw_in_tick),
-                );
-            }
-            #[cfg(not(feature = "match-logs"))]
-            let _ = is_the_throw;
-            if player_id != thrower {
-                self.throw_in_taker = None;
-            }
-        }
+        // touch this classifies — so asked afterwards, every delivered
+        // throw reads as one its thrower never let go of.
+        self.settle_throw_in(player_id, Some(team_id), tick);
         // Somebody else has been on the ball — whatever the last releaser
         // did is history, and their re-collect bar lifts.
         if self
@@ -1213,6 +1235,13 @@ impl Ball {
         self.last_release_player_id = None;
         self.last_release_from_hands = false;
         self.held_in_hands = false;
+        // …and the throw-in that was in progress is over, whatever became
+        // of it. It has to go with the release id above and not on its
+        // own: a throw nobody touched — one that went straight back out
+        // of play, which is 22% of them — would otherwise keep naming its
+        // thrower into the NEXT restart, and Law 15 would be enforced
+        // against a ball he has nothing to do with.
+        self.throw_in_taker = None;
         self.last_touch_was_deliberate_kick = false;
     }
 

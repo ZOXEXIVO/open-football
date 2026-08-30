@@ -19,6 +19,28 @@ pub struct Sample {
     pub z: f32,
 }
 
+impl Sample {
+    /// Samples out of the worker's flat quads: `[t, x, y, z]` per sample, in
+    /// one `Float32Array` — see the loader's `SEAMSTRESS`, which is what lays
+    /// them out that way.
+    ///
+    /// The timestamp survives the trip through `f32` exactly: a match is under
+    /// seven million milliseconds and a float carries integers to sixteen — so
+    /// this is a memcpy-shaped read, not a rounding one, and that is the whole
+    /// reason the worker can hand samples over as bare floats instead of JSON.
+    pub fn from_quads(quads: &[f32]) -> Vec<Sample> {
+        quads
+            .chunks_exact(4)
+            .map(|quad| Sample {
+                t: quad[0] as u32,
+                x: quad[1],
+                y: quad[2],
+                z: quad[3],
+            })
+            .collect()
+    }
+}
+
 impl<'de> Deserialize<'de> for Sample {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -466,15 +488,28 @@ impl ReplayTracks {
     /// handed back is the hundred thousand samples that would otherwise stop
     /// the page.
     pub fn absorb(&mut self, chunk: ChunkPayload) -> HashMap<u32, Box<RawValue>> {
-        self.ball.merge(chunk.ball);
-        for (player_id, entries) in chunk.states {
+        self.absorb_envelope(chunk.ball, chunk.events, chunk.states);
+        chunk.players
+    }
+
+    /// The envelope alone — the ball, the event log and the state lines —
+    /// however it arrived. The main-thread parse hands it over as a
+    /// [`ChunkPayload`] above; the worker hands the same three things over
+    /// already read, which is why this half stands on its own.
+    pub fn absorb_envelope(
+        &mut self,
+        ball: Vec<Sample>,
+        events: Vec<MatchEvent>,
+        states: HashMap<u32, Vec<StateEntry>>,
+    ) {
+        self.ball.merge(ball);
+        for (player_id, entries) in states {
             self.states.entry(player_id).or_default().merge(entries);
         }
-        if !chunk.events.is_empty() {
-            self.events.extend(chunk.events);
+        if !events.is_empty() {
+            self.events.extend(events);
             self.events.sort_by_key(|event| event.timestamp);
         }
-        chunk.players
     }
 
     /// One of those players, read and merged.
@@ -483,6 +518,16 @@ impl ReplayTracks {
             .entry(player_id)
             .or_default()
             .merge(ChunkPayload::open(samples));
+    }
+
+    /// The same player arriving off the worker: his samples are already
+    /// numbers, laid out four floats to a sample, and reading them is a copy
+    /// rather than a parse.
+    pub fn absorb_player_quads(&mut self, player_id: u32, quads: &[f32]) {
+        self.players
+            .entry(player_id)
+            .or_default()
+            .merge(Sample::from_quads(quads));
     }
 }
 

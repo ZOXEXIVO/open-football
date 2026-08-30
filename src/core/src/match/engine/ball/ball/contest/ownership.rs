@@ -463,6 +463,20 @@ impl Ball {
         if self.awaiting_restart.is_some() {
             return;
         }
+        // **Somebody other than the thrower has the ball**, and no touch
+        // was recorded on the way — several of the grants below (the
+        // notified claim, the deadlock resolver, the main claim scan)
+        // assign `current_owner` outright. Left unsettled, Law 15's bar
+        // stayed armed against a thrower whose team-mate had already
+        // collected the throw, which excluded him from the chase for a
+        // ball that was back in play. See `Ball::settle_throw_in`.
+        if let (Some(thrower), Some(owner)) = (self.throw_in_taker, self.current_owner) {
+            if owner != thrower {
+                let team = players.iter().find(|p| p.id == owner).map(|p| p.team_id);
+                let tick = self.current_tick_cached;
+                self.settle_throw_in(owner, team, tick);
+            }
+        }
         if self.flags.in_flight_state > 0 {
             self.flags.in_flight_state -= 1;
             // Allow pass target to claim during flight

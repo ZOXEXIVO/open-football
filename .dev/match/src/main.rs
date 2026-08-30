@@ -9604,6 +9604,15 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 per(t[7]),
                 pc(t[8], t[7])
             );
+            if t[1] > 0 {
+                println!(
+                    "  the ones never thrown: {:.0}% still in his hands when it ended, \
+                     a mean {:.1} s after he picked it up; {:.1} throws emitted/match",
+                    pc(t[10], t[1]),
+                    t[9] as f64 / t[1] as f64 / 100.0,
+                    per(t[11])
+                );
+            }
         }
         if r[5] > 0 {
             println!(

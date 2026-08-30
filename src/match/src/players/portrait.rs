@@ -25,7 +25,7 @@
 use crate::app::config::{PlayerInfo, ViewerConfig};
 use crate::art::textures::{Portrait, Textures};
 use crate::players::actors::PlayerActor;
-use crate::players::body::{BodyParts, Flesh, Thatch};
+use crate::players::body::{BodyParts, DressedFlesh, Flesh, Thatch};
 use crate::players::kit::{Complexion, Wardrobe};
 use bevy::prelude::*;
 use std::collections::VecDeque;
@@ -795,8 +795,22 @@ impl Portraits {
         portraits: Option<Res<Portraits>>,
         config: Res<ViewerConfig>,
         actors: Query<(Entity, &PlayerActor)>,
-        mut skin: Query<(&Flesh, &mut MeshMaterial3d<StandardMaterial>)>,
+        mut skin: Query<
+            (&Flesh, &mut MeshMaterial3d<StandardMaterial>),
+            Without<DressedFlesh>,
+        >,
+        // The merged limbs — cloth and skin on one sheet — move the same way
+        // the bare parts above do, except that their destination is the
+        // wardrobe's sheet for the same strip in the new tone rather than a
+        // ramp entry. The `Without` filters are what let the two queries
+        // borrow the same component: no part carries both markers, but only
+        // the filters can say so to the scheduler.
+        mut dressed: Query<
+            (&DressedFlesh, &mut MeshMaterial3d<StandardMaterial>),
+            Without<Flesh>,
+        >,
         mut hair: Query<(&Thatch, &mut Visibility)>,
+        mut wardrobe: Option<ResMut<Wardrobe>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
         mut images: ResMut<Assets<Image>>,
     ) {
@@ -862,12 +876,25 @@ impl Portraits {
             let Some((actor, _)) = actors.iter().find(|(_, actor)| actor.id == id) else {
                 continue;
             };
-            if let Some(tone) = picture.cheek_tone()
-                && let Some(material) = portraits.complexions.get(Complexion::nearest_skin(tone))
-            {
-                for (part, mut worn) in &mut skin {
-                    if part.actor == actor {
-                        worn.0 = material.clone();
+            if let Some(tone) = picture.cheek_tone() {
+                let entry = Complexion::nearest_skin(tone);
+                if let Some(material) = portraits.complexions.get(entry) {
+                    for (part, mut worn) in &mut skin {
+                        if part.actor == actor {
+                            worn.0 = material.clone();
+                        }
+                    }
+                }
+                // …and the merged limbs follow, onto the same strip's sheet
+                // in the same nearest tone — through the wardrobe, so a
+                // second player photographed into that tone lands in the
+                // batch this one just created. See [`Wardrobe::limb_sheet`].
+                if let Some(wardrobe) = wardrobe.as_mut() {
+                    for (part, mut worn) in &mut dressed {
+                        if part.actor == actor {
+                            worn.0 =
+                                wardrobe.limb_sheet(part.strip, entry, &mut materials, &mut images);
+                        }
                     }
                 }
             }
@@ -1447,7 +1474,7 @@ mod tests {
         // land on the eye line of a SKULL cannot be seen in it at all.
         const SHOT: usize = 320;
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::new(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes);
         let layout = BodyParts::face_layout();
         let head = Transform::from_xyz(0.0, -layout.foot - layout.span * 0.5, 0.0);
         // The generated face beside it, on the same head from the same

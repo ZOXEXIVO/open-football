@@ -225,6 +225,19 @@ impl FrameCost {
         ));
     }
 
+    /// The same chunk when the worker read it — the parse figure is the
+    /// WORKER'S clock, fetch to flat floats, none of it on a frame. What this
+    /// thread pays instead is a copy on arrival and the budgeted fold in
+    /// `ChunkLoader::read_on`, and a line here that starts growing back
+    /// toward the old envelope numbers means the workshop has quietly stopped
+    /// carrying the work.
+    pub fn announce_woven(index: usize, bytes: usize, milliseconds: f32) {
+        Self::announce(&format!(
+            "match viewer — chunk {index} woven off-thread: {:.1} MB of JSON, worker parse {milliseconds:.0} ms",
+            bytes as f32 / (1024.0 * 1024.0),
+        ));
+    }
+
     /// The console, on the one target that has one.
     #[cfg(target_arch = "wasm32")]
     fn announce(line: &str) {

@@ -88,6 +88,16 @@ web-sys = { version = "0.3", features = [
     # explains why it goes the long way round rather than decoding in here.
     "Blob",
     "Url",
+    # The chunk workshop: a plain dedicated worker, minted from a blob URL,
+    # that fetches and parses recording chunks off the main thread — see
+    # `loader.rs`. `Location` is for stitching the page's origin onto a
+    # root-relative chunk URL, which a blob-scripted worker cannot resolve.
+    "Worker",
+    "MessageEvent",
+    "ErrorEvent",
+    "Event",
+    "BlobPropertyBag",
+    "Location",
     "HtmlImageElement",
     "HtmlCanvasElement",
     "CanvasRenderingContext2d",

@@ -1392,12 +1392,20 @@ impl Actors {
                     color: Color::srgba(0.0, 0.0, 0.0, 0.85),
                 },
                 TextLayout::justify(Justify::Center),
-                // Width and alignment belong here rather than in
-                // [`Self::place_labels`], which only ever wrote the same two
-                // constants back over themselves — and a `Node` written on
-                // every frame is a UI layout pass on every frame.
+                // The whole layout, written once. `place_labels` moves the
+                // plate by its `UiTransform` and never touches the `Node`
+                // again: a `Node` write dirties the taffy tree and re-measures
+                // text, so twenty-two plates following a panning camera used
+                // to bill a full UI layout pass to every frame the camera
+                // moved. A transform is applied after layout and costs the
+                // frame nothing. The zero insets are the anchor that
+                // translation is measured from — left to `Auto`, an absolute
+                // root's corner is wherever taffy's static position puts it,
+                // which is an answer this plate must not depend on.
                 Node {
                     position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
                     width: Val::Px(88.0),
                     justify_content: JustifyContent::Center,
                     ..default()
@@ -2207,7 +2215,20 @@ impl Actors {
     pub(crate) fn strike_kind(at: Vec3, before: f32) -> Strike {
         let dead = before < Self::DEAD_BALL;
         let touchline = Field::HALF_WIDTH - at.z.abs() < Self::TOUCHLINE_REACH;
-        if dead && touchline && at.y < Self::AIRBORNE {
+        // ⚠ **The corner arc is on the touchline too**, and a corner is
+        // just as dead and just as far out there — so without this every
+        // corner in the match was drawn as a man hurling the ball
+        // two-handed over his head. The two restarts are told apart by
+        // the OTHER axis: a throw-in is taken from anywhere along the
+        // side except the very corner, a corner from nowhere else.
+        let byline = Field::HALF_LENGTH - at.x.abs() < Self::TOUCHLINE_REACH;
+        // …and it is now taken from his HANDS rather than off the grass:
+        // the engine holds a throw-in's ball at `Ball::carry_height` for
+        // the second he stands on the line looking up, so the height at
+        // contact is chest height and not zero. Both are a throw — the
+        // ball is dead, out on the paint, and below the shoulder — and
+        // reading only the grass drew every throw-in as a boot.
+        if dead && touchline && !byline && at.y < Self::HEADED {
             Strike::ThrowIn
         } else if at.y > Self::HEADED {
             Strike::Head
@@ -3303,7 +3324,7 @@ impl Actors {
         window: Single<&Window, With<PrimaryWindow>>,
         lineup: Res<Lineup>,
         actors: Query<(&Transform, &Visibility), With<PlayerActor>>,
-        mut labels: Query<(&PlayerLabel, &mut Node, &mut Visibility), Without<PlayerActor>>,
+        mut labels: Query<(&PlayerLabel, &mut UiTransform, &mut Visibility), Without<PlayerActor>>,
     ) {
         let (camera, camera_transform) = *camera;
         let eye = camera_transform.translation;
@@ -3329,16 +3350,20 @@ impl Actors {
         let to_plate = Vec2::new(window.width(), window.height()) / projected.max(Vec2::ONE);
 
         // Same rule as the contact shadows: touch neither the visibility nor
-        // the node unless the value actually moved. A `Node` write reruns the
-        // layout pass over the WHOLE UI tree, so a plate that has not moved
-        // must not write itself.
+        // the transform unless the value actually moved. The plate rides its
+        // `UiTransform` now, which taffy never reads — the `Node` was retired
+        // from this system because writing one reruns layout and re-measures
+        // text over the whole UI tree, and a panning camera moves all
+        // twenty-two plates on every frame it pans. The guard is still worth
+        // having: change detection is not free, and a still camera should
+        // write nothing at all.
         let settle = |visibility: &mut Visibility, wanted: Visibility| {
             if *visibility != wanted {
                 *visibility = wanted;
             }
         };
 
-        for (label, mut node, mut visibility) in &mut labels {
+        for (label, mut plate, mut visibility) in &mut labels {
             let Ok((actor_transform, actor_visibility)) = actors.get(label.actor) else {
                 settle(&mut visibility, Visibility::Hidden);
                 continue;
@@ -3407,28 +3432,29 @@ impl Actors {
             //
             // Rounded to the pixel it will be drawn at, so a player standing
             // still — before kickoff, at a restart, through half time — stops
-            // writing his plate's node at all. Sub-pixel positions on a UI
-            // node buy nothing: `bevy_ui` rounds them for the draw anyway, and
-            // the only thing the extra precision was doing was guaranteeing a
-            // relayout of the bar and twenty-two plates on every frame.
+            // writing his plate's transform at all. Sub-pixel positions buy
+            // nothing on text this size, and the rounding is what lets the
+            // guard below hold through a still shot.
             //
-            // Width and alignment are set once, where the plate is spawned:
-            // they are constants, and writing a constant into a
-            // change-detected component every frame is the same relayout by
-            // another route.
+            // The node itself was written once, at the spawn, and never again:
+            // the plate is moved by translation, which is applied after layout
+            // — so a pan costs twenty-two component writes and no relayout,
+            // no text measure. That difference is the whole reason this
+            // system stopped touching `Node`.
             let boots = boots * to_plate;
             let crown = crown * to_plate;
             let stature = (boots.y - crown.y).abs().max(6.0);
-            let left = Val::Px((boots.x - 44.0).round());
             // A plate hangs below the boots, which is a label on the grass a
             // man is standing on and cannot collide with the ball above him.
             // There is no second case: the one shot in the replay that framed a
             // man too close for that — the line-up's pass along the faces —
             // does not draw plates at all any more.
-            let top = Val::Px((boots.y + stature * Self::LABEL_GAP).round());
-            if node.left != left || node.top != top {
-                node.left = left;
-                node.top = top;
+            let wanted = Val2::px(
+                (boots.x - 44.0).round(),
+                (boots.y + stature * Self::LABEL_GAP).round(),
+            );
+            if plate.translation != wanted {
+                plate.translation = wanted;
             }
             settle(&mut visibility, Visibility::Inherited);
         }
@@ -4627,7 +4653,7 @@ mod flight {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = crate::players::body::BodyParts::new(&mut meshes);
+        let parts = crate::players::body::BodyParts::tailor(&mut meshes);
 
         let mut sheet = vec![0u8; WIDE * STEPS * TALL * 2 * 4];
         // Frames of match time between columns, at the recording's own 30 ms.
@@ -5398,8 +5424,33 @@ mod kicks {
         );
         assert!(Actors::strike_kind(Vec3::new(12.0, 0.0, middle), 0.0) == Strike::Boot);
         // And a cross whipped in from the touchline is not one either: it is
-        // the height that decides, and a throw-in is taken off the floor.
+        // the height that decides, and nothing is thrown from above the
+        // shoulder.
         assert!(Actors::strike_kind(Vec3::new(12.0, 1.8, touchline), 0.0) == Strike::Head);
+
+        // …and it is taken from his HANDS, which is where the engine now
+        // holds it — `Ball::carry_height`, 1.15 m. This is the case the
+        // whole restart produces and it used to be drawn as a boot.
+        for side in [-1.0f32, 1.0] {
+            assert!(
+                Actors::strike_kind(Vec3::new(12.0, 1.15, side * touchline), 0.0)
+                    == Strike::ThrowIn,
+                "a ball held on the line at chest height is a throw-in, not a kick"
+            );
+        }
+
+        // **A corner is not a throw-in.** The arc is on the touchline too,
+        // and the ball is every bit as dead out there — the byline is the
+        // only thing that separates them.
+        let corner = Field::HALF_LENGTH - 0.25;
+        for x in [-corner, corner] {
+            for z in [-touchline, touchline] {
+                assert!(
+                    Actors::strike_kind(Vec3::new(x, 0.0, z), 0.0) == Strike::Boot,
+                    "a corner at ({x}, {z}) is kicked, not thrown"
+                );
+            }
+        }
     }
 
     /// A man with the ball in his hands does not turn to look at it.

@@ -1,6 +1,5 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::Indices;
-#[cfg(test)]
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
@@ -8,7 +7,7 @@ use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 use crate::art::textures::FaceLayout;
 use crate::players::actors::Actors;
-use crate::players::kit::Outfit;
+use crate::players::kit::{Outfit, Swatch};
 
 /// One cross-section of a body part: an ellipse of half-widths `x` (across the
 /// body) and `z` (front to back) at height `y`, in the part's own space, and
@@ -491,6 +490,47 @@ impl Sculptor {
     /// [`Self::joined`] for what an entity costs.
     fn placed(base: Mesh, part: Mesh, at: Transform) -> Mesh {
         Self::joined(base, part.transformed_by(at))
+    }
+
+    /// A part re-pointed at one square of the wardrobe sheet: every vertex's
+    /// UV becomes the centre of that [`Swatch`]'s texel.
+    ///
+    /// This is what widens [`Self::joined`] from "same material" to "same
+    /// SHEET". A lathe's own UVs wrap the surface, which only the face ever
+    /// used — every other part is a flat colour, so its UVs are free to say
+    /// which flat colour instead. A constant UV per region means every
+    /// triangle interpolates a constant, so no filtering or bleed caveat
+    /// comes with the sheet — see [`Swatch`] for the layout.
+    fn clad(mut part: Mesh, swatch: Swatch) -> Mesh {
+        let worn = part
+            .attribute(Mesh::ATTRIBUTE_UV_0)
+            .map_or(0, VertexAttributeValues::len);
+        part.insert_attribute(Mesh::ATTRIBUTE_UV_0, vec![swatch.uv(); worn]);
+        part
+    }
+
+    /// Several parts as one mesh, each region wearing its own swatch of the
+    /// sheet — a shirt with its collar, a thigh with the leg of the shorts
+    /// over it.
+    ///
+    /// The other half of the [`Self::joined`] argument, for the pairs it
+    /// could not reach: parts rigidly fixed to their parent that were
+    /// entities ONLY because they wore a different colour. A sleeve, a cuff,
+    /// a collar, a shorts leg and a sock turnover per player came to eleven
+    /// entities each — two hundred and thirty over a match, every one paying
+    /// the full per-entity toll of transform, visibility, extraction and a
+    /// validated WebGL2 draw, for cloth that has never once moved against the
+    /// limb it is sewn to.
+    fn outfitted(parts: Vec<(Mesh, Swatch)>) -> Mesh {
+        let mut parts = parts.into_iter();
+        let (first, swatch) = parts.next().expect("an outfit has at least one part");
+        let mut whole = Self::clad(first, swatch);
+        for (part, swatch) in parts {
+            whole
+                .merge(&Self::clad(part, swatch))
+                .expect("every sculpted part carries position, normal and UV");
+        }
+        whole
     }
 
     /// A rounded lump — a hand, a boot, the ball of a joint — sized on each
@@ -1004,7 +1044,63 @@ impl Physique {
 /// Every mesh a footballer is made of, built once and shared by all
 /// twenty-two: only the materials differ from player to player.
 #[derive(Resource)]
+/// What one footballer is drawn out of: the meshes [`Footballer::assemble`]
+/// hangs off the rig, most of them several [`Cuts`] merged onto the wardrobe
+/// sheet.
+///
+/// The merge is the point of the split between this and [`Cuts`]. Measured on
+/// a machine whose frame is spent per entity, ~656 of the scene's ~870 mesh
+/// entities were the twenty-two players, and a third of THOSE were cloth
+/// welded to a limb and separate only for its colour — sleeve, cuff, collar,
+/// shorts leg, sock turnover. Merged here, a player is nine entities lighter
+/// and looks exactly the same, because the geometry is the same vertices and
+/// the sheet resolves to the same flat colours the separate materials carried
+/// (see [`Swatch`]).
+///
+/// What stays its own entity is exactly what still needs to be: anything with
+/// a [`Joint`], anything with a per-player material (the face, the prints),
+/// and the cap of hair a portrait takes off.
 pub struct BodyParts {
+    /// The shirt with its collar in it, worn on the kit sheet.
+    torso: Handle<Mesh>,
+    pelvis: Handle<Mesh>,
+    head: Handle<Mesh>,
+    hair: [Option<Handle<Mesh>>; 4],
+    /// A short-sleeved upper arm: the limb, the sleeve and the cuff as one
+    /// mesh on the limb sheet, since the arm shows through below the hem.
+    arm_sleeved: Handle<Mesh>,
+    /// A keeper's upper arm, sleeved to the elbow.
+    arm_sleeved_long: Handle<Mesh>,
+    /// The bare forearm every outfielder shows — unmerged, and still painted
+    /// in the shared complexion ramp entry, which ignores its lathe UVs.
+    forearm: Handle<Mesh>,
+    /// A keeper's forearm with the long sleeve and its wrist cuff over it.
+    forearm_sleeved: Handle<Mesh>,
+    hand: [Handle<Mesh>; 2],
+    glove: Handle<Mesh>,
+    finger: Handle<Mesh>,
+    fingertip: Handle<Mesh>,
+    thumb: Handle<Mesh>,
+    /// The thigh with the leg of the shorts hanging on it.
+    thigh: Handle<Mesh>,
+    /// The socked shin with the turnover at the top of it.
+    shin: Handle<Mesh>,
+    boot: Handle<Mesh>,
+    number: Handle<Mesh>,
+    name: Handle<Mesh>,
+    name_front: Handle<Mesh>,
+}
+
+/// Every part as it comes off the lathe: one mesh per piece of a footballer,
+/// including the cloth that ships merged (see [`BodyParts`]).
+///
+/// Still a real, buildable thing rather than an intermediate, because two
+/// consumers want the parts SEPARATE: the assembled figure is composed from
+/// them here, and the test suite's software rasteriser draws them one at a
+/// time in per-part tints — a preview of a merged mesh in one colour could
+/// not show a collar against its shirt. See `preview`, which is the other
+/// walker of this list.
+pub(crate) struct Cuts {
     torso: Handle<Mesh>,
     /// The neck of the shirt, in the club's trim colour. Derived from the
     /// torso rather than written out again — see [`Sculptor::band`].
@@ -1409,8 +1505,78 @@ impl BodyParts {
     /// wrong order, small enough that it is invisible at the panel's edges.
     const PRINT_LIFT: f32 = 0.004;
 
+    /// Assembles the working set: the parts cut, the fixed cloth merged onto
+    /// its limbs, and the cuts that shipped whole carried over.
+    ///
+    /// The cuts that exist only to be merged — the collar, the sleeves, the
+    /// cuffs, the shorts legs, the sock tops — are read back out of the store,
+    /// folded into their parents, and their own handles dropped at the end of
+    /// this function, so nothing of them survives to be uploaded twice.
     pub fn new(meshes: &mut Assets<Mesh>) -> Self {
+        let cuts = Self::tailor(meshes);
+        let cut = |meshes: &Assets<Mesh>, handle: &Handle<Mesh>| {
+            meshes
+                .get(handle)
+                .expect("every cut part was just added")
+                .clone()
+        };
+
+        let torso = Sculptor::outfitted(vec![
+            (cut(meshes, &cuts.torso), Swatch::Shirt),
+            (cut(meshes, &cuts.collar), Swatch::Trim),
+        ]);
+        let pelvis = Sculptor::clad(cut(meshes, &cuts.pelvis), Swatch::Shorts);
+        let arm_sleeved = Sculptor::outfitted(vec![
+            (cut(meshes, &cuts.upper_arm), Swatch::Skin),
+            (cut(meshes, &cuts.sleeve), Swatch::Shirt),
+            (cut(meshes, &cuts.cuff), Swatch::Trim),
+        ]);
+        let arm_sleeved_long = Sculptor::outfitted(vec![
+            (cut(meshes, &cuts.upper_arm), Swatch::Skin),
+            (cut(meshes, &cuts.sleeve_long), Swatch::Shirt),
+        ]);
+        let forearm_sleeved = Sculptor::outfitted(vec![
+            (cut(meshes, &cuts.forearm), Swatch::Skin),
+            (cut(meshes, &cuts.sleeve_forearm), Swatch::Shirt),
+            (cut(meshes, &cuts.cuff_forearm), Swatch::Trim),
+        ]);
+        let thigh = Sculptor::outfitted(vec![
+            (cut(meshes, &cuts.thigh), Swatch::Skin),
+            (cut(meshes, &cuts.shorts_leg), Swatch::Shorts),
+        ]);
+        let shin = Sculptor::outfitted(vec![
+            (cut(meshes, &cuts.shin), Swatch::Socks),
+            (cut(meshes, &cuts.sock_top), Swatch::Shorts),
+        ]);
+
         BodyParts {
+            torso: meshes.add(torso),
+            pelvis: meshes.add(pelvis),
+            arm_sleeved: meshes.add(arm_sleeved),
+            arm_sleeved_long: meshes.add(arm_sleeved_long),
+            forearm_sleeved: meshes.add(forearm_sleeved),
+            thigh: meshes.add(thigh),
+            shin: meshes.add(shin),
+            head: cuts.head,
+            hair: cuts.hair,
+            forearm: cuts.forearm,
+            hand: cuts.hand,
+            glove: cuts.glove,
+            finger: cuts.finger,
+            fingertip: cuts.fingertip,
+            thumb: cuts.thumb,
+            boot: cuts.boot,
+            number: cuts.number,
+            name: cuts.name,
+            name_front: cuts.name_front,
+        }
+    }
+
+    /// Cuts every part of the pattern, one mesh each. The composed working
+    /// set is [`Self::new`] above; the tests' rasteriser walks these instead,
+    /// because a preview has to show a collar against its shirt.
+    pub(crate) fn tailor(meshes: &mut Assets<Mesh>) -> Cuts {
+        Cuts {
             torso: meshes.add(Sculptor::modelled(
                 &Self::SHIRT,
                 Sculptor::SIDES,
@@ -5715,6 +5881,22 @@ pub struct Flesh {
     pub actor: Entity,
 }
 
+/// A part worn in his own complexion AND his club's cloth at once — a sleeved
+/// arm, a thigh with the leg of the shorts on it. Merged meshes on the limb
+/// sheet, where [`Flesh`] parts sit on a shared ramp entry.
+///
+/// Its own marker because the portrait repaint has to treat the two
+/// differently: a bare forearm moves to the ramp entry nearest the
+/// photograph, where one of these has to go back to the wardrobe for the
+/// SAME strip's sheet in the new tone — which is why the strip rides along.
+/// See [`crate::players::portrait::Portraits::attach`] and
+/// [`crate::players::kit::Wardrobe::limb_sheet`].
+#[derive(Component)]
+pub struct DressedFlesh {
+    pub actor: Entity,
+    pub strip: usize,
+}
+
 /// …and the cap of hair over the top of his head, for the same reason and by
 /// the same route. A cap sits over the photograph, so a black one on a blond
 /// man is the single most visible way a real face can still come out wrong.
@@ -5882,14 +6064,17 @@ impl Footballer {
             body.spawn((
                 Joint::new(root, Limb::Pelvis, 0.0, hips),
                 Mesh3d(parts.pelvis.clone()),
-                MeshMaterial3d(outfit.shorts.clone()),
+                MeshMaterial3d(outfit.kit.clone()),
                 Transform::from_translation(hips),
             ));
 
+            // The torso mesh carries its own collar now, so the kit sheet
+            // answers for both — see [`BodyParts`], which is where the merge
+            // and its arithmetic live.
             body.spawn((
                 Joint::new(root, Limb::Torso, 0.0, hips),
                 Mesh3d(parts.torso.clone()),
-                MeshMaterial3d(outfit.shirt.clone()),
+                MeshMaterial3d(outfit.kit.clone()),
                 Transform::from_translation(hips),
             ))
             .with_children(|torso| {
@@ -5922,12 +6107,6 @@ impl Footballer {
                         Visibility::Hidden,
                     ));
                 }
-                torso.spawn((
-                    Mesh3d(parts.collar.clone()),
-                    MeshMaterial3d(outfit.trim.clone()),
-                    Transform::default(),
-                ));
-
                 torso
                     .spawn((
                         Joint::new(root, Limb::Head, 0.0, neck),
@@ -5949,54 +6128,56 @@ impl Footballer {
                 for side in [-1.0f32, 1.0] {
                     let shoulder =
                         Vec3::new(side * Physique::SHOULDER_SPREAD, Physique::SHOULDER, 0.0);
+                    // A keeper wears long sleeves, which is half of what
+                    // tells him apart from the twenty outfield players at any
+                    // distance the strip does not. Either way the sleeve —
+                    // and the cuff on a short one — is IN the arm mesh now,
+                    // painted from the limb sheet; what was three entities of
+                    // limb and cloth is one.
                     torso
                         .spawn((
                             Joint::new(root, Limb::Shoulder, side, shoulder),
-                            Mesh3d(parts.upper_arm.clone()),
-                            MeshMaterial3d(outfit.skin.clone()),
-                            Flesh { actor: root },
+                            Mesh3d(if keeper {
+                                parts.arm_sleeved_long.clone()
+                            } else {
+                                parts.arm_sleeved.clone()
+                            }),
+                            MeshMaterial3d(outfit.limb.clone()),
+                            DressedFlesh {
+                                actor: root,
+                                strip: outfit.strip,
+                            },
                             Transform::from_translation(shoulder),
                         ))
                         .with_children(|arm| {
-                            // A keeper wears long sleeves, which is half of
-                            // what tells him apart from the twenty outfield
-                            // players at any distance the strip does not.
-                            arm.spawn((
+                            // The outfield forearm is bare skin and stays on
+                            // the shared complexion ramp; a keeper's carries
+                            // the rest of his sleeve and the cuff at the
+                            // wrist, merged like the arm above it.
+                            let mut lower = arm.spawn((
+                                Joint::new(root, Limb::Elbow, side, elbow),
                                 Mesh3d(if keeper {
-                                    parts.sleeve_long.clone()
+                                    parts.forearm_sleeved.clone()
                                 } else {
-                                    parts.sleeve.clone()
+                                    parts.forearm.clone()
                                 }),
-                                MeshMaterial3d(outfit.shirt.clone()),
-                                Transform::default(),
+                                Transform::from_translation(elbow),
                             ));
-                            if !keeper {
-                                arm.spawn((
-                                    Mesh3d(parts.cuff.clone()),
-                                    MeshMaterial3d(outfit.trim.clone()),
-                                    Transform::default(),
+                            if keeper {
+                                lower.insert((
+                                    MeshMaterial3d(outfit.limb.clone()),
+                                    DressedFlesh {
+                                        actor: root,
+                                        strip: outfit.strip,
+                                    },
+                                ));
+                            } else {
+                                lower.insert((
+                                    MeshMaterial3d(outfit.skin.clone()),
+                                    Flesh { actor: root },
                                 ));
                             }
-                            arm.spawn((
-                                Joint::new(root, Limb::Elbow, side, elbow),
-                                Mesh3d(parts.forearm.clone()),
-                                MeshMaterial3d(outfit.skin.clone()),
-                                Flesh { actor: root },
-                                Transform::from_translation(elbow),
-                            ))
-                            .with_children(|forearm| {
-                                if keeper {
-                                    forearm.spawn((
-                                        Mesh3d(parts.sleeve_forearm.clone()),
-                                        MeshMaterial3d(outfit.shirt.clone()),
-                                        Transform::default(),
-                                    ));
-                                    forearm.spawn((
-                                        Mesh3d(parts.cuff_forearm.clone()),
-                                        MeshMaterial3d(outfit.trim.clone()),
-                                        Transform::default(),
-                                    ));
-                                }
+                            lower.with_children(|forearm| {
                                 let mut wearing = forearm.spawn((
                                     Joint::new(root, Limb::Wrist, side, wrist),
                                     Mesh3d(if keeper {
@@ -6060,31 +6241,29 @@ impl Footballer {
 
             for side in [-1.0f32, 1.0] {
                 let hip = Vec3::new(side * Physique::HIP_SPREAD, Physique::HIP, 0.0);
+                // The leg of the shorts swings with the thigh it hangs on and
+                // the sock's turnover with the shin, so both ride IN those
+                // meshes now — the thigh on the limb sheet because bare skin
+                // shows below the hem, the shin on the kit sheet because a
+                // sock covers all of it.
                 body.spawn((
                     Joint::new(root, Limb::Hip, side, hip),
                     Mesh3d(parts.thigh.clone()),
-                    MeshMaterial3d(outfit.skin.clone()),
-                    Flesh { actor: root },
+                    MeshMaterial3d(outfit.limb.clone()),
+                    DressedFlesh {
+                        actor: root,
+                        strip: outfit.strip,
+                    },
                     Transform::from_translation(hip),
                 ))
                 .with_children(|leg| {
                     leg.spawn((
-                        Mesh3d(parts.shorts_leg.clone()),
-                        MeshMaterial3d(outfit.shorts.clone()),
-                        Transform::default(),
-                    ));
-                    leg.spawn((
                         Joint::new(root, Limb::Knee, side, knee),
                         Mesh3d(parts.shin.clone()),
-                        MeshMaterial3d(outfit.socks.clone()),
+                        MeshMaterial3d(outfit.kit.clone()),
                         Transform::from_translation(knee),
                     ))
                     .with_children(|shin| {
-                        shin.spawn((
-                            Mesh3d(parts.sock_top.clone()),
-                            MeshMaterial3d(outfit.shorts.clone()),
-                            Transform::default(),
-                        ));
                         // The boot hangs off an ANKLE rather than off the
                         // shin: its mesh origin already sits where the
                         // ankle is (the sole is 38 mm below it), so the
@@ -6496,7 +6675,7 @@ pub(crate) mod preview {
         canvas: &mut Canvas,
         lens: &Lens,
         meshes: &Assets<Mesh>,
-        parts: &BodyParts,
+        parts: &Cuts,
         at: Transform,
         sheet: (u32, u32, &[u8]),
         cap: bool,
@@ -6598,7 +6777,7 @@ pub(crate) mod preview {
         canvas: &mut Canvas,
         lens: &Lens,
         meshes: &Assets<Mesh>,
-        parts: &BodyParts,
+        parts: &Cuts,
         gait: Gait,
     ) {
         posed(
@@ -6623,7 +6802,7 @@ pub(crate) mod preview {
         canvas: &mut Canvas,
         lens: &Lens,
         meshes: &Assets<Mesh>,
-        parts: &BodyParts,
+        parts: &Cuts,
         gait: Gait,
         carriage: Transform,
         keeper: bool,
@@ -8750,7 +8929,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::new(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes);
 
         // Standing square on, from the side, and three-quarters on — plus a
         // stride and a kick, because a joint that is fine straight is not
@@ -8813,7 +8992,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::new(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes);
 
         // Front, three-quarter, side, back — the lathe is symmetric, so those
         // four are the whole of it — and then one running, because a hem that
@@ -8870,7 +9049,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::new(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes);
 
         let at = |phase: f32, spring: f32| {
             let mut gait = running(0.95);
@@ -8951,7 +9130,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::new(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes);
 
         let man = |id: u32, speed: f32| {
             let mut gait = running((speed / Actors::SPRINT).clamp(0.0, 1.0));
@@ -9025,7 +9204,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::new(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes);
 
         // Standing, for the comparison; then all four ways of taking a goal
         // — hands on the head square on and from the side, hands on the
@@ -9099,7 +9278,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::new(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes);
 
         // `roll` is negated in `PlayerActor::topple` — going over onto his
         // own right is the NEGATIVE tip — so a dive to his right is a
@@ -9196,7 +9375,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::new(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes);
 
         // The course a keeper actually has at each speed, through the real
         // opening band: dead abeam of the ball, so the whole of it is
@@ -9287,7 +9466,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::new(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes);
         // Speed, the way he is going in his own frame, and the angle to
         // watch it from. The first pair is a man jockeying; the rest are the
         // turn transient, which is what the camera actually spends its time
@@ -9389,7 +9568,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::new(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes);
 
         let mut set = still();
         set.set = 1.0;
@@ -9474,7 +9653,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::new(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes);
 
         let mut set = still();
         set.set = 1.0;
@@ -9624,7 +9803,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::new(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes);
 
         // What a real launch angle leaves of the sprawl, and what the ground
         // then does with it — the same two expressions `PlayerActor::topple`
@@ -9759,9 +9938,72 @@ mod tests {
     /// drawing twenty-two of these is putting through about 9 million
     /// triangles a frame.
     #[test]
+    /// **A merged part points every vertex at a swatch, and loses nothing in
+    /// the merge.** The whole trick of [`Sculptor::outfitted`] is that a
+    /// vertex's UV names its colour; a vertex left on the lathe's own UVs
+    /// would sample a diagonal stripe of the wardrobe sheet, and a merge
+    /// that dropped vertices would open a hole in a shirt. Counted against
+    /// the raw cuts, which are the same geometry by construction.
+    #[test]
+    fn a_merged_part_wears_only_swatches() {
+        let mut meshes = Assets::<Mesh>::default();
+        let cuts = BodyParts::tailor(&mut meshes);
+        let count = |handle: &Handle<Mesh>| {
+            meshes
+                .get(handle)
+                .and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_POSITION))
+                .map_or(0, VertexAttributeValues::len)
+        };
+        let expected = [
+            count(&cuts.torso) + count(&cuts.collar),
+            count(&cuts.pelvis),
+            count(&cuts.upper_arm) + count(&cuts.sleeve) + count(&cuts.cuff),
+            count(&cuts.upper_arm) + count(&cuts.sleeve_long),
+            count(&cuts.forearm) + count(&cuts.sleeve_forearm) + count(&cuts.cuff_forearm),
+            count(&cuts.thigh) + count(&cuts.shorts_leg),
+            count(&cuts.shin) + count(&cuts.sock_top),
+        ];
+
+        let parts = BodyParts::new(&mut meshes);
+        let swatches: Vec<[f32; 2]> = [
+            Swatch::Skin,
+            Swatch::Shirt,
+            Swatch::Trim,
+            Swatch::Shorts,
+            Swatch::Socks,
+        ]
+        .into_iter()
+        .map(Swatch::uv)
+        .collect();
+        for (name, handle, wanted) in [
+            ("torso", &parts.torso, expected[0]),
+            ("pelvis", &parts.pelvis, expected[1]),
+            ("arm", &parts.arm_sleeved, expected[2]),
+            ("keeper arm", &parts.arm_sleeved_long, expected[3]),
+            ("keeper forearm", &parts.forearm_sleeved, expected[4]),
+            ("thigh", &parts.thigh, expected[5]),
+            ("shin", &parts.shin, expected[6]),
+        ] {
+            let mesh = meshes.get(handle).expect("the part was built");
+            let Some(VertexAttributeValues::Float32x2(uvs)) =
+                mesh.attribute(Mesh::ATTRIBUTE_UV_0)
+            else {
+                panic!("the {name} lost its UVs in the merge");
+            };
+            assert_eq!(uvs.len(), wanted, "the {name} lost vertices in the merge");
+            for uv in uvs {
+                assert!(
+                    swatches.contains(uv),
+                    "a {name} vertex points at {uv:?}, which is no swatch"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_footballer_is_worth_his_triangles() {
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::new(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes);
         let count = |handle: &Handle<Mesh>| {
             meshes
                 .get(handle)

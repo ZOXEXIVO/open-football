@@ -18,7 +18,7 @@
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
-use crate::r#match::engine::ball::ball::{AwaitedRestart, RunOff};
+use crate::r#match::engine::ball::ball::{AwaitedRestart, RunOff, ThrowIn};
 use crate::r#match::engine::result::Score;
 use crate::r#match::{
     MatchContext, MatchField, MatchPlayerCollection, PlayerSide, events::EventCollection,
@@ -292,5 +292,156 @@ fn the_throw_is_still_taken_from_the_point_it_crossed() {
         (take_from.x - 420.0).abs() < 8.0,
         "and at the point the ball crossed it, got x={:.1} against 420",
         take_from.x
+    );
+}
+
+/// Drive the restart to the moment the taker actually has the ball, and
+/// hand back his id. `None` if the walk timed out — the backstop places
+/// him and the test wanted the real thing.
+fn take_the_throw(field: &mut MatchField, context: &mut MatchContext) -> Option<u32> {
+    let taker = field.ball.awaiting_restart?.taker_id;
+    let mut events = EventCollection::with_capacity(4);
+    let bound = AwaitedRestart::CEILING + AwaitedRestart::PATIENCE_TICKS;
+    for _ in 0..bound {
+        if field.ball.awaiting_restart.is_none() {
+            break;
+        }
+        // Walk him onto the spot himself, one stride at a time, so the
+        // restart resolves through the ARRIVAL rather than through the
+        // patience backstop — the backstop skips the second leg and this
+        // is a test about what happens once he is holding the ball.
+        let spot = field.ball.awaiting_restart.map(|r| r.spot)?;
+        if let Some(p) = field.players.iter_mut().find(|p| p.id == taker) {
+            let gap = spot - p.position;
+            let step = gap.magnitude().min(4.0);
+            if step > 0.0 {
+                p.position += gap.normalize() * step;
+            }
+        }
+        context.increment_time();
+        let players = field.players.clone();
+        field
+            .ball
+            .tick_awaited_restart(context, &players, &mut events);
+    }
+    (field.ball.pending_set_piece_teleport.is_none()).then_some(taker)
+}
+
+/// **He picks it up.** A throw-in is taken by hand, and until this the
+/// engine put the ball at the taker's feet and let him dribble it in —
+/// measured at 99.7% of every throw-in in the match.
+///
+/// `held_in_hands` is what makes it a throw rather than a dribble: it is
+/// read by the claim paths (nobody takes it off him), by the press (there
+/// is nothing to close down yet) and by the viewer, which draws a ball at
+/// carry height in a man's arms and one on the grass at his boots quite
+/// differently.
+#[test]
+fn the_thrower_holds_the_ball_rather_than_standing_on_it() {
+    if !ThrowIn::armed() {
+        return;
+    }
+    let (mut field, mut context) = kickoff();
+    let toucher = outfielder(&field, PlayerSide::Left);
+    put_it_out(&mut field, &context, toucher, None);
+    let taker = take_the_throw(&mut field, &mut context).expect("the taker reached the ball");
+
+    assert_eq!(field.ball.current_owner, Some(taker));
+    assert!(
+        field.ball.held_in_hands,
+        "a throw-in is taken with both hands — the ball is not at his feet"
+    );
+    assert_eq!(
+        field.ball.throw_in_taker,
+        Some(taker),
+        "and the throw is his until somebody else plays it"
+    );
+}
+
+/// **Law 15: he may not touch it again.**
+///
+/// This is the reported defect. The throw was an ordinary pass by an
+/// ordinary carrier, so nothing stopped the thrower — the man nearest the
+/// touchline by construction — running onto his own delivery, and measured
+/// over 60 matches he was the FIRST player to touch it again on 100% of
+/// the throws that were thrown at all.
+///
+/// The bar has to outlast the general self-recollect one, which lifts as
+/// soon as the ball has gone five metres. A throw that has gone five
+/// metres is precisely the one he must not chase.
+#[test]
+fn the_thrower_may_not_be_first_to_touch_his_own_throw() {
+    if !ThrowIn::armed() {
+        return;
+    }
+    let (mut field, mut context) = kickoff();
+    let toucher = outfielder(&field, PlayerSide::Left);
+    put_it_out(&mut field, &context, toucher, None);
+    let taker = take_the_throw(&mut field, &mut context).expect("the taker reached the ball");
+
+    // He throws it. `note_release` is what the pass handler calls, and it
+    // is the whole of what arms the bar.
+    let from = field.ball.position;
+    let tick = context.current_tick();
+    field.ball.current_tick_cached = tick;
+    field.ball.note_release(taker, from, tick);
+    field.ball.current_owner = None;
+
+    // Ten metres down the line — twice the general bar's travel escape.
+    field.ball.position = from + Vector3::new(80.0, 0.0, 0.0);
+    assert_eq!(
+        field.ball.blocked_recollect_player(),
+        Some(taker),
+        "the throw is still his: nobody else has played it, so he may not"
+    );
+
+    // …and a team-mate meets it. That is the moment the law lifts.
+    let receiver = field
+        .players
+        .iter()
+        .find(|p| p.side == Some(PlayerSide::Right) && p.id != taker)
+        .map(|p| (p.id, p.team_id))
+        .expect("the throwing side has ten other players");
+    field
+        .ball
+        .record_touch(receiver.0, receiver.1, tick + 60, true);
+    assert_eq!(
+        field.ball.throw_in_taker, None,
+        "somebody else is on the ball — the throw is over"
+    );
+    assert_eq!(
+        field.ball.blocked_recollect_player(),
+        None,
+        "and the thrower is an ordinary player again"
+    );
+}
+
+/// A throw nobody comes for must not bar its thrower forever. Every other
+/// bar in the engine carries a ceiling for the same reason: no rule may
+/// become the thing that stalls the match.
+#[test]
+fn the_second_touch_bar_expires_rather_than_deadlocking() {
+    if !ThrowIn::armed() {
+        return;
+    }
+    let (mut field, mut context) = kickoff();
+    let toucher = outfielder(&field, PlayerSide::Left);
+    put_it_out(&mut field, &context, toucher, None);
+    let taker = take_the_throw(&mut field, &mut context).expect("the taker reached the ball");
+
+    let from = field.ball.position;
+    let tick = context.current_tick();
+    field.ball.current_tick_cached = tick;
+    field.ball.note_release(taker, from, tick);
+    field.ball.current_owner = None;
+    field.ball.position = from + Vector3::new(80.0, 0.0, 0.0);
+    assert_eq!(field.ball.blocked_recollect_player(), Some(taker));
+
+    // Ten seconds on, with nobody having gone near it.
+    field.ball.current_tick_cached = tick + 1000;
+    assert_eq!(
+        field.ball.blocked_recollect_player(),
+        None,
+        "a ball nobody has come for in ten seconds is a loose ball again"
     );
 }

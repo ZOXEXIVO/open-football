@@ -1037,25 +1037,37 @@ impl Timeline {
         // clock, the fill and the loading notice, and a `Single` that failed
         // to match would skip the lot of them to save a hover effect.
         pointer: Query<&RelativeCursorPosition, With<SeekTrack>>,
+        rail: Query<&ComputedNode, With<SeekTrack>>,
         mut fill: Query<&mut Node, (With<SeekFill>, Without<SeekKnob>)>,
         mut knob: Query<&mut Node, (With<SeekKnob>, Without<SeekFill>)>,
         mut clock: Query<&mut Text, With<ClockLabel>>,
         mut icon: Query<&mut ImageNode, With<PlayToggleIcon>>,
         mut notice: Query<(&mut Visibility, &mut Text), (With<LoadingNotice>, Without<ClockLabel>)>,
     ) {
-        let progress = playback.progress() * 100.0;
+        // The playhead, in whole pixels of the rail rather than as a share of
+        // it. A percentage moves every frame the replay plays, and each write
+        // reruns UI layout over the whole tree — the bar, the markers and
+        // twenty-two name plates, billed to every frame of the match to move
+        // a fill by a hundredth of a pixel. Rounded to the pixel it will be
+        // drawn at, the write lands only when the drawn bar actually grows:
+        // every few seconds at 1x, and instantly on a seek, which are the two
+        // cases anybody can see. The band and the rail span the same width,
+        // so the band's measure is the rail's — see the note on `SeekTrack`.
+        let along = rail.single().map_or(0.0, |band| {
+            (band.size.x * band.inverse_scale_factor * playback.progress()).round()
+        });
         if let Ok(mut node) = fill.single_mut()
-            && node.width != percent(progress)
+            && node.width != px(along)
         {
-            node.width = percent(progress);
+            node.width = px(along);
         }
         if let Ok(mut node) = knob.single_mut() {
             // Guarded for the same reason as the knob's size below: a paused
             // replay, or one waiting on its first chunk, is a replay whose bar
             // does not move, and it should not be relaying out the UI to say
             // so.
-            if node.left != percent(progress) {
-                node.left = percent(progress);
+            if node.left != px(along) {
+                node.left = px(along);
             }
             // The knob swells under the pointer. Sized here rather than in a
             // hover system because the track carries the cursor position and

@@ -231,7 +231,6 @@ pub mod shot_accuracy_diag {
         sum.load(Ordering::Relaxed) as f32 / shots as f32 / 1000.0 - SIGNED_OFFSET
     }
 
-
     /// **The same accounting, split by what KIND of shot it was.**
     ///
     /// Indexed by `ShotType` in declaration order; each row is
@@ -3631,6 +3630,12 @@ impl PlayerEventDispatcher {
                 field.ball.position.z = 0.0;
             }
         }
+        // He has the ball, so a throw-in in progress is over — and this
+        // path records no touch, which is the only reason it has to say
+        // so itself. See `Ball::settle_throw_in`.
+        let team_id = field.get_player(player_id).map(|p| p.team_id);
+        let tick = field.ball.current_tick_cached;
+        field.ball.settle_throw_in(player_id, team_id, tick);
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
         field.ball.pass_target_player_id = None;

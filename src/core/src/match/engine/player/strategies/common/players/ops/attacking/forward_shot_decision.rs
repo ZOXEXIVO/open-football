@@ -4201,9 +4201,14 @@ pub mod mid_run_diag {
             same_team: bool,
             travelled: f32,
             held_ticks: u64,
+            still_in_his_hands: bool,
         ) {
             if !released {
                 THROW_DELIVERY[1].fetch_add(1, Ordering::Relaxed);
+                THROW_DELIVERY[9].fetch_add(held_ticks, Ordering::Relaxed);
+                if still_in_his_hands {
+                    THROW_DELIVERY[10].fetch_add(1, Ordering::Relaxed);
+                }
                 return;
             }
             THROW_DELIVERY[2].fetch_add(1, Ordering::Relaxed);
@@ -4233,6 +4238,13 @@ pub mod mid_run_diag {
             if had_target {
                 THROW_DELIVERY[8].fetch_add(1, Ordering::Relaxed);
             }
+        }
+
+        /// One throw actually EMITTED by the thrower. Against slot 2 —
+        /// throws that reached somebody — this separates "he never let
+        /// go" from "he let go and the event was refused downstream".
+        pub fn note_throw_emitted() {
+            THROW_DELIVERY[11].fetch_add(1, Ordering::Relaxed);
         }
 
         pub fn throw_snapshot() -> [u64; 12] {

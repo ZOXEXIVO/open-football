@@ -104,28 +104,17 @@ impl ThrowInDelivery {
     /// he is physically capable of.
     const COMFORTABLE: f32 = 0.55;
 
-    /// False when `OF_THROW_IN=off` — the throw-in reverts to what it
-    /// was: an ordinary carrier with an ordinary state machine, which is
-    /// the arm the measurement above was taken on.
-    pub fn armed() -> bool {
-        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *ON.get_or_init(|| {
-            std::env::var("OF_THROW_IN")
-                .map(|v| v != "off" && v != "0")
-                .unwrap_or(true)
-        })
-    }
-
     /// True while this player is the one taking a throw-in and still has
     /// the ball in his hands.
     ///
     /// Two reads and no scan for everybody else, on every tick — the same
     /// shape as [`RestartCarry`](super::RestartCarry), and for the same
-    /// reason: it is checked once per player per tick at dispatch.
+    /// reason: it is checked once per player per tick at dispatch. The
+    /// `OF_THROW_IN` switch lives on [`ThrowIn::armed`] and reaches this
+    /// through `throw_taker`, which is never stamped when it is off.
     #[inline]
     pub fn taking(ctx: &StateProcessingContext) -> bool {
-        Self::armed()
-            && ctx.tick_context.ball.throw_taker == Some(ctx.player.id)
+        ctx.tick_context.ball.throw_taker == Some(ctx.player.id)
             && ctx.tick_context.ball.current_owner == Some(ctx.player.id)
     }
 
@@ -144,14 +133,51 @@ impl ThrowInDelivery {
         let picked = Self::target(ctx, out_of_patience);
         #[cfg(feature = "match-logs")]
         crate::mid_run_diag::RestartCensus::note_throw_scan(picked.is_some());
-        let target = picked?;
-        Some(Event::PlayerEvent(PlayerEvent::PassTo(
-            PassingEventContext::new()
-                .with_from_player_id(ctx.player.id)
-                .with_to_player_id(target.id)
-                .with_reason("THROW_IN")
-                .build(ctx),
-        )))
+        // **Out of patience and still nobody in range: he throws it
+        // anyway.** There is no third thing a man holding a ball on the
+        // touchline may do — he may not carry it in, and standing there
+        // is a stalled match. Measured before this existed: 6.4% of
+        // throw-ins ended with the thrower still holding the ball,
+        // because a scan bounded to `ThrowIn::range` can come up empty
+        // when the ten team-mates are all beyond his arms.
+        let target = match picked.or_else(|| out_of_patience.then(|| Self::nearest(ctx)).flatten())
+        {
+            Some(target) => target,
+            None => return None,
+        };
+
+        // …and it never goes further than he can throw it. The scan is
+        // bounded by his range, so this only bites on the backstop above:
+        // the ball goes as far down the line towards the man as his arms
+        // reach, and the rest is a race. Aimed at a POINT in that case,
+        // which is what it is — see `PassingEventBuilder::with_target_point`.
+        let (_, max_range) = ThrowIn::range(ctx.player.skills.technical.long_throws);
+        let to = target.position - ctx.player.position;
+        let distance = to.norm();
+        let mut pass = PassingEventContext::new()
+            .with_from_player_id(ctx.player.id)
+            .with_to_player_id(target.id)
+            .with_reason("THROW_IN");
+        if distance > max_range && distance > 1.0 {
+            pass = pass.with_target_point(ctx.player.position + to * (max_range / distance));
+        }
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::RestartCensus::note_throw_emitted();
+        Some(Event::PlayerEvent(PlayerEvent::PassTo(pass.build(ctx))))
+    }
+
+    /// The closest team-mate at any distance — the backstop's target, and
+    /// nothing else's.
+    fn nearest(ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        ctx.players()
+            .teammates()
+            .all()
+            .map(|m| {
+                let d = (m.position - ctx.player.position).norm();
+                (m, d)
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(m, _)| m)
     }
 
     /// **Who he throws it to.**
@@ -204,15 +230,17 @@ impl ThrowInDelivery {
             // manage: 1.0 at `COMFORTABLE` of his range, tapering both
             // ways.
             let reach = (distance / max_range).clamp(0.0, 1.0);
-            let comfort = 1.0 - ((reach - Self::COMFORTABLE) / Self::COMFORTABLE).abs().min(1.0);
+            let comfort = 1.0
+                - ((reach - Self::COMFORTABLE) / Self::COMFORTABLE)
+                    .abs()
+                    .min(1.0);
 
             // …and up the pitch, gently. Most throw-ins go square or
             // back, and weighting this any harder turns every one of them
             // into a hopeful ball down the line.
             let progression = (0.5 + 0.5 * (to.x * forward) / max_range).clamp(0.0, 1.0);
 
-            let score =
-                openness * 0.50 + lane * 0.22 + comfort * 0.18 + progression * 0.10;
+            let score = openness * 0.50 + lane * 0.22 + comfort * 0.18 + progression * 0.10;
             if best.map_or(true, |(_, b)| score > b) {
                 best = Some((mate, score));
             }
@@ -235,7 +263,11 @@ impl ThrowInDelivery {
         }
         let dir = lane / length;
         let mut nearest = f32::INFINITY;
-        for (id, _) in ctx.tick_context.grid.opponents(ctx.player.id, length + 40.0) {
+        for (id, _) in ctx
+            .tick_context
+            .grid
+            .opponents(ctx.player.id, length + 40.0)
+        {
             let rel = ctx.tick_context.grid.position_of(id) - from;
             let along = rel.dot(&dir);
             if along <= 0.0 || along >= length {

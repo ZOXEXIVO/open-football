@@ -570,7 +570,7 @@ impl Ball {
         // that this is the tick he actually gets the ball. Stamped AFTER
         // `record_touch`, because that call is the pick-up and the pick-up
         // is not a second touch. See [`Ball::throw_in_taker`].
-        if await_state.origin == PassOriginRestart::ThrowIn {
+        if await_state.origin == PassOriginRestart::ThrowIn && ThrowIn::armed() {
             self.throw_in_taker = Some(await_state.taker_id);
             // **In his hands, and not at his feet.** He fetched it by
             // hand and he throws it with both hands; the seconds in
@@ -831,6 +831,31 @@ impl CornerWalk {
 pub struct ThrowIn;
 
 impl ThrowIn {
+    /// **Whether the throw-in is a throw at all.** False when
+    /// `OF_THROW_IN=off`, which restores the whole of what was measured
+    /// below: the taker owns the ball at his feet like any other carrier,
+    /// nothing holds him to the line, and Law 15 is not enforced.
+    ///
+    /// One switch for three pieces — the ball in his hands here, the
+    /// second-touch bar in [`Ball::blocked_recollect_player`], and the
+    /// delivery itself in
+    /// [`ThrowInDelivery`](crate::r#match::player::strategies::common::states::ThrowInDelivery)
+    /// — because they are one behaviour and an A/B that moved only part of
+    /// it would measure neither arm.
+    ///
+    /// Measured over 60 matches at level 14 with it off: of 163.9
+    /// throw-ins a match, **99.7% were carried into play rather than
+    /// thrown**, and of the 0.3% that were thrown, **100% were first
+    /// touched again by the thrower himself**.
+    pub fn armed() -> bool {
+        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ON.get_or_init(|| {
+            std::env::var("OF_THROW_IN")
+                .map(|v| v != "off" && v != "0")
+                .unwrap_or(true)
+        })
+    }
+
     /// Delivery range in field units, as `(min, max)`.
     ///
     /// 140u baseline + up to 180u extra at long_throws=20 — at this
