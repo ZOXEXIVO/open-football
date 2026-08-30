@@ -124,6 +124,23 @@ impl Quality {
     /// eighty-nine of them.
     const SETTLE_BEFORE: f32 = 20.0;
 
+    /// The ceiling on believing the measurement at all — the same number, and
+    /// the same argument, as [`Stage::STALLED_MS`](crate::app::stage::Stage):
+    /// past this the page is not slow, it is STALLED. A median in the
+    /// hundreds of milliseconds is a shader link that slipped past the
+    /// bring-up, a backgrounded tab, a breakpoint — and none of those is a
+    /// sampling problem: taking three samples in four away turns 300 ms into
+    /// 300 ms. The tier is one-way, so answering a stall here docks a machine
+    /// for the whole match.
+    ///
+    /// Not hypothetical. The squad's own shader link lands wherever the
+    /// recording's arrival puts it, and measured on 2026-08-30 it landed at
+    /// twenty-two seconds once in nine openings — inside this window, filling
+    /// the frame history with 291 ms "frames" — and an RTX 3080 Ti spent the
+    /// match at one sample + FXAA. The module note's exact false positive,
+    /// back in through a second door.
+    const STALLED_MS: f32 = 100.0;
+
     /// Asks the browser what it is drawing with, and picks a starting tier.
     ///
     /// Called before the app is built rather than from a system, so the camera
@@ -239,7 +256,14 @@ impl Quality {
             quality.settled = true;
             return;
         }
-        if cost.typical_frame_ms() < Self::STRUGGLING_MS {
+        // Between struggling and stalled, exactly as the resolution ladder
+        // reads the same figure: below the band the machine is fine, above it
+        // the page is stopped and no tier would help — see
+        // [`Self::STALLED_MS`]. A stall leaves the door open rather than
+        // settling, because the machine has not been measured yet: the window
+        // still ends at [`Self::SETTLE_BEFORE`], and a machine that is
+        // genuinely struggling will still be struggling once the stall clears.
+        if !(Self::STRUGGLING_MS..Self::STALLED_MS).contains(&cost.typical_frame_ms()) {
             return;
         }
 
