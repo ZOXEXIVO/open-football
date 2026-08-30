@@ -60,7 +60,13 @@ impl CameraZoom {
     /// One notch of the wheel. Geometric rather than additive, so a turn
     /// back out undoes a turn in exactly and the control feels the same at
     /// both ends of its range.
-    const STEP: f32 = 1.10;
+    ///
+    /// Public because it is also the UNIT a staged shot's lens is quoted in:
+    /// the pre-match pass along the faces is held three notches wider than it
+    /// was tuned at, and writing that as three of these keeps it three clicks
+    /// of the actual wheel however the wheel is retuned. See
+    /// [`Lineup::FRONT_LENS`](crate::broadcast::lineup::Lineup).
+    pub const STEP: f32 = 1.10;
     const RANGE: (f32, f32) = (0.45, 3.0);
 
     /// How much of a notch one pixel of a smooth-scrolling wheel is worth.

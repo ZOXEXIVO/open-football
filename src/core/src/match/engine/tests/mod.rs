@@ -18,6 +18,7 @@ mod offside_restart_tests;
 mod recording_globals;
 mod run_out_tests;
 mod solid_engine_tests;
+mod sprint_ramp_tests;
 mod state_reachability_tests;
 mod substitution_break_tests;
 mod throw_in_tests;

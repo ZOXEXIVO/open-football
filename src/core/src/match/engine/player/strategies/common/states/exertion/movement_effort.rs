@@ -1,6 +1,10 @@
 use super::activity_intensity::ActivityIntensity;
 use crate::r#match::MatchPlayer;
+use crate::r#match::player::strategies::players::ops::effective_skill::{
+    ActionContext, effective_skill,
+};
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
+use nalgebra::Vector3;
 
 /// Translates a player's current exertion level — the same
 /// [`ActivityIntensity`] the fatigue model reads each tick — into a
@@ -29,6 +33,48 @@ use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 /// the scaled ceiling (a near-target `Arrive` decelerating, an
 /// intentionally slow walk vector) are left untouched.
 pub struct MovementEffort;
+
+/// Peak FIRST-STEP ground acceleration at `acceleration` = 1, in m/s².
+/// Real sprint kinematics: horizontal acceleration is strongest off the
+/// mark (~6–10 m/s² for professionals) and falls roughly linearly with
+/// speed toward zero at top speed — see [`ACCEL_SPEED_FALLOFF`].
+///
+/// ⚠ The band sits a shade ABOVE the literature (6.5–12 against ~6–10)
+/// and the falloff keeps 25% at top speed, deliberately: the first,
+/// strictly-literature dose (flat 4.4–8.8 m/s², no falloff) was built
+/// and measured, and it broke the defensive game wholesale — tackles
+/// 10.5 → 5.2 per team, goals 3.0 → 6.1, pass accuracy 86.6 → 91.2,
+/// shots 14.5 → 22.1 (n=250, level 14, `OF_RAMP_LEGACY` as control).
+/// Every reactive close in the engine — press, mark, cut a lane — was
+/// calibrated against instant acceleration, and a full second of flat
+/// ramp on every reaction let attack after attack through. The falloff
+/// shape restores the quick first steps that reactive defending lives
+/// on while keeping the sprint build-up (and the attribute spread)
+/// real; the residual generosity is the titrated dose that keeps the
+/// calibrated defence standing. Tightening it toward the literature is
+/// a defensive-recalibration campaign, not a constant edit.
+const ACCEL_PEAK_FLOOR_MS2: f32 = 6.5;
+/// Span to `acceleration` = 20 (floor + span = 12.0 m/s² peak burst).
+const ACCEL_PEAK_SPAN_MS2: f32 = 5.5;
+/// How much of the peak budget is gone at top speed. Ground force falls
+/// as the legs run out of contact time: `gain = peak × (1 − falloff ×
+/// speed/top_speed)`. 0.75 leaves a quarter of first-step force at full
+/// sprint, so players can still adjust a flat-out run.
+const ACCEL_SPEED_FALLOFF: f32 = 0.75;
+/// m/s² → Δ(u/tick) per AI tick. Velocity is written on full AI ticks
+/// only (every second 10 ms sim tick → dt = 0.02 s), and 1 u/tick =
+/// 12.5 m/s (0.125 m per 10 ms): `a × 0.02 / 12.5`.
+const MS2_TO_DV: f32 = 0.02 / 12.5;
+/// Braking / change-of-direction budget multiplier band over the PEAK
+/// (not the speed-decayed gain): 1.8× at agility 0 to 2.6× at agility
+/// 20. Eccentric (braking)
+/// force genuinely exceeds concentric in sprinting humans (~1.3–2×); the
+/// top of this band is deliberately generous so arrivals stay crisp —
+/// every `Arrive`/settle in the engine was calibrated against instant
+/// stops, and the brake budget is what keeps that calibration honest
+/// while the forward ramp becomes physical.
+const BRAKE_BASE: f32 = 1.8;
+const BRAKE_AGILITY_SPAN: f32 = 0.8;
 
 impl MovementEffort {
     /// Target speed as a fraction of conditioned max speed for the given
@@ -128,6 +174,152 @@ impl MovementEffort {
         use std::sync::OnceLock;
         static LEGACY: OnceLock<bool> = OnceLock::new();
         *LEGACY.get_or_init(|| std::env::var("OF_CHASE_LEGACY").is_ok())
+    }
+
+    /// One AI tick of the velocity ramp — the momentum model that makes
+    /// `acceleration` mean what its name says.
+    ///
+    /// # The defect this replaces
+    ///
+    /// The integrator's old per-tick bound was `sprint_capability ×
+    /// agility × 0.7` ≈ 0.25–0.55 u/tick — a FULL stop-to-sprint change
+    /// in one or two AI ticks. In physical units that is 150–350 m/s²
+    /// against a real footballer's 5–9, so every player on the pitch
+    /// reached top speed in 20–40 ms from a standing start. Two
+    /// consequences, both measured before this existed:
+    ///
+    /// * the `acceleration` attribute decided NOTHING kinematic — a 6 and
+    ///   an 18 differed by one tick of ramp (~2 cm of ground); every race,
+    ///   however short, was settled by top speed alone, where
+    ///   `acceleration` is a 0.2 blend weight inside
+    ///   [`PlayerSkills::max_speed`](crate::PlayerSkills). Real football
+    ///   is the opposite: the first five metres belong to acceleration,
+    ///   and only the long chase belongs to pace.
+    /// * the bound read `agility`, not `acceleration` — the attribute
+    ///   named for this exact quantity was consulted nowhere on the
+    ///   integration path.
+    ///
+    /// # The model
+    ///
+    /// Per AI tick (20 ms — velocity is only written on full ticks) the
+    /// velocity may move toward the desired vector by at most a budget
+    /// derived from real sprint kinematics — strongest off the mark,
+    /// fading as the legs run out of ground-contact time:
+    ///
+    /// ```text
+    /// gaining speed:  (6.5 + accel01 × 5.5) × (1 − 0.75 × speed/top)  m/s²
+    /// braking/turning: peak × (1.8 + agility01 × 0.8)     (no falloff)
+    /// ```
+    ///
+    /// So `acceleration` 1..20 spans a 6.5–12.0 m/s² first step decaying
+    /// toward a quarter of that at full sprint — a standing start reaches
+    /// 90% of top speed in ~0.8 s (elite) to ~1.4 s (poor), while a
+    /// marking shuffle or a two-metre close still gets nearly the whole
+    /// peak, which is what keeps reactive defending alive (see the dose
+    /// history on [`ACCEL_PEAK_FLOOR_MS2`]). Braking and redirecting get
+    /// a larger budget than gaining speed, which is the real asymmetry
+    /// (eccentric force beats concentric) and what keeps arrivals crisp;
+    /// `agility` owns that multiplier, so change-of-direction is its
+    /// kinematic channel while straight-line burst belongs to
+    /// `acceleration`. The attribute is read through [`effective_skill`]
+    /// in the explosive band, so a drained player loses burst before he
+    /// loses top speed, and elite stamina keeps burst alive late — the
+    /// same fatigue law every duel already reads.
+    ///
+    /// "Gaining speed" vs "braking" is decided by comparing speeds, not
+    /// headings: a 90° cut at constant speed is braking work (shedding
+    /// one direction while buying another), a standing start is pure
+    /// gain, and a reversal transits the brake branch until the turn is
+    /// through, then accelerates out — all without a special case.
+    ///
+    /// The `desired` vector is capped at `effort_ceiling` (the
+    /// effort/carry-scaled max the caller already computed) BEFORE the
+    /// ramp, and the ramped result is capped at `athletic_ceiling` (the
+    /// conditioned top speed) — never at the effort ceiling, because a
+    /// sprinter whose state drops to a walk does not stop in one tick:
+    /// he decelerates through it at the brake budget, transiently above
+    /// the new ceiling, which is what momentum IS. The athletic ceiling
+    /// stays hard: nothing here ever makes a man faster than he can run.
+    ///
+    /// Goalkeepers are exempt (the caller keeps the legacy bound for
+    /// them): their explosive lateral band and `SaveModel`'s reach are
+    /// one calibrated budget, and re-deriving keeper dive travel through
+    /// outfield sprint physics would silently shrink the goal he defends.
+    ///
+    /// `OF_RAMP_LEGACY=1` restores the old agility-twitch bound — the
+    /// A/B control (same pattern as [`Self::chase_legacy`]).
+    pub fn sprint_ramp(
+        player: &MatchPlayer,
+        minute: u32,
+        desired: Vector3<f32>,
+        effort_ceiling: f32,
+        athletic_ceiling: f32,
+    ) -> Vector3<f32> {
+        let desired = Self::cap(desired, effort_ceiling);
+        let current = player.velocity;
+        let delta = desired - current;
+        let delta_sq = delta.norm_squared();
+        if delta_sq <= 1e-12 {
+            return Self::cap(desired, athletic_ceiling);
+        }
+
+        let speeding_up = desired.norm_squared() > current.norm_squared();
+        let speed01 = if athletic_ceiling > 0.0 {
+            (current.norm() / athletic_ceiling).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let budget = Self::accel_budget(player, minute, speeding_up, speed01);
+
+        let ramped = if delta_sq > budget * budget {
+            current + delta * (budget / delta_sq.sqrt())
+        } else {
+            desired
+        };
+        Self::cap(ramped, athletic_ceiling)
+    }
+
+    /// The per-AI-tick velocity-change budget behind [`Self::sprint_ramp`],
+    /// in u/tick. `speed01` is current speed over the athletic ceiling —
+    /// the gain budget falls with it ([`ACCEL_SPEED_FALLOFF`]); the brake
+    /// budget does not (eccentric force holds at speed). Public so a
+    /// diagnostic or test reads the SAME number the integrator enforces —
+    /// a re-derived copy goes stale (see the history on
+    /// [`Self::carrier_ceiling`]).
+    pub fn accel_budget(player: &MatchPlayer, minute: u32, speeding_up: bool, speed01: f32) -> f32 {
+        let accel_eff = effective_skill(
+            player,
+            player.skills.physical.acceleration,
+            ActionContext::explosive(minute),
+        );
+        let accel01 = (accel_eff / 20.0).clamp(0.0, 1.0);
+        let peak_ms2 = ACCEL_PEAK_FLOOR_MS2 + accel01 * ACCEL_PEAK_SPAN_MS2;
+        if speeding_up {
+            peak_ms2 * (1.0 - ACCEL_SPEED_FALLOFF * speed01.clamp(0.0, 1.0)) * MS2_TO_DV
+        } else {
+            let agility01 = (player.skills.physical.agility / 20.0).clamp(0.0, 1.0);
+            peak_ms2 * (BRAKE_BASE + agility01 * BRAKE_AGILITY_SPAN) * MS2_TO_DV
+        }
+    }
+
+    /// `OF_RAMP_LEGACY=1` reverts the velocity integrator to the
+    /// pre-ramp agility-twitch bound (a full stop-to-sprint change in
+    /// 1–2 AI ticks, `acceleration` kinematically inert). Debug
+    /// infrastructure — do not remove.
+    pub fn ramp_legacy() -> bool {
+        use std::sync::OnceLock;
+        static LEGACY: OnceLock<bool> = OnceLock::new();
+        *LEGACY.get_or_init(|| std::env::var("OF_RAMP_LEGACY").is_ok())
+    }
+
+    #[inline]
+    fn cap(v: Vector3<f32>, max: f32) -> Vector3<f32> {
+        let n_sq = v.norm_squared();
+        if n_sq > max * max && n_sq > 0.0 {
+            v * (max / n_sq.sqrt())
+        } else {
+            v
+        }
     }
 
     /// Self-pacing: a tired player can't keep flinging themselves into

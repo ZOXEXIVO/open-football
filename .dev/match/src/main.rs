@@ -487,6 +487,15 @@ struct ViewerConfigJson<'a> {
     /// seconds of ceremony, and the same A/B switch is how the substitution
     /// walk is compared against the engine without it.
     lineup: bool,
+    /// The most frames a second the viewer will draw; zero is uncapped.
+    ///
+    /// The game leaves this at the viewer's own default (a hundred and
+    /// twenty). The harness passes ZERO because it is the measuring
+    /// instrument: with vsync disabled in headless Chrome, `FrameCost` then
+    /// reads the scene's true cost, where a capped viewer would read the cap.
+    /// **`OF_FPS_CAP=120` puts the product's ceiling back** for checking the
+    /// ceiling itself.
+    fps_cap: f32,
 }
 
 #[derive(Serialize)]
@@ -570,6 +579,10 @@ impl ViewerPage {
             venue: VenueJson::from_env(),
             debug: true,
             lineup: std::env::var("OF_NO_LINEUP").is_err(),
+            fps_cap: std::env::var("OF_FPS_CAP")
+                .ok()
+                .and_then(|cap| cap.parse().ok())
+                .unwrap_or(0.0),
         };
 
         let placeholder = if VIEWER_WASM_GZ.is_empty() {

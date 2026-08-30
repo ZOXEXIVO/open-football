@@ -9937,7 +9937,6 @@ mod tests {
     /// is per-entity bound and near enough resolution-insensitive. A GPU
     /// drawing twenty-two of these is putting through about 9 million
     /// triangles a frame.
-    #[test]
     /// **A merged part points every vertex at a swatch, and loses nothing in
     /// the merge.** The whole trick of [`Sculptor::outfitted`] is that a
     /// vertex's UV names its colour; a vertex left on the lathe's own UVs

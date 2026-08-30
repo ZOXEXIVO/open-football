@@ -29,9 +29,13 @@ pub struct LooseBallChase;
 
 impl LooseBallChase {
     /// Ball height below which the aim point is the ball itself.
-    const GROUND_H: f32 = 1.5;
+    ///
+    /// Public because [`SteeringBehavior::Intercept`] keys its own
+    /// ground/aerial fade to the same band — two copies of "what counts
+    /// as a rolling ball" would drift.
+    pub const GROUND_H: f32 = 1.5;
     /// Ball height above which the aim point is where it will land.
-    const AERIAL_H: f32 = 3.0;
+    pub const AERIAL_H: f32 = 3.0;
 
     /// Where to run for a loose ball, and the velocity to run there with.
     ///
@@ -148,6 +152,28 @@ impl LooseBallChase {
         *LEGACY.get_or_init(|| std::env::var("OF_TAIL_CHASE").is_ok())
     }
 
+    /// Diagnostic switch: with `OF_CONCEDE` set, a chase the bearing-hold
+    /// cannot win goes back to being CONCEDED, as it was between
+    /// 2026-08-22 and now — [`SteeringBehavior::Intercept`] spends
+    /// everything cross-track the moment the root closes, and
+    /// [`Self::meeting_point`] reverts to the closing-rate estimate that
+    /// saturates at the resting point.
+    ///
+    /// This is the A/B control for the lost-cause rescue, and it exists
+    /// because this exact repair has already been mis-measured once: two
+    /// versions of it were built on top of an `aim` that had broken its
+    /// own aerial branch, the regression appeared in BOTH arms of every
+    /// comparison, and the idea was written off on evidence that was
+    /// really about the other bug. A switch in the same binary is the
+    /// only comparison that survives the working tree moving. Same
+    /// pattern as [`Self::tail_chase`]; read once per process. Debug
+    /// infrastructure — do not remove.
+    pub fn concede() -> bool {
+        use std::sync::OnceLock;
+        static CONCEDE: OnceLock<bool> = OnceLock::new();
+        *CONCEDE.get_or_init(|| std::env::var("OF_CONCEDE").is_ok())
+    }
+
     /// Where this player and a rolling ball can actually meet.
     ///
     /// # Why the engine had no answer for this
@@ -163,19 +189,11 @@ impl LooseBallChase {
     ///
     /// # The solve
     ///
-    /// The same decomposition the steering uses, so where a player runs
-    /// and where he is steered can never become two different opinions:
-    /// split the ball's travel into the part along our line of sight and
-    /// the part across it, match the cross-track part, and close the gap
-    /// with whatever speed is left over. What remains is the closing
-    /// speed, the gap over it is the time, and [`BallRoll::distance`]
-    /// says where the ball has rolled to by then.
-    ///
-    /// A chaser who cannot close at all is not a special case: the
-    /// closing speed goes to nothing, the horizon runs away, and
-    /// `BallRoll::distance` saturates at the resting point — so he is
-    /// sent to where the ball will stop, which is the right answer and
-    /// the same one, continuously, from either side of the boundary.
+    /// [`Self::earliest_meeting`] — the first point on the ball's
+    /// decaying roll this player can be at no later than the ball.
+    /// Shared verbatim with the lost-cause branch of
+    /// [`SteeringBehavior::Intercept`], so where a player is sent and
+    /// where he is steered can never become two different opinions.
     ///
     /// Clamped to the run-off rather than to the pitch for the reason
     /// `calculate_landing_position` is: a ball on its way out of play
@@ -190,7 +208,8 @@ impl LooseBallChase {
             return ball_pos;
         }
         let flat = |v: Vector3<f32>| Vector3::new(v.x, v.y, 0.0);
-        let to_ball = flat(ball_pos) - flat(ctx.player.position);
+        let player_pos = flat(ctx.player.position);
+        let to_ball = flat(ball_pos) - player_pos;
         let gap = to_ball.norm();
         let ball_vel = flat(ball_vel);
         let ball_speed = ball_vel.norm();
@@ -198,18 +217,29 @@ impl LooseBallChase {
         if gap < 1e-3 || ball_speed < BallRoll::STOPPED {
             return ball_pos;
         }
-        let line_of_sight = to_ball / gap;
-        let ball_dir = ball_vel / ball_speed;
-
         let speed = ctx.player.max_speed_with_condition_cached().max(1e-3);
-        let across = ball_vel - line_of_sight * ball_vel.dot(&line_of_sight);
-        let across_sq = across.norm_squared();
-        // What he has left for the gap once he has matched the ball
-        // across the line, less whatever the ball is taking along it.
-        let closing = (speed * speed - across_sq).max(0.0).sqrt() - ball_vel.dot(&line_of_sight);
-        let ticks = gap / closing.max(1e-3);
 
-        let point = ball_pos + ball_dir * BallRoll::distance(ball_speed, ticks);
+        let point = if Self::concede() {
+            // The 2026-08-22 estimate, kept as the `OF_CONCEDE` arm:
+            // match the ball across the line of sight, call what is left
+            // the closing speed, and read the roll at `gap / closing`
+            // ticks. Exact enough while he can close — but a chaser who
+            // CANNOT close gets an unbounded horizon and is sent to the
+            // resting point, which for a ball on its way out of play is
+            // against the boards: he escorts it over the line instead of
+            // cutting it off while it is still in reach.
+            let line_of_sight = to_ball / gap;
+            let ball_dir = ball_vel / ball_speed;
+            let across = ball_vel - line_of_sight * ball_vel.dot(&line_of_sight);
+            let closing =
+                (speed * speed - across.norm_squared()).max(0.0).sqrt()
+                    - ball_vel.dot(&line_of_sight);
+            let ticks = gap / closing.max(1e-3);
+            flat(ball_pos) + ball_dir * BallRoll::distance(ball_speed, ticks)
+        } else {
+            Self::earliest_meeting(player_pos, speed, flat(ball_pos), ball_vel).0
+        };
+
         let size = &ctx.context.field_size;
         let (min_x, max_x, min_y, max_y) =
             RunOff::ball_bounds(size.width as f32, size.height as f32);
@@ -218,6 +248,111 @@ impl LooseBallChase {
             point.y.clamp(min_y, max_y),
             0.0,
         )
+    }
+
+    /// The first point on a rolling ball's path this runner can reach no
+    /// later than the ball — the point a player who has read the roll
+    /// runs at.
+    ///
+    /// # Why "earliest", and not "where the closing rate says"
+    ///
+    /// The estimate this replaces decomposed the chase against the
+    /// current line of sight and asked how fast the gap shrinks NOW.
+    /// For a chase the runner is winning the two agree. For one he is
+    /// momentarily losing — a ball crossing his front faster than he can
+    /// run, the commonest loose ball there is at 0.892 u/tick against a
+    /// 0.45-0.63 sprint — the closing rate is zero or negative, the
+    /// horizon diverges, and the answer degenerates to the RESTING
+    /// point. But a rolling ball sheds speed every tick, so between
+    /// "where it is" and "where it stops" there is almost always a first
+    /// point he can make, and it can sit well upstream of the rest —
+    /// inside the pitch, say, when the rest is over the touchline.
+    /// Reported exactly so: *"defenders in TakeBall run parallel to the
+    /// ball and it rolls out of bounds, even though the defender could
+    /// have intercepted it."*
+    ///
+    /// # The solve
+    ///
+    /// Rolling is the one phase of a ball's life with a closed form, so
+    /// both sides of the race are exact: the ball is at
+    /// [`BallRoll::distance`]`(v, t)` along its line, the runner covers
+    /// `speed × t` on the straight. The shortfall between them starts at
+    /// the gap, is continuous, and is guaranteed to go negative — the
+    /// ball stops at [`BallRoll::range`] after [`BallRoll::rest_ticks`],
+    /// and a straight run reaches that point in finite time — so the
+    /// first crossing exists; a coarse march brackets it and a bisection
+    /// pins it. No model of the steering, no feedback: positions, one
+    /// speed, and the friction constant the physics itself uses.
+    ///
+    /// A march this coarse can step OVER a brief early window (a ball
+    /// that dips into reach for a moment while passing close) and settle
+    /// on the later, permanent crossing instead. That costs a few ticks
+    /// of optimality, never correctness — the returned point is always
+    /// one he genuinely arrives at first — and the solve is re-run every
+    /// tick, so a window that widens as the ball slows is picked up the
+    /// moment it is real.
+    ///
+    /// Returns `(point, ticks)` — the when matters as much as the where,
+    /// because commitment is priced in TIME: the steering runs hard at a
+    /// meeting seconds away and declines one half a minute out.
+    ///
+    /// Works in the flat plane; hand it flat vectors. A flying ball is
+    /// not this function's subject — its horizontal speed does not decay
+    /// like a roll's — which is why the steering fades the lost-cause
+    /// branch out across the same height band `aim` uses.
+    pub fn earliest_meeting(
+        player_pos: Vector3<f32>,
+        max_speed: f32,
+        ball_pos: Vector3<f32>,
+        ball_vel: Vector3<f32>,
+    ) -> (Vector3<f32>, f32) {
+        let ball_speed = ball_vel.norm();
+        let gap = (ball_pos - player_pos).norm();
+        if gap < 1e-3 || ball_speed < BallRoll::STOPPED {
+            return (ball_pos, 0.0);
+        }
+        let dir = ball_vel / ball_speed;
+        let speed = max_speed.max(1e-3);
+
+        // How far short of the ball he still is after `t` ticks — the
+        // ball on its decaying roll, him flat out on the straight line.
+        let shortfall = |t: f32| -> f32 {
+            let there = ball_pos + dir * BallRoll::distance(ball_speed, t);
+            (there - player_pos).norm() - speed * t
+        };
+
+        // The horizon that PROVES a meeting exists: from `rest_ticks` on
+        // the ball is a fixed point at `range`, and the straight run
+        // reaches it in `|rest − him| / speed` more — by then the
+        // shortfall is below zero by the whole of `speed × rest_ticks`.
+        let rest = ball_pos + dir * BallRoll::range(ball_speed);
+        let horizon = BallRoll::rest_ticks(ball_speed) + (rest - player_pos).norm() / speed;
+
+        const STEPS: usize = 16;
+        const HALVINGS: usize = 12;
+        let step = horizon / STEPS as f32;
+        let mut bracket = None;
+        for i in 1..=STEPS {
+            let t = step * i as f32;
+            if shortfall(t) <= 0.0 {
+                bracket = Some((t - step, t));
+                break;
+            }
+        }
+        // Float dust at the far end of the horizon; out there the ball
+        // is at rest and the resting point IS the meeting.
+        let Some((mut lo, mut hi)) = bracket else {
+            return (rest, horizon);
+        };
+        for _ in 0..HALVINGS {
+            let mid = 0.5 * (lo + hi);
+            if shortfall(mid) <= 0.0 {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        (ball_pos + dir * BallRoll::distance(ball_speed, hi), hi)
     }
 
     /// Remove the component of `separation` that points against the run to

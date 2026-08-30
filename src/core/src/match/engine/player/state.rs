@@ -577,50 +577,72 @@ impl PlayerMatchState {
             // this tick's velocity is reachable from last tick's only
             // within the limits of what they can push against the ground.
             //
-            // The steering behaviours already know this: `Seek`, `Arrive`
-            // and `Pursuit` each cap their steering vector at roughly
-            // `max_speed * agility * 0.7` before returning. The bound was
-            // simply being thrown away afterwards. Almost every caller
-            // composes the result — `Arrive{..}.velocity +
-            // separation_velocity()` — and the added term is not part of
-            // any behaviour's limit, while a handful of states
-            // (`RunningInBehind` and friends) skip the behaviours entirely
-            // and assign `direction * speed` outright. Either way the
-            // final velocity could invert between two consecutive ticks.
-            //
-            // That is what the twitch actually is. With no momentum, two
-            // competing pulls — a state steering a defender back to his
-            // mark and personal-space steering him off it — do not settle
-            // at a balance point, they alternate: full velocity one way,
-            // full velocity back, at 50 Hz. Measured, **88% of all
-            // velocity reversals happened with no state change under
-            // them** (`dev_match trace`), i.e. inside a single state's own
-            // steering, which is exactly this signature.
-            //
             // Enforcing the bound HERE, at the one place every state's
             // velocity passes through, means no state can bypass it and
-            // no caller can compose its way around it. States that
-            // already respected it (a plain `Arrive`, a plain `Pursuit`)
-            // are unaffected — their velocity change was inside the limit
-            // to begin with.
-            let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
-            let max_accel = sprint_capability * agility_normalized * 0.7;
-            let delta = velocity - player.velocity;
-            let delta_sq = delta.norm_squared();
-            let velocity = if delta_sq > max_accel * max_accel && delta_sq > 0.0 {
-                player.velocity + delta * (max_accel / delta_sq.sqrt())
-            } else {
-                velocity
-            };
+            // no caller can compose its way around it: almost every
+            // caller composes steering results (`Arrive{..}.velocity +
+            // separation_velocity()`), and a handful of states
+            // (`RunningInBehind` and friends) skip the behaviours
+            // entirely and assign `direction * speed` outright.
+            //
+            // Outfielders get the real momentum model —
+            // `MovementEffort::sprint_ramp`, where `acceleration` sets
+            // the per-tick budget in physical units (4.4–8.8 m/s²) and
+            // `agility` the braking/turning multiplier. Before it, the
+            // bound below was the only one, and at 0.25–0.55 u/tick it
+            // allowed a full stop-to-sprint change in 1–2 AI ticks
+            // (150–350 m/s²): every race was settled by top speed alone
+            // and the `acceleration` attribute was kinematically inert —
+            // a 6 and an 18 differed by ~2 cm off a standing start.
+            //
+            // Goalkeepers keep the legacy twitch bound: their explosive
+            // lateral band and `SaveModel` reach are one calibrated
+            // budget (see `goalkeeper_max_speed`), and pushing keeper
+            // dive travel through outfield sprint physics would shrink
+            // the goal he defends. The legacy bound also remains the
+            // engine-wide A/B control via `OF_RAMP_LEGACY=1`.
+            //
+            // The twitch history, which is why a bound exists at all:
+            // with no momentum, two competing pulls — a state steering a
+            // defender back to his mark and personal-space steering him
+            // off it — do not settle at a balance point, they alternate:
+            // full velocity one way, full velocity back, at 50 Hz.
+            // Measured, **88% of all velocity reversals happened with no
+            // state change under them** (`dev_match trace`), i.e. inside
+            // a single state's own steering. The ramp's far tighter
+            // budget suppresses that signature even harder than the
+            // twitch bound did.
+            if player_position_group == PlayerFieldPositionGroup::Goalkeeper
+                || MovementEffort::ramp_legacy()
+            {
+                let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
+                let max_accel = sprint_capability * agility_normalized * 0.7;
+                let delta = velocity - player.velocity;
+                let delta_sq = delta.norm_squared();
+                let velocity = if delta_sq > max_accel * max_accel && delta_sq > 0.0 {
+                    player.velocity + delta * (max_accel / delta_sq.sqrt())
+                } else {
+                    velocity
+                };
 
-            let velocity_sq = velocity.norm_squared();
-            let max_speed_sq = max_speed * max_speed;
+                let velocity_sq = velocity.norm_squared();
+                let max_speed_sq = max_speed * max_speed;
 
-            if velocity_sq > max_speed_sq && velocity_sq > 0.0 {
-                let velocity_magnitude = velocity_sq.sqrt();
-                player.velocity = velocity * (max_speed / velocity_magnitude);
+                if velocity_sq > max_speed_sq && velocity_sq > 0.0 {
+                    let velocity_magnitude = velocity_sq.sqrt();
+                    player.velocity = velocity * (max_speed / velocity_magnitude);
+                } else {
+                    player.velocity = velocity;
+                }
             } else {
-                player.velocity = velocity;
+                let minute = sc::minute_from_ms(context.total_match_time);
+                player.velocity = MovementEffort::sprint_ramp(
+                    player,
+                    minute,
+                    velocity,
+                    max_speed,
+                    sprint_capability,
+                );
             }
         }
 

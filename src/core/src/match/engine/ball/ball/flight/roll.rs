@@ -40,6 +40,20 @@ impl BallRoll {
         ((speed - Self::STOPPED) * Self::KEPT / (1.0 - Self::KEPT)).max(0.0)
     }
 
+    /// Ticks until a ball rolling at `speed` decays to
+    /// [`STOPPED`](Self::STOPPED) and sits.
+    ///
+    /// The inverse of the decay `distance` sums: `kᵗ = v_stop / v`. This
+    /// is the natural time horizon for any question about the whole of a
+    /// roll — past it the ball is a fixed point at
+    /// [`range`](Self::range).
+    pub fn rest_ticks(speed: f32) -> f32 {
+        if speed <= Self::STOPPED {
+            return 0.0;
+        }
+        (Self::STOPPED / speed).ln() / Self::KEPT.ln()
+    }
+
     /// Ground covered by that ball in `ticks` ticks.
     ///
     /// Continuous in both arguments and saturating at

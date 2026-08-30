@@ -56,6 +56,19 @@ pub struct ViewerConfig {
     /// front of every run of a screenshot loop is fifteen seconds of ceremony.
     #[serde(default = "ViewerConfig::walked_out")]
     pub lineup: bool,
+    /// The most frames a second the replay will draw. Zero means uncapped —
+    /// the browser's own refresh rate is then the only ceiling.
+    ///
+    /// Absent means a hundred and twenty, which is the product's answer: a
+    /// high-refresh panel keeps the extra smoothness of motion up to twice a
+    /// broadcast frame rate, and the 240 Hz class stops burning double that
+    /// again on pictures nobody can tell apart — which on a laptop is the
+    /// fan coming on for a replay. A 60 Hz display never sees the cap at
+    /// all; its own refresh is the tighter ceiling. The `.dev/match` harness
+    /// passes zero, because it is the measuring instrument and a capped
+    /// instrument reads the cap instead of the scene.
+    #[serde(default = "ViewerConfig::high_refresh")]
+    pub fps_cap: f32,
 }
 
 #[derive(Deserialize)]
@@ -131,6 +144,10 @@ impl ViewerConfig {
     /// The default for [`Self::lineup`], which serde wants as a function.
     fn walked_out() -> bool {
         true
+    }
+
+    fn high_refresh() -> f32 {
+        120.0
     }
 
     pub fn metadata_url(&self) -> String {
@@ -320,6 +337,7 @@ impl ViewerConfig {
             venue: VenueInfo::default(),
             debug: false,
             lineup: true,
+            fps_cap: Self::high_refresh(),
         }
     }
 }

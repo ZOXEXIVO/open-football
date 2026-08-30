@@ -28,13 +28,19 @@
 //! model, because a test that only passes forwards cannot tell a fix from
 //! a geometry that was always winnable.
 //!
-//! One of them, `a_ball_crossing_faster_than_he_can_run_is_conceded`,
-//! pins a case the engine deliberately does NOT win. Read its note before
-//! "fixing" it: two repairs were measured and both were worse.
+//! The lost cause — a ball whose cross-track speed alone beats the
+//! chaser — used to be pinned here as deliberately conceded, because two
+//! repairs had "measured worse" (both verdicts later found confounded;
+//! see the history on `SteeringBehavior::Intercept`). It is now rescued:
+//! when the achievable closing rate dies, the steering runs at
+//! `LooseBallChase::earliest_meeting` — the first point of the decaying
+//! roll the chaser can make — and the tests below demand the
+//! interception instead of the concession.
 
 #![cfg(test)]
 
 use super::goal_celebration_tests::squad;
+use crate::r#match::common_states::LooseBallChase;
 use crate::r#match::engine::ball::ball::{BallRoll, CONTROL_DISTANCE, GROUND_FRICTION};
 use crate::r#match::engine::result::Score;
 use crate::r#match::{
@@ -73,48 +79,24 @@ fn roll_one_tick(pos: &mut Vector3<f32>, vel: &mut Vector3<f32>) {
     pos.y += vel.y;
 }
 
-/// The meeting-point solve, over a bare player rather than a whole
-/// `StateProcessingContext`. Mirrors `LooseBallChase::meeting_point`:
-/// the same split of the ball's travel into the part along the line of
-/// sight and the part across it, the same closing speed, and the same
-/// `BallRoll` horizon.
-fn meeting_point(
-    player: &MatchPlayer,
-    ball_pos: Vector3<f32>,
-    ball_vel: Vector3<f32>,
-) -> Vector3<f32> {
-    let flat = |v: Vector3<f32>| Vector3::new(v.x, v.y, 0.0);
-    let to_ball = flat(ball_pos) - flat(player.position);
-    let gap = to_ball.norm();
-    let ball_vel = flat(ball_vel);
-    let ball_speed = ball_vel.norm();
-    if gap < 1e-3 || ball_speed < BallRoll::STOPPED {
-        return ball_pos;
-    }
-    let line_of_sight = to_ball / gap;
-    let ball_dir = ball_vel / ball_speed;
-    let speed = player.max_speed_with_condition_cached().max(1e-3);
-    let across = ball_vel - line_of_sight * ball_vel.dot(&line_of_sight);
-    let across_sq = across.norm_squared();
-    let closing = (speed * speed - across_sq).max(0.0).sqrt() - ball_vel.dot(&line_of_sight);
-    let ticks = gap / closing.max(1e-3);
-    ball_pos + ball_dir * BallRoll::distance(ball_speed, ticks)
-}
-
 /// How near a chaser gets to a rolling ball over `ticks`, steering with
 /// `behaviour` and integrating what it returns exactly as
 /// `MatchPlayer::move_to` does.
 ///
-/// Returns `(closest approach, gap at the end)` in game units.
+/// Returns `(closest approach, gap at the end, first tick within
+/// control range)` in game units / ticks — the third is the number that
+/// decides whether a ball rolling for the line is met while it is still
+/// in play.
 fn chase(
     mut player: MatchPlayer,
     mut ball_pos: Vector3<f32>,
     mut ball_vel: Vector3<f32>,
     ticks: usize,
     tail_chase: bool,
-) -> (f32, f32) {
+) -> (f32, f32, Option<usize>) {
     let mut closest = f32::MAX;
-    for _ in 0..ticks {
+    let mut reached = None;
+    for tick in 0..ticks {
         let steering = if tail_chase {
             // The model as it stood: run at where the ball IS, with
             // `Pursuit`'s five-tick lead. This is what `OF_TAIL_CHASE`
@@ -138,11 +120,14 @@ fn chase(
             - Vector3::new(player.position.x, player.position.y, 0.0))
         .norm();
         closest = closest.min(gap);
+        if reached.is_none() && gap <= CONTROL_DISTANCE {
+            reached = Some(tick);
+        }
     }
     let gap = (Vector3::new(ball_pos.x, ball_pos.y, 0.0)
         - Vector3::new(player.position.x, player.position.y, 0.0))
     .norm();
-    (closest, gap)
+    (closest, gap, reached)
 }
 
 /// The reported picture, as geometry: a ball crossing in front of a
@@ -164,8 +149,8 @@ fn a_defender_cuts_off_a_ball_crossing_in_front_of_him() {
     // running at where it is loses the race.
     let ball_vel = Vector3::new(0.35, 0.0, 0.0);
 
-    let (closest, _) = chase(player.clone(), ball_pos, ball_vel, 400, false);
-    let (tail_closest, _) = chase(player, ball_pos, ball_vel, 400, true);
+    let (closest, _, _) = chase(player.clone(), ball_pos, ball_vel, 400, false);
+    let (tail_closest, _, _) = chase(player, ball_pos, ball_vel, 400, true);
 
     assert!(
         closest <= CONTROL_DISTANCE,
@@ -216,7 +201,7 @@ fn a_ball_at_rest_is_simply_run_at_and_stopped_on() {
     player.velocity = Vector3::zeros();
     let ball_pos = Vector3::new(360.0, 272.0, 0.0);
 
-    let (closest, gap) = chase(player, ball_pos, Vector3::zeros(), 400, false);
+    let (closest, gap, _) = chase(player, ball_pos, Vector3::zeros(), 400, false);
     assert!(
         closest < 1.0,
         "he should reach a stationary ball, got {closest:.2}u"
@@ -283,7 +268,12 @@ fn the_meeting_point_leads_a_rolling_ball() {
     let ball_pos = Vector3::new(420.0, 260.0, 0.0);
     let ball_vel = Vector3::new(0.35, 0.0, 0.0);
 
-    let m = meeting_point(&player, ball_pos, ball_vel);
+    let (m, _) = LooseBallChase::earliest_meeting(
+        player.position,
+        player.max_speed_with_condition_cached(),
+        ball_pos,
+        ball_vel,
+    );
     let lead = m.x - ball_pos.x;
     assert!(
         lead > 20.0,
@@ -313,35 +303,185 @@ fn the_meeting_point_of_a_still_ball_is_the_ball() {
     let mut player = chaser();
     player.position = Vector3::new(300.0, 272.0, 0.0);
     let ball_pos = Vector3::new(360.0, 272.0, 0.0);
-    let m = meeting_point(&player, ball_pos, Vector3::zeros());
+    let (m, when) = LooseBallChase::earliest_meeting(
+        player.position,
+        player.max_speed_with_condition_cached(),
+        ball_pos,
+        Vector3::zeros(),
+    );
     assert!((m - ball_pos).norm() < 1e-3, "got {m:?}");
+    assert_eq!(when, 0.0, "nothing to wait for either");
 }
 
-/// ⚠ THE LOST CAUSE, RECORDED RATHER THAN FIXED.
-///
-/// When the ball's CROSS-TRACK speed alone beats the chaser there is no
-/// bearing to hold: the root in `SteeringBehavior::Intercept` is zero,
-/// everything goes sideways, and he closes nothing while it lasts. Two
-/// repairs were measured over 200 fixtures and both cost more elsewhere
-/// than this does — the table is on the `Intercept` variant.
-///
-/// So this asserts the CURRENT behaviour, deliberately. If a later change
-/// makes him close here, that is a win and this test should be rewritten
-/// to demand it — but only alongside the census and the goals line,
-/// because that is where the last two attempts died.
+/// The lost cause is exactly where the estimate this solver replaced
+/// went to the RESTING point: no closing rate, an unbounded horizon,
+/// "run to where it stops". The earliest meeting must sit well upstream
+/// of the rest for a chaser this fast — that upstream margin is the
+/// ball met INSIDE the pitch rather than fetched off the boards — and
+/// it must be a genuine appointment: both of them there at the same
+/// time.
 #[test]
-fn a_ball_crossing_faster_than_he_can_run_is_conceded() {
+fn the_earliest_meeting_sits_upstream_of_the_resting_point() {
+    let mut player = chaser();
+    player.position = Vector3::new(420.0, 200.0, 0.0);
+    let ball_pos = Vector3::new(420.0, 260.0, 0.0);
+    let ball_vel = Vector3::new(0.9, 0.0, 0.0);
+    let speed = player.max_speed_with_condition_cached();
+
+    let (m, when) = LooseBallChase::earliest_meeting(player.position, speed, ball_pos, ball_vel);
+    assert!(when > 0.0, "a meeting downstream takes time to happen");
+    let rest_x = ball_pos.x + BallRoll::range(0.9);
+    assert!(
+        m.x < rest_x - 20.0,
+        "the roll dies at x {rest_x:.0}; a chaser reading it meets it \
+         sooner than that, got x {:.0}",
+        m.x
+    );
+
+    let his_time = (m - player.position).norm() / speed;
+    let ball_time = {
+        let (mut pos, mut vel) = (ball_pos, ball_vel);
+        let mut t = 0usize;
+        while (pos.x - m.x).abs() > 1.0 && t < 5000 {
+            roll_one_tick(&mut pos, &mut vel);
+            t += 1;
+        }
+        t as f32
+    };
+    assert!(
+        (his_time - ball_time).abs() < ball_time * 0.10,
+        "an appointment, not a guess: him {his_time:.0} ticks, ball {ball_time:.0}"
+    );
+}
+
+/// THE LOST CAUSE, RESCUED — inside the commitment horizon. This test
+/// used to pin the opposite (`…is_conceded`), because two repairs had
+/// "measured worse". Both of those verdicts were confounded (built on an
+/// `aim` whose aerial branch was broken; history on the `Intercept`
+/// variant), and its own note said to rewrite it the day a change made
+/// him close here, alongside the census and the goals line.
+///
+/// When the ball's cross-track speed alone beats the chaser there is no
+/// bearing to hold: the root in `SteeringBehavior::Intercept` is zero,
+/// and the old law spent everything sideways — the reported frame, a
+/// defender running PARALLEL to a ball he was never getting nearer.
+/// Now the closing rate dying hands the chase to
+/// `LooseBallChase::earliest_meeting`: let the roll die, take the
+/// straight line to the first point of it he can make.
+#[test]
+fn a_ball_crossing_faster_than_he_can_run_is_still_cut_off() {
+    let mut player = chaser();
+    player.position = Vector3::new(420.0, 236.0, 0.0);
+    player.velocity = Vector3::zeros();
+    let ball_pos = Vector3::new(420.0, 260.0, 0.0);
+    // Quicker than his ~0.47 sprint, all of it across his line, 24u
+    // (3 m) off it — the shape a viewer means by "he could have
+    // intercepted that": makeable inside a few seconds by a man who
+    // reads the roll, unreachable forever for one who holds the bearing.
+    let ball_vel = Vector3::new(0.55, 0.0, 0.0);
+
+    // The first stride is already the tell. The collapse spent his whole
+    // speed cross-track — pure +x, exactly parallel to the ball's
+    // travel, the gap never once shrinking. The read cuts downstream
+    // AND in.
+    let first = SteeringBehavior::Intercept {
+        target: ball_pos,
+        target_velocity: ball_vel,
+    }
+    .calculate(&player)
+    .velocity;
+    assert!(first.x > 0.0, "downstream, with the roll: {first:?}");
+    assert!(
+        first.y > 0.01,
+        "and IN toward the ball's line, not parallel to it: {first:?}"
+    );
+
+    let (closest, _, reached) = chase(player, ball_pos, ball_vel, 600, false);
+    assert!(
+        reached.is_some(),
+        "friction gives this ball back within seconds, and a chaser who \
+         read the roll is there when it does; closest approach {closest:.1}u"
+    );
+}
+
+/// …AND THE MARATHON IS STILL CONCEDED, DELIBERATELY. 0.9 u/tick is the
+/// measured population MEAN for a loose ball — about twice a sprint —
+/// and crossing 60u (7.5 m) off his line its earliest meeting sits
+/// 900+ ticks of roll downstream. No real player makes that run, and
+/// paying it was measured at **+0.54 goals/match of pure shot volume**
+/// (3×300 fixtures against `OF_CONCEDE`, the whole rise in throughput,
+/// none in quality): rescued marathons kept attacking sequences alive
+/// everywhere on the pitch. `COMMIT_FAR` prices the read in time, so
+/// past ten seconds of roll the law is the pre-rescue one.
+///
+/// If a later change makes him close HERE, that is the economy opening
+/// again, not a win — re-measure goals/match against `OF_CONCEDE`
+/// before believing it.
+#[test]
+fn a_marathon_cut_is_declined() {
     let mut player = chaser();
     player.position = Vector3::new(420.0, 200.0, 0.0);
     player.velocity = Vector3::zeros();
     let ball_pos = Vector3::new(420.0, 260.0, 0.0);
-    // 0.9 u/tick is the measured population mean for a loose ball, and
-    // roughly twice his top speed. All of it is across his line.
     let ball_vel = Vector3::new(0.9, 0.0, 0.0);
 
-    let (closest, _) = chase(player, ball_pos, ball_vel, 400, false);
+    let (closest, _, reached) = chase(player, ball_pos, ball_vel, 400, false);
     assert!(
-        closest > CONTROL_DISTANCE,
-        "if he now reaches this, the lost-cause branch has been fixed —          re-measure the census AND goals/match before celebrating;          closest approach {closest:.1}u"
+        reached.is_none() && closest > CONTROL_DISTANCE,
+        "a ball at twice his speed crossing 7.5 m away is conceded, not \
+         chased across the pitch; closest approach {closest:.1}u"
+    );
+}
+
+/// The reported frame, end to end: *"it ends up rolling out of bounds,
+/// even though the defender could have intercepted it."* A ball he
+/// cannot outsprint rolls across him with 30u in hand. Both models get
+/// there EVENTUALLY — friction guarantees that much — but the ball is
+/// usually over a line first, so the number that matters is WHEN. The
+/// read has to be worth whole seconds over the stern chase, or it isn't
+/// buying back any of those balls.
+#[test]
+fn a_lost_ball_is_met_where_it_slows_not_escorted_out() {
+    let mut player = chaser();
+    player.position = Vector3::new(420.0, 242.0, 0.0);
+    player.velocity = Vector3::zeros();
+    let ball_pos = Vector3::new(420.0, 272.0, 0.0);
+    let ball_vel = Vector3::new(0.55, 0.0, 0.0);
+
+    let (_, _, cut) = chase(player.clone(), ball_pos, ball_vel, 900, false);
+    let (_, _, tail) = chase(player, ball_pos, ball_vel, 900, true);
+
+    let cut = cut.expect("the read reaches the ball inside the horizon");
+    if let Some(tail) = tail {
+        assert!(
+            (cut as f32) < tail as f32 * 0.8,
+            "cutting the roll off must beat trailing it by a wide margin: \
+             met at tick {cut} vs {tail}"
+        );
+    }
+    // …and `tail == None` is the same verdict, louder: the stern chase
+    // never arrived at all inside the horizon.
+}
+
+/// `rest_ticks` is the inverse of the decay `distance` sums, and the
+/// horizon `earliest_meeting` trusts to prove a meeting exists — if it
+/// drifts off `range`, that proof quietly breaks first.
+#[test]
+fn the_roll_rest_time_agrees_with_the_roll_range() {
+    for speed in [0.2f32, 0.5, 0.9, 2.0] {
+        let t = BallRoll::rest_ticks(speed);
+        assert!(t > 0.0, "a moving ball takes time to die, speed {speed}");
+        let there = BallRoll::distance(speed, t);
+        let range = BallRoll::range(speed);
+        assert!(
+            (there - range).abs() < 1.0,
+            "at {speed} u/tick the ball should be at its resting point \
+             ({range:.1}u) after rest_ticks ({t:.0}), got {there:.1}u"
+        );
+    }
+    assert_eq!(
+        BallRoll::rest_ticks(BallRoll::STOPPED * 0.5),
+        0.0,
+        "a ball already under the stopping threshold has no roll left"
     );
 }

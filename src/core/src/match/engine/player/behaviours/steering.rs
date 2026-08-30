@@ -69,36 +69,64 @@ pub enum SteeringBehavior<'a> {
     /// * a ball crossing in front of him is met on the diagonal, at the
     ///   angle that makes the two arrive together;
     /// * a ball whose cross-track speed exceeds his own leaves nothing
-    ///   under the root, so he spends everything on the lateral and gets
-    ///   as near the line as he physically can — beaten, but beaten
-    ///   running the right way, and back on the line the moment the ball
-    ///   slows enough for the root to reopen.
+    ///   under the root — and holding the bearing there closes no gap at
+    ///   all, so the law stops holding it. See the lost-cause read below.
     ///
-    /// ## ⚠ The lost-cause branch — a real hole, left open
+    /// ## The lost-cause read — the hole, closed
     ///
-    /// Spending everything sideways closes NO gap while it lasts, and
-    /// `loose_ball_chase_tests` pins a defender who never gets nearer a
-    /// ball crossing his front at twice his speed
-    /// (`a_ball_crossing_faster_than_he_can_run_is_conceded`). A ball
-    /// slows down, so it IS reachable further downstream, and two ways of
-    /// exploiting that were built and run:
+    /// Constant bearing is exact against a target that keeps its speed,
+    /// and a rolling ball never does. Whenever the achievable closing
+    /// rate dies — the root shut by the cross-track term, or the ball
+    /// taking more out along the line than the root leaves — the hold
+    /// used to spend everything sideways: *beaten, but beaten running
+    /// the right way*. Which was the reported picture, verbatim:
+    /// *"defenders in TakeBall run parallel to the ball and it rolls out
+    /// of bounds, even though the defender could have intercepted it."*
+    /// The man ran the non-converging line for as long as the ball
+    /// outpaced him, and by the time friction reopened the root the ball
+    /// was over the line he could have cut it off short of.
     ///
-    ///   * steer at [`LooseBallChase::meeting_point`] instead of holding
-    ///     the bearing on the ball;
-    ///   * blend the two headings by the squared speed ratio, meaning to
-    ///     leave ordinary chases alone and rescue only the lost ones.
+    /// Now: as the closing rate falls through [`Self::LOST_CAUSE`] of
+    /// top speed, the desired velocity crosses smoothly from the
+    /// bearing-hold to a flat-out straight run at
+    /// [`LooseBallChase::earliest_meeting`] — the first point on the
+    /// decaying roll he can be at no later than the ball, computed from
+    /// the same friction constant the physics integrates. A still-just-
+    /// winnable race stays on the proven law; a lost one is read like a
+    /// player reads it: let it run, take the line to where it slows.
+    /// The fade is scaled by `aim`'s own ground/aerial band, because a
+    /// flying ball's travel does not decay like a roll's (see below),
+    /// and by the COMMITMENT HORIZON [`Self::COMMIT_NEAR`]/
+    /// [`Self::COMMIT_FAR`], because rescuing meetings ten seconds of
+    /// roll downstream turned out to rewrite the match economy — the
+    /// unbounded rescue measured **+0.54 goals/match**, all of it shot
+    /// VOLUME (13.0 → 15.0/team) at flat quality, from marathon cuts
+    /// keeping attacking sequences alive that used to die over a line.
+    /// `OF_CONCEDE` restores the old collapse as the A/B control, and
+    /// `loose_ball_chase_tests` pins the rescue, the declined marathon,
+    /// and the untouched winnable cases.
     ///
-    /// **Both measured worse, and BOTH MEASUREMENTS ARE CONFOUNDED — do
-    /// not cite them as settled.** Each was built on a version of
+    /// ### The two prior attempts, and why their verdicts did not count
+    ///
+    /// Both of these were built and measured once before — steer at the
+    /// meeting point outright, and blend the headings by the squared
+    /// speed ratio — and both "measured worse". **Both measurements were
+    /// confounded:** each was built on a version of
     /// [`LooseBallChase::aim`] that had folded its aerial branch into
     /// this behaviour, which steers a chaser at the XY a flying ball
-    /// passes OVER rather than the one it lands on. That fold alone costs
-    /// the whole change (55% aimed-ahead → 48%, tackles 16.3 → 12.6 per
-    /// team over 200 fixtures), so neither arm isolates the thing it was
-    /// supposed to test. The note on `aim` has the numbers.
+    /// passes OVER rather than the one it lands on. That fold alone
+    /// costs the whole change (55% aimed-ahead → 48%, tackles 16.3 →
+    /// 12.6 per team over 200 fixtures), so neither arm isolated the
+    /// idea it was supposed to test. This version differs from both:
+    /// the aerial branch stays intact and explicitly gates the blend,
+    /// the discriminator is the CLOSING RATE (which also catches a ball
+    /// pulling away along the line, where the root never shuts), and
+    /// the blend goes to the earliest reachable point rather than the
+    /// resting point.
     ///
-    /// What IS established: this law, against `OF_TAIL_CHASE`, over 200
-    /// fixtures each, reproduced on two independent builds —
+    /// What was established for the bearing-hold itself, against
+    /// `OF_TAIL_CHASE`, over 200 fixtures each, reproduced on two
+    /// independent builds —
     ///
     /// | | tail chase | this |
     /// |---|---|---|
@@ -109,11 +137,6 @@ pub enum SteeringBehavior<'a> {
     /// | pass accuracy (real ~85) | 82.4 | **85.5** |
     /// | tackles/team (real ~18) | 16.0 | 16.1 |
     /// | interceptions/team (real ~10) | 24.3 | 28.1 ← |
-    ///
-    /// So the hole is left open because nothing has yet been shown to
-    /// close it for free — not because closing it was proven to cost.
-    /// Anyone retrying either idea should rebuild it on the CURRENT
-    /// `aim` and re-run both arms; the earlier verdicts are void.
     ///
     /// Inside [`Self::SETTLE`] the desired velocity crosses smoothly to
     /// the target's own, because collecting a moving ball means arriving
@@ -377,15 +400,70 @@ impl<'a> SteeringBehavior<'a> {
                 let across_sq = across.norm_squared();
                 let speed_sq = max_speed * max_speed;
 
-                let mut desired = if across_sq >= speed_sq {
-                    // He cannot live with it across the line. Everything
-                    // he has goes sideways: beaten, but beaten running
-                    // the right way, and back on the line the moment the
-                    // ball slows enough for the root to reopen.
+                // The bearing-hold — exact while the race is winnable.
+                let hold = if across_sq >= speed_sq {
+                    // He cannot live with it across the line; everything
+                    // he has goes sideways. Kept as one END of the blend
+                    // below, never the whole answer any more.
                     across * (max_speed / across_sq.sqrt().max(1e-4))
                 } else {
                     // Match it across, close the gap with what is left.
                     across + line_of_sight * (speed_sq - across_sq).sqrt()
+                };
+
+                // What holding that bearing actually shrinks the gap by,
+                // per tick: the speed left under the root, less whatever
+                // the ball takes out along the line. When this dies the
+                // bearing-hold is treading water — running a line that
+                // never converges, the reported "parallel to the ball"
+                // frame — while the ball sheds speed it will never get
+                // back. The rescue is not a better bearing, it is a
+                // different read: the first point on the decaying roll
+                // he can be at no later than the ball, straight at it,
+                // flat out. Crossed smoothly so no tick can snap the
+                // heading, and faded out over `aim`'s own height band —
+                // a flying ball's travel does not decay like a roll's,
+                // and modelling it as one is how the last attempt at
+                // this went wrong (see the history on the variant).
+                let closing =
+                    (speed_sq - across_sq).max(0.0).sqrt() - target_velocity.dot(&line_of_sight);
+                let t = ((target.z - LooseBallChase::GROUND_H)
+                    / (LooseBallChase::AERIAL_H - LooseBallChase::GROUND_H))
+                    .clamp(0.0, 1.0);
+                let grounded = 1.0 - t * t * (3.0 - 2.0 * t);
+                let lost = 1.0 - (closing / (Self::LOST_CAUSE * max_speed)).clamp(0.0, 1.0);
+                let lost = (lost * lost * (3.0 - 2.0 * lost)) * grounded;
+
+                let mut desired = if lost <= 0.0 || LooseBallChase::concede() {
+                    hold
+                } else {
+                    let (meet, when) = LooseBallChase::earliest_meeting(
+                        here,
+                        max_speed,
+                        Self::flat(*target),
+                        target_velocity,
+                    );
+                    // Commitment is priced in TIME. A meeting he can
+                    // make inside a few seconds is attacked flat out; one
+                    // half a pitch of roll away is not an interception,
+                    // it is following play, and the unbounded version of
+                    // this sent players on ten-second cross-field
+                    // sprints after balls a real player concedes —
+                    // measured at +0.54 goals/match of phantom chance
+                    // supply (3×300 fixtures against `OF_CONCEDE`, the
+                    // whole rise in shot volume, none in shot quality).
+                    // Past [`Self::COMMIT_FAR`] the law is byte-for-byte
+                    // the pre-rescue one.
+                    let commit = 1.0
+                        - ((when - Self::COMMIT_NEAR)
+                            / (Self::COMMIT_FAR - Self::COMMIT_NEAR))
+                            .clamp(0.0, 1.0);
+                    let commit = commit * commit * (3.0 - 2.0 * commit);
+                    let cut = (meet - here)
+                        .try_normalize(1e-4)
+                        .map(|d| d * max_speed)
+                        .unwrap_or(hold);
+                    hold + (cut - hold) * (lost * commit)
                 };
 
                 // Arriving is travelling WITH it, not stopping next to
@@ -592,6 +670,36 @@ impl<'a> SteeringBehavior<'a> {
     /// first touch, and a number picked separately here would be a
     /// second opinion about the same event.
     const SETTLE: f32 = CONTROL_DISTANCE;
+
+    /// Closing rate, as a fraction of the chaser's top speed, below which
+    /// [`Intercept`](Self::Intercept) stops holding the bearing and runs
+    /// at the first point of the roll it can make instead.
+    ///
+    /// Zero is the physical boundary — at zero the bearing-hold shrinks
+    /// the gap by nothing per tick — and the band above it exists for
+    /// continuity, so a ball hovering at the boundary cannot snap the
+    /// heading between two laws. Its width is a judgement about how slow
+    /// a race is still worth running as a race: at a quarter of top
+    /// speed a 20 u gap takes 170+ ticks to close, and a man who can see
+    /// that reads the roll instead.
+    const LOST_CAUSE: f32 = 0.25;
+
+    /// Meeting time, in ticks, inside which a lost-cause cut is attacked
+    /// at full commitment — four seconds, about the far edge of a real
+    /// interception read: the length of a hard 25-30 m run.
+    const COMMIT_NEAR: f32 = 200.0;
+    /// …and past which it is declined entirely — ten seconds out is not
+    /// an interception anybody runs, it is the ball leaving the phase of
+    /// play. Between the two the commitment fades smoothly.
+    ///
+    /// The pair is what separates the rescued population (the reported
+    /// "he could have intercepted that": balls up to ~1.3× sprint speed,
+    /// met within seconds) from the marathon population the unbounded
+    /// rescue invented (the loose-ball SPEED MEAN is 0.892 u/tick, ~2×
+    /// sprint, and such a ball crossing with any lateral offset meets a
+    /// chaser 10-18 s downstream — nobody real makes that run, and
+    /// paying it measured +0.54 goals/match of pure shot volume).
+    const COMMIT_FAR: f32 = 500.0;
 
     /// Drop a stored vector into the plane the runner moves in.
     ///

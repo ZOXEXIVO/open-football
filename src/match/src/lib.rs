@@ -106,7 +106,40 @@ impl MatchViewer {
         // carrying the answer.
         let quality = Quality::probe();
 
+        // How often the app runs at all. The browser holds the page to its
+        // display, and past the cap that is only ever pictures nobody can
+        // tell apart, paid for in GPU heat — a 240 Hz panel would spend
+        // double the frame budget of the cap itself. Capped, the event loop
+        // wakes on its own drift-free timer (`scheduled start + wait`, so the
+        // cadence averages the cap exactly) and on NOTHING else — the
+        // `react_to_*` flags stay off because a pointer move would otherwise
+        // wake an extra update per event, and a camera drag is precisely when
+        // the cap must hold. Input loses nothing: events queue and the next
+        // tick reads them, at most one tick late.
+        //
+        // Zero means uncapped — the `.dev/match` harness asks for that,
+        // because it is the measuring instrument and a capped instrument
+        // reads the cap instead of the scene. See `ViewerConfig::fps_cap`.
+        let pace = if config.fps_cap > 0.0 {
+            let tick = bevy::winit::UpdateMode::Reactive {
+                wait: std::time::Duration::from_secs_f32(1.0 / config.fps_cap),
+                react_to_device_events: false,
+                react_to_user_events: false,
+                react_to_window_events: false,
+            };
+            bevy::winit::WinitSettings {
+                focused_mode: tick,
+                // The same tick out of focus: the browser already throttles a
+                // hidden tab's timers, and a visible-but-unfocused replay is
+                // still a replay someone is watching.
+                unfocused_mode: tick,
+            }
+        } else {
+            bevy::winit::WinitSettings::default()
+        };
+
         App::new()
+            .insert_resource(pace)
             .add_plugins(
                 DefaultPlugins
                     .set(WindowPlugin {
@@ -511,6 +544,11 @@ impl MatchViewer {
             // is the split that says whether a slow frame is ours or the GPU's.
             .add_systems(First, FrameCost::open)
             .add_systems(Last, FrameCost::close)
+            // The corner frame counter. Registered apart from the full chain
+            // above — which is at Bevy's twenty-system tuple limit — and
+            // deliberately unordered against it: the badge paces itself and
+            // reads a median that is always a frame stale anyway.
+            .add_systems(Update, Timeline::refresh_fps)
             // The engine-facing overlays only exist when the page asked for
             // them, so their systems are only registered then.
             .add_systems(

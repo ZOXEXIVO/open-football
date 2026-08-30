@@ -57,7 +57,7 @@
 //! told apart.
 
 use crate::app::config::{PlayerInfo, ViewerConfig};
-use crate::broadcast::camera::{CameraFlight, CameraOrbit, TvCamera};
+use crate::broadcast::camera::{CameraFlight, CameraOrbit, CameraZoom, TvCamera};
 use crate::broadcast::focus::CameraSubject;
 use crate::players::actors::{PlayerActor, Undressed};
 use crate::players::body::FrontPrint;
@@ -254,9 +254,18 @@ impl Lineup {
     /// has to buy with the lens is ANGLE and not magnification. See
     /// [`Self::magnification`].
     ///
+    /// **Three notches of the wheel wider than the 0.66 it was tuned at**
+    /// (2026-08-30, maintainer: zoom the faces pass out by two clicks of the
+    /// mouse wheel, then one more) — and written as clicks of the wheel's own
+    /// step rather than as the number they come to, because this constant is
+    /// QUOTED in the wheel's units: a click is a ratio of
+    /// [`CameraZoom::STEP`], so "a click wider" is exact here and stays a
+    /// click of the actual wheel if that step is ever retuned.
+    ///
     /// The team shots are not given one at all — theirs is worked out from the
     /// ground they have to cover. See [`Self::lens_for`].
-    const FRONT_LENS: f32 = 0.66;
+    const FRONT_LENS: f32 =
+        0.66 / (CameraZoom::STEP * CameraZoom::STEP * CameraZoom::STEP);
     /// **How fast the pass crosses the line, in metres a second.**
     ///
     /// The ceremony is wall-clock — the playhead is parked for all of it, so

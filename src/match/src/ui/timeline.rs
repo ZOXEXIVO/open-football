@@ -55,6 +55,16 @@ pub struct PlayToggleIcon;
 #[derive(Component)]
 pub struct LoadingNotice;
 
+/// The frame-rate figure in the top-left corner.
+///
+/// Always on, unlike the debug strip on the bar: it is one small number in
+/// the viewer's own furniture, and "is this smooth or is it me" is a question
+/// a player asks of the product, not of the harness. It reads the same median
+/// [`FrameCost`] keeps anyway, so it costs a string compare on most frames
+/// and a re-shape twice a second at worst.
+#[derive(Component)]
+pub struct FpsBadge;
+
 #[derive(Component)]
 pub struct SpeedButton;
 
@@ -620,6 +630,32 @@ impl Timeline {
 
         commands.insert_resource(icons);
 
+        // The corner frame counter. Furniture, so it takes the default depth
+        // with the bar — over the picture, never dimmed by a cut — and the
+        // same shadow recipe as the name plates, because the top-left of the
+        // frame is sky and stand: the two brightest things a white figure can
+        // land on.
+        commands.spawn((
+            FpsBadge,
+            Text::new(""),
+            TextFont {
+                font: FontSource::Handle(faces.face_for("120 fps")),
+                font_size: FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
+            TextShadow {
+                offset: Vec2::splat(1.0),
+                color: Color::srgba(0.0, 0.0, 0.0, 0.85),
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(8),
+                top: px(6),
+                ..default()
+            },
+        ));
+
         commands.spawn((
             LoadingNotice,
             Text::new(config.labels.loading.clone()),
@@ -967,6 +1003,37 @@ impl Timeline {
     ) {
         if states.iter().any(|i| *i == Interaction::Pressed) {
             overlay.states = !overlay.states;
+        }
+    }
+
+    /// Keeps the corner figure current — twice a second, and only when the
+    /// number actually moved, for the same reason the debug strip below
+    /// paces itself: a re-shaped line of text on every frame is a cost on
+    /// the very measurement it displays.
+    pub fn refresh_fps(
+        cost: Res<FrameCost>,
+        time: Res<Time>,
+        mut due: Local<f32>,
+        mut badge: Query<&mut Text, With<FpsBadge>>,
+    ) {
+        *due -= time.delta_secs();
+        if *due > 0.0 {
+            return;
+        }
+        *due = 0.5;
+        let Ok(mut text) = badge.single_mut() else {
+            return;
+        };
+        let median = cost.typical_frame_ms();
+        // Silent until there is a real window to read: a figure computed off
+        // the bring-up's shader links would open the page on "3 fps".
+        let wanted = if median > 0.0 {
+            format!("{:.0} fps", (1000.0 / median).round())
+        } else {
+            String::new()
+        };
+        if text.as_str() != wanted {
+            **text = wanted;
         }
     }
 
