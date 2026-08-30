@@ -13,7 +13,38 @@ use crate::r#match::{
 
 const INTERCEPTION_DISTANCE: f32 = 250.0; // React to balls from further out
 const CLEARING_DISTANCE: f32 = 50.0;
-const STANDING_TIME_LIMIT: u64 = 300;
+/// Ticks of standing still after which a defender with nothing to do
+/// walks instead. 60 ticks is 1.2 s of match time (an AI tick is 20 ms).
+///
+/// ⚠ **It has to stay below [`HOLD_LINE_TIMEOUT`], or the branch is
+/// dead.** `transition` checks the walk gate first but this state leaves
+/// for `HoldingLine` unconditionally at that timeout, so a limit above
+/// it can never be reached. It was **300 against a 100-tick exit**,
+/// which left only the `is_tired` half of
+/// [`DefenderStandingState::should_transition_to_walking`] able to fire
+/// — and `Defender: Walking` measured **zero entries across three
+/// matches** (`dev_match waypoints`), a fully-written state with a
+/// handler, a fatigue tier and a transition set that no match ever
+/// entered.
+const STANDING_TIME_LIMIT: u64 = 60;
+
+/// Ticks of standing before the defender goes back to minding the line,
+/// whatever else is true. The unconditional exit from this state.
+const HOLD_LINE_TIMEOUT: u64 = 100;
+
+const _: () = assert!(
+    STANDING_TIME_LIMIT < HOLD_LINE_TIMEOUT,
+    "the walk gate is unreachable above the unconditional HoldingLine exit"
+);
+
+/// How close to his slot in the block a defender must be for "nothing is
+/// happening here" to mean he can walk.
+///
+/// Measured against the live anchor, not the kickoff dot: the block
+/// slides all match, so `distance_from_start_position` asks whether he is
+/// standing where he was drawn before the whistle — which he is not, and
+/// which is why this half of the gate never contributed either. Same
+/// correction `DefenderWalkingState` already made for its recovery run.
 const WALK_DISTANCE_THRESHOLD: f32 = 15.0;
 const MARKING_DISTANCE: f32 = 35.0; // Pick up attackers early
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
@@ -290,7 +321,7 @@ impl StateProcessingHandler for DefenderStandingState {
             ));
         }
         // Timeout: if no other transition triggered, reposition to defensive line
-        if ctx.in_state_time > 100 {
+        if ctx.in_state_time > HOLD_LINE_TIMEOUT {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::HoldingLine,
             ));
@@ -340,14 +371,41 @@ impl StateProcessingHandler for DefenderStandingState {
             }
         }
 
-        // Apply separation velocity to spread out from nearby players
-        // This prevents huddle formation even while standing
-        let separation = ctx.player().separation_velocity();
-        if separation.magnitude() > 1.0 {
-            return Some(separation * 0.4);
+        // Standing is holding your place in the block — which is not the
+        // same as standing on the spot the block has already moved off.
+        //
+        // This is what is left of "idle shape drift" now the pre-drawn
+        // route above is disarmed (see `TacticalRoutes`), and it is the
+        // honest version of it: the target is the slot the team plan is
+        // giving him THIS tick, not a line drawn at the opposition goal
+        // before kickoff. The route asked a standing centre-half to be
+        // 53.5% of the way up the pitch — 19.9 m from his anchor, and
+        // pointing away from it on 58.7% of ticks. `Arrive` decelerates
+        // into its target, so what this produces is a shuffle that
+        // stops, and `Standing` declares `Recovery` intensity, so it is
+        // served at a fraction of his top speed either way.
+        //
+        // Separation rides on top rather than replacing it: a defender
+        // easing away from a team-mate should still finish in his slot.
+        let separation = ctx.player().separation_velocity() * 0.4;
+        let anchor = ctx.team().my_anchor();
+        if (anchor - ctx.player.position).magnitude() < 4.0 {
+            return Some(if separation.magnitude() > 0.4 {
+                separation
+            } else {
+                Vector3::zeros()
+            });
         }
 
-        Some(Vector3::zeros())
+        Some(
+            SteeringBehavior::Arrive {
+                target: anchor,
+                slowing_distance: 20.0,
+            }
+            .calculate(ctx.player)
+            .velocity
+                + separation,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
@@ -374,7 +432,7 @@ impl DefenderStandingState {
             .is_none();
 
         let close_to_optimal_position =
-            player_ops.distance_from_start_position() < WALK_DISTANCE_THRESHOLD;
+            ctx.team().distance_from_anchor() < WALK_DISTANCE_THRESHOLD;
         let team_in_control = ctx.team().is_control_ball();
 
         (is_tired || standing_too_long)

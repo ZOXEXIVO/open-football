@@ -24,7 +24,9 @@ use crate::r#match::player::memory::PlayerMemory;
 use crate::r#match::player::state::{PlayerMatchState, PlayerState};
 use crate::r#match::player::statistics::MatchPlayerStatistics;
 use crate::r#match::player::transition::TransitionSource;
-use crate::r#match::player::waypoints::WaypointManager;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::waypoints::census::WaypointCensus;
+use crate::r#match::player::waypoints::{TacticalRoutes, WaypointExit, WaypointManager};
 use crate::r#match::{
     ActivityIntensity, ConditionContext, GameTickContext, MatchContext, StateProcessingContext,
 };
@@ -1583,14 +1585,31 @@ impl MatchPlayer {
     }
 
     pub fn should_follow_waypoints(&self, ctx: &StateProcessingContext) -> bool {
+        let exit = self.waypoint_exit(ctx);
+        #[cfg(feature = "match-logs")]
+        WaypointCensus::note(ctx, exit);
+        exit.follows()
+    }
+
+    /// Which of `should_follow_waypoints`' exits applies — the same
+    /// decision, named, so the census can attribute it.
+    fn waypoint_exit(&self, ctx: &StateProcessingContext) -> WaypointExit {
+        // The route is not a movement source. Checked first so the
+        // census still counts the ask and still reads the geometry the
+        // route WOULD have demanded — that comparison is the whole
+        // evidence for the default. See `TacticalRoutes`.
+        if !TacticalRoutes::armed() {
+            return WaypointExit::Disarmed;
+        }
+
         // Ball carrier doesn't follow waypoints — they move freely
         if self.has_ball(ctx) {
-            return false;
+            return WaypointExit::Carrier;
         }
 
         // Best chaser pursues the ball, not waypoints
         if !ctx.ball().is_owned() && ctx.team().is_best_player_to_chase_ball() {
-            return false;
+            return WaypointExit::Chaser;
         }
 
         // If any teammate is too close (< 12u, the natural "shoulder-
@@ -1616,13 +1635,13 @@ impl MatchPlayer {
             t.id > me_id
         });
         if teammate_crowding {
-            return true;
+            return WaypointExit::Crowded;
         }
 
         // Everyone else follows waypoints to maintain tactical shape
         // Waypoints represent position-specific movement patterns that keep
         // formation spread and prevent clustering
-        true
+        WaypointExit::Default
     }
 }
 

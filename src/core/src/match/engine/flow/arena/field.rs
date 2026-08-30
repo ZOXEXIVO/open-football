@@ -420,6 +420,12 @@ impl MatchField {
         player_in.side = side;
         player_in.tactical_position.current_position = position;
         player_in.tactical_position.regenerate_waypoints(side);
+        // The regenerate above only refreshes the stored route; the
+        // player's own cache is read straight from it and is only
+        // rebuilt lazily when EMPTY, so a substitute who kept a
+        // non-empty route from his bench position would have carried it
+        // — drawn from a slot he is no longer standing in — all match.
+        player_in.rebuild_waypoint_cache();
         player_in.start_position = start_pos;
         // **He walks on now.** This used to BE the placement — the sub was
         // written onto his slot from the off-pitch sentinel, 100% of the

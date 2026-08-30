@@ -27,11 +27,29 @@ impl TacticalPositions {
         }
     }
 
+    /// Redraw this player's routes for the role he holds **now** and the
+    /// end he is attacking.
+    ///
+    /// ⚠ It used to redraw each entry for the position stored ON the
+    /// entry, which is only the same thing while nobody changes role.
+    /// Both callers that change one — a substitute taking over someone
+    /// else's slot (`MatchField::substitute_player`) and an outfielder
+    /// stationed in goal (`Substitutions::station_in_goal`) — write
+    /// `current_position` and then call this, so the entry was left
+    /// pointing at the role the player used to hold.
+    /// `MatchPlayer::rebuild_waypoint_cache` filters on
+    /// `position == current_position` and matched nothing, so those
+    /// players carried an **empty** route for the rest of the match, and
+    /// neither this call nor a later rebuild could ever repair it (the
+    /// rebuild only fires on an empty cache, and produced another empty
+    /// one). Measured at up to 16.7% of forward route lookups in a run
+    /// with a full bench.
     pub fn regenerate_waypoints(&mut self, side: Option<PlayerSide>) {
-        for tactical_position in &mut self.tactical_positions {
-            tactical_position.waypoints =
-                Self::generate_waypoints_for_position(tactical_position.position, side);
-        }
+        self.tactical_positions.clear();
+        self.tactical_positions.push(MatchTacticalPosition {
+            position: self.current_position,
+            waypoints: Self::generate_waypoints_for_position(self.current_position, side),
+        });
     }
 
     fn generate_waypoints_for_position(
@@ -234,5 +252,68 @@ impl TacticalPositions {
 
         // Default position if not found (center of the field)
         (420.0, 272.5)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TacticalPositions;
+    use crate::PlayerPositionType;
+    use crate::r#match::player::PlayerSide;
+
+    /// A route belongs to the role its owner holds NOW.
+    ///
+    /// The two callers that change a role — a substitute taking over
+    /// someone else's slot, and an outfielder stationed in goal — write
+    /// `current_position` and then call `regenerate_waypoints`. It used
+    /// to redraw the entry for the position stored on the entry, so the
+    /// entry kept pointing at the old role;
+    /// `MatchPlayer::rebuild_waypoint_cache` filters on
+    /// `position == current_position`, found nothing, and left those
+    /// players with an empty route for the rest of the match.
+    #[test]
+    fn a_role_change_repoints_the_route_at_the_new_role() {
+        let mut tp =
+            TacticalPositions::new(PlayerPositionType::MidfielderCenter, Some(PlayerSide::Left));
+        tp.current_position = PlayerPositionType::ForwardRight;
+        tp.regenerate_waypoints(Some(PlayerSide::Left));
+
+        assert_eq!(tp.tactical_positions.len(), 1);
+        assert_eq!(
+            tp.tactical_positions[0].position,
+            PlayerPositionType::ForwardRight,
+            "the stored entry must follow the role, or the cache filter matches nothing"
+        );
+        assert!(
+            !tp.tactical_positions[0].waypoints.is_empty(),
+            "a re-pointed entry must carry a route"
+        );
+        // And it is HIS route, not the one he walked on with.
+        let fresh =
+            TacticalPositions::new(PlayerPositionType::ForwardRight, Some(PlayerSide::Left));
+        assert_eq!(
+            tp.tactical_positions[0].waypoints,
+            fresh.tactical_positions[0].waypoints
+        );
+    }
+
+    /// Swapping ends is not a role change: the entry keeps its position
+    /// and only the geometry flips. This is the half-time path, and it
+    /// is the one case where the old loop was already correct.
+    #[test]
+    fn swapping_ends_keeps_the_role_and_flips_the_route() {
+        let mut tp =
+            TacticalPositions::new(PlayerPositionType::DefenderLeft, Some(PlayerSide::Left));
+        let first_half = tp.tactical_positions[0].waypoints.clone();
+        tp.regenerate_waypoints(Some(PlayerSide::Right));
+
+        assert_eq!(
+            tp.tactical_positions[0].position,
+            PlayerPositionType::DefenderLeft
+        );
+        assert_ne!(
+            tp.tactical_positions[0].waypoints, first_half,
+            "the route must be redrawn toward the other goal"
+        );
     }
 }

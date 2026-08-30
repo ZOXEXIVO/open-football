@@ -200,6 +200,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             StateManager::handle_state_finish(&mut context, &mut field, play_state_result);
         }
 
+        // Whatever the twenty-two were doing when the whistle went. The
+        // transition recorder sees a state a player is still in as one he
+        // never left, which reads identically to a dead end — see
+        // `TransitionGraph::note_final_states`.
+        #[cfg(feature = "match-logs")]
+        crate::r#match::TransitionGraph::note_final_states(
+            field.players.iter().map(|p| p.state),
+        );
+
         let result = Self::build_result(field, context, match_position_data);
         if PhaseProf::enabled() {
             PhaseProf::report_and_reset("match");

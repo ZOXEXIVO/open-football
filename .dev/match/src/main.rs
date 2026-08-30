@@ -3064,6 +3064,12 @@ fn print_usage() {
         "  dev_match trace [N] [level]     runtime per-player trace: position flicker + state looping"
     );
     eprintln!(
+        "  dev_match waypoints [N] [level] tactical-route census: route geometry, take rate per state,"
+    );
+    eprintln!(
+        "                                      where the route walk comes to rest, route vs team shape"
+    );
+    eprintln!(
         "  dev_match subs [N] [level]      substitution-usage diagnostic: per-team subs distribution by result"
     );
     eprintln!(
@@ -3660,6 +3666,15 @@ fn main() {
             let n = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(1usize);
             let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
             run_trace(n, lvl);
+        }
+        // Tactical-route census: whether the waypoint layer is consulted,
+        // where along its route each player sits, and how far the route
+        // target is from the anchor the team plan gave the same man on
+        // the same tick. See `WaypointCensusRun`.
+        "waypoints" | "routes" => {
+            let n = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(2usize);
+            let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
+            WaypointCensusRun::run(n, lvl);
         }
         "subs" => {
             let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(100);
@@ -4341,6 +4356,18 @@ struct LevelRow {
     corner_shape_deadline_pct: f32,
     /// Routine mix, `[near, spot, far, short, edge]`, as shares.
     corner_routines: [f32; 5],
+    /// The accuracy chain, per division. `exec` is the mean
+    /// `execution_skill` at the strike — CENTRED against the match by
+    /// `MatchStandard`, so it is supposed to read the same at every
+    /// level; `edge` is the total miss penalty it produces, and `cond`
+    /// the fatigue half of that, which is deliberately NOT centred.
+    /// Together they say which term is pricing the pyramid.
+    mean_execution: f32,
+    mean_edge: f32,
+    mean_condition: f32,
+    wide_share: f32,
+    over_share: f32,
+    miskick_share: f32,
 }
 
 impl LevelSweep {
@@ -4414,6 +4441,38 @@ impl LevelSweep {
                 r.high_scoring as f32 / n * 100.0,
                 r.box_shot_share * 100.0,
                 r.interceptions as f32 / n / 2.0,
+            );
+        }
+
+        // ── The accuracy chain, per division ──────────────────────────
+        //
+        // Every other column in the table above comes out flat — shots,
+        // save%, conversion of the shots that reach the frame. The whole
+        // divisional spread in GOALS is the on-target rate, and this is
+        // what the on-target rate is made of.
+        //
+        // `exec` is the load-bearing one: `ShotSkillProfile` prices every
+        // band against `MatchStandard`, so a level-6 striker among
+        // level-6 opposition is supposed to read the same as a level-18
+        // striker among level-18 opposition. If this column slopes, the
+        // centring is leaking and the fix is upstream in the profile; if
+        // it is flat and `edge` still slopes, the fatigue half is what
+        // prices the division.
+        println!();
+        println!(
+            "{:>5} {:>8} {:>8} {:>8} {:>8} {:>8} {:>9}",
+            "level", "exec", "edge", "cond", "wide%", "over%", "miskick%"
+        );
+        for r in &rows {
+            println!(
+                "{:>5} {:>8.4} {:>8.4} {:>8.4} {:>7.1}% {:>7.1}% {:>8.1}%",
+                r.level,
+                r.mean_execution,
+                r.mean_edge,
+                r.mean_condition,
+                r.wide_share * 100.0,
+                r.over_share * 100.0,
+                r.miskick_share * 100.0,
             );
         }
 
@@ -4501,6 +4560,10 @@ impl LevelSweep {
         // set-piece counters behind the corner columns.
         core::time_band_diag::reset();
         core::mid_run_diag::reset();
+        // The accuracy chain is what the on-target column is made of,
+        // and on-target is the only column with a real slope left in it
+        // — so it has to be this level's, not the sweep's running total.
+        core::shot_accuracy_diag::reset();
 
         let outcomes: Vec<(u8, u8, TeamStats, TeamStats)> = (0..n_matches)
             .into_par_iter()
@@ -4532,10 +4595,18 @@ impl LevelSweep {
             0.0
         };
 
+        let sa = core::shot_accuracy_diag::snapshot();
+        let struck = sa[0].max(1) as f32;
         let mut row = LevelRow {
             level,
             matches: outcomes.len() as u32,
             box_shot_share,
+            mean_execution: core::shot_accuracy_diag::mean_execution(),
+            mean_edge: core::shot_accuracy_diag::mean_edge(),
+            mean_condition: core::shot_accuracy_diag::mean_condition_drag(),
+            wide_share: sa[1] as f32 / struck,
+            over_share: sa[2] as f32 / struck,
+            miskick_share: sa[3] as f32 / struck,
             ..Default::default()
         };
         for (hg, ag, h, a) in &outcomes {
@@ -4866,6 +4937,21 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             sa[4] as f32 / struck * 100.0,
             sa[5] as f32 / struck * 100.0,
         );
+        // The anchor the two forced-miss rolls are centred on, and the
+        // number `POPULATION_EXECUTION` has to equal for the centring to
+        // be true — a gap between them is a miss penalty (or a gift)
+        // charged to every shooter in the game.
+        //
+        // ⚠ It WAS printed, three lines further down and inside the
+        // finishing-tier block's `if`, worded as advice for a future
+        // change rather than as a check on an existing constant. Nobody
+        // read it against the constant, and the two drifted 0.622
+        // against 0.550. Lifted out here, unconditional, and named after
+        // the thing it sets.
+        println!(
+            "  mean execution     : {:.4}   ← set POPULATION_EXECUTION to this",
+            core::shot_accuracy_diag::mean_execution()
+        );
         // …and whether the man who struck it makes any difference. If
         // these three are the same number, finishing is decorative.
         let bf = core::shot_accuracy_diag::finishing_snapshot();
@@ -4880,14 +4966,6 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 bf[1][0],
                 pct(2),
                 bf[2][0]
-            );
-            println!(
-                "  population mean execution_skill at the strike: {:.3}   \
-                 (centre any accuracy quality term here)",
-                core::shot_accuracy_diag::EXECUTION_SUM.load(std::sync::atomic::Ordering::Relaxed)
-                    as f32
-                    / 1000.0
-                    / struck
             );
         }
         // ── SHOTS BY KIND ─────────────────────────────────────────────
@@ -10396,7 +10474,12 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         let universe = core::r#match::player::state::PlayerState::all();
         let mut entry = core::r#match::player::state::PlayerState::entry_states().to_vec();
         entry.extend(core::r#match::player::state::PlayerState::reserved_states());
-        let terminal = core::r#match::player::state::PlayerState::reserved_states().to_vec();
+        // Terminal = reserved, plus every state somebody was still in
+        // when a whistle went: a player who has not left a state gives it
+        // no outbound edge, which reads as a dead end. See
+        // `TransitionGraph::note_final_states`.
+        let mut terminal = core::r#match::player::state::PlayerState::reserved_states().to_vec();
+        terminal.extend(core::r#match::TransitionGraph::final_states());
         let violations =
             core::r#match::TransitionGraph::audit(&edges, &universe, &entry, &terminal);
 
@@ -10414,6 +10497,21 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
             })
             .collect();
         println!("  states observed: {}/{}", observed.len(), universe.len());
+        // NAME the ones that never came up. This run is the only place
+        // in the project with a sample big enough to make "never entered"
+        // mean anything — the unit-test version of the audit sees two
+        // matches and cannot tell a rare state from a dead one — so
+        // printing a bare count throws away the whole finding. A state
+        // that stays on this line across a few hundred matches is either
+        // unreachable or reachable only through a path nothing takes.
+        let unobserved: Vec<String> = universe
+            .iter()
+            .filter(|s| !observed.contains(&s.compact_id()))
+            .map(|s| s.to_string())
+            .collect();
+        if !unobserved.is_empty() {
+            println!("  never entered  : {}", unobserved.join(", "));
+        }
         if real.is_empty() {
             println!("  invariants: OK (no observed unreachable / dead-end states)");
         } else {
@@ -12562,4 +12660,231 @@ impl SkiedBallTrace {
             println!("{capture}");
         }
     }
+}
+
+// ── waypoints: tactical-route census ───────────────────────────────────
+//
+// The route layer is the oldest movement code in the engine and the only
+// one nothing has ever measured. Seven states consult it — Defender
+// Standing/Walking, Midfielder Running/Walking, Forward Running/Standing/
+// Walking — and in each of them the route branch is the FIRST thing
+// `velocity()` tries, so whatever it says overrides the anchor-, shape-
+// and duty-derived movement underneath.
+//
+// Four blocks:
+//   ROUTE GEOMETRY — the routes themselves, printed straight out of the
+//     generator for both sides. Static, and enough on its own to see
+//     whether a route is a football movement.
+//   USAGE BY STATE — evals vs takes, so "is it used at all" is a number.
+//   ROUTE WALK — how the index moves, and where it comes to rest.
+//   ROUTE vs SHAPE — how far the route target is from the anchor the
+//     team plan gave the same player on the same tick, and how often the
+//     two point in opposite directions.
+struct WaypointCensusRun;
+
+impl WaypointCensusRun {
+    fn run(matches: usize, level: u8) {
+        use core::waypoint_census::WaypointCensus;
+
+        Self::print_geometry();
+
+        WaypointCensus::reset();
+        for m in 0..matches {
+            MatchRuntime::set_events_mode(false);
+            let (home, _) = make_squad_viewer(1, HOME_TEAM_NAME, level, 0);
+            let (away, _) = make_squad_viewer(2, AWAY_TEAM_NAME, level, 11);
+            let _ = FootballEngine::<840, 545>::play(home, away, false, false, false);
+            eprintln!("  waypoints: match {}/{} played", m + 1, matches);
+        }
+
+        Self::print_usage(matches, level);
+        Self::print_walk();
+        Self::print_vs_shape();
+    }
+
+    /// Every generated route, for both sides.
+    fn print_geometry() {
+        use core::r#match::PlayerSide;
+        use core::r#match::engine::tactics::positions::TacticalPositions;
+
+        println!();
+        println!("=== ROUTE GEOMETRY (as generated, pitch 840x545, goals at x=0 / x=840) ===");
+        println!(
+            "  {:<28} {:<6} {:>7}  {}",
+            "position", "side", "end-x", "route (x,y) ..."
+        );
+        for (position, _, _) in core::r#match::POSITION_POSITIONING {
+            for (side, label) in [(PlayerSide::Left, "home"), (PlayerSide::Right, "away")] {
+                let tp = TacticalPositions::new(*position, Some(side));
+                let route = &tp.tactical_positions[0].waypoints;
+                let end = route.last().copied().unwrap_or((0.0, 0.0));
+                // How far up the pitch the route ENDS, toward the goal
+                // this side attacks. 100% is the opposition goal line.
+                let depth = match side {
+                    PlayerSide::Left => end.0 / 840.0,
+                    PlayerSide::Right => (840.0 - end.0) / 840.0,
+                };
+                let pts: Vec<String> = route
+                    .iter()
+                    .map(|(x, y)| format!("({:.0},{:.0})", x, y))
+                    .collect();
+                println!(
+                    "  {:<28} {:<6} {:>6.0}%  {}",
+                    format!("{:?}", position),
+                    label,
+                    depth * 100.0,
+                    pts.join(" -> ")
+                );
+            }
+        }
+    }
+
+    fn print_usage(matches: usize, level: u8) {
+        use core::waypoint_census::WaypointCensus;
+
+        println!();
+        println!(
+            "=== WAYPOINT USAGE BY STATE ({} match(es), level {}) ===",
+            matches, level
+        );
+        println!(
+            "  {:<34} {:>12} {:>12} {:>8}",
+            "state", "asked", "followed", "take%"
+        );
+        let mut total_evals = 0u64;
+        let mut total_takes = 0u64;
+        for state in PlayerState::all() {
+            let (evals, takes) = WaypointCensus::by_state(state.compact_id());
+            if evals == 0 {
+                continue;
+            }
+            total_evals += evals;
+            total_takes += takes;
+            println!(
+                "  {:<34} {:>12} {:>12} {:>7.1}%",
+                format!("{}", state),
+                evals,
+                takes,
+                takes as f64 / evals as f64 * 100.0
+            );
+        }
+        println!(
+            "  {:<34} {:>12} {:>12} {:>7.1}%",
+            "ALL",
+            total_evals,
+            total_takes,
+            total_takes as f64 / total_evals.max(1) as f64 * 100.0
+        );
+    }
+
+    fn print_walk() {
+        use core::waypoint_census::WaypointCensus;
+
+        let mgr = WaypointCensus::manager();
+        println!();
+        println!("=== ROUTE WALK ===");
+        println!("  manager updates                        : {}", mgr.ticks);
+        println!(
+            "  index advances                         : {} ({:.4} per update)",
+            mgr.advances,
+            mgr.advances as f64 / mgr.ticks.max(1) as f64
+        );
+        println!(
+            "    of which by the past-next projection : {} ({:.0}%)",
+            mgr.advances_past_next,
+            mgr.advances_past_next as f64 / mgr.advances.max(1) as f64 * 100.0
+        );
+        println!(
+            "  routes run to their end (completions)  : {}",
+            mgr.completions
+        );
+        println!("  routes re-armed at waypoint 0          : {}", mgr.rearms);
+
+        println!();
+        println!(
+            "  {:<12} {:>10} {:>10} {:>9} {:>9}   {}",
+            "group", "targeted", "followed", "at end%", "done%", "index histogram 0..7"
+        );
+        for group in Self::GROUPS {
+            let row = WaypointCensus::by_group(group);
+            if row.geom == 0 {
+                continue;
+            }
+            let hist: Vec<String> = row
+                .idx
+                .iter()
+                .map(|n| format!("{:.0}%", *n as f64 / row.geom as f64 * 100.0))
+                .collect();
+            println!(
+                "  {:<12} {:>10} {:>10} {:>8.1}% {:>8.1}%   {}",
+                format!("{:?}", group),
+                row.geom,
+                row.takes,
+                row.terminus as f64 / row.geom as f64 * 100.0,
+                row.completed as f64 / row.geom as f64 * 100.0,
+                hist.join(" ")
+            );
+        }
+    }
+
+    fn print_vs_shape() {
+        use core::waypoint_census::WaypointCensus;
+
+        println!();
+        println!("=== ROUTE vs SHAPE (depth: 0% = own goal line, 100% = opposition goal line) ===");
+        println!(
+            "  {:<12} {:>9} {:>9} {:>9} {:>10} {:>10} {:>9} {:>9} {:>8}",
+            "group", "he-is", "shape", "route", "route-m", "anchor-m", "gap-m", "opposed%", "3rd%",
+        );
+        for group in Self::GROUPS {
+            let row = WaypointCensus::by_group(group);
+            if row.geom == 0 {
+                continue;
+            }
+            const M: f64 = 0.125; // metres per field unit
+            let decided = (row.agree + row.opposed).max(1);
+            println!(
+                "  {:<12} {:>8.1}% {:>8.1}% {:>8.1}% {:>9.1} {:>9.1} {:>8.1} {:>8.1}% {:>7.1}%",
+                format!("{:?}", group),
+                row.mean_player_depth * 100.0,
+                row.mean_anchor_depth * 100.0,
+                row.mean_target_depth * 100.0,
+                row.mean_to_target_u * M,
+                row.mean_to_anchor_u * M,
+                row.mean_target_to_anchor_u * M,
+                row.opposed as f64 / decided as f64 * 100.0,
+                row.target_final_third as f64 / row.geom as f64 * 100.0,
+            );
+        }
+
+        println!();
+        println!(
+            "  {:<12} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
+            "group", "asked", "disarmed%", "carrier%", "chaser%", "crowded%", "empty%"
+        );
+        for group in Self::GROUPS {
+            let row = WaypointCensus::by_group(group);
+            if row.evals == 0 {
+                continue;
+            }
+            let e = row.evals as f64;
+            println!(
+                "  {:<12} {:>10} {:>9.1}% {:>9.1}% {:>9.1}% {:>9.1}% {:>9.1}%",
+                format!("{:?}", group),
+                row.evals,
+                row.disarmed as f64 / e * 100.0,
+                row.skip_carrier as f64 / e * 100.0,
+                row.skip_chaser as f64 / e * 100.0,
+                row.crowded as f64 / e * 100.0,
+                row.skip_empty as f64 / e * 100.0,
+            );
+        }
+    }
+
+    const GROUPS: [PlayerFieldPositionGroup; 4] = [
+        PlayerFieldPositionGroup::Goalkeeper,
+        PlayerFieldPositionGroup::Defender,
+        PlayerFieldPositionGroup::Midfielder,
+        PlayerFieldPositionGroup::Forward,
+    ];
 }

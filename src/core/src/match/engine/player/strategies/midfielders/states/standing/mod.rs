@@ -223,7 +223,16 @@ impl MidfielderStandingState {
         }
 
         let ball_far = ctx.ball().distance() > WALK_BALL_DISTANCE;
-        let in_position = ctx.player().distance_from_start_position() < IN_POSITION_DISTANCE;
+        // Against the live anchor, not the kickoff dot. The block slides
+        // all match, so `distance_from_start_position` was asking whether
+        // he is standing where he was DRAWN before the whistle — which a
+        // midfielder almost never is, so the fresh-player branch below
+        // (`ball_far && in_position`) essentially never fired and
+        // `Midfielder: Walking` measured **zero velocity evaluations
+        // across three matches** (`dev_match waypoints`). Same correction
+        // the walking state itself already made when it stopped steering
+        // at `start_position`.
+        let in_position = ctx.team().distance_from_anchor() < IN_POSITION_DISTANCE;
 
         // Tired players take any excuse to walk; fresh ones only walk when
         // there is genuinely nothing to run toward.

@@ -460,6 +460,8 @@ pub use crate::r#match::player::motion_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::player::strategies::players::ops::forward_shot_decision::helper_diag;
 #[cfg(feature = "match-logs")]
+pub use crate::r#match::player::waypoints::census as waypoint_census;
+#[cfg(feature = "match-logs")]
 pub use crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag;

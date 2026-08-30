@@ -215,10 +215,33 @@ fn every_state_has_a_handler_and_a_distinct_id() {
 /// Precise version of the guard: run the real audit over an observed edge
 /// set. Requires the `match-logs` recorder, so it is feature-gated to keep
 /// the default test run fast.
+///
+/// # What a unit test can and cannot claim here
+///
+/// The edge set is whatever this PROCESS happened to simulate, and only
+/// two files in the suite play a match at all (`goal_clip_recording_tests`
+/// and `friendly_recording_tests`). Two matches is nowhere near enough to
+/// see every state: `Defender: Shooting`, `Goalkeeper: Punching` and
+/// `Injured` are all genuinely rare, and at that sample size "no inbound
+/// edge" means "did not come up", not "cannot be reached".
+///
+/// So this asserts the invariant the sample actually supports — **a state
+/// the run entered must have a way in and a way out** — filtering to
+/// states the run exercised, exactly as `dev_match stats` already does at
+/// its own call site ("an unreached state is 'not observed', not a
+/// structural dead-end").
+///
+/// ⚠ It therefore does NOT answer "does every state occur in a real
+/// match". That question needs hundreds of matches and lives in the
+/// harness: `dev_match stats 400 14 14` prints `states observed: N/81`
+/// and names the ones it never saw. Left unfiltered here, this test was
+/// simply red — 16 states on master, before any of the work that added
+/// this note.
 #[cfg(feature = "match-logs")]
 #[test]
 fn observed_graph_has_no_dead_states() {
     use crate::r#match::player::transition::{GraphInvariantViolation, TransitionGraph};
+    use std::collections::HashSet;
 
     // The recorder accumulates across every match run in the process, so
     // whatever the rest of the suite has already simulated contributes.
@@ -229,22 +252,58 @@ fn observed_graph_has_no_dead_states() {
         return;
     }
 
+    // ⚠ **Only a COMPLETED match can be audited.** Most of the edges in
+    // a test process come from fixtures that drive players directly —
+    // the corner-shape, throw-in and substitution-break tests — and
+    // never reach the end of `play_with_config`. Those leave every
+    // player parked in whatever state the fixture stopped him in, with
+    // no outbound edge and no whistle to excuse it, so each one reads as
+    // a dead end. `final_states()` is empty until a real match finishes,
+    // which is exactly the condition under which this audit means
+    // something.
+    //
+    // Tests run in parallel and in an arbitrary order, so whether that
+    // has happened by the time this runs is luck. It is genuinely
+    // opportunistic; the guaranteed version of this check is
+    // `dev_match stats`, over hundreds of matches, and `static_reachability`
+    // above is the one that always runs.
+    let whistled = TransitionGraph::final_states();
+    if whistled.is_empty() {
+        return;
+    }
+
     let universe = PlayerState::all();
-    let entry = PlayerState::entry_states();
+    // Reserved states count as entries AND as terminals: `Injured` is
+    // reached through the injury roll rather than a handler transition,
+    // and nothing leads out of it. Same pair the harness passes.
     let reserved = PlayerState::reserved_states();
-    let violations = TransitionGraph::audit(&edges, &universe, &entry, &reserved);
+    let mut entry = PlayerState::entry_states().to_vec();
+    entry.extend(reserved);
+    // …plus whatever the twenty-two were doing when each whistle went. A
+    // player still in a state has not left it, so it has no outbound
+    // edge and reads exactly like a dead end. See
+    // `TransitionGraph::note_final_states`.
+    let mut terminal = reserved.to_vec();
+    terminal.extend(whistled);
+    let violations = TransitionGraph::audit(&edges, &universe, &entry, &terminal);
+
+    // Only states this run actually exercised. See the note above.
+    let observed: HashSet<u16> = edges
+        .iter()
+        .flat_map(|e| [e.from.compact_id(), e.to.compact_id()])
+        .collect();
 
     let unreachable: Vec<u16> = violations
         .iter()
         .filter_map(|v| match v {
-            GraphInvariantViolation::Unreachable(id) => Some(*id),
+            GraphInvariantViolation::Unreachable(id) if observed.contains(id) => Some(*id),
             _ => None,
         })
         .collect();
     let dead_ends: Vec<u16> = violations
         .iter()
         .filter_map(|v| match v {
-            GraphInvariantViolation::DeadEnd(id) => Some(*id),
+            GraphInvariantViolation::DeadEnd(id) if observed.contains(id) => Some(*id),
             _ => None,
         })
         .collect();
@@ -259,7 +318,8 @@ fn observed_graph_has_no_dead_states() {
 
     assert!(
         unreachable.is_empty(),
-        "state(s) never entered in an observed match: {:?}",
+        "state(s) a player was observed LEAVING with no observed way in — \
+         something puts him there without a recorded transition: {:?}",
         unreachable.iter().copied().map(name_of).collect::<Vec<_>>()
     );
     assert!(

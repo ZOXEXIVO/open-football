@@ -110,6 +110,63 @@ pub mod shot_accuracy_diag {
     /// anchor any centred accuracy term has to sit on.
     pub static EXECUTION_SUM: AtomicU64 = AtomicU64::new(0);
 
+    /// **The accuracy edge, split into the two halves that make it.**
+    ///
+    /// `accuracy_edge` is `(POPULATION_EXECUTION − execution_skill) ×
+    /// ACCURACY_SPREAD + low_condition_penalty × CONDITION_DRAG`, and
+    /// the two halves have opposite obligations: the skill half is
+    /// CENTRED, so it must average ~0 in every division, while the
+    /// fatigue half is deliberately one-sided and therefore free to
+    /// track the division's legs. Read per level (`dev_match levels`)
+    /// they say which of the two is pricing the pyramid — a question no
+    /// aggregate at a single level can answer, and the reason the
+    /// on-target rate could slope 31.0% → 36.3% across the range with
+    /// every constant in the chain apparently centred.
+    ///
+    /// Both stored ×1000 with a +1.0 offset so a signed edge survives an
+    /// unsigned counter (`accuracy_edge` is clamped to −0.40..0.80).
+    pub static EDGE_SUM: AtomicU64 = AtomicU64::new(0);
+    pub static CONDITION_SUM: AtomicU64 = AtomicU64::new(0);
+
+    /// Offset applied to the two sums above so a negative edge fits an
+    /// unsigned counter.
+    const SIGNED_OFFSET: f32 = 1.0;
+
+    /// Record one shot's accuracy edge and the fatigue half of it.
+    #[inline]
+    pub fn note_edge(edge: f32, condition_drag: f32) {
+        EDGE_SUM.fetch_add(
+            ((edge + SIGNED_OFFSET) * 1000.0).max(0.0) as u64,
+            Ordering::Relaxed,
+        );
+        CONDITION_SUM.fetch_add(
+            ((condition_drag + SIGNED_OFFSET) * 1000.0).max(0.0) as u64,
+            Ordering::Relaxed,
+        );
+    }
+
+    /// Mean total accuracy edge over every shot — positive is a miss
+    /// penalty, and it should be near zero for a population the centring
+    /// constant describes.
+    pub fn mean_edge() -> f32 {
+        mean_of(&EDGE_SUM)
+    }
+
+    /// …and the fatigue half of it on its own.
+    pub fn mean_condition_drag() -> f32 {
+        mean_of(&CONDITION_SUM)
+    }
+
+    /// Mean of a signed sum, undoing the offset.
+    fn mean_of(sum: &AtomicU64) -> f32 {
+        let shots = SHOTS.load(Ordering::Relaxed);
+        if shots == 0 {
+            return 0.0;
+        }
+        sum.load(Ordering::Relaxed) as f32 / shots as f32 / 1000.0 - SIGNED_OFFSET
+    }
+
+
     /// **The same accounting, split by what KIND of shot it was.**
     ///
     /// Indexed by `ShotType` in declaration order; each row is
@@ -198,6 +255,16 @@ pub mod shot_accuracy_diag {
         out
     }
 
+    /// Zero every counter. `dev_match levels` calls it before each level
+    /// so the accuracy columns describe THAT division rather than the
+    /// sweep's running total — the same reason `time_band_diag` is reset
+    /// there.
+    ///
+    /// ⚠ The three running SUMS have to be in here with the counts they
+    /// are divided by. `EXECUTION_SUM` was not, so any mean read after a
+    /// reset divided a stale total by a fresh shot count — invisible
+    /// while nothing reset this module, which was the case until the
+    /// level sweep started reading it.
     pub fn reset() {
         for c in [
             &SHOTS,
@@ -206,6 +273,9 @@ pub mod shot_accuracy_diag {
             &MISKICK_FIRED,
             &AIM_INSIDE_POSTS,
             &AIM_ON_FRAME,
+            &EXECUTION_SUM,
+            &EDGE_SUM,
+            &CONDITION_SUM,
         ] {
             c.store(0, Ordering::Relaxed);
         }
@@ -230,6 +300,25 @@ pub mod shot_accuracy_diag {
             AIM_INSIDE_POSTS.load(Ordering::Relaxed),
             AIM_ON_FRAME.load(Ordering::Relaxed),
         ]
+    }
+
+    /// Mean `execution_skill` over every shot that reached the aiming
+    /// code — **the number `POPULATION_EXECUTION` has to equal**, and
+    /// therefore the one thing in this module that is a maintenance
+    /// instrument rather than a report.
+    ///
+    /// The constant centres both forced-miss rolls, so the whole
+    /// population's on-target rate is untouched only while the two
+    /// agree. `EXECUTION_SUM` existed for this and nothing printed it,
+    /// which is how the constant came to sit 0.07 above the blend it
+    /// is supposed to track — worth about three points of on-target
+    /// rate charged to every shooter in the game.
+    pub fn mean_execution() -> f32 {
+        let shots = SHOTS.load(Ordering::Relaxed);
+        if shots == 0 {
+            return 0.0;
+        }
+        EXECUTION_SUM.load(Ordering::Relaxed) as f32 / shots as f32 / 1000.0
     }
 }
 
@@ -3574,12 +3663,39 @@ impl PlayerEventDispatcher {
         const KEEPER_PLACEMENT_READ: f32 = 18.0;
         /// Population mean of `execution_skill` AT THE MOMENT OF A STRIKE
         /// — not over all players, because who shoots is itself selected.
-        /// Measured 0.622 over 80 matches at L14 (`dev_match stats` prints
-        /// it under the off-target causes). Both forced-miss rolls are
-        /// centred here, so the population on-target rate is untouched and
-        /// only the spread around it is new. Re-derive it from the harness
-        /// if the `execution_skill` blend ever moves.
-        const POPULATION_EXECUTION: f32 = 0.622;
+        ///
+        /// Both forced-miss rolls are centred here, so the population's
+        /// on-target rate is untouched and only the spread around it is
+        /// new. **That holds only while this equals the blend's actual
+        /// mean**, and `dev_match stats` now prints that mean on its own
+        /// line (`mean execution ← set POPULATION_EXECUTION to this`).
+        /// Re-derive it there after anything that moves the blend.
+        ///
+        /// ⚠ **It had drifted, and it was charging everybody.** The
+        /// constant read 0.622 against a measured **0.550** — the
+        /// `execution_skill` blend has moved since (`peer()` now prices
+        /// every band against `MatchStandard`, and headers execute on
+        /// `header_finish`). The harness did print the mean, but three
+        /// lines down inside the finishing-tier block's `if` and worded
+        /// as advice to a future change ("centre any accuracy quality
+        /// term here") rather than as a check on the constant that
+        /// already existed, so nobody read one against the other. It has
+        /// been lifted out, made unconditional, and named after this
+        /// constant.
+        ///
+        /// 0.072 of edge is not a rounding error at this scale. It runs
+        /// through `wide_miss_chance` and `over_bar_chance` as
+        /// `base * (1 + edge) + edge * ACCURACY_SCUFF`, so the AVERAGE
+        /// shooter in the game carried about a 6.5% multiplicative and a
+        /// 0.9-point additive miss penalty that the centring exists to
+        /// make exactly zero. Measured identically (0.547-0.550 open
+        /// play) across every arm of the route work, including untouched
+        /// `master`, so it is drift rather than anything that change did.
+        ///
+        /// Correcting it, `dev_match stats 400 14 14`: on-target
+        /// **30.4% → 33.6%** against a real ~33%, and goals **2.32 →
+        /// 2.47** against a real ~2.5.
+        const POPULATION_EXECUTION: f32 = 0.550;
         /// How far the forced-miss rolls swing either side of that for the
         /// best and worst finisher in the game. 0.90 puts a 1/20 finisher
         /// about 1.4× as likely to drag it wide or sky it as an average
@@ -4073,6 +4189,7 @@ impl PlayerEventDispatcher {
                 (execution_skill * 1000.0).max(0.0) as u64,
                 std::sync::atomic::Ordering::Relaxed,
             );
+            shot_accuracy_diag::note_edge(accuracy_edge, low_condition_penalty * CONDITION_DRAG);
         }
 
         if rng.random_range(0.0f32..1.0) < wide_miss_chance {

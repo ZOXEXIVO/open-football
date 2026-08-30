@@ -202,6 +202,10 @@ mod recorder {
 
     static STORE: Mutex<Option<Store>> = Mutex::new(None);
 
+    /// Compact ids of the states players were left in at a final
+    /// whistle. See `TransitionGraph::note_final_states`.
+    static FINAL_STATES: Mutex<Option<HashSet<u16>>> = Mutex::new(None);
+
     // ── Seen-edge bitmap fast path ──────────────────────────────────────
     //
     // `record` runs on EVERY state transition of every player (dominant
@@ -282,6 +286,7 @@ mod recorder {
         pub fn reset() {
             let mut guard = STORE.lock().unwrap();
             *guard = None;
+            *FINAL_STATES.lock().unwrap() = None;
             for word in SEEN_BITS.iter() {
                 word.store(0, Ordering::Relaxed);
             }
@@ -291,6 +296,40 @@ mod recorder {
         pub fn edges() -> Vec<GraphEdge> {
             let guard = STORE.lock().unwrap();
             guard.as_ref().map(|s| s.edges.clone()).unwrap_or_default()
+        }
+
+        /// **The states the twenty-two were in when the whistle went.**
+        ///
+        /// A player still in a state has not left it, so it carries no
+        /// outbound edge and the audit reads it as a dead end — a state
+        /// with no way out once entered. Over hundreds of matches the
+        /// artefact washes out, because some other match leaves that
+        /// state normally; over one or two it is up to twenty-two false
+        /// positives, which is what a unit test running on whatever the
+        /// suite happened to simulate actually sees.
+        ///
+        /// Recorded here so the audit can be handed them as terminals
+        /// and judge only states that a match genuinely finished with
+        /// nowhere to go. Called once per match from
+        /// `FootballEngine::play_with_config`.
+        pub fn note_final_states(states: impl IntoIterator<Item = PlayerState>) {
+            let mut guard = FINAL_STATES.lock().unwrap();
+            let set = guard.get_or_insert_with(HashSet::new);
+            for state in states {
+                set.insert(state.compact_id());
+            }
+        }
+
+        /// Distinct states seen at a final whistle, as `PlayerState`s.
+        pub fn final_states() -> Vec<PlayerState> {
+            let guard = FINAL_STATES.lock().unwrap();
+            let Some(set) = guard.as_ref() else {
+                return Vec::new();
+            };
+            PlayerState::all()
+                .into_iter()
+                .filter(|s| set.contains(&s.compact_id()))
+                .collect()
         }
 
         /// Render the recorded graph as Graphviz DOT.

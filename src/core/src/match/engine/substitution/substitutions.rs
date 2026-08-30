@@ -306,6 +306,10 @@ impl Substitutions {
             let side = p.side;
             p.tactical_position.current_position = PlayerPositionType::Goalkeeper;
             p.tactical_position.regenerate_waypoints(side);
+            // Same reason as `MatchField::substitute_player`: the cache
+            // is only rebuilt lazily on an empty one, so without this he
+            // keeps running the outfield route he walked on with.
+            p.rebuild_waypoint_cache();
             if let Some(gs) = goal_start {
                 // An outfielder going in goal after the keeper is sent off
                 // or injured with no substitutions left. Legitimate — but

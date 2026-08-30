@@ -15,7 +15,7 @@ pub mod state;
 pub mod statistics;
 pub mod strategies;
 pub mod transition;
-mod waypoints;
+pub mod waypoints;
 
 pub use behaviours::*;
 pub use context::*;
