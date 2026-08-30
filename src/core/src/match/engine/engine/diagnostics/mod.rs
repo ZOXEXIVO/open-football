@@ -9,6 +9,8 @@
 //!   shape, duel gates, and loose-ball chase geometry.
 //! * `spacing` — how much room the twenty-two give each other, and what
 //!   the largest clump on the pitch is made of.
+//! * `heatmap` — the thermal map: where each slot spends its time, both
+//!   sides folded into one frame and split by possession phase.
 //! * `teleport_probe` — the per-tick ball relocation probe the driver
 //!   threads through its phases.
 //!
@@ -20,6 +22,8 @@ pub mod phase_prof;
 
 #[cfg(feature = "match-logs")]
 pub mod census;
+#[cfg(feature = "match-logs")]
+pub mod heatmap;
 #[cfg(feature = "match-logs")]
 pub mod spacing;
 #[cfg(feature = "match-logs")]

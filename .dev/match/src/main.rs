@@ -5,6 +5,8 @@ use core::club::player::Player;
 use core::club::player::PlayerPositionType;
 use core::club::team::tactics::{MatchTacticType, Tactics};
 use core::frame_trace::FrameTrace;
+use core::heatmap_diag as heat;
+use core::heatmap_diag::HeatMapCensus;
 use core::r#match::FootballEngine;
 use core::r#match::MatchSquad;
 use core::r#match::player::MatchPlayer;
@@ -3058,6 +3060,16 @@ fn print_usage() {
         "                                      distance-to-goal profile, box occupancy, and an ASCII map"
     );
     eprintln!(
+        "  dev_match heat [N] [level] [min]  thermal map: per-slot occupancy grids, both sides folded to"
+    );
+    eprintln!(
+        "                                      attack right; role identity, possession phases, team shape."
+    );
+    eprintln!(
+        "                                      [min] limits each match to its first N minutes (0 = all);"
+    );
+    eprintln!("                                      OF_HEAT_JSON=<path> dumps every grid");
+    eprintln!(
         "  dev_match sky [N] [level]       skied-ball trace: every flight that climbs past 12 m, and what launched it"
     );
     eprintln!(
@@ -3675,6 +3687,17 @@ fn main() {
             let n = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(2usize);
             let lvl = args.get(3).and_then(|v| v.parse().ok()).unwrap_or(14u8);
             WaypointCensusRun::run(n, lvl);
+        }
+        // The thermal map: where every slot actually spends the match,
+        // both sides folded into one frame, split by possession phase and
+        // printed beside the figure a real one gives. The only mode that
+        // can answer "does this player have a position at all" — every
+        // other spatial counter here is a scalar. See `HeatCensusRun`.
+        "heat" | "heatmap" => {
+            let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1);
+            let level: u8 = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(14);
+            let minutes: u64 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(0);
+            HeatCensusRun::run(n, level, minutes);
         }
         "subs" => {
             let n: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(100);
@@ -4368,6 +4391,40 @@ struct LevelRow {
     wide_share: f32,
     over_share: f32,
     miskick_share: f32,
+    /// Where the shot was AIMED after the three forced-miss rolls, as a
+    /// share of shots struck. The column to read against the table's
+    /// `OT%`, which counts shots that actually reached the frame: aim is
+    /// what the shooter did, `OT%` is what happened to the ball, and the
+    /// gap between them is flight, blocks and deflections.
+    aim_on_frame: f32,
+    /// Raw count of shots that reached the aiming code, so `aim%` and
+    /// the table above's `OT%` can be checked to share a denominator
+    /// before their difference is read as a leak.
+    aim_shots: u64,
+    mean_force: f32,
+    /// Traffic: mean defenders in the lane of an off-target shot, and
+    /// the share of ALL shots a deflection rescued onto the frame.
+    lane_defenders: f32,
+    deflected_share: f32,
+    /// **Where a struck shot ended up**, as shares of shots struck —
+    /// `reception_diag`'s lifecycle partition, per division.
+    ///
+    /// This is the column that closes the gap the accuracy table opens.
+    /// The aim comes out flat at every level, so a divisional slope in
+    /// the on-target rate (goals + saves, i.e. shots that REACHED the
+    /// keeper) has to be something eating on-frame shots in flight, and
+    /// it eats far more of them in the lower divisions.
+    fate_struck: u64,
+    fate_reached: f32,
+    fate_claimed_def: f32,
+    fate_claimed_att: f32,
+    fate_stopped: f32,
+    fate_out: f32,
+    /// Mean distance a shot was struck from, and the same for the shots
+    /// that actually resolved at the goal. If the second is shorter, the
+    /// leak is distance-selective.
+    struck_dist_m: f32,
+    reached_dist_m: f32,
 }
 
 impl LevelSweep {
@@ -4460,12 +4517,12 @@ impl LevelSweep {
         // prices the division.
         println!();
         println!(
-            "{:>5} {:>8} {:>8} {:>8} {:>8} {:>8} {:>9}",
-            "level", "exec", "edge", "cond", "wide%", "over%", "miskick%"
+            "{:>5} {:>8} {:>8} {:>8} {:>8} {:>8} {:>9} {:>7} {:>6} {:>7} {:>7} {:>8}",
+            "level", "exec", "edge", "cond", "wide%", "over%", "miskick%", "aim%", "lane", "defl%", "force", "struck"
         );
         for r in &rows {
             println!(
-                "{:>5} {:>8.4} {:>8.4} {:>8.4} {:>7.1}% {:>7.1}% {:>8.1}%",
+                "{:>5} {:>8.4} {:>8.4} {:>8.4} {:>7.1}% {:>7.1}% {:>8.1}% {:>6.1}% {:>6.2} {:>6.1}% {:>7.3} {:>8}",
                 r.level,
                 r.mean_execution,
                 r.mean_edge,
@@ -4473,6 +4530,42 @@ impl LevelSweep {
                 r.wide_share * 100.0,
                 r.over_share * 100.0,
                 r.miskick_share * 100.0,
+                r.aim_on_frame * 100.0,
+                r.lane_defenders,
+                r.deflected_share * 100.0,
+                r.mean_force,
+                r.aim_shots,
+            );
+        }
+
+        // ── Where a struck shot ended up, per division ────────────────
+        //
+        // `reached` is goal + keeper: the shots that got to the end of
+        // their flight and were resolved at the goal. Everything else is
+        // a shot that never got to be one, and the three columns after
+        // it say who took it — an outfield defender mid-flight, one of
+        // the shooter's own team-mates, or nobody at all (it stopped).
+        //
+        // Read against `aim%` above, which is flat. Any slope here is
+        // the divisional spread, and `struck` vs `reached` distance says
+        // whether the leak selects on range.
+        println!();
+        println!(
+            "{:>5} {:>9} {:>10} {:>10} {:>9} {:>7} {:>10} {:>10} {:>8}",
+            "level", "reached%", "def-claim%", "att-claim%", "stopped%", "out%", "struck m", "reached m", "n"
+        );
+        for r in &rows {
+            println!(
+                "{:>5} {:>8.1}% {:>9.1}% {:>9.1}% {:>8.1}% {:>6.1}% {:>10.1} {:>10.1} {:>8}",
+                r.level,
+                r.fate_reached * 100.0,
+                r.fate_claimed_def * 100.0,
+                r.fate_claimed_att * 100.0,
+                r.fate_stopped * 100.0,
+                r.fate_out * 100.0,
+                r.struck_dist_m,
+                r.reached_dist_m,
+                r.fate_struck,
             );
         }
 
@@ -4564,6 +4657,7 @@ impl LevelSweep {
         // and on-target is the only column with a real slope left in it
         // — so it has to be this level's, not the sweep's running total.
         core::shot_accuracy_diag::reset();
+        core::reception_diag::reset();
 
         let outcomes: Vec<(u8, u8, TeamStats, TeamStats)> = (0..n_matches)
             .into_par_iter()
@@ -4596,6 +4690,8 @@ impl LevelSweep {
         };
 
         let sa = core::shot_accuracy_diag::snapshot();
+        let fate = core::reception_diag::fate_census();
+        let fate_struck = fate[0].max(1) as f32;
         let struck = sa[0].max(1) as f32;
         let mut row = LevelRow {
             level,
@@ -4607,6 +4703,23 @@ impl LevelSweep {
             wide_share: sa[1] as f32 / struck,
             over_share: sa[2] as f32 / struck,
             miskick_share: sa[3] as f32 / struck,
+            aim_on_frame: sa[5] as f32 / struck,
+            aim_shots: sa[0],
+            mean_force: core::shot_accuracy_diag::mean_force(),
+            lane_defenders: core::shot_accuracy_diag::mean_lane_defenders(),
+            deflected_share: core::shot_accuracy_diag::deflected_share(),
+            fate_struck: fate[0],
+            fate_reached: (fate[1] + fate[2]) as f32 / fate_struck,
+            fate_claimed_def: fate[4] as f32 / fate_struck,
+            fate_claimed_att: fate[5] as f32 / fate_struck,
+            fate_stopped: fate[6] as f32 / fate_struck,
+            fate_out: fate[3] as f32 / fate_struck,
+            struck_dist_m: fate[9] as f32 / 100.0 / fate_struck * 0.125,
+            reached_dist_m: if fate[1] + fate[2] > 0 {
+                fate[10] as f32 / 100.0 / (fate[1] + fate[2]) as f32 * 0.125
+            } else {
+                0.0
+            },
             ..Default::default()
         };
         for (hg, ag, h, a) in &outcomes {
@@ -12887,4 +13000,516 @@ impl WaypointCensusRun {
         PlayerFieldPositionGroup::Midfielder,
         PlayerFieldPositionGroup::Forward,
     ];
+}
+
+// ── heat: the thermal map ─────────────────────────────────────────────
+//
+/// **Where the twenty-two actually spend the match**, printed the way a
+/// broadcaster prints it.
+///
+/// Reads [`core::heatmap_diag`], which samples the FIELD at 20 Hz of match
+/// time rather than reading the replay track — the track is deduplicated
+/// at 0.3 u with a 750 ms heartbeat, so counting its samples measures
+/// movement, and a heat map is the opposite of that: it is a picture of
+/// where a man STOOD.
+///
+/// Both sides are folded onto one another attacking RIGHT, so every map
+/// below is the average of twenty-two shirts in eleven slots, and each is
+/// printed beside the number a real one gives.
+///
+/// `OF_HEAT_JSON=<path>` additionally dumps every grid so the maps can be
+/// drawn properly somewhere that has pixels.
+struct HeatCensusRun;
+
+impl HeatCensusRun {
+    /// Pitch area, m² — the denominator for every area share below.
+    const PITCH_AREA: f32 = heat::PITCH_LENGTH_M * heat::PITCH_WIDTH_M;
+    /// Two grid rows to a printed line: a character then covers 1.25 m by
+    /// 4.87 m, which a terminal's own 1:2 cell shape renders very nearly
+    /// square.
+    const ROW_MERGE: usize = 2;
+
+    fn run(matches: usize, level: u8, minutes: u64) {
+        HeatMapCensus::reset();
+        HeatMapCensus::set_window(minutes * 60_000);
+        MatchRuntime::set_events_mode(true);
+
+        println!(
+            "Thermal map: {} match(es), both squads level {}, {} — {}",
+            matches,
+            level,
+            HarnessTactic::label(),
+            if minutes == 0 {
+                "whole match".to_string()
+            } else {
+                format!("first {} min of each", minutes)
+            }
+        );
+
+        for m in 0..matches {
+            let (home, _) = make_squad_viewer(1, HOME_TEAM_NAME, level, 0);
+            let (away, _) = make_squad_viewer(2, AWAY_TEAM_NAME, level, 11);
+            let result = FootballEngine::<840, 545>::play(home, away, true, false, false);
+            if let Some(score) = result.score.as_ref() {
+                eprintln!(
+                    "  heat: match {}/{} played ({}:{})",
+                    m + 1,
+                    matches,
+                    score.home_team.get(),
+                    score.away_team.get()
+                );
+            }
+        }
+
+        let report = HeatMapCensus::snapshot();
+        Self::print(&report, matches, level, minutes);
+        if let Ok(path) = env::var("OF_HEAT_JSON") {
+            Self::dump_json(&report, &path);
+        }
+    }
+
+    /// Slots that actually took the field, in the engine's own order.
+    fn live_slots(report: &core::heatmap_diag::HeatReport) -> Vec<usize> {
+        report
+            .positions
+            .iter()
+            .filter(|p| p.samples > 0)
+            .map(|p| p.position)
+            .collect()
+    }
+
+    fn label(index: usize) -> &'static str {
+        PlayerPositionType::ALL[index].get_short_name()
+    }
+
+    /// The smallest area holding `share` of a map's time, m².
+    ///
+    /// This is what a heat map is actually claiming: not where a player
+    /// went once, but how much grass his football is spread over. A
+    /// midfielder covering 1,000 m² with half his time is holding a
+    /// position; one covering 3,000 m² with the same half is following
+    /// the ball.
+    fn area(grid: &[u64], share: f64) -> f32 {
+        let total: u64 = grid.iter().sum();
+        if total == 0 {
+            return 0.0;
+        }
+        let mut sorted: Vec<u64> = grid.iter().copied().filter(|v| *v > 0).collect();
+        sorted.sort_unstable_by(|a, b| b.cmp(a));
+        let target = total as f64 * share;
+        let mut acc = 0.0;
+        let mut cells = 0usize;
+        for v in sorted {
+            acc += v as f64;
+            cells += 1;
+            if acc >= target {
+                break;
+            }
+        }
+        cells as f32 * (Self::PITCH_AREA / heat::CELLS as f32)
+    }
+
+    /// Share of a map's time in its single hottest cell.
+    fn peak(grid: &[u64]) -> f32 {
+        let total: u64 = grid.iter().sum();
+        if total == 0 {
+            return 0.0;
+        }
+        grid.iter().copied().max().unwrap_or(0) as f32 / total as f32
+    }
+
+    /// Cosine similarity of two maps. 1.00 means the two men occupied the
+    /// same grass in the same proportions — which for two DIFFERENT slots
+    /// means the shape has no roles in it.
+    fn cosine(a: &[u64], b: &[u64]) -> f32 {
+        let mut dot = 0.0f64;
+        let mut na = 0.0f64;
+        let mut nb = 0.0f64;
+        for (x, y) in a.iter().zip(b.iter()) {
+            let (x, y) = (*x as f64, *y as f64);
+            dot += x * y;
+            na += x * x;
+            nb += y * y;
+        }
+        if na == 0.0 || nb == 0.0 {
+            return 0.0;
+        }
+        (dot / (na.sqrt() * nb.sqrt())) as f32
+    }
+
+    /// Pearson correlation of a map with the BALL's map, over every cell.
+    ///
+    /// The single most diagnostic number in this block. A real player's
+    /// occupancy correlates with the ball's only loosely — he has a
+    /// position and the ball visits it — so 0.3-0.5 is a healthy figure
+    /// for a midfielder and lower for everybody else. A side whose every
+    /// slot reads 0.8+ is not playing a shape; it is orbiting the ball.
+    fn correlation(a: &[u64], b: &[u64]) -> f32 {
+        let n = a.len().min(b.len()) as f64;
+        if n == 0.0 {
+            return 0.0;
+        }
+        let ma = a.iter().map(|v| *v as f64).sum::<f64>() / n;
+        let mb = b.iter().map(|v| *v as f64).sum::<f64>() / n;
+        let mut cov = 0.0;
+        let mut va = 0.0;
+        let mut vb = 0.0;
+        for (x, y) in a.iter().zip(b.iter()) {
+            let dx = *x as f64 - ma;
+            let dy = *y as f64 - mb;
+            cov += dx * dy;
+            va += dx * dx;
+            vb += dy * dy;
+        }
+        if va == 0.0 || vb == 0.0 {
+            return 0.0;
+        }
+        (cov / (va.sqrt() * vb.sqrt())) as f32
+    }
+
+    fn print(report: &core::heatmap_diag::HeatReport, matches: usize, level: u8, minutes: u64) {
+        let slots = Self::live_slots(report);
+        let seconds = report.samples as f64 * 0.05;
+
+        println!();
+        println!(
+            "=== THERMAL MAP ({} match(es), level {}, {}) ===",
+            matches,
+            level,
+            HarnessTactic::label()
+        );
+        println!(
+            "  {} instants sampled at 20 Hz = {:.1} min of football{}",
+            report.samples,
+            seconds / 60.0,
+            if minutes == 0 {
+                String::new()
+            } else {
+                format!(" (window: first {} min of each match)", minutes)
+            }
+        );
+        println!(
+            "  frame: x = 0 own goal line … {:.0} m the goal he attacks;  y = 0 … {:.0} m touchline to touchline",
+            heat::PITCH_LENGTH_M,
+            heat::PITCH_WIDTH_M
+        );
+        println!("  both sides folded to attack RIGHT (180° rotation, so flanks survive)");
+
+        // ── where each slot lives ─────────────────────────────────────
+        println!();
+        println!("--- WHERE EACH SLOT LIVES (all play) ---");
+        println!(
+            "  {:<5} {:>7} {:>7} {:>7} {:>7} {:>8} {:>8} {:>7} {:>8} {:>7}",
+            "slot", "mean x", "sd x", "mean y", "sd y", "A50 m²", "A95 m²", "peak%", "ball m", "<15m%"
+        );
+        for slot in &slots {
+            let p = &report.positions[*slot];
+            let grid = &p.grid[heat::PHASE_ALL];
+            println!(
+                "  {:<5} {:>7.1} {:>7.1} {:>7.1} {:>7.1} {:>8.0} {:>8.0} {:>6.1}% {:>8.1} {:>6.0}%",
+                Self::label(*slot),
+                p.mean_x,
+                p.sd_x,
+                p.mean_y,
+                p.sd_y,
+                Self::area(grid, 0.50),
+                Self::area(grid, 0.95),
+                Self::peak(grid) * 100.0,
+                p.ball_gap,
+                p.near_ball * 100.0,
+            );
+        }
+        println!(
+            "  real: a back four averages 30-40 m from its own goal and a striker 65-78; sd x 11-16 m,"
+        );
+        println!(
+            "        sd y 7-12 m; A50 ≈ 700-1,200 m² (10-17% of the pitch), A95 ≈ 2,500-4,000 m²;"
+        );
+        println!(
+            "        mean distance to the ball 25-35 m, and 20-30% of a match spent inside 15 m of it"
+        );
+
+        // ── the thirds ────────────────────────────────────────────────
+        println!();
+        println!("--- HOW THE TIME DIVIDES ---");
+        println!(
+            "  {:<5} {:>8} {:>9} {:>9} {:>9} {:>8} {:>9}",
+            "slot", "own ½%", "f.third%", "own box%", "opp box%", "wide%", "touchl.%"
+        );
+        for slot in &slots {
+            let p = &report.positions[*slot];
+            println!(
+                "  {:<5} {:>7.1}% {:>8.1}% {:>8.1}% {:>8.1}% {:>7.1}% {:>8.1}%",
+                Self::label(*slot),
+                p.own_half * 100.0,
+                p.final_third * 100.0,
+                p.own_box * 100.0,
+                p.opp_box * 100.0,
+                p.wide * 100.0,
+                p.touchline * 100.0,
+            );
+        }
+        println!(
+            "  real: a centre-back spends 70-80% in his own half and a striker 20-30%; a winger is"
+        );
+        println!(
+            "        outside the width of the box (wide%) 45-65% of the time and within 10 m of his"
+        );
+        println!("        touchline 25-40%, a centre-back under 10%");
+
+        // ── the two phases ────────────────────────────────────────────
+        println!();
+        println!("--- IN POSSESSION vs OUT OF IT ---");
+        println!(
+            "  {:<5} {:>9} {:>9} {:>9}   {}",
+            "slot", "x (ball)", "x (no b.)", "shift", "map cosine(in, out)"
+        );
+        for slot in &slots {
+            let p = &report.positions[*slot];
+            println!(
+                "  {:<5} {:>9.1} {:>9.1} {:>+9.1}   {:>10.3}",
+                Self::label(*slot),
+                p.poss_x,
+                p.oop_x,
+                p.poss_x - p.oop_x,
+                Self::cosine(&p.grid[heat::PHASE_IN_POSSESSION], &p.grid[heat::PHASE_OUT_OF_POSSESSION]),
+            );
+        }
+        println!(
+            "  real: every outfielder's mean position moves UP the pitch with the ball — a full-back"
+        );
+        println!(
+            "        +10..15 m, a centre-back +6..10, a midfielder +8..14, a striker +6..12; the two"
+        );
+        println!("        maps are visibly different pictures, cosine ≈ 0.5-0.8");
+
+        // ── role identity ─────────────────────────────────────────────
+        println!();
+        println!("--- ROLE IDENTITY: are these eleven different maps? ---");
+        let outfield: Vec<usize> = slots
+            .iter()
+            .copied()
+            .filter(|s| !PlayerPositionType::ALL[*s].is_goalkeeper())
+            .collect();
+        let mut pair_sum = 0.0f32;
+        let mut pair_n = 0u32;
+        for (i, a) in outfield.iter().enumerate() {
+            for b in outfield.iter().skip(i + 1) {
+                pair_sum += Self::cosine(
+                    &report.positions[*a].grid[heat::PHASE_ALL],
+                    &report.positions[*b].grid[heat::PHASE_ALL],
+                );
+                pair_n += 1;
+            }
+        }
+        println!(
+            "  mean cosine between the {} outfield maps: {:.3}   (real ≈ 0.20-0.35 — a left-back and",
+            outfield.len(),
+            pair_sum / pair_n.max(1) as f32
+        );
+        println!("  a right-back share almost no grass, a striker and a centre-back none at all)");
+        println!();
+        println!("  {:<5}{}", "", outfield.iter().map(|s| format!("{:>6}", Self::label(*s))).collect::<Vec<_>>().join(""));
+        for a in &outfield {
+            let row: String = outfield
+                .iter()
+                .map(|b| {
+                    format!(
+                        "{:>6.2}",
+                        Self::cosine(
+                            &report.positions[*a].grid[heat::PHASE_ALL],
+                            &report.positions[*b].grid[heat::PHASE_ALL],
+                        )
+                    )
+                })
+                .collect();
+            println!("  {:<5}{}", Self::label(*a), row);
+        }
+
+        println!();
+        println!("  …and each slot's map against the BALL's own map (Pearson r over every cell):");
+        let mut ball_row = String::new();
+        for slot in &slots {
+            ball_row.push_str(&format!(
+                "  {} {:.2}",
+                Self::label(*slot),
+                Self::correlation(&report.positions[*slot].grid[heat::PHASE_ALL], &report.ball)
+            ));
+        }
+        println!("   {}", ball_row.trim());
+        println!(
+            "  real: 0.2-0.5 for a central midfielder, under 0.3 for everybody else. Anything near"
+        );
+        println!("  1.0 says the man is not holding a position — he is a function of the ball.");
+
+        // ── team shape ────────────────────────────────────────────────
+        println!();
+        println!("--- TEAM SHAPE (ten outfielders as a body) ---");
+        println!(
+            "  {:<14} {:>8} {:>8} {:>9} {:>9} {:>9} {:>8}",
+            "phase", "length", "width", "centroid", "deepest", "highest", "swarm"
+        );
+        for (i, name) in ["all play", "in possession", "out of poss."].iter().enumerate() {
+            let s = report.shape[i];
+            println!(
+                "  {:<14} {:>7.1} {:>8.1} {:>9.1} {:>9.1} {:>9.1} {:>8.2}",
+                name, s.length, s.width, s.centroid_x, s.deepest, s.highest, s.swarm
+            );
+        }
+        println!(
+            "  real: length 30-40 m, width 45-58 m in possession and 28-38 m out of it; the DEEPEST"
+        );
+        println!(
+            "        outfielder sits 18-28 m from his own goal and the HIGHEST 65-80; 4-6 of the ten"
+        );
+        println!("        are within 15 m of the ball");
+
+        // ── the maps themselves ───────────────────────────────────────
+        println!();
+        println!("--- THE MAPS ---");
+        println!(
+            "  every map drawn attacking RIGHT; ' ' none  '.' rare  ':' some  '+' often  '*' heavy  '#' peak"
+        );
+        println!("  furniture: '|' the two box edges and the halfway line");
+        Self::render(&report.ball, "THE BALL");
+        let mut team: Vec<u64> = vec![0; heat::CELLS];
+        for slot in &outfield {
+            for (t, v) in team.iter_mut().zip(&report.positions[*slot].grid[heat::PHASE_ALL]) {
+                *t += *v;
+            }
+        }
+        Self::render(&team, "ALL TEN OUTFIELDERS");
+        for slot in &slots {
+            let p = &report.positions[*slot];
+            Self::render(
+                &p.grid[heat::PHASE_ALL],
+                &format!(
+                    "{}  —  mean ({:.0}, {:.0}) m, A50 {:.0} m², r(ball) {:.2}",
+                    Self::label(*slot),
+                    p.mean_x,
+                    p.mean_y,
+                    Self::area(&p.grid[heat::PHASE_ALL], 0.5),
+                    Self::correlation(&p.grid[heat::PHASE_ALL], &report.ball),
+                ),
+            );
+        }
+    }
+
+    /// One map, 84 columns by 14 printed lines.
+    fn render(grid: &[u64], title: &str) {
+        let cols = heat::COLS;
+        let rows = heat::ROWS / Self::ROW_MERGE;
+        let mut merged = vec![0u64; cols * rows];
+        for (cell, v) in grid.iter().enumerate() {
+            let row = (cell / cols) / Self::ROW_MERGE;
+            merged[row.min(rows - 1) * cols + cell % cols] += *v;
+        }
+        let peak = merged.iter().copied().max().unwrap_or(1).max(1) as f64;
+        // Box edges and the halfway line, in columns of this map.
+        let box_near = (16.5 / heat::PITCH_LENGTH_M as f64 * cols as f64) as usize;
+        let box_far = (88.5 / heat::PITCH_LENGTH_M as f64 * cols as f64) as usize;
+        let half = cols / 2;
+
+        println!();
+        println!("  {}", title);
+        for row in 0..rows {
+            let mut line = String::with_capacity(cols + 4);
+            line.push_str("   ");
+            for col in 0..cols {
+                let v = merged[row * cols + col] as f64 / peak;
+                let ch = if v <= 0.0 {
+                    if col == half || col == box_near || col == box_far {
+                        '|'
+                    } else {
+                        ' '
+                    }
+                } else if v < 0.02 {
+                    '.'
+                } else if v < 0.06 {
+                    ':'
+                } else if v < 0.16 {
+                    '+'
+                } else if v < 0.40 {
+                    '*'
+                } else {
+                    '#'
+                };
+                line.push(ch);
+            }
+            println!("{}", line);
+        }
+    }
+
+    /// Every grid, as JSON, so the maps can be drawn where there are
+    /// pixels rather than characters.
+    fn dump_json(report: &core::heatmap_diag::HeatReport, path: &str) {
+        let mut out = String::from("{\n");
+        out.push_str(&format!(
+            "  \"cols\": {}, \"rows\": {}, \"pitch\": [{}, {}], \"samples\": {},\n",
+            heat::COLS,
+            heat::ROWS,
+            heat::PITCH_LENGTH_M,
+            heat::PITCH_WIDTH_M,
+            report.samples
+        ));
+        out.push_str(&format!(
+            "  \"ball\": [{}],\n",
+            report
+                .ball
+                .iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+        out.push_str("  \"slots\": [\n");
+        let slots = Self::live_slots(report);
+        for (i, slot) in slots.iter().enumerate() {
+            let p = &report.positions[*slot];
+            out.push_str(&format!(
+                "    {{\"name\": \"{}\", \"samples\": {}, \"mean\": [{:.2}, {:.2}], \"sd\": [{:.2}, {:.2}], \
+                 \"ball_gap\": {:.2}, \"near_ball\": {:.4}, \"own_half\": {:.4}, \"final_third\": {:.4}, \
+                 \"own_box\": {:.4}, \"opp_box\": {:.4}, \"wide\": {:.4}, \"touchline\": {:.4}, \
+                 \"poss_x\": {:.2}, \"oop_x\": {:.2}, \"all\": [{}], \"in\": [{}], \"out\": [{}]}}{}\n",
+                Self::label(*slot),
+                p.samples,
+                p.mean_x,
+                p.mean_y,
+                p.sd_x,
+                p.sd_y,
+                p.ball_gap,
+                p.near_ball,
+                p.own_half,
+                p.final_third,
+                p.own_box,
+                p.opp_box,
+                p.wide,
+                p.touchline,
+                p.poss_x,
+                p.oop_x,
+                p.grid[heat::PHASE_ALL].iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","),
+                p.grid[heat::PHASE_IN_POSSESSION].iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","),
+                p.grid[heat::PHASE_OUT_OF_POSSESSION].iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","),
+                if i + 1 == slots.len() { "" } else { "," }
+            ));
+        }
+        out.push_str("  ],\n  \"shape\": [\n");
+        for (i, s) in report.shape.iter().enumerate() {
+            out.push_str(&format!(
+                "    {{\"samples\": {}, \"length\": {:.2}, \"width\": {:.2}, \"centroid\": {:.2}, \"deepest\": {:.2}, \"highest\": {:.2}, \"swarm\": {:.3}}}{}\n",
+                s.samples,
+                s.length,
+                s.width,
+                s.centroid_x,
+                s.deepest,
+                s.highest,
+                s.swarm,
+                if i + 1 == report.shape.len() { "" } else { "," }
+            ));
+        }
+        out.push_str("  ]\n}\n");
+        match std::fs::write(path, out) {
+            Ok(()) => println!("\n  grids written to {}", path),
+            Err(e) => eprintln!("  could not write {}: {}", path, e),
+        }
+    }
 }

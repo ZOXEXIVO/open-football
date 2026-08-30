@@ -253,6 +253,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         Self::sample_box_delivery(field, context);
         #[cfg(feature = "match-logs")]
         Self::sample_spacing(field, context);
+        #[cfg(feature = "match-logs")]
+        Self::sample_heatmap(field, context);
 
         let t = prof_on.then(Instant::now);
         Self::play_players(field, context, tick_ctx, events);

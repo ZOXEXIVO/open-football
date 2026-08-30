@@ -179,6 +179,26 @@ impl MatchStandard {
         }
     }
 
+    /// A normalised (0..1) attribute read against the standard of
+    /// football in this match rather than against the whole game.
+    ///
+    /// The operation is `norm01 - shift`, which is nothing more than
+    /// [`Self::shift`]'s own doc restated — but it is the operation every
+    /// caller wants and it was open-coded at each of them, so a new one
+    /// could read the raw attribute and nothing would say it had gone
+    /// wrong. `ShotSkillProfile` applies it to eleven bands;
+    /// `PlayerOperationsImpl::shoot_goal_power` did not apply it at all,
+    /// and that single omission was worth **38% of shot power across the
+    /// pyramid** (measured 1.415 at level 6 against 1.953 at level 18,
+    /// `dev_match levels`) with every other term in the shooting chain
+    /// coming out flat.
+    ///
+    /// Exactly neutral at the calibration level, where `shift` is zero.
+    #[inline]
+    pub fn peer(norm01: f32, shift: f32) -> f32 {
+        (norm01 - shift).clamp(0.0, 1.0)
+    }
+
     /// The goalkeeping equivalent of [`Self::shift`].
     #[inline]
     pub fn keeper_shift(ctx: &MatchContext) -> f32 {

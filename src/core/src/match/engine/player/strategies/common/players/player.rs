@@ -2,6 +2,7 @@ use crate::r#match::player::strategies::players::{
     DefensiveOperationsImpl, MovementOperationsImpl, PassingOperationsImpl, PressureOperationsImpl,
     ShootingOperationsImpl, SkillOperationsImpl,
 };
+use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::result::VectorExtensions;
 use crate::r#match::{
     MatchPlayer, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
@@ -354,14 +355,39 @@ impl<'p> PlayerOperationsImpl<'p> {
 
         let skills = &self.ctx.player.skills;
 
+        // ⚠ **Every one of these is read against the standard of
+        // football in the match, not against the whole game.**
+        //
+        // They used to be raw `attribute / 20.0`, and this function is
+        // the only uncentred quantity left anywhere in the shooting
+        // chain. Measured per division (`dev_match levels`), everything
+        // the shooter decides comes out flat — `execution_skill`
+        // 0.542→0.553, the wide / over-bar / miskick rolls within a
+        // point of each other, and the share of shots AIMED on frame
+        // 36.2/36.7/36.6/36.6 — while the launch force ran **1.415 at
+        // level 6 against 1.953 at level 18, a 38% climb**, with level 6
+        // pinned on the clamp's floor.
+        //
+        // A shot struck 38% slower is 38% longer in front of the bodies
+        // between it and the net, and it is defended by a keeper whose
+        // save chance IS priced against the match
+        // (`MatchStandard::keeper_shift`). That asymmetry is what made
+        // the lower divisions lose on-frame shots in flight — 4.6 points
+        // of on-target rate at level 6 against 0.1 at level 18 — and it
+        // is the whole of the engine's remaining divisional goal spread.
+        //
+        // Exactly neutral at the calibration level, where the shift is
+        // zero, so `stats 14 14` is untouched. `OF_STANDARD_OFF=1`
+        // restores the absolute read along with every other one.
+        let shift = MatchStandard::shift(self.ctx.context);
         // Technical skills
-        let technique = skills.technical.technique / 20.0;
-        let long_shots = skills.technical.long_shots / 20.0;
-        let finishing = skills.technical.finishing / 20.0;
+        let technique = MatchStandard::peer(skills.technical.technique / 20.0, shift);
+        let long_shots = MatchStandard::peer(skills.technical.long_shots / 20.0, shift);
+        let finishing = MatchStandard::peer(skills.technical.finishing / 20.0, shift);
         // Physical
-        let strength = skills.physical.strength / 20.0;
+        let strength = MatchStandard::peer(skills.physical.strength / 20.0, shift);
         // Mental: composure under pressure
-        let composure = skills.mental.composure / 20.0;
+        let composure = MatchStandard::peer(skills.mental.composure / 20.0, shift);
 
         // Blend finishing (close) vs long_shots (far) based on distance
         let max_field_distance = self.ctx.context.field_size.width as f32;

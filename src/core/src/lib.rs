@@ -466,6 +466,8 @@ pub use crate::r#match::player::strategies::players::ops::forward_shot_decision:
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag;
 #[cfg(feature = "match-logs")]
+pub use crate::r#match::heatmap as heatmap_diag;
+#[cfg(feature = "match-logs")]
 pub use crate::r#match::spacing as spacing_diag;
 
 static STORE_MATCH_EVENTS_MODE: AtomicBool = AtomicBool::new(false);

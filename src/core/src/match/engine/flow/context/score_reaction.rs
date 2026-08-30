@@ -48,6 +48,40 @@ impl MatchContext {
         *OFF.get_or_init(|| std::env::var("OF_SHAPE_OFF").is_ok())
     }
 
+    /// Diagnostic lever: how much of the positional block may hang OFF
+    /// the pitch on the far side when it slides toward the ball, as a
+    /// fraction of its own half-width. `OF_BLOCK_OVERHANG=0.6` lets the
+    /// far edge sit 60% of a half-width beyond the touchline; the
+    /// default, 0.0, keeps the whole rectangle on the grass.
+    ///
+    /// It exists because that clamp is the binding constraint on the
+    /// entire side's lateral behaviour and nothing else in the engine
+    /// says so. `ShapeBuilder` slides the block's centre by
+    /// `SLIDE_DEFENDING` (0.55) of the ball's own lateral displacement,
+    /// then clamps the result so the rectangle stays on the pitch — which
+    /// on a 68 m pitch with a 47 m block leaves the centre ±8.9 m of
+    /// travel. Measured with the thermal map (`dev_match heat`): the
+    /// ball's lateral spread is sd 15.0 m, the centre-backs' is sd 4.2 m
+    /// out of possession, and a Gaussian of sd 8.25 m truncated at
+    /// ±8.9 m has sd 4.7 m. The clamp, not the slide coefficient, is what
+    /// the defence is actually obeying.
+    ///
+    /// A real block DOES hang off the pitch: sliding to the ball is
+    /// precisely the far full-back tucking into the middle and the far
+    /// winger abandoning his touchline. Read once per process. Debug
+    /// infrastructure — do not remove.
+    pub fn block_overhang() -> f32 {
+        use std::sync::OnceLock;
+        static OVERHANG: OnceLock<f32> = OnceLock::new();
+        *OVERHANG.get_or_init(|| {
+            std::env::var("OF_BLOCK_OVERHANG")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0)
+        })
+    }
+
     /// Diagnostic switch: with `OF_MID_CLEAR_OFF` set, the midfielder
     /// Tier-1 "clear chance" shot in `midfielders/states/running` stops
     /// being a DETERMINISTIC bypass and the same look goes through the

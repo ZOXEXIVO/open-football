@@ -132,6 +132,71 @@ pub mod shot_accuracy_diag {
     /// unsigned counter.
     const SIGNED_OFFSET: f32 = 1.0;
 
+    /// **The deflection channel.** `LANE_SUM` is Σ `defenders_in_lane`
+    /// over the off-target shots that ran the lane scan (`LANE_SCANS`),
+    /// and `DEFLECTED` is how many of them were redirected onto the
+    /// frame.
+    ///
+    /// Instrumented because the aim comes out FLAT across the pyramid
+    /// (36.0-37.6% on frame at every level) while the engine's measured
+    /// on-target rate slopes 32.4% → 37.4%. Everything the shooter does
+    /// is therefore innocent, and what is left between his boot and the
+    /// goal line is traffic.
+    pub static LANE_SCANS: AtomicU64 = AtomicU64::new(0);
+    pub static LANE_SUM: AtomicU64 = AtomicU64::new(0);
+    pub static DEFLECTED: AtomicU64 = AtomicU64::new(0);
+
+    /// Σ of the launch force ×1000 over `SHOTS` — how hard the ball was
+    /// actually struck.
+    ///
+    /// `power_multiplier` is priced against the match by
+    /// `ShotSkillProfile`, but it only trims the number this multiplies:
+    /// `shoot_goal_power` is the number, and it is read off raw
+    /// attributes. If this column slopes across the pyramid then a
+    /// lower-division shot travels slower to the same goal, defended by
+    /// a keeper whose save chance IS priced against the match — and a
+    /// slower ball spends longer in front of the bodies between it and
+    /// the net.
+    pub static FORCE_SUM: AtomicU64 = AtomicU64::new(0);
+
+    /// Mean launch force over every shot.
+    pub fn mean_force() -> f32 {
+        let shots = SHOTS.load(Ordering::Relaxed);
+        if shots == 0 {
+            return 0.0;
+        }
+        FORCE_SUM.load(Ordering::Relaxed) as f32 / shots as f32 / 1000.0
+    }
+
+    /// Record one off-target shot's lane scan and whether it deflected.
+    #[inline]
+    pub fn note_lane(defenders_in_lane: u32, deflected: bool) {
+        LANE_SCANS.fetch_add(1, Ordering::Relaxed);
+        LANE_SUM.fetch_add(defenders_in_lane as u64, Ordering::Relaxed);
+        if deflected {
+            DEFLECTED.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Mean defenders in the lane of an off-target shot.
+    pub fn mean_lane_defenders() -> f32 {
+        let scans = LANE_SCANS.load(Ordering::Relaxed);
+        if scans == 0 {
+            return 0.0;
+        }
+        LANE_SUM.load(Ordering::Relaxed) as f32 / scans as f32
+    }
+
+    /// Share of ALL shots struck that were rescued onto the frame by a
+    /// deflection.
+    pub fn deflected_share() -> f32 {
+        let shots = SHOTS.load(Ordering::Relaxed);
+        if shots == 0 {
+            return 0.0;
+        }
+        DEFLECTED.load(Ordering::Relaxed) as f32 / shots as f32
+    }
+
     /// Record one shot's accuracy edge and the fatigue half of it.
     #[inline]
     pub fn note_edge(edge: f32, condition_drag: f32) {
@@ -276,6 +341,10 @@ pub mod shot_accuracy_diag {
             &EXECUTION_SUM,
             &EDGE_SUM,
             &CONDITION_SUM,
+            &LANE_SCANS,
+            &LANE_SUM,
+            &DEFLECTED,
+            &FORCE_SUM,
         ] {
             c.store(0, Ordering::Relaxed);
         }
@@ -4190,6 +4259,10 @@ impl PlayerEventDispatcher {
                 std::sync::atomic::Ordering::Relaxed,
             );
             shot_accuracy_diag::note_edge(accuracy_edge, low_condition_penalty * CONDITION_DRAG);
+            shot_accuracy_diag::FORCE_SUM.fetch_add(
+                (shoot_event_model.force as f32 * 1000.0).max(0.0) as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
         }
 
         if rng.random_range(0.0f32..1.0) < wide_miss_chance {
@@ -4291,6 +4364,10 @@ impl PlayerEventDispatcher {
         let setpiece_bonus = if is_set_piece { 0.12 } else { 0.0 };
         let deflection_chance = (defenders_in_lane as f32 * 0.04 + setpiece_bonus).min(0.26);
         let deflected = was_offtarget && rng.random_range(0.0f32..1.0) < deflection_chance;
+        #[cfg(feature = "match-logs")]
+        if was_offtarget {
+            shot_accuracy_diag::note_lane(defenders_in_lane, deflected);
+        }
         // Save the pre-deflection trajectory: when a deflection fires, the
         // GK shouldn't track the new trajectory in mid-flight — real
         // deflections happen close to arrival and the keeper has already

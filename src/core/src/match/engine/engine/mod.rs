@@ -316,6 +316,8 @@ pub use diagnostics::phase_prof;
 // …and the spacing census the harness reads, on the same footing as the
 // other `match-logs` diagnostics re-exported from the crate root.
 #[cfg(feature = "match-logs")]
+pub use diagnostics::heatmap;
+#[cfg(feature = "match-logs")]
 pub use diagnostics::spacing;
 
 // The flat type surface. Listed rather than globbed so that the names the

@@ -12,7 +12,7 @@
 
 use crate::r#match::engine::teamplay::plans::shape::{MAX_ON_PITCH, TeamShape};
 use crate::r#match::engine::teamplay::tactical::TeamTacticalState;
-use crate::r#match::{MatchField, PlayerSide};
+use crate::r#match::{MatchContext, MatchField, PlayerSide};
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::ShapeCensus;
 use nalgebra::Vector3;
@@ -273,7 +273,15 @@ impl ShapeBuilder<'_> {
         // Keep the whole block on the pitch rather than clamping each
         // anchor separately — clamping per player collapses everyone on
         // the far flank onto the same touchline strip.
-        let half_w = width / 2.0;
+        //
+        // ⚠ THIS CLAMP, NOT `slide`, IS WHAT THE DEFENCE ACTUALLY OBEYS.
+        // A 47 m block on a 68 m pitch leaves the centre ±8.9 m of
+        // travel, so a `SLIDE_DEFENDING` of 0.55 against a ball whose own
+        // lateral spread is sd 15 m is delivered as sd ~4.7 m — which is
+        // the centre-backs' measured 4.2 m. See
+        // [`MatchContext::block_overhang`] for the lever that relaxes it
+        // and for the measurement.
+        let half_w = width / 2.0 * (1.0 - MatchContext::block_overhang());
         let centre_target = centre_target.clamp(
             PITCH_MARGIN + half_w.min(pitch_centre_y - PITCH_MARGIN),
             field_height - PITCH_MARGIN - half_w.min(pitch_centre_y - PITCH_MARGIN),
