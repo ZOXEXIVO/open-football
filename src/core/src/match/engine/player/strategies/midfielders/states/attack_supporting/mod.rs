@@ -1,4 +1,5 @@
 use crate::PlayerSkills;
+use crate::r#match::MatchContext;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::midfielders::states::common::{
@@ -387,6 +388,32 @@ impl MidfielderAttackSupportingState {
                 // bearing from the carrier, so two supporters approaching
                 // from different sides stay on different sides. The
                 // forwards' outlet reads the same model.
+                //
+                // ⚠ AND ONLY ONE MIDFIELDER OFFERS IT.
+                //
+                // The floor fixed the distance and left the COUNT: the
+                // gate is "am I inside 20 m of the carrier", which in a
+                // 4-4-2 both central midfielders satisfy essentially all
+                // the time. Measured with `dev_match heat` over 10 × 90
+                // min, each of them averaged 15.8 m from the ball and
+                // spent 53% of the match inside 15 m of it, and each
+                // correlated with the BALL's own occupancy map at
+                // r = 0.65 — the two highest figures in the side by a
+                // distance, and a pair of maps 0.60 alike. Two men
+                // offering the same pass is one man's worth of options
+                // and one man's worth of space.
+                //
+                // The nearer one goes; the other holds the position his
+                // team gave him, which is what the far-side midfielder is
+                // for. Deciding it by distance rather than by the plan's
+                // `near_support` keeps an outlet available even when the
+                // plan has named a forward.
+                if !Self::is_nearest_midfield_outlet(ctx) {
+                    return ctx
+                        .team()
+                        .my_anchor()
+                        .clamp_to_field(field_width, field_height);
+                }
                 ctx.ball()
                     .owner_id()
                     .and_then(|id| ctx.context.players.by_id(id))
@@ -579,6 +606,28 @@ impl MidfielderAttackSupportingState {
     /// make the run flicker — but smooth in every input, so a player near
     /// the boundary between two runs drifts between them as the picture
     /// changes instead of switching on a hundredth.
+    /// Is this the midfielder nearest the ball, and therefore the one
+    /// whose job the short outlet is?
+    ///
+    /// Ties break by id so the answer is stable across a possession and
+    /// the pair cannot swap the job every tick. A side with one midfielder
+    /// on the pitch trivially passes.
+    fn is_nearest_midfield_outlet(ctx: &StateProcessingContext) -> bool {
+        if MatchContext::shape_fix_off() {
+            return true;
+        }
+        let me = ctx.player.id;
+        let ball = ctx.tick_context.positions.ball.position;
+        let mine = (ctx.player.position - ball).magnitude();
+        !ctx.players().teammates().all().any(|t| {
+            if t.id == me || !t.tactical_positions.is_midfielder() {
+                return false;
+            }
+            let his = (t.position - ball).magnitude();
+            his < mine || (his == mine && t.id < me)
+        })
+    }
+
     fn determine_run_type(
         &self,
         ctx: &StateProcessingContext,

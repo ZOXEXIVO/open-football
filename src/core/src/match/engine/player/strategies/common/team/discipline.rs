@@ -99,6 +99,38 @@ const MAX_PULL: f32 = 0.85;
 /// player can realistically affect the ball in the next second or two.
 const BALL_ENGAGEMENT: f32 = 80.0;
 
+/// How much harder a metre out of position ACROSS the pitch counts than
+/// a metre along it.
+///
+/// The tether was a circle of [`SLACK`] around the anchor, and the two
+/// axes are not comparable. A pitch is 105 m long and 68 wide, so width
+/// is the scarcer axis before anybody moves; and lateral position is what
+/// makes a passing lane, because two players six metres apart in the same
+/// channel stand in one another's cover shadow while two players six
+/// metres apart up the pitch do not.
+///
+/// Measured with `dev_match heat`: the men a plan puts on a touchline
+/// stood a mean 18.5 m off it against a real 12-17, and spent 21% of a
+/// match inside 10 m of it against a real 25-40 — while the anchors they
+/// were tethered to sat about 6 m from the paint. Six metres of isotropic
+/// slack IS that drift, so the tether had nothing to say about the one
+/// axis that was wrong, on any of the states that were not explicitly
+/// holding width.
+///
+/// 1.6 keeps the ordinary 6 m of freedom up and down the pitch and leaves
+/// 3.75 m across it. The recall's DIRECTION is untouched — he still runs
+/// at his anchor rather than at a distorted point; only the question of
+/// whether he is out of position at all is asked per axis.
+///
+/// ⚠ 1.35 was measured against it and is strictly worse. The two cost the
+/// SAME — goals/match 2.59 and 2.67 at 1.6 against 2.65 at 1.35, over
+/// 300 matches each — and 1.35 buys a point less of touchline occupancy
+/// (21.9% against 23.0) and 0.7 m less width in possession. Whatever the
+/// anisotropy costs, it is a threshold rather than a slope, so there is
+/// no gentler setting to retreat to: the choice is this or none, and none
+/// is `OF_SHAPE_FIX_OFF`.
+const LATERAL_URGENCY: f32 = 1.6;
+
 pub struct ShapeDiscipline;
 
 impl ShapeDiscipline {
@@ -126,11 +158,21 @@ impl ShapeDiscipline {
         let anchor = ctx.team().my_anchor();
         let to_anchor = anchor - ctx.player.position;
         let lag = to_anchor.magnitude();
-        if lag <= SLACK {
+        // What the shape FEELS, which is not the plain distance — see
+        // [`LATERAL_URGENCY`]. Zero lag gives zero felt lag, so the early
+        // return still guards the division below.
+        let felt = if MatchContext::shape_fix_off() {
+            lag
+        } else {
+            (to_anchor.x * to_anchor.x
+                + to_anchor.y * to_anchor.y * LATERAL_URGENCY * LATERAL_URGENCY)
+                .sqrt()
+        };
+        if felt <= SLACK {
             return (velocity, 0.0);
         }
 
-        let pull = (((lag - SLACK) / RANGE).clamp(0.0, 1.0)) * MAX_PULL * Self::organisation(ctx);
+        let pull = (((felt - SLACK) / RANGE).clamp(0.0, 1.0)) * MAX_PULL * Self::organisation(ctx);
 
         // The recall runs at the player's own top speed, so a man 30 m out
         // of shape actually recovers rather than ambling back — the

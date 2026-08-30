@@ -1,4 +1,5 @@
 use crate::PlayerFieldPositionGroup;
+use crate::r#match::MatchContext;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{
     ActivityIntensity, DefenderCondition, DefensiveLine,
@@ -682,6 +683,12 @@ impl StateProcessingHandler for DefenderRunningState {
 }
 
 impl DefenderRunningState {
+    /// Half-width of the central channel, as a fraction of the pitch.
+    /// 0.14 of 68 m is a corridor about 19 m wide down the middle — the
+    /// span of the penalty area, which is what "central" means to a
+    /// full-back deciding whether the ball is on his side.
+    const CENTRAL_CHANNEL: f32 = 0.14;
+
     /// Counter-attack outlet — same gates as `DefenderPassingState`.
     /// Returns the long-ball target when (a) we won possession recently,
     /// (b) the opposition over-committed forward, and (c) a teammate is
@@ -1652,10 +1659,33 @@ impl DefenderRunningState {
         // worth of opportunities.
         let player_on_left_flank = start_y < field_height * 0.5;
         let ball_pos_flank = ctx.tick_context.positions.ball.position;
-        let has_ball_on_same_flank =
-            (ball_pos_flank.y < field_height * 0.5) == player_on_left_flank;
+        // "My side of the pitch" is a flank plus the middle, not a half.
+        //
+        // The half-and-half test made this a coin flip on the ball's
+        // lateral position, and a full-back does not only overlap when
+        // the ball is already out wide on his side — the commonest
+        // overlap in football starts with the ball in central midfield
+        // and he is gone before it is played. Measured with the overlap
+        // funnel, the strict test cut 18,902 survivors to 2,333: 88% of
+        // everything that got this far, on the one gate that was
+        // supposed to be roughly even.
+        //
+        // The rule that survives is the one it was reaching for: he may
+        // not go when the ball is on the OTHER flank, because then he is
+        // the far full-back and the far full-back tucks in.
+        let channel = if MatchContext::shape_fix_off() {
+            0.0
+        } else {
+            Self::CENTRAL_CHANNEL
+        };
+        let off_centre = (ball_pos_flank.y - field_height * 0.5) / field_height;
+        let ball_on_far_flank = if player_on_left_flank {
+            off_centre > channel
+        } else {
+            off_centre < -channel
+        };
 
-        if !has_ball_on_same_flank {
+        if ball_on_far_flank {
             return false;
         }
         #[cfg(feature = "match-logs")]
@@ -1696,7 +1726,19 @@ impl DefenderRunningState {
                 progress < behind_threshold
             })
             .count();
-        let mut required_behind = ctx.team().rest_defense_count() as usize + 1;
+        // `rest_defense_count` IS the answer to "how many stay home", so
+        // asking for one more than it double-counts the man leaving.
+        //
+        // The filter above already excludes him, so `+ 1` demanded FIVE
+        // other players strictly behind the ball in a 4-4-2 whose default
+        // rest-defence count is four — the whole back line plus a
+        // midfielder, every time, before either full-back was allowed to
+        // move. Measured with the overlap funnel it cut 2,295 survivors
+        // to 328, and the whole funnel came out at 250 commitments from
+        // 339,621 asks: 0.07%, against full-backs reaching the final
+        // third 0.8% of a match where the real figure is 8-15%.
+        let mut required_behind =
+            ctx.team().rest_defense_count() as usize + usize::from(MatchContext::shape_fix_off());
         let minute = (ctx.context.total_match_time as f32) / 60_000.0;
         if minute > 75.0 && ctx.team().score_diff() > 0 {
             required_behind += 1;

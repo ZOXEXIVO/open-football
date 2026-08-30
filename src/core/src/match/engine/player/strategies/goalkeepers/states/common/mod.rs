@@ -1,4 +1,5 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
+use crate::r#match::MatchContext;
 use crate::r#match::engine::ball::ball::contest::save::SaveModel;
 use crate::r#match::engine::ball::ball::{AerialReach, DeadBall, GRAVITY_PER_TICK, ShotTarget};
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
@@ -224,8 +225,28 @@ pub struct KeeperRestPosition;
 
 impl KeeperRestPosition {
     /// Off his line with the ball at the far end and the line high.
-    /// 220u = 27.5 m.
-    const SWEEP_DEPTH: f32 = 220.0;
+    /// 280u = 35 m — the ceiling of the curve, not a place he often
+    /// stands: the line tether below almost always takes it first.
+    const SWEEP_DEPTH: f32 = 280.0;
+    /// How sharply depth falls away as the ball comes toward him.
+    ///
+    /// This was 2.0, and the square is what kept the keeper on his line.
+    /// The ball's mean distance from a goal is 46% of the pitch, and
+    /// `0.46² = 0.21`, so the TYPICAL depth was a fifth of the range —
+    /// measured over 10 × 90 min with `dev_match heat`, a mean of 6.7 m
+    /// off his line with sd 3.1 m and 99.3% of the match inside his own
+    /// box. The model's own reference table above asks for 12-18 m with
+    /// the ball in midfield, and the square could not produce 8.
+    ///
+    /// 1.35 reproduces all four reference rows: ~3.5 m with the ball in
+    /// the box, ~6.5 in the final third, ~14 in midfield, ~21 with the
+    /// ball in the opponent's half. The asymmetry the square was reaching
+    /// for — dropping back is urgent, pushing up is not — is a property
+    /// of how fast he travels, not of where he wants to be, and it is
+    /// already there: the same `SET_DEADZONE` that stops him gliding
+    /// after the ball makes the push-up gradual, while a ball arriving
+    /// puts him in a save state that has no deadzone at all.
+    const DEPTH_FALLOFF: f32 = 1.35;
     /// …and with the ball on top of him. 18u = 2.25 m.
     const NEAR_DEPTH: f32 = 18.0;
     /// He never closes to within this of his own back line — the space
@@ -325,12 +346,16 @@ impl KeeperRestPosition {
         let to_ball = ball - own_goal;
         let ball_distance = to_ball.magnitude();
 
-        // Depth rises with the ball's distance. SQUARED, so he drops onto
-        // his line quickly as the ball comes into the final third and only
-        // drifts back up slowly once it has gone — the asymmetry a keeper
-        // actually plays with: getting back is urgent, pushing up is not.
+        // Depth rises with the ball's distance, biased toward the line —
+        // see [`Self::DEPTH_FALLOFF`] for why the exponent is what it is
+        // and what the square it replaced actually produced.
         let far = (ball_distance / field_width).clamp(0.0, 1.0);
-        let mut depth = Self::NEAR_DEPTH + (Self::SWEEP_DEPTH - Self::NEAR_DEPTH) * far * far;
+        let (sweep, falloff) = if MatchContext::shape_fix_off() {
+            (220.0, 2.0)
+        } else {
+            (Self::SWEEP_DEPTH, Self::DEPTH_FALLOFF)
+        };
+        let mut depth = Self::NEAR_DEPTH + (sweep - Self::NEAR_DEPTH) * far.powf(falloff);
         // Temperament: a commanding keeper sweeps, a line-keeper does not.
         depth *= 0.65 + command_of_area.clamp(0.0, 1.0) * 0.55;
 

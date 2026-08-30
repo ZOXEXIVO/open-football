@@ -1,4 +1,5 @@
 use crate::r#match::DefensiveDuty;
+use crate::r#match::MatchContext;
 use crate::r#match::StateProcessingContext;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::engine::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
@@ -599,6 +600,30 @@ impl DefensiveLine {
     /// through his own zone and into the edge of his neighbour's, not
     /// enough to follow him across the pitch and take the line with him.
     pub const SHAPE_LEASH: f32 = 60.0;
+    /// How close to a touchline a defender's shape slot may be placed.
+    /// 12u = 1.5 m — the width of the run-off, not a tactical distance.
+    const TOUCHLINE_INSET: f32 = 12.0;
+
+    /// How much of the BLOCK's lateral shift the back line takes.
+    ///
+    /// A defensive unit does not slide as one rigid body: the midfield
+    /// band shifts furthest toward the ball, the back line least, which
+    /// is what keeps a back four covering the width of the goal while the
+    /// men in front of it go and press. Taking the block's shift whole
+    /// put a centre-back on the touchline with the ball in the opposite
+    /// corner.
+    ///
+    /// Sized off the real picture rather than picked: a back four facing
+    /// a ball on the touchline near halfway sits roughly 11 m toward it,
+    /// against a ball displaced 34 m from the middle — a delivered slide
+    /// of about a third. `SLIDE_DEFENDING` is 0.55, so 0.7 of it would
+    /// land there if the block reached its target — but the block is
+    /// rate-limited to a defender's own running pace on purpose (a switch
+    /// of play crosses the pitch faster than a team can shuffle across
+    /// it), so what arrives is smaller again. Measured at 0.7 the
+    /// centre-backs came out at sd 5.5 m across the pitch against a real
+    /// 7-9, so the share carries the shortfall the rate limit leaves.
+    const LINE_SLIDE_SHARE: f32 = 0.9;
     /// How far a defender holding shape may drop BEHIND the line to
     /// cover. 48u = 6 m — the covering centre-half sitting off the man
     /// engaging, which is what makes a back four a diagonal.
@@ -612,6 +637,13 @@ impl DefensiveLine {
     /// nothing. A defender in front of his own line plays the attack
     /// onside behind him.
     pub const DEPTH_STEP_UP: f32 = 16.0;
+    /// …and the same allowance while his OWN side has the ball, where the
+    /// offside argument does not apply at all. 64u = 8 m — the depth of
+    /// the screen in front of a back four, and still well short of
+    /// `MARK_STEP_UP_CAP`, so a defender squeezing up with the ball is
+    /// joining the block rather than leaving it. See the note at the use
+    /// site for the measurement that sized it.
+    pub const DEPTH_STEP_UP_ATTACKING: f32 = 64.0;
     /// How far upfield of the ball the line may sit while the ball is in
     /// our own half. 16u = 2 m — enough to keep an offside line playable,
     /// not enough to leave the back four in front of the danger.
@@ -632,7 +664,35 @@ impl DefensiveLine {
     /// this returns — the kickoff slot pulled toward the middle by how
     /// deep the danger is and how compact the side wants to be.
     pub fn compact_slot_y(ctx: &StateProcessingContext) -> f32 {
-        let centre_y = ctx.context.field_size.height as f32 / 2.0;
+        let pitch_centre_y = ctx.context.field_size.height as f32 / 2.0;
+        // ⚠ THE LINE SLIDES. ITS REFERENCE IS THE BLOCK, NOT THE HALFWAY
+        // STRIPE.
+        //
+        // This used to return the kick-off slot squeezed toward the
+        // MIDDLE OF THE PITCH, and read the ball only for how hard to
+        // squeeze — so a back four's lateral position was a fixed number
+        // per player, plus `hold_shape`'s 60 u of licence around it,
+        // whatever the ball was doing sideways. Measured with
+        // `dev_match heat` over 10 × 90 min: the ball's own lateral
+        // spread is sd 15.3 m, a centre-back's was **sd 4.6 m**, and a
+        // uniform spread over the leash's ±7.5 m is sd 4.33 — the whole
+        // of his sideways movement was the leash and none of it was the
+        // game. Turning the entire positional layer off with
+        // `OF_SHAPE_OFF` moved it by 0.4 m, which is what said the line
+        // was not reading the block at all.
+        //
+        // `TeamShape::centre_y` is the same reference the rest of the
+        // side hangs off and it already slides with the ball, so taking
+        // it here makes the back four part of the block on both axes
+        // instead of only on depth. The player's own lateral pattern is
+        // still measured from the pitch centre — that is his shape, and
+        // it travels with the unit rather than being redrawn by it.
+        let centre_y = if MatchContext::shape_fix_off() {
+            pitch_centre_y
+        } else {
+            let block_centre = ctx.team().shape().centre_or(pitch_centre_y);
+            pitch_centre_y + (block_centre - pitch_centre_y) * Self::LINE_SLIDE_SHARE
+        };
         let field_len = ctx.context.field_size.width as f32;
         let ball_x = ctx.tick_context.positions.ball.position.x;
         let own_goal_x = ctx.ball().direction_to_own_goal().x;
@@ -644,7 +704,12 @@ impl DefensiveLine {
         // lines up across 50 m now defends its own box across ~27, which
         // is what a deep block actually looks like.
         let squeeze = 1.0 - (0.30 + compactness * 0.35) * danger;
-        centre_y + (ctx.player.start_position.y - centre_y) * squeeze
+        let slot = centre_y + (ctx.player.start_position.y - pitch_centre_y) * squeeze;
+        // The block may hang off the pitch — it narrows to fit rather
+        // than sliding back to the middle — but a defender may not stand
+        // in the run-off.
+        let height = ctx.context.field_size.height as f32;
+        slot.clamp(Self::TOUCHLINE_INSET, height - Self::TOUCHLINE_INSET)
     }
 
     /// Is `target` inside our own penalty area? Real dimensions at
@@ -794,8 +859,32 @@ impl DefensiveLine {
         // in front of the back four, which is as far up as a member of it
         // has any business being.
         const MARK_STEP_UP_CAP: f32 = 72.0;
-        let step_up = man.map_or(Self::DEPTH_STEP_UP, |m| {
+        // ⚠ AND THE ALLOWANCE IS NOT THE SAME IN BOTH PHASES.
+        //
+        // The step-up bound above is an OFFSIDE argument, and offside is a
+        // question about the attacking side: a defender ahead of his own
+        // line while HIS team has the ball plays nobody onside, because
+        // there is nobody to play onside. Bounding both phases at 2 m made
+        // the line a ratchet — it may drop 4.25 m in a step and rise 2 —
+        // so it shed height faster than it gained it and the back four's
+        // possession excursion came out short. Measured with
+        // `dev_match heat` over 12 × 90 min at level 14 (phase read from
+        // `TeamTacticalState::in_possession`, the same flag the block
+        // plan uses): a centre-back's mean height moved +5.4 m between
+        // phases against a real +6-10, while the midfield in front of him
+        // managed +10.6.
+        //
+        // Squeezing up with the ball is what a back four is FOR in
+        // possession — it is the half of a compact block the attacking
+        // phase depends on. The defending allowance is untouched.
+        let base_step_up = if ctx.team().tactical().in_possession && !MatchContext::shape_fix_off()
+        {
+            Self::DEPTH_STEP_UP_ATTACKING
+        } else {
             Self::DEPTH_STEP_UP
+        };
+        let step_up = man.map_or(base_step_up, |m| {
+            base_step_up
                 .max((m.x - line_x) * forward)
                 .min(MARK_STEP_UP_CAP)
         });

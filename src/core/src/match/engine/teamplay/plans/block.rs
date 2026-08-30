@@ -270,22 +270,35 @@ impl ShapeBuilder<'_> {
         };
         let pitch_centre_y = field_height / 2.0;
         let centre_target = pitch_centre_y + (ball.y - pitch_centre_y) * slide;
-        // Keep the whole block on the pitch rather than clamping each
-        // anchor separately — clamping per player collapses everyone on
-        // the far flank onto the same touchline strip.
+        // **The block SQUEEZES to stay on the pitch; it does not slide
+        // back to the middle to do it.**
         //
-        // ⚠ THIS CLAMP, NOT `slide`, IS WHAT THE DEFENCE ACTUALLY OBEYS.
-        // A 47 m block on a 68 m pitch leaves the centre ±8.9 m of
-        // travel, so a `SLIDE_DEFENDING` of 0.55 against a ball whose own
-        // lateral spread is sd 15 m is delivered as sd ~4.7 m — which is
-        // the centre-backs' measured 4.2 m. See
-        // [`MatchContext::block_overhang`] for the lever that relaxes it
-        // and for the measurement.
-        let half_w = width / 2.0 * (1.0 - MatchContext::block_overhang());
-        let centre_target = centre_target.clamp(
-            PITCH_MARGIN + half_w.min(pitch_centre_y - PITCH_MARGIN),
-            field_height - PITCH_MARGIN - half_w.min(pitch_centre_y - PITCH_MARGIN),
-        );
+        // The first version kept the whole rectangle on the grass by
+        // clamping the CENTRE, which on a 68 m pitch left a 47 m block
+        // ±8.9 m of lateral travel — and that clamp, not `slide`, was
+        // what the side actually obeyed. Measured with `dev_match heat`:
+        // the ball's own lateral spread is sd 15.3 m and the block
+        // delivered sd ~4.7 m, a `SLIDE_DEFENDING` of 0.55 arriving as
+        // 0.30. A defending side that cannot shift more than nine metres
+        // has no far side to overload and no near side to trap on.
+        //
+        // Narrowing instead is what a real block does with a ball on the
+        // touchline: the far full-back tucks all the way into the middle
+        // and the far winger abandons his line, so the unit is both
+        // shifted AND thinner. Only the CENTRE has to be on the pitch;
+        // the width then takes whatever room is left either side of it.
+        // Ordering matters — the squeeze is measured off the centre the
+        // block actually reached, not the one it was aiming at, so the
+        // stored `width` always describes the anchors that were drawn.
+        let centre_target = if MatchContext::block_rigid() {
+            let half_w = width / 2.0;
+            centre_target.clamp(
+                PITCH_MARGIN + half_w.min(pitch_centre_y - PITCH_MARGIN),
+                field_height - PITCH_MARGIN - half_w.min(pitch_centre_y - PITCH_MARGIN),
+            )
+        } else {
+            centre_target.clamp(PITCH_MARGIN, field_height - PITCH_MARGIN)
+        };
         // The lateral slide is rate-limited for the same reason as the
         // rear line: a switch of play crosses the pitch far faster than
         // a team can shuffle across it, and the delay in getting over IS
@@ -296,6 +309,29 @@ impl ShapeBuilder<'_> {
             self.max_step,
             BLOCK_SNAP,
         );
+        // …and the width it has room for there — trimmed on the side that
+        // ran out of pitch, and only on that side.
+        //
+        // Squeezing symmetrically about the centre was the first attempt
+        // and it cost real width for nothing: a block shifted to a
+        // touchline lost as much off its FAR edge, where there was
+        // plenty of grass, as off the near one. Measured, in-possession
+        // team width fell 43.3 → 42.4 m against a real 45-58, which is
+        // the wrong direction on a number that was already short.
+        // Clamping the two edges independently and reading the centre
+        // back off them keeps every metre the pitch actually has.
+        let (centre_y, width) = if MatchContext::block_rigid() {
+            (centre_y, width)
+        } else {
+            let lo = (centre_y - width * 0.5).max(PITCH_MARGIN);
+            let hi = (centre_y + width * 0.5).min(field_height - PITCH_MARGIN);
+            // Floored so a block pinned against a touchline is still a
+            // block and not a queue: below this the lateral fractions
+            // stop separating anybody and the flank collapses into one
+            // strip, which is the failure the centre clamp guarded
+            // against.
+            ((lo + hi) * 0.5, (hi - lo).max(WIDTH_NARROW * 0.5))
+        };
 
         // ── Project every player into it ─────────────────────────────
         let mut len = 0usize;

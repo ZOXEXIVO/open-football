@@ -114,6 +114,20 @@ impl TeamShape {
             .map(|(_, pos)| *pos)
     }
 
+    /// The block's live lateral centre, or `fallback` before the first
+    /// refresh.
+    ///
+    /// The counterpart of `DefensiveLine::position_x` for the other axis:
+    /// a unit-level answer to "where is the middle of us right now", so a
+    /// state that positions a player sideways has something to hang off
+    /// besides the pitch's own midpoint. Without it every lateral
+    /// constraint in the engine measured from the halfway stripe, which
+    /// is a fixed landmark, and the whole side was laterally static
+    /// however far the block was told to slide.
+    pub fn centre_or(&self, fallback: f32) -> f32 {
+        if self.active { self.centre_y } else { fallback }
+    }
+
     /// Recompute both sides' blocks in place, from the tactical state
     /// produced by the same refresh pass.
     pub fn refresh(home: &mut Self, away: &mut Self, inputs: &ShapeRefreshInputs<'_>) {

@@ -24,12 +24,24 @@
 //!   substituted player the instant he goes off (he moves to `departed`,
 //!   which the replay goes on drawing on the touchline), so nothing here
 //!   has to unpick a touchline blob from a real position.
-//! * **The phase.** Every cell is booked twice: over all play, and into
-//!   whichever of the two possession phases was running. A real
-//!   full-back's map in possession sits ten to fifteen metres further up
-//!   the pitch than the same man's map out of it, and the pair is the
-//!   clearest picture of a shape there is. One map that never moves
-//!   between the two is the signature of a side with no phases at all.
+//! * **The phase, as the ENGINE means it.** Every cell is booked twice:
+//!   over all play, and into whichever of the two possession phases was
+//!   running. A real full-back's map in possession sits ten to fifteen
+//!   metres further up the pitch than the same man's map out of it, and
+//!   the pair is the clearest picture of a shape there is. One map that
+//!   never moves between the two is the signature of a side with no
+//!   phases at all.
+//!
+//!   ⚠ The phase is [`TeamTacticalState::in_possession`], **not**
+//!   `ball.current_owner`. The first cut used the owner and it was
+//!   measuring something else: somebody is actually CARRYING the ball for
+//!   about 18% of a match, so 82% of every sample fell through into the
+//!   all-play bucket and the two phase maps were built out of settled
+//!   carrying alone. The possession flag is sticky across loose balls and
+//!   passes in flight, it is what `TeamShape` itself reads when it decides
+//!   which end the block hangs from, and it partitions the whole match —
+//!   so the question "does the block make its excursion" is asked of the
+//!   same phase the block was planned for.
 //!
 //! The ball gets a map of its own, folded into *both* frames, because the
 //! per-slot maps hold both sides and the thing they are compared against
@@ -224,6 +236,19 @@ impl ShapeAcc {
 
 static SHAPE: [ShapeAcc; PHASES] = [const { ShapeAcc::new() }; PHASES];
 
+/// How long each side spends in each [`GamePhase`], in sampled instants.
+///
+/// The phase is not decoration — it gates the overlap, the width plan's
+/// commitment and the block's own reference — so "how much of a match is
+/// each one" is a first-order question about the shape, and nothing else
+/// in the harness answers it. Indexed by `GamePhase as usize`.
+static PHASE_TICKS: [AtomicU64; GAME_PHASES] = [const { AtomicU64::new(0) }; GAME_PHASES];
+
+/// Variants of [`GamePhase`]. Asserted against the labels the harness
+/// prints, so a new variant cannot silently fall off the end of the
+/// table.
+pub const GAME_PHASES: usize = 8;
+
 /// One slot's finished maps and totals, in metres and shares.
 #[derive(Clone, Default)]
 pub struct PositionHeat {
@@ -270,6 +295,8 @@ pub struct HeatReport {
     pub positions: Vec<PositionHeat>,
     pub ball: Vec<u64>,
     pub shape: [ShapeHeat; PHASES],
+    /// Side-instants spent in each [`GamePhase`], by `as usize` order.
+    pub game_phase: [u64; GAME_PHASES],
 }
 
 pub struct HeatMapCensus;
@@ -328,6 +355,9 @@ impl HeatMapCensus {
         }
         for acc in SHAPE.iter() {
             acc.reset();
+        }
+        for slot in PHASE_TICKS.iter() {
+            slot.store(0, Ordering::Relaxed);
         }
         LAST_WINDOW.store(u64::MAX, Ordering::Relaxed);
         SAMPLES.store(0, Ordering::Relaxed);
@@ -393,6 +423,7 @@ impl HeatMapCensus {
             positions,
             ball: BALL.iter().map(|c| c.load(Ordering::Relaxed)).collect(),
             shape,
+            game_phase: std::array::from_fn(|i| PHASE_TICKS[i].load(Ordering::Relaxed)),
         }
     }
 }
@@ -422,11 +453,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let w = field.size.width as f32;
         let h = field.size.height as f32;
         let ball = field.ball.position;
-        let owner_team = field
-            .ball
-            .current_owner
-            .and_then(|id| field.players.iter().find(|p| p.id == id))
-            .map(|p| p.team_id);
 
         // The ball, folded into BOTH frames. The slot maps below stack the
         // two sides on top of each other, so the map they are compared
@@ -459,16 +485,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 continue;
             }
             let acc = &POS[index];
-            let phase = match owner_team {
-                Some(team) if team == p.team_id => PHASE_IN_POSSESSION,
-                Some(_) => PHASE_OUT_OF_POSSESSION,
-                None => PHASE_ALL,
+            let phase = if context.tactical_for_team(p.team_id).in_possession {
+                PHASE_IN_POSSESSION
+            } else {
+                PHASE_OUT_OF_POSSESSION
             };
             let cell = HeatMapCensus::cell(x, y);
             HeatMapCensus::grid_slot(index, PHASE_ALL, cell).fetch_add(1, Ordering::Relaxed);
-            if phase != PHASE_ALL {
-                HeatMapCensus::grid_slot(index, phase, cell).fetch_add(1, Ordering::Relaxed);
-            }
+            HeatMapCensus::grid_slot(index, phase, cell).fetch_add(1, Ordering::Relaxed);
 
             let off_centre = (y - PITCH_WIDTH_M * 0.5).abs();
             let gap = (p.position - ball).magnitude() * M_PER_UNIT;
@@ -504,18 +528,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             if gap < BALL_RING_M {
                 acc.near_ball.fetch_add(1, Ordering::Relaxed);
             }
-            match phase {
-                PHASE_IN_POSSESSION => {
-                    acc.poss_n.fetch_add(1, Ordering::Relaxed);
-                    acc.poss_x_x10
-                        .fetch_add((x.max(0.0) * 10.0) as u64, Ordering::Relaxed);
-                }
-                PHASE_OUT_OF_POSSESSION => {
-                    acc.oop_n.fetch_add(1, Ordering::Relaxed);
-                    acc.oop_x_x10
-                        .fetch_add((x.max(0.0) * 10.0) as u64, Ordering::Relaxed);
-                }
-                _ => {}
+            if phase == PHASE_IN_POSSESSION {
+                acc.poss_n.fetch_add(1, Ordering::Relaxed);
+                acc.poss_x_x10
+                    .fetch_add((x.max(0.0) * 10.0) as u64, Ordering::Relaxed);
+            } else {
+                acc.oop_n.fetch_add(1, Ordering::Relaxed);
+                acc.oop_x_x10
+                    .fetch_add((x.max(0.0) * 10.0) as u64, Ordering::Relaxed);
             }
 
             // The shape is the ten outfielders. The keeper is 40 m behind
@@ -543,16 +563,21 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             if count[frame] < 6 {
                 continue;
             }
-            let phase = match (owner_team, team_of_frame[frame]) {
-                (Some(owner), Some(team)) if owner == team => PHASE_IN_POSSESSION,
-                (Some(_), Some(_)) => PHASE_OUT_OF_POSSESSION,
-                _ => PHASE_ALL,
+            let Some(team) = team_of_frame[frame] else {
+                continue;
+            };
+            let tactical = context.tactical_for_team(team);
+            let game_phase = tactical.phase as usize;
+            if game_phase < GAME_PHASES {
+                PHASE_TICKS[game_phase].fetch_add(1, Ordering::Relaxed);
+            }
+            let phase = if tactical.in_possession {
+                PHASE_IN_POSSESSION
+            } else {
+                PHASE_OUT_OF_POSSESSION
             };
             let n = count[frame] as f32;
             for slot in [PHASE_ALL, phase] {
-                if slot != PHASE_ALL && phase == PHASE_ALL {
-                    continue;
-                }
                 let acc = &SHAPE[slot];
                 acc.samples.fetch_add(1, Ordering::Relaxed);
                 acc.length_x10.fetch_add(

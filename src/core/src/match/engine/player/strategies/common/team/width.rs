@@ -32,7 +32,7 @@
 
 use crate::r#match::engine::ball::ball::OffsideLine;
 use crate::r#match::player::strategies::common::states::ActivityIntensity;
-use crate::r#match::{Flank, StateProcessingContext, WidePlan};
+use crate::r#match::{Flank, MatchContext, StateProcessingContext, WidePlan};
 use nalgebra::Vector3;
 
 /// What the wide channel wants from this player right now.
@@ -105,8 +105,35 @@ impl WideChannel {
     /// condition read from three directions, so entry and exit can never
     /// both be true and the state cannot two-cycle.
     pub fn still_mine(ctx: &StateProcessingContext) -> bool {
+        // ⚠ THE PHASE, NOT `is_control_ball()`.
+        //
+        // `is_control_ball` needs a live owner, or a previous owner plus
+        // a ball travelling FORWARD — so a square or backward pass, which
+        // is most of any build-up, reads as not-in-control. The
+        // assignment therefore switched off for the duration of most
+        // passes, which is exactly when a winger should be standing on
+        // his line waiting for one.
+        //
+        // `AttackPlan::refresh` fixed the same bug one level up and says
+        // so in as many words; this gate was re-imposing it underneath
+        // the plan. Measured with `dev_match heat` before the change:
+        // `Midfielder: Holding Width` held **2.7%** of every AI tick and
+        // `Forward: Holding Width` was never entered at all, while the
+        // men who hold a touchline sat a mean 18.8 m off it against a
+        // real 12-17 and spent 18% of a match within 10 m of it against
+        // a real 25-40. A state that owns 2.7% of the match cannot put
+        // anybody anywhere.
+        //
+        // The tactical flag is sticky across loose balls and is the same
+        // one the plan that made this assignment consulted, so the gate
+        // and the plan can no longer disagree.
+        let in_phase = if MatchContext::shape_fix_off() {
+            ctx.team().is_control_ball()
+        } else {
+            ctx.team().tactical().in_possession
+        };
         !ctx.player.has_ball(ctx)
-            && ctx.team().is_control_ball()
+            && in_phase
             && Self::assignment(ctx).is_some()
             // A box slot outranks the touchline: the far-side holder
             // arriving at the back post is the same man one phase later,

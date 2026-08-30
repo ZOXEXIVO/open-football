@@ -1,8 +1,8 @@
 use crate::r#match::player::strategies::common::players::ops::box_movement::BoxMovement;
 use crate::r#match::{
     AttackPlan, BoxSlot, CoachInstruction, DefensiveDuty, DefensivePlan, Flank, GamePhase,
-    MatchCoach, MatchPlayerLite, PlayerSide, StateProcessingContext, TeamShape, TeamTacticalState,
-    WidePlan,
+    MatchCoach, MatchContext, MatchPlayerLite, PlayerSide, StateProcessingContext, TeamShape,
+    TeamTacticalState, WidePlan,
 };
 use crate::{PlayerFieldPositionGroup, Tactics};
 use nalgebra::Vector3;
@@ -33,6 +33,51 @@ impl<'b> TeamOperationsImpl<'b> {
     /// the pass simple and the full-back's decision hard.
     const OVERLAP_LEAD: f32 = 60.0;
     const OVERLAP_OUTSIDE: f32 = 20.0;
+    /// How much of the gap between the block's line and the BALL a man
+    /// holding a touchline closes.
+    ///
+    /// Holding width is a lateral instruction — the doc on
+    /// [`WidePlan::width_anchor`] says so, and takes the depth from the
+    /// block unchanged. That is right for a winger whose block anchor is
+    /// already the front rank and wrong for everybody else, because the
+    /// men a formation draws widest are its FULL-BACKS: they sit on the
+    /// block's rear line, which in possession is capped at
+    /// `REAR_ATTACK_CEILING`, so a wide player's anchor came out about
+    /// 62 m up a 105 m pitch and the overlap runner's seven and a half
+    /// metres beyond that — a stride short of the final third, by
+    /// construction. Measured, full-backs spent **0.8%** of a match in
+    /// the final third against a real 8-15%, and 0.5% of all wide ticks
+    /// were anywhere near a byline.
+    ///
+    /// A man holding a touchline in an attack stands level with the play.
+    /// 0.65 puts him most of the way to the ball's own line while still
+    /// leaving him behind it when the ball is already at the byline, and
+    /// pulls him back when the move is recycled behind him.
+    const WIDTH_DEPTH_FOLLOW: f32 = 0.65;
+    // ⚠ A DEEPER FOLLOW FOR THE OVERLAP RUNNER WAS TRIED AND REVERTED —
+    // DO NOT RE-DERIVE IT.
+    //
+    // The reasoning is sound and the measurement refuses it. 0.65 leaves
+    // a width holder permanently 35% of the gap behind the ball, which is
+    // right for the man offering the square option and wrong for the one
+    // whose whole job is to get past it: with the ball at 70 m and a
+    // full-back's block anchor around 40, it put him at 59 and
+    // `OVERLAP_LEAD` carried him to 66 — a stride short of the final
+    // third, exactly where full-backs kept landing (2.8% of a match there
+    // against a real 8-15%).
+    //
+    // Giving the designated runner 0.9 moved his ANCHOR into the final
+    // third and moved his SHARE of it not at all (2.8% → 2.75%). What it
+    // did move was his distance from that anchor: `Defender: Overlapping`
+    // went from 13.5 m behind it to 15.7. The state owns **0.7% of AI
+    // ticks** and `WideChannel::still_mine` ends it the instant
+    // possession turns over, so the run is over before the distance is
+    // covered — and the touchline time it appeared to buy full-backs was
+    // taken straight off the wingers (23.0% → 21.6%).
+    //
+    // Anchor depth is not the constraint here; state occupancy is. The
+    // work that would move it is an audit of which states consult
+    // `my_anchor` at all, not another constant.
 
     pub fn tactics(&self) -> &Tactics {
         // A sent-off / mid-swap player can transiently have no side
@@ -271,6 +316,9 @@ impl<'b> TeamOperationsImpl<'b> {
         }
         let field_height = self.ctx.context.field_size.height as f32;
         let block = self.shape().anchor_of(self.ctx.player.id)?;
+        // …at the depth of the play, not the depth of the block's back
+        // line. See [`Self::width_depth`].
+        let block = Vector3::new(self.width_depth(block.x), block.y, 0.0);
         // 0.35 floor: a man given the touchline goes at least part of
         // the way there whatever the tactic says, or the assignment is
         // decorative.
@@ -291,6 +339,27 @@ impl<'b> TeamOperationsImpl<'b> {
             ));
         }
         None
+    }
+
+    /// The depth a width assignment is held at — see
+    /// [`Self::WIDTH_DEPTH_FOLLOW`].
+    ///
+    /// Forward only. The width plan goes live as soon as the side has the
+    /// ball, build-up included, so a symmetric follow would drag a winger
+    /// back to his own six-yard box every goal kick. Holding a touchline
+    /// pushes a man UP to the play; it never pulls him behind the line
+    /// his own block already drew for him.
+    fn width_depth(&self, block_x: f32) -> f32 {
+        if MatchContext::shape_fix_off() {
+            return block_x;
+        }
+        let ball_x = self.ctx.tick_context.positions.ball.position.x;
+        let field_width = self.ctx.context.field_size.width as f32;
+        let forward = self.ctx.player.side.map_or(1.0, |s| s.forward_dir_x());
+        if (ball_x - block_x) * forward <= 0.0 {
+            return block_x;
+        }
+        (block_x + (ball_x - block_x) * Self::WIDTH_DEPTH_FOLLOW).clamp(14.0, field_width - 14.0)
     }
 
     /// How far this player is from the place his team wants him.

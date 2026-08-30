@@ -13342,6 +13342,41 @@ impl HeatCensusRun {
         );
         println!("  1.0 says the man is not holding a position — he is a function of the ball.");
 
+        // ── how the match divides into phases ─────────────────────────
+        //
+        // The phase gates the overlap, the width plan's commitment and the
+        // block's own reference, so how much of a match each one owns is a
+        // first-order question about the shape — and every funnel in the
+        // harness reads it without anybody ever having counted it.
+        println!();
+        println!("--- GAME PHASE (share of side-instants) ---");
+        const PHASE_LABELS: [&str; 8] = [
+            "BuildUp",
+            "Progression",
+            "Attack",
+            "AttackingTransition",
+            "DefensiveTransition",
+            "MidBlock",
+            "LowBlock",
+            "HighPress",
+        ];
+        let phase_total: u64 = report.game_phase.iter().sum::<u64>().max(1);
+        for (label, n) in PHASE_LABELS.iter().zip(report.game_phase) {
+            println!(
+                "  {:<22} {:>6.1}%   {:>12}",
+                label,
+                n as f64 / phase_total as f64 * 100.0,
+                n
+            );
+        }
+        let in_poss: u64 = report.game_phase[0] + report.game_phase[1] + report.game_phase[2]
+            + report.game_phase[3];
+        println!(
+            "  in possession: {:.1}% of it, of which Attack+Progression {:.1}%   (real ~50-60%)",
+            in_poss as f64 / phase_total as f64 * 100.0,
+            (report.game_phase[1] + report.game_phase[2]) as f64 / in_poss.max(1) as f64 * 100.0
+        );
+
         // ── team shape ────────────────────────────────────────────────
         println!();
         println!("--- TEAM SHAPE (ten outfielders as a body) ---");
