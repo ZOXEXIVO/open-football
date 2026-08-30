@@ -93,16 +93,38 @@ fn ticks_to_speed(player: &mut MatchPlayer, fraction: f32) -> u32 {
 
 #[test]
 fn higher_acceleration_reaches_top_speed_sooner() {
-    let mut quick = build_runner(18.0, 12.0, 9500);
-    let mut slow = build_runner(6.0, 12.0, 9500);
-    // Same pace: race the RAMP, not the blend. (The blend still gives
-    // the 18 a slightly higher ceiling; racing to a fixed fraction of
-    // each player's own max isolates the ramp itself.)
-    let t_quick = ticks_to_speed(&mut quick, 0.90);
-    let t_slow = ticks_to_speed(&mut slow, 0.90);
+    // The budget itself must separate the attribute (continuous — no
+    // tick quantization): ≥15% more burst for 18 than for 6.
+    let quick = build_runner(18.0, 12.0, 9500);
+    let slow = build_runner(6.0, 12.0, 9500);
+    let b_quick = MovementEffort::accel_budget(&quick, 10, true);
+    let b_slow = MovementEffort::accel_budget(&slow, 10, true);
     assert!(
-        (t_quick as f32) < t_slow as f32 * 0.80,
-        "accel 18 should ramp ≥20% faster than accel 6: {t_quick} vs {t_slow} AI ticks"
+        b_quick > b_slow * 1.15,
+        "accel 18 budget {b_quick} should be ≥15% over accel 6 {b_slow}"
+    );
+    // And the race must show it: same pace, standing start, first
+    // second (50 AI ticks) — the quick starter leads by a real margin
+    // (≥1.5 u ≈ a stride). Ramp + blend both contribute; the point is
+    // that the ATTRIBUTE decides the first metres.
+    let mut quick = quick;
+    let mut slow = slow;
+    quick.velocity = Vector3::zeros();
+    slow.velocity = Vector3::zeros();
+    let (mut d_quick, mut d_slow) = (0.0f32, 0.0f32);
+    for _ in 0..50 {
+        let mq = quick.max_speed_with_condition_cached();
+        let ms = slow.max_speed_with_condition_cached();
+        quick.velocity =
+            MovementEffort::sprint_ramp(&quick, 10, Vector3::new(mq, 0.0, 0.0), mq, mq);
+        slow.velocity = MovementEffort::sprint_ramp(&slow, 10, Vector3::new(ms, 0.0, 0.0), ms, ms);
+        // Positions integrate on BOTH sim ticks of each AI tick.
+        d_quick += quick.velocity.x * 2.0;
+        d_slow += slow.velocity.x * 2.0;
+    }
+    assert!(
+        d_quick > d_slow + 1.5,
+        "accel 18 should lead a same-pace standing start by ≥1.5 u after 1 s: {d_quick} vs {d_slow}"
     );
 }
 

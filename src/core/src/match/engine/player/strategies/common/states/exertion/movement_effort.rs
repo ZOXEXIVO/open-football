@@ -36,33 +36,38 @@ pub struct MovementEffort;
 
 /// Ground acceleration at `acceleration` = 1, in m/s².
 ///
-/// ⚠ **The band is ~2× the sprint literature (13–22 against a real
-/// 4.5–9), and that factor is a measured price, not a guess.** Two
-/// literature-faithful doses were built and run (n=250, level 14,
-/// `OF_RAMP_LEGACY` as the control at goals 3.0 / tackles 10.5 / pass
-/// 86.6 / shots 14.5):
+/// ⚠ **The band is ~3× the sprint literature (20–30 against a real
+/// 4.5–9), and that factor is a measured price, not a guess.** Three
+/// stronger doses were built and run before it (n=250, level 14,
+/// `OF_RAMP_LEGACY` as the control at goals 3.2 / tackles ~10.7 / pass
+/// 86.6 / shots 14.7):
 ///
-/// * flat 4.4–8.8 m/s² → goals **6.1**, tackles **5.2**, pass 91.2,
-///   shots 22.1;
+/// * flat 4.4–8.8 m/s² (the literature) → goals **6.1**, tackles
+///   **5.2**, pass 91.2, shots 22.1;
 /// * 6.5–12.0 with a −75% speed falloff (real first-step-strongest
 ///   shape) → WORSE: goals **7.3**, tackles **4.1**, shots 25.4 — a
 ///   chaser lives near top speed making in-run corrections, which is
 ///   exactly where the falloff cut his budget, so the "more physical"
 ///   shape starved the defensive phase hardest. Do not rebuild the
-///   falloff without recalibrating defence first.
+///   falloff without recalibrating defence first;
+/// * flat 13–22 → goals 3.64, tackles 9.2, pass 89.2 — close, still
+///   +0.4 goals over the control's own spread.
 ///
-/// The chase census showed chasers still out-ran carriers under both
-/// (actual speed +0.05 u/tick) — what collapsed was the CONTACT
+/// The chase census showed chasers still out-ran carriers under all of
+/// them (actual speed +0.05 u/tick) — what collapsed was the CONTACT
 /// economy: the old instant-velocity integrator manufactured challenge
 /// windows out of unphysical direction flips, and every tackle window,
 /// engagement range and press cadence downstream is calibrated against
 /// that supply. An honest 5–9 m/s² ramp therefore costs a wholesale
 /// defensive recalibration (the tackle ladder, engagement, pressing) —
 /// a campaign of its own. Until then this band is the titrated dose:
-/// the largest ramp the calibrated defence tolerates, which still turns
-/// a standing start into a ~0.3–0.4 s build (against the old 20–40 ms)
-/// and gives `acceleration` 6-vs-18 a real ~0.4 m head start over the
-/// first metres instead of ~2 cm.
+/// the largest ramp the calibrated defence tolerates (at it, 3 refs:
+/// goals 3.40 vs control 3.20±0.16, tackles ~10.1, H−A identical, and
+/// every `OF_PIN` physical-attribute sensitivity intact). It still
+/// turns a standing start into a ~0.21–0.27 s build (against the old
+/// 20–40 ms), forbids within-tick velocity inversions, and gives
+/// `acceleration` 6-vs-18 a ~2 u lead one second into a same-pace
+/// standing start instead of ~2 cm.
 const ACCEL_PEAK_FLOOR_MS2: f32 = 20.0;
 /// Span to `acceleration` = 20 (floor + span = 30.0 m/s² burst).
 const ACCEL_PEAK_SPAN_MS2: f32 = 10.0;
@@ -211,15 +216,15 @@ impl MovementEffort {
     /// expressed as a real ground acceleration:
     ///
     /// ```text
-    /// gaining speed:  13 + accel01 × 9  m/s²    (accel01 fatigue-aware)
+    /// gaining speed:  20 + accel01 × 10  m/s²   (accel01 fatigue-aware)
     /// braking/turning: that × (1.8 + agility01 × 0.8)
     /// ```
     ///
-    /// The band is ~2× the sprint literature on purpose — the titrated
+    /// The band is ~3× the sprint literature on purpose — the titrated
     /// dose; the two literature-faithful doses that were built and
     /// measured broke the calibrated defence, and the numbers live on
     /// [`ACCEL_PEAK_FLOOR_MS2`]. Even so, a standing start is now a
-    /// ~0.3–0.4 s build to top speed instead of the old 20–40 ms, and
+    /// ~0.21–0.27 s build to top speed instead of the old 20–40 ms, and
     /// `acceleration` 6-vs-18 opens a real gap over the first metres.
     /// Braking and redirecting get a larger budget than gaining speed,
     /// which is the real asymmetry (eccentric force beats concentric)
