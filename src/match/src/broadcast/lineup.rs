@@ -1,27 +1,28 @@
 //! **The teams walked out**: both elevens standing in one line inside the near
 //! touchline before a ball is kicked, and the camera that goes down the line.
 //!
-//! Football on television does not open on a kickoff. It opens on the two
-//! sides lined up in front of the main stand, and a camera that walks the
-//! line — one slow pass along the faces, left to right across the frame.
-//! Then it cuts to the gantry and the match starts.
+//! Football on television does not open on a kickoff. It opens high over
+//! the ground, finds the two sides lined up in front of the main stand,
+//! comes down to them, and walks the line — one slow pass along the faces,
+//! left to right across the frame. Then it cuts to the gantry and the match
+//! starts.
 //!
 //! That is exactly what this is, and it has three beats — **one unbroken
 //! camera move**, because there is no cut anywhere inside the ceremony:
 //!
-//! 1. **One long pass along the faces of the whole line** at eye level —
+//! 1. **The approach.** It opens [`Lineup::OVERHEAD`] metres over the
+//!    centre spot, the line a row of figures in front of the stand, and
+//!    flies toward them from behind, sinking as it goes and arriving at eye
+//!    level behind the end of the line. It is also what is up while the
+//!    squad is being dressed — see [`Act::Assembling`], the one beat with
+//!    no fixed length.
+//! 2. **The corner.** Round the end of the line and onto the front of it,
+//!    shedding speed as it comes round.
+//! 3. **One long pass along the faces of the whole line** at eye level —
 //!    slow enough to look at each man as he goes by, crossing the frame
 //!    left to right. (A camera on the gantry side has world +x on the LEFT
-//!    of its frame, so the dolly travels toward −x.) It is also what is up
-//!    while the squad is being dressed — see [`Act::Assembling`], the one
-//!    beat with no fixed length.
-//! 2. **The corner.** Past the last man the camera does not stop: it swings
-//!    round the end of the line to the back side, gathering speed as it
-//!    comes round.
-//! 3. **The get-away.** From behind them it pulls away toward the middle of
-//!    the field, rising as it goes — the line receding into the whole
-//!    ground — and over the centre spot comes the cut to the gantry and the
-//!    kickoff.
+//!    of its frame, so the dolly travels toward −x.) Past the last man
+//!    comes the cut to the gantry and the kickoff.
 //!
 //! ⚠ **No plate is drawn over anybody for any of it**, and that is not an
 //! omission — it is where the names come from. The ceremony names its men
@@ -97,9 +98,10 @@ enum Act {
     #[default]
     Waiting,
     /// The recording is in, the playhead is parked and the squad is being
-    /// dressed a few men a frame. The opening frame of the pass is held over
-    /// it, which is what turns "twenty-two bodies appearing three at a time"
-    /// into "the teams coming out".
+    /// dressed a few men a frame. The opening aerial is held over it — and
+    /// from [`Lineup::OVERHEAD`] metres over the centre spot, twenty-two
+    /// bodies appearing three at a time is a line assembling in the
+    /// distance rather than men popping into existence.
     Assembling,
     /// Running, seconds of REAL time into the walk down the line.
     Running(f32),
@@ -189,8 +191,8 @@ impl Lineup {
     /// of what lets the whole ceremony be a single unbroken camera move.
     const FRONT: (f32, f32) = (4.3, 1.72);
     /// What the beats aim at, in metres up a man: his eyes on the pass along
-    /// the faces, and the shoulder line of the row for the get-away's locked
-    /// look back at it.
+    /// the faces, and the shoulder line of the row for the approach's locked
+    /// look at it.
     const SHOULDERS: f32 = 1.38;
     const EYES: f32 = 1.60;
     /// **How far ahead of itself the lens looks as it travels**, as a fraction
@@ -211,9 +213,10 @@ impl Lineup {
     /// How far past the end man the pass runs at either end, in metres. Enough
     /// that the last man crosses the whole frame rather than stopping in the
     /// middle of it — and no more, because at [`Self::PACE`] every metre of it
-    /// is the better part of a second and a half of empty touchline. The far
-    /// end of it is also the post the corner pivots on: the camera is clear
-    /// of the last man before it starts to swing round him.
+    /// is the better part of a second and a half of empty touchline. The
+    /// high end of it is also the post the corner pivots on: the swing onto
+    /// the faces happens beyond the end man, so the pass opens already
+    /// clear of him.
     const RUN_ON: f32 = 1.8;
     /// The lens the pass is held on, as a multiple of the wheel's own factor —
     /// under one is wider than the broadcast lens, which every shot here is:
@@ -253,28 +256,28 @@ impl Lineup {
     /// ⚠ Which is long, and deliberately survivable: every way of asking for
     /// the football ends it on the frame it is asked — see [`Self::hold`].
     const PACE: f32 = 0.686;
-    /// **How fast the get-away crosses the ground, in metres a second** —
-    /// eight times the pass, because it is a different sentence: the pass
-    /// says *look at each of these men*, and the get-away says *and now the
-    /// match*. The corner ramps up to this and the pull-out holds it all the
-    /// way to the cut.
+    /// **How fast the approach crosses the ground, in metres a second** —
+    /// eight times the pass, because they are different sentences: the
+    /// approach says *here is the ground and here are the teams*, and the
+    /// pass says *now look at each of these men*. The approach holds this
+    /// the whole way in, and the corner sheds it down to the pass's crawl.
     const FLY: f32 = 5.5;
-    /// **How far the get-away carries straight on before bending away**, in
-    /// metres — the middle handle of its curve ([`Self::getaway_point`]).
-    /// The corner hands the camera over travelling ALONG the line, and the
-    /// middle of the field is off to the side of that heading; the handle is
-    /// what turns one into the other without a kink at the seam.
+    /// **How far out from the corner the approach straightens up**, in
+    /// metres — the middle handle of its curve ([`Self::approach_point`]).
+    /// The middle of the field is off to the side of the line's own axis,
+    /// and the corner needs the camera arriving ALONG that axis; the handle
+    /// is what turns one heading into the other without a kink at the seam.
     const HANDLE: f32 = 6.0;
-    /// …and how high it has risen by the time it is over the centre spot, in
-    /// metres. High enough that the ground the ceremony hands back reads as
-    /// the whole pitch rather than a patch of turf. The rise is EASED over
-    /// the pull-out, so the corner hands over dead level and the climb
-    /// flattens out again as the cut arrives.
+    /// …and how high over the centre spot the ceremony OPENS, in metres.
+    /// High enough that the first frame reads as the whole ground with a
+    /// line of men in it rather than a patch of turf. The descent is EASED,
+    /// so the opening hangs still for a beat and the arrival at the corner
+    /// is dead level.
     const OVERHEAD: f32 = 13.0;
-    /// How finely the get-away's curve is walked when it is measured and
+    /// How finely the approach's curve is walked when it is measured and
     /// travelled: enough legs that each is well under half a metre, so the
     /// polyline is within a millimetre or two of the true curve.
-    const GETAWAY_STEPS: usize = 64;
+    const APPROACH_STEPS: usize = 64;
     /// **How long the wide will wait for the last man to be dressed**, in real
     /// seconds, before it starts anyway.
     ///
@@ -649,9 +652,10 @@ impl Lineup {
         ((last - first) + Self::RUN_ON * 2.0) / Self::PACE
     }
 
-    /// The speed the pass ends at: [`Self::glide`]'s slope at its far end is
-    /// `1 − LEAN`, so the camera arrives at the corner still moving, at just
-    /// under half its own average. The corner picks it up from exactly here.
+    /// The speed the pass opens and closes at: [`Self::glide`]'s slope is
+    /// `1 − LEAN` at both of its ends, just under half the pass's own
+    /// average. The corner sheds the approach's [`Self::FLY`] down to
+    /// exactly here, so the hand-over onto the faces has no lurch in it.
     fn crawl() -> f32 {
         Self::PACE * (1.0 - Self::LEAN)
     }
@@ -660,46 +664,47 @@ impl Lineup {
     ///
     /// ⚠ **A consequence of what it has to join, not a number of its own.**
     /// The corner covers half a circle of [`Self::FRONT`].0 while its speed
-    /// ramps steadily from the crawl the pass hands it to the [`Self::FLY`]
-    /// the get-away takes over at — so neither seam has a lurch in it, and
-    /// the duration is simply that distance over the average of the two
-    /// speeds.
+    /// sheds steadily from the [`Self::FLY`] the approach arrives at to the
+    /// crawl the pass opens on — so neither seam has a lurch in it, and the
+    /// duration is simply that distance over the average of the two speeds.
     fn swing_seconds(&self) -> f32 {
         PI * Self::FRONT.0 * 2.0 / (Self::crawl() + Self::FLY)
     }
 
-    /// …and the get-away: the ground its own curve covers, at [`Self::FLY`].
-    fn getaway_seconds(&self) -> f32 {
-        self.getaway_length() / Self::FLY
+    /// …and the approach: the ground its own curve covers, at [`Self::FLY`].
+    fn approach_seconds(&self) -> f32 {
+        self.approach_length() / Self::FLY
     }
 
-    /// The whole ceremony, in seconds: the pass, the corner, the get-away.
+    /// The whole ceremony, in seconds: the approach, the corner, the pass.
     fn total(&self) -> f32 {
-        self.walk_seconds() + self.swing_seconds() + self.getaway_seconds()
+        self.approach_seconds() + self.swing_seconds() + self.walk_seconds()
     }
 
     /// The camera, `into` seconds in.
     ///
-    /// ⚠ **No cut anywhere.** One move: down the faces left to right, round
-    /// the last man, and away to the middle of the field — the three beats
-    /// are one path, continuous in position AND in speed at both seams (see
-    /// [`Self::round_the_end`] and [`Self::getaway_point`]), and the only
-    /// cut the ceremony has is the one at the very end, to the kickoff.
+    /// ⚠ **No cut anywhere.** One move: down from over the centre spot to
+    /// behind the line, round the end man onto the faces, and left to right
+    /// along the whole line — the three beats are one path, continuous in
+    /// position AND in speed at both seams (see [`Self::approach_point`] and
+    /// [`Self::round_the_end`]), and the only cut the ceremony has is the
+    /// one at the very end, to the kickoff.
     fn shot_at(&self, into: f32) -> Shot {
         let (first, last) = self.ends();
         let start = first - Self::RUN_ON;
         let end = last + Self::RUN_ON;
-        let walk = self.walk_seconds();
-        if into < walk {
-            let along = Self::glide((into / walk.max(1e-3)).clamp(0.0, 1.0));
-            return Self::in_front(end + (start - end) * along);
+        let approach = self.approach_seconds();
+        if into < approach {
+            let gone = (into * Self::FLY).min(self.approach_length());
+            return self.approach(gone);
         }
         let swing = self.swing_seconds();
-        if into < walk + swing {
-            return self.round_the_end(start, into - walk);
+        if into < approach + swing {
+            return self.round_the_end(end, into - approach);
         }
-        let gone = (into - walk - swing) * Self::FLY;
-        self.getaway(gone.min(self.getaway_length()))
+        let walk = self.walk_seconds();
+        let along = Self::glide(((into - approach - swing) / walk.max(1e-3)).clamp(0.0, 1.0));
+        Self::in_front(end + (start - end) * along)
     }
 
     /// The pass: in front of them at eye level, crossing the frame left to
@@ -713,87 +718,89 @@ impl Lineup {
     }
 
     /// **The corner: half a circle round the end of the line**, `t` seconds
-    /// into the swing, pivoting on the far end of the pass's run-on.
+    /// into the swing, pivoting on the high end of the pass's run-on — from
+    /// behind the line, round the end man, onto the faces.
     ///
-    /// The pass's last position and the get-away's first are the two ends of
+    /// The approach's last position and the pass's first are the two ends of
     /// one semicircle of radius [`Self::FRONT`].0 centred on the line, so
     /// the path is continuous by construction. The SPEED is continuous by
-    /// construction too: the camera accelerates steadily along the arc from
-    /// [`Self::crawl`] to [`Self::FLY`] — an operator breaking into a run,
+    /// construction too: the camera decelerates steadily along the arc from
+    /// [`Self::FLY`] to [`Self::crawl`] — an operator easing out of a run,
     /// not a machine changing gear.
     ///
-    /// The height holds eye level for the whole turn — the rise belongs to
-    /// the get-away — and the look is carried from just past the last face
-    /// round to the middle of the row, on a smoothstep of ground covered, so
-    /// it is not still swinging at either seam.
+    /// The height holds eye level for the whole turn — the descent belongs
+    /// to the approach — and the look is carried from the middle of the row
+    /// round to the first face, on a smoothstep of ground covered, so it is
+    /// not still swinging at either seam.
     fn round_the_end(&self, corner: f32, t: f32) -> Shot {
         let swing = self.swing_seconds().max(1e-3);
-        let gone = Self::crawl() * t + (Self::FLY - Self::crawl()) * t * t / (2.0 * swing);
+        let gone = Self::FLY * t - (Self::FLY - Self::crawl()) * t * t / (2.0 * swing);
         let round = (gone / Self::FRONT.0).clamp(0.0, PI);
         let over = Self::ease((gone / (PI * Self::FRONT.0)).clamp(0.0, 1.0));
         Shot {
             stand: Vec3::new(
-                corner - Self::FRONT.0 * round.sin(),
+                corner + Self::FRONT.0 * round.sin(),
                 Self::FRONT.1,
-                Self::ROW_Z - Self::FRONT.0 * round.cos(),
+                Self::ROW_Z + Self::FRONT.0 * round.cos(),
             ),
-            aim: Self::in_front(corner).aim.lerp(Self::midline(), over),
+            aim: Self::midline().lerp(Self::in_front(corner).aim, over),
             lens: Self::FRONT_LENS,
         }
     }
 
-    /// Where the get-away looks: the middle of the row, at shoulder height.
-    /// Locked for the whole pull-out — a crane move reads as a crane move
-    /// because the look stays put while the ground opens up around it.
+    /// Where the approach looks: the middle of the row, at shoulder height.
+    /// Locked for the whole flight in — the ground rushes underneath while
+    /// the subject holds still, which is what reads as an approach.
     fn midline() -> Vec3 {
         Vec3::new(0.0, Self::SHOULDERS, Self::ROW_Z)
     }
 
-    /// **The get-away's path**, `t` in 0..1: from behind the end of the line
-    /// to [`Self::OVERHEAD`] metres over the centre spot.
+    /// **The approach's path**, `t` in 0..1: from [`Self::OVERHEAD`] metres
+    /// over the centre spot down to behind the high end of the line.
     ///
-    /// On the ground it is a quadratic curve whose middle handle carries
-    /// straight on from the corner ([`Self::HANDLE`]), so the seam has no
-    /// kink in it; the third point is the centre spot — the origin, so its
-    /// term vanishes. The rise is eased on top, which leaves the corner dead
-    /// level and arrives flattening out.
-    fn getaway_point(&self, t: f32) -> Vec3 {
-        let (first, _) = self.ends();
-        let start = first - Self::RUN_ON;
-        let from = Vec2::new(start, Self::ROW_Z + Self::FRONT.0);
-        let handle = Vec2::new(start + Self::HANDLE, Self::ROW_Z + Self::FRONT.0);
+    /// On the ground it is a quadratic curve whose middle handle sits
+    /// [`Self::HANDLE`] metres short of the arrival, on the line's own axis,
+    /// so the camera arrives travelling the way the corner opens and the
+    /// seam has no kink in it; the first point is the centre spot — the
+    /// origin, so its term vanishes. The descent is eased on top, which
+    /// hangs the opening still for a beat and lands the arrival dead level.
+    fn approach_point(&self, t: f32) -> Vec3 {
+        let (_, last) = self.ends();
+        let end = last + Self::RUN_ON;
+        let back = Vec2::new(end, Self::ROW_Z + Self::FRONT.0);
+        let handle = Vec2::new(end - Self::HANDLE, Self::ROW_Z + Self::FRONT.0);
         let one = 1.0 - t;
-        let flat = from * (one * one) + handle * (2.0 * one * t);
+        let flat = handle * (2.0 * one * t) + back * (t * t);
         Vec3::new(
             flat.x,
-            Self::FRONT.1 + (Self::OVERHEAD - Self::FRONT.1) * Self::ease(t),
+            Self::FRONT.1 + (Self::OVERHEAD - Self::FRONT.1) * Self::ease(one),
             flat.y,
         )
     }
 
-    /// How much ground the get-away covers, in metres — measured along the
-    /// path, rise included, so [`Self::FLY`] means what it says.
-    fn getaway_length(&self) -> f32 {
+    /// How much ground the approach covers, in metres — measured along the
+    /// path, descent included, so [`Self::FLY`] means what it says.
+    fn approach_length(&self) -> f32 {
         let mut length = 0.0;
-        let mut previous = self.getaway_point(0.0);
-        for step in 1..=Self::GETAWAY_STEPS {
-            let next = self.getaway_point(step as f32 / Self::GETAWAY_STEPS as f32);
+        let mut previous = self.approach_point(0.0);
+        for step in 1..=Self::APPROACH_STEPS {
+            let next = self.approach_point(step as f32 / Self::APPROACH_STEPS as f32);
             length += next.distance(previous);
             previous = next;
         }
         length
     }
 
-    /// The get-away, `gone` metres along its own path — walked by distance
+    /// The approach, `gone` metres along its own path — walked by distance
     /// rather than by the curve's parameter, so the camera crosses the
-    /// ground at [`Self::FLY`] the whole way and the corner's hand-over has
+    /// ground at [`Self::FLY`] the whole way and the corner receives it with
     /// no step in speed.
-    fn getaway(&self, gone: f32) -> Shot {
+    fn approach(&self, gone: f32) -> Shot {
         let mut travelled = 0.0;
-        let mut previous = self.getaway_point(0.0);
+        let mut previous = self.approach_point(0.0);
         let mut stand = previous;
-        for step in 1..=Self::GETAWAY_STEPS {
-            let next = self.getaway_point(step as f32 / Self::GETAWAY_STEPS as f32);
+        for step in 1..=Self::APPROACH_STEPS {
+            let next = self.approach_point(step as f32 / Self::APPROACH_STEPS as f32);
             let leg = next.distance(previous);
             if travelled + leg >= gone {
                 stand = previous.lerp(next, (gone - travelled) / leg.max(1e-6));
@@ -961,8 +968,9 @@ mod tests {
 
     /// The frame of the pass at which the camera is level with `man`.
     fn level_with(lineup: &Lineup, man: &Stand) -> Shot {
+        let from = lineup.approach_seconds() + lineup.swing_seconds();
         (0..=800)
-            .map(|step| lineup.shot_at(lineup.walk_seconds() * step as f32 / 800.0))
+            .map(|step| lineup.shot_at(from + lineup.walk_seconds() * step as f32 / 800.0))
             .min_by(|left, right| {
                 (left.stand.x - man.at.x)
                     .abs()
@@ -984,31 +992,75 @@ mod tests {
     #[test]
     fn the_pass_crosses_the_frame_left_to_right() {
         let lineup = walked_out();
-        let opening = lineup.shot_at(0.0);
+        let from = lineup.approach_seconds() + lineup.swing_seconds();
+        let opening = lineup.shot_at(from);
         assert!(
             opening.stand.x > lineup.row[21].at.x,
             "the pass does not open beyond the high end"
         );
-        let handover = lineup.shot_at(lineup.walk_seconds() - 1e-3);
+        let handover = lineup.shot_at(lineup.total() - 1e-3);
         assert!(
             handover.stand.x < lineup.row[0].at.x,
-            "the pass hands over before the last man"
+            "the pass does not end past the last man"
         );
         // …and it never doubles back.
         let mut previous = opening.stand.x;
         for step in 1..=400 {
-            let shot = lineup.shot_at(lineup.walk_seconds() * step as f32 / 400.0);
+            let shot = lineup.shot_at(from + lineup.walk_seconds() * step as f32 / 400.0);
             assert!(shot.stand.x <= previous + 1e-4, "the pass doubled back");
             previous = shot.stand.x;
         }
     }
 
-    /// The pass is on the stand side of the line, down their own eyeline —
-    /// and the get-away comes out BEHIND them and then only ever moves away
-    /// and up, until the middle of the field ends the ceremony.
+    /// The ceremony opens high over the middle of the field, and the
+    /// approach only ever sinks and closes on the line — arriving at eye
+    /// level BEHIND them, so the corner can bring the camera round onto the
+    /// faces, which are down their own eyeline for the pass.
     #[test]
-    fn the_getaway_turns_behind_them_and_rises_to_the_middle_of_the_field() {
+    fn the_approach_comes_down_from_the_middle_of_the_field_behind_them() {
         let lineup = walked_out();
+        // The opening frame: high over the centre spot, looking at the row.
+        let opening = lineup.shot_at(0.0);
+        assert!(
+            opening.stand.x.abs() < 0.5 && opening.stand.z.abs() < 0.5,
+            "the ceremony does not open over the middle of the field: {:?}",
+            opening.stand
+        );
+        assert!((opening.stand.y - Lineup::OVERHEAD).abs() < 0.1);
+        let look = (opening.aim - opening.stand).normalize();
+        assert!(
+            look.z < 0.0 && look.y < 0.0,
+            "the opening is not looking down at the line: {look:?}"
+        );
+        // The flight in only ever sinks and closes on the line…
+        let mut previous = opening;
+        for step in 1..=200 {
+            let shot = lineup.shot_at(lineup.approach_seconds() * step as f32 / 200.0);
+            assert!(
+                shot.stand.z <= previous.stand.z + 1e-4,
+                "it backed away from the line"
+            );
+            assert!(
+                shot.stand.y <= previous.stand.y + 1e-4,
+                "it climbed on the way in"
+            );
+            previous = shot;
+        }
+        // …arrives behind the line at eye level…
+        let arrived = lineup.shot_at(lineup.approach_seconds());
+        assert!(
+            arrived.stand.z > Lineup::ROW_Z,
+            "the approach does not arrive behind them"
+        );
+        assert!((arrived.stand.y - Lineup::FRONT.1).abs() < 0.05);
+        // …and the corner comes out on the front of the line, still level.
+        let round = lineup.shot_at(lineup.approach_seconds() + lineup.swing_seconds());
+        assert!(
+            round.stand.z < Lineup::ROW_Z,
+            "the corner does not come out in front of them"
+        );
+        assert!((round.stand.y - Lineup::FRONT.1).abs() < 0.05);
+        // The pass itself is down their own eyeline, at eye level.
         let man = lineup.row[7];
         let level = level_with(&lineup, &man);
         let to_lens = (level.stand - man.at).with_y(0.0).normalize();
@@ -1019,45 +1071,6 @@ mod tests {
         assert!(
             (level.stand.y - Lineup::FRONT.1).abs() < 1e-3,
             "the pass is not at eye level"
-        );
-        // The corner comes out behind the line, still dead level…
-        let from = lineup.walk_seconds() + lineup.swing_seconds();
-        let turned = lineup.shot_at(from);
-        assert!(
-            turned.stand.z > Lineup::ROW_Z,
-            "the corner does not come out behind them"
-        );
-        assert!(
-            (turned.stand.y - Lineup::FRONT.1).abs() < 0.05,
-            "…or hands over off eye level"
-        );
-        // …then the get-away only ever moves away from the line and upward…
-        let mut previous = turned;
-        for step in 1..=200 {
-            let at = from + lineup.getaway_seconds() * step as f32 / 200.0;
-            let shot = lineup.shot_at(at.min(lineup.total() - 1e-4));
-            assert!(
-                shot.stand.z >= previous.stand.z - 1e-4,
-                "it came back toward the line"
-            );
-            assert!(
-                shot.stand.y >= previous.stand.y - 1e-4,
-                "it dropped on the way out"
-            );
-            previous = shot;
-        }
-        // …and ends over the centre spot, looking back down at the row.
-        let over = lineup.shot_at(lineup.total() - 1e-4);
-        assert!(
-            over.stand.x.abs() < 0.5 && over.stand.z.abs() < 0.5,
-            "the ceremony does not end over the middle of the field: {:?}",
-            over.stand
-        );
-        assert!((over.stand.y - Lineup::OVERHEAD).abs() < 0.1);
-        let look = (over.aim - over.stand).normalize();
-        assert!(
-            look.z < 0.0 && look.y < 0.0,
-            "it is not looking back down at the line: {look:?}"
         );
     }
 
@@ -1087,38 +1100,38 @@ mod tests {
         }
     }
 
-    /// **The corner joins the pass to the get-away with no lurch at either
-    /// seam.** It picks the camera up at the crawl the pass ends on and hands
-    /// it over at the speed the get-away runs at — continuity of SPEED, where
-    /// the test above only proves continuity of position.
+    /// **The corner joins the approach to the pass with no lurch at either
+    /// seam.** It receives the camera at the speed the approach flies at and
+    /// hands it over at the crawl the pass opens on — continuity of SPEED,
+    /// where the test above only proves continuity of position.
     #[test]
-    fn the_corner_ramps_from_the_crawl_of_the_pass_to_the_speed_of_the_fly() {
+    fn the_corner_sheds_the_flight_down_to_the_crawl_of_the_pass() {
         let lineup = walked_out();
         let speed = |at: f32| {
             let dt = 0.004;
             lineup.shot_at(at + dt).stand.distance(lineup.shot_at(at).stand) / dt
         };
-        let walk = lineup.walk_seconds();
+        let approach = lineup.approach_seconds();
         let swing = lineup.swing_seconds();
         assert!(
-            (speed(walk - 0.01) - Lineup::crawl()).abs() < Lineup::crawl() * 0.25,
-            "the pass ends at {} m/s, not the crawl",
-            speed(walk - 0.01)
+            (speed(approach - 0.01) - Lineup::FLY).abs() < Lineup::FLY * 0.05,
+            "the approach arrives at {} m/s",
+            speed(approach - 0.01)
         );
         assert!(
-            (speed(walk + 0.005) - Lineup::crawl()).abs() < Lineup::crawl() * 0.5,
-            "the corner picks up at {} m/s, not the crawl",
-            speed(walk + 0.005)
+            (speed(approach + 0.005) - Lineup::FLY).abs() < Lineup::FLY * 0.1,
+            "the corner receives it at {} m/s, not the approach's speed",
+            speed(approach + 0.005)
         );
         assert!(
-            (speed(walk + swing - 0.01) - Lineup::FLY).abs() < Lineup::FLY * 0.1,
-            "the corner hands over at {} m/s, not the get-away's speed",
-            speed(walk + swing - 0.01)
+            (speed(approach + swing - 0.01) - Lineup::crawl()).abs() < Lineup::crawl() * 0.5,
+            "the corner hands over at {} m/s, not the crawl",
+            speed(approach + swing - 0.01)
         );
         assert!(
-            (speed(walk + swing + 0.005) - Lineup::FLY).abs() < Lineup::FLY * 0.05,
-            "the get-away runs at {} m/s",
-            speed(walk + swing + 0.005)
+            (speed(approach + swing + 0.005) - Lineup::crawl()).abs() < Lineup::crawl() * 0.5,
+            "the pass opens at {} m/s",
+            speed(approach + swing + 0.005)
         );
     }
 
@@ -1135,18 +1148,19 @@ mod tests {
         let corner = PI * Lineup::FRONT.0 * 2.0 / (Lineup::crawl() + Lineup::FLY);
         assert!(
             (lineup.total()
-                - (ground / Lineup::PACE + corner + lineup.getaway_length() / Lineup::FLY))
+                - (lineup.approach_length() / Lineup::FLY + corner + ground / Lineup::PACE))
                 .abs()
                 < 1e-2
         );
         // …and `glide` never runs the middle of the pass more than half as
         // fast again as its mean, which is the whole reason it is not a
         // smoothstep.
+        let from = lineup.approach_seconds() + lineup.swing_seconds();
         let step = lineup.walk_seconds() / 600.0;
         let mut fastest: f32 = 0.0;
         for frame in 0..600 {
-            let a = lineup.shot_at(step * frame as f32);
-            let b = lineup.shot_at(step * (frame + 1) as f32);
+            let a = lineup.shot_at(from + step * frame as f32);
+            let b = lineup.shot_at(from + step * (frame + 1) as f32);
             fastest = fastest.max(a.stand.distance(b.stand) / step);
         }
         assert!(
@@ -1185,10 +1199,12 @@ mod tests {
     #[test]
     fn every_man_shows_the_camera_a_side_of_his_shirt_with_his_name_on_it() {
         let lineup = walked_out();
+        let from = lineup.approach_seconds() + lineup.swing_seconds();
         for stand in &lineup.row {
             let mut passed = false;
             for step in 0..=2_000 {
-                let shot = lineup.shot_at(lineup.walk_seconds() * step as f32 / 2_000.0);
+                let shot =
+                    lineup.shot_at(from + lineup.walk_seconds() * step as f32 / 2_000.0);
                 if shot.stand.z < Lineup::ROW_Z && (shot.aim.x - stand.at.x).abs() < 0.5 {
                     passed = true;
                 }
