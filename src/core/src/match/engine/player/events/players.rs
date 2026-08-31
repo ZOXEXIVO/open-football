@@ -2378,6 +2378,165 @@ impl PlayerEventDispatcher {
         edge_dist <= 10.0
     }
 
+    /// How hard a closing opponent degrades pass execution: an ABSOLUTE
+    /// targeting-error addition of `press01 · transmission ·
+    /// skill_budget · GAIN` game units, where `skill_budget` is the
+    /// same `0.3 + shortfall^1.5 · 9` curve the base error uses
+    /// (passing-led) and `transmission` is the composure-led press
+    /// resistance ([`Self::press_transmission`]).
+    ///
+    /// Why this exists: the error model prices WHO is striking the ball
+    /// — skill, fatigue, distance — but nothing in it priced the man
+    /// closing him down. A pass under two closing bodies was struck as
+    /// cleanly as one in acres, which is exactly backwards: pressured
+    /// execution is where real passes die, and composure under pressure
+    /// is where passing skill separates. Measured before the change
+    /// (`OF_PIN=passing:6:18`, n=250): a twelve-point swing of `passing`
+    /// across a whole side moved team pass accuracy **−0.4pp** and the
+    /// scoreline by less than the ±0.2 noise band — the marquee passing
+    /// attribute was outcome-inert because unpressured targeting error
+    /// (≈0.5 m for a POOR passer on a 20 m ball) never converts inside
+    /// a 5 m receiver-claim radius.
+    ///
+    /// Why ABSOLUTE and not a multiplier: both were measured. A
+    /// multiplier of the distance-scaled base did nothing at any dose —
+    /// gain 10 at the 5 m pressure radius moved population accuracy
+    /// 0.1pp — because `distance_error_factor` crushes the base to
+    /// ~0.9u on a median 5 m pass and a doubled centimetre is still a
+    /// centimetre. A hurried ball misses by a metre-plus at ANY
+    /// distance; the pressured component therefore does not scale with
+    /// how far the pass travels.
+    ///
+    /// `OF_PASS_PRESS_GAIN=<f32>` overrides for titration; `0` disables
+    /// exactly (no addition, no extra RNG draws, bit-identical stream).
+    const PASS_PRESS_ERROR_GAIN: f32 = 3.0;
+
+    fn pass_press_gain() -> f32 {
+        static GAIN: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+        *GAIN.get_or_init(|| {
+            std::env::var("OF_PASS_PRESS_GAIN")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(Self::PASS_PRESS_ERROR_GAIN)
+        })
+    }
+
+    /// How far the forced-miss rolls swing either side of
+    /// `POPULATION_EXECUTION` for the best and worst finisher in the
+    /// game. CENTRED on the population anchor, so this is a spread, not
+    /// a dose — it cannot move the aggregate on-target rate, only how
+    /// far skill separates around it. `OF_SHOT_ACC_SPREAD` overrides
+    /// for titration.
+    ///
+    /// 1.5 was titrated 2026-08-31: at the historical 0.90 a 6:18
+    /// side-wide `finishing` pin measured Δ −0.14 goals (inside the
+    /// noise band — the marquee finishing attribute effectively
+    /// invisible); at 1.5 the same pin measures ≈ −0.35..−0.4 while
+    /// the population on-target rate stays 34-36% and goals stay in
+    /// their band (centred design holds only while
+    /// `POPULATION_EXECUTION` tracks the printed `mean execution` —
+    /// the wider the spread, the more an anchor drift costs, so keep
+    /// them matched).
+    fn shot_accuracy_spread() -> f32 {
+        static SPREAD: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+        *SPREAD.get_or_init(|| {
+            std::env::var("OF_SHOT_ACC_SPREAD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1.5)
+        })
+    }
+
+    /// How much of the press reaches this passer's feet, 0..1 — the
+    /// composure-led resistance in pure form (inputs 0..1,
+    /// fatigue-folded, match-priced — `PassSkills` values at the live
+    /// call site). Composure carries 0.5 because the press is beaten in
+    /// the head first and the feet second; technique and passing split
+    /// the rest. `pub(crate)` so the contract tests pin the shape
+    /// without standing up a `MatchField`.
+    pub(crate) fn press_transmission(composure01: f32, technique01: f32, passing01: f32) -> f32 {
+        let resist = (composure01 * 0.5 + technique01 * 0.25 + passing01 * 0.25).clamp(0.0, 1.0);
+        (1.0 - resist).powf(1.2)
+    }
+
+    /// How much a nearby leader's voice shields the passer from the
+    /// press, 0..~0.22. The loudest organiser among teammates within
+    /// 15 m counts (`on_field_leadership` — leadership-led, fatigue-
+    /// aware, keeper voice included via its own branch); the damp
+    /// scales with his composite. Zero when nobody worth hearing is in
+    /// range or `OF_VOICE_DAMP_OFF=1`.
+    fn voice_damp(
+        field: &MatchField,
+        passer_team_id: u32,
+        passer_id: u32,
+        passer_position: Vector3<f32>,
+        minute: u32,
+    ) -> f32 {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        if *OFF.get_or_init(|| std::env::var("OF_VOICE_DAMP_OFF").is_ok()) {
+            return 0.0;
+        }
+        const VOICE_RANGE: f32 = 120.0;
+        let mut best = 0.0f32;
+        for mate in field
+            .players
+            .iter()
+            .filter(|q| q.team_id == passer_team_id && q.id != passer_id)
+        {
+            if (mate.position - passer_position).magnitude() > VOICE_RANGE {
+                continue;
+            }
+            let lead = sc::on_field_leadership(mate, minute);
+            if lead > best {
+                best = lead;
+            }
+        }
+        best * 0.22
+    }
+
+    /// Pressure on the passer at the moment of the strike, 0..1.
+    /// Distance-of-the-nearest does the work — full effect with a man
+    /// at contact range (≤8u = 1 m), nothing beyond 40u = 5 m — and a
+    /// second body inside the radius adds the "no safe side to open
+    /// onto" surcharge.
+    ///
+    /// 40u is the football-analytics "pressure event" convention (a
+    /// defender within ~5 yards of the man on the ball), not a tuned
+    /// number. It matters here because the engine's carriers release
+    /// early: the carrier's own `is_under_immediate_pressure` gate is
+    /// 5u, so almost no pass is struck with an opponent inside 3 m —
+    /// measured at REACH=24u, a gain of 10 on the multiplier moved
+    /// population pass accuracy by 0.1pp because press01 was ~0 at
+    /// essentially every strike. The defender who ARRIVES during the
+    /// backswing-plus-first-metres is the pressure a real passer feels,
+    /// and at closing speed that is a 4-5 m starting distance.
+    pub(crate) fn pass_press01(
+        players: &[MatchPlayer],
+        passer_team_id: u32,
+        passer_position: Vector3<f32>,
+    ) -> f32 {
+        const CONTACT: f32 = 8.0;
+        const REACH: f32 = 40.0;
+        let mut nearest = f32::MAX;
+        let mut inside: u32 = 0;
+        for q in players.iter().filter(|q| q.team_id != passer_team_id) {
+            let d = (q.position - passer_position).magnitude();
+            if d < REACH {
+                inside += 1;
+            }
+            if d < nearest {
+                nearest = d;
+            }
+        }
+        if nearest >= REACH {
+            return 0.0;
+        }
+        let closing = 1.0 - ((nearest - CONTACT) / (REACH - CONTACT)).clamp(0.0, 1.0);
+        let crowd = if inside >= 2 { 0.3 } else { 0.0 };
+        (closing + crowd).clamp(0.0, 1.0)
+    }
+
     fn handle_pass_to_event(
         event_model: PassingEventContext,
         field: &mut MatchField,
@@ -2404,6 +2563,7 @@ impl PlayerEventDispatcher {
         let player = field.get_player(event_model.from_player_id).unwrap();
         let passer_position = player.position;
         let passer_side = player.side;
+        let passer_team_id = player.team_id;
         let skills = PassSkills::from_player(player, minute, MatchStandard::shift(context));
 
         // Calculate overall quality for accuracy - affected by condition
@@ -2549,6 +2709,50 @@ impl PlayerEventDispatcher {
             base_max_position_error
         };
 
+        // ── EXECUTION UNDER PRESSURE ─────────────────────────────────
+        // Everything above prices the striker in isolation; this prices
+        // the man closing him down — as an ABSOLUTE addition, because a
+        // hurried ball misses by a metre-plus at any pass distance (see
+        // `PASS_PRESS_ERROR_GAIN` for why a multiplier measured null).
+        // The addition reuses the base curve's passing-led skill budget
+        // and gates it through the composure-led transmission, so the
+        // elite passer under press keeps his level and the poor one
+        // sprays. A corner or free-kick taker is unpressed by geometry
+        // (opponents retreat), so dead balls pay nothing without
+        // needing a special case.
+        let max_position_error = {
+            let press01 = Self::pass_press01(&field.players, passer_team_id, passer_position);
+            if press01 > 0.0 {
+                // A leader within earshot talks the man on the ball
+                // through the press — "time", "man on", "turn". The
+                // voice reduces how much of the pressure reaches the
+                // strike, not the pressure itself. This is
+                // `leadership`'s one on-pitch execution channel: its
+                // other hosts (shape organisation ±15%, chaos damp) are
+                // deliberately narrow team-level bands, and a 6:18 pin
+                // across a side measured +0.25 — null. The attribute's
+                // heavyweight usage is out-of-match by design
+                // (chemistry, dressing room, captaincy); this term is
+                // the honest in-match complement, not a scoreline dial.
+                // `OF_VOICE_DAMP_OFF=1` disables exactly.
+                let press01 = press01
+                    * (1.0
+                        - Self::voice_damp(
+                            field,
+                            passer_team_id,
+                            event_model.from_player_id,
+                            passer_position,
+                            minute,
+                        ));
+                let transmission =
+                    Self::press_transmission(skills.composure, skills.technique, skills.passing);
+                let skill_budget = 0.3 + shortfall.powf(1.5) * 9.0;
+                max_position_error + press01 * transmission * skill_budget * Self::pass_press_gain()
+            } else {
+                max_position_error
+            }
+        };
+
         // Add random targeting error
         let mut target_error_x = rng.jitter(0.0, max_position_error);
         let mut target_error_y = rng.jitter(0.0, max_position_error);
@@ -2563,6 +2767,14 @@ impl PlayerEventDispatcher {
             target_error_x += rng.random_range(-8.0f32..8.0);
             target_error_y += rng.random_range(-8.0f32..8.0);
         }
+
+        // The radial the ball will arrive OFF its ideal point — stashed
+        // on the ball so the first-touch resolver can price receiving a
+        // wayward delivery (see `pending_pass_error`). Swing is excluded
+        // on purpose: a swung cross is aimed off and bent BACK onto its
+        // target, so it arrives where it was meant to.
+        field.ball.pending_pass_error =
+            (target_error_x * target_error_x + target_error_y * target_error_y).sqrt();
 
         // Calculate actual target with error
         let mut actual_target = Vector3::new(
@@ -3544,6 +3756,21 @@ impl PlayerEventDispatcher {
     /// is the net under them, and `reception_diag::GRANT_OUT_OF_REACH` is
     /// how many times a state asked for something impossible.
     fn can_take_possession(player_id: u32, field: &MatchField) -> bool {
+        // A ball an engine-level aerial contest has awarded to SOMEBODY
+        // ELSE is spoken for — the winner's header resolves it, and any
+        // grant here (the keeper's state-machine gathers most of all —
+        // his states bypass the claim scan entirely) re-rolls a duel the
+        // contest already settled. The delivery trace showed exactly
+        // this: won corner deliveries arrived and the defending keeper's
+        // gather took the hanging ball off the winner's head within
+        // ticks, every time.
+        if field
+            .ball
+            .aerial_contest_winner
+            .is_some_and(|w| w != player_id)
+        {
+            return false;
+        }
         let Some(player) = field.players.iter().find(|p| p.id == player_id) else {
             return false;
         };
@@ -3770,11 +3997,13 @@ impl PlayerEventDispatcher {
         /// **30.4% → 33.6%** against a real ~33%, and goals **2.32 →
         /// 2.47** against a real ~2.5.
         const POPULATION_EXECUTION: f32 = 0.550;
-        /// How far the forced-miss rolls swing either side of that for the
-        /// best and worst finisher in the game. 0.90 puts a 1/20 finisher
-        /// about 1.4× as likely to drag it wide or sky it as an average
-        /// one, and a 20/20 finisher at about 0.7×.
-        const ACCURACY_SPREAD: f32 = 0.90;
+        // How far the forced-miss rolls swing either side of the anchor
+        // is `Self::shot_accuracy_spread()` — centred, so widening it
+        // cannot move the population's on-target rate, only how far a
+        // good and a bad finisher sit from it. Env-tunable because the
+        // 2026-08-31 sweep measured the whole finishing axis at
+        // Δ −0.14 goals for a 6:18 side-wide pin — real, but a fraction
+        // of what the marquee finishing attribute should carry.
         /// The scuffed tap-in: how much of a miss chance the worst
         /// finisher carries at ANY range, and the best one is spared.
         /// Distance-independent by design — see the note at
@@ -4249,7 +4478,8 @@ impl PlayerEventDispatcher {
         // exactly as he did and a tired one worse, so the population mean
         // moves by however much of the match is played on empty — which is
         // the real effect and the one worth having.
-        let accuracy_edge = ((POPULATION_EXECUTION - execution_skill) * ACCURACY_SPREAD
+        let accuracy_edge = ((POPULATION_EXECUTION - execution_skill)
+            * Self::shot_accuracy_spread()
             + low_condition_penalty * CONDITION_DRAG)
             .clamp(-0.40, 0.80);
         let wide_miss_chance = wide_base * (1.0 + accuracy_edge)

@@ -210,17 +210,45 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         field_width: f32,
         context: &mut MatchContext,
     ) -> bool {
-        /// Outside this there is always a way out. 130u ≈ 16 m.
-        const BEHIND_DEPTH: f32 = 130.0;
-        /// Share that goes behind when the header is right on the line.
-        const BEHIND_AT_LINE: f32 = 0.55;
+        /// Outside this there is always a way out. 150u ≈ 18.75 m.
+        const BEHIND_DEPTH: f32 = 150.0;
 
+        // ⚠ The curve was re-shaped 2026-08-31 against the measured
+        // resolve-depth distribution, exactly as the old warning here
+        // demanded. The previous form (`0.55 · urgency²` over a 130u
+        // window) was quadratic in a variable that is ~0.0-0.26 where
+        // contests actually resolve (12-16 m out — the drop zones of
+        // floated and whipped deliveries), so it returned **~1%** and
+        // the corner-source census had "delivery HOOKED behind" at
+        // 0.45/match against the real ~3.5-4 of a ~10.4-corner match.
+        // The defender who wins that header is facing his own goal
+        // with the ball whipped across him — heading it behind is the
+        // NORMAL outcome under pressure at that depth, not a goal-line
+        // desperation. The gentler exponent puts ~14% at 12 m and ~6%
+        // at 16 m, which at the post-ordering-fix ~25-30 headed clears
+        // a match prices the hooked family at its real share.
+        // `OF_BEHIND_LINE` overrides the at-line share for titration.
         let depth = (ball_pos.x - attacked_goal.x).abs();
         if depth > BEHIND_DEPTH || field_width <= 0.0 {
             return false;
         }
         // 1.0 on the goal line, 0 at the edge of the window.
         let urgency = 1.0 - depth / BEHIND_DEPTH;
-        context.rng.bernoulli(BEHIND_AT_LINE * urgency * urgency)
+        context
+            .rng
+            .bernoulli(Self::behind_at_line() * urgency.powf(1.2))
+    }
+
+    /// Share of headed clears that go behind when the header is right
+    /// on the goal line. `OF_BEHIND_LINE` overrides for titration.
+    fn behind_at_line() -> f32 {
+        use std::sync::OnceLock;
+        static V: OnceLock<f32> = OnceLock::new();
+        *V.get_or_init(|| {
+            std::env::var("OF_BEHIND_LINE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.50)
+        })
     }
 }

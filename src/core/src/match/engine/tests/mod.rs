@@ -3,6 +3,7 @@
 //! between modules so future refactors don't drift combined behavior.
 
 mod corner_setup_tests;
+mod effort_appetite_tests;
 mod fatigue_calibration_tests;
 mod friendly_recording_tests;
 mod goal_celebration_tests;
@@ -15,6 +16,7 @@ mod keeper_save_contact_tests;
 mod loose_ball_chase_tests;
 mod match_realism_tests;
 mod offside_restart_tests;
+mod pass_pressure_tests;
 mod recording_globals;
 mod run_out_tests;
 mod solid_engine_tests;

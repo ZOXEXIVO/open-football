@@ -509,6 +509,19 @@ impl Ball {
         }
     }
 
+    /// Weight of the stretched-reception term in the first-touch
+    /// difficulty blend. `OF_TOUCH_STRETCH=<f32>` overrides for
+    /// titration; `0` restores the pre-change difficulty exactly.
+    fn touch_stretch_weight() -> f32 {
+        static W: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+        *W.get_or_init(|| {
+            std::env::var("OF_TOUCH_STRETCH")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.30)
+        })
+    }
+
     /// True when the current delivery has stopped being one: on the deck
     /// and slower than a walking pace. See the call site in
     /// [`Ball::process_ownership`].
@@ -577,7 +590,27 @@ impl Ball {
             }
         }
         let pressure01 = (1.0 - nearest_opp_dist / 10.0).clamp(0.0, 1.0);
-        let difficulty = speed01 * 0.40 + pressure01 * 0.40 + aerial01 * 0.20;
+        // A ball weighted to feet and one collected a stretch off its
+        // line are different receptions. `pending_pass_error` is the
+        // radial the delivery genuinely arrived off its ideal point
+        // (stashed at emit — jitter + miskick, swing excluded); the
+        // dead zone means anything inside 0.5 m still counts as "at
+        // his feet", with full difficulty at a ~1.8 m stretch. This is
+        // the passer's error reaching the receiver's touch — before it,
+        // a wayward delivery rolled the same reception as a perfect
+        // one, so pass quality died at the claim radius. The dead zone
+        // was titrated: at 2u the term charged routine arrivals too
+        // (+1.7 miscontrols/team on a population already above the real
+        // 8-15 band); 4u exempts the bulk and keeps the pressured /
+        // miskicked tail, which is the tail it was built for.
+        // `OF_TOUCH_STRETCH=<w>` overrides the weight; 0 disables
+        // exactly.
+        let stretch01 = ((self.pending_pass_error - 4.0) / 10.0).clamp(0.0, 1.0);
+        let difficulty = (speed01 * 0.40
+            + pressure01 * 0.40
+            + aerial01 * 0.20
+            + stretch01 * Self::touch_stretch_weight())
+        .min(1.0);
 
         // Nervousness bump — high-pressure psych state spills more
         // first touches (the modifier is additive probability already).
@@ -1457,6 +1490,28 @@ impl Ball {
         // Ball is too high to be claimed by any player (flying over everyone's heads)
         if self.position.z > MAX_BALL_HEIGHT {
             return;
+        }
+
+        // ── A BALL HANGING OFF A WON AERIAL CONTEST BELONGS TO THE
+        // HEADER ─────────────────────────────────────────────────────
+        // The contest resolved, the delivery arrived, and the ball is
+        // hanging in the heading band so the winner's heading state can
+        // strike it. Without this guard the ordinary claim scan below
+        // converted that hanging ball into ground possession — for
+        // whoever stood nearest, the winner included — on the very tick
+        // it arrived, and the header the contest had already awarded
+        // simply never happened. Measured 2026-08-31: contests won
+        // ~3.3/match, headers actually struck **0.5** — an 80% leak,
+        // and the reason `heading` measured null while `jumping` sat at
+        // −0.26 for a season of pins. The strike itself clears the
+        // grant through `record_touch`; a ball that drops through the
+        // band un-struck (the winner was beaten to the spot after all)
+        // lapses here and becomes an ordinary loose ball.
+        if self.aerial_contest_winner.is_some() {
+            if self.position.z >= 1.2 {
+                return;
+            }
+            self.aerial_contest_winner = None;
         }
 
         // Check if previous owner is still within range

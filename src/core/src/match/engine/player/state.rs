@@ -558,7 +558,27 @@ impl PlayerMatchState {
                     player.last_activity_intensity,
                     player.player_attributes.condition_percentage(),
                 );
-                max_speed *= effort
+                // …times the player's APPETITE for that effort:
+                // `work_rate` decides how much of a sub-maximal band he
+                // actually uses all match, `determination` whether he
+                // keeps using it when it is late or his team is behind.
+                // See `MovementEffort::effort_appetite` — both terms are
+                // population-centred at ~1.0 and the product is clamped
+                // so nobody exceeds his conditioned ceiling.
+                let minute = sc::minute_from_ms(context.total_match_time);
+                let (own, opp) = if player.team_id == context.field_home_team_id {
+                    (context.score.home_team.get(), context.score.away_team.get())
+                } else {
+                    (context.score.away_team.get(), context.score.home_team.get())
+                };
+                let appetite = MovementEffort::effort_appetite(
+                    player,
+                    player.last_activity_intensity,
+                    minute,
+                    own < opp,
+                );
+                max_speed *= (effort * appetite)
+                    .min(1.0)
                     .max(state_change_result.shape_recall_pull)
                     .max(state_change_result.effort_floor);
             }

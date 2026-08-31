@@ -5152,6 +5152,119 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         0.0
     };
     println!("pass accuracy       : {:.1}%  (real ~85%)", pass_acc);
+    // Per-side split. The pin harness (`OF_PIN=<attr>:<home>:<away>`)
+    // makes the two sides deliberately unequal, and the pooled number
+    // above averages exactly the signal a pin run exists to measure.
+    // Home is team 1 — the pin's first value.
+    {
+        let (h_pa, h_pc, a_pa, a_pc) =
+            outcomes.iter().fold((0u64, 0u64, 0u64, 0u64), |acc, o| {
+                (
+                    acc.0 + o.home.passes_attempted as u64,
+                    acc.1 + o.home.passes_completed as u64,
+                    acc.2 + o.away.passes_attempted as u64,
+                    acc.3 + o.away.passes_completed as u64,
+                )
+            });
+        let pct = |c: u64, a: u64| c as f32 / a.max(1) as f32 * 100.0;
+        println!(
+            "  home/away split   : H {:.1}% of {:.0}/match   A {:.1}% of {:.0}/match",
+            pct(h_pc, h_pa),
+            h_pa as f32 / n,
+            pct(a_pc, a_pa),
+            a_pa as f32 / n,
+        );
+    }
+    // Per-side KPI panel — same rationale as the pass split above:
+    // every pin run is deliberately asymmetric, and the pooled numbers
+    // below hide the side the signal lives on. A defensive pin reads
+    // per-side tackles/interceptions, a GK pin reads per-side saves,
+    // an aggression pin reads per-side fouls. Home is team 1.
+    {
+        #[derive(Default)]
+        struct SideAgg {
+            sh: u64,
+            ot: u64,
+            sv: u64,
+            tk: u64,
+            int: u64,
+            fl: u64,
+            mc: u64,
+            hv: u64,
+            xg: f64,
+        }
+        impl SideAgg {
+            fn add(&mut self, t: &TeamStats) {
+                self.sh += t.shots as u64;
+                self.ot += t.on_target as u64;
+                self.sv += t.saves as u64;
+                self.tk += t.tackles as u64;
+                self.int += t.interceptions as u64;
+                self.fl += t.fouls as u64;
+                self.mc += t.miscontrols as u64;
+                self.hv += t.heavy_touches as u64;
+                self.xg += t.xg as f64;
+            }
+        }
+        let mut hs = SideAgg::default();
+        let mut aw = SideAgg::default();
+        for o in &outcomes {
+            hs.add(&o.home);
+            aw.add(&o.away);
+        }
+        let row = |tag: &str, s: &SideAgg| {
+            println!(
+                "  per-side {tag}        : sh {:>4.1}  ot {:>4.1}  sv {:>4.1}  xg {:>4.2}  tk {:>4.1}  int {:>4.1}  fl {:>4.1}  mc {:>4.1}  hv {:>4.1}",
+                s.sh as f32 / n,
+                s.ot as f32 / n,
+                s.sv as f32 / n,
+                s.xg as f32 / n,
+                s.tk as f32 / n,
+                s.int as f32 / n,
+                s.fl as f32 / n,
+                s.mc as f32 / n,
+                s.hv as f32 / n,
+            );
+        };
+        row("H", &hs);
+        row("A", &aw);
+    }
+    // Late goals per side — the `determination` KPI: character shows in
+    // the last quarter, on tired legs. Read a determination pin here as
+    // well as on the scoreline.
+    {
+        let (mut h75, mut a75, mut hall, mut aall) = (0u32, 0u32, 0u32, 0u32);
+        for o in &outcomes {
+            for &(t, is_home) in &o.goal_events {
+                if is_home {
+                    hall += 1;
+                } else {
+                    aall += 1;
+                }
+                if t >= 75 * 60_000 {
+                    if is_home {
+                        h75 += 1;
+                    } else {
+                        a75 += 1;
+                    }
+                }
+            }
+        }
+        let share = |late: u32, all: u32| {
+            if all == 0 {
+                0.0
+            } else {
+                late as f32 * 100.0 / all as f32
+            }
+        };
+        println!(
+            "  late goals (75'+) : H {:.2}/match ({:.0}% of theirs)   A {:.2}/match ({:.0}%)",
+            h75 as f32 / n,
+            share(h75, hall),
+            a75 as f32 / n,
+            share(a75, aall),
+        );
+    }
     println!(
         "tackles per team    : {:.1}  (real ~18)",
         total_tackles as f32 / (2.0 * n)

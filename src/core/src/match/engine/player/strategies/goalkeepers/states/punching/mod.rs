@@ -74,6 +74,33 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
             return None;
         }
 
+        // A fist connects with what a fist can REACH. `distance()` is
+        // horizontal, so a delivery arcing five or six metres overhead
+        // passed the check and the punch resolved against a ball no
+        // keeper could touch — the delivery trace showed corner-won
+        // crosses being "punched" out of their flight at z 5.4-6.5 m.
+        // The leap ceiling is the honest vertical bar.
+        let ball_z = ctx.tick_context.positions.ball.position.z;
+        if ball_z
+            > crate::r#match::goalkeepers::states::common::KeeperAerialClaim::leap_ceiling(
+                ctx.player.skills.physical.jumping,
+            )
+        {
+            return None;
+        }
+
+        // …and a delivery an engine-level aerial contest awarded to an
+        // opponent is not his to punch: his claim chance was priced into
+        // that contest. Double-jeopardy rule, same as the claim assess.
+        if ctx
+            .tick_context
+            .ball
+            .aerial_contest_winner
+            .is_some_and(|w| w != ctx.player.id)
+        {
+            return None;
+        }
+
         // Crowd / pressure from nearby opponents — high crowd punishes
         // weak claim quality more.
         let crowd = (ctx.players().opponents().nearby(8.0).count() as f32 / 4.0).clamp(0.0, 1.0);

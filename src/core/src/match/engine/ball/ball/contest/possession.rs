@@ -257,6 +257,7 @@ impl Ball {
         self.pending_pass_origin = None;
         self.pending_pass_target = None;
         self.pending_pass_was_cross = false;
+        self.pending_pass_error = 0.0;
         self.pending_cross_type = None;
         // Disarm the aerial contest with the delivery it belonged to — a
         // cross that has been claimed, cleared or intercepted is over.

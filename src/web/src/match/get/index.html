@@ -618,11 +618,63 @@
         }
     }
 
+    // Which pace to ask of the viewer. Left alone it caps itself at 120
+    // updates a second (`ViewerConfig::fps_cap`), timed by a wall clock —
+    // and a wall clock is the wrong instrument on a display the cap cannot
+    // help anyway: the browser presents on the display's own vsync, the
+    // timer drifts against it, and every crossing shows one frame twice and
+    // the next as a double step. That judder is invisible while the football
+    // plays and glaring on the line-up's slow pass along the faces. Uncapped
+    // (zero) the viewer runs one update per animation frame — locked to the
+    // vsync it is presented on, the only smooth cadence a browser has. So
+    // the display is measured, and the cap is waived wherever it could never
+    // have engaged. A panel genuinely faster than the cap keeps it: 240
+    // frames a second of pictures nobody can tell apart is the fan coming
+    // on for a replay, which is the decision the cap records.
+    const UNCAP_BELOW = 130; // the viewer's own 120, plus measurement jitter
+    function displayRefresh() {
+        return new Promise((resolve) => {
+            const stamps = [];
+            // A hidden tab is given no animation frames at all, so the
+            // sampling races a timer; zero means "could not tell", and the
+            // config is then left exactly as the server wrote it.
+            const bail = window.setTimeout(() => resolve(0), 800);
+            function tick(now) {
+                stamps.push(now);
+                if (stamps.length <= 10) {
+                    requestAnimationFrame(tick);
+                    return;
+                }
+                window.clearTimeout(bail);
+                const gaps = [];
+                for (let i = 1; i < stamps.length; i += 1) {
+                    gaps.push(stamps[i] - stamps[i - 1]);
+                }
+                // The median, because the page is busy underneath this —
+                // the wasm is downloading and compiling while it samples —
+                // and a few janked frames must not read as a slower display.
+                gaps.sort((a, b) => a - b);
+                const gap = gaps[Math.floor(gaps.length / 2)];
+                resolve(gap > 0 ? 1000 / gap : 0);
+            }
+            requestAnimationFrame(tick);
+        });
+    }
+    // Started now, alongside the download, so by the time the wasm is ready
+    // the answer is too and the start waits on nothing.
+    const refreshRate = displayRefresh();
+
     counted("/static/viewer/match_viewer_bg.wasm?v={{ match_viewer_version }}")
         .then((response) => init({ module_or_path: response }))
-        .then(() => {
+        .then(() => refreshRate)
+        .then((refresh) => {
             show("starting", STARTING_AT);
-            MatchViewer.start(JSON.stringify({{ viewer_config_json|safe }}));
+            const config = {{ viewer_config_json|safe }};
+            // Only where the server has not chosen a cap itself.
+            if (config && !("fps_cap" in config) && refresh > 0 && refresh <= UNCAP_BELOW) {
+                config.fps_cap = 0;
+            }
+            MatchViewer.start(JSON.stringify(config));
         })
         .catch((error) => {
             console.error("match viewer failed to start", error);

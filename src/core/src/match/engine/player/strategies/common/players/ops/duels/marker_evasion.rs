@@ -97,6 +97,25 @@ impl MarkerEvasion {
         })
     }
 
+    /// Skill spread of the mover-vs-holder edge — how far a genuine
+    /// mismatch moves the contest off the 0.5 centre. Titrated 2026-08-31
+    /// (0.5 measured null on an `off_the_ball` pin); see the note at the
+    /// `edge` computation. `OF_EVASION_EDGE` overrides; 0.5 restores the
+    /// original spread exactly.
+    const EDGE_SPREAD: f32 = 0.85;
+
+    #[inline]
+    fn edge_spread() -> f32 {
+        use std::sync::OnceLock;
+        static R: OnceLock<f32> = OnceLock::new();
+        *R.get_or_init(|| {
+            std::env::var("OF_EVASION_EDGE")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok())
+                .unwrap_or(Self::EDGE_SPREAD)
+        })
+    }
+
     /// Period of the check-and-spin, in **milliseconds of match time**.
     /// ~2.2 s is the real cadence of a centre-forward's double movement —
     /// long enough for the marker to commit to the first move.
@@ -213,16 +232,31 @@ impl MarkerEvasion {
             .by_id(marker.id)
             .map(|d| {
                 let s = &d.skills;
-                ((s.mental.positioning / 20.0) * 0.40
-                    + (s.mental.anticipation / 20.0) * 0.35
-                    + (s.mental.concentration / 20.0) * 0.25)
+                // `marking` leads — staying with a man who is trying to
+                // lose you IS the trade the attribute names. It was
+                // absent from this blend entirely, which is a large part
+                // of why a 6-vs-18 `marking` pin measured only −0.21
+                // goals (2026-08-31 sweep): the attribute never touched
+                // the one contest that is literally called marking.
+                ((s.technical.marking / 20.0) * 0.35
+                    + (s.mental.anticipation / 20.0) * 0.30
+                    + (s.mental.positioning / 20.0) * 0.20
+                    + (s.mental.concentration / 20.0) * 0.15)
                     .clamp(0.0, 1.0)
             })
             .unwrap_or(0.5);
 
-        // Even contest sits at 0.5; the spread is deliberately narrow so
-        // this shades outcomes rather than deciding them.
-        let edge = (0.5 + (mover - holder) * 0.5).clamp(0.05, 0.95);
+        // Even contest sits at 0.5. The SPREAD around it is the whole
+        // instrument: at the original 0.5 a twelve-point `off_the_ball`
+        // pin across a full side measured **+0.16** goals — inside the
+        // noise band, i.e. "shades outcomes" had shaded all the way to
+        // zero. Widening the spread is population-safe by construction
+        // (a symmetric population keeps the mean edge at 0.5, so the
+        // chance supply `SHOT_BAR_BASE` was re-titrated against does not
+        // move); what it changes is the ASYMMETRIC matchup, which is
+        // what the attributes are for. `OF_EVASION_EDGE` overrides for
+        // titration; 0.5 restores the old spread exactly.
+        let edge = (0.5 + (mover - holder) * Self::edge_spread()).clamp(0.05, 0.95);
 
         Some(MarkerRead {
             marker,

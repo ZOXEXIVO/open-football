@@ -17,26 +17,25 @@ shared = { path = "../shared" }
 core = { path = "../core" }
 database = { path = "../database" }
 axum = "0.8.9"
-log = "0.4.33"
+log = "0.4.34"
 tokio = { version = "1.53.1", features = ["full"] }
 tower = "0.5.3"
 tower-http = { version = "0.7.0", features = ["fs", "catch-panic"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json"] }
 chrono = "0.4.45"
 itertools = "0.15.0"
 askama = "0.16.0"
 askama_web = { version = "0.16.0", features = ["axum-0.8"] }
-async-compression = { version = "0.4.42", features = ["gzip", "tokio"] }
 rust-embed = "8.12"
 mime_guess = "2.0.5"
-flate2 = "1.1.9"
+flate2 = "1.1.10"
 rayon = "1.12.0"
 hostname = "0.4.2"
 sysinfo = { version = "0.39.6", features = ["system"] }
 bincode = { version = "2.0", features = ["serde"] }
-toml = "1.1"
+
 
 # Compiles `src/match` (the Bevy replay viewer) to WebAssembly and stages it
 # into `assets/`. The same helper backs `.dev/match`, so the harness and the

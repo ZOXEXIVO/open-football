@@ -17,6 +17,45 @@ use nalgebra::Vector3;
 use std::sync::atomic::Ordering;
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
+    /// Base attacker win rate of the open-play aerial contest — see the
+    /// note at the `att_win` computation for its history.
+    /// `OF_CROSS_WIN` overrides for titration.
+    ///
+    /// 0.16 → 0.28 in the same 2026-08-31 campaign, measured: with the
+    /// full contest chain finally leak-free (ordering, grants, keeper
+    /// double-jeopardy, the always-a-contact strike), 0.16 produced 2.4
+    /// wins and 0.87 headed shots a match — the whole header channel
+    /// carried ~0.09 goals/match against a real ~0.5-0.7, too thin for
+    /// ANY heading-skill swing to reach the scoreline through. 0.28
+    /// prices attacking first contact at ~11-13% of contests (real
+    /// clean attacking contact on crosses runs higher still), which is
+    /// what lifts headed shots toward their real 2.5-4 band.
+    fn cross_win_base() -> f32 {
+        use std::sync::OnceLock;
+        static V: OnceLock<f32> = OnceLock::new();
+        *V.get_or_init(|| {
+            std::env::var("OF_CROSS_WIN")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.28)
+        })
+    }
+
+    /// Base travel of a contested headed clear, in game units (16 m).
+    /// The margin-scaled span on top is at the call site — see the note
+    /// there for the measured heading-tax history. `OF_CLEAR_RANGE`
+    /// overrides for titration.
+    fn clear_range_base() -> f32 {
+        use std::sync::OnceLock;
+        static V: OnceLock<f32> = OnceLock::new();
+        *V.get_or_init(|| {
+            std::env::var("OF_CLEAR_RANGE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(130.0)
+        })
+    }
+
     /// Discrete OPEN-PLAY cross contest — the sibling of
     /// [`resolve_corner_contest`](Self::resolve_corner_contest), and for
     /// the same reason.
@@ -234,20 +273,24 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // Attacker vs defender. Base is low because most crosses are
         // headed clear — the spread comes from the aerial mismatch.
         //
-        // 0.26 → 0.32, re-derived once open-play crossing existed at all.
-        // The harness prints the reference this is against (`real: cross
-        // completion ~22-25%`) and measured **10%** over 200 fixtures:
-        // 46 contests a match, 41 of them headed clear, 0.9 headers on
-        // goal. That was invisible for as long as the contest fired 3.9
-        // times a match on 2.2 open-play crosses a team — a rate nobody
-        // could calibrate against, because the sample did not exist.
-        //
-        // It is deliberately still well under half. Most crosses ARE
-        // headed clear; the point of the number is that the ones that
-        // are not should be the ones where an attacker has genuinely
-        // beaten his man, and the `(att_score - def_score) * 0.55` term
-        // is what says so.
-        let att_win = (0.32 + (att_score - def_score) * 0.55 + type_edge).clamp(0.05, 0.62);
+        // Re-based 0.32 → 0.16 when the contest ordering fix landed
+        // (2026-08-31). 0.32 was itself a re-derivation ("0.26 → 0.32,
+        // once open-play crossing existed at all") — but it was fitted
+        // while the receiver-priority claim was eating 22.9 in-band
+        // deliveries a match before this contest could fire, so it was
+        // priced against a fraction of the real volume. With the
+        // contests running before `play_ball`, every lofted box
+        // delivery is genuinely contested (~35-40 a match), and at 0.32
+        // that produced an absurd ~12 headed attempts a match against a
+        // real ~2.5-4 TOTAL headed shots. 0.16 prices the binary
+        // contest honestly: a "win" here is a clean attacking header,
+        // not mere first contact (flick-ons and knock-downs live inside
+        // the cleared majority), and most crosses ARE headed clear. The
+        // `(att_score - def_score) * 0.55` term still decides WHO wins
+        // the ones that are won. `OF_CROSS_WIN` overrides the base for
+        // titration.
+        let att_win =
+            (Self::cross_win_base() + (att_score - def_score) * 0.55 + type_edge).clamp(0.04, 0.55);
 
         if context.rng.bernoulli(att_win) {
             #[cfg(feature = "match-logs")]
@@ -327,11 +370,28 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 return;
             }
 
-            const CLEAR_RANGE_UNITS: f32 = 210.0; // ~26 m
+            // ── THE CLEAR IS A CONTESTED HEADER, NOT A FREE KICK ─────
+            // 210u (26 m) flat was a clean defensive exit on every one
+            // of the ~29 headed clears a match, which made the aerial
+            // route a possession furnace: the side whose decisions
+            // favour crossing (high `heading` targets) burned attacks
+            // into guaranteed clean exits, and the 6:18 heading pin
+            // measured a WRONG-WAY Δ ≈ +0.28 over n=500 — a style tax
+            // on the aerially good. A real defensive header under
+            // pressure travels 10-18 m and drops at the edge of the
+            // box, where the second ball is genuinely contested — the
+            // second-ball phase this branch's own docs name as what it
+            // feeds. Range now scales with how comfortably the duel was
+            // won: a scrambled, pressured clear squirts to the box edge
+            // (~16 m from the resolve point), a dominant free header
+            // still buys the old clean exit. `OF_CLEAR_RANGE` overrides
+            // the base for titration.
             const CLEAR_APEX_METRES: f32 = 6.0;
+            let margin = (def_score - att_score).clamp(0.0, 0.55);
+            let clear_range = Self::clear_range_base() + margin * 160.0;
             let vz = Ball::launch_speed_for_apex(CLEAR_APEX_METRES);
             let hang = Ball::hang_ticks(vz).max(1.0);
-            let speed = CLEAR_RANGE_UNITS / hang;
+            let speed = clear_range / hang;
 
             let clear_dir = (ball_pos - attacked_goal)
                 .try_normalize(0.01)

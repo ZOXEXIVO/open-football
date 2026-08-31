@@ -25,6 +25,80 @@ impl StateProcessingHandler for ForwardHeadingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_position = ctx.tick_context.positions.ball.position;
 
+        // ── A WON CONTEST ALWAYS PRODUCES A CONTACT ──────────────────
+        // When the engine-level aerial contest awarded this player the
+        // ball and flew the delivery to his head, he touches it: a shot
+        // when he is in headed-shot range and the cooldowns allow, a
+        // glance / knock-down otherwise. This block sits ABOVE the
+        // bail-out gates below on purpose — they were the 80% leak the
+        // contest funnel measured (wins 2.5/match, headers struck 0.5):
+        // contests resolve 12-16 m out, the range gate is 12 m, and the
+        // team's 7.5 s shot window is usually warm in a crossing attack,
+        // so most won headers hit a `return Running` and simply
+        // vanished — leaving the granted ball hanging with nobody
+        // allowed to claim it. A real winner who cannot shoot still
+        // HEADS the ball somewhere; `glanced_contact` is that contact,
+        // and it clears the grant through `record_touch`.
+        let contest_awarded = ctx.tick_context.ball.aerial_contest_winner == Some(ctx.player.id);
+        // …and a ball awarded to somebody ELSE is not ours to challenge
+        // (double jeopardy — same rule as the defender/midfielder states).
+        if !contest_awarded && ctx.tick_context.ball.aerial_contest_winner.is_some() {
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+        }
+        if contest_awarded {
+            if ball_position.z < HEADING_HEIGHT_THRESHOLD {
+                // Dropped under the band un-struck — the grant lapses in
+                // the ownership guard and this is an ordinary loose ball.
+                return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+            }
+            if ctx.ball().distance() > HEADING_DISTANCE_THRESHOLD {
+                // Still arriving — keep attacking the drop point.
+                return None;
+            }
+            // An AWARDED header is exempt from the TEAM shot window
+            // (the player's own 2 s stays). That window exists to stop
+            // rapid-fire recycling in open play — but corners FOLLOW
+            // shots (a blocked shot is how you win one), so the window
+            // was warm for essentially every set-piece header and
+            // "set-piece header" sat at 0.04/match through two rounds
+            // of contest fixes. Range 120u (15 m) rather than the foot
+            // paths' 96u: the contest resolves where the delivery
+            // descends through heading height, 12-16 m out, and a
+            // glanced header from there is a real if low-value attempt
+            // — the shot pipeline prices it.
+            let may_shoot =
+                ctx.player().can_shoot() && ctx.ball().distance_to_opponent_goal() <= 120.0;
+            let heading = ctx.player.skills.technical.heading / 20.0;
+            let jumping = ctx.player.skills.physical.jumping / 20.0;
+            let on_corner_award = ctx.ball().is_team_attacking_corner();
+            let (base, floor) = if on_corner_award {
+                (0.62, 0.55)
+            } else {
+                (0.34, 0.28)
+            };
+            let p = (base + (heading + jumping) * 0.5 * 0.30).clamp(floor, 0.95);
+            return if may_shoot && ctx.context.rng.unit_f32() < p {
+                #[cfg(feature = "match-logs")]
+                CROSS_HEADER_ON_GOAL.fetch_add(1, AtomicOrdering::Relaxed);
+                Some(StateChangeResult::with_forward_state_and_event(
+                    ForwardState::Running,
+                    Event::PlayerEvent(PlayerEvent::Shoot(
+                        ShootingEventContext::new()
+                            .with_player_id(ctx.player.id)
+                            .with_target(ctx.player().shooting_direction())
+                            .with_reason("FWD_HEADING_ON_GOAL")
+                            .with_shot_type(ShotType::Header)
+                            .build(ctx),
+                    )),
+                ))
+            } else {
+                Some(StateChangeResult::with_forward_state_and_event(
+                    ForwardState::Running,
+                    Event::PlayerEvent(PlayerEvent::ClearBall(self.glanced_contact(ctx))),
+                ))
+            };
+        }
+
         // Ball too far — transition back to running
         if ctx.ball().distance() > HEADING_DISTANCE_THRESHOLD {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
@@ -48,40 +122,20 @@ impl StateProcessingHandler for ForwardHeadingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        // Contest carve-out: when a discrete engine-level aerial contest
-        // (`resolve_corner_contest` for corners, `resolve_cross_contest`
-        // for open-play crosses) has ALREADY decided this player won the
-        // jump and dropped the ball on their head, rolling a second full
-        // aerial duel here is double jeopardy — the same bug the CB
-        // AttackingCorner state documents and fixes with a clean-contact
-        // floor (0.62-0.95). Mirror that fix: contact-only roll, with the
-        // header's accuracy still graded by the shooting pipeline.
-        //
-        // A loose aerial ball that NO contest resolved still takes the
-        // full duel below — there, nothing upstream decided anything.
-        let contest_awarded = ctx.tick_context.ball.aerial_contest_winner == Some(ctx.player.id);
+        // Corner carve-out (no engine-level award): the set-piece jump
+        // at a ball aimed at your head — contact-only roll, the same
+        // clean-contact reasoning as the awarded block above; the full
+        // aerial duel below is for loose balls nothing upstream decided.
         let on_corner = ctx.ball().is_team_attacking_corner();
-        if contest_awarded || on_corner {
+        if on_corner {
             let heading = ctx.player.skills.technical.heading / 20.0;
             let jumping = ctx.player.skills.physical.jumping / 20.0;
             // A corner is a set jump at a ball aimed at your head, so a
-            // won contest nearly always produces an attempt. An OPEN-PLAY
-            // cross is not: the ball is moving, the runner is moving, and
-            // most won aerials come off as flick-ons, knock-downs and
-            // mistimed contacts. Real football gets ~1.5-2 headed shots
-            // per team per match from open play; giving both paths the
-            // corner's clean-contact floor produced closer to three.
-            let (base, floor) = if on_corner {
-                (0.62, 0.55)
-            } else {
-                (0.34, 0.28)
-            };
+            // won contest nearly always produces an attempt (the awarded
+            // block above owns the open-play flick-on/knock-down mix).
+            let (base, floor) = (0.62, 0.55);
             let p = (base + (heading + jumping) * 0.5 * 0.30).clamp(floor, 0.95);
             return if ctx.context.rng.unit_f32() < p {
-                #[cfg(feature = "match-logs")]
-                if contest_awarded {
-                    CROSS_HEADER_ON_GOAL.fetch_add(1, AtomicOrdering::Relaxed);
-                }
                 Some(StateChangeResult::with_forward_state_and_event(
                     ForwardState::Running,
                     Event::PlayerEvent(PlayerEvent::Shoot(

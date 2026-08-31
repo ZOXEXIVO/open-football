@@ -33,6 +33,24 @@ impl StateProcessingHandler for DefenderHeadingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_position = ctx.tick_context.positions.ball.position;
 
+        // A ball an engine-level aerial contest awarded to SOMEBODY ELSE
+        // is not this defender's to challenge — the contest already
+        // resolved that duel (the best defender in the box lost it), and
+        // this state re-winning it mid-flight was double jeopardy: it
+        // touched the delivery, `record_touch` wiped the grant, and the
+        // won header vanished. Measured 2026-08-31: corner contests won
+        // 0.7/match, set-piece headers actually struck 0.07.
+        if ctx
+            .tick_context
+            .ball
+            .aerial_contest_winner
+            .is_some_and(|w| w != ctx.player.id)
+        {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Standing,
+            ));
+        }
+
         // During an attacking corner, keep contesting the delivery rather
         // than dropping out of the box — return to AttackingCorner so the
         // CB pursues the ball / second ball instead of holding the line.

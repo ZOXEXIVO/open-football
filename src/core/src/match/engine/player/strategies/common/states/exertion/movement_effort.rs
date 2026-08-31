@@ -153,6 +153,79 @@ impl MovementEffort {
         Self::speed_fraction(ActivityIntensity::VeryHigh, condition_pct) * carry
     }
 
+    /// Off-ball effort APPETITE — how much of the declared effort band a
+    /// player actually uses, as a multiplier on [`Self::speed_fraction`].
+    /// Two attributes live here, independently gated and independently
+    /// switchable:
+    ///
+    /// * **`work_rate`, the whole match, sub-maximal bands only**
+    ///   (`VeryHigh` is exempt — a run in behind or a loose-ball chase is
+    ///   urgent for everybody). This is the attribute's literal meaning —
+    ///   how much ground a player chooses to cover when nothing forces
+    ///   him — and it had no absolute host at all: its reads were
+    ///   relative elections among teammates (which a side-wide pin
+    ///   cancels and which sum to zero across a team), a forward-only
+    ///   press radius (0.3% of AI ticks), and a `> 0.7` gate on
+    ///   losing-badly-late. Measured 2026-08-31: `OF_PIN=work_rate:6:18`
+    ///   moved the goal differential **+0.28** — a null, on the wrong
+    ///   side. Band 0.88..1.08, centred so the population mean (~11.8)
+    ///   multiplies by ~1.0 and the calibrated ground-covered /
+    ///   chance-supply numbers stay put. `OF_WR_EFFORT_OFF=1` disables.
+    ///
+    /// * **`determination`, when the game asks the question** — from 70'
+    ///   always (everyone's legs are gone; character decides who keeps
+    ///   moving), from 55' when the player's team is BEHIND. All bands,
+    ///   `VeryHigh` included: refusing to stop sprinting late is what
+    ///   the attribute names. Its previous hosts (tackle urgency via the
+    ///   `resilience` composite, 0.10 of late-game fatigue mitigation)
+    ///   measured **+0.13** on a 6:18 pin — null. Band 0.90..1.07,
+    ///   population-centred like the above. `OF_DET_LATE_OFF=1`
+    ///   disables.
+    ///
+    /// Raw attribute reads on purpose: appetite is identity, not
+    /// execution — the same rule the passing personalities and the
+    /// tackle temperament follow. Fatigue already scales the band value
+    /// itself through `self_pacing` and the condition curve, so this
+    /// multiplier deliberately does not re-read condition. Callers clamp
+    /// the product of band × appetite at 1.0 (a determined player late
+    /// reaches his conditioned ceiling; nobody exceeds it). Draws no
+    /// RNG — both switches are stream-exact.
+    pub fn effort_appetite(
+        player: &MatchPlayer,
+        intensity: ActivityIntensity,
+        minute: u32,
+        trailing: bool,
+    ) -> f32 {
+        let mut mult = 1.0;
+        if !Self::wr_effort_off() && !matches!(intensity, ActivityIntensity::VeryHigh) {
+            let wr01 = (player.skills.mental.work_rate / 20.0).clamp(0.0, 1.0);
+            // 0.84..1.12. The first dose (0.88..1.08, ±10%) moved the
+            // 6:18 pin from +0.28 to −0.15 — right direction, still
+            // inside the noise band. Real top-flight distance spreads
+            // run ±20% around the team mean, so ±14% stays conservative
+            // while the pin clears the band (measured −0.15 → see the
+            // sweep memory for the re-run). Mean (~11.8) still ×1.005.
+            mult *= 0.84 + wr01 * 0.28;
+        }
+        if !Self::det_late_off() && (minute >= 70 || (trailing && minute >= 55)) {
+            let det01 = (player.skills.mental.determination / 20.0).clamp(0.0, 1.0);
+            mult *= 0.90 + det01 * 0.17;
+        }
+        mult
+    }
+
+    fn wr_effort_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_WR_EFFORT_OFF").is_ok())
+    }
+
+    fn det_late_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_DET_LATE_OFF").is_ok())
+    }
+
     /// Diagnostic switch: with `OF_CHASE_LEGACY` set, the chase model
     /// reverts to what it was before 2026-08-18 — the man on the ball is
     /// exempt from every ceiling except his own carry band, and the

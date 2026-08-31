@@ -1326,6 +1326,18 @@ impl KeeperAerialClaim {
         if ctx.ball().is_owned() || ctx.ball().blocked_from_recollecting() {
             return None;
         }
+        // A delivery an engine-level aerial contest has already awarded
+        // is not his to come for: the keeper's claim chance was PRICED
+        // INTO that contest (`gk_command` shrinks the attacker's win,
+        // and the cross contest's own GK branch can take the ball off
+        // both duellists). Coming for it anyway re-rolled his part —
+        // the flight census showed corner-won deliveries being touched
+        // out of the air before arrival while the winner's header
+        // vanished. He stays for the strike; the save pipeline is where
+        // he answers it.
+        if ctx.tick_context.ball.aerial_contest_winner.is_some() {
+            return None;
+        }
         if !ctx.ball().on_own_side() {
             return None;
         }

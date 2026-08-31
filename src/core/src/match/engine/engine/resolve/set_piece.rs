@@ -58,11 +58,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // arrival rather than at the strike.
         if let Some(player_id) = field.ball.pending_aerial_strike.take() {
             if let Some(idx) = field.player_index(player_id) {
+                let attacking_corner =
+                    field.ball.pass_origin_restart == crate::r#match::PassOriginRestart::Corner;
                 let p = &mut field.players[idx];
                 let next = if p.tactical_position.current_position.is_forward() {
                     PlayerState::Forward(ForwardState::Heading)
                 } else if p.tactical_position.current_position.is_midfielder() {
                     PlayerState::Midfielder(MidfielderState::Heading)
+                } else if attacking_corner {
+                    // A defender who won the ATTACKING corner header goes
+                    // to the state that shoots, not the one that clears.
+                    PlayerState::Defender(DefenderState::AttackingCorner)
                 } else {
                     PlayerState::Defender(DefenderState::Heading)
                 };

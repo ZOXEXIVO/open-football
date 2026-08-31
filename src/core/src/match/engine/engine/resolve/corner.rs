@@ -33,6 +33,20 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// carried by a corner header's ~0.10-0.14 xG in the shot pipeline —
     /// only ~3-4% of corners end in a goal (real ≈ 3%), giving defenders
     /// their realistic set-piece share without inflating totals.
+    /// Base attacker win rate of the corner aerial contest — see the
+    /// note at the `att_win` computation for the 0.100 → 0.30 history.
+    /// `OF_CORNER_WIN` overrides for titration.
+    fn corner_win_base() -> f32 {
+        use std::sync::OnceLock;
+        static V: OnceLock<f32> = OnceLock::new();
+        *V.get_or_init(|| {
+            std::env::var("OF_CORNER_WIN")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.30)
+        })
+    }
+
     pub(in crate::r#match::engine::engine) fn resolve_corner_contest(
         field: &mut MatchField,
         context: &mut MatchContext,
@@ -205,10 +219,25 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             Some(CornerRoutine::FarPost) => 0.92,
             _ => 1.00,
         };
-        let att_win = ((0.100 + (att_score - best_def_score) * 0.50 - gk_command * 0.18)
+        // ⚠ The base had been ground down through successive
+        // recalibrations (0.36 → 0.31 → 0.100) until the keeper term
+        // swallowed it: for an evenly-matched box `0.100 −
+        // gk_command·0.18` is NEGATIVE, so essentially every corner
+        // returned the 0.04 floor — measured 2026-08-31 at **43
+        // attacker wins in 1169 corners (3.7%)** against a real ~22% of
+        // corners producing an attacking attempt, and DEF corner
+        // headers on goal down to 5 per 250 matches. 0.30 puts the
+        // even-box case at ~0.19 before the delivery/routine scales,
+        // which at the real ~10.4-corner supply prices out to ~2 won
+        // headers and ~0.3 corner goals a match — the real corner
+        // economy. `OF_CORNER_WIN` overrides the base for titration;
+        // the multiplicative structure is load-bearing (see the ratchet
+        // note above) and stays.
+        let att_win = ((Self::corner_win_base() + (att_score - best_def_score) * 0.50
+            - gk_command * 0.18)
             * delivery_scale
             * routine_scale)
-            .clamp(0.04, 0.36);
+            .clamp(0.04, 0.40);
 
         if context.rng.bernoulli(att_win) {
             #[cfg(feature = "match-logs")]
@@ -252,6 +281,18 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // 5 m up, about 1.7 s in the air, comfortably inside
             // `CornerDeadline` so the shape still holds for the
             // whole flight.
+            // `force_heading` is TRUE here since 2026-08-31. It was
+            // false on the reasoning that `AttackingCorner` owns its own
+            // header — but the contest's winner is the best aerial
+            // ATTACKER in the box, which is usually a forward standing
+            // pinned on a corner station with no heading entry hook at
+            // all, and even CB winners drift off the drop spot while the
+            // delivery flies (measured: 200 corner wins per 250 matches,
+            // 10 CB header chances, 12 set-piece headers struck — the
+            // wins simply vanished). The strike drain still leaves a
+            // winner already in `AttackingCorner` on his own route, and
+            // routes a defender winner INTO that state rather than the
+            // defensive clear.
             Self::deliver_to_winner(
                 field,
                 att_idx,
@@ -260,7 +301,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 Self::CORNER_DROP_BEHIND,
                 Self::CORNER_APEX,
                 true,
-                false,
+                true,
             );
         } else if let Some(clearer) = best_def {
             // **The repeat corner.** The defending side wins the header,

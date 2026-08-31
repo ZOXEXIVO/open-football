@@ -1,7 +1,8 @@
 [package]
 name = "match_viewer"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
 publish = false
 
 # Deliberately excluded from the root workspace (see the root `Cargo.toml`
@@ -24,7 +25,7 @@ shared = { path = "../shared" }
 # `default_font` is deliberately absent: it compiles in `FiraMono-subset.ttf`,
 # which cannot spell half the squad list. `Typeface` fills the same slot with the
 # faces the web UI uses — see `fonts/README.md`.
-bevy = { version = "0.19", default-features = false, features = [
+bevy = { version = "0.19.1", default-features = false, features = [
     "async_executor",
     # FXAA, and only FXAA of the four it carries. It is what stands in for
     # multisampling on hardware that cannot pay for multisampling — see
@@ -71,9 +72,9 @@ bevy = { version = "0.19", default-features = false, features = [
 # print on the back of a shirt can be set in the SAME face as the label over
 # the player's head — see `typeface::Stencil`. Costs nothing in the artefact:
 # `bevy_text` already compiles it in, this only names it.
-swash = "0.2"
+swash = "0.2.10"
 wasm-bindgen = "=0.2.127"
-wasm-bindgen-futures = "0.4"
+wasm-bindgen-futures = "0.4.77"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = [
     "console",
@@ -144,13 +145,13 @@ web-sys = { version = "0.3", features = [
     "OscillatorType",
     "StereoPannerNode",
 ] }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
 # `raw_value` so a chunk can be opened in two passes: the envelope now, each
 # player's samples a few frames later. See `ChunkPayload`, which explains why a
 # megabyte and a half of JSON parsed between two animation frames is the single
 # worst thing that happens in this viewer.
-serde_json = { version = "1", features = ["raw_value"] }
-console_error_panic_hook = "0.1"
+serde_json = { version = "1.0.151", features = ["raw_value"] }
+console_error_panic_hook = "0.1.7"
 
 # `opt-level = "z"` over `3`: the replay viewer is not compute bound (a few
 # hundred transform writes per frame) and every megabyte here is embedded

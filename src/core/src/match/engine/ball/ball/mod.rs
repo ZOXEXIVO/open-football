@@ -434,6 +434,15 @@ pub struct Ball {
     /// at emit-time so the completion classifier can credit
     /// `crosses_completed` when the same pass is received.
     pub pending_pass_was_cross: bool,
+    /// How far the live pass was struck OFF its ideal arrival point, in
+    /// game units — the targeting-error radial (jitter + miskick) drawn
+    /// at emit time. This is a physical property of the ball in flight
+    /// (the deviation between the ball the receiver was shown and the
+    /// ball he is getting), not a peek at the passer's dice: the first-
+    /// touch resolver reads it so a wayward delivery is genuinely harder
+    /// to bring down than one weighted to feet. 0.0 outside a pass
+    /// window; cleared with the rest of the `pending_pass_*` set.
+    pub pending_pass_error: f32,
 
     /// Snapshot of the most recently *completed* pass — populated by
     /// `credit_completed_pass` AFTER it bumps `passes_completed` and
@@ -795,6 +804,7 @@ impl Ball {
             pending_pass_origin: None,
             pending_pass_target: None,
             pending_pass_was_cross: false,
+            pending_pass_error: 0.0,
             last_completed_pass_passer_id: None,
             last_completed_pass_receiver_id: None,
             last_completed_pass_tick: 0,
@@ -1218,6 +1228,7 @@ impl Ball {
         self.pending_pass_origin = None;
         self.pending_pass_target = None;
         self.pending_pass_was_cross = false;
+        self.pending_pass_error = 0.0;
         self.offside_snapshot = None;
         // ⚠ `pending_save_credit` is NOT cleared here — it is EARNED, not
         // in-flight. See `clear_for_dead_ball` for the full note.

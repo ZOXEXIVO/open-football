@@ -209,6 +209,29 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         #[cfg(feature = "match-logs")]
         let mut relocation = TeleportProbe::open(field);
 
+        // ── AERIAL CONTESTS RESOLVE BEFORE THE BALL IS CLAIMABLE ─────
+        // Both discrete contests run BEFORE `play_ball`, because claims
+        // resolve inside it: on the tick a lofted delivery descended
+        // into the claim ceiling (2.8 m), the intended receiver's
+        // priority claim completed it as an ordinary pass and
+        // `clear_pending_pass_metadata` disarmed the contest that
+        // existed precisely to stop that. The cross contest's own doc
+        // said so ("the receiver claim resolves EARLIER in the tick
+        // than this does") back when 2-3 open-play crosses a match made
+        // it unmeasurable; at the wide-play spine's ~40 lofted
+        // deliveries a match the endline census counted **22.9 a match
+        // disarmed INSIDE the contest band** — the whole missing aerial
+        // game. Running the contests first costs one 10 ms tick of
+        // staleness and settles the race by construction: a ball
+        // descending into a contested box is attacked in the air before
+        // anyone can bring it down.
+        Self::resolve_corner_contest(field, context);
+        #[cfg(feature = "match-logs")]
+        relocation.at(field, tc::STAGE_CORNER_CONTEST);
+        Self::resolve_cross_contest(field, context);
+        #[cfg(feature = "match-logs")]
+        relocation.at(field, tc::STAGE_CROSS_CONTEST);
+
         let t = prof_on.then(Instant::now);
         Self::play_ball(field, context, tick_ctx, events);
         #[cfg(feature = "match-logs")]
@@ -221,12 +244,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         Self::apply_pending_save_credit(field);
         #[cfg(feature = "match-logs")]
         relocation.at(field, tc::STAGE_SAVE_CREDIT);
-        Self::resolve_corner_contest(field, context);
-        #[cfg(feature = "match-logs")]
-        relocation.at(field, tc::STAGE_CORNER_CONTEST);
-        Self::resolve_cross_contest(field, context);
-        #[cfg(feature = "match-logs")]
-        relocation.at(field, tc::STAGE_CROSS_CONTEST);
         // Resolve any deferred-foul / advantage state. Cheap (one
         // Option read in the dominant no-advantage case) so we run it
         // every full tick rather than waiting for the next event.

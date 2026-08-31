@@ -83,6 +83,21 @@ impl StateProcessingHandler for MidfielderHeadingState {
             ));
         }
 
+        // A ball an engine-level contest awarded to somebody else is not
+        // ours to challenge — same double-jeopardy rule as the defender
+        // heading state; touching it wiped the grant and vanished the
+        // won header.
+        if ctx
+            .tick_context
+            .ball
+            .aerial_contest_winner
+            .is_some_and(|w| w != ctx.player.id)
+        {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
+            ));
+        }
+
         let ball_position = ctx.tick_context.positions.ball.position;
 
         // Ball dropped out of the heading band or drifted out of reach —
@@ -90,6 +105,17 @@ impl StateProcessingHandler for MidfielderHeadingState {
         if ball_position.z < HEADING_HEIGHT_THRESHOLD
             || ctx.ball().distance() > HEADING_DISTANCE_THRESHOLD
         {
+            // …unless a contest AWARDED him this delivery and it is
+            // still hanging in the band on its way to him — an awarded
+            // ball is attacked, not abandoned (the same leak the
+            // forward state's awarded block closes; a bail here
+            // vanished the won header and left the granted ball
+            // unclaimable until the grant lapsed).
+            if ball_position.z >= HEADING_HEIGHT_THRESHOLD
+                && ctx.tick_context.ball.aerial_contest_winner == Some(ctx.player.id)
+            {
+                return None;
+            }
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));
@@ -111,10 +137,14 @@ impl StateProcessingHandler for MidfielderHeadingState {
         // Won it. Where the contact goes depends on where on the pitch it
         // happened — attacking the box is a shot, deep in our own third
         // is a clearance, and everything between is a knock-down forward.
+        // A contest-AWARDED header is exempt from the TEAM shot window —
+        // same rule and same measured reason as the forward state: the
+        // window is warm during every corner/cross sequence, and it was
+        // silently converting won set-piece headers into knock-downs.
         if ctx.ball().distance_to_opponent_goal() < ATTACKING_HEADER_RANGE
             && self.is_genuine_header_chance(ctx)
             && ctx.player().can_shoot()
-            && ctx.team().can_shoot()
+            && (contest_awarded || ctx.team().can_shoot())
         {
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Running,
