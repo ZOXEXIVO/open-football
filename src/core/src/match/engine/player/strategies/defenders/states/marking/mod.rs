@@ -5,8 +5,10 @@ use crate::r#match::defenders::states::common::{
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::player::strategies::common::states::{ContactFoul, MarkEngagement};
 use crate::r#match::player::strategies::players::DefensiveRole;
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -277,17 +279,37 @@ impl StateProcessingHandler for DefenderMarkingState {
             // quantity is what makes that true: lead for the good
             // reader, trail for the poor one.
             //
-            // Scored on the same three attributes `MarkerEvasion` reads
-            // him on, so the two halves of the duel are one contest.
-            let reading = {
-                let s = &ctx.player.skills.mental;
-                ((s.positioning / 20.0) * 0.40
-                    + (s.anticipation / 20.0) * 0.35
-                    + (s.concentration / 20.0) * 0.25)
-                    .clamp(0.0, 1.0)
-            };
-            // −MAX_READ_LAG (a step behind) … +MAX_READ_LAG (a step ahead).
-            const MAX_READ_LAG: f32 = 14.0;
+            // ── THE READ IS A DUEL, NOT A PROPERTY ────────────────────
+            //
+            // It was `(reading − 0.5)` on a blend that did not include
+            // `marking` — so the tracker's read was priced against an
+            // absolute constant, and the MAN being tracked contributed
+            // nothing: an 18-off_the_ball mover degraded his marker's
+            // extrapolation exactly as much as a 6, which is why every
+            // evasion-amplitude sweep measured zero separation and the
+            // 2026-08-31 definitive sweep still had off_the_ball leaning
+            // wrong-side (+0.24 pooled) and marking at −0.16.
+            //
+            // Both halves now come from `MarkerEvasion`'s shared blends —
+            // ONE contest, one source: `holder_quality` (marking-led,
+            // the same blend the evasion edge reads) against
+            // `mover_quality` (off_the_ball-led). A linear extrapolation
+            // is exactly what a check-and-spin exploits, and how far it
+            // is exploited is now the mover's trickiness against the
+            // tracker's reading. Centred at zero for an even contest at
+            // ANY level — both blends ride the same population, so the
+            // duel is divisionally flat by construction.
+            let minute = sc::minute_from_ms(ctx.context.total_match_time);
+            let mover_q = ctx
+                .context
+                .players
+                .by_id(opponent_to_mark.id)
+                .map(|m| MarkerEvasion::mover_quality(m, minute))
+                .unwrap_or(0.5);
+            let read_edge = (MarkerEvasion::holder_quality(ctx.player) - mover_q).clamp(-0.5, 0.5);
+            // −span (a step behind) … +span (a step ahead).
+            // `OF_READ_SPAN` overrides for titration.
+            let max_read_lag = MarkerEvasion::read_span();
             // ── …CENTRED ON THE TIME IT TAKES HIM TO GET THERE ────────
             //
             // Signing the read term around ZERO means the AVERAGE marker
@@ -308,9 +330,9 @@ impl StateProcessingHandler for DefenderMarkingState {
             let closing_ticks = {
                 let gap = (opponent_to_mark.position - ctx.player.position).magnitude();
                 let speed = ctx.player.max_speed_with_condition_cached().max(0.05);
-                (gap / speed).min(MAX_READ_LAG * 2.0)
+                (gap / speed).min(max_read_lag * 2.0)
             };
-            let prediction_time = closing_ticks + (reading - 0.5) * 2.0 * MAX_READ_LAG;
+            let prediction_time = closing_ticks + read_edge * 2.0 * max_read_lag;
             let opponent_future_position =
                 opponent_to_mark.position + opponent_velocity * prediction_time;
 

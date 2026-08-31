@@ -2,29 +2,35 @@
 //! touchline before a ball is kicked, and the camera that goes down the line.
 //!
 //! Football on television does not open on a kickoff. It opens on the two
-//! sides lined up in front of the main stand: a held shot of one team, a held
-//! shot of the other, and then a slow pass along the faces of the whole line.
+//! sides lined up in front of the main stand, and a camera that walks the
+//! line — one slow pass along the faces, left to right across the frame.
 //! Then it cuts to the gantry and the match starts.
 //!
-//! That is exactly what this is, and it has three beats:
+//! That is exactly what this is, and it has three beats — **one unbroken
+//! camera move**, because there is no cut anywhere inside the ceremony:
 //!
-//! 1. **The home eleven, from behind, held still** for [`Lineup::TEAM_HOLD`].
-//!    The frame holds that team and no more of the line, so eleven names are
-//!    on the screen at once — the eleven printed across their shoulders. It is
-//!    also what is up while the squad is being dressed — see
-//!    [`Act::Assembling`], the one beat with no fixed length.
-//! 2. **Cut, and the away eleven the same way.**
-//! 3. **Cut round to the front, and one long pass along the whole line** at
-//!    eye level — slow enough to look at each man as he goes by.
+//! 1. **One long pass along the faces of the whole line** at eye level —
+//!    slow enough to look at each man as he goes by, crossing the frame
+//!    left to right. (A camera on the gantry side has world +x on the LEFT
+//!    of its frame, so the dolly travels toward −x.) It is also what is up
+//!    while the squad is being dressed — see [`Act::Assembling`], the one
+//!    beat with no fixed length.
+//! 2. **The corner.** Past the last man the camera does not stop: it swings
+//!    round the end of the line to the back side, gathering speed as it
+//!    comes round.
+//! 3. **The get-away.** From behind them it pulls away toward the middle of
+//!    the field, rising as it goes — the line receding into the whole
+//!    ground — and over the centre spot comes the cut to the gantry and the
+//!    kickoff.
 //!
 //! ⚠ **No plate is drawn over anybody for any of it**, and that is not an
-//! omission — it is where the names come from. The ceremony names its men off
-//! the shirts they are standing in: the print across the shoulders in the two
-//! shots, which are taken from BEHIND the line for exactly that reason, and a
-//! print across the FRONT of the shirt — the same panel, the same lettering,
-//! worn for the walk-out and nothing else — in the pass along the faces. The
-//! name plate that follows a footballer through the match is held back until
-//! the ceremony hands the pitch over. See [`Lineup::wear_the_name`] and
+//! omission — it is where the names come from. The ceremony names its men
+//! off the shirt they are standing in: a print across the FRONT of the
+//! shirt — the same panel, the same lettering as the back, worn for the
+//! walk-out and nothing else — read by the pass along the faces, which is
+//! the one beat close enough to read anything. The name plate that follows
+//! a footballer through the match is held back until the ceremony hands the
+//! pitch over. See [`Lineup::wear_the_name`] and
 //! [`FrontPrint`](crate::players::body::FrontPrint).
 //!
 //! ## What it costs the replay, which is nothing
@@ -57,7 +63,7 @@
 //! told apart.
 
 use crate::app::config::{PlayerInfo, ViewerConfig};
-use crate::broadcast::camera::{CameraFlight, CameraOrbit, CameraZoom, TvCamera};
+use crate::broadcast::camera::{CameraFlight, CameraOrbit, CameraZoom};
 use crate::broadcast::focus::CameraSubject;
 use crate::players::actors::{PlayerActor, Undressed};
 use crate::players::body::FrontPrint;
@@ -65,18 +71,12 @@ use crate::recording::loader::ChunkLoader;
 use crate::recording::playback::Playback;
 use crate::scene::field::Field;
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
 use std::f32::consts::PI;
 
-/// Where one man stands in the line, which way he is turned, and whose he is.
+/// Where one man stands in the line, and which way he is turned.
 #[derive(Clone, Copy)]
 struct Stand {
     id: u32,
-    /// Which side of the line he belongs to. Carried here rather than looked
-    /// up on [`ViewerConfig`] because the two static beats are ABOUT the
-    /// split: one static beat frames a side, and the shot list is written in
-    /// terms of it.
-    home: bool,
     at: Vec3,
     heading: f32,
 }
@@ -97,9 +97,9 @@ enum Act {
     #[default]
     Waiting,
     /// The recording is in, the playhead is parked and the squad is being
-    /// dressed a few men a frame. The opening wide is held over it, which is
-    /// what turns "twenty-two bodies appearing three at a time" into "the
-    /// teams coming out".
+    /// dressed a few men a frame. The opening frame of the pass is held over
+    /// it, which is what turns "twenty-two bodies appearing three at a time"
+    /// into "the teams coming out".
     Assembling,
     /// Running, seconds of REAL time into the walk down the line.
     Running(f32),
@@ -156,17 +156,10 @@ impl Lineup {
     /// 0.176 either side of his centreline, plus the arms hanging outside
     /// them), so this leaves about a foot of daylight between two of them:
     /// close enough to read as a line-up with arms linked, far enough that the
-    /// bodies do not intersect on the wider builds.
-    ///
-    /// ⚠ **This is the ONLY thing that decides how big a printed name comes
-    /// out**, which is not where anybody looks for it. A team shot has to hold
-    /// eleven men across the frame, so each of them gets an eleventh of it
-    /// wherever the camera stands and whatever lens it is on — moving in makes
-    /// no difference at all, because [`Self::lens_for`] simply opens up to
-    /// compensate. Shortening the LINE is what makes the frame narrower, and a
-    /// narrower frame is the whole of it. Down from 1.25 (2026-08-26,
-    /// maintainer: *"players should stand more compactly… names on shirts
-    /// aren't always visible"*), which is 1.4x the print.
+    /// bodies do not intersect on the wider builds. Down from 1.25
+    /// (2026-08-26, maintainer: *"players should stand more compactly"*) —
+    /// and every metre of line is also a metre and a half of pass, so a
+    /// packed line keeps the ceremony moving.
     const SPACING: f32 = 0.85;
     /// And the gap between the two teams, which is what makes it read as two
     /// elevens rather than one crowd of twenty-two. Two and a half times the
@@ -184,47 +177,20 @@ impl Lineup {
     /// own eyeline.
     const AT_THE_STAND: f32 = PI;
 
-    /// **Where a team's own shot stands: behind the line, and how high.**
-    ///
-    /// Behind is the pitch side — they are facing the stand, so their backs
-    /// are to the middle of the ground.
-    ///
-    /// ⚠ **The distance does not decide how big the men come out; the WIDTH
-    /// the frame has to hold does.** Eleven men have to fit across it, so each
-    /// of them gets an eleventh of it wherever the camera stands, and all this
-    /// number chooses is how much perspective there is — how much bigger the
-    /// man in the middle is than the man on the end. See [`Self::SPACING`],
-    /// which is the knob that actually moves the print.
-    ///
-    /// Nine and a half metres (down from twelve, 2026-08-26: *"the camera
-    /// behind them should be closer"*) puts the end men a tenth further off
-    /// than the middle one and turned twenty-four degrees off square. Both of
-    /// those are BETTER than they were at twelve metres despite the move in,
-    /// because [`Self::SPACING`] shortened the block by more than the camera
-    /// gave up — and both matter, since a name printed across a shoulder is
-    /// foreshortened by however far round its owner is turned.
-    ///
-    /// The height is above a man's head on purpose, so the line is seen
-    /// slightly down onto and the far end of it does not disappear behind the
-    /// near end.
-    const TEAM_BACK: (f32, f32) = (9.5, 3.0);
-    /// How much clear ground the frame keeps outside the end men of a team, in
-    /// metres. Small: every centimetre of it is width taken away from eleven
-    /// names that are only a few dozen pixels wide as it is.
-    const TEAM_MARGIN: f32 = 0.7;
-    /// **How long each team is held for**, in seconds.
-    const TEAM_HOLD: f32 = 3.0;
-    /// The frame's shape when nothing better is known — see
-    /// [`Self::lens_for`], which is handed the real one.
-    const FRAME: f32 = 16.0 / 9.0;
-    /// …and where the pass along the front stands: closer, and at eye level.
+    /// **Where the pass along the faces stands: how far off the line, and how
+    /// high** — eye level, close enough that a man is a portrait.
     ///
     /// A face is a tenth of the size of a shirt, so this is as close as the
     /// line allows — it still leaves the lens two and a half metres inside the
     /// touchline, which is the bound [`Self::INSET`] was chosen for.
+    ///
+    /// ⚠ **The stand-off is also the RADIUS the corner swings on** — the
+    /// pass and the corner are one circle's worth of geometry, which is part
+    /// of what lets the whole ceremony be a single unbroken camera move.
     const FRONT: (f32, f32) = (4.3, 1.72);
-    /// What each pass aims at, in metres up the man: the print across his
-    /// shoulders on the way down, his eyes on the way back.
+    /// What the beats aim at, in metres up a man: his eyes on the pass along
+    /// the faces, and the shoulder line of the row for the get-away's locked
+    /// look back at it.
     const SHOULDERS: f32 = 1.38;
     const EYES: f32 = 1.60;
     /// **How far ahead of itself the lens looks as it travels**, as a fraction
@@ -232,8 +198,7 @@ impl Lineup {
     ///
     /// A dolly whose aim is square to its own rail is a machine going past a
     /// row of objects. Leading it a little is what makes it read as an
-    /// operator walking the line — and the second pass leads the other way,
-    /// because it is walking the other way.
+    /// operator walking the line.
     ///
     /// ⚠ **A fraction rather than a distance, so the lead is the same ANGLE
     /// whatever the pass is standing off.** Fixed at a metre and a bit it was
@@ -246,7 +211,9 @@ impl Lineup {
     /// How far past the end man the pass runs at either end, in metres. Enough
     /// that the last man crosses the whole frame rather than stopping in the
     /// middle of it — and no more, because at [`Self::PACE`] every metre of it
-    /// is the better part of a second and a half of empty touchline.
+    /// is the better part of a second and a half of empty touchline. The far
+    /// end of it is also the post the corner pivots on: the camera is clear
+    /// of the last man before it starts to swing round him.
     const RUN_ON: f32 = 1.8;
     /// The lens the pass is held on, as a multiple of the wheel's own factor —
     /// under one is wider than the broadcast lens, which every shot here is:
@@ -262,15 +229,15 @@ impl Lineup {
     /// [`CameraZoom::STEP`], so "a click wider" is exact here and stays a
     /// click of the actual wheel if that step is ever retuned.
     ///
-    /// The team shots are not given one at all — theirs is worked out from the
-    /// ground they have to cover. See [`Self::lens_for`].
+    /// Every beat of the ceremony is held on it — which is part of what keeps
+    /// the move unbroken: nothing ever has to change lens.
     const FRONT_LENS: f32 =
         0.66 / (CameraZoom::STEP * CameraZoom::STEP * CameraZoom::STEP);
     /// **How fast the pass crosses the line, in metres a second.**
     ///
     /// The ceremony is wall-clock — the playhead is parked for all of it, so
     /// there is no match time to measure it in and the transport speed does
-    /// not touch it — and this is the one number the length of it comes out
+    /// not touch it — and this is the number most of its length comes out
     /// of: twenty-three metres of travel at seven tenths of a metre a second
     /// is thirty-three seconds. `glide` runs the middle of that at about 0.88.
     ///
@@ -280,12 +247,34 @@ impl Lineup {
     /// fast enough to read a name off a shirt and much too fast to look at
     /// anybody — then 30% slower, 30% slower again, and 30% slower once more
     /// (2026-08-29). The lens now takes a second and a quarter to travel from
-    /// one man to the next, and the whole ceremony runs a little under forty
-    /// seconds.
+    /// one man to the next, and the whole ceremony — the pass, the corner and
+    /// the fly home — runs a little over forty seconds.
     ///
     /// ⚠ Which is long, and deliberately survivable: every way of asking for
     /// the football ends it on the frame it is asked — see [`Self::hold`].
     const PACE: f32 = 0.686;
+    /// **How fast the get-away crosses the ground, in metres a second** —
+    /// eight times the pass, because it is a different sentence: the pass
+    /// says *look at each of these men*, and the get-away says *and now the
+    /// match*. The corner ramps up to this and the pull-out holds it all the
+    /// way to the cut.
+    const FLY: f32 = 5.5;
+    /// **How far the get-away carries straight on before bending away**, in
+    /// metres — the middle handle of its curve ([`Self::getaway_point`]).
+    /// The corner hands the camera over travelling ALONG the line, and the
+    /// middle of the field is off to the side of that heading; the handle is
+    /// what turns one into the other without a kink at the seam.
+    const HANDLE: f32 = 6.0;
+    /// …and how high it has risen by the time it is over the centre spot, in
+    /// metres. High enough that the ground the ceremony hands back reads as
+    /// the whole pitch rather than a patch of turf. The rise is EASED over
+    /// the pull-out, so the corner hands over dead level and the climb
+    /// flattens out again as the cut arrives.
+    const OVERHEAD: f32 = 13.0;
+    /// How finely the get-away's curve is walked when it is measured and
+    /// travelled: enough legs that each is well under half a metre, so the
+    /// polyline is within a millimetre or two of the true curve.
+    const GETAWAY_STEPS: usize = 64;
     /// **How long the wide will wait for the last man to be dressed**, in real
     /// seconds, before it starts anyway.
     ///
@@ -359,6 +348,12 @@ impl Lineup {
 
     /// Stands the two elevens up: one line, centred on the halfway line, with
     /// [`Self::DIVIDE`] between the sides.
+    ///
+    /// ⚠ **The home eleven stands at the LOW-x end, and that order is the shot
+    /// list's direction.** The pass opens at the low end of the line, so the
+    /// viewer is shown their own team's faces before the visitors' — and the
+    /// corner turns round the away end, because that is where the pass runs
+    /// out of men.
     fn row_of(home: &[&PlayerInfo], away: &[&PlayerInfo]) -> Vec<Stand> {
         if home.is_empty() || away.is_empty() {
             return Vec::new();
@@ -370,7 +365,6 @@ impl Lineup {
         for player in home {
             row.push(Stand {
                 id: player.id,
-                home: true,
                 at: Vec3::new(at, 0.0, Self::ROW_Z),
                 heading: Self::AT_THE_STAND,
             });
@@ -380,7 +374,6 @@ impl Lineup {
         for player in away {
             row.push(Stand {
                 id: player.id,
-                home: false,
                 at: Vec3::new(at, 0.0, Self::ROW_Z),
                 heading: Self::AT_THE_STAND,
             });
@@ -405,7 +398,6 @@ impl Lineup {
         flight: Res<CameraFlight>,
         orbit: Res<CameraOrbit>,
         squad: Query<(&PlayerActor, Has<Undressed>)>,
-        windows: Query<&Window, With<PrimaryWindow>>,
         mut playback: ResMut<Playback>,
         mut lineup: ResMut<Lineup>,
     ) {
@@ -513,17 +505,7 @@ impl Lineup {
             Act::Running(into) => into,
             _ => 0.0,
         };
-        // The frame's own shape, because a team shot's lens is worked out from
-        // it — see [`Self::lens_for`]. The replay is rendered into an image the
-        // shape of the window, so the window IS the frame; sixteen by nine is
-        // only the fallback for a window that has not sized itself yet.
-        let frame = windows
-            .single()
-            .ok()
-            .map(|window| window.width() / window.height().max(1.0))
-            .filter(|shape| shape.is_finite() && *shape > 0.1)
-            .unwrap_or(Self::FRAME);
-        lineup.shot = Some(lineup.shot_at(into, frame));
+        lineup.shot = Some(lineup.shot_at(into));
     }
 
     /// Hands the replay back.
@@ -616,9 +598,8 @@ impl Lineup {
     /// only thing naming anybody during the ceremony: the plate that follows a
     /// footballer through the match is held back for all of it (see
     /// [`Actors::place_labels`](crate::players::actors::Actors::place_labels)).
-    /// Which is what the two halves of the shot list were always for — the
-    /// static beats are shot from BEHIND the line, where the back print is, and
-    /// the pass comes down the front at four metres, where this one is.
+    /// The pass comes down the FRONT at four metres, where this print is —
+    /// the one beat of the ceremony close enough to read a name at all.
     ///
     /// Every print in the squad, not only the line's, and it does not have to
     /// be choosier than that: [`Self::pose`] hides every man who is not in the
@@ -657,19 +638,8 @@ impl Lineup {
         (first.min(last), first.max(last))
     }
 
-    /// …and of one side's block of it, which is what a team shot has to hold.
-    fn block(&self, home: bool) -> (f32, f32) {
-        let mut from = f32::MAX;
-        let mut to = f32::MIN;
-        for stand in self.row.iter().filter(|stand| stand.home == home) {
-            from = from.min(stand.at.x);
-            to = to.max(stand.at.x);
-        }
-        if from > to { self.ends() } else { (from, to) }
-    }
-
-    /// How long the pass along the front takes, in seconds — the ground it has
-    /// to cover at [`Self::PACE`].
+    /// How long the pass along the faces takes, in seconds — the ground it
+    /// has to cover at [`Self::PACE`].
     ///
     /// A method rather than a constant because the ground depends on how many
     /// men there are, and a document with a short team sheet in it must not
@@ -679,62 +649,61 @@ impl Lineup {
         ((last - first) + Self::RUN_ON * 2.0) / Self::PACE
     }
 
-    /// The whole ceremony, in seconds.
-    fn total(&self) -> f32 {
-        Self::TEAM_HOLD * 2.0 + self.walk_seconds()
+    /// The speed the pass ends at: [`Self::glide`]'s slope at its far end is
+    /// `1 − LEAN`, so the camera arrives at the corner still moving, at just
+    /// under half its own average. The corner picks it up from exactly here.
+    fn crawl() -> f32 {
+        Self::PACE * (1.0 - Self::LEAN)
     }
 
-    /// The camera, `into` seconds in, for a frame of this shape.
+    /// How long the corner round the end of the line takes, in seconds.
     ///
-    /// ⚠ **Two cuts, and both are deliberate.** A held shot of one team, a cut
-    /// to the other, and a cut round to the front for the pass — which is what
-    /// television does with a line-up, and what a viewer needs if the point of
-    /// the first two beats is to read a team sheet off them. The one thing
-    /// that has to be continuous is the pass itself.
-    fn shot_at(&self, into: f32, frame: f32) -> Shot {
-        if into < Self::TEAM_HOLD {
-            return self.team_shot(true, frame);
-        }
-        if into < Self::TEAM_HOLD * 2.0 {
-            return self.team_shot(false, frame);
-        }
+    /// ⚠ **A consequence of what it has to join, not a number of its own.**
+    /// The corner covers half a circle of [`Self::FRONT`].0 while its speed
+    /// ramps steadily from the crawl the pass hands it to the [`Self::FLY`]
+    /// the get-away takes over at — so neither seam has a lurch in it, and
+    /// the duration is simply that distance over the average of the two
+    /// speeds.
+    fn swing_seconds(&self) -> f32 {
+        PI * Self::FRONT.0 * 2.0 / (Self::crawl() + Self::FLY)
+    }
+
+    /// …and the get-away: the ground its own curve covers, at [`Self::FLY`].
+    fn getaway_seconds(&self) -> f32 {
+        self.getaway_length() / Self::FLY
+    }
+
+    /// The whole ceremony, in seconds: the pass, the corner, the get-away.
+    fn total(&self) -> f32 {
+        self.walk_seconds() + self.swing_seconds() + self.getaway_seconds()
+    }
+
+    /// The camera, `into` seconds in.
+    ///
+    /// ⚠ **No cut anywhere.** One move: down the faces left to right, round
+    /// the last man, and away to the middle of the field — the three beats
+    /// are one path, continuous in position AND in speed at both seams (see
+    /// [`Self::round_the_end`] and [`Self::getaway_point`]), and the only
+    /// cut the ceremony has is the one at the very end, to the kickoff.
+    fn shot_at(&self, into: f32) -> Shot {
         let (first, last) = self.ends();
         let start = first - Self::RUN_ON;
         let end = last + Self::RUN_ON;
-        let along = Self::glide(
-            ((into - Self::TEAM_HOLD * 2.0) / self.walk_seconds().max(1e-3)).clamp(0.0, 1.0),
-        );
-        Self::in_front(end + (start - end) * along)
-    }
-
-    /// **One team, from behind, with the whole of it in the frame.**
-    ///
-    /// Square on and dead centre: this is a team photograph, and anything
-    /// oblique would make the far end of the line smaller than the near end
-    /// for no reason. The lens is not a constant — it is whatever holds this
-    /// side's own width from [`Self::TEAM_BACK`], so eleven men fit by
-    /// construction rather than because somebody tuned a number until they
-    /// did. See [`Self::lens_for`].
-    fn team_shot(&self, home: bool, frame: f32) -> Shot {
-        let (from, to) = self.block(home);
-        let middle = (from + to) * 0.5;
-        Shot {
-            stand: Vec3::new(
-                middle,
-                Self::TEAM_BACK.1,
-                Self::ROW_Z + Self::TEAM_BACK.0,
-            ),
-            aim: Vec3::new(middle, Self::SHOULDERS, Self::ROW_Z),
-            lens: Self::lens_for(
-                (to - from) + Self::TEAM_MARGIN * 2.0,
-                Self::TEAM_BACK.0,
-                frame,
-            ),
+        let walk = self.walk_seconds();
+        if into < walk {
+            let along = Self::glide((into / walk.max(1e-3)).clamp(0.0, 1.0));
+            return Self::in_front(end + (start - end) * along);
         }
+        let swing = self.swing_seconds();
+        if into < walk + swing {
+            return self.round_the_end(start, into - walk);
+        }
+        let gone = (into - walk - swing) * Self::FLY;
+        self.getaway(gone.min(self.getaway_length()))
     }
 
-    /// The pass: in front of them, at eye level, working back the other way —
-    /// so the lead goes the other way with it.
+    /// The pass: in front of them at eye level, crossing the frame left to
+    /// right — and leading ahead of itself, down the line.
     fn in_front(at: f32) -> Shot {
         Shot {
             stand: Vec3::new(at, Self::FRONT.1, Self::ROW_Z - Self::FRONT.0),
@@ -743,19 +712,102 @@ impl Lineup {
         }
     }
 
-    /// **The lens that holds `width` metres across a frame of shape `frame`
-    /// from `range` metres away**, as a multiple of the wheel's own factor.
+    /// **The corner: half a circle round the end of the line**, `t` seconds
+    /// into the swing, pivoting on the far end of the pass's run-on.
     ///
-    /// ⚠ **The frame's SHAPE is an input and cannot be assumed.** The replay
-    /// is drawn into an image the shape of the window and stretched onto it,
-    /// so the horizontal angle a given lens covers depends on how wide the
-    /// window is — and the one promise a team shot makes is that eleven men
-    /// fit across it. Held at a constant tuned for sixteen by nine, the same
-    /// shot on a narrower window cuts a full-back off each end.
-    fn lens_for(width: f32, range: f32, frame: f32) -> f32 {
-        let across = (width * 0.5 / range.max(0.1)).atan();
-        let up = (across.tan() / frame.max(0.1)).atan();
-        TvCamera::FOV / (2.0 * up).max(1e-3)
+    /// The pass's last position and the get-away's first are the two ends of
+    /// one semicircle of radius [`Self::FRONT`].0 centred on the line, so
+    /// the path is continuous by construction. The SPEED is continuous by
+    /// construction too: the camera accelerates steadily along the arc from
+    /// [`Self::crawl`] to [`Self::FLY`] — an operator breaking into a run,
+    /// not a machine changing gear.
+    ///
+    /// The height holds eye level for the whole turn — the rise belongs to
+    /// the get-away — and the look is carried from just past the last face
+    /// round to the middle of the row, on a smoothstep of ground covered, so
+    /// it is not still swinging at either seam.
+    fn round_the_end(&self, corner: f32, t: f32) -> Shot {
+        let swing = self.swing_seconds().max(1e-3);
+        let gone = Self::crawl() * t + (Self::FLY - Self::crawl()) * t * t / (2.0 * swing);
+        let round = (gone / Self::FRONT.0).clamp(0.0, PI);
+        let over = Self::ease((gone / (PI * Self::FRONT.0)).clamp(0.0, 1.0));
+        Shot {
+            stand: Vec3::new(
+                corner - Self::FRONT.0 * round.sin(),
+                Self::FRONT.1,
+                Self::ROW_Z - Self::FRONT.0 * round.cos(),
+            ),
+            aim: Self::in_front(corner).aim.lerp(Self::midline(), over),
+            lens: Self::FRONT_LENS,
+        }
+    }
+
+    /// Where the get-away looks: the middle of the row, at shoulder height.
+    /// Locked for the whole pull-out — a crane move reads as a crane move
+    /// because the look stays put while the ground opens up around it.
+    fn midline() -> Vec3 {
+        Vec3::new(0.0, Self::SHOULDERS, Self::ROW_Z)
+    }
+
+    /// **The get-away's path**, `t` in 0..1: from behind the end of the line
+    /// to [`Self::OVERHEAD`] metres over the centre spot.
+    ///
+    /// On the ground it is a quadratic curve whose middle handle carries
+    /// straight on from the corner ([`Self::HANDLE`]), so the seam has no
+    /// kink in it; the third point is the centre spot — the origin, so its
+    /// term vanishes. The rise is eased on top, which leaves the corner dead
+    /// level and arrives flattening out.
+    fn getaway_point(&self, t: f32) -> Vec3 {
+        let (first, _) = self.ends();
+        let start = first - Self::RUN_ON;
+        let from = Vec2::new(start, Self::ROW_Z + Self::FRONT.0);
+        let handle = Vec2::new(start + Self::HANDLE, Self::ROW_Z + Self::FRONT.0);
+        let one = 1.0 - t;
+        let flat = from * (one * one) + handle * (2.0 * one * t);
+        Vec3::new(
+            flat.x,
+            Self::FRONT.1 + (Self::OVERHEAD - Self::FRONT.1) * Self::ease(t),
+            flat.y,
+        )
+    }
+
+    /// How much ground the get-away covers, in metres — measured along the
+    /// path, rise included, so [`Self::FLY`] means what it says.
+    fn getaway_length(&self) -> f32 {
+        let mut length = 0.0;
+        let mut previous = self.getaway_point(0.0);
+        for step in 1..=Self::GETAWAY_STEPS {
+            let next = self.getaway_point(step as f32 / Self::GETAWAY_STEPS as f32);
+            length += next.distance(previous);
+            previous = next;
+        }
+        length
+    }
+
+    /// The get-away, `gone` metres along its own path — walked by distance
+    /// rather than by the curve's parameter, so the camera crosses the
+    /// ground at [`Self::FLY`] the whole way and the corner's hand-over has
+    /// no step in speed.
+    fn getaway(&self, gone: f32) -> Shot {
+        let mut travelled = 0.0;
+        let mut previous = self.getaway_point(0.0);
+        let mut stand = previous;
+        for step in 1..=Self::GETAWAY_STEPS {
+            let next = self.getaway_point(step as f32 / Self::GETAWAY_STEPS as f32);
+            let leg = next.distance(previous);
+            if travelled + leg >= gone {
+                stand = previous.lerp(next, (gone - travelled) / leg.max(1e-6));
+                break;
+            }
+            travelled += leg;
+            previous = next;
+            stand = next;
+        }
+        Shot {
+            stand,
+            aim: Self::midline(),
+            lens: Self::FRONT_LENS,
+        }
     }
 
     /// One dolly's travel, 0..1, eased by [`Self::LEAN`].
@@ -808,6 +860,7 @@ impl Lineup {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::broadcast::camera::TvCamera;
 
     fn sheet(ids: &[u32], home: bool) -> Vec<PlayerInfo> {
         ids.iter()
@@ -908,14 +961,8 @@ mod tests {
 
     /// The frame of the pass at which the camera is level with `man`.
     fn level_with(lineup: &Lineup, man: &Stand) -> Shot {
-        let from = Lineup::TEAM_HOLD * 2.0;
         (0..=800)
-            .map(|step| {
-                lineup.shot_at(
-                    from + lineup.walk_seconds() * step as f32 / 800.0,
-                    Lineup::FRAME,
-                )
-            })
+            .map(|step| lineup.shot_at(lineup.walk_seconds() * step as f32 / 800.0))
             .min_by(|left, right| {
                 (left.stand.x - man.at.x)
                     .abs()
@@ -929,81 +976,39 @@ mod tests {
         Vec3::new(man.heading.sin(), 0.0, man.heading.cos())
     }
 
-    /// Every man of one side is inside the frame a team shot holds, and nobody
-    /// from the other side is.
-    ///
-    /// ⚠ **This is the promise the beat exists to make** — "so that the
-    /// players of one team fit in the frame and I see player names" — and it
-    /// is checked at three window shapes, because the lens that keeps it is
-    /// worked out from the frame's own aspect. Held at a constant tuned for
-    /// sixteen by nine, a narrower window cuts a full-back off each end.
+    /// **The pass crosses the frame left to right.** The broadcast gantry is
+    /// behind the −z touchline, and a camera there looking at the line has
+    /// world +x on the LEFT of its frame — so "left to right", the way the
+    /// viewer watches it, is a dolly travelling toward −x: opening past the
+    /// high end of the line and handing over past the low one.
     #[test]
-    fn a_team_shot_holds_its_whole_eleven_and_only_its_eleven() {
+    fn the_pass_crosses_the_frame_left_to_right() {
         let lineup = walked_out();
-        for frame in [16.0 / 9.0, 4.0 / 3.0, 21.0 / 9.0] {
-            for home in [true, false] {
-                let shot = lineup.team_shot(home, frame);
-                // The frame's own half-angle across, out of the lens it chose.
-                let up = TvCamera::FOV / shot.lens * 0.5;
-                let across = (up.tan() * frame).atan();
-                for stand in &lineup.row {
-                    let to = stand.at - shot.stand;
-                    let off = (to.x / to.z.abs().max(1e-3)).atan().abs();
-                    if stand.home == home {
-                        assert!(
-                            off < across,
-                            "at {frame:.2} one of his own is {off} out of a {across} frame"
-                        );
-                    } else {
-                        assert!(
-                            off > across,
-                            "at {frame:.2} the other team is in shot at {off} of {across}"
-                        );
-                    }
-                }
-            }
+        let opening = lineup.shot_at(0.0);
+        assert!(
+            opening.stand.x > lineup.row[21].at.x,
+            "the pass does not open beyond the high end"
+        );
+        let handover = lineup.shot_at(lineup.walk_seconds() - 1e-3);
+        assert!(
+            handover.stand.x < lineup.row[0].at.x,
+            "the pass hands over before the last man"
+        );
+        // …and it never doubles back.
+        let mut previous = opening.stand.x;
+        for step in 1..=400 {
+            let shot = lineup.shot_at(lineup.walk_seconds() * step as f32 / 400.0);
+            assert!(shot.stand.x <= previous + 1e-4, "the pass doubled back");
+            previous = shot.stand.x;
         }
     }
 
+    /// The pass is on the stand side of the line, down their own eyeline —
+    /// and the get-away comes out BEHIND them and then only ever moves away
+    /// and up, until the middle of the field ends the ceremony.
     #[test]
-    fn the_team_shots_are_behind_them_and_the_pass_is_in_front() {
+    fn the_getaway_turns_behind_them_and_rises_to_the_middle_of_the_field() {
         let lineup = walked_out();
-        // Each static beat stands behind the side it is looking at.
-        //
-        // ⚠ Measured against the MIDDLE of that side, because the camera
-        // stands square on to the middle of it: a man on the end of a
-        // twelve-metre block is twenty-seven degrees round from a lens twelve
-        // metres back, which is the shot being wide rather than the shot being
-        // in the wrong place. What is true of every one of them is the side of
-        // the line the lens is on, and that is asserted separately.
-        for (home, at) in [(true, 0.1), (false, Lineup::TEAM_HOLD + 0.1)] {
-            let shot = lineup.shot_at(at, Lineup::FRAME);
-            let (from, to) = lineup.block(home);
-            let middle = lineup
-                .row
-                .iter()
-                .filter(|stand| stand.home == home)
-                .min_by(|left, right| {
-                    (left.at.x - (from + to) * 0.5)
-                        .abs()
-                        .total_cmp(&(right.at.x - (from + to) * 0.5).abs())
-                })
-                .expect("a side has men in it");
-            let to_lens = (shot.stand - middle.at).with_y(0.0).normalize();
-            assert!(
-                to_lens.dot(facing(middle)) < -0.9,
-                "the home={home} team shot is not behind them: {to_lens:?}"
-            );
-            for stand in lineup.row.iter().filter(|stand| stand.home == home) {
-                assert!(
-                    shot.stand.z > stand.at.z,
-                    "the lens is on the wrong side of the line for {}",
-                    stand.id
-                );
-            }
-        }
-        // ⚠ **And the pass is on the other side of the line**, which is the
-        // whole reason it is a beat of its own rather than more of the same.
         let man = lineup.row[7];
         let level = level_with(&lineup, &man);
         let to_lens = (level.stand - man.at).with_y(0.0).normalize();
@@ -1011,52 +1016,137 @@ mod tests {
             to_lens.dot(facing(&man)) > 0.9,
             "the pass is not in front of him: {to_lens:?}"
         );
-        assert!(level.stand.y < Lineup::TEAM_BACK.1, "and it is no lower");
+        assert!(
+            (level.stand.y - Lineup::FRONT.1).abs() < 1e-3,
+            "the pass is not at eye level"
+        );
+        // The corner comes out behind the line, still dead level…
+        let from = lineup.walk_seconds() + lineup.swing_seconds();
+        let turned = lineup.shot_at(from);
+        assert!(
+            turned.stand.z > Lineup::ROW_Z,
+            "the corner does not come out behind them"
+        );
+        assert!(
+            (turned.stand.y - Lineup::FRONT.1).abs() < 0.05,
+            "…or hands over off eye level"
+        );
+        // …then the get-away only ever moves away from the line and upward…
+        let mut previous = turned;
+        for step in 1..=200 {
+            let at = from + lineup.getaway_seconds() * step as f32 / 200.0;
+            let shot = lineup.shot_at(at.min(lineup.total() - 1e-4));
+            assert!(
+                shot.stand.z >= previous.stand.z - 1e-4,
+                "it came back toward the line"
+            );
+            assert!(
+                shot.stand.y >= previous.stand.y - 1e-4,
+                "it dropped on the way out"
+            );
+            previous = shot;
+        }
+        // …and ends over the centre spot, looking back down at the row.
+        let over = lineup.shot_at(lineup.total() - 1e-4);
+        assert!(
+            over.stand.x.abs() < 0.5 && over.stand.z.abs() < 0.5,
+            "the ceremony does not end over the middle of the field: {:?}",
+            over.stand
+        );
+        assert!((over.stand.y - Lineup::OVERHEAD).abs() < 0.1);
+        let look = (over.aim - over.stand).normalize();
+        assert!(
+            look.z < 0.0 && look.y < 0.0,
+            "it is not looking back down at the line: {look:?}"
+        );
     }
 
+    /// **The whole ceremony is one unbroken camera move.** The pass, the
+    /// corner and the fly are one continuous path — the only cut the ceremony
+    /// has is the one at the very end, to the kickoff — so no frame-to-frame
+    /// step anywhere may exceed what the fastest beat covers in a frame.
     #[test]
-    fn the_pass_along_the_front_never_cuts() {
-        // The two team shots are cuts on purpose; the pass is the one stretch
-        // that has to be continuous, sampled finely enough to catch a step at
-        // either end of its own easing.
+    fn the_ceremony_is_one_unbroken_camera_move() {
         let lineup = walked_out();
-        let from = Lineup::TEAM_HOLD * 2.0;
         let total = lineup.total();
         let steps = 4_000;
+        let dt = total / steps as f32;
+        let bound = Lineup::FLY * dt * 1.5 + 1e-3;
         let mut previous: Option<Shot> = None;
         for step in 0..=steps {
-            let at = from + (total - from) * step as f32 / steps as f32;
-            let shot = lineup.shot_at(at.min(total - 1e-4), Lineup::FRAME);
+            let at = (dt * step as f32).min(total - 1e-4);
+            let shot = lineup.shot_at(at);
             if let Some(previous) = previous {
                 let jump = shot.stand.distance(previous.stand);
-                assert!(jump < 0.02, "the camera jumped {jump} m at {at} s");
+                assert!(jump < bound, "the camera jumped {jump} m at {at} s");
                 let swing = shot.aim.distance(previous.aim);
-                assert!(swing < 0.02, "the aim jumped {swing} m at {at} s");
+                assert!(swing < bound, "the aim jumped {swing} m at {at} s");
                 assert!((shot.lens - previous.lens).abs() < 1e-4);
             }
             previous = Some(shot);
         }
     }
 
+    /// **The corner joins the pass to the get-away with no lurch at either
+    /// seam.** It picks the camera up at the crawl the pass ends on and hands
+    /// it over at the speed the get-away runs at — continuity of SPEED, where
+    /// the test above only proves continuity of position.
+    #[test]
+    fn the_corner_ramps_from_the_crawl_of_the_pass_to_the_speed_of_the_fly() {
+        let lineup = walked_out();
+        let speed = |at: f32| {
+            let dt = 0.004;
+            lineup.shot_at(at + dt).stand.distance(lineup.shot_at(at).stand) / dt
+        };
+        let walk = lineup.walk_seconds();
+        let swing = lineup.swing_seconds();
+        assert!(
+            (speed(walk - 0.01) - Lineup::crawl()).abs() < Lineup::crawl() * 0.25,
+            "the pass ends at {} m/s, not the crawl",
+            speed(walk - 0.01)
+        );
+        assert!(
+            (speed(walk + 0.005) - Lineup::crawl()).abs() < Lineup::crawl() * 0.5,
+            "the corner picks up at {} m/s, not the crawl",
+            speed(walk + 0.005)
+        );
+        assert!(
+            (speed(walk + swing - 0.01) - Lineup::FLY).abs() < Lineup::FLY * 0.1,
+            "the corner hands over at {} m/s, not the get-away's speed",
+            speed(walk + swing - 0.01)
+        );
+        assert!(
+            (speed(walk + swing + 0.005) - Lineup::FLY).abs() < Lineup::FLY * 0.05,
+            "the get-away runs at {} m/s",
+            speed(walk + swing + 0.005)
+        );
+    }
+
     #[test]
     fn the_pass_crosses_the_line_at_the_pace_it_was_given() {
-        // ⚠ **The length of the ceremony is a CONSEQUENCE of the pace**, not a
-        // constant standing beside it: a short team sheet has less ground to
-        // cover and must not leave the camera crawling past an empty touchline
-        // for the difference.
+        // ⚠ **The length of the ceremony is a CONSEQUENCE of its speeds**, not
+        // a constant standing beside them: a short team sheet has less ground
+        // to cover and must not leave the camera crawling past an empty
+        // touchline for the difference.
         let lineup = walked_out();
         let (first, last) = lineup.ends();
         let ground = (last - first) + Lineup::RUN_ON * 2.0;
         assert!((lineup.walk_seconds() - ground / Lineup::PACE).abs() < 1e-3);
-        assert!((lineup.total() - (Lineup::TEAM_HOLD * 2.0 + ground / Lineup::PACE)).abs() < 1e-3);
-        // …and `glide` never runs the middle of it more than half as fast
-        // again as that, which is the whole reason it is not a smoothstep.
-        let from = Lineup::TEAM_HOLD * 2.0;
+        let corner = PI * Lineup::FRONT.0 * 2.0 / (Lineup::crawl() + Lineup::FLY);
+        assert!(
+            (lineup.total()
+                - (ground / Lineup::PACE + corner + lineup.getaway_length() / Lineup::FLY))
+                .abs()
+                < 1e-2
+        );
+        // …and `glide` never runs the middle of the pass more than half as
+        // fast again as its mean, which is the whole reason it is not a
+        // smoothstep.
         let step = lineup.walk_seconds() / 600.0;
         let mut fastest: f32 = 0.0;
         for frame in 0..600 {
-            let a = lineup.shot_at(from + step * frame as f32, Lineup::FRAME);
-            let b = lineup.shot_at(from + step * (frame + 1) as f32, Lineup::FRAME);
+            let a = lineup.shot_at(step * frame as f32);
+            let b = lineup.shot_at(step * (frame + 1) as f32);
             fastest = fastest.max(a.stand.distance(b.stand) / step);
         }
         assert!(
@@ -1083,38 +1173,22 @@ mod tests {
         );
     }
 
-    /// **Every man is shown a side of his shirt that has his name on it, and
-    /// the pass goes by all of them.**
+    /// **Every man is shown the side of his shirt with his walk-out name on
+    /// it, and the pass goes by all of them.**
     ///
     /// ⚠ **This is the whole naming contract now that no plate is drawn.** The
     /// ceremony captions nobody — it names its men off the print they are
-    /// wearing — so the promise the shot list has to keep is that each beat is
-    /// on a side of the shirt that carries the name: the back in the two static
-    /// shots, the front in the pass. Checked for every man rather than for the
-    /// middle of the line, because it is the ends that a shot fails at.
+    /// wearing — and the pass along the faces is the one beat close enough to
+    /// read anything, so it has to go by every man, front on. Checked for
+    /// every man rather than for the middle of the line, because it is the
+    /// ends that a shot fails at.
     #[test]
     fn every_man_shows_the_camera_a_side_of_his_shirt_with_his_name_on_it() {
         let lineup = walked_out();
-        let total = lineup.total();
         for stand in &lineup.row {
-            // His own side's held shot, from behind — the back print.
-            let at = if stand.home {
-                Lineup::TEAM_HOLD * 0.5
-            } else {
-                Lineup::TEAM_HOLD * 1.5
-            };
-            let shot = lineup.shot_at(at, Lineup::FRAME);
-            let to_lens = (shot.stand - stand.at).with_y(0.0).normalize();
-            assert!(
-                to_lens.dot(facing(stand)) < -0.85,
-                "{} is not showing his back to his own team shot: {to_lens:?}",
-                stand.id
-            );
-
-            // …and the pass, which comes down the front — the walk-out print.
             let mut passed = false;
             for step in 0..=2_000 {
-                let shot = lineup.shot_at(total * step as f32 / 2_000.0, Lineup::FRAME);
+                let shot = lineup.shot_at(lineup.walk_seconds() * step as f32 / 2_000.0);
                 if shot.stand.z < Lineup::ROW_Z && (shot.aim.x - stand.at.x).abs() < 0.5 {
                     passed = true;
                 }
@@ -1172,7 +1246,7 @@ mod tests {
         let lineup = walked_out();
         let total = lineup.total();
         for step in 0..=2_000 {
-            let shot = lineup.shot_at(total * step as f32 / 2_000.0, Lineup::FRAME);
+            let shot = lineup.shot_at(total * step as f32 / 2_000.0);
             assert!(
                 shot.stand.z > -(Field::HALF_WIDTH + 1e-3),
                 "the lens went out past the touchline to {:?}",

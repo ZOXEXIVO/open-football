@@ -693,10 +693,9 @@ impl TvCamera {
     ///
     /// Public because it is the unit every other lens in the replay is quoted
     /// in: the shots that take the camera off the gantry are all written as a
-    /// MULTIPLE of this, and one of them — the pre-match line-up's team shot,
-    /// which has to hold eleven men across the frame — works its multiple out
-    /// from the ground it has to cover rather than being given one. See
-    /// [`Lineup::lens_for`](crate::broadcast::lineup::Lineup).
+    /// MULTIPLE of this — see
+    /// [`Lineup::FRONT_LENS`](crate::broadcast::lineup::Lineup), the lens the
+    /// pre-match ceremony is held on.
     pub const FOV: f32 = 0.265;
     /// How far the aim point follows the ball across the pitch. Low down the
     /// whole width is in shot anyway, so this is back to a gentle lead rather

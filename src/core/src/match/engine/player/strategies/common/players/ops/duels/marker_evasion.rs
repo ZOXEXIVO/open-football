@@ -42,7 +42,7 @@
 //! poor mover against a good marker gets nothing, which is the point.
 
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
-use crate::r#match::{MatchPlayerLite, StateProcessingContext};
+use crate::r#match::{MatchPlayer, MatchPlayerLite, StateProcessingContext};
 use nalgebra::Vector3;
 
 /// What the attacker can see of the man marking him.
@@ -179,6 +179,66 @@ impl MarkerEvasion {
         !*LEGACY.get_or_init(|| std::env::var("OF_EVASION_LEGACY").is_ok())
     }
 
+    /// Swing of the tracking-read duel, in AI ticks either side of the
+    /// marker's closing time: a poor reader against a tricky mover aims
+    /// a full span BEHIND where the man will be, an elite reader a span
+    /// ahead. Consumed by `DefenderMarkingState` and
+    /// `MidfielderGuardingState`. `OF_READ_SPAN` overrides for
+    /// titration.
+    ///
+    /// 24 was titrated 2026-08-31: at the historical 14 the 6:18 pins
+    /// read `off_the_ball` +0.16 (still the wrong side) and `marking`
+    /// −0.20; at 24 they read **−0.14 and −0.47** with every population
+    /// guard untouched (goals, shots, on-target, pass accuracy,
+    /// miscontrols all in band — the duel is centred, so the even
+    /// contest behaves exactly as the old flat read did). A 6:18
+    /// mismatch is ~0.29 of edge → ~14 ticks (0.28 s) of read lag,
+    /// which at running speed is the real metre-and-a-half of
+    /// separation a good mover buys at the moment the ball is played.
+    pub(crate) fn read_span() -> f32 {
+        use std::sync::OnceLock;
+        static V: OnceLock<f32> = OnceLock::new();
+        *V.get_or_init(|| {
+            std::env::var("OF_READ_SPAN")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(24.0)
+        })
+    }
+
+    /// The MOVER's half of the marking duel — how good this player is at
+    /// getting away from a marker. `off_the_ball` leads (fatigue-folded);
+    /// acceleration and agility carry the physical half. ONE SOURCE for
+    /// both sides of the engine: the attacker's evasion (here) and the
+    /// marker's read-degradation (`DefenderMarkingState` /
+    /// `MidfielderGuardingState`) call this same blend, so the duel can
+    /// never drift into two different contests wearing one name.
+    pub(crate) fn mover_quality(player: &MatchPlayer, minute: u32) -> f32 {
+        let s = &player.skills;
+        (sc::n(sc::eff(player, sc::EffActionContext::mental(minute), |p| {
+            p.skills.mental.off_the_ball
+        })) * 0.45
+            + (s.physical.acceleration / 20.0).clamp(0.0, 1.0) * 0.32
+            + (s.physical.agility / 20.0).clamp(0.0, 1.0) * 0.23)
+            .clamp(0.0, 1.0)
+    }
+
+    /// The HOLDER's half — how good this player is at staying with a man
+    /// who is trying to lose him. `marking` leads: it was absent from
+    /// this blend entirely until 2026-08-31, which is a large part of
+    /// why a 6-vs-18 `marking` pin measured only −0.21 goals — the
+    /// attribute never touched the one contest that is literally called
+    /// marking. Shared with the tracking states, same as
+    /// [`Self::mover_quality`].
+    pub(crate) fn holder_quality(player: &MatchPlayer) -> f32 {
+        let s = &player.skills;
+        ((s.technical.marking / 20.0) * 0.35
+            + (s.mental.anticipation / 20.0) * 0.30
+            + (s.mental.positioning / 20.0) * 0.20
+            + (s.mental.concentration / 20.0) * 0.15)
+            .clamp(0.0, 1.0)
+    }
+
     /// The man marking this attacker, if anybody is.
     ///
     /// Not simply the nearest body: a marker is an opponent who is
@@ -215,35 +275,12 @@ impl MarkerEvasion {
         let tightness = (1.0 - gap / Self::MARK_RADIUS).clamp(0.0, 1.0);
 
         let minute = sc::minute_from_ms(ctx.context.total_match_time);
-        let mover = {
-            let s = &ctx.player.skills;
-            (sc::n(sc::eff(
-                ctx.player,
-                sc::EffActionContext::mental(minute),
-                |p| p.skills.mental.off_the_ball,
-            )) * 0.45
-                + (s.physical.acceleration / 20.0).clamp(0.0, 1.0) * 0.32
-                + (s.physical.agility / 20.0).clamp(0.0, 1.0) * 0.23)
-                .clamp(0.0, 1.0)
-        };
+        let mover = Self::mover_quality(ctx.player, minute);
         let holder = ctx
             .context
             .players
             .by_id(marker.id)
-            .map(|d| {
-                let s = &d.skills;
-                // `marking` leads — staying with a man who is trying to
-                // lose you IS the trade the attribute names. It was
-                // absent from this blend entirely, which is a large part
-                // of why a 6-vs-18 `marking` pin measured only −0.21
-                // goals (2026-08-31 sweep): the attribute never touched
-                // the one contest that is literally called marking.
-                ((s.technical.marking / 20.0) * 0.35
-                    + (s.mental.anticipation / 20.0) * 0.30
-                    + (s.mental.positioning / 20.0) * 0.20
-                    + (s.mental.concentration / 20.0) * 0.15)
-                    .clamp(0.0, 1.0)
-            })
+            .map(Self::holder_quality)
             .unwrap_or(0.5);
 
         // Even contest sits at 0.5. The SPREAD around it is the whole

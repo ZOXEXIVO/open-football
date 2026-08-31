@@ -4,7 +4,9 @@ use crate::r#match::midfielders::states::common::{
     ActivityIntensity, Interception, MidfielderCondition,
 };
 use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::player::strategies::common::states::{ContactFoul, MarkEngagement};
+use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
@@ -203,8 +205,26 @@ impl StateProcessingHandler for MidfielderGuardingState {
             let opponent_velocity = opponent.velocity(ctx);
             let own_goal = ctx.ball().direction_to_own_goal();
 
-            // Predict where opponent is heading
-            let opponent_future = opponent.position + opponent_velocity * PREDICTION_TIME;
+            // Predict where opponent is heading — as a DUEL, the same
+            // contest the back line's marking state runs and the same
+            // shared blends (`MarkerEvasion::holder_quality` vs
+            // `mover_quality`). The flat `PREDICTION_TIME` (0.25 of a
+            // tick — effectively the live position) stays as the even-
+            // contest baseline, so the population is untouched; what
+            // changes is the SPREAD: a poor reader on a tricky mover
+            // aims a read-span behind the man (genuine perceptual lag —
+            // the check-and-spin finally buys separation in midfield
+            // too), an elite reader arrives a span ahead.
+            let minute = sc::minute_from_ms(ctx.context.total_match_time);
+            let mover_q = ctx
+                .context
+                .players
+                .by_id(opponent.id)
+                .map(|m| MarkerEvasion::mover_quality(m, minute))
+                .unwrap_or(0.5);
+            let read_edge = (MarkerEvasion::holder_quality(ctx.player) - mover_q).clamp(-0.5, 0.5);
+            let prediction = PREDICTION_TIME + read_edge * 2.0 * MarkerEvasion::read_span();
+            let opponent_future = opponent.position + opponent_velocity * prediction;
 
             // ── How tight, and how tethered — both scale with danger ──
             //

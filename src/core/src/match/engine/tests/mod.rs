@@ -14,6 +14,7 @@ mod keeper_body_tests;
 mod keeper_punt_tests;
 mod keeper_save_contact_tests;
 mod loose_ball_chase_tests;
+mod marker_read_tests;
 mod match_realism_tests;
 mod offside_restart_tests;
 mod pass_pressure_tests;

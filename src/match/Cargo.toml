@@ -1,8 +1,11 @@
 [package]
+# Explicit rather than `*.workspace = true`: an EXCLUDED package cannot
+# inherit workspace fields — cargo fails with "failed to find a workspace
+# root" before it builds anything — and this crate is excluded on purpose.
+# Same pattern as `builder/Cargo.toml`.
 name = "match_viewer"
-version.workspace = true
-authors.workspace = true
-edition.workspace = true
+version = "0.1.0"
+edition = "2024"
 publish = false
 
 # Deliberately excluded from the root workspace (see the root `Cargo.toml`
