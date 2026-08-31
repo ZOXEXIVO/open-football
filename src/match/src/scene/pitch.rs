@@ -570,14 +570,56 @@ impl Pitch {
 
     /// **How much ground there is outside the playing surface**, in metres:
     /// across the touchlines, and behind the goal lines. The advertising
-    /// hoardings stand at the end of it and the banks of seating begin two
-    /// metres beyond them, so this pair is the whole run-off — everything
-    /// between the paint and the first thing a camera can walk into.
+    /// hoardings stand at the end of it and the banks of seating begin
+    /// [`Self::SIDE_SETBACK`] beyond them, so this pair and that one are the
+    /// whole run-off — everything between the paint and the first thing a
+    /// camera can walk into.
     ///
     /// Read by `ChangeoverShot`, which puts a lens on the grass a few metres
     /// behind a man and has to know where the ground stops.
     pub const SIDE_MARGIN: f32 = 3.4;
     pub const END_MARGIN: f32 = 4.6;
+
+    /// **How far behind the hoardings the front row of seating stands**, in
+    /// metres: down a touchline, and behind a goal.
+    ///
+    /// On top of the margins above, so the apron is 7.4 m of ground from the
+    /// touchline to the first step and 7.0 m from the goal line to it. More
+    /// down the sides than behind the goals, which is where the room actually
+    /// goes at a real ground: the benches, the technical areas, the fourth
+    /// official and the photographers are all on a touchline and none of them
+    /// is behind a goal.
+    ///
+    /// **The side figure is also what uncovers the near touchline**, and that
+    /// is the reason it moved — 2.1 m put the front row 5.5 m off the paint.
+    /// The gantry is only 18 m up (`TvCamera::HEIGHT`), so a bank too short
+    /// for [`Bank::cull`] to take out is still tall enough to stand between
+    /// the lens and the play: its crest cuts across the picture and the strip
+    /// of pitch behind it is not in shot at all. Moving the bank back carries
+    /// its crest toward the lens without raising it, so the sightline that
+    /// grazes that crest comes down on the turf sooner, and about 2.4 m of
+    /// pitch comes back for every metre spent here.
+    ///
+    /// Measured at the statures where it bites — the ones whose banks just
+    /// miss the cull, which is where the whole cost of this falls:
+    ///
+    /// - **fourteen rows**, the tallest bank that still escapes the cull, hid
+    ///   21.2 m of pitch and now hides 16.7. That is a stand standing across
+    ///   the near touchline and a good way in toward the centre circle.
+    /// - **ten rows** hid 8.7 m and now hides 5.4.
+    /// - **a five-step village terrace** hid 27 cm and now hides none of it.
+    /// - **a great ground** is culled and was never in this at all.
+    ///
+    /// ⚠ The rest of that strip is the cull's to fix, not this constant's: no
+    /// setback the ground has room for clears a fourteen-row bank, which would
+    /// want its front row 14 m off the touchline. What this buys is the near
+    /// third of the pitch back, not all of it.
+    ///
+    /// The ceiling is [`Self::TREAD`]'s: the back row of a great ground's
+    /// touchline bank has to finish short of the broadcast gantry, and every
+    /// metre here is a metre off that clearance.
+    pub(crate) const SIDE_SETBACK: f32 = 4.0;
+    pub(crate) const END_SETBACK: f32 = 2.4;
 
     /// **Depth of one row of terracing**, front to back.
     ///
@@ -589,15 +631,17 @@ impl Pitch {
     /// from the centre spot — and a rake that runs past it puts the lens
     /// inside the terracing.
     ///
-    /// At 0.95 the tallest touchline bank finishes at 72 m and clears it.
-    const TREAD: f32 = 0.95;
+    /// At 0.95 the tallest touchline bank finishes at 74 m and clears it —
+    /// 72 before [`Self::SIDE_SETBACK`] took two metres of that clearance to
+    /// get the near bank off the pitch.
+    pub(crate) const TREAD: f32 = 0.95;
 
     /// **How thick a step's slab is**, as a multiple of the riser.
     ///
     /// Comfortably over one, so each step overlaps the one below it and the
     /// flight comes out as a solid bank rather than as a stack of shelves with
     /// daylight between them.
-    const SLAB: f32 = 1.9;
+    pub(crate) const SLAB: f32 = 1.9;
 
     /// The pitch as the mower left it: the shade the grass lies in going away
     /// from the roller, and the shade of the same grass lying back toward it.
@@ -1174,11 +1218,13 @@ impl Pitch {
         // Then both ends, rotated a quarter turn so their rows recede down the
         // x axis instead of the z one — one each way, which is what puts them
         // behind opposite goals.
+        let side = across + Self::SIDE_SETBACK;
+        let end = along + Self::END_SETBACK;
         for (bank, (stand, turn, length, from, most, riser)) in [
-            (Stand::Side, 0.0, touchline_span, across + 2.1, 34, 0.72),
-            (Stand::Side, PI, touchline_span, across + 2.1, 34, 0.72),
-            (Stand::HomeEnd, FRAC_PI_2, end_span, along + 2.4, 31, 0.70),
-            (Stand::AwayEnd, -FRAC_PI_2, end_span, along + 2.4, 31, 0.70),
+            (Stand::Side, 0.0, touchline_span, side, 34, 0.72),
+            (Stand::Side, PI, touchline_span, side, 34, 0.72),
+            (Stand::HomeEnd, FRAC_PI_2, end_span, end, 31, 0.70),
+            (Stand::AwayEnd, -FRAC_PI_2, end_span, end, 31, 0.70),
         ]
         .into_iter()
         .enumerate()

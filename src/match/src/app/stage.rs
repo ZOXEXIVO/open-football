@@ -111,6 +111,9 @@ pub struct Stage {
     drawn: f32,
     /// Seconds left before the frame cost is consulted again.
     review: f32,
+    /// Consecutive reviews that have found the display being missed. See
+    /// [`Self::CONSECUTIVE`].
+    missing: u32,
 }
 
 impl Stage {
@@ -145,7 +148,27 @@ impl Stage {
     /// amount of resolution would have helped. Stepping down on it would leave
     /// a viewer who came back to their tab looking at a picture they never
     /// asked to lose.
-    const STALLED_MS: f32 = 100.0;
+    ///
+    /// ⚠ **It was 100 ms, and there it disabled this ladder on precisely the
+    /// machines the ladder is for.** See
+    /// [`Quality::STALLED_MS`](crate::app::quality::Quality), which carries
+    /// the whole argument: a part managing six to nine frames a second reads
+    /// 110–170 ms, was classified as suspended, and got not one rung. The
+    /// ceiling belongs here, but the thing that separates a suspended page
+    /// from a slow one is that a suspended page comes BACK — so the test is
+    /// persistence ([`Self::CONSECUTIVE`]) and the magnitude bound moves up to
+    /// where it only catches a page that has genuinely stopped.
+    const STALLED_MS: f32 = 500.0;
+
+    /// How many consecutive reviews have to say the frame is being missed
+    /// before a rung is spent.
+    ///
+    /// Cheaper to be wrong here than in [`Quality`] — a rung costs a texture
+    /// reallocation where a tier costs a scene-wide shader recompile — but the
+    /// same discriminator applies and it is worth a single extra review to
+    /// avoid handing a soft picture to somebody whose tab was simply behind
+    /// another window for five seconds.
+    const CONSECUTIVE: u32 = 2;
 
     /// How often the frame cost is consulted, in seconds.
     ///
@@ -190,6 +213,21 @@ impl Stage {
 
     fn scale(&self) -> f32 {
         Self::SCALES[self.step]
+    }
+
+    /// The band this ladder judges by, for
+    /// [`Quality`](crate::app::quality::Quality) to check itself against. The
+    /// two controllers read the same median and answer it the same way, and
+    /// keeping them in step by comment alone is what let them drift apart:
+    /// the ceiling was wrong in both files and had to be found twice.
+    #[cfg(test)]
+    pub(crate) fn struggling_ms() -> f32 {
+        Self::STRUGGLING_MS
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stalled_ms() -> f32 {
+        Self::STALLED_MS
     }
 
     /// Which rung the ladder has settled on, for the debug strip. The size
@@ -354,8 +392,17 @@ impl Stage {
                 stage.review = Self::REVIEW;
                 let median = cost.typical_frame_ms();
                 let missing = (Self::STRUGGLING_MS..Self::STALLED_MS).contains(&median);
-                if missing && stage.step + 1 < Self::SCALES.len() {
+                // A comfortable reading and a stalled one both say the last
+                // one was not a measurement of a machine that is missing the
+                // display, so both put the count back to nothing. See
+                // [`Self::CONSECUTIVE`].
+                stage.missing = if missing { stage.missing + 1 } else { 0 };
+                if stage.missing >= Self::CONSECUTIVE && stage.step + 1 < Self::SCALES.len() {
                     stage.step += 1;
+                    // Spent, so the next rung needs its own two readings
+                    // rather than walking the whole ladder down on the
+                    // strength of one slow stretch.
+                    stage.missing = 0;
                     web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&format!(
                         "match viewer — {median:.0} ms frames; drawing the replay at {:.0}% of the canvas",
                         stage.scale() * 100.0,
@@ -421,6 +468,7 @@ impl FromWorld for Stage {
             // have the first frame decide there was nothing to do.
             size: UVec2::ZERO,
             drawn: Self::SCALES[0],
+            missing: 0,
             review: Self::REVIEW,
         }
     }
@@ -441,6 +489,7 @@ mod tests {
             step,
             size: UVec2::ZERO,
             drawn: Stage::SCALES[step],
+            missing: 0,
             review: 0.0,
         }
     }

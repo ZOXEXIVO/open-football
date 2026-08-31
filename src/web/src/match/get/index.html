@@ -674,6 +674,33 @@
             if (config && !("fps_cap" in config) && refresh > 0 && refresh <= UNCAP_BELOW) {
                 config.fps_cap = 0;
             }
+            // `?perf=1` turns on the frame-cost readout: the strip on the
+            // transport bar and a console line every two seconds saying
+            // where the frame went — our systems, the rest of Bevy's main
+            // world, or the renderer and the browser.
+            //
+            // It is set from the page rather than from the server because
+            // the question it answers is about the MACHINE, not about the
+            // match: a replay that is smooth on one computer and unwatchable
+            // on the next is the same document either way, and whoever is
+            // looking into it has only the second computer. It deliberately
+            // does not turn on `debug`, which is the engine's overlay —
+            // every player's state named over his head is not what somebody
+            // chasing a frame rate asked for.
+            const asked = new URLSearchParams(location.search);
+            if (config && asked.get("perf") === "1") {
+                config.perf = true;
+            }
+            // …and `?grain=spare` / `?grain=full` force how finely the
+            // twenty-two are lathed, which the machine's own tier would
+            // otherwise decide. The pair is what makes the decision
+            // checkable: a viewer can watch the same match both ways on his
+            // own computer and read the frame cost off the bar each time,
+            // which is the one comparison that settles whether the coarse
+            // figure is worth what it buys.
+            if (config && ["full", "spare"].includes(asked.get("grain"))) {
+                config.grain = asked.get("grain");
+            }
             MatchViewer.start(JSON.stringify(config));
         })
         .catch((error) => {

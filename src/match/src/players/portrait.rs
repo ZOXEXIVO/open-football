@@ -26,6 +26,8 @@ use crate::app::config::{PlayerInfo, ViewerConfig};
 use crate::art::textures::{Portrait, Textures};
 use crate::players::actors::PlayerActor;
 use crate::players::body::{BodyParts, DressedFlesh, Flesh, Thatch};
+#[cfg(test)]
+use crate::players::body::Grain;
 use crate::players::kit::{Complexion, Wardrobe};
 use bevy::prelude::*;
 use std::collections::VecDeque;
@@ -1474,7 +1476,7 @@ mod tests {
         // land on the eye line of a SKULL cannot be seen in it at all.
         const SHOT: usize = 320;
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::tailor(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes, Grain::FULL);
         let layout = BodyParts::face_layout();
         let head = Transform::from_xyz(0.0, -layout.foot - layout.span * 0.5, 0.0);
         // The generated face beside it, on the same head from the same

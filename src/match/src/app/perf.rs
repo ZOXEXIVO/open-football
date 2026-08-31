@@ -112,6 +112,11 @@ pub struct FrameCost {
     meshes: u32,
     drawn: u32,
     counted: u32,
+    /// **What the squad costs in triangles**, and at which grain — reported
+    /// once by [`crate::players::actors::Actors::spawn`] and repeated on every
+    /// line afterwards. See [`Self::note_geometry`] for why it is told rather
+    /// than counted.
+    geometry: Option<String>,
     /// The single worst frame since the last console line, and what it cost.
     ///
     /// Separate from the window's own 95th percentile, and not the same
@@ -187,7 +192,7 @@ impl FrameCost {
             cost.drawn = drawn;
         }
 
-        if !config.debug {
+        if !config.instrumented() {
             return;
         }
         let due = cost
@@ -198,6 +203,26 @@ impl FrameCost {
             Self::announce(&cost.report());
             cost.spike = 0.0;
         }
+    }
+
+    /// **What the geometry budget came to**, told once at bring-up.
+    ///
+    /// Told rather than counted, and the reason is a property of the engine
+    /// rather than a shortcut: every mesh in this scene is built with
+    /// `RenderAssetUsages::RENDER_WORLD`, so the moment it has been extracted
+    /// to the render world its vertex data is REMOVED from the main world's
+    /// `Assets<Mesh>`. A system here could walk every `Mesh3d` in the world
+    /// and would find nothing behind the handles to count. The one place the
+    /// figure is knowable is where the meshes are made.
+    ///
+    /// It exists because the alternative was demonstrated. `SIDES` went 32 to
+    /// 128 on 2026-08-30, one outfielder went from ~33,000 triangles to
+    /// 377,024, and the line below — which reports mesh ENTITIES, and reported
+    /// them accurately throughout — said nothing, because entities are not
+    /// what changed. A budget nobody prints is a budget that grows elevenfold
+    /// and is found by hand, months later, off a user's complaint.
+    pub fn note_geometry(&mut self, summary: String) {
+        self.geometry = Some(summary);
     }
 
     /// The median whole-frame time over the last window, in milliseconds.
@@ -256,12 +281,16 @@ impl FrameCost {
         format!(
             "match viewer — {fps:.0} fps · frame {frame:.1} ms (p95 {worst:.1}, \
              worst {spike:.0}) = update {update:.1} + rest of main {rest:.1} \
-             + outside {outside:.1} · {drawn}/{meshes} meshes drawn",
+             + outside {outside:.1} · {drawn}/{meshes} meshes drawn{geometry}",
             spike = self.spike,
             rest = (main - update).max(0.0),
             outside = (frame - main).max(0.0),
             drawn = self.drawn,
             meshes = self.meshes,
+            geometry = match &self.geometry {
+                Some(summary) => format!(" · {summary}"),
+                None => String::new(),
+            },
         )
     }
 

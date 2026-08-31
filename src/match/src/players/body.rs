@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
+use crate::app::quality::Tier;
 use crate::art::textures::FaceLayout;
 use crate::players::actors::Actors;
 use crate::players::kit::{Outfit, Swatch};
@@ -313,6 +314,137 @@ impl Relief {
     }
 }
 
+/// **How finely a footballer is cut**, as the four numbers that decide it.
+///
+/// These were `const`s until 2026-09-01, and the comment that justified their
+/// last raise said the frame is spent per-ENTITY rather than per-triangle — so
+/// a finer lathe "is paid for once in memory". That was measured on an RTX
+/// 3080 Ti, and it was measured before the raise it was quoted to license: a
+/// census the same day put one outfielder at **377,024 triangles** against the
+/// ~33,000 on record, and the twenty-two at some eight million a frame.
+///
+/// On the card it was measured on, eight million triangles is a rounding
+/// error. On the integrated part in a desktop Ryzen — two compute units
+/// borrowing the CPU's memory — it is the whole frame, and it is invisible to
+/// both of the mechanisms that exist to rescue a slow machine:
+/// [`Quality`](crate::app::quality::Quality)'s sampling tier and
+/// [`Stage`](crate::app::stage::Stage)'s resolution ladder both spend pixels,
+/// and vertex cost does not care how many pixels there are. So the machine
+/// gets a coarser lathe instead, decided once, before anything is cut.
+///
+/// It is free to decide and it cannot hitch: [`BodyParts`] is built once at
+/// startup, after [`Quality::probe`](crate::app::quality::Quality::probe) has
+/// already run, and every one of these meshes is shared by all twenty-two.
+/// Unlike the sampling tier, nothing here re-specialises a render pipeline.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Grain {
+    /// Sides around each ring of an ordinary part.
+    sides: usize,
+    /// …and around a head, which is not the same question — see
+    /// [`Self::FULL`].
+    head_sides: usize,
+    /// …and around the small round parts, the joint balls and the digits.
+    blob_sides: usize,
+    /// Rings lathed between each pair a profile is authored with.
+    curve: usize,
+    /// Rings from pole to pole on a blob.
+    stacks: usize,
+}
+
+impl Grain {
+    /// What a machine with a graphics card of its own draws: exactly the
+    /// figure this crate has always cut, down to the vertex.
+    ///
+    /// The four counts and why each is what it is:
+    ///
+    /// - **`sides` 128.** Not the silhouette — a squared-off section
+    ///   ([`Ring::edge`]) carries most of its curvature in four corners, so a
+    ///   count that reads smooth on an ellipse chamfers visibly there, and the
+    ///   corners of a chest and a pair of shorts are where the eye looks for
+    ///   the shape. A [`Swell`] is also a few millimetres deep over thirty
+    ///   degrees of turn, which is a handful of facets to describe a whole
+    ///   muscle with unless there are some to spare.
+    /// - **`head_sides` 128.** At sixteen the front of a skull was four
+    ///   vertices wide, an eye landed between two of them and the texture
+    ///   sheared across the facets. A face is a photograph wrapped onto a
+    ///   lathe and it is the one surface anybody looks AT.
+    /// - **`curve` 8**, which rises WITH `sides` rather than after it: a mesh
+    ///   fine round and coarse along looks worse than one evenly coarse,
+    ///   because the crease runs the other way and a ribbed limb reads as
+    ///   readily as a faceted one.
+    /// - **`blob_sides` 48 / `stacks` 28** for the joint balls and a keeper's
+    ///   digits, which are centimetres across.
+    pub const FULL: Grain = Grain {
+        sides: 128,
+        head_sides: 128,
+        blob_sides: 48,
+        curve: 8,
+        stacks: 28,
+    };
+
+    /// What an integrated part draws.
+    ///
+    /// **The head is deliberately not cut as far as the rest**, and it is the
+    /// one number here that is not simply "less". Everything else on a
+    /// footballer is a shape; his face is a picture, wrapped on a lathe by
+    /// [`BodyParts::face_layout`], and the failure it degrades into is not a
+    /// coarser silhouette but a sheared photograph. Sixty-four still puts
+    /// sixteen vertices across the front of a skull.
+    ///
+    /// The rest is cut hard, because the argument for the full count is an
+    /// argument about a camera at arm's length — [`CameraFlight`] can be flown
+    /// there, and the crease between two facets is what reads as *assembled
+    /// out of parts* when it is. At a broadcast distance a thigh is a
+    /// centimetre of screen, and a machine that cannot hold the refresh rate
+    /// is not being asked to choose between a smooth thigh and a faceted one.
+    /// It is being asked to choose between a faceted thigh and a slideshow.
+    ///
+    /// Measured over the part list this cuts one outfielder from 377,024
+    /// triangles to a little over 60,000, and the squad from ~8 M to ~1.3 M.
+    pub const SPARE: Grain = Grain {
+        sides: 48,
+        head_sides: 64,
+        blob_sides: 16,
+        curve: 4,
+        stacks: 14,
+    };
+
+    /// Which one this machine gets.
+    ///
+    /// One decision, taken from the same tier that decides the sampling, so a
+    /// machine cannot end up coarsely lathed and multisampled or the other way
+    /// round. See [`Quality`](crate::app::quality::Quality), which explains how
+    /// the tier itself is arrived at.
+    ///
+    /// Overridable by the page (`?grain=spare`) — see
+    /// [`ViewerConfig::grain`](crate::app::config::ViewerConfig), and why a
+    /// decision nobody can try the other side of is a decision nobody can
+    /// check.
+    pub fn of(tier: Tier, asked: Option<&str>) -> Grain {
+        match asked {
+            Some("full") => Self::FULL,
+            Some("spare") => Self::SPARE,
+            _ => match tier {
+                Tier::Multisampled => Self::FULL,
+                Tier::PostProcessed => Self::SPARE,
+            },
+        }
+    }
+
+    /// How many triangles a whole squad comes to at this grain — twenty
+    /// outfielders and two keepers, for the console line at bring-up.
+    ///
+    /// Reported rather than inferred, because the entire reason this struct
+    /// exists is that a geometry budget nobody prints is a geometry budget
+    /// that grows elevenfold without anybody noticing.
+    pub fn describe(&self) -> String {
+        format!(
+            "sides {}, head {}, blob {}, curve {}",
+            self.sides, self.head_sides, self.blob_sides, self.curve
+        )
+    }
+}
+
 /// Lathes stacked ellipses into a closed, smooth-shaded mesh.
 ///
 /// Every part of a footballer — a thigh, the torso, a skull — is a tube through
@@ -336,61 +468,6 @@ struct Sculptor {
 }
 
 impl Sculptor {
-    /// Sides around each ring.
-    ///
-    /// Sixteen was chosen against a broadcast camera a hundred metres away,
-    /// where the silhouette error is a third of a pixel and nobody could have
-    /// seen it. The camera can now be flown to arm's length, and at that range
-    /// the count that matters is not the silhouette's — the shading is smooth
-    /// across a facet and creased AT it, so sixteen flat panels round a torso
-    /// read as sixteen flat panels. Thirty-two halves the crease.
-    ///
-    /// It costs almost nothing here. Every mesh is shared by all twenty-two
-    /// players, so this doubles a few thousand vertices ONCE; what a scene of
-    /// footballers actually costs is the ~350 draw calls, and that number does
-    /// not move.
-    /// A hundred and twenty-eight, and the reason is no longer the silhouette
-    /// at all. Two things spend it. A squared-off section (see [`Ring::edge`])
-    /// carries most of its curvature in the four corners, so a facet count
-    /// that reads as smooth on an ellipse chamfers visibly there — and the
-    /// corners of a chest and a pair of shorts are exactly where the eye looks
-    /// for the shape. And the surface is no longer the section: a [`Swell`] is
-    /// a few millimetres deep over thirty degrees of turn, which is a handful
-    /// of facets to describe a whole muscle with unless there are enough of
-    /// them to spare. Every mesh is shared by all twenty-two, and the frame is
-    /// spent per-ENTITY rather than per-triangle (see [`Sculptor::joined`]),
-    /// so what this buys is paid for once in memory.
-    const SIDES: usize = 128;
-    /// And for the head, which carries a face.
-    ///
-    /// At sixteen the front of a skull was four vertices wide, so an eye
-    /// landed between two of them and the texture sheared across the facets.
-    /// A head is also the one part of a footballer anybody looks AT — it is on
-    /// the body's own count now rather than under it.
-    const HEAD_SIDES: usize = 128;
-    /// And for the small round parts — see [`Sculptor::ellipsoid`].
-    const BLOB_SIDES: usize = 48;
-    /// Rings from pole to pole on a sphere.
-    const STACKS: usize = 28;
-    /// How many rings are lathed between each pair a profile is written with.
-    ///
-    /// The control points are the shape as it is AUTHORED — a dozen numbers a
-    /// human can read and edit — and the mesh is the smooth curve through
-    /// them rather than the polyline between them. That distinction is most of
-    /// what separates a limb from a stack of truncated cones: the silhouette
-    /// error of a straight span is second order and invisible, but the CREASE
-    /// where two spans meet is first order and is exactly what the eye reads
-    /// as "assembled out of parts".
-    ///
-    /// Eight, and it rises WITH [`Sculptor::SIDES`] rather than after it: a
-    /// mesh that is fine round and coarse along looks worse than one that is
-    /// evenly coarse, because the crease it leaves runs the other way and the
-    /// eye reads a ribbed limb as readily as a faceted one. It matters most
-    /// where a span is long and the profile is turning through it — the roll
-    /// of the shirt's hem, the trapezius, the seat, the curl of the fingers —
-    /// which is everywhere a piece of clothing changes direction.
-    const CURVE: usize = 8;
-
     fn new(sides: usize, relief: Relief) -> Self {
         Sculptor {
             positions: Vec::new(),
@@ -403,19 +480,19 @@ impl Sculptor {
     }
 
     /// A part described by its profile, from either end.
-    fn part(rings: &[Ring]) -> Mesh {
-        Self::part_at(rings, Self::SIDES)
+    fn part(grain: Grain, rings: &[Ring]) -> Mesh {
+        Self::part_at(grain, rings, grain.sides)
     }
 
     /// The same, at a chosen resolution.
-    fn part_at(rings: &[Ring], sides: usize) -> Mesh {
-        Self::modelled(rings, sides, Relief::SMOOTH)
+    fn part_at(grain: Grain, rings: &[Ring], sides: usize) -> Mesh {
+        Self::modelled(grain, rings, sides, Relief::SMOOTH)
     }
 
     /// …and the same again with muscle under it: the profile says what shape
     /// the part is and the [`Relief`] what is going on beneath its surface.
-    fn modelled(rings: &[Ring], sides: usize, relief: Relief) -> Mesh {
-        Self::lathe(&Self::curved(rings), sides, relief)
+    fn modelled(grain: Grain, rings: &[Ring], sides: usize, relief: Relief) -> Mesh {
+        Self::lathe(&Self::curved(grain, rings), sides, relief)
     }
 
     /// And a profile that is ALREADY dense, lathed as written.
@@ -430,7 +507,7 @@ impl Sculptor {
         sculptor.build()
     }
 
-    /// A profile resampled through a smooth curve — see [`Sculptor::CURVE`].
+    /// A profile resampled through a smooth curve — see [`Grain::FULL`].
     ///
     /// Catmull-Rom through the control points, on the RADII only: `y` is the
     /// variable the profile is a function of rather than part of its shape,
@@ -439,20 +516,23 @@ impl Sculptor {
     /// [`Sculptor::section`] cannot survive.
     ///
     /// Everything derived from a part must come through here too, or the
-    /// derivation is measuring a shape the mesh does not have.
-    fn curved(rings: &[Ring]) -> Vec<Ring> {
+    /// derivation is measuring a shape the mesh does not have — which is also
+    /// why the grain has to be carried in rather than read off a constant: a
+    /// derivation resampled at one fineness and lathed at another is measuring
+    /// a shape the mesh does not have in a second, quieter way.
+    fn curved(grain: Grain, rings: &[Ring]) -> Vec<Ring> {
         if rings.len() < 3 {
             return rings.to_vec();
         }
         let last = rings.len() - 1;
-        let mut out = Vec::with_capacity(last * Self::CURVE + 1);
+        let mut out = Vec::with_capacity(last * grain.curve + 1);
         for span in 0..last {
             let before = rings[span.saturating_sub(1)];
             let start = rings[span];
             let end = rings[span + 1];
             let after = rings[(span + 2).min(last)];
-            for step in 0..Self::CURVE {
-                out.push(start.through(before, end, after, step as f32 / Self::CURVE as f32));
+            for step in 0..grain.curve {
+                out.push(start.through(before, end, after, step as f32 / grain.curve as f32));
             }
         }
         out.push(rings[last]);
@@ -539,22 +619,22 @@ impl Sculptor {
     /// Coarser than the lathed parts on purpose: there are ten of these on a
     /// footballer and none of them is more than six centimetres across, where
     /// twenty-four sides put the silhouette error under half a millimetre.
-    fn ellipsoid(radii: Vec3) -> Mesh {
-        Self::ellipsoid_at(radii, Vec3::ZERO)
+    fn ellipsoid(grain: Grain, radii: Vec3) -> Mesh {
+        Self::ellipsoid_at(grain, radii, Vec3::ZERO)
     }
 
     /// The same, carried off the origin it is modelled about.
-    fn ellipsoid_at(radii: Vec3, at: Vec3) -> Mesh {
-        let mut sculptor = Sculptor::new(Self::BLOB_SIDES, Relief::SMOOTH);
-        sculptor.loft(&Self::sphere(radii), at);
+    fn ellipsoid_at(grain: Grain, radii: Vec3, at: Vec3) -> Mesh {
+        let mut sculptor = Sculptor::new(grain.blob_sides, Relief::SMOOTH);
+        sculptor.loft(&Self::sphere(grain, radii), at);
         sculptor.build()
     }
 
     /// Sphere profile, bottom pole to top pole.
-    fn sphere(radii: Vec3) -> Vec<Ring> {
-        (0..=Self::STACKS)
+    fn sphere(grain: Grain, radii: Vec3) -> Vec<Ring> {
+        (0..=grain.stacks)
             .map(|stack| {
-                let angle = PI * (1.0 - stack as f32 / Self::STACKS as f32);
+                let angle = PI * (1.0 - stack as f32 / grain.stacks as f32);
                 Ring {
                     y: radii.y * angle.cos(),
                     x: radii.x * angle.sin(),
@@ -1512,8 +1592,8 @@ impl BodyParts {
     /// cuffs, the shorts legs, the sock tops — are read back out of the store,
     /// folded into their parents, and their own handles dropped at the end of
     /// this function, so nothing of them survives to be uploaded twice.
-    pub fn new(meshes: &mut Assets<Mesh>) -> Self {
-        let cuts = Self::tailor(meshes);
+    pub fn new(meshes: &mut Assets<Mesh>, grain: Grain) -> Self {
+        let cuts = Self::tailor(meshes, grain);
         let cut = |meshes: &Assets<Mesh>, handle: &Handle<Mesh>| {
             meshes
                 .get(handle)
@@ -1572,14 +1652,51 @@ impl BodyParts {
         }
     }
 
+    /// **What one outfielder comes to in triangles**, counted off the meshes
+    /// that were just built.
+    ///
+    /// Has to be asked while the parts are still in the main world: they are
+    /// made with `RenderAssetUsages::RENDER_WORLD` and their vertex data is
+    /// dropped the moment it reaches the renderer, so this is the last
+    /// opportunity anything has to count them. See
+    /// [`FrameCost::note_geometry`](crate::app::perf::FrameCost::note_geometry).
+    ///
+    /// An outfielder rather than a keeper, because twenty of the twenty-two
+    /// are one and a squad's cost is his cost times twenty. Paired parts are
+    /// counted twice, which is what a man wears.
+    pub fn triangles(&self, meshes: &Assets<Mesh>) -> usize {
+        let count = |handle: &Handle<Mesh>| {
+            meshes
+                .get(handle)
+                .and_then(|mesh| mesh.indices())
+                .map_or(0, |indices| indices.len() / 3)
+        };
+        let single = count(&self.torso)
+            + count(&self.pelvis)
+            + count(&self.head)
+            + count(&self.number)
+            + count(&self.name)
+            + count(&self.name_front)
+            // The fullest cap, since a squad wears a spread of them.
+            + self.hair.iter().flatten().map(count).max().unwrap_or(0);
+        let paired = count(&self.arm_sleeved)
+            + count(&self.forearm)
+            + count(&self.hand[1])
+            + count(&self.thigh)
+            + count(&self.shin)
+            + count(&self.boot);
+        single + 2 * paired
+    }
+
     /// Cuts every part of the pattern, one mesh each. The composed working
     /// set is [`Self::new`] above; the tests' rasteriser walks these instead,
     /// because a preview has to show a collar against its shirt.
-    pub(crate) fn tailor(meshes: &mut Assets<Mesh>) -> Cuts {
+    pub(crate) fn tailor(meshes: &mut Assets<Mesh>, grain: Grain) -> Cuts {
         Cuts {
             torso: meshes.add(Sculptor::modelled(
+                grain,
                 &Self::SHIRT,
-                Sculptor::SIDES,
+                grain.sides,
                 Self::TRUNK,
             )),
             // The neck of the shirt: the top of the torso swollen by five
@@ -1600,7 +1717,7 @@ impl BodyParts {
             // on a throat — seven millimetres of daylight is a rib-knit neck,
             // and the two and a half centimetres this had were a socket with
             // a head standing in it.
-            collar: meshes.add(Sculptor::part(&[
+            collar: meshes.add(Sculptor::part(grain, &[
                 Ring::set(0.5775, 0.0930, 0.0775, -0.0105),
                 Ring::set(0.5845, 0.0810, 0.0705, -0.0115),
                 Ring::set(0.5905, 0.0725, 0.0655, -0.0120),
@@ -1638,11 +1755,11 @@ impl BodyParts {
             // crescent across the small of his back. Nothing up there is ever
             // seen — the hem covers it — so the fix is to not model it.
             pelvis: meshes.add(Sculptor::lathe(
-                &Self::seat(),
-                Sculptor::SIDES,
+                &Self::seat(grain),
+                grain.sides,
                 Relief::SMOOTH,
             )),
-            head: meshes.add(Sculptor::part_at(&Self::SKULL, Sculptor::HEAD_SIDES)),
+            head: meshes.add(Sculptor::part_at(grain, &Self::SKULL, grain.head_sides)),
             // Shaved, a crop, short back and sides, and a mop: the three caps
             // start lower at the temple, carry more volume and leave less
             // forehead in turn, which is the whole axis a squad varies along.
@@ -1654,9 +1771,9 @@ impl BodyParts {
             // ruled round the head at ear height.
             hair: [
                 None,
-                Some(meshes.add(Self::cap(0.100, 0.005, 0.0498))),
-                Some(meshes.add(Self::cap(0.092, 0.009, 0.0586))),
-                Some(meshes.add(Self::cap(0.084, 0.017, 0.0790))),
+                Some(meshes.add(Self::cap(grain, 0.100, 0.005, 0.0498))),
+                Some(meshes.add(Self::cap(grain, 0.092, 0.009, 0.0586))),
+                Some(meshes.add(Self::cap(grain, 0.084, 0.017, 0.0790))),
             ],
             // Deltoid, bicep, taper to the elbow.
             //
@@ -1673,7 +1790,7 @@ impl BodyParts {
             // notices about a limb at close range; a real arm loses about a
             // tenth between the bicep and the elbow and the forearm's belly
             // picks straight up from there.
-            upper_arm: meshes.add(Sculptor::part(&[
+            upper_arm: meshes.add(Sculptor::part(grain, &[
                 Ring::oval(0.050, 0.0195, 0.0192),
                 Ring::oval(0.026, 0.0400, 0.0388),
                 Ring::oval(-0.006, 0.0568, 0.0545),
@@ -1712,7 +1829,7 @@ impl BodyParts {
             // pod. The hem sits at −0.132 with four millimetres in hand, which
             // is as close as it can be taken before the two lathes start
             // fighting for depth.
-            sleeve: meshes.add(Sculptor::part(&Self::sleeve(&[
+            sleeve: meshes.add(Sculptor::part(grain, &Self::sleeve(&[
                 Ring::squared(-0.018, 0.0758, 0.0648, 0.001, 2.28),
                 Ring::squared(-0.050, 0.0700, 0.0612, 0.002, 2.26),
                 Ring::squared(-0.085, 0.0636, 0.0572, 0.003, 2.22),
@@ -1738,7 +1855,7 @@ impl BodyParts {
             // fourteen still overlapping the sleeve's rim at −0.132 — which
             // is the overlap the rule above wants, and the rest of the
             // sleeve's length back to the shoulder.
-            cuff: meshes.add(Sculptor::part(&[
+            cuff: meshes.add(Sculptor::part(grain, &[
                 Ring::squared(-0.118, 0.0618, 0.0570, 0.0034, 2.22),
                 Ring::squared(-0.130, 0.0598, 0.0554, 0.0040, 2.20),
                 Ring::squared(-0.138, 0.0578, 0.0534, 0.0040, 2.19),
@@ -1773,7 +1890,7 @@ impl BodyParts {
                 // both are running the same way, rather than at a rim where
                 // one is 2 mm proud of the other and the break is a ring right
                 // round the elbow.
-                Sculptor::part(&[
+                Sculptor::part(grain, &[
                     // The offsets tilt the curve those two surfaces cross on
                     // so that it is not a ring ruled level round the arm: the
                     // shading break falls a few millimetres lower at the back
@@ -1795,12 +1912,12 @@ impl BodyParts {
                 // millimetre apart over a band do not draw as one surface,
                 // they draw as a dotted line of z-fighting right round the
                 // joint, which is worse than the bead it replaced.
-                Sculptor::ellipsoid_at(
+                Sculptor::ellipsoid_at(grain, 
                     Vec3::new(0.0400, 0.0420, 0.0378),
                     Vec3::new(0.0, -0.006, -0.001),
                 ),
             )),
-            hand: [Self::hand(-1.0), Self::hand(1.0)].map(|mesh| meshes.add(mesh)),
+            hand: [Self::hand(grain, -1.0), Self::hand(grain, 1.0)].map(|mesh| meshes.add(mesh)),
             // Cuff, back of the hand, then the padded palm out to the
             // fingertips. Half again as long as a bare hand and nearly twice
             // as wide, which is what a keeper's glove is: at this range the
@@ -1811,7 +1928,7 @@ impl BodyParts {
             // hand and squared off at the end, which is what a keeper's glove
             // is — a flat surface, deliberately, because the point of it is
             // to be in the way.
-            glove: meshes.add(Sculptor::part(&[
+            glove: meshes.add(Sculptor::part(grain, &[
                 Ring::oval(0.062, 0.034, 0.030),
                 Ring::oval(0.038, 0.045, 0.036),
                 Ring::oval(0.014, 0.052, 0.038),
@@ -1829,15 +1946,17 @@ impl BodyParts {
             // not a hinge with daylight through it, and two tapers that meet
             // exactly show the join the moment the finger bends.
             finger: meshes.add(Sculptor::part_at(
+                grain,
                 &[
                     Ring::oval(0.008, 0.0155, 0.0135),
                     Ring::oval(-0.012, 0.0165, 0.0145),
                     Ring::oval(-0.034, 0.0155, 0.0135),
                     Ring::oval(-0.050, 0.0138, 0.0118),
                 ],
-                Sculptor::BLOB_SIDES,
+                grain.blob_sides,
             )),
             fingertip: meshes.add(Sculptor::part_at(
+                grain,
                 &[
                     Ring::oval(0.010, 0.0145, 0.0125),
                     Ring::oval(-0.008, 0.0150, 0.0130),
@@ -1845,24 +1964,25 @@ impl BodyParts {
                     Ring::oval(-0.036, 0.0100, 0.0085),
                     Ring::oval(-0.042, 0.0055, 0.0050),
                 ],
-                Sculptor::BLOB_SIDES,
+                grain.blob_sides,
             )),
             // The thumb: shorter, thicker, and it comes off the side rather
             // than the end.
             thumb: meshes.add(Sculptor::part_at(
+                grain,
                 &[
                     Ring::oval(0.010, 0.018, 0.016),
                     Ring::oval(-0.014, 0.019, 0.017),
                     Ring::oval(-0.040, 0.016, 0.014),
                     Ring::oval(-0.052, 0.011, 0.010),
                 ],
-                Sculptor::BLOB_SIDES,
+                grain.blob_sides,
             )),
             // The long sleeve, in two parts for the two halves of the arm.
             // Cut the same four millimetres looser than the limb inside it
             // that the short one is — two nearly tangent surfaces crossing
             // each other draw as a ragged sawtooth no depth buffer can fix.
-            sleeve_long: meshes.add(Sculptor::part(&Self::sleeve(&[
+            sleeve_long: meshes.add(Sculptor::part(grain, &Self::sleeve(&[
                 Ring::squared(-0.018, 0.0758, 0.0648, 0.001, 2.28),
                 Ring::squared(-0.050, 0.0700, 0.0612, 0.002, 2.26),
                 Ring::squared(-0.090, 0.0592, 0.0556, 0.002, 2.20),
@@ -1870,7 +1990,7 @@ impl BodyParts {
                 Ring::squared(-0.228, 0.0518, 0.0496, 0.002, 2.10),
                 Ring::squared(-0.292, 0.0468, 0.0452, 0.002, 2.10),
             ]))),
-            sleeve_forearm: meshes.add(Sculptor::part(&[
+            sleeve_forearm: meshes.add(Sculptor::part(grain, &[
                 Ring::squared(0.050, 0.0432, 0.0418, 0.000, 2.10),
                 Ring::squared(0.008, 0.0492, 0.0464, 0.000, 2.15),
                 Ring::squared(-0.055, 0.0516, 0.0490, 0.001, 2.15),
@@ -1879,7 +1999,7 @@ impl BodyParts {
                 Ring::squared(-0.235, 0.0336, 0.0302, 0.002, 2.05),
                 Ring::squared(-0.268, 0.0294, 0.0266, 0.002, 2.00),
             ])),
-            cuff_forearm: meshes.add(Sculptor::part(&[
+            cuff_forearm: meshes.add(Sculptor::part(grain, &[
                 Ring::squared(-0.212, 0.0396, 0.0374, 0.002, 2.10),
                 Ring::squared(-0.242, 0.0358, 0.0338, 0.002, 2.05),
                 Ring::squared(-0.260, 0.0324, 0.0306, 0.002, 2.00),
@@ -1932,7 +2052,7 @@ impl BodyParts {
             // which is past anything but a kick. It has to be pulled IN
             // across to buy that (nothing above the seat's widest ring may
             // reach past it), and the tuck it takes is under the cloth.
-            shorts_leg: meshes.add(Sculptor::part(&[
+            shorts_leg: meshes.add(Sculptor::part(grain, &[
                 Ring::squared(-0.038, 0.0720, 0.0710, 0.000, 2.26),
                 Ring::squared(-0.072, 0.0824, 0.0814, 0.001, 2.34),
                 Ring::squared(-0.100, 0.0855, 0.0850, 0.001, 2.38),
@@ -1947,6 +2067,7 @@ impl BodyParts {
             // muscle is the [`Self::QUADS`] relief, on the half of the thigh
             // the shorts leave bare.
             thigh: meshes.add(Sculptor::modelled(
+                grain,
                 &[
                     Ring::set(-0.085, 0.0805, 0.0800, 0.000),
                     Ring::set(-0.150, 0.0812, 0.0805, 0.002),
@@ -1955,13 +2076,13 @@ impl BodyParts {
                     Ring::set(-0.420, 0.0590, 0.0585, 0.000),
                     Ring::set(-0.455, 0.0530, 0.0530, 0.000),
                 ],
-                Sculptor::SIDES,
+                grain.sides,
                 Self::QUADS,
             )),
             // The shin, with the ball of the knee in it — see `forearm` above.
             shin: meshes.add(Sculptor::joined(
-                Sculptor::modelled(&Self::SHIN, Sculptor::SIDES, Self::CALF),
-                Sculptor::ellipsoid(Vec3::splat(0.048)),
+                Sculptor::modelled(grain, &Self::SHIN, grain.sides, Self::CALF),
+                Sculptor::ellipsoid(grain, Vec3::splat(0.048)),
             )),
             // The turnover at the top of the sock, in the shorts colour — the
             // one piece of kit detail that survives at this distance.
@@ -1974,13 +2095,13 @@ impl BodyParts {
             // camera got the worse it looked.
             sock_top: meshes.add(Sculptor::lathe(
                 &{
-                    let mut band = Sculptor::band(&Self::shin(), -0.078, 0.012, 4, 0.0038);
+                    let mut band = Sculptor::band(&Self::shin(grain), -0.078, 0.012, 4, 0.0038);
                     // Rolled under at the bottom edge, where a turnover is turned
                     // over.
-                    band.insert(0, Sculptor::section(&Self::shin(), -0.090).swollen(0.0012));
+                    band.insert(0, Sculptor::section(&Self::shin(grain), -0.090).swollen(0.0012));
                     band
                 },
-                Sculptor::SIDES,
+                grain.sides,
                 // Smooth, and the calf under it is what keeps it that way: the
                 // turnover's rolled edge has only a millimetre of clearance
                 // over the sock, so [`Self::CALF`] is written to start below
@@ -1995,7 +2116,7 @@ impl BodyParts {
             // well in front of the ankle, the widest part is across the ball
             // of the foot, and the whole thing draws back and narrows into the
             // heel as it rises.
-            boot: meshes.add(Sculptor::part(&[
+            boot: meshes.add(Sculptor::part(grain, &[
                 Ring::set(-0.040, 0.026, 0.062, 0.024),
                 Ring::set(-0.032, 0.040, 0.086, 0.022),
                 Ring::set(-0.018, 0.047, 0.097, 0.016),
@@ -2008,7 +2129,7 @@ impl BodyParts {
             // name runs across the shoulders above it. Both lie ON the shirt:
             // see [`Sculptor::decal`] for why a flat rectangle cannot.
             number: meshes.add(Sculptor::decal(
-                &Self::shirt(),
+                &Self::shirt(grain),
                 Self::TRUNK,
                 Self::NUMBER_AT,
                 Self::NUMBER_HEIGHT,
@@ -2017,7 +2138,7 @@ impl BodyParts {
                 Self::PRINT_LIFT,
             )),
             name: meshes.add(Sculptor::decal(
-                &Self::shirt(),
+                &Self::shirt(grain),
                 Self::TRUNK,
                 Self::NAME_AT,
                 Self::NAME_HEIGHT,
@@ -2037,7 +2158,7 @@ impl BodyParts {
             // looking at that side of him: at the back a player's right is on
             // the reader's left, and at the front it is on the reader's right.
             name_front: meshes.add(Sculptor::decal(
-                &Self::shirt(),
+                &Self::shirt(grain),
                 Self::TRUNK,
                 Self::NAME_FRONT_AT,
                 Self::NAME_FRONT_HEIGHT,
@@ -2059,17 +2180,17 @@ impl BodyParts {
     /// forehead than at the temples, because the skull is rounder there. A
     /// constant burial either sinks the hair to the crown or sits it down over
     /// the eyebrows, and there is no value in between that works.
-    fn cap(from: f32, swell: f32, recede: f32) -> Mesh {
+    fn cap(grain: Grain, from: f32, swell: f32, recede: f32) -> Mesh {
         Sculptor::lathe(
-            &Self::cap_rings(from, swell, recede),
-            Sculptor::HEAD_SIDES,
+            &Self::cap_rings(grain, from, swell, recede),
+            grain.head_sides,
             Relief::SMOOTH,
         )
     }
 
     /// The profile of that cap, apart from the lathe so the hairline it
     /// produces can be measured rather than looked at.
-    fn cap_rings(from: f32, swell: f32, recede: f32) -> Vec<Ring> {
+    fn cap_rings(grain: Grain, from: f32, swell: f32, recede: f32) -> Vec<Ring> {
         const STEPS: usize = 20;
         /// Where the cap stops following the skull and pinches to its own
         /// crown, as a DEPTH below the crown.
@@ -2091,7 +2212,7 @@ impl BodyParts {
         // between them — and where it does, a ring of bare scalp comes through
         // the hair. Every player took the field wearing a tonsure once
         // already; see `the_hair_leaves_a_hairline`.
-        let skull = Self::skull();
+        let skull = Self::skull(grain);
         let span = (crown.y - SHOULDER) - from;
         let mut rings: Vec<Ring> = (0..=STEPS)
             .map(|step| {
@@ -2157,16 +2278,16 @@ impl BodyParts {
     /// printed panels, the hair and its hairline are all placed to within a
     /// few millimetres of the surface they sit on, and the gap between a
     /// chord and its arc is that same order.
-    fn skull() -> Vec<Ring> {
-        Sculptor::curved(&Self::SKULL)
+    fn skull(grain: Grain) -> Vec<Ring> {
+        Sculptor::curved(grain, &Self::SKULL)
     }
 
-    fn shirt() -> Vec<Ring> {
-        Sculptor::curved(&Self::SHIRT)
+    fn shirt(grain: Grain) -> Vec<Ring> {
+        Sculptor::curved(grain, &Self::SHIRT)
     }
 
-    fn seat() -> Vec<Ring> {
-        Sculptor::curved(&Self::SEAT)
+    fn seat(grain: Grain) -> Vec<Ring> {
+        Sculptor::curved(grain, &Self::SEAT)
     }
 
     /// **The shoulder is a BALL on the joint**, and the sleeve is that ball
@@ -2250,7 +2371,7 @@ impl BodyParts {
     /// once for each `side`, the curl and the thumb come out as mirror images
     /// the way hands do. A negative scale would have done it in one mesh and
     /// would also have turned every triangle inside out.
-    fn hand(side: f32) -> Mesh {
+    fn hand(grain: Grain, side: f32) -> Mesh {
         /// One finger, root at the knuckle and pointing down its own −y.
         const FINGER: [Ring; 7] = [
             Ring::oval(0.012, 0.0096, 0.0100),
@@ -2294,7 +2415,7 @@ impl BodyParts {
         // stepping in from it. Written the other way round — which it was —
         // the wrist draws as a bright ring and the hand as a separate object
         // hung under it.
-        let mut hand = Sculptor::part(&[
+        let mut hand = Sculptor::part(grain, &[
             Ring::squared(0.056, 0.0210, 0.0205, 0.000, 2.05),
             Ring::squared(0.038, 0.0300, 0.0298, 0.001, 2.15),
             Ring::squared(0.012, 0.0252, 0.0332, 0.002, 2.35),
@@ -2313,14 +2434,14 @@ impl BodyParts {
                 .collect();
             hand = Sculptor::placed(
                 hand,
-                Sculptor::part_at(&digit, Sculptor::BLOB_SIDES),
+                Sculptor::part_at(grain, &digit, grain.blob_sides),
                 Transform::from_translation(Vec3::new(0.0, drop, along))
                     .with_rotation(Quat::from_rotation_z(-side * curl)),
             );
         }
         Sculptor::placed(
             hand,
-            Sculptor::part_at(&THUMB, Sculptor::BLOB_SIDES),
+            Sculptor::part_at(grain, &THUMB, grain.blob_sides),
             Transform::from_translation(Vec3::new(-side * 0.004, -0.020, 0.0250))
                 .with_rotation(Quat::from_rotation_z(-side * 0.52) * Quat::from_rotation_x(-0.62)),
         )
@@ -2346,8 +2467,8 @@ impl BodyParts {
         rings
     }
 
-    fn shin() -> Vec<Ring> {
-        Sculptor::curved(&Self::SHIN)
+    fn shin(grain: Grain) -> Vec<Ring> {
+        Sculptor::curved(grain, &Self::SHIN)
     }
 
     /// Where the features of a face land on this skull, for whoever is drawing
@@ -2424,13 +2545,28 @@ impl BodyParts {
     const KNUCKLES: f32 = -0.086;
     pub const SPLAY: f32 = 3.4;
 
+    /// **Read at [`Grain::FULL`] whatever the machine is lathing at**, and
+    /// that is deliberate rather than an oversight.
+    ///
+    /// Everything else derived from a part has to be measured at the grain the
+    /// part was actually cut at, or it is placed against a shape the mesh does
+    /// not have. This one is the exception, for two reasons. The curve through
+    /// the control points is the SAME curve at either grain — only the density
+    /// it is sampled at moves — so `cheek` shifts by a fraction of a millimetre
+    /// on a 75 mm cheekbone, second order and well under a texel. And the
+    /// texture this lays out is painted once per player and, for a
+    /// photographed man, fitted to a real head by
+    /// [`Portraits`](crate::players::portrait::Portraits): making the layout
+    /// answer to the grain would mean two painted sheets per face for a
+    /// difference nothing can see. `foot` and `span` are read off the authored
+    /// profile and are grain-independent already.
     pub fn face_layout() -> FaceLayout {
         let foot = Self::SKULL[0].y;
         let crown = Self::SKULL[Self::SKULL.len() - 1].y;
         FaceLayout {
             foot,
             span: crown - foot,
-            cheek: Sculptor::section(&Self::skull(), Self::EYES).x,
+            cheek: Sculptor::section(&Self::skull(Grain::FULL), Self::EYES).x,
             eyes: Self::EYES,
             brow: Self::BROW,
             nostrils: Self::NOSTRILS,
@@ -6974,6 +7110,22 @@ mod tests {
     use super::*;
     use crate::players::kit::Complexion;
 
+    /// Which grain the `dump_*` tests below cut their figures at.
+    ///
+    /// `MATCH_FIGURE_GRAIN=spare` alongside `MATCH_FIGURE_DUMP`. It exists
+    /// because the coarse figure is only ever built on a machine slow enough
+    /// to need it, and the whole question it raises — does a footballer still
+    /// read as a person at forty-eight sides — is one that can only be settled
+    /// by looking. Every other test in this module names its grain outright,
+    /// because a test that changed what it checked depending on the
+    /// environment would be no test at all.
+    fn dump_grain() -> Grain {
+        match std::env::var("MATCH_FIGURE_GRAIN").as_deref() {
+            Ok("spare") => Grain::SPARE,
+            _ => Grain::FULL,
+        }
+    }
+
     /// **A walking goalkeeper takes steps, however set he is.**
     ///
     /// The single largest thing wrong with this rig, and it hid for months
@@ -8641,7 +8793,7 @@ mod tests {
     fn the_print_lies_on_the_shirt() {
         let panel = |at: f32, height: f32, bearing: f32, arc: f32| {
             Sculptor::decal(
-                &BodyParts::shirt(),
+                &BodyParts::shirt(Grain::FULL),
                 BodyParts::TRUNK,
                 at,
                 height,
@@ -8685,7 +8837,7 @@ mod tests {
                 .expect("panel has positions")
                 .to_vec();
             for point in &positions {
-                let shirt = Sculptor::section(&BodyParts::shirt(), point[1]);
+                let shirt = Sculptor::section(&BodyParts::shirt(Grain::FULL), point[1]);
                 // In the shirt's OWN section, which is not an ellipse — see
                 // [`Ring::radius`].
                 let radius = shirt.radius(point[0], point[2]);
@@ -8770,7 +8922,7 @@ mod tests {
 
         // Still on the cloth at that height: the panel's arc has to land on a
         // section of the shirt, not on the shoulder ball either side of it.
-        let section = Sculptor::section(&BodyParts::shirt(), top);
+        let section = Sculptor::section(&BodyParts::shirt(Grain::FULL), top);
         assert!(
             section.x > 0.17 && section.z > 0.09,
             "the shirt has narrowed to {} x {} under the plate",
@@ -8797,8 +8949,8 @@ mod tests {
     #[test]
     fn the_shirt_hangs_clear_of_the_shorts() {
         let hips = Vec3::new(0.0, Physique::HIP, 0.0);
-        let shirt = BodyParts::shirt();
-        let seat = BodyParts::seat();
+        let shirt = BodyParts::shirt(Grain::FULL);
+        let seat = BodyParts::seat(Grain::FULL);
         // The SEAT measured against the shirt, and not the other way round.
         // The failure is the seat coming out through the cloth, so what has to
         // stay inside is the seat — and at the hem's own edge the two are
@@ -8881,8 +9033,8 @@ mod tests {
                 })
                 .sum::<f32>()
         };
-        let shirt = BodyParts::shirt();
-        let seat = BodyParts::seat();
+        let shirt = BodyParts::shirt(Grain::FULL);
+        let seat = BodyParts::seat(Grain::FULL);
         // The widest of the seat, and the shoulder as the sleeve leaves it —
         // the crest of the shirt is INSIDE that and is not what anybody sees.
         let hip = seat.iter().fold(0.0f32, |widest, ring| widest.max(ring.x));
@@ -8929,7 +9081,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::tailor(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes, dump_grain());
 
         // Standing square on, from the side, and three-quarters on — plus a
         // stride and a kick, because a joint that is fine straight is not
@@ -8992,7 +9144,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::tailor(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes, dump_grain());
 
         // Front, three-quarter, side, back — the lathe is symmetric, so those
         // four are the whole of it — and then one running, because a hem that
@@ -9049,7 +9201,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::tailor(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes, dump_grain());
 
         let at = |phase: f32, spring: f32| {
             let mut gait = running(0.95);
@@ -9130,7 +9282,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::tailor(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes, dump_grain());
 
         let man = |id: u32, speed: f32| {
             let mut gait = running((speed / Actors::SPRINT).clamp(0.0, 1.0));
@@ -9204,7 +9356,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::tailor(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes, dump_grain());
 
         // Standing, for the comparison; then all four ways of taking a goal
         // — hands on the head square on and from the side, hands on the
@@ -9278,7 +9430,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::tailor(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes, dump_grain());
 
         // `roll` is negated in `PlayerActor::topple` — going over onto his
         // own right is the NEGATIVE tip — so a dive to his right is a
@@ -9375,7 +9527,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::tailor(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes, dump_grain());
 
         // The course a keeper actually has at each speed, through the real
         // opening band: dead abeam of the ball, so the whole of it is
@@ -9466,7 +9618,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::tailor(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes, dump_grain());
         // Speed, the way he is going in his own frame, and the angle to
         // watch it from. The first pair is a man jockeying; the rest are the
         // turn transient, which is what the camera actually spends its time
@@ -9568,7 +9720,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::tailor(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes, dump_grain());
 
         let mut set = still();
         set.set = 1.0;
@@ -9653,7 +9805,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::tailor(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes, dump_grain());
 
         let mut set = still();
         set.set = 1.0;
@@ -9803,7 +9955,7 @@ mod tests {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::tailor(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes, dump_grain());
 
         // What a real launch angle leaves of the sprawl, and what the ground
         // then does with it — the same two expressions `PlayerActor::topple`
@@ -9911,42 +10063,27 @@ mod tests {
         );
     }
 
-    /// What one footballer costs, in triangles.
-    ///
-    /// A stated decision rather than whatever falls out. The figure was ~4,500
-    /// triangles when the only camera was a gantry a hundred metres away; the
-    /// camera can now be flown to arm's length, where sixteen flat panels
-    /// round a torso and a hinge at every joint read — accurately — as a
-    /// robot. This is the budget that bought a curve instead.
-    ///
-    /// Tripled again (35k → 104k) when the sections stopped being ellipses,
-    /// then 104k → 134k for five digits on each bare hand — see
-    /// [`BodyParts::hand`], and note that the hand was not in this count at
-    /// all until then. Tripled once more for the SURFACE: a [`Swell`] is a
-    /// three-millimetre change over thirty degrees of turn and forty
-    /// centimetres of height, and a mesh that cannot describe it draws a
-    /// pressurised balloon whatever the profile says. [`Sculptor::SIDES`] and
-    /// [`Sculptor::CURVE`] are the two knobs and they go up together, because
-    /// a mesh that is fine round and coarse along looks worse than one that is
-    /// evenly coarse.
-    ///
-    /// It is affordable because of what it does NOT change: every mesh here is
-    /// shared by all twenty-two players, so this is a few hundred thousand
-    /// vertices in memory ONCE, and the ~400 draw calls a squad costs are set
-    /// by the number of PARTS, not by their resolution — measured, the frame
-    /// is per-entity bound and near enough resolution-insensitive. A GPU
-    /// drawing twenty-two of these is putting through about 9 million
-    /// triangles a frame.
     /// **A merged part points every vertex at a swatch, and loses nothing in
     /// the merge.** The whole trick of [`Sculptor::outfitted`] is that a
     /// vertex's UV names its colour; a vertex left on the lathe's own UVs
     /// would sample a diagonal stripe of the wardrobe sheet, and a merge
     /// that dropped vertices would open a hole in a shirt. Counted against
     /// the raw cuts, which are the same geometry by construction.
+    ///
+    /// Swept at BOTH grains. The merge walks a vertex list, so a coarser
+    /// lathe is a different list, and "every vertex names a swatch" is
+    /// exactly the kind of property that can hold at one sampling and not at
+    /// another.
     #[test]
     fn a_merged_part_wears_only_swatches() {
+        for grain in [Grain::FULL, Grain::SPARE] {
+            a_merged_part_wears_only_swatches_at(grain);
+        }
+    }
+
+    fn a_merged_part_wears_only_swatches_at(grain: Grain) {
         let mut meshes = Assets::<Mesh>::default();
-        let cuts = BodyParts::tailor(&mut meshes);
+        let cuts = BodyParts::tailor(&mut meshes, grain);
         let count = |handle: &Handle<Mesh>| {
             meshes
                 .get(handle)
@@ -9963,7 +10100,7 @@ mod tests {
             count(&cuts.shin) + count(&cuts.sock_top),
         ];
 
-        let parts = BodyParts::new(&mut meshes);
+        let parts = BodyParts::new(&mut meshes, grain);
         let swatches: Vec<[f32; 2]> = [
             Swatch::Skin,
             Swatch::Shirt,
@@ -9999,10 +10136,16 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_footballer_is_worth_his_triangles() {
+    /// What one player is worth in triangles, at a given grain.
+    ///
+    /// Pulled out of the budget test below so the two grains can be compared
+    /// against each other rather than each against a constant somebody wrote
+    /// down. The comparison is the whole point: [`Grain::SPARE`] exists to be
+    /// a large multiple cheaper than [`Grain::FULL`], and a change that
+    /// quietly closed the gap would leave both absolute bounds satisfied.
+    fn footballer_triangles(grain: Grain) -> usize {
         let mut meshes = Assets::<Mesh>::default();
-        let parts = BodyParts::tailor(&mut meshes);
+        let parts = BodyParts::tailor(&mut meshes, grain);
         let count = |handle: &Handle<Mesh>| {
             meshes
                 .get(handle)
@@ -10039,14 +10182,74 @@ mod tests {
         .map(|handle| count(handle))
         .sum::<usize>();
 
-        let footballer = single + 2 * paired;
-        assert!(
-            (320_000..520_000).contains(&footballer),
-            "a footballer is {footballer} triangles"
-        );
         // And nothing in him is a hidden extravagance: no single part is worth
-        // more than the head, which is the one anybody looks at.
-        assert!(count(&parts.head) < footballer / 4);
+        // more than a quarter of him.
+        assert!(
+            count(&parts.head) * 4 < single + 2 * paired,
+            "the head alone is {} of a footballer's {} triangles",
+            count(&parts.head),
+            single + 2 * paired
+        );
+        single + 2 * paired
+    }
+
+    /// **The geometry budget, and the gap between the two grains.**
+    ///
+    /// The absolute figure is here because it went unwatched once and cost a
+    /// user his replay: `SIDES` and `HEAD_SIDES` went 32 to 128 on 2026-08-30
+    /// and one outfielder went from ~33,000 triangles to 377,024 — an
+    /// elevenfold rise, twenty-two of them on the screen at once, and nothing
+    /// in the viewer counted a triangle so nothing said a word. It was found
+    /// by censusing this crate by hand after a report of an unwatchable replay
+    /// on an integrated part.
+    ///
+    /// The RATIO is here because it is the thing that actually has to hold.
+    /// [`Grain::SPARE`] is not "a bit less"; it is the difference between a
+    /// machine that can draw a football match and one that cannot, and a
+    /// well-meaning change that took `SPARE` back up toward `FULL` would leave
+    /// every absolute bound below perfectly satisfied.
+    #[test]
+    fn a_footballer_is_worth_his_triangles() {
+        let full = footballer_triangles(Grain::FULL);
+        assert!(
+            (320_000..520_000).contains(&full),
+            "at full grain a footballer is {full} triangles"
+        );
+
+        let spare = footballer_triangles(Grain::SPARE);
+        assert!(
+            (30_000..110_000).contains(&spare),
+            "at spare grain a footballer is {spare} triangles"
+        );
+
+        // The gap is the whole errand. Four to one at the very least — below
+        // that the coarse tier is paying the cost of a second mesh set and a
+        // second look for a saving that will not carry a 2-CU part.
+        assert!(
+            full >= spare * 4,
+            "spare grain is {spare} against full's {full}, which is only {:.1}x",
+            full as f32 / spare as f32
+        );
+    }
+
+    /// The grain follows the sampling tier, and the page can override it.
+    ///
+    /// The override is what makes the decision checkable on a machine that
+    /// would never otherwise build the coarse figure — see
+    /// [`ViewerConfig::grain`](crate::app::config::ViewerConfig).
+    #[test]
+    fn the_grain_follows_the_tier_unless_it_is_told_otherwise() {
+        assert_eq!(Grain::of(Tier::Multisampled, None), Grain::FULL);
+        assert_eq!(Grain::of(Tier::PostProcessed, None), Grain::SPARE);
+        // Either way round, so a slow machine can be shown the sharp figure
+        // and a fast one the coarse one.
+        assert_eq!(Grain::of(Tier::PostProcessed, Some("full")), Grain::FULL);
+        assert_eq!(Grain::of(Tier::Multisampled, Some("spare")), Grain::SPARE);
+        // Anything else is not an instruction. A query string is written by
+        // hand, and a typo has to leave the machine's own answer standing
+        // rather than silently picking one of them.
+        assert_eq!(Grain::of(Tier::Multisampled, Some("sparse")), Grain::FULL);
+        assert_eq!(Grain::of(Tier::PostProcessed, Some("")), Grain::SPARE);
     }
 
     /// The balls at the elbow and the knee are there for a limb that is BENT.
@@ -10059,7 +10262,7 @@ mod tests {
         let ball = 0.048f32;
         for above in [0.010f32, 0.020, 0.030] {
             let across = ball * (1.0 - (above / ball).powi(2)).max(0.0).sqrt();
-            let sock = Sculptor::section(&BodyParts::shin(), above).x;
+            let sock = Sculptor::section(&BodyParts::shin(Grain::FULL), above).x;
             let thigh = 0.053 + (0.059 - 0.053) * (above / 0.035).min(1.0);
             assert!(
                 across < sock.max(thigh),
@@ -10080,7 +10283,7 @@ mod tests {
     /// amount of care inside the texture generator can catch.
     #[test]
     fn the_face_goes_on_the_front() {
-        let head = Sculptor::part_at(&BodyParts::SKULL, Sculptor::HEAD_SIDES);
+        let head = Sculptor::part_at(Grain::FULL, &BodyParts::SKULL, Grain::FULL.head_sides);
         let positions = head
             .attribute(Mesh::ATTRIBUTE_POSITION)
             .and_then(|values| values.as_float3())
@@ -10137,7 +10340,7 @@ mod tests {
         // The cheek half-width is what turns an angle into a distance across
         // the face, so it has to be the skull's, at eye level.
         assert!(
-            (layout.cheek - Sculptor::section(&BodyParts::skull(), layout.eyes).x).abs() < 1e-6
+            (layout.cheek - Sculptor::section(&BodyParts::skull(Grain::FULL), layout.eyes).x).abs() < 1e-6
         );
         // A face is about a fifth narrower than the head is deep, which is
         // what stops it reading as a barrel with eyes on it.
@@ -10156,8 +10359,21 @@ mod tests {
     /// The set-back fades with height precisely so that this crossing lands
     /// somewhere a hairline belongs; a constant offset either buries the hair
     /// to the crown or sits it down over the eyebrows.
+    /// ⚠ **Swept at BOTH grains**, and that is not belt-and-braces — it is the
+    /// specific thing [`Grain::SPARE`] is most likely to break. The cap and
+    /// the skull are two profiles that have to CONTAIN one another, and
+    /// containment is decided by how finely each is sampled: the tonsure bug
+    /// (a ring of bare scalp at the crown) was originally a containment that
+    /// held at the authored control points and failed between them. A coarser
+    /// lathe moves exactly those in-between points.
     #[test]
     fn the_hair_leaves_a_hairline() {
+        for grain in [Grain::FULL, Grain::SPARE] {
+            the_hair_leaves_a_hairline_at(grain);
+        }
+    }
+
+    fn the_hair_leaves_a_hairline_at(grain: Grain) {
         let layout = BodyParts::face_layout();
         // The three caps, fullest last. Written out here rather than read back
         // off the meshes because what is being checked is the recipe.
@@ -10169,7 +10385,7 @@ mod tests {
         .iter()
         .enumerate()
         {
-            let rings = BodyParts::cap_rings(from, swell, recede);
+            let rings = BodyParts::cap_rings(grain, from, swell, recede);
             // Where the cap comes out through the skin, straight up the front
             // of the head. Searched from the brow, because a fringe below that
             // is hair over the eyes.
@@ -10177,7 +10393,7 @@ mod tests {
                 .map(|step| layout.brow + step as f32 * 0.0005)
                 .find(|&y| {
                     let hair = Sculptor::section(&rings, y);
-                    let skull = Sculptor::section(&BodyParts::skull(), y);
+                    let skull = Sculptor::section(&BodyParts::skull(grain), y);
                     hair.offset + hair.z > skull.offset + skull.z
                 })
                 .unwrap_or_else(|| panic!("cap {index} never comes out at the front"));
@@ -10206,7 +10422,7 @@ mod tests {
                 let top = layout.foot + layout.span - 0.0001;
                 let y = emerges + (top - emerges) * step as f32 / 60.0;
                 let hair = Sculptor::section(&rings, y);
-                let skull = Sculptor::section(&BodyParts::skull(), y);
+                let skull = Sculptor::section(&BodyParts::skull(grain), y);
                 for turn in 0..12 {
                     let angle = turn as f32 * PI / 6.0;
                     // Where the skull's surface sits inside the cap's ellipse:
@@ -10223,7 +10439,7 @@ mod tests {
             }
 
             let temple = Sculptor::section(&rings, layout.eyes);
-            let skull = Sculptor::section(&BodyParts::skull(), layout.eyes);
+            let skull = Sculptor::section(&BodyParts::skull(grain), layout.eyes);
             assert!(temple.x > skull.x, "cap {index} is bald at the temple");
             assert!(
                 temple.offset - temple.z > skull.offset - skull.z - swell - 0.002,

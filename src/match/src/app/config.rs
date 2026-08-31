@@ -46,6 +46,38 @@ pub struct ViewerConfig {
     /// that means anything to a player.
     #[serde(default)]
     pub debug: bool,
+    /// Turns on the frame-cost readout — the console line every two seconds
+    /// and the strip on the transport bar — and nothing else.
+    ///
+    /// Separate from [`Self::debug`] because the two answer to different
+    /// people. `debug` is for whoever is working on the ENGINE: it names every
+    /// player's state, offers a playback-speed control and prints the ball's
+    /// coordinates in game units, none of which means anything to somebody
+    /// watching a match. This is for whoever is working on the FRAME, and the
+    /// question it answers — "where is the time going on the machine that is
+    /// slow" — can only be answered on the machine that is slow, which is
+    /// somebody's own computer running the real game.
+    ///
+    /// Reachable as `?perf=1` on the match page. It had to be added: the cost
+    /// readout was gated on `debug`, `debug` is set only by the `.dev/match`
+    /// harness, and so a frame could not be attributed anywhere a user was
+    /// ever going to be. `debug` implies it — see [`Self::instrumented`].
+    #[serde(default)]
+    pub perf: bool,
+    /// Forces how finely the twenty-two are cut, overriding what the machine
+    /// was measured to deserve: `"full"` or `"spare"`.
+    ///
+    /// Absent means the tier decides, which is the answer in the game — see
+    /// [`Grain`](crate::players::body::Grain). This exists because the
+    /// decision cannot otherwise be CHECKED. The coarse figure is only ever
+    /// built on a machine slow enough to need it, so nobody on a desktop with
+    /// a card in it can look at what it draws, and the person best placed to
+    /// say whether a replay is fast enough — the one watching it — had no way
+    /// to try the other answer and compare.
+    ///
+    /// Reachable as `?grain=spare` on the match page, alongside `?perf=1`.
+    #[serde(default)]
+    pub grain: Option<String>,
     /// Whether to walk the two teams out before the replay starts — the line
     /// on the touchline, and the camera that goes down it. See
     /// [`Lineup`](crate::broadcast::lineup::Lineup).
@@ -148,6 +180,12 @@ impl ViewerConfig {
 
     fn high_refresh() -> f32 {
         120.0
+    }
+
+    /// Whether the frame-cost readout is on. See [`Self::perf`] for why the
+    /// engine's overlay implies the frame's and not the other way round.
+    pub fn instrumented(&self) -> bool {
+        self.debug || self.perf
     }
 
     pub fn metadata_url(&self) -> String {
@@ -336,6 +374,8 @@ impl ViewerConfig {
             labels: ViewerLabels::default(),
             venue: VenueInfo::default(),
             debug: false,
+            perf: false,
+            grain: None,
             lineup: true,
             fps_cap: Self::high_refresh(),
         }

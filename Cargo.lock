@@ -412,7 +412,7 @@ checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
 name = "core"
-version = "1.7.530"
+version = "1.7.540"
 dependencies = [
  "chrono",
  "deunicode",
@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "database"
-version = "1.7.530"
+version = "1.7.540"
 dependencies = [
  "chrono",
  "core",
@@ -1425,7 +1425,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "open_football"
-version = "1.7.530"
+version = "1.7.540"
 dependencies = [
  "color-eyre",
  "core",
@@ -1826,7 +1826,7 @@ dependencies = [
 
 [[package]]
 name = "shared"
-version = "1.7.530"
+version = "1.7.540"
 
 [[package]]
 name = "shlex"
@@ -2379,7 +2379,7 @@ dependencies = [
 
 [[package]]
 name = "web"
-version = "1.7.530"
+version = "1.7.540"
 dependencies = [
  "askama",
  "askama_web",

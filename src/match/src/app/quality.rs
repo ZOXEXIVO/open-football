@@ -55,6 +55,7 @@ use crate::app::perf::FrameCost;
 use bevy::anti_alias::fxaa::{Fxaa, Sensitivity};
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
+use bevy::render::renderer::RenderAdapterInfo;
 use bevy::render::view::Msaa;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, WebGl2RenderingContext, WebglDebugRendererInfo};
@@ -83,6 +84,12 @@ pub struct Quality {
     /// not the frames this is trying to judge — and neither are the ones the
     /// browser spent compiling shaders. Written once by [`Self::start`].
     started: Option<Instant>,
+    /// Consecutive readings that have said the machine is struggling, and when
+    /// the last of them was taken. See [`Self::CONSECUTIVE`] — the count is
+    /// what tells a slow machine from a stall, and it resets the moment a
+    /// reading comes back comfortable.
+    struggling: u32,
+    reviewed: Option<Instant>,
 }
 
 impl Quality {
@@ -139,7 +146,44 @@ impl Quality {
     /// the frame history with 291 ms "frames" — and an RTX 3080 Ti spent the
     /// match at one sample + FXAA. The module note's exact false positive,
     /// back in through a second door.
-    const STALLED_MS: f32 = 100.0;
+    ///
+    /// ⚠ **It was 100 ms, and at 100 ms it switched this mechanism off on
+    /// exactly the machines it exists for.** A part genuinely managing six to
+    /// nine frames a second sits at 110–170 ms, which was read as "stalled" —
+    /// so a viewer whose replay was unwatchable got neither this nor a single
+    /// rung of the resolution ladder, and both controllers sat there declining
+    /// to act for the whole match. Reported 2026-09-01 on an integrated
+    /// Radeon.
+    ///
+    /// The ceiling is right and the number was wrong, because MAGNITUDE is the
+    /// wrong test. What separates a stall from a slow machine is that a stall
+    /// ENDS: a shader link, a backgrounded tab and a breakpoint are all
+    /// transient, and a two-compute-unit GPU is not. So the test is
+    /// persistence — see [`Self::CONSECUTIVE`] — and with a second reading
+    /// required this can go up to where it only ever catches a page that has
+    /// genuinely stopped. Half a second a frame is two frames of animation in
+    /// a second; nothing anybody would sit through, and far above any real
+    /// frame rate the ladder should be answering.
+    const STALLED_MS: f32 = 500.0;
+
+    /// How many consecutive readings have to say the machine is struggling
+    /// before the tier moves.
+    ///
+    /// This is what replaces the magnitude test above, and it is the honest
+    /// discriminator: [`FrameCost`]'s window is two seconds wide, so two
+    /// readings that both say "struggling" cannot both be the same four-second
+    /// shader link unless the link is still going — and a machine that is
+    /// merely slow says it every time it is asked. Two, not three: the whole
+    /// window this may act in is fourteen seconds wide, and the tier is worth
+    /// less the later it lands.
+    const CONSECUTIVE: u32 = 2;
+
+    /// How long between two readings, in seconds. The same figure and the same
+    /// argument as [`Stage::REVIEW`](crate::app::stage::Stage): `FrameCost`'s
+    /// own window is two seconds wide, so anything shorter is asking the same
+    /// question twice and would let one slow stretch answer
+    /// [`Self::CONSECUTIVE`] on its own.
+    const REVIEW: f32 = 2.5;
 
     /// Asks the browser what it is drawing with, and picks a starting tier.
     ///
@@ -175,11 +219,65 @@ impl Quality {
             tier,
             settled: tier == Tier::PostProcessed,
             started: None,
+            struggling: 0,
+            reviewed: None,
         }
     }
 
     pub fn tier(&self) -> Tier {
         self.tier
+    }
+
+    /// **Checks the probe's guess against the adapter that is actually going
+    /// to draw**, and corrects it before anything is built.
+    ///
+    /// [`Self::probe`] has to run before the app exists, so it asks a canvas
+    /// of its own — and a canvas of its own is not the canvas wgpu got. The
+    /// two now ask for the same power preference (see [`Self::renderer`]), but
+    /// "the same request" is not "the same answer": the browser is free to
+    /// place two contexts on two adapters, and on a desktop with a discrete
+    /// card beside an integrated one it sometimes does.
+    ///
+    /// `RenderAdapterInfo` is the real answer — the adapter wgpu opened, named
+    /// by the backend itself. Bevy's `RenderPlugin::finish` puts it in the main
+    /// world before any schedule runs, which is what makes this correction
+    /// possible at all: registered in `PreStartup`, it lands before
+    /// [`TvCamera::spawn`](crate::broadcast::camera::TvCamera::spawn) reads the
+    /// tier and before [`BodyParts`](crate::players::body::BodyParts) is cut,
+    /// so a machine that was guessed wrong is simply built right.
+    ///
+    /// ⚠ **Correcting it here rather than leaving it to [`Self::relent`] is
+    /// the whole value.** Relenting changes the sample count, and changing the
+    /// sample count re-specialises every render pipeline in the scene — which
+    /// on this backend is the four-to-six-seconds-per-program shader link that
+    /// `bringup` exists to keep behind the loading overlay, happening again,
+    /// in the middle of the football. A tier that is right before the first
+    /// frame costs nothing to adopt.
+    ///
+    /// It only ever moves DOWNWARD, like every other decision in this file: if
+    /// wgpu names an integrated part the tier drops and settles. A card named
+    /// here does not raise a tier the probe already lowered — the probe's
+    /// false positives are the cheap ones, and a machine that has already
+    /// started cutting a coarse figure would have to be rebuilt to undo it.
+    pub fn confirm(mut quality: ResMut<Quality>, adapter: Option<Res<RenderAdapterInfo>>) {
+        let Some(adapter) = adapter else {
+            return;
+        };
+        let name = adapter.name.clone();
+        let integrated = Self::is_integrated(&name);
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&format!(
+            "match viewer — wgpu opened: {name} ({})",
+            if integrated { "integrated" } else { "discrete" },
+        )));
+        if !integrated || quality.tier == Tier::PostProcessed {
+            return;
+        }
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+            "match viewer — the probe read a different adapter; \
+             dropping to one sample + FXAA before the first frame",
+        ));
+        quality.tier = Tier::PostProcessed;
+        quality.settled = true;
     }
 
     /// Whether the tier has stopped moving.
@@ -256,14 +354,32 @@ impl Quality {
             quality.settled = true;
             return;
         }
+        // One reading per window, not one per frame. `FrameCost`'s median is
+        // two seconds wide, so asking it sixty times a second counts the same
+        // two seconds sixty times over and [`Self::CONSECUTIVE`] would be
+        // satisfied by two frames rather than by two measurements — which is
+        // the whole thing it exists to rule out.
+        let due = quality
+            .reviewed
+            .is_none_or(|last| (now - last).as_secs_f32() >= Self::REVIEW);
+        if !due {
+            return;
+        }
+        quality.reviewed = Some(now);
+
         // Between struggling and stalled, exactly as the resolution ladder
         // reads the same figure: below the band the machine is fine, above it
-        // the page is stopped and no tier would help — see
-        // [`Self::STALLED_MS`]. A stall leaves the door open rather than
-        // settling, because the machine has not been measured yet: the window
-        // still ends at [`Self::SETTLE_BEFORE`], and a machine that is
-        // genuinely struggling will still be struggling once the stall clears.
+        // the page is not slow but STOPPED and no tier would help — see
+        // [`Self::STALLED_MS`], which is where the argument for both bounds
+        // is. Either way the count goes back to nothing: a comfortable
+        // reading and a stalled one are both evidence that the last reading
+        // was not a measurement of a struggling machine.
         if !(Self::STRUGGLING_MS..Self::STALLED_MS).contains(&cost.typical_frame_ms()) {
+            quality.struggling = 0;
+            return;
+        }
+        quality.struggling += 1;
+        if quality.struggling < Self::CONSECUTIVE {
             return;
         }
 
@@ -285,6 +401,19 @@ impl Quality {
     /// to be handed to wgpu is how you get a canvas wgpu cannot have. The
     /// element is never added to the document, so it is collected as soon as
     /// this returns.
+    ///
+    /// ⚠ **It must ask for the context on the same terms wgpu will**, and it
+    /// used to ask on different ones. A bare `getContext('webgl2')` carries
+    /// `powerPreference: "default"`, where Bevy hands wgpu its canvas with
+    /// `PowerPreference::HighPerformance` — and on a machine with two adapters
+    /// in it a browser is entitled to answer those two requests with two
+    /// different GPUs. That is the whole purpose of the preference. Asked the
+    /// weaker question on a desktop holding a discrete card beside an
+    /// integrated one, this can read the card, start the viewer at four
+    /// samples, and leave a machine that is drawing on the iGPU to be rescued
+    /// by [`Self::relent`] — which then pays for the correction with a
+    /// recompile of every shader in the scene, in play. Reported 2026-09-01 on
+    /// exactly that hardware.
     fn renderer() -> Option<String> {
         let canvas: HtmlCanvasElement = web_sys::window()?
             .document()?
@@ -292,8 +421,17 @@ impl Quality {
             .ok()?
             .dyn_into()
             .ok()?;
-        let context: WebGl2RenderingContext =
-            canvas.get_context("webgl2").ok()??.dyn_into().ok()?;
+        let attributes = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(
+            &attributes,
+            &wasm_bindgen::JsValue::from_str("powerPreference"),
+            &wasm_bindgen::JsValue::from_str("high-performance"),
+        );
+        let context: WebGl2RenderingContext = canvas
+            .get_context_with_context_options("webgl2", &attributes)
+            .ok()??
+            .dyn_into()
+            .ok()?;
         // The extension has to be asked for before the parameter it defines can
         // be read, and asking for it is where a browser that declines to answer
         // declines.
@@ -392,5 +530,58 @@ mod tests {
                 "{renderer} should have been left at four samples"
             );
         }
+    }
+
+    /// **The band has to be able to contain a machine that is genuinely
+    /// slow**, which is the bug this pair of constants had.
+    ///
+    /// At a ceiling of 100 ms a part managing six to nine frames a second —
+    /// 110 to 170 ms — fell straight through the top of the band and was read
+    /// as a stalled page, so the one mechanism that could have helped it
+    /// declined to act. The numbers below are the frame times of machines
+    /// this is FOR, and every one of them has to be inside.
+    #[test]
+    fn a_slow_machine_is_inside_the_band_it_is_judged_by() {
+        for median in [24.5f32, 40.0, 80.0, 120.0, 170.0, 250.0] {
+            assert!(
+                (Quality::STRUGGLING_MS..Quality::STALLED_MS).contains(&median),
+                "{median} ms is a machine that needs help and the band excludes it"
+            );
+        }
+        // …and a page that has genuinely stopped is still outside it. A
+        // four-second shader link or a backgrounded tab must not dock anybody.
+        for median in [900.0f32, 4_000.0] {
+            assert!(!(Quality::STRUGGLING_MS..Quality::STALLED_MS).contains(&median));
+        }
+        // A comfortable machine, on either common refresh rate, is below it.
+        for median in [8.3f32, 16.7, 20.0] {
+            assert!(median < Quality::STRUGGLING_MS, "{median} ms is not slow");
+        }
+    }
+
+    /// Both controllers read the same figure and answer it the same way, so
+    /// they have to agree about what the figure means — a machine that fails
+    /// one should fail the other. Stated as a test because they live in two
+    /// files and the numbers were kept in step by comment alone.
+    #[test]
+    fn the_two_controllers_judge_by_the_same_band() {
+        use crate::app::stage::Stage;
+        assert_eq!(Quality::STRUGGLING_MS, Stage::struggling_ms());
+        assert_eq!(Quality::STALLED_MS, Stage::stalled_ms());
+    }
+
+    /// The window has to be wide enough for [`Quality::CONSECUTIVE`] readings
+    /// at [`Quality::REVIEW`] apart, or requiring two of them means requiring
+    /// something that cannot happen and the tier never moves at all.
+    #[test]
+    fn the_window_holds_the_readings_it_asks_for() {
+        let window = Quality::SETTLE_BEFORE - Quality::SETTLE_AFTER;
+        let needed = Quality::REVIEW * Quality::CONSECUTIVE as f32;
+        assert!(
+            window >= needed * 2.0,
+            "a {window} s window cannot comfortably hold {} readings {} s apart",
+            Quality::CONSECUTIVE,
+            Quality::REVIEW
+        );
     }
 }

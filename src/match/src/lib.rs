@@ -90,6 +90,7 @@ impl MatchViewer {
 
         let duration_ms = config.match_time_ms;
         let debug = config.debug;
+        let instrumented = config.instrumented();
 
         // The orbit drag needs the right and wheel buttons, and the browser
         // answers those with a context menu and autoscroll. Winit would
@@ -244,6 +245,12 @@ impl MatchViewer {
             // cannot be a `Resource` at all — `Speakers` is the one non-send
             // thing in the app.
             .init_non_send::<Speakers>()
+            // Before everything: the tier the probe guessed, checked against
+            // the adapter wgpu actually opened. It has to land ahead of the
+            // camera and the squad, both of which are built from it — see
+            // `Quality::confirm`, and why a tier corrected here is free where
+            // one corrected later costs a scene-wide shader recompile.
+            .add_systems(PreStartup, Quality::confirm)
             .add_systems(
                 Startup,
                 (
@@ -553,13 +560,18 @@ impl MatchViewer {
             // them, so their systems are only registered then.
             .add_systems(
                 Update,
-                (
-                    Timeline::handle_debug_controls,
-                    Actors::follow_states,
-                    Timeline::refresh_debug,
-                )
+                (Timeline::handle_debug_controls, Actors::follow_states)
                     .chain()
                     .run_if(move || debug),
+            )
+            // The frame-cost strip answers to the wider gate: `?perf=1` turns
+            // it on for a user on his own machine without also naming every
+            // player's engine state over his head. See `ViewerConfig::perf`.
+            // It tolerates the STATES chip being absent — it asks for it with
+            // `single_mut` and carries on when there is none.
+            .add_systems(
+                Update,
+                Timeline::refresh_debug.run_if(move || instrumented),
             )
             .run();
     }

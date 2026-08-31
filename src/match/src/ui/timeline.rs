@@ -523,6 +523,9 @@ impl Timeline {
                         },
                     ));
 
+                    // The engine's own overlay: what every player is doing,
+                    // which is a question about the SIMULATION and means
+                    // nothing to somebody watching a match.
                     if config.debug {
                         bar.spawn((
                             StatesButton,
@@ -541,7 +544,13 @@ impl Timeline {
                                 ..default()
                             },
                         ));
+                    }
 
+                    // …and the frame's, which is a question about THIS
+                    // MACHINE and can only be answered on the machine that is
+                    // slow. Hence `?perf=1` and its own gate — see
+                    // [`ViewerConfig::perf`].
+                    if config.instrumented() {
                         // Camera zoom readout. The chips that used to sit
                         // in front of it are gone: the wheel does this
                         // now (`CameraZoom::handle_wheel`), which is where

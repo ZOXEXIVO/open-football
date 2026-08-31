@@ -1,10 +1,12 @@
 use crate::app::config::{PlayerInfo, ViewerConfig};
+use crate::app::perf::FrameCost;
+use crate::app::quality::Quality;
 use crate::app::stage::Backdrop;
 use crate::art::textures::Textures;
 use crate::art::typeface::Faces;
 use crate::broadcast::lineup::Lineup;
 use crate::players::aftermath::Aftermath;
-use crate::players::body::{BodyParts, Carriage, Footballer, Gait, Joint, Physique};
+use crate::players::body::{BodyParts, Carriage, Footballer, Gait, Grain, Joint, Physique};
 use crate::players::kit::{Complexion, Wardrobe};
 use crate::players::portrait::Portraits;
 use crate::recording::loader::ChunkLoader;
@@ -1336,8 +1338,26 @@ impl Actors {
         mut images: ResMut<Assets<Image>>,
         config: Res<ViewerConfig>,
         faces: Res<Faces>,
+        quality: Res<Quality>,
+        mut cost: ResMut<FrameCost>,
     ) {
-        let parts = BodyParts::new(&mut meshes);
+        // How finely the twenty-two are cut, decided once, here, off the same
+        // tier that decides the sampling — see [`Grain`]. It has to be read
+        // before the first part is lathed, and it never changes afterwards:
+        // every mesh below is shared by the whole squad and re-cutting them
+        // mid-match would mean re-uploading every vertex buffer in the scene.
+        let grain = Grain::of(quality.tier(), config.grain.as_deref());
+        let parts = BodyParts::new(&mut meshes, grain);
+        // Said out loud while the vertices are still here to be counted. The
+        // meshes are `RENDER_WORLD`-only, so a moment from now the main world
+        // will not have the data and no later system could work this out —
+        // see [`FrameCost::note_geometry`], and the elevenfold regression that
+        // went unnoticed for want of exactly this line.
+        cost.note_geometry(format!(
+            "{} tri/player ({})",
+            parts.triangles(&meshes),
+            grain.describe(),
+        ));
         let wardrobe = Wardrobe::new(&mut materials, &mut images, &config);
         // Empty, and filled a man at a time by [`Self::take_the_field`]. See
         // [`crate::players::portrait::Portraits`], which explains why the send
@@ -4653,7 +4673,7 @@ mod flight {
             panic!("set MATCH_FIGURE_DUMP to a directory");
         };
         let mut meshes = Assets::<Mesh>::default();
-        let parts = crate::players::body::BodyParts::tailor(&mut meshes);
+        let parts = crate::players::body::BodyParts::tailor(&mut meshes, Grain::FULL);
 
         let mut sheet = vec![0u8; WIDE * STEPS * TALL * 2 * 4];
         // Frames of match time between columns, at the recording's own 30 ms.

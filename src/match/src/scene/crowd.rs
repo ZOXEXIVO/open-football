@@ -1953,19 +1953,26 @@ mod tests {
     #[test]
     fn the_whole_crowd_fits_in_its_budget() {
         use crate::scene::field::Field;
+        use crate::scene::pitch::Pitch;
 
         let full = Stature::of(&venue(62_000, 54_000, 9_800, false));
         let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
-        let along = Field::HALF_LENGTH + 4.6;
-        let across = Field::HALF_WIDTH + 3.4;
+        // Read off `Pitch` rather than restated, so that moving a bank moves
+        // this measurement with it. The whole point of the assertion below is
+        // that it fails when the layout grows past what the ground has room
+        // for, and a copy of the layout cannot do that.
+        let along = Field::HALF_LENGTH + Pitch::END_MARGIN;
+        let across = Field::HALF_WIDTH + Pitch::SIDE_MARGIN;
+        let side = across + Pitch::SIDE_SETBACK;
+        let end = along + Pitch::END_SETBACK;
 
         let mut vertices = 0;
         let mut deepest: f32 = 0.0;
         for (seed, (length, from, most, riser)) in [
-            (along * 2.0 + full.overhang(6.0, 30.0), across + 2.1, 34, 0.72),
-            (along * 2.0 + full.overhang(6.0, 30.0), across + 2.1, 34, 0.72),
-            (across * 2.0 + full.overhang(4.0, 24.0), along + 2.4, 31, 0.70),
-            (across * 2.0 + full.overhang(4.0, 24.0), along + 2.4, 31, 0.70),
+            (along * 2.0 + full.overhang(6.0, 30.0), side, 34, 0.72),
+            (along * 2.0 + full.overhang(6.0, 30.0), side, 34, 0.72),
+            (across * 2.0 + full.overhang(4.0, 24.0), end, 31, 0.70),
+            (across * 2.0 + full.overhang(4.0, 24.0), end, 31, 0.70),
         ]
         .into_iter()
         .enumerate()
@@ -1974,9 +1981,9 @@ mod tests {
                 length,
                 rows: full.rows(most),
                 riser,
-                tread: 0.95,
+                tread: Pitch::TREAD,
                 from,
-                slab: 1.9,
+                slab: Pitch::SLAB,
             };
             if seed < 2 {
                 deepest = deepest.max(bank.step(bank.rows - 1).x + bank.tread);
@@ -1990,8 +1997,12 @@ mod tests {
         // ⚠ **The touchline bank must not reach the gantry.** The broadcast
         // rest shot parks at `HALF_WIDTH + SETBACK` — 82 m from the centre
         // spot — and a rake that runs out past it puts the lens inside the
-        // terracing. This is the constraint that sets `Pitch::TREAD`, and the
-        // one a future "make the stands taller again" would break first.
+        // terracing. This is the constraint that sets `Pitch::TREAD` and caps
+        // `Pitch::SIDE_SETBACK`, and the one a future "make the stands taller
+        // again" would break first.
+        //
+        // It sits at 73.8 m as this stands, so there are four metres of the
+        // budget left: rows, riser and setback all spend out of the same one.
         assert!(
             deepest < 78.0,
             "the touchline bank finishes {deepest} m out, against a gantry at 82"

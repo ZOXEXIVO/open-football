@@ -277,8 +277,15 @@ impl ChangeoverShot {
     ///
     /// The far side is the run-off like everything else. The near side is the
     /// bench touchline, and the whole shot lives out there: the swing ends
-    /// [`Self::OUT`] metres beyond the line, past the boards and two metres
-    /// into the near bank of seating.
+    /// [`Self::OUT`] metres beyond the line, past the boards and just over
+    /// half a metre into the near bank of seating.
+    ///
+    /// That last figure is thin and it is `Pitch::SIDE_SETBACK` that decides
+    /// it — the front row is 7.4 m off the line and the swing reaches 8. Push
+    /// the seating back another metre and the lens finishes in FRONT of the
+    /// bank instead of inside it, which costs nothing here (the stand is
+    /// behind the lens either way, and the shot aims at the centre spot) but
+    /// does mean the near bank stays drawn through a substitution.
     ///
     /// ⚠ That works because [`Bank::cull`](crate::scene::pitch::Bank) hides
     /// whichever stand the lens is inside — and it is also why the wall is
