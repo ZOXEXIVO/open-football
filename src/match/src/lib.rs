@@ -41,7 +41,7 @@ mod ui;
 use crate::app::bringup::Bringup;
 use crate::app::config::ViewerConfig;
 use crate::app::perf::FrameCost;
-use crate::app::quality::Quality;
+use crate::app::quality::{Footprint, Quality};
 use crate::app::stage::Stage;
 use crate::art::typeface::Typeface;
 use crate::broadcast::camera::{CameraFlight, CameraOrbit, CameraZoom, TvCamera};
@@ -104,8 +104,11 @@ impl MatchViewer {
         CameraFlight::claim_flight_keys(&config.canvas);
 
         // Before anything is drawn, so the camera can be built already
-        // carrying the answer.
-        let quality = Quality::probe();
+        // carrying the answer — and so the SCENE can be, which matters more:
+        // a handheld's problem is not that the frame is late, it is that the
+        // browser kills the tab for what the scene asks to hold. See
+        // `Footprint`, and `?device=` for turning the guess off.
+        let quality = Quality::probe(Footprint::of(config.device.as_deref()));
 
         // How often the app runs at all. The browser holds the page to its
         // display, and past the cap that is only ever pictures nobody can

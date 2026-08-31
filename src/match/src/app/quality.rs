@@ -60,6 +60,101 @@ use bevy::render::view::Msaa;
 use wasm_bindgen::JsCast;
 use web_sys::{HtmlCanvasElement, WebGl2RenderingContext, WebglDebugRendererInfo};
 
+/// **What the device can be asked to HOLD**, which is a different question
+/// from what it can be asked to draw in sixteen milliseconds.
+///
+/// Everything else in this file is about time: a frame that arrives late, and
+/// the two things that can be spent to make it arrive sooner. A phone fails a
+/// different way. WebKit gives a tab a memory ceiling and *kills the renderer*
+/// when it is crossed — the tab does not run slowly, it reloads, and on a page
+/// that asks for too much on its way up it reloads every time. Reported
+/// 2026-09-01: the replay would not open at all on an iPhone or an iPad, where
+/// it previously did.
+///
+/// Nothing in the viewer knew what a phone was. The scene it builds is sized
+/// for a computer — a hundred and twenty-odd megabytes of crowd geometry, a
+/// squad at [`Grain::FULL`](crate::players::body::Grain), and a four-sample
+/// colour and depth attachment over the whole canvas — and none of the three
+/// mechanisms that make a slow machine watchable does anything about the
+/// first byte of it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Footprint {
+    /// A computer. Memory is not the binding constraint, and the tier and the
+    /// ladder are free to answer for the frame alone.
+    Roomy,
+    /// A phone or a tablet. The scene has to FIT before anything about its
+    /// frame rate is worth discussing.
+    Handheld,
+}
+
+impl Footprint {
+    /// **iOS cannot be recognised by its GPU**, which is why this asks the
+    /// platform rather than the renderer.
+    ///
+    /// Safari removed `WEBGL_debug_renderer_info` altogether, so
+    /// [`Quality::renderer`] returns `None` on every iPhone and iPad and the
+    /// string tests in [`Quality::is_integrated`] never see anything to match.
+    /// And even where a string does arrive, an iPad and an Apple-silicon Mac
+    /// report the same `Apple GPU` — the renderer genuinely does not carry the
+    /// distinction that matters here, because the distinction is the
+    /// enclosure, not the part.
+    ///
+    /// So: a device whose PRIMARY POINTER IS A FINGER. `(pointer: coarse)` is
+    /// what separates a tablet from a laptop with a touchscreen, which reports
+    /// touch points and is not a handheld — it has a mouse, and it has a
+    /// computer's memory behind it. Both halves are required for that reason.
+    ///
+    /// Deliberately conservative in the same direction as everything else
+    /// here: a machine this cannot name is treated as roomy and the
+    /// measurement is left to move it. The cost of a false positive is a
+    /// desktop drawing a thinner crowd; the cost of a false negative is a
+    /// phone that cannot open a match at all, which is the bug this exists
+    /// for — so where the two are in tension this leans toward saying yes.
+    ///
+    /// ⚠ Split on the target rather than guarded with `if let`: off the web
+    /// `web_sys::window()` does not return `None`, it PANICS — "cannot access
+    /// imported statics on non-wasm targets" — so a test that reached this
+    /// would take the process down rather than read a default.
+    #[cfg(target_arch = "wasm32")]
+    fn probe() -> Footprint {
+        let Some(window) = web_sys::window() else {
+            return Footprint::Roomy;
+        };
+        let fingers = window.navigator().max_touch_points() > 0;
+        let coarse = window
+            .match_media("(pointer: coarse)")
+            .ok()
+            .flatten()
+            .is_some_and(|query| query.matches());
+        if fingers && coarse {
+            Footprint::Handheld
+        } else {
+            Footprint::Roomy
+        }
+    }
+
+    /// There is no browser to ask, so there is no handheld to find.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn probe() -> Footprint {
+        Footprint::Roomy
+    }
+
+    /// What the page asked for, where it asked — `?device=handheld|roomy`.
+    ///
+    /// Here for the same reason [`ViewerConfig::grain`](crate::app::config::ViewerConfig)
+    /// is: the failure this answers happens on somebody else's phone, it
+    /// produces no console and no error page, and the only way to find out
+    /// which part of the scene is too big is to be able to turn the parts off
+    /// from the address bar of the device that is failing.
+    pub fn of(asked: Option<&str>) -> Footprint {
+        match asked {
+            Some("handheld") => Footprint::Handheld,
+            Some("roomy") => Footprint::Roomy,
+            _ => Self::probe(),
+        }
+    }
+}
+
 /// How much sampling the frame can afford.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tier {
@@ -90,6 +185,9 @@ pub struct Quality {
     /// reading comes back comfortable.
     struggling: u32,
     reviewed: Option<Instant>,
+    /// What this device can be asked to hold — see [`Footprint`], which is the
+    /// only thing in this file that is not about milliseconds.
+    footprint: Footprint,
 }
 
 impl Quality {
@@ -190,30 +288,49 @@ impl Quality {
     /// Called before the app is built rather than from a system, so the camera
     /// can be spawned already carrying the answer — a tier decided on the first
     /// frame is a tier that costs nothing to adopt.
-    pub fn probe() -> Self {
-        let tier = match Self::renderer() {
+    pub fn probe(footprint: Footprint) -> Self {
+        let named = match Self::renderer() {
             Some(name) => {
                 let integrated = Self::is_integrated(&name);
                 web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&format!(
                     "match viewer — renderer: {name} ({})",
-                    if integrated {
-                        "integrated, one sample + FXAA"
-                    } else {
-                        "discrete, four samples"
-                    }
+                    if integrated { "integrated" } else { "discrete" }
                 )));
-                if integrated {
-                    Tier::PostProcessed
-                } else {
-                    Tier::Multisampled
-                }
+                integrated
             }
             // Nothing to go on. Start where the picture is best and let the
             // measurement move it — which is the right way round: a machine
             // that can afford four samples must not be docked them because its
             // browser declined to introduce itself.
-            None => Tier::Multisampled,
+            //
+            // ⚠ This is EVERY iPhone and iPad: Safari removed the extension
+            // that answers, so the branch above never runs there. It is why
+            // the footprint below is asked separately and is not a refinement
+            // of the renderer string — see [`Footprint::probe`].
+            None => false,
         };
+
+        // A handheld never renders a four-sample frame, whatever the string
+        // said or failed to say. The attachments are the largest single thing
+        // this file can decline to allocate, and on a device whose tab is
+        // killed for asking they are not a picture-quality decision at all.
+        let handheld = footprint == Footprint::Handheld;
+        let tier = if named || handheld {
+            Tier::PostProcessed
+        } else {
+            Tier::Multisampled
+        };
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&format!(
+            "match viewer — {} · {}",
+            match footprint {
+                Footprint::Handheld => "handheld",
+                Footprint::Roomy => "roomy",
+            },
+            match tier {
+                Tier::PostProcessed => "one sample + FXAA",
+                Tier::Multisampled => "four samples",
+            },
+        )));
 
         Quality {
             tier,
@@ -221,7 +338,12 @@ impl Quality {
             started: None,
             struggling: 0,
             reviewed: None,
+            footprint,
         }
+    }
+
+    pub fn footprint(&self) -> Footprint {
+        self.footprint
     }
 
     pub fn tier(&self) -> Tier {
@@ -568,6 +690,23 @@ mod tests {
         use crate::app::stage::Stage;
         assert_eq!(Quality::STRUGGLING_MS, Stage::struggling_ms());
         assert_eq!(Quality::STALLED_MS, Stage::stalled_ms());
+    }
+
+    /// The page can force the device class either way, and a typo forces
+    /// nothing.
+    ///
+    /// It is the only bisection available on the device that fails: a phone
+    /// that reloads the tab leaves no console and no stack, so being able to
+    /// ask for the small scene from the address bar is the whole diagnostic.
+    #[test]
+    fn the_page_can_force_the_device_class() {
+        assert_eq!(Footprint::of(Some("handheld")), Footprint::Handheld);
+        assert_eq!(Footprint::of(Some("roomy")), Footprint::Roomy);
+        // Off the browser there is no window to ask, which reads as roomy —
+        // and a misspelling must fall through to the same probe rather than
+        // silently picking a side.
+        assert_eq!(Footprint::of(Some("handeld")), Footprint::Roomy);
+        assert_eq!(Footprint::of(None), Footprint::Roomy);
     }
 
     /// The window has to be wide enough for [`Quality::CONSECUTIVE`] readings

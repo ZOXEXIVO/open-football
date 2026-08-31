@@ -78,6 +78,19 @@ pub struct ViewerConfig {
     /// Reachable as `?grain=spare` on the match page, alongside `?perf=1`.
     #[serde(default)]
     pub grain: Option<String>,
+    /// Forces what kind of machine this is taken to be: `"handheld"` or
+    /// `"roomy"`. Absent means the viewer works it out — see
+    /// [`Footprint`](crate::app::quality::Footprint).
+    ///
+    /// This one is a diagnostic before it is a preference. The failure it was
+    /// added for — a phone that reloads the tab instead of opening the match —
+    /// produces no console, no error page and no stack: the renderer process
+    /// is killed and the browser simply starts again. There is nothing to read
+    /// afterwards, so the only way to find out which part of the scene was too
+    /// big is to be able to build the scene both ways from the address bar of
+    /// the device that is failing.
+    #[serde(default)]
+    pub device: Option<String>,
     /// Whether to walk the two teams out before the replay starts — the line
     /// on the touchline, and the camera that goes down it. See
     /// [`Lineup`](crate::broadcast::lineup::Lineup).
@@ -376,6 +389,7 @@ impl ViewerConfig {
             debug: false,
             perf: false,
             grain: None,
+            device: None,
             lineup: true,
             fps_cap: Self::high_refresh(),
         }

@@ -13,6 +13,7 @@
 //! in mid-air or buried in the row in front of him.
 
 use crate::app::config::VenueInfo;
+use crate::app::quality::Footprint;
 use crate::art::textures::{CrowdPalette, Textures};
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::Indices;
@@ -433,6 +434,82 @@ impl Terrace {
 /// They were a box with a smaller box on top, which is what a crowd looks like
 /// from a hundred metres and nothing like what one looks like from three — and
 /// the free camera goes to three.
+/// **How much crowd a device is asked to hold.**
+///
+/// The stands are by a long way the largest mesh in the scene: twenty thousand
+/// people at a hundred and thirty vertices each, some **hundred and twenty-five
+/// megabytes of static geometry** once the indices are counted (the figure is
+/// `the_whole_crowd_fits_in_its_budget`'s, and it is the ceiling rather than
+/// the common case). On a computer that is a bargain — it is four draw calls,
+/// and the frame is spent per entity — and the note on
+/// [`Crowd::SPACING`] records it being measured and found free.
+///
+/// On a phone it is not a frame cost at all, it is a **memory** cost, and
+/// memory is what WebKit kills a tab for. Reported 2026-09-01: the replay
+/// would not open on an iPhone or an iPad, where it previously did — and the
+/// crowd figure had lately gone from fifty-six vertices a man to a hundred and
+/// thirty, which doubled this on its own.
+///
+/// So a handheld builds the same ground with a thinner crowd in it. Both
+/// levers are here because neither is enough alone: the figure is already
+/// frugal at 8/8/4, so cutting it is worth about a third, and the rest has to
+/// come from seating fewer people.
+///
+/// ⚠ **The stand itself is untouched.** Rows, overhang and occupancy all still
+/// come off the fixture — see
+/// [`Stature`] and [`stadium_answers_to_the_fixture`]. A ground that got
+/// visibly smaller on a phone would be a different ground, and the venue is a
+/// fact about the match rather than about the device looking at it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Throng {
+    body_sides: usize,
+    skull_sides: usize,
+    limb_sides: usize,
+    /// Metres between one seat and the next.
+    spacing: f32,
+}
+
+impl Throng {
+    /// What a computer builds: every figure this crate has ever drawn, at the
+    /// spacing the stands were laid out for.
+    pub const FULL: Throng = Throng {
+        body_sides: Crowd::BODY_SIDES,
+        skull_sides: Crowd::SKULL_SIDES,
+        limb_sides: Crowd::LIMB_SIDES,
+        spacing: Crowd::SPACING,
+    };
+
+    /// …and what a phone builds.
+    ///
+    /// Five sides round a torso and a head rather than eight, three round a
+    /// limb rather than four, and a metre between seats rather than seventy
+    /// centimetres. Together that is a spectator worth 87 vertices instead of
+    /// 128, and a third fewer of them: **about 45% of the geometry**, which
+    /// takes the ceiling from ~125 MB to ~55.
+    ///
+    /// The head keeps the most of what it had, for the reason it had eight in
+    /// the first place: it is the one part of a spectator with a picture on it
+    /// and the one a lens is ever walked up to. Five still reads as an oval;
+    /// four is the barrel the count was raised from.
+    pub const HANDHELD: Throng = Throng {
+        body_sides: 5,
+        skull_sides: 5,
+        limb_sides: 3,
+        spacing: Crowd::HANDHELD_SPACING,
+    };
+
+    /// Which one this device gets. One decision, taken from the same
+    /// [`Footprint`] that decides the sampling and the squad's grain, so a
+    /// scene cannot come out thinned in one place and not in another.
+    pub fn of(footprint: Footprint) -> Throng {
+        match footprint {
+            Footprint::Roomy => Self::FULL,
+            Footprint::Handheld => Self::HANDHELD,
+        }
+    }
+
+}
+
 pub struct Crowd;
 
 impl Crowd {
@@ -599,6 +676,14 @@ impl Crowd {
     /// there is BE there.
     const LIMB_SIDES: usize = 4;
 
+    /// How far apart a handheld seats them — see [`Throng::HANDHELD`].
+    ///
+    /// A metre, against [`Self::SPACING`]'s seventy centimetres, which is a
+    /// third fewer people in every bank. It is the only honest way to make
+    /// this mesh smaller by a large factor: the figure is already frugal, and
+    /// a crowd is a number of PEOPLE times what one costs.
+    const HANDHELD_SPACING: f32 = 1.00;
+
     /// How much taller or shorter than that anybody gets. People are not one
     /// size, and a bank of identical figures reads as a printed pattern rather
     /// than as a crowd — the same reason the seats behind them are jittered.
@@ -653,13 +738,14 @@ impl Crowd {
         stand: Stand,
         palette: &CrowdPalette,
         seed: u32,
+        throng: Throng,
     ) -> Option<Mesh> {
         // The run the seats are laid across, which is the bank less the widest
         // spectator it could seat: these are placed by their middles, so a run
         // of the full length puts the two on the ends half a shoulder off the
         // end of the concrete.
         let run = (terrace.length - Self::REACH * 2.0 * (1.0 + Self::SPREAD)).max(0.0);
-        let slots = (run / Self::SPACING).floor() as usize;
+        let slots = (run / throng.spacing).floor() as usize;
         if slots == 0 || terrace.rows == 0 {
             return None;
         }
@@ -678,7 +764,7 @@ impl Crowd {
         };
 
         let mut figures =
-            Figures::with_capacity((slots * terrace.rows) as f32 * occupancy);
+            Figures::with_capacity((slots * terrace.rows) as f32 * occupancy, throng);
 
         for row in 0..terrace.rows {
             let step = terrace.step(row);
@@ -749,7 +835,7 @@ impl Crowd {
                         Self::CHEST * 0.5 * deep,
                     )
                 });
-                figures.tube(&body, Self::BODY_SIDES, false, |_, _| clothing);
+                figures.tube(&body, throng.body_sides, false, |_, _| clothing);
 
                 // The head on top of it, turned on [`Self::SKULL`] and skinned
                 // with his own tile the whole way round — hair at the back, an
@@ -764,10 +850,10 @@ impl Crowd {
                         Self::HEAD.z * 0.5 * deep,
                     )
                 });
-                figures.tube(&skull, Self::SKULL_SIDES, true, |turn, course| {
+                figures.tube(&skull, throng.skull_sides, true, |turn, course| {
                     palette.head_uv(head, turn, Self::SKULL[course].3)
                 });
-                figures.cap(skull[Self::SKULL.len() - 1], Self::SKULL_SIDES, |turn| {
+                figures.cap(skull[Self::SKULL.len() - 1], throng.skull_sides, |turn| {
                     palette.head_uv(head, turn, 0.0)
                 });
 
@@ -788,10 +874,10 @@ impl Crowd {
                         seat.limb(elbow, wrist - top, Self::ARM),
                         seat.limb(wrist, wrist - elbow, Self::ARM * 0.78),
                     ];
-                    figures.tube(&limb, Self::LIMB_SIDES, false, |_, _| clothing);
+                    figures.tube(&limb, throng.limb_sides, false, |_, _| clothing);
                     // The back of his hand, which is the one end of an arm
                     // that is out in the open air.
-                    figures.cap(limb[2], Self::LIMB_SIDES, |_| skin);
+                    figures.cap(limb[2], throng.limb_sides, |_| skin);
                 }
 
                 // …and two legs, but only for the men on their feet. A seated
@@ -809,7 +895,7 @@ impl Crowd {
                             seat.limb(knee, ankle - top, Self::LEG * 0.86),
                             seat.limb(ankle, ankle - knee, Self::LEG * 0.74),
                         ];
-                        figures.tube(&limb, Self::LIMB_SIDES, false, |_, _| trousers);
+                        figures.tube(&limb, throng.limb_sides, false, |_, _| trousers);
                     }
                 }
             }
@@ -1167,8 +1253,9 @@ impl Spectators {
         stature: Stature,
         stand: Stand,
         seed: u32,
+        throng: Throng,
     ) -> Option<(Mesh3d, MeshMaterial3d<StandardMaterial>)> {
-        let crowd = Crowd::fill(terrace, stature, stand, &self.palette, seed)?;
+        let crowd = Crowd::fill(terrace, stature, stand, &self.palette, seed, throng)?;
         Some((
             Mesh3d(meshes.add(crowd)),
             MeshMaterial3d(self.material.clone()),
@@ -1209,27 +1296,31 @@ impl Figures {
     /// their feet carry a pair of legs this does not count, and they are a
     /// tenth of a main stand. It costs a re-allocation of a very large buffer
     /// to be far out.
-    const VERTICES: usize = Crowd::BODY.len() * Crowd::BODY_SIDES
-        + Crowd::SKULL.len() * (Crowd::SKULL_SIDES + 1)
-        + (Crowd::SKULL_SIDES + 1)
-        + 2 * (3 * Crowd::LIMB_SIDES + Crowd::LIMB_SIDES + 1);
+    fn vertices(throng: Throng) -> usize {
+        Crowd::BODY.len() * throng.body_sides
+            + Crowd::SKULL.len() * (throng.skull_sides + 1)
+            + (throng.skull_sides + 1)
+            + 2 * (3 * throng.limb_sides + throng.limb_sides + 1)
+    }
+
     /// …and the triangles over them: two to every quad up a tube, plus the fan
     /// that closes a head and a hand. Counted rather than guessed at four to a
     /// vertex, which is a shade under and so bought a re-allocation of a
     /// forty-megabyte buffer per bank.
-    const INDICES: usize = 3
-        * (2 * (Crowd::BODY.len() - 1) * Crowd::BODY_SIDES
-            + 2 * (Crowd::SKULL.len() - 1) * Crowd::SKULL_SIDES
-            + Crowd::SKULL_SIDES
-            + 2 * (2 * 2 * Crowd::LIMB_SIDES + Crowd::LIMB_SIDES));
+    fn indices(throng: Throng) -> usize {
+        3 * (2 * (Crowd::BODY.len() - 1) * throng.body_sides
+            + 2 * (Crowd::SKULL.len() - 1) * throng.skull_sides
+            + throng.skull_sides
+            + 2 * (2 * 2 * throng.limb_sides + throng.limb_sides))
+    }
 
-    fn with_capacity(figures: f32) -> Self {
+    fn with_capacity(figures: f32, throng: Throng) -> Self {
         let figures = figures.ceil().max(0.0) as usize;
         Figures {
-            positions: Vec::with_capacity(figures * Self::VERTICES),
-            normals: Vec::with_capacity(figures * Self::VERTICES),
-            uvs: Vec::with_capacity(figures * Self::VERTICES),
-            indices: Vec::with_capacity(figures * Self::INDICES),
+            positions: Vec::with_capacity(figures * Self::vertices(throng)),
+            normals: Vec::with_capacity(figures * Self::vertices(throng)),
+            uvs: Vec::with_capacity(figures * Self::vertices(throng)),
+            indices: Vec::with_capacity(figures * Self::indices(throng)),
         }
     }
 
@@ -1601,7 +1692,7 @@ mod tests {
         let (clothing, home, away) = (24.0 / 52.0, 40.0 / 52.0, 46.0 / 52.0);
 
         let worn = |stand: Stand| {
-            let mesh = Crowd::fill(&terrace(10), stature, stand, &palette, 5)
+            let mesh = Crowd::fill(&terrace(10), stature, stand, &palette, 5, Throng::FULL)
                 .expect("a ten-step bank holds a crowd");
             let Some(bevy::mesh::VertexAttributeValues::Float32x2(uvs)) =
                 mesh.attribute(Mesh::ATTRIBUTE_UV_0)
@@ -1714,7 +1805,7 @@ mod tests {
             ..terrace(14)
         };
         let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
-        let mesh = Crowd::fill(&terrace, Stature::of(&VenueInfo::default()), Stand::Side, &palette, 3)
+        let mesh = Crowd::fill(&terrace, Stature::of(&VenueInfo::default()), Stand::Side, &palette, 3, Throng::FULL)
             .expect("a bank one place wide still holds a crowd");
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(points)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
@@ -1808,7 +1899,7 @@ mod tests {
         let stature = Stature::of(&venue(30_000, 24_000, 9_000, false));
         let colours_from = 40.0 / 52.0;
 
-        let mesh = Crowd::fill(&terrace, stature, Stand::HomeEnd, &palette, 9)
+        let mesh = Crowd::fill(&terrace, stature, Stand::HomeEnd, &palette, 9, Throng::FULL)
             .expect("a bank this size holds a crowd");
         let (
             Some(bevy::mesh::VertexAttributeValues::Float32x3(points)),
@@ -1873,7 +1964,7 @@ mod tests {
         let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
         // Two thirds full, so there is room both to clump and to leave gaps.
         let stature = Stature::of(&venue(30_000, 20_000, 8_000, false));
-        let mesh = Crowd::fill(&terrace, stature, Stand::Side, &palette, 11)
+        let mesh = Crowd::fill(&terrace, stature, Stand::Side, &palette, 11, Throng::FULL)
             .expect("a bank this size holds a crowd");
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(points)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
@@ -1989,7 +2080,7 @@ mod tests {
                 deepest = deepest.max(bank.step(bank.rows - 1).x + bank.tread);
             }
             let stand = if seed < 2 { Stand::Side } else { Stand::HomeEnd };
-            vertices += Crowd::fill(&bank, full, stand, &palette, seed as u32 + 1)
+            vertices += Crowd::fill(&bank, full, stand, &palette, seed as u32 + 1, Throng::FULL)
                 .expect("a full bank holds a crowd")
                 .count_vertices();
         }
@@ -2053,6 +2144,55 @@ mod tests {
         );
     }
 
+    /// **…and a phone is asked to hold a fraction of it.**
+    ///
+    /// The crowd is the largest mesh in the scene by a long way, and on a
+    /// handheld it is not a frame cost but a MEMORY one: WebKit kills the tab
+    /// rather than drawing slowly, which is the failure this was written for
+    /// (2026-09-01 — the replay would not open on an iPhone or an iPad).
+    ///
+    /// The ratio is what is pinned rather than a figure, for the same reason
+    /// the squad grain pins one: a change that quietly took the handheld
+    /// crowd back up toward the full one would satisfy any absolute bound
+    /// that was loose enough to hold both.
+    #[test]
+    fn a_handheld_holds_a_fraction_of_the_crowd() {
+        use crate::scene::pitch::Pitch;
+        let stature = Stature::of(&venue(62_000, 54_000, 9_800, false));
+        let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
+        let bank = Terrace {
+            length: 120.0,
+            rows: 34,
+            riser: 0.72,
+            tread: Pitch::TREAD,
+            from: 40.0,
+            slab: Pitch::SLAB,
+        };
+        let count = |throng| {
+            Crowd::fill(&bank, stature, Stand::Side, &palette, 1, throng)
+                .expect("a full bank holds a crowd")
+                .count_vertices()
+        };
+        let full = count(Throng::FULL);
+        let handheld = count(Throng::HANDHELD);
+        // Both levers have to be pulling: the figure is already frugal at
+        // 8/8/4, so cutting its sides alone is worth about a third and the
+        // rest has to come from seating fewer people.
+        assert!(
+            (handheld as f32) < full as f32 * 0.55,
+            "a handheld builds {handheld} vertices against a computer's {full}, \n             which is {:.0}% and not the cut this exists to make",
+            handheld as f32 / full as f32 * 100.0
+        );
+        // …and it is still a crowd. Thinned past about a third and the bank
+        // reads as scattered people on a wall rather than as a full ground,
+        // which is the failure `Crowd::SPACING` records being measured once
+        // already.
+        assert!(
+            (handheld as f32) > full as f32 * 0.25,
+            "a handheld builds {handheld} vertices against {full}, which is not a crowd"
+        );
+    }
+
     /// Nobody stands in mid-air, and nobody stands on the pitch side of the
     /// front row. Every figure has to be on the tread of a step of the flight
     /// the concrete was poured off.
@@ -2060,7 +2200,7 @@ mod tests {
     fn every_spectator_is_sitting_on_a_step() {
         let terrace = terrace(9);
         let palette = CrowdPalette::of_swatches(24, 16, 6, 6);
-        let mesh = Crowd::fill(&terrace, Stature::of(&VenueInfo::default()), Stand::HomeEnd, &palette, 7)
+        let mesh = Crowd::fill(&terrace, Stature::of(&VenueInfo::default()), Stand::HomeEnd, &palette, 7, Throng::FULL)
             .expect("a nine-step bank forty metres long holds a crowd");
 
         let surfaces: Vec<f32> = (0..terrace.rows).map(|row| terrace.step(row).y).collect();

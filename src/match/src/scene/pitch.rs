@@ -1,6 +1,7 @@
 use crate::app::config::ViewerConfig;
+use crate::app::quality::Quality;
 use crate::art::textures::{Textures, Turf};
-use crate::scene::crowd::{Spectators, Stand, Stature, Terrace};
+use crate::scene::crowd::{Spectators, Stand, Stature, Terrace, Throng};
 use crate::scene::field::Field;
 use crate::scene::net::Netting;
 use bevy::asset::RenderAssetUsages;
@@ -881,6 +882,7 @@ impl Pitch {
         mut materials: ResMut<Assets<StandardMaterial>>,
         mut images: ResMut<Assets<Image>>,
         config: Res<ViewerConfig>,
+        quality: Res<Quality>,
     ) {
         Self::spawn_ground(
             &mut commands,
@@ -888,6 +890,7 @@ impl Pitch {
             &mut materials,
             &mut images,
             &config,
+            Throng::of(quality.footprint()),
         );
     }
 
@@ -985,6 +988,7 @@ impl Pitch {
         materials: &mut Assets<StandardMaterial>,
         images: &mut Assets<Image>,
         venue: &ViewerConfig,
+        throng: Throng,
     ) {
         let stature = Stature::of(&venue.venue);
 
@@ -1251,6 +1255,7 @@ impl Pitch {
                 // same crowd in the same places and the two ends are visibly
                 // one photograph.
                 bank as u32 + 1,
+                throng,
             );
         }
     }
@@ -1273,6 +1278,7 @@ impl Pitch {
         stand: Stand,
         turn: f32,
         seed: u32,
+        throng: Throng,
     ) {
         /// Fraction of the way up the lit walkway runs.
         const TIER: f32 = 0.35;
@@ -1369,7 +1375,7 @@ impl Pitch {
             // The crowd, as one more mesh on the same steps. A child of the
             // bank rather than a thing of its own, so `Bank::cull` takes the
             // people out with the structure they are sitting on.
-            if let Some(crowd) = spectators.seat(meshes, terrace, stature, stand, seed) {
+            if let Some(crowd) = spectators.seat(meshes, terrace, stature, stand, seed, throng) {
                 bank.spawn(crowd);
             }
 

@@ -701,6 +701,18 @@
             if (config && ["full", "spare"].includes(asked.get("grain"))) {
                 config.grain = asked.get("grain");
             }
+            // …and `?device=handheld` / `?device=roomy` force what kind of
+            // machine the viewer takes this to be, which decides the
+            // sampling, the squad grain AND how much crowd is built.
+            //
+            // A diagnostic first: a phone that reloads the tab rather than
+            // opening the match leaves nothing to read afterwards, because
+            // the renderer was killed rather than having failed. Being able
+            // to ask for the small scene from the address bar of the device
+            // that is failing is the only bisection available there.
+            if (config && ["handheld", "roomy"].includes(asked.get("device"))) {
+                config.device = asked.get("device");
+            }
             MatchViewer.start(JSON.stringify(config));
         })
         .catch((error) => {

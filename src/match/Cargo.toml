@@ -113,6 +113,12 @@ web-sys = { version = "0.3", features = [
     # throwaway canvas; the viewer's own canvas belongs to wgpu.
     "WebGl2RenderingContext",
     "WebglDebugRendererInfo",
+    # …and asking what KIND of machine it is, which the renderer string cannot
+    # say: Safari removed the extension above, so every iPhone and iPad answers
+    # nothing at all. A device whose primary pointer is a finger is a handheld
+    # — see `quality::Footprint::probe`.
+    "Navigator",
+    "MediaQueryList",
     "KeyboardEvent",
     "AddEventListenerOptions",
     "Document",
