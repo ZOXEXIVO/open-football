@@ -217,6 +217,7 @@ pub struct PlayerSkillsDto {
 pub struct TechnicalDto {
     pub corners: u8,
     pub crossing: u8,
+    pub dribbling: u8,
     pub finishing: u8,
     pub first_touch: u8,
     pub free_kick_taking: u8,
@@ -233,6 +234,7 @@ pub struct TechnicalDto {
 pub struct MentalDto {
     pub aggression: u8,
     pub anticipation: u8,
+    pub bravery: u8,
     pub composure: u8,
     pub concentration: u8,
     pub decisions: u8,
@@ -695,6 +697,7 @@ fn get_skills(player: &Player) -> PlayerSkillsDto {
         technical: TechnicalDto {
             corners: player.skills.technical.corners.floor() as u8,
             crossing: player.skills.technical.crossing.floor() as u8,
+            dribbling: player.skills.technical.dribbling.floor() as u8,
             finishing: player.skills.technical.finishing.floor() as u8,
             first_touch: player.skills.technical.first_touch.floor() as u8,
             free_kick_taking: player.skills.technical.free_kicks.floor() as u8,
@@ -710,6 +713,7 @@ fn get_skills(player: &Player) -> PlayerSkillsDto {
         mental: MentalDto {
             aggression: player.skills.mental.aggression.floor() as u8,
             anticipation: player.skills.mental.anticipation.floor() as u8,
+            bravery: player.skills.mental.bravery.floor() as u8,
             composure: player.skills.mental.composure.floor() as u8,
             concentration: player.skills.mental.concentration.floor() as u8,
             decisions: player.skills.mental.decisions.floor() as u8,
