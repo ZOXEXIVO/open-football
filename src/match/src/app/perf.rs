@@ -41,6 +41,7 @@
 //! about 100 µs on a page that is not cross-origin isolated — hence the
 //! window: a median over two seconds of frames is well clear of that step.
 
+use crate::app::bill::MemoryBill;
 use crate::app::config::ViewerConfig;
 use bevy::camera::visibility::ViewVisibility;
 use bevy::platform::time::Instant;
@@ -273,6 +274,12 @@ impl FrameCost {
     fn announce(_line: &str) {}
 
     /// The whole picture on one line, for the console.
+    ///
+    /// The bytes ride along with the milliseconds because the two failures
+    /// they describe are told apart by nothing else. A frame that is late and
+    /// a tab that is about to be killed look identical from outside, and on
+    /// the device where the second one happens there is no console to read
+    /// either of them in — see [`MemoryBill`].
     pub fn report(&self) -> String {
         let (frame, worst) = self.frame.spread();
         let (main, _) = self.main.spread();
@@ -281,7 +288,8 @@ impl FrameCost {
         format!(
             "match viewer — {fps:.0} fps · frame {frame:.1} ms (p95 {worst:.1}, \
              worst {spike:.0}) = update {update:.1} + rest of main {rest:.1} \
-             + outside {outside:.1} · {drawn}/{meshes} meshes drawn{geometry}",
+             + outside {outside:.1} · {drawn}/{meshes} meshes drawn{geometry} \
+             · heap {heap:.0} MiB (peak {peak:.0}) · assets {assets:.0} MiB",
             spike = self.spike,
             rest = (main - update).max(0.0),
             outside = (frame - main).max(0.0),
@@ -291,6 +299,9 @@ impl FrameCost {
                 Some(summary) => format!(" · {summary}"),
                 None => String::new(),
             },
+            heap = MemoryBill::mib(MemoryBill::heap()),
+            peak = MemoryBill::mib(MemoryBill::peak()),
+            assets = MemoryBill::mib(MemoryBill::total()),
         )
     }
 

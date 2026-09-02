@@ -28,6 +28,7 @@
 use crate::art::textures::Textures;
 use crate::players::actors::{Actors, BallState};
 use crate::scene::field::Field;
+use crate::scene::pitch::Pitch;
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::Indices;
 use bevy::prelude::*;
@@ -392,11 +393,11 @@ impl Netting {
         let post_axis = half_goal + Self::POST_RADIUS;
         let bar_axis = Field::PHYSICS_GOAL_HEIGHT + Self::POST_RADIUS;
         // The upright runs from the grass to the underside of the bar.
-        let post = meshes.add(Cylinder::new(Self::POST_RADIUS, bar_axis));
-        let bar = meshes.add(Cylinder::new(
-            Self::POST_RADIUS,
-            (post_axis + Self::POST_RADIUS) * 2.0,
-        ));
+        let post = Pitch::stock(meshes, Cylinder::new(Self::POST_RADIUS, bar_axis).into());
+        let bar = Pitch::stock(
+            meshes,
+            Cylinder::new(Self::POST_RADIUS, (post_axis + Self::POST_RADIUS) * 2.0).into(),
+        );
         let back_height = Field::NET_BACK_HEIGHT;
 
         for side in [-1.0f32, 1.0] {
@@ -508,7 +509,7 @@ impl Netting {
             steps,
         );
         commands.spawn((
-            Mesh3d(meshes.add(mesh)),
+            Mesh3d(Pitch::stock(meshes, mesh)),
             MeshMaterial3d(material.clone()),
             // The vertices already carry the panel's world orientation, so
             // the entity only has to be moved to its origin.

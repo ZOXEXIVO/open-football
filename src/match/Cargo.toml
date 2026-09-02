@@ -156,9 +156,9 @@ web-sys = { version = "0.3", features = [
 ] }
 serde = { version = "1.0.229", features = ["derive"] }
 # `raw_value` so a chunk can be opened in two passes: the envelope now, each
-# player's samples a few frames later. See `ChunkPayload`, which explains why a
-# megabyte and a half of JSON parsed between two animation frames is the single
-# worst thing that happens in this viewer.
+# player's samples a few frames later. See `ChunkPayload`, which explains why
+# a chunk of JSON — 1.35 MB gzipped, 4.4 MB in the parser — read between two
+# animation frames is the single worst thing that happens in this viewer.
 serde_json = { version = "1.0.151", features = ["raw_value"] }
 console_error_panic_hook = "0.1.7"
 

@@ -15,6 +15,7 @@ use crate::transfers::pipeline::processor::{
 };
 use crate::transfers::pipeline::recruitment::ScoutMonitoringSource;
 use crate::transfers::pipeline::scouting_config::{RealismTarget, ScoutingConfig};
+use crate::transfers::pipeline::standing::CareerRecordSnapshot;
 use crate::transfers::pipeline::{
     ClubTransferPlan, DetailedScoutingReport, PlayerObservation, ReportRiskFlag,
     ScoutMatchAssignment, ScoutingAssignment, ScoutingRecommendation, TransferNeedPriority,
@@ -977,6 +978,11 @@ impl PipelineProcessor {
                         contract_months_remaining,
                         salary,
                         language_profile: LanguageProfile::from_languages(&player.languages),
+                        international_apps: player.player_attributes.international_apps,
+                        career_record: CareerRecordSnapshot::read(
+                            player,
+                            player.position().position_group(),
+                        ),
                         seller_ctx: SellerPlausibilityContext {
                             club_reputation_score: seller_club_rep_score,
                             league_reputation: seller_league_rep,
@@ -990,6 +996,7 @@ impl PipelineProcessor {
                             market_resignation: player.market_resignation(date),
                             club_matches_played: seller_club_matches,
                             big_stage_inclination: player.big_stage_inclination,
+                            is_marketed: club.transfer_plan.is_marketed(player.id),
                         },
                     });
                 }

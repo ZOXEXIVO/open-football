@@ -2963,13 +2963,15 @@ a:active {
     border-top: 1px solid #1a2a34;
 }
 
+/* Eyebrow over a block inside a panel — the panel head's voice, one
+   step quieter. */
 .fm-section-subtitle {
-    font-size: 12px;
-    font-weight: 600;
-    color: #5a7080;
+    margin: 0 0 8px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin: 0 0 8px 0;
+    color: #546a78;
 }
 
 .fm-personal-detail {
@@ -3000,11 +3002,6 @@ a:active {
     text-align: right;
 }
 
-.fm-bar-row .fm-rep-label {
-    width: 110px;
-    white-space: nowrap;
-}
-
 @media (min-width: 600px) {
     .fm-bar-row {
         flex-wrap: nowrap;
@@ -3031,210 +3028,641 @@ a:active {
     font-size: 13px;
 }
 
-.fm-morale-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 4px 0;
-}
+/* ── Personal tab: profile ────────────────────────────────────────
+   The profile is a fact sheet, so it is set as a two-column
+   definition list that folds to one column when the panel is narrow
+   (the 1200–1280px sidebar band included — the columns are auto-fit,
+   not keyed to the viewport). Every bar on the page shares one track
+   (.fm-pp-track). A health — condition — is painted traffic-light; a
+   level — reputation, language, trust — is plain blue, so a regional
+   reputation is never shown as if it were an injury. */
 
-.fm-morale-label {
-    font-size: 13px;
-    color: #94a3af;
-    font-weight: 500;
-    min-width: 50px;
-}
-
-.fm-morale-bar {
-    flex: 1;
-    height: 6px;
-    background: #1a2a34;
-    border-radius: 3px;
-    overflow: hidden;
-}
-
-.fm-morale-fill {
-    height: 100%;
-    border-radius: 3px;
-    transition: width 0.3s;
-    background: #5a7080;
-}
-
-.fm-morale-fill.fm-morale-good {
-    background: #4caf50;
-}
-
-.fm-morale-fill.fm-morale-okay {
-    background: #ff9800;
-}
-
-.fm-morale-fill.fm-morale-poor {
-    background: #e53935;
-}
-
-.fm-morale-val {
-    font-size: 13px;
-    color: #c8d4de;
-    font-weight: 500;
-    min-width: 70px;
-    text-align: right;
-}
-
-.fm-factor-name {
-    color: #94a3af;
-    font-weight: 500;
-}
-
-.fm-factor-val {
-    color: #c8d4de;
-    font-weight: 500;
-    text-align: right;
-}
-
-.fm-factor-val.fm-factor-pos {
-    color: #4caf50;
-}
-
-.fm-factor-val.fm-factor-neg {
-    color: #e53935;
-}
-
-.fm-concerns-title {
-    color: #e53935;
-}
-
-.fm-concerns-list {
-    list-style: none;
-    padding: 0;
+.fm-pp-kv {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(max(210px, calc(50% - 14px)), 1fr));
+    column-gap: 28px;
     margin: 0;
 }
 
-.fm-concerns-list li {
-    font-size: 13px;
-    color: #e53935;
-    padding: 3px 0;
-    padding-left: 14px;
-    position: relative;
+.fm-pp-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
 }
 
-.fm-concerns-list li::before {
+.fm-pp-row dt {
+    flex-shrink: 0;
+    font-size: 12px;
+    font-weight: 400;
+    color: #546a78;
+    white-space: nowrap;
+}
+
+.fm-pp-row dd {
+    margin: 0;
+    min-width: 0;
+    font-size: 13px;
+    color: #c8d4de;
+    text-align: right;
+}
+
+.fm-pp-bars {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(max(210px, calc(50% - 14px)), 1fr));
+    column-gap: 28px;
+}
+
+.fm-pp-bar-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 5px 0;
+}
+
+.fm-pp-label {
+    flex: 0 0 auto;
+    margin-right: auto;
+    font-size: 12px;
+    color: #546a78;
+    white-space: nowrap;
+}
+
+.fm-pp-track {
+    position: relative;
+    display: block;
+    flex: 0 1 140px;
+    height: 4px;
+    background: #1a2a34;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.fm-pp-fill {
+    display: block;
+    height: 100%;
+    border-radius: 2px;
+    background: #437fa2;
+}
+
+.fm-pp-fill.is-good {
+    background: #4caf50;
+}
+
+.fm-pp-fill.is-okay {
+    background: #ff9800;
+}
+
+.fm-pp-fill.is-poor {
+    background: #e53935;
+}
+
+.fm-pp-num {
+    flex-shrink: 0;
+    width: 36px;
+    font-size: 12px;
+    color: #c8d4de;
+    text-align: right;
+}
+
+.fm-pp-num-wide {
+    width: auto;
+    min-width: 48px;
+}
+
+.fm-pp-rep {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+}
+
+.fm-pp-rep-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+}
+
+.fm-pp-rep-name {
+    font-size: 11px;
+    color: #546a78;
+}
+
+.fm-pp-rep-tile .fm-pp-track {
+    flex: none;
+    width: 100%;
+}
+
+.fm-pp-rep-word {
+    font-size: 12px;
+    font-weight: 500;
+    color: #c8d4de;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fm-pp-duo {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px 28px;
+}
+
+.fm-pp-duo-col {
+    min-width: 0;
+}
+
+.fm-pp-clubs {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.fm-pp-clubs li {
+    padding: 5px 0;
+    font-size: 13px;
+}
+
+.fm-pp-clubs a {
+    color: #5ba3d9;
+    text-decoration: none;
+}
+
+.fm-pp-clubs a:hover {
+    text-decoration: underline;
+}
+
+/* Personality: the radar carries the hidden attributes; the tiles
+   under it are the traits a manager actually quotes — three mental
+   attributes in their tier colours, and training-ground behaviour as
+   a word. */
+
+.fm-pp-radar {
+    max-width: 420px;
+}
+
+.fm-radar-val {
+    fill: #c8d4de;
+    font-weight: 600;
+}
+
+/* Four tiles in a row, or two by two — never three and an orphan, so
+   the section is the container the tile grid answers to. */
+.fm-pp-traits-wrap {
+    container-type: inline-size;
+}
+
+.fm-pp-traits {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+}
+
+@container (max-width: 520px) {
+    .fm-pp-traits {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+.fm-pp-trait {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    min-width: 0;
+    padding: 8px 6px;
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid #1f2d37;
+    border-radius: 3px;
+    text-align: center;
+}
+
+.fm-pp-trait-name {
+    max-width: 100%;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: #546a78;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.fm-pp-trait-val {
+    padding: 0 6px;
+    border-radius: 2px;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.1;
+}
+
+.fm-pp-trait-word {
+    padding-top: 4px;
+    font-size: 14px;
+    color: #c8d4de;
+}
+
+/* ── Morale & happiness ───────────────────────────────────────────
+   One panel, read top to bottom: the verdict (the morale word on its
+   five-band bar, with any flags the club has raised beside it), then
+   the columns that explain it — a ledger of what is pulling him each
+   way, what he wants, and where he stands with this club. The
+   columns are auto-fit, so a narrow content column folds them
+   without a viewport query. */
+
+.fm-mh-hero {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 32px;
+    padding: 14px 16px;
+}
+
+.fm-mh-morale {
+    flex: 1 1 300px;
+    min-width: 0;
+    max-width: 480px;
+}
+
+.fm-mh-morale .fm-section-subtitle {
+    margin-bottom: 4px;
+}
+
+.fm-mh-morale-line {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.fm-mh-word {
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 1.1;
+    letter-spacing: -0.2px;
+    color: #94a3af;
+    white-space: nowrap;
+}
+
+.fm-mh-word.is-good {
+    color: #5cb86c;
+}
+
+.fm-mh-word.is-okay {
+    color: #ffa726;
+}
+
+.fm-mh-word.is-poor {
+    color: #ef5350;
+}
+
+/* The four ticks sit where the morale label changes — 25, 45, 65,
+   80 — so the bar reads as the scale the word came from. */
+.fm-mh-track {
+    position: relative;
+    flex: 1 1 120px;
+    min-width: 0;
+    height: 8px;
+    background: #1a2a34;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.fm-mh-track::after {
     content: "";
     position: absolute;
-    left: 0;
-    top: 10px;
+    inset: 0;
+    pointer-events: none;
+    background:
+        linear-gradient(#0f171c, #0f171c) 25% 0 / 2px 100% no-repeat,
+        linear-gradient(#0f171c, #0f171c) 45% 0 / 2px 100% no-repeat,
+        linear-gradient(#0f171c, #0f171c) 65% 0 / 2px 100% no-repeat,
+        linear-gradient(#0f171c, #0f171c) 80% 0 / 2px 100% no-repeat;
+}
+
+.fm-mh-fill {
+    display: block;
+    height: 100%;
+    border-radius: 4px;
+    background: #5a7080;
+}
+
+.fm-mh-fill.is-good {
+    background: #4caf50;
+}
+
+.fm-mh-fill.is-okay {
+    background: #ff9800;
+}
+
+.fm-mh-fill.is-poor {
+    background: #e53935;
+}
+
+.fm-mh-flags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.fm-mh-flag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px 4px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #f08a86;
+    background: rgba(229, 57, 53, 0.1);
+    border: 1px solid rgba(229, 57, 53, 0.28);
+    border-radius: 3px;
+    white-space: nowrap;
+}
+
+.fm-mh-flag::before {
+    content: "";
+    flex-shrink: 0;
     width: 6px;
     height: 6px;
     border-radius: 50%;
     background: #e53935;
 }
 
-/* ── The mind panel ─────────────────────────────────────────────
-   What a player wants, and what he remembers about this club.
-   The 'unspoken' modifier is load-bearing rather than decorative: the
-   Latent and Active rungs of the goal ladder are the ones nobody has
-   heard him say, and a manager reading this page needs to be able to
-   tell a private want from a public one at a glance. */
+/* Each cell draws its own top and left rule and the grid is pulled
+   1px left, so the rules land on the panel edge and under the hero
+   whichever way the columns wrap. */
+.fm-mh-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    width: calc(100% + 1px);
+    margin-left: -1px;
+}
 
-.fm-mind-wants,
-.fm-mind-memories {
+.fm-mh-cell {
+    min-width: 0;
+    padding: 12px 16px 14px;
+    border-top: 1px solid #1a2a34;
+    border-left: 1px solid #1a2a34;
+}
+
+/* The ledger: one diverging bar per factor, worst at the top. Half
+   the track is a full-strength factor, so the spine is the zero. */
+.fm-mh-ledger {
     list-style: none;
-    padding: 0;
     margin: 0;
+    padding: 0;
 }
 
-.fm-mind-want {
-    padding: 6px 0;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+.fm-mh-ledger-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 112px 96px;
+    align-items: center;
+    column-gap: 12px;
+    padding: 4px 0;
 }
 
-.fm-mind-want:last-child {
-    border-bottom: none;
+.fm-mh-ledger-name {
+    font-size: 12px;
+    color: #94a3af;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
-.fm-mind-want-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 8px;
-    margin-bottom: 4px;
+.fm-mh-ledger-bar {
+    position: relative;
+    height: 6px;
+    background: #1a2a34;
+    border-radius: 3px;
 }
 
-.fm-mind-want-name {
-    font-size: 13px;
-    font-weight: 600;
+.fm-mh-ledger-bar::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: -3px;
+    bottom: -3px;
+    width: 1px;
+    background: #3a4c5a;
 }
 
-.fm-mind-want-status {
+.fm-mh-ledger-fill {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    max-width: 50%;
+}
+
+.fm-mh-ledger-fill.is-pos {
+    left: 50%;
+    background: #4caf50;
+    border-radius: 0 3px 3px 0;
+}
+
+.fm-mh-ledger-fill.is-neg {
+    right: 50%;
+    background: #e53935;
+    border-radius: 3px 0 0 3px;
+}
+
+.fm-mh-ledger-val {
     font-size: 11px;
-    color: #757575;
+    color: #6d8290;
     text-align: right;
     white-space: nowrap;
 }
 
-.fm-mind-unspoken .fm-mind-want-name {
-    font-weight: 500;
-    font-style: italic;
-    opacity: 0.82;
+.fm-mh-ledger-val.is-pos {
+    color: #5cb86c;
 }
 
-.fm-mind-fill {
+.fm-mh-ledger-val.is-neg {
+    color: #ef5350;
+}
+
+/* What he wants: one line per want, loudest first. The 'unspoken'
+   tag is load-bearing rather than decorative — the Latent and Active
+   rungs are the ones nobody has heard him say, and a manager reading
+   this needs to tell a private want from a public one at a glance. */
+.fm-mh-wants {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.fm-mh-want {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 56px auto;
+    align-items: center;
+    column-gap: 12px;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.fm-mh-want:last-child {
+    border-bottom: none;
+}
+
+.fm-mh-want-body {
+    min-width: 0;
+}
+
+.fm-mh-want-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: #c8d4de;
+}
+
+.fm-mh-want.is-unspoken .fm-mh-want-name {
+    font-style: italic;
+    font-weight: 500;
+    color: #8fa2b0;
+}
+
+.fm-mh-want-tag {
+    display: inline-block;
+    margin-left: 6px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    color: #5c6f7c;
+    vertical-align: 1px;
+}
+
+.fm-mh-want-note {
+    margin-top: 1px;
+    font-size: 11px;
+    color: #6d8290;
+}
+
+.fm-mh-want-note.is-blocked {
+    color: #ef5350;
+}
+
+.fm-mh-want-bar {
+    position: relative;
+    display: block;
+    height: 4px;
+    background: #1a2a34;
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.fm-mh-want-fill {
+    display: block;
+    height: 100%;
+    border-radius: 2px;
     background: #5c6bc0;
 }
 
-.fm-mind-unspoken .fm-mind-fill {
-    background: #9fa8da;
+.fm-mh-want.is-unspoken .fm-mh-want-fill {
+    opacity: 0.55;
 }
 
-.fm-mind-note {
+.fm-mh-want-status {
     font-size: 11px;
-    color: #757575;
-    margin-top: 3px;
+    color: #6d8290;
+    text-align: right;
+    white-space: nowrap;
 }
 
-.fm-mind-blocked {
-    color: #e53935;
+/* Where he stands with this club: the manager, then what he
+   remembers of the place. */
+.fm-mh-manager {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    padding: 1px 0 3px;
 }
 
-.fm-mind-memory {
+.fm-mh-manager-name {
+    min-width: 0;
     font-size: 13px;
-    padding: 3px 0 3px 14px;
-    position: relative;
+    font-weight: 600;
+    color: #c8d4de;
 }
 
-.fm-mind-memory::before {
+.fm-mh-manager-rel {
+    font-size: 11px;
+    font-weight: 600;
+    color: #94a3af;
+    white-space: nowrap;
+}
+
+.fm-mh-manager-rel.is-good {
+    color: #5cb86c;
+}
+
+.fm-mh-manager-rel.is-poor {
+    color: #ef5350;
+}
+
+.fm-mh-eyebrow-gap {
+    margin-top: 14px;
+}
+
+.fm-mh-sentiment {
+    padding-bottom: 4px;
+    font-size: 13px;
+    color: #94a3af;
+}
+
+.fm-mh-sentiment.is-good {
+    color: #5cb86c;
+}
+
+.fm-mh-sentiment.is-poor {
+    color: #ef5350;
+}
+
+.fm-mh-memories {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.fm-mh-memories li {
+    position: relative;
+    padding: 3px 0 3px 14px;
+    font-size: 12px;
+    color: #c8d4de;
+}
+
+.fm-mh-memories li::before {
     content: "";
     position: absolute;
     left: 0;
-    top: 10px;
+    top: 9px;
     width: 6px;
     height: 6px;
     border-radius: 50%;
 }
 
-.fm-mind-warm::before {
+.fm-mh-memories li.is-warm::before {
     background: #4caf50;
 }
 
-.fm-mind-sour::before {
+.fm-mh-memories li.is-sour::before {
     background: #e53935;
 }
 
-.fm-rel-good {
-    color: #4caf50;
-}
+@media (max-width: 480px) {
+    .fm-mh-ledger-row {
+        grid-template-columns: minmax(0, 1fr) 80px auto;
+    }
 
-.fm-rel-poor {
-    color: #e53935;
-}
-
-.fm-fav-club-link {
-    color: #5ba3d9;
-    text-decoration: none;
-    font-size: 13px;
-}
-
-.fm-fav-club-link:hover {
-    text-decoration: underline;
+    .fm-mh-ledger-name {
+        white-space: normal;
+    }
 }
 
 .fm-mini-bar {
@@ -6598,6 +7026,19 @@ a:active {
     line-height: 1.5;
 }
 
+/* What the viewer is holding, in megabytes. Only ever on screen under
+   `?perf=1`, and set in a monospace face because it is a column of figures
+   somebody is watching change from phase to phase — a proportional face makes
+   a number that has grown look like a number that has moved. Dimmer than the
+   note above it: it is instrumentation sharing a panel with a product. */
+.match-loader-bill {
+    margin: 0;
+    color: #55637a;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px;
+    letter-spacing: 0.01em;
+}
+
 /* Nothing is coming. The ring stops turning rather than spinning over a dead
    viewer, and the bar goes the colour of the message. */
 .match-loader-failed .match-loader-ring {
@@ -7860,6 +8301,12 @@ html.match-scroll-locked body {
     .fm-panel > .fm-panel-head {
         position: sticky;
         left: 0;
+    }
+
+    /* A column-stretched panel is a grid here; keep its rows at the
+       top rather than spreading them down the column's height. */
+    .fm-personal-col > .fm-panel {
+        align-content: start;
     }
 
     .fm-stats,

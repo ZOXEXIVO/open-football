@@ -26,10 +26,10 @@
 //! For the reason [`crate::art`] paints its own textures: a replay that had to
 //! fetch a set of foley samples would either play silently for the first ten
 //! seconds or hold the page until they landed, and the recordings themselves
-//! are already a megabyte and a half per five minutes of match. Everything
-//! here is synthesised in the browser out of a few seconds of noise the module
-//! generates for itself, so the whole soundtrack costs no bytes over the wire
-//! and nothing in the wasm artefact but the code that builds it.
+//! are already 1.35 MB gzipped — 4.4 MB inflated — per five minutes of match.
+//! Everything here is synthesised in the browser out of a few seconds of noise
+//! the module generates for itself, so the whole soundtrack costs no bytes
+//! over the wire and nothing in the wasm artefact but the code that builds it.
 //!
 //! It also means the crate stays free of `bevy_audio`, which is deliberately
 //! absent from the feature list in `Cargo.toml` — it would drag in a decoder

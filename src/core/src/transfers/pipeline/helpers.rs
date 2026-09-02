@@ -3,12 +3,13 @@ use rustc_hash::FxHashMap;
 
 use crate::club::player::events::transfer_social::TransferInterestSignal;
 use crate::club::player::language::LanguageProfile;
-use crate::shared::CurrencyValue;
+use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::ScoutingRegion;
 use crate::transfers::pipeline::breakout::{BreakoutPerformanceSignal, LeaguePerformanceLookup};
 use crate::transfers::pipeline::processor::{
     PipelineProcessor, PlayerSummary, SellerPlausibilityContext,
 };
+use crate::transfers::pipeline::standing::CareerRecordSnapshot;
 use crate::transfers::pipeline::{DetailedScoutingReport, ReportRiskFlag, TransferRequest};
 use crate::transfers::reason::{ScoutVerdict, TransferReason};
 use crate::transfers::window::{PlayerValuationCalculator, TransferCalendar};
@@ -334,6 +335,7 @@ impl PipelineProcessor {
                 crate::club::team::squad::SquadEvidenceContext::current_season_sample(date, club)
                     .club_matches_proxy(),
             big_stage_inclination: player.big_stage_inclination,
+            is_marketed: club.transfer_plan.is_marketed(player.id),
         };
         PlayerSummary {
             player_id: player.id,
@@ -383,6 +385,8 @@ impl PipelineProcessor {
             salary,
             seller_ctx,
             language_profile: LanguageProfile::from_languages(&player.languages),
+            international_apps: player.player_attributes.international_apps,
+            career_record: CareerRecordSnapshot::read(player, pos_group),
         }
     }
 
@@ -588,6 +592,21 @@ impl PipelineProcessor {
         date: NaiveDate,
         price_level: f32,
     ) -> CurrencyValue {
+        // The club's own ledger price, when its monthly pass has reached
+        // him. That number knows three things this function cannot: what he
+        // is to THIS side (a core player costs twice what his market value
+        // says, because the club does not want to sell him), how long the
+        // club still controls him, and where he sits on his own career arc.
+        // See [`AssetLedger::asking_for`]. `SellerFeeFloor` is still the
+        // absolute floor underneath whatever comes out.
+        if let Some(asking) = club.transfer_plan.asking_for(player.id) {
+            if asking > 0.0 {
+                return CurrencyValue {
+                    amount: FormattingUtils::round_fee(asking),
+                    currency: Currency::Usd,
+                };
+            }
+        }
         // Selling clubs anchor on their own market context — a Serie A
         // club asking the same fee as a Maltese side for an identical
         // player is an obvious flatness bug. Pull the seller's blended

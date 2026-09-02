@@ -577,7 +577,12 @@ impl TransferMotive {
     pub fn from_key(key: &str) -> Self {
         match key {
             "signing_reason_formation_gap" => TransferMotive::FormationGap,
+            // A squad investment is the same story from the reader's side
+            // — the club went out and bought somebody better than what it
+            // had. What separates it from an ordinary upgrade (it filled no
+            // hole) is a fact about the buyer's motive, not about the page.
             "signing_reason_quality_upgrade"
+            | "signing_reason_squad_investment"
             | "signing_reason_loan_opportunistic_upgrade"
             | "signing_reason_opportunistic_loan_upgrade" => TransferMotive::QualityUpgrade,
             "signing_reason_depth_cover"
@@ -592,7 +597,12 @@ impl TransferMotive {
             "signing_reason_staff_recommendation" => TransferMotive::ScoutFind,
             "signing_reason_experienced_head" => TransferMotive::Experience,
             "signing_reason_cheap_reinforcement" => TransferMotive::Bargain,
-            "signing_reason_academy_graduation" => TransferMotive::AcademyPromotion,
+            // A callup is a graduation the club did not plan — the lad came
+            // up because somebody got hurt. Same page from the reader's
+            // side: a name out of the academy is in the first team.
+            "signing_reason_academy_graduation" | "signing_reason_academy_emergency_callup" => {
+                TransferMotive::AcademyPromotion
+            }
             // "a loan happened", "a transfer happened", a broadcast, a
             // manual move: true, and not worth a headline.
             _ => TransferMotive::Unknown,

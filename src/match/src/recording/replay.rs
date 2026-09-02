@@ -186,9 +186,14 @@ impl StateTrack {
 ///
 /// # Why the players are not parsed here
 ///
-/// A chunk is five minutes of twenty-three tracks — a megabyte and a half of
-/// JSON — and it is parsed on the browser's only thread, between two animation
-/// frames, with the replay running. `perf` names it as the thing that reads as
+/// A chunk is five minutes of twenty-three tracks. ⚠ **1.35 MB on the wire and
+/// 4.4 MB in the parser** — the figure this note used to carry was the GZIPPED
+/// size, which is what a network tab shows and is not what any of the
+/// arithmetic here is about: the transfer is inflated before a byte of it is
+/// looked at, and the object graph `JSON.parse` builds out of the inflated
+/// document is larger again. It is parsed on the browser's only thread,
+/// between two animation frames, with the replay running. `perf` names it as
+/// the thing that reads as
 /// "laggy" without ever showing up as a low frame rate: not a slow sixtieth of
 /// a second, one frame in a thousand that takes half of one.
 ///
@@ -322,29 +327,72 @@ impl Track {
             return;
         }
         if incoming[0].t >= self.samples[self.samples.len() - 1].t {
+            // ⚠ **Reserved exactly, not grown.** `extend` doubles when it runs
+            // out, so a track that took twenty chunks in order ended the match
+            // holding about 1.6 times the samples it had — some 40 MiB of
+            // slack across a full recording, and on wasm32 a buffer that has
+            // been that big once is a page the tab is charged for until it
+            // closes. See [`MemoryBill`](crate::app::bill::MemoryBill).
+            self.samples.reserve_exact(incoming.len());
             self.samples.extend(incoming);
             return;
         }
 
-        let mut merged = Vec::with_capacity(self.samples.len() + incoming.len());
-        let (mut i, mut j) = (0, 0);
-        while i < self.samples.len() && j < incoming.len() {
-            if self.samples[i].t <= incoming[j].t {
-                merged.push(self.samples[i]);
-                i += 1;
-            } else {
-                merged.push(incoming[j]);
-                j += 1;
-            }
-        }
-        merged.extend_from_slice(&self.samples[i..]);
-        merged.extend_from_slice(&incoming[j..]);
-        self.samples = merged;
+        // **Merged in place**, which is what a backward seek deserves.
+        //
+        // This used to build a third vector the size of both — so a seek back
+        // across a full recording briefly held two copies of every track in
+        // the match, twenty-two times over, at the one moment the viewer is
+        // also asking for four chunks off the network. Appending and sorting
+        // holds one buffer and one reservation: the samples are two sorted
+        // runs and the sort below is `sort_by_key`, which is a stable merge
+        // sort and recognises a run rather than re-comparing its way through
+        // it.
+        self.samples.reserve_exact(incoming.len());
+        self.samples.extend(incoming);
+        self.samples.sort_by_key(|sample| sample.t);
         // Both cursors: an out-of-order merge invalidates every index into the
         // old vector, and a stale lookahead is exactly as wrong as a stale
         // playhead.
         self.cursor = 0;
         self.lookahead = 0;
+    }
+
+    /// **Keeps only the samples inside one of `spans`**, and puts both cursors
+    /// back to the start.
+    ///
+    /// The cursors are indices into the vector this has just rewritten, so
+    /// they mean nothing afterwards — exactly the situation the out-of-order
+    /// arm of [`Self::merge`] already resets them for, and exactly as
+    /// dangerous: a stale cursor is a lookup that reads somebody else's
+    /// position and draws a man standing in the wrong half.
+    ///
+    /// `shrink_to_fit` after the sweep, because the whole reason this is
+    /// called is that the buffer was too big. Retaining in place leaves a
+    /// ninety-minute allocation holding fifteen minutes of match, and on
+    /// wasm32 the allocator handing pages back to itself is not the browser
+    /// handing them back to the operating system — but a buffer that is not
+    /// re-grown is a peak that is not re-reached, which is the whole game
+    /// here. See [`MemoryBill`](crate::app::bill::MemoryBill).
+    pub fn keep_within(&mut self, spans: &[(f64, f64)]) {
+        let before = self.samples.len();
+        self.samples.retain(|sample| {
+            let at = sample.t as f64;
+            spans.iter().any(|(from, to)| at >= *from && at < *to)
+        });
+        if self.samples.len() == before {
+            return;
+        }
+        self.samples.shrink_to_fit();
+        self.cursor = 0;
+        self.lookahead = 0;
+    }
+
+    /// How many samples this track's buffer is holding room for — see
+    /// [`ReplayTracks::resident_bytes`], which is the only caller and explains
+    /// why it is the capacity rather than the length.
+    pub fn capacity(&self) -> usize {
+        self.samples.capacity()
     }
 
     /// Interpolated position at `time_ms`, or `None` when the entity has no
@@ -529,6 +577,51 @@ impl ReplayTracks {
             .or_default()
             .merge(Sample::from_quads(quads));
     }
+
+    /// **Throws away every sample outside the spans given**, which is what
+    /// keeps a full recording from growing to the length of the match.
+    ///
+    /// The loader owns the policy — see
+    /// [`ChunkLoader::evict`](crate::recording::loader::ChunkLoader) — and this
+    /// owns the sweep. Spans rather than one window because the exception is
+    /// not adjacent to anything: on a goals-only recording the chunk holding
+    /// the next clip can be twenty chunks from the playhead and still be the
+    /// thing the replay is about to need.
+    ///
+    /// The ball is swept with the players. It is one track against twenty-two,
+    /// but it is the longest one — the ball is on the pitch for the whole
+    /// match where a substitute is on for twenty minutes — and leaving it out
+    /// would be a leak with a comment over it.
+    ///
+    /// Events and state lines are NOT swept. They are a handful of entries per
+    /// chunk against a hundred thousand samples, the timeline draws the whole
+    /// match's worth of them at once, and a seek back over an evicted state
+    /// line would leave a player's name plate blank until the chunk came
+    /// round again.
+    pub fn keep_within(&mut self, spans: &[(f64, f64)]) {
+        self.ball.keep_within(spans);
+        for track in self.players.values_mut() {
+            track.keep_within(spans);
+        }
+    }
+
+    /// **What the recording is holding**, in bytes of samples.
+    ///
+    /// The one entry on the memory bill that is a running level rather than a
+    /// total: it grows as chunks land and falls as they are evicted. Counted
+    /// off `capacity` rather than `len` deliberately — a `Vec` that grew to
+    /// ninety minutes of match and was then swept still owns the buffer, and
+    /// what the tab is charged for is the buffer. See
+    /// [`MemoryBill`](crate::app::bill::MemoryBill).
+    pub fn resident_bytes(&self) -> usize {
+        let sample = size_of::<Sample>();
+        self.ball.capacity() * sample
+            + self
+                .players
+                .values()
+                .map(|track| track.capacity() * sample)
+                .sum::<usize>()
+    }
 }
 
 /// The two-pass read of a chunk, which is the thing standing between a viewer
@@ -613,6 +706,80 @@ mod chunks {
     #[test]
     fn a_track_with_nothing_in_it_opens_nowhere() {
         assert_eq!(Track::default().opens_at(), None);
+    }
+
+    fn samples(times: &[u32]) -> Vec<Sample> {
+        times
+            .iter()
+            .map(|t| Sample {
+                t: *t,
+                x: *t as f32,
+                y: 0.0,
+                z: 0.0,
+            })
+            .collect()
+    }
+
+    /// **A chunk arriving out of order still leaves a sorted timeline.**
+    ///
+    /// The merge is done in place now — appended and sorted rather than
+    /// interleaved into a third vector the size of both — which is a memory
+    /// change with a correctness surface: every lookup in this file is a
+    /// binary search or a cursor step over `samples`, and both need it
+    /// ordered.
+    #[test]
+    fn a_backward_seek_still_leaves_the_timeline_sorted() {
+        let mut track = Track::default();
+        track.merge(samples(&[600, 700, 800]));
+        // …and now the chunk before it, which is what a seek back fetches.
+        track.merge(samples(&[100, 200, 300]));
+
+        for step in [100.0f64, 200.0, 300.0, 600.0, 700.0, 800.0] {
+            let at = track.position_at(step).expect("a sample at every stamp");
+            assert!(
+                (at[0] - step as f32).abs() < 1e-3,
+                "{step} ms read back as {at:?}"
+            );
+        }
+    }
+
+    /// **The sweep keeps what it is told to and forgets the rest.**
+    ///
+    /// The thing that was never happening: a session held every chunk it had
+    /// ever touched until the tab closed. See
+    /// [`ChunkLoader::evict`](crate::recording::loader::ChunkLoader).
+    #[test]
+    fn a_swept_track_keeps_only_the_spans_it_was_given() {
+        let mut track = Track::default();
+        track.merge(samples(&[0, 100, 200, 900, 1_000, 5_000]));
+        // Walk the cursor out to the far end, so the sweep has something
+        // stale to put back.
+        assert!(track.position_at(5_000.0).is_some());
+
+        track.keep_within(&[(0.0, 300.0), (4_000.0, 6_000.0)]);
+
+        // Asserted on the stamps rather than through [`Self::position_at`],
+        // which is the wrong instrument for this question: a hole in a track
+        // is HELD across — the last sample before it answers, by design, so a
+        // stationary player does not blink — so a lookup in the middle would
+        // come back `Some` whether the sweep had run or not.
+        let kept: Vec<u32> = track.samples.iter().map(|sample| sample.t).collect();
+        assert_eq!(kept, vec![0, 100, 200, 5_000], "the sweep kept {kept:?}");
+        // …and the lookups either side still work off the rewritten vector,
+        // which is what resetting the cursors is for.
+        assert!(track.position_at(100.0).is_some(), "the near span went");
+        assert!(track.position_at(5_000.0).is_some(), "the far span went");
+    }
+
+    /// …and a sweep that drops nothing must not disturb the track, because it
+    /// runs on an ordinary frame like everything else here.
+    #[test]
+    fn a_sweep_that_keeps_everything_changes_nothing() {
+        let mut track = Track::default();
+        track.merge(samples(&[0, 100, 200]));
+        track.keep_within(&[(0.0, 1_000.0)]);
+        assert!(track.position_at(100.0).is_some());
+        assert_eq!(track.span(), Some((0.0, 200.0)));
     }
 }
 

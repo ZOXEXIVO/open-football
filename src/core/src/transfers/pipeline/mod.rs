@@ -1,3 +1,5 @@
+pub mod asset_ledger;
+pub(crate) mod auction;
 mod breakout;
 mod breakout_watch;
 mod circulation;
@@ -7,7 +9,9 @@ mod helpers;
 mod loan_interest;
 mod loan_market;
 mod negotiations;
+pub mod planning;
 pub(crate) mod plausibility;
+pub mod playing_time;
 pub(crate) mod recommendations;
 pub(crate) mod recruitment;
 mod recruitment_meeting;
@@ -15,15 +19,27 @@ mod scouting;
 pub(crate) mod scouting_config;
 mod shortlists;
 pub(crate) mod squad_fit;
+pub mod standing;
+pub mod trace;
+pub mod upgrade_math;
+pub mod watchlist;
 
+use crate::club::player::contract::PlayerSquadStatus;
 use crate::transfers::ScoutingRegion;
+use crate::transfers::pipeline::planning::{BriefTier, RecruitmentBrief};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType, ReputationLevel};
 use chrono::NaiveDate;
 use std::collections::HashMap;
 
 // Re-export PipelineProcessor and PlayerSummary for external use
+pub use self::asset_ledger::{AssetLedger, SellListEntry, SellMotive};
+pub use self::planning::{BriefSlot, MoneySlack, SquadPlanner};
 pub use self::processor::PipelineProcessor;
 pub use self::processor::{PlayerSummary, SellerPlausibilityContext};
+pub use self::standing::CareerRecordSnapshot;
+pub use self::trace::TransferTrace;
+pub use self::upgrade_math::{DealValue, MoneyUtility, UpgradeMath};
+pub use self::watchlist::MarketKnowledge;
 // Recruitment department types — meetings, votes, monitoring rows.
 pub use self::recruitment::{
     BoardRecruitmentDossier, RecruitmentDecision, RecruitmentDecisionType, RecruitmentMeeting,
@@ -37,6 +53,7 @@ mod processor {
     use crate::club::player::language::LanguageProfile;
     use crate::club::team::squad::SquadAssetClass;
     use crate::transfers::ScoutingRegion;
+    use crate::transfers::pipeline::standing::CareerRecordSnapshot;
     use crate::{
         PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, PositionCoverage,
     };
@@ -147,6 +164,11 @@ mod processor {
         /// tell those two approaches apart instead of treating every bidder
         /// as interchangeable.
         pub big_stage_inclination: f32,
+        /// The selling club's own asset ledger would answer a call about
+        /// him — see [`asset_ledger::AssetLedger`]. Snapshotted at
+        /// pool-build time so a foreign buyer reads the same quiet
+        /// availability a domestic one does. Never a public status.
+        pub is_marketed: bool,
     }
 
     #[allow(dead_code)]
@@ -217,6 +239,19 @@ mod processor {
         /// country's language mask so clubs lean toward candidates who
         /// can communicate in the dressing room.
         pub language_profile: LanguageProfile,
+        /// International appearances. The single most visible piece of
+        /// evidence a scout abroad has that a player has been measured
+        /// against opponents from better leagues — and one the market
+        /// summary simply did not carry, so the standing read had no way
+        /// to tell a fifty-cap international apart from an uncapped
+        /// squad man with the same club form.
+        pub international_apps: u16,
+        /// Completed-season career record, read off the canonical ledger
+        /// when the pool is built. A club in another country cannot walk
+        /// a foreign player's history, so the one durable answer to "has
+        /// he done this before, or is this one season?" has to travel on
+        /// the summary. See [`CareerRecordSnapshot`].
+        pub career_record: CareerRecordSnapshot,
     }
 }
 
@@ -276,6 +311,20 @@ pub enum TransferNeedReason {
     InjuryCoverLoan,
     /// Player available on loan who is clearly better than current options
     OpportunisticLoanUpgrade,
+    /// The squad has no hole here — the club simply wants to own a better
+    /// player, and has the money to.
+    ///
+    /// Every other buying motive in this list is a form of *patching*:
+    /// something is missing, thin, ageing or about to be. Real elite clubs
+    /// also buy to raise the ceiling and to own assets, and the model had
+    /// no way to say so — `QualityUpgrade` fires only when the WEAKEST
+    /// formation slot is below the tier baseline, which for a squad whose
+    /// starters are all above it is never. That is why a club sitting on
+    /// two billion in cash could watch one of the best midfielders in the
+    /// world play seven seasons at a mid-table foreign club and never make
+    /// a call: it had nothing to patch, so it raised no request, so no
+    /// scout was assigned, so no shortlist existed, so no bid was made.
+    SquadInvestment,
 }
 
 impl TransferNeedReason {
@@ -295,6 +344,7 @@ impl TransferNeedReason {
             TransferNeedReason::OpportunisticLoanUpgrade => {
                 "request_reason_opportunistic_loan_upgrade"
             }
+            TransferNeedReason::SquadInvestment => "request_reason_squad_investment",
         }
     }
 
@@ -317,6 +367,7 @@ impl TransferNeedReason {
             TransferNeedReason::OpportunisticLoanUpgrade => {
                 "signing_reason_opportunistic_loan_upgrade"
             }
+            TransferNeedReason::SquadInvestment => "signing_reason_squad_investment",
         }
     }
 }
@@ -519,6 +570,24 @@ pub struct TransferRequest {
     /// own record of a position it shopped for and could not fill, and the
     /// recruitment page is entitled to keep showing it.
     pub escalation_recorded: bool,
+
+    /// How transformative the club means this signing to be — and therefore
+    /// what share of the window's money it may command, how big an
+    /// improvement it demands, and whether it is bought or borrowed.
+    ///
+    /// Set by the [`planning::SquadPlanner`]; requests raised by paths that
+    /// predate the brief (succession, prospects, emergency depth) default to
+    /// [`BriefTier::B`], which is exactly what they always behaved as.
+    pub tier: BriefTier,
+    /// Smallest believed improvement over the incumbent, in observable
+    /// ability points, that makes a candidate worth pursuing for this
+    /// request. Zero for cover and for the paths that do not measure an
+    /// incumbent at all.
+    pub min_gain: i16,
+    /// The role the club offers whoever fills this request. Read by the
+    /// personal-terms model: a starter offered rotation says no unless the
+    /// stage or the money makes up for it.
+    pub promised_status: PlayerSquadStatus,
 }
 
 impl TransferRequest {
@@ -560,6 +629,12 @@ impl TransferRequest {
             TransferNeedReason::CheapReinforcement => (19, 34),
             TransferNeedReason::InjuryCoverLoan => (20, 33),
             TransferNeedReason::OpportunisticLoanUpgrade => (19, 32),
+            // The step-up market is a young man's market: a club paying a
+            // real fee for a player it does not need is buying an asset,
+            // and an asset has to have resale years left in it. The band
+            // is the measured age range of the real standout-abroad move
+            // (18-27), not a preference.
+            TransferNeedReason::SquadInvestment => (20, 27),
         };
 
         TransferRequest {
@@ -578,7 +653,24 @@ impl TransferRequest {
             source: TransferRequestSource::Evaluation,
             escalation: NeedEscalation::default(),
             escalation_recorded: false,
+            // An ordinary upgrade with no measured incumbent — what every
+            // request in the pipeline was before the brief existed.
+            tier: BriefTier::B,
+            min_gain: 0,
+            promised_status: PlayerSquadStatus::FirstTeamSquadRotation,
         }
+    }
+
+    /// Stamp the brief's terms onto a request. Called by the planner right
+    /// after [`Self::new`] so the age band, the tier and the promised role
+    /// travel together into scouting, the shortlist and the negotiation.
+    pub fn briefed(mut self, slot: &BriefSlot) -> Self {
+        self.tier = slot.tier;
+        self.min_gain = slot.min_gain;
+        self.promised_status = slot.promised_status.clone();
+        self.preferred_age_min = slot.age_band.0;
+        self.preferred_age_max = slot.age_band.1;
+        self
     }
 
     /// Re-raise this need in the voice of a club that has failed to fill it
@@ -1102,6 +1194,12 @@ pub struct KnownPlayerMemory {
     pub last_known_country_id: u32,
     pub position: PlayerPositionType,
     pub position_group: PlayerFieldPositionGroup,
+    /// Age when last seen. The one fact about a foreign target the
+    /// board otherwise has no way to read: a marquee purchase abroad
+    /// never appears in the buying country's player snapshots, so the
+    /// chairman was asked to approve a fee with no idea whether he was
+    /// buying a 22-year-old asset or a 31-year-old two-season rental.
+    pub age: u8,
     pub assessed_ability: u8,
     pub assessed_potential: u8,
     pub confidence: f32,
@@ -1241,6 +1339,32 @@ pub struct ClubTransferPlan {
     pub next_monitoring_id: u32,
     /// Monotonic id allocator for `RecruitmentMeeting`.
     pub next_meeting_id: u32,
+
+    /// What the club is shopping for, and on what terms — the output of the
+    /// monthly [`planning::SquadPlanner`] pass. `None` until the club has
+    /// been planned for the first time.
+    ///
+    /// Survives the window reset on purpose: a brief is written 45 days
+    /// AHEAD of the window and is what the watchlist and the year-round
+    /// scouting recruit against, so wiping it at window start would throw
+    /// away exactly the preparation it exists to accumulate.
+    pub brief: Option<RecruitmentBrief>,
+    /// Date the brief was last written. Drives the monthly cadence.
+    pub last_plan_date: Option<NaiveDate>,
+
+    /// The club's standing knowledge of the market — names within reach and
+    /// within the envelope for each briefed shirt, refreshed weekly all year.
+    /// See [`watchlist::MarketKnowledge`].
+    pub watchlist: Vec<WatchlistEntry>,
+
+    /// Players the club would sell at a price — see
+    /// [`asset_ledger::AssetLedger`]. Marketed, never listed: an entry here
+    /// produces a Soft availability signal for buyers in the right band and
+    /// nothing else. No `Lst` status, no public event, no override of the
+    /// squad-asset protections.
+    pub sell_list: Vec<SellListEntry>,
+    /// Date the ledger was last priced. Shares the planner's cadence.
+    pub last_ledger_date: Option<NaiveDate>,
 }
 
 /// One club's standoff on one loan target: when it will look at him again,
@@ -1259,6 +1383,57 @@ pub struct LoanStandoff {
     pub until: NaiveDate,
     /// Approaches made so far. Drives the escalation curve.
     pub approaches: u8,
+}
+
+/// Why a watched player might realistically be gettable. Public signals
+/// only — a seller's own sell list is invisible from outside until the
+/// plausibility model turns it into a Soft availability.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WatchAvailability {
+    /// Nothing says he is available; the department watches him anyway.
+    None,
+    /// He wants a bigger stage and his agent is making calls.
+    Circulated,
+    /// His club is running a negative balance.
+    SellerDistress,
+    /// A year or less left on the contract.
+    Expiring,
+    /// Publicly listed for transfer or loan.
+    Listed,
+    /// He has formally asked to leave.
+    Requested,
+}
+
+/// One name on a club's standing watchlist — see
+/// [`watchlist::MarketKnowledge`].
+///
+/// The board is knowledge, not intent. A name here has been judged worth
+/// following against a specific briefed shirt; whether the club can legally
+/// or affordably sign him is still decided by the plausibility model, the
+/// board and the seller, exactly as before.
+#[derive(Debug, Clone)]
+pub struct WatchlistEntry {
+    pub player_id: u32,
+    /// Where he was when he was last seen. A foreigner exists on no roster
+    /// this country can walk, so this is the only durable record of where
+    /// to find him.
+    pub club_id: u32,
+    pub country_id: u32,
+    pub position: PlayerPositionType,
+    pub position_group: PlayerFieldPositionGroup,
+    pub age: u8,
+    /// The club's OWN read of his ability — `ClubOpinion` noise over the
+    /// observable level, never hidden ability.
+    pub believed_ability: u8,
+    pub estimated_value: f64,
+    /// Belief score he was ranked on this week.
+    pub score: f32,
+    pub availability: WatchAvailability,
+    /// The briefed shirt he was filed under, and how transformative that
+    /// slot is meant to be.
+    pub slot_position: PlayerPositionType,
+    pub slot_tier: BriefTier,
+    pub last_refreshed: NaiveDate,
 }
 
 /// A scouting report preserved past its originating assignment, used to
@@ -1305,7 +1480,50 @@ impl ClubTransferPlan {
             recruitment_meetings: Vec::new(),
             next_monitoring_id: 1,
             next_meeting_id: 1,
+            brief: None,
+            last_plan_date: None,
+            watchlist: Vec::new(),
+            sell_list: Vec::new(),
+            last_ledger_date: None,
         }
+    }
+
+    /// Names the club's own watch is carrying for one position group,
+    /// strongest belief first. The shortlist builder reads this before it
+    /// reaches for the request-driven pool: a department that has been
+    /// watching a man all year does not start from scratch in July.
+    pub fn watchlist_for(&self, group: PlayerFieldPositionGroup) -> Vec<&WatchlistEntry> {
+        let mut rows: Vec<&WatchlistEntry> = self
+            .watchlist
+            .iter()
+            .filter(|e| e.position_group == group)
+            .collect();
+        rows.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| a.player_id.cmp(&b.player_id))
+        });
+        rows
+    }
+
+    /// True when the club would answer a call about this player. Read by the
+    /// seller-side plausibility as a Soft availability source — never as a
+    /// listing, and never as an override of the asset protections.
+    pub fn is_marketed(&self, player_id: u32) -> bool {
+        self.sell_list
+            .iter()
+            .any(|e| e.player_id == player_id && e.is_marketed())
+    }
+
+    /// What the club would want for a player it has priced. `None` for
+    /// anyone the ledger has not reached (a fresh club, a player signed
+    /// since the last monthly pass).
+    pub fn asking_for(&self, player_id: u32) -> Option<f64> {
+        self.sell_list
+            .iter()
+            .find(|e| e.player_id == player_id)
+            .map(|e| e.asking)
     }
 
     /// True if a player is on the blocklist for the given date.
@@ -2014,6 +2232,7 @@ mod known_player_memory_tests {
             last_known_country_id: 1,
             position: PlayerPositionType::ForwardCenter,
             position_group: PlayerFieldPositionGroup::Forward,
+            age: 24,
             assessed_ability: ability,
             assessed_potential: ability.saturating_add(10),
             confidence,

@@ -1,3 +1,4 @@
+use crate::app::bill::{Held, MemoryBill};
 use crate::app::config::{PlayerInfo, ViewerConfig};
 use crate::app::perf::FrameCost;
 use crate::app::quality::Quality;
@@ -1358,15 +1359,41 @@ impl Actors {
             parts.triangles(&meshes),
             grain.describe(),
         ));
+        // …and the same set in bytes, on the other ledger. The two answer
+        // different failures — see [`MemoryBill`] — and the parts are shared
+        // by the whole squad, so this is counted once and not twenty-two
+        // times.
+        MemoryBill::note(Held::Squad, parts.bytes(&meshes));
         let wardrobe = Wardrobe::new(&mut materials, &mut images, &config);
         // Empty, and filled a man at a time by [`Self::take_the_field`]. See
         // [`crate::players::portrait::Portraits`], which explains why the send
         // has to follow the body rather than lead it.
-        commands.insert_resource(Portraits::waiting(&wardrobe));
+        commands.insert_resource(Portraits::waiting(&wardrobe, grain));
 
         let patch = meshes.add(Plane3d::default().mesh().size(1.0, 1.0));
 
-        for player in &config.players {
+        // `?squad=off` leaves the pitch empty and the stadium standing. Not a
+        // watchable replay and not meant to be one — it is a bisection knob
+        // for a device that reloads its tab instead of reporting anything, and
+        // the question it answers is whether the STADIUM alone fits. See
+        // [`ViewerConfig::squad`], and
+        // [`Bringup`](crate::app::bringup::Bringup), which has to be told the
+        // same thing or the overlay never lifts off an empty pitch.
+        //
+        // ⚠ **Taken here and not at the top of this system**, deliberately.
+        // Everything above builds RESOURCES — the shared parts, the wardrobe,
+        // the portrait mailbox — and half a dozen systems downstream take them
+        // as `Res<_>` and would panic on the first frame if they were missing.
+        // What the knob is buying is the per-player half: twenty-two bodies,
+        // their kits, their numbers, their names and their faces, which is
+        // where the squad's bytes actually are.
+        let squad: &[PlayerInfo] = if config.squad_is_off() {
+            &[]
+        } else {
+            &config.players
+        };
+
+        for player in squad {
             let actor = commands
                 .spawn((
                     PlayerActor::new(player.id, player.is_goalkeeper(), player.is_home),

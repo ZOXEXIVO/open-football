@@ -575,6 +575,24 @@ impl ClubBoard {
             }
         }
 
+        // Asset term: the same fee is a different proposition depending on
+        // what the club still owns at the end of the contract.
+        //
+        // A board weighing a big fee does not only ask "can we afford it?"
+        // — it asks "what is left when we are done?". A 22-year-old is a
+        // resaleable asset the club can recover most of its money from; a
+        // 30-year-old at the same price is consumption. Without this the
+        // model priced both identically, so the deals real boards find
+        // easiest to sign off — a young standout at a transformative fee —
+        // faced exactly the same discipline gate as a veteran punt.
+        //
+        // Continuous in age, so there is no cliff at which a player stops
+        // being an asset, and centred on `ASSET_NEUTRAL_AGE` so an
+        // ordinary prime-age signing is unaffected.
+        if let Some(age) = proposal.player_age {
+            tolerance += Self::asset_tolerance(age);
+        }
+
         if over_allocated > tolerance.max(0.50) {
             return BoardTransferDecision::Vetoed(BoardTransferConcern::FinancialDiscipline);
         }
@@ -616,6 +634,19 @@ impl ClubBoard {
     /// squad-profile fit plus deal economics (wage impact, resale, risk).
     /// Returns `Some` to override the base decision; `None` to defer to it.
     /// A `Balanced` profile with no economics dossier always returns `None`.
+    fn asset_tolerance(age: u8) -> f64 {
+        /// Age at which a signing is neither an asset nor consumption — the
+        /// tolerance shift crosses zero here.
+        const ASSET_NEUTRAL_AGE: f64 = 26.0;
+        /// Tolerance the board grants per year of resale life below
+        /// `ASSET_NEUTRAL_AGE`, and takes back per year above it.
+        const PER_YEAR: f64 = 0.06;
+        /// Bound on the whole term, so age can shade a decision but never
+        /// decide it on its own.
+        const CAP: f64 = 0.30;
+        ((ASSET_NEUTRAL_AGE - age as f64) * PER_YEAR).clamp(-CAP, CAP)
+    }
+
     fn review_governance(&self, proposal: &BoardTransferProposal) -> Option<BoardTransferDecision> {
         use BoardTransferConcern::*;
 
@@ -995,7 +1026,31 @@ impl ClubBoard {
             3 => 0.35,
             _ => 0.2,
         };
-        let budget_ceiling = price_ceiling.min(eco_ceiling) * tier_factor;
+        // The country ceiling above is a property of the LEAGUE, not of the
+        // club, so every top-flight side in a country shared one number.
+        // For the biggest clubs it was the binding constraint and it never
+        // moved: a club could win everything, treble its revenue and pile
+        // up two billion in cash, and its transfer budget stayed pinned to
+        // the same ~$115M as its mid-table neighbour. Money that is never
+        // spendable is a finance leak — it accumulates on the balance sheet
+        // for ever and never reaches the market.
+        //
+        // So the ceiling grows with the club as well as with the country:
+        // a share of what it EARNS, plus a share of the cash genuinely idle
+        // behind its wage commitments. A rep-6000 club with modest revenue
+        // and no reserves barely moves; a giant reaches the gross-spend band
+        // real clubs of that size actually operate in.
+        const INCOME_SHARE: f64 = 0.25;
+        const IDLE_CASH_SHARE: f64 = 0.08;
+        /// Years of wage bill a club is assumed to want in the bank before
+        /// any of its cash reads as idle.
+        const WAGE_COVER_YEARS: f64 = 1.5;
+        let annual_income = board_ctx.trailing_annual_income.max(0) as f64;
+        let idle_cash = (board_ctx.balance as f64
+            - board_ctx.total_annual_wages as f64 * WAGE_COVER_YEARS)
+            .max(0.0);
+        let club_headroom = INCOME_SHARE * annual_income + IDLE_CASH_SHARE * idle_cash;
+        let budget_ceiling = (price_ceiling.min(eco_ceiling) + club_headroom) * tier_factor;
         let mut transfer_budget = raw_budget.min(budget_ceiling) as i32;
 
         // A club trading in emergency measures or administration cannot buy
@@ -3385,5 +3440,31 @@ mod board_behaviour_tests {
             ever_resolved,
             "an eligible distressed club should see a takeover resolve over 3 years"
         );
+    }
+}
+
+#[cfg(test)]
+mod asset_tolerance_tests {
+    use super::ClubBoard;
+
+    #[test]
+    fn a_young_signing_earns_rope_and_an_old_one_loses_it() {
+        // The same fee, three ages. A board weighing a big number asks what
+        // is left at the end of the contract, and the model had no way to
+        // express that at all.
+        let young = ClubBoard::asset_tolerance(21);
+        let neutral = ClubBoard::asset_tolerance(26);
+        let veteran = ClubBoard::asset_tolerance(31);
+        assert!(young > 0.0, "{young}");
+        assert_eq!(neutral, 0.0);
+        assert!(veteran < 0.0, "{veteran}");
+        assert!(young > veteran);
+    }
+
+    #[test]
+    fn the_term_stays_bounded_at_both_ends() {
+        // Age shades a decision; it must never decide one.
+        assert!(ClubBoard::asset_tolerance(16) <= 0.30);
+        assert!(ClubBoard::asset_tolerance(40) >= -0.30);
     }
 }

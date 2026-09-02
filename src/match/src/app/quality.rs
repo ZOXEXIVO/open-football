@@ -99,17 +99,42 @@ impl Footprint {
     /// distinction that matters here, because the distinction is the
     /// enclosure, not the part.
     ///
-    /// So: a device whose PRIMARY POINTER IS A FINGER. `(pointer: coarse)` is
-    /// what separates a tablet from a laptop with a touchscreen, which reports
-    /// touch points and is not a handheld — it has a mouse, and it has a
-    /// computer's memory behind it. Both halves are required for that reason.
+    /// So: a device whose POINTER IS A FINGER, asked five ways, **any one of
+    /// which is enough**.
     ///
-    /// Deliberately conservative in the same direction as everything else
-    /// here: a machine this cannot name is treated as roomy and the
-    /// measurement is left to move it. The cost of a false positive is a
-    /// desktop drawing a thinner crowd; the cost of a false negative is a
-    /// phone that cannot open a match at all, which is the bug this exists
-    /// for — so where the two are in tension this leans toward saying yes.
+    /// ⚠ **It used to be one test, and the one test was an AND.** A primary
+    /// pointer of `(pointer: coarse)` together with a touch count: the
+    /// reasoning was that it separates a tablet from a laptop with a
+    /// touchscreen, which reports touch points and has a computer's memory
+    /// behind it. The reasoning is sound and the conclusion was still wrong,
+    /// because an iPad with a Magic Keyboard or any Bluetooth trackpad
+    /// attached reports a FINE primary pointer. It read as a computer and was
+    /// handed the exact scene that had just killed its tab — and the keyboard
+    /// is not an unusual way to hold an iPad, it is how one is held for
+    /// anything longer than a minute.
+    ///
+    /// So the tells are ORed, and the direction of the error is chosen
+    /// deliberately. A false positive is a touch-screen laptop drawing a
+    /// thinner crowd and a slightly softer picture, which nobody will report.
+    /// A false negative is a device that cannot open a match at all, which is
+    /// the bug this exists for. Where the two are in tension this says yes.
+    ///
+    /// The five:
+    ///
+    /// - **A coarse primary pointer with fingers behind it** — the original,
+    ///   and still the one that catches a phone held in a hand.
+    /// - **`(any-pointer: coarse)`** — a touch digitiser is present at all,
+    ///   whatever is currently driving the cursor. This is the one that
+    ///   catches the iPad on its keyboard.
+    /// - **More than one touch point** — a mouse emulating touch reports one;
+    ///   a real panel reports five or ten.
+    /// - **iPadOS asking for the desktop site.** Safari on an iPad has
+    ///   reported itself as a Macintosh since iPadOS 13, and there is exactly
+    ///   one tell left: `navigator.platform` says `MacIntel` and the machine
+    ///   also reports multi-touch, which no actual Mac does.
+    /// - **A handheld in the user agent string.** Last, because a UA string is
+    ///   the least trustworthy thing a browser says — but it costs nothing and
+    ///   it catches the Android cases the media queries would too.
     ///
     /// ⚠ Split on the target rather than guarded with `if let`: off the web
     /// `web_sys::window()` does not return `None`, it PANICS — "cannot access
@@ -120,17 +145,74 @@ impl Footprint {
         let Some(window) = web_sys::window() else {
             return Footprint::Roomy;
         };
-        let fingers = window.navigator().max_touch_points() > 0;
-        let coarse = window
-            .match_media("(pointer: coarse)")
-            .ok()
-            .flatten()
-            .is_some_and(|query| query.matches());
-        if fingers && coarse {
-            Footprint::Handheld
-        } else {
-            Footprint::Roomy
+        let navigator = window.navigator();
+        let fingers = navigator.max_touch_points();
+        let asks = |query: &str| {
+            window
+                .match_media(query)
+                .ok()
+                .flatten()
+                .is_some_and(|media| media.matches())
+        };
+        let agent = navigator.user_agent().unwrap_or_default();
+        let platform = navigator.platform().unwrap_or_default();
+
+        let tells = [
+            (
+                "a finger for a pointer",
+                fingers > 0 && asks("(pointer: coarse)"),
+            ),
+            ("a touch digitiser", asks("(any-pointer: coarse)")),
+            ("multi-touch", fingers > 1),
+            (
+                "iPadOS on the desktop site",
+                platform == "MacIntel" && fingers > 1,
+            ),
+            (
+                "a handheld user agent",
+                Self::HANDHELD_AGENTS
+                    .iter()
+                    .any(|handheld| agent.contains(handheld)),
+            ),
+        ];
+
+        let said: Vec<&str> = tells
+            .iter()
+            .filter(|(_, fired)| *fired)
+            .map(|(name, _)| *name)
+            .collect();
+        if said.is_empty() {
+            return Footprint::Roomy;
         }
+        // Said out loud because the alternative is unfalsifiable. This
+        // decision is taken on somebody else's device, it changes the whole
+        // scene, and until it was printed the only way to find out which way
+        // it had gone was to count the people in a stand.
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&format!(
+            "match viewer — handheld: {}",
+            said.join(", "),
+        )));
+        Footprint::Handheld
+    }
+
+    /// What a phone or a tablet puts in its user agent. `Mobile` is Firefox's
+    /// and Chrome's own marker on Android and is deliberately broad; the rest
+    /// are the platforms that never appear on a desktop.
+    #[cfg(target_arch = "wasm32")]
+    const HANDHELD_AGENTS: [&'static str; 4] = ["iPhone", "iPad", "Android", "Mobile"];
+
+    /// Whether there is a touch panel on this machine at all — asked without
+    /// any of the pointer reasoning, because the caller
+    /// ([`Quality::confirm`]) already has the other half of the argument in
+    /// the adapter's name.
+    #[cfg(target_arch = "wasm32")]
+    fn touched() -> bool {
+        web_sys::window().is_some_and(|window| window.navigator().max_touch_points() > 0)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn touched() -> bool {
+        false
     }
 
     /// There is no browser to ask, so there is no handheld to find.
@@ -346,6 +428,17 @@ impl Quality {
         self.footprint
     }
 
+    /// **An Apple part with a finger on it**, which is an iPhone or an iPad
+    /// and cannot be anything else.
+    ///
+    /// Separate from [`Self::is_integrated`] because it is a different
+    /// question: that one asks whether the frame will be slow, this one asks
+    /// whether the tab will survive. A `MacBook Pro` is both integrated and
+    /// roomy.
+    fn apple_handheld(adapter: &str) -> bool {
+        adapter.contains("Apple") && Footprint::touched()
+    }
+
     pub fn tier(&self) -> Tier {
         self.tier
     }
@@ -391,6 +484,33 @@ impl Quality {
             "match viewer — wgpu opened: {name} ({})",
             if integrated { "integrated" } else { "discrete" },
         )));
+
+        // **A third way to catch an iPad**, and the only one that speaks for
+        // the part rather than for the enclosure.
+        //
+        // `Apple GPU` is what wgpu names on an iPhone, an iPad AND an
+        // Apple-silicon Mac, so on its own it says nothing — see
+        // [`Footprint::probe`], which is why the enclosure is asked about
+        // separately. Together with a touch panel it says a great deal: a Mac
+        // has no touch panel of any kind, and an iPad reports one however its
+        // keyboard has confused the pointer queries.
+        //
+        // One-way, like every other decision in this file. A footprint already
+        // lowered is never raised — the scene is being built from it, and a
+        // handheld corrected back to roomy here would mean re-cutting the
+        // squad and re-seating the crowd.
+        if quality.footprint == Footprint::Roomy && Self::apple_handheld(&name) {
+            web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+                "match viewer — wgpu opened an Apple GPU on a touch device; \
+                 building the handheld scene",
+            ));
+            quality.footprint = Footprint::Handheld;
+        }
+        if quality.footprint == Footprint::Handheld && quality.tier == Tier::Multisampled {
+            quality.tier = Tier::PostProcessed;
+            quality.settled = true;
+        }
+
         if !integrated || quality.tier == Tier::PostProcessed {
             return;
         }

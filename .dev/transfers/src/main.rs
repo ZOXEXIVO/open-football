@@ -35,8 +35,10 @@
 //! whole run into silence; redirect directly instead.
 
 use core::club::player::core::player::TransferRequestReason;
+use core::club::player::transfer::{BigStagePull, BigStagePullContext};
 use core::club::team::squad::{SquadAssetClass, SquadAssetContext};
 use core::country::result::transfers::free_agent_audit::FreeAgentMarketAuditor;
+use core::transfers::pipeline::planning::BriefTier;
 use core::transfers::{
     TransferListingOrigin, TransferListingStatus, TransferListingType, TransferType,
 };
@@ -56,6 +58,7 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 use chrono::NaiveDate;
 use env_logger::Env;
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::future::Future;
@@ -176,6 +179,19 @@ const PARKED_PRIME_AGE: u8 = 24;
 /// harness reports the same three tiers the simulation acts on.
 const STAGE_INCLINED_BAR: f32 = 0.22;
 const STAGE_MOOD_BAR: f32 = 0.40;
+
+/// The exporter bands — the leagues a standout is supposed to be bought
+/// OUT of. Turkey, Portugal, the Netherlands, Belgium, Russia, Brazil and
+/// Argentina all sit inside this window.
+const STANDOUT_LEAGUE_MIN: u16 = 5_500;
+const STANDOUT_LEAGUE_MAX: u16 = 8_499;
+/// Age window of the classic step-up move, measured off the real market
+/// (Ünder 20, Yazıcı 22, Kadıoğlu 24, Aktürkoğlu 25, Tosun 26).
+const STANDOUT_AGE_MIN: u8 = 21;
+const STANDOUT_AGE_MAX: u8 = 27;
+/// `BigStagePull::standing` at or above which a player reads as a genuine
+/// standout for his league rather than merely a starter in it.
+const STANDOUT_STANDING_BAR: f32 = 0.6;
 
 /// Coarse league-strength label for the ambition breakdown.
 fn league_band(reputation: u16) -> &'static str {
@@ -301,15 +317,265 @@ impl LoanFlowCensus {
     }
 }
 
+// ---------------------------------------------------------------------
+// Springboard census
+// ---------------------------------------------------------------------
+
+/// What the world knows about one club, resolved once so the move walk and
+/// the cohort walk can both ask questions about clubs that live in a
+/// different country from the row they are reading.
+#[derive(Debug, Clone)]
+struct ClubFacts {
+    name: String,
+    country_id: u32,
+    /// Main-team league reputation, 0..10000. Zero when the club has no
+    /// registered senior league.
+    league_reputation: u16,
+    league_id: Option<u32>,
+    league_name: String,
+    /// Annualised trailing income — never the raw trailing sum (memory
+    /// `club_finance_fm_rebuild`).
+    annual_income: i64,
+    balance: i64,
+    transfer_budget: f64,
+}
+
+impl ClubFacts {
+    fn band(&self) -> &'static str {
+        league_band(self.league_reputation)
+    }
+}
+
+/// Ordered strength of the league bands, so "moved up a band" is a
+/// comparison rather than a table of special cases.
+struct BandLadder;
+
+impl BandLadder {
+    /// Rungs, weakest first. `league_band` returns one of these labels.
+    const RUNGS: [&'static str; 6] = [
+        "unknown",
+        "weak <4000",
+        "modest 4000-5499",
+        "mid 5500-6999",
+        "strong 7000-8499",
+        "elite 8500+",
+    ];
+
+    fn rung(label: &str) -> usize {
+        Self::RUNGS.iter().position(|r| *r == label).unwrap_or(0)
+    }
+
+    /// True when `to` sits strictly above `from`. "unknown" never counts as
+    /// a step in either direction — it is missing data, not a weak league.
+    fn is_step_up(from: &str, to: &str) -> bool {
+        if from == "unknown" || to == "unknown" {
+            return false;
+        }
+        Self::rung(to) > Self::rung(from)
+    }
+}
+
+/// One permanent move, reduced to the facts the flow matrix needs.
+#[derive(Debug, Clone)]
+struct FlowMove {
+    season: u16,
+    from_band: &'static str,
+    to_band: &'static str,
+    fee: f64,
+    age: Option<u8>,
+    /// Fee ÷ the SELLING club's annual income — the number that actually
+    /// decides these deals in real life.
+    fee_over_seller_income: Option<f64>,
+    /// The selling club's league, for the exporter-drain table.
+    from_league: Option<(u32, String)>,
+    /// True when the two clubs sit in different countries. The springboard
+    /// is a CROSS-BORDER phenomenon, and a domestic promotion between
+    /// bands is a different market; counting them together would let a
+    /// healthy domestic ladder hide a border that nothing crosses.
+    cross_border: bool,
+}
+
+/// Permanent moves bucketed by `(from band → to band)`, the two-cell
+/// question this whole campaign turns on: `strong → elite` and
+/// `mid → elite/strong`.
+#[derive(Debug, Default)]
+struct FlowMatrix {
+    moves: Vec<FlowMove>,
+    /// Distinct seasons seen, so per-season rates are honest.
+    seasons: HashSet<u16>,
+}
+
+impl FlowMatrix {
+    /// Age band of the classic step-up move — the population the calibration
+    /// targets are written against.
+    const STEP_UP_AGE_MIN: u8 = 21;
+    const STEP_UP_AGE_MAX: u8 = 27;
+
+    fn record(&mut self, m: FlowMove) {
+        self.seasons.insert(m.season);
+        self.moves.push(m);
+    }
+
+    fn season_count(&self) -> usize {
+        self.seasons.len().max(1)
+    }
+
+    /// Every move from a named band to a named band.
+    fn cell(&self, from: &str, to: &str) -> Vec<&FlowMove> {
+        self.moves
+            .iter()
+            .filter(|m| m.from_band == from && m.to_band == to)
+            .collect()
+    }
+
+    /// Step-up moves by a player inside the classic age window, out of the
+    /// exporter bands. The cohort the targets are about.
+    fn step_ups(&self) -> Vec<&FlowMove> {
+        self.moves
+            .iter()
+            .filter(|m| {
+                BandLadder::is_step_up(m.from_band, m.to_band)
+                    && m.age.is_none_or(|a| {
+                        (Self::STEP_UP_AGE_MIN..=Self::STEP_UP_AGE_MAX).contains(&a)
+                    })
+            })
+            .collect()
+    }
+}
+
+/// The population the springboard is supposed to serve: a standout in a
+/// sub-elite league, young enough to be bought, playing senior football.
+#[derive(Debug, Default)]
+struct StandoutCohort {
+    /// Cohort size.
+    total: usize,
+    /// Of those, how many at least one club in ANOTHER country is actively
+    /// carrying on its books — a monitoring row, a standing recommendation,
+    /// a shortlist place or a live negotiation. This is the funnel's first
+    /// stage made visible: before this work, a contented standout abroad
+    /// generated none of the four.
+    with_foreign_file: usize,
+    /// …and how many have a live cross-border negotiation right now.
+    with_live_foreign_bid: usize,
+    /// Ages, for the distribution.
+    ages: Vec<u8>,
+    /// Cohort members per exporter league, so the drain table can report a
+    /// rate rather than a raw count.
+    per_league: HashMap<u32, (String, usize)>,
+}
+
+/// Balance-sheet hoarding — money that is never spendable is a finance leak
+/// of its own, and the budget ceiling is the thing that decides whether it
+/// ever reaches the market.
+#[derive(Debug, Clone)]
+struct HoardRow {
+    name: String,
+    balance: i64,
+    annual_income: i64,
+    transfer_budget: f64,
+    /// Fees paid for players signed in the most recent recorded season.
+    gross_spend: f64,
+}
+
+/// The live-market instruments: what the seven planning / knowledge /
+/// pricing layers actually produced, as distinct from how many players
+/// moved.
+///
+/// Move totals alone cannot tell a market from a procurement queue — a
+/// queue that processes the same requests faster posts the same totals.
+/// These read the state the new layers write: whether clubs are planning at
+/// all, whether their boards diverge, whether anything was quietly for sale,
+/// and whether the price of money moved.
+#[derive(Debug, Default)]
+struct LiveMarketCensus {
+    /// Clubs carrying a written recruitment brief, and the tier mix of the
+    /// slots on them.
+    clubs_with_brief: usize,
+    briefed_slots: usize,
+    tier_a: usize,
+    tier_b: usize,
+    tier_c: usize,
+    /// Money slack recorded on each brief — the axis the appetite runs on.
+    money_slack: Vec<f32>,
+    /// Watchlist depth per club, and the names the biggest clubs carry, so
+    /// the herd failure mode is measurable.
+    watchlist_sizes: Vec<usize>,
+    /// (club reputation, set of watched player ids) for the top clubs.
+    top_club_boards: Vec<(u16, HashSet<u32>)>,
+    /// Sell-list depth per club, and how many entries are marketed.
+    sell_list_sizes: Vec<usize>,
+    marketed_players: usize,
+    /// Senior squad sizes against the board's registered cap.
+    squad_sizes: Vec<usize>,
+    squads_over_cap: usize,
+    /// Registered-foreigner violations against the country's own rules —
+    /// the P5 acceptance metric, which must be zero.
+    regulation_violations: usize,
+    /// Price level per country, keyed by name.
+    price_levels: Vec<(String, f32)>,
+    /// Cumulative story counters, summed across countries.
+    contested_agreements: u32,
+    deadline_agreements: u32,
+    sell_list_conversions: u32,
+    agent_led_approaches: u32,
+    /// Gross fee spend per league in the most recent recorded season.
+    gross_spend_by_league: HashMap<u32, (String, f64)>,
+    /// Ages at fee moves of at least ten million.
+    big_move_ages: Vec<u8>,
+}
+
+impl LiveMarketCensus {
+    /// How many of the biggest clubs' boards to compare for overlap. Twenty
+    /// is the P2 acceptance cohort.
+    const OVERLAP_CLUBS: usize = 20;
+    /// Fee at which a move is a headline one — the band whose median age
+    /// the real market reports at about 24.
+    const BIG_MOVE_FEE: f64 = 10_000_000.0;
+
+    /// Mean pairwise overlap between the top clubs' watchlists, as a share
+    /// of the smaller board. The herd failure mode is this number going up:
+    /// if every rich club watches the same eight names the market is one
+    /// auction and the losers buy nothing.
+    fn board_overlap(&self) -> Option<f64> {
+        let mut boards: Vec<&HashSet<u32>> = self
+            .top_club_boards
+            .iter()
+            .filter(|(_, b)| !b.is_empty())
+            .map(|(_, b)| b)
+            .collect();
+        if boards.len() < 2 {
+            return None;
+        }
+        boards.truncate(Self::OVERLAP_CLUBS);
+        let mut total = 0.0;
+        let mut pairs = 0usize;
+        for i in 0..boards.len() {
+            for j in (i + 1)..boards.len() {
+                let shared = boards[i].intersection(boards[j]).count() as f64;
+                let smaller = boards[i].len().min(boards[j].len()) as f64;
+                if smaller > 0.0 {
+                    total += shared / smaller;
+                    pairs += 1;
+                }
+            }
+        }
+        (pairs > 0).then(|| total / pairs as f64)
+    }
+}
+
 #[derive(Debug, Default)]
 struct MarketReport {
     players: PlayerCensus,
     moves: MoveCensus,
     listings: ListingCensus,
     loan_flow: LoanFlowCensus,
+    flow: FlowMatrix,
+    cohort: StandoutCohort,
+    hoard: Vec<HoardRow>,
     live_negotiations: usize,
     clubs: usize,
     free_agents: usize,
+    live: LiveMarketCensus,
 }
 
 // ---------------------------------------------------------------------
@@ -370,11 +636,111 @@ impl MarketCensus {
         }
     }
 
+    /// Resolve every club in the world once, plus the two cross-country
+    /// indexes the springboard census needs.
+    ///
+    /// A transfer-history row names two club ids and nothing else, and the
+    /// clubs it names routinely live in different countries from the row.
+    /// Without a world-wide index, "did this move go up a band?" and "what
+    /// was the fee worth to the seller?" are unanswerable — which is why
+    /// the report could count moves and say nothing about direction.
+    fn world_index(
+        data: &SimulatorData,
+        date: NaiveDate,
+    ) -> (
+        HashMap<u32, ClubFacts>,
+        HashMap<u32, NaiveDate>,
+        HashMap<u32, HashSet<u32>>,
+    ) {
+        let mut clubs: HashMap<u32, ClubFacts> = HashMap::new();
+        let mut birth_dates: HashMap<u32, NaiveDate> = HashMap::new();
+        // player_id → the country ids of clubs carrying him on their books.
+        let mut watchers: HashMap<u32, HashSet<u32>> = HashMap::new();
+
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    let league = club
+                        .teams
+                        .main()
+                        .and_then(|t| t.league_id)
+                        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid));
+                    clubs.insert(
+                        club.id,
+                        ClubFacts {
+                            name: club.name.clone(),
+                            country_id: country.id,
+                            league_reputation: league.map(|l| l.reputation).unwrap_or(0),
+                            league_id: league.map(|l| l.id),
+                            league_name: league
+                                .map(|l| l.name.clone())
+                                .unwrap_or_else(|| "—".to_string()),
+                            annual_income: club.finance.estimated_annual_income(date),
+                            balance: club.finance.balance.balance,
+                            transfer_budget: club
+                                .finance
+                                .transfer_budget
+                                .as_ref()
+                                .map(|b| b.amount)
+                                .unwrap_or(0.0),
+                        },
+                    );
+
+                    // Everything this club is carrying on another player.
+                    let plan = &club.transfer_plan;
+                    let watched = plan
+                        .scout_monitoring
+                        .iter()
+                        .map(|m| m.player_id)
+                        .chain(plan.staff_recommendations.iter().map(|r| r.player_id))
+                        .chain(
+                            plan.shortlists
+                                .iter()
+                                .flat_map(|s| s.candidates.iter().map(|c| c.player_id)),
+                        );
+                    for player_id in watched {
+                        watchers.entry(player_id).or_default().insert(country.id);
+                    }
+
+                    for team in &club.teams.teams {
+                        for player in team.players.iter() {
+                            birth_dates.insert(player.id, player.birth_date);
+                        }
+                    }
+                }
+                // A live negotiation is the strongest form of "carrying him".
+                for negotiation in country.transfer_market.negotiations.values() {
+                    watchers
+                        .entry(negotiation.player_id)
+                        .or_default()
+                        .insert(country.id);
+                }
+            }
+        }
+        (clubs, birth_dates, watchers)
+    }
+
     /// Walk the whole world and build the report.
     fn collect(data: &SimulatorData) -> MarketReport {
         let date = data.date.date();
         let mut report = MarketReport::default();
         report.free_agents = data.free_agents.len();
+        let (club_facts, birth_dates, watchers) = Self::world_index(data, date);
+        // Gross spend per buying club in the most recent recorded season —
+        // the "does the money actually leave the building?" half of the
+        // hoard line.
+        let mut gross_spend: HashMap<u32, f64> = HashMap::new();
+        let mut live_negotiation_countries: HashMap<u32, HashSet<u32>> = HashMap::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for negotiation in country.transfer_market.negotiations.values() {
+                    live_negotiation_countries
+                        .entry(negotiation.player_id)
+                        .or_default()
+                        .insert(country.id);
+                }
+            }
+        }
 
         // Deduplicate cross-border history rows: the same move is written
         // into both the selling and the buying country's market.
@@ -400,6 +766,57 @@ impl MarketCensus {
                             report.moves.permanent += 1;
                             entry.0 += 1;
                             report.moves.fees.push(t.fee.amount);
+                            // Direction of travel — the whole springboard
+                            // question. Both clubs are resolved through the
+                            // world index because either can live in a
+                            // different country from this history row.
+                            let from = club_facts.get(&t.from_club_id);
+                            let to = club_facts.get(&t.to_club_id);
+                            *gross_spend.entry(t.to_club_id).or_insert(0.0) += t.fee.amount;
+                            // Gross spend belongs to the BUYER's league —
+                            // that is the market whose price level and
+                            // budgets it reflects.
+                            if let Some(buyer) = to {
+                                if let Some(league_id) = buyer.league_id {
+                                    let row = report
+                                        .live
+                                        .gross_spend_by_league
+                                        .entry(league_id)
+                                        .or_insert_with(|| (buyer.league_name.clone(), 0.0));
+                                    row.1 += t.fee.amount;
+                                }
+                            }
+                            // The headline band: real markets put its
+                            // median age at about 24, with 90 % between 19
+                            // and 29. A drift upward means clubs are buying
+                            // the finished article instead of an asset.
+                            if t.fee.amount >= LiveMarketCensus::BIG_MOVE_FEE {
+                                if let Some(age) = birth_dates
+                                    .get(&t.player_id)
+                                    .map(|b| DateUtils::age(*b, t.transfer_date))
+                                {
+                                    report.live.big_move_ages.push(age);
+                                }
+                            }
+                            report.flow.record(FlowMove {
+                                season: t.season_year,
+                                from_band: from.map(|c| c.band()).unwrap_or("unknown"),
+                                to_band: to.map(|c| c.band()).unwrap_or("unknown"),
+                                fee: t.fee.amount,
+                                age: birth_dates
+                                    .get(&t.player_id)
+                                    .map(|b| DateUtils::age(*b, t.transfer_date)),
+                                fee_over_seller_income: from
+                                    .filter(|c| c.annual_income > 0)
+                                    .map(|c| t.fee.amount / c.annual_income as f64),
+                                from_league: from.and_then(|c| {
+                                    c.league_id.map(|id| (id, c.league_name.clone()))
+                                }),
+                                cross_border: match (from, to) {
+                                    (Some(f), Some(t)) => f.country_id != t.country_id,
+                                    _ => false,
+                                },
+                            });
                         }
                         TransferType::Loan(_) => {
                             report.moves.loan += 1;
@@ -465,6 +882,68 @@ impl MarketCensus {
                 }
 
                 report.live_negotiations += market.negotiations.len();
+                // ---- the live-market layers --------------------------
+                // Everything the planner, the watchlist, the ledger and
+                // the pricing model wrote this tick. Read before the
+                // player walk so a club that produced nothing still shows
+                // up as a zero rather than as an absence.
+                let story = &market.story;
+                report.live.contested_agreements += story.contested_agreements;
+                report.live.deadline_agreements += story.deadline_agreements;
+                report.live.sell_list_conversions += story.sell_list_conversions;
+                report.live.agent_led_approaches += story.agent_led_approaches;
+                report
+                    .live
+                    .price_levels
+                    .push((country.name.clone(), country.settings.pricing.price_level));
+
+                for club in &country.clubs {
+                    let plan = &club.transfer_plan;
+                    if let Some(brief) = plan.brief.as_ref() {
+                        report.live.clubs_with_brief += 1;
+                        report.live.briefed_slots += brief.slots.len();
+                        report.live.money_slack.push(brief.money_slack);
+                        for slot in brief.slots.iter() {
+                            match slot.tier {
+                                BriefTier::A => report.live.tier_a += 1,
+                                BriefTier::B => report.live.tier_b += 1,
+                                BriefTier::C => report.live.tier_c += 1,
+                            }
+                        }
+                    }
+                    report.live.watchlist_sizes.push(plan.watchlist.len());
+                    report.live.sell_list_sizes.push(plan.sell_list.len());
+                    report.live.marketed_players +=
+                        plan.sell_list.iter().filter(|e| e.is_marketed()).count();
+
+                    let Some(main) = club.teams.main() else {
+                        continue;
+                    };
+                    report.live.top_club_boards.push((
+                        main.reputation.world,
+                        plan.watchlist.iter().map(|e| e.player_id).collect(),
+                    ));
+
+                    // Squad size against the board's own registered cap,
+                    // and the country's foreigner rule. Both are P5
+                    // acceptance metrics and both must stay clean.
+                    let senior: Vec<&core::Player> =
+                        main.players.iter().filter(|p| !p.is_on_loan()).collect();
+                    report.live.squad_sizes.push(senior.len());
+                    if let Some(cap) = club.board.season_targets.as_ref().map(|t| t.max_squad_size)
+                    {
+                        if cap > 0 && senior.len() > cap as usize {
+                            report.live.squads_over_cap += 1;
+                        }
+                    }
+                    if !country
+                        .regulations
+                        .omitted_for_foreign_limit(&senior, country.id)
+                        .is_empty()
+                    {
+                        report.live.regulation_violations += 1;
+                    }
+                }
 
                 // ---- players -----------------------------------------
                 for club in &country.clubs {
@@ -532,6 +1011,70 @@ impl MarketCensus {
                             report.players.senior_servable += 1;
                             if Self::live_apps(player) > 0 {
                                 report.players.live_apps_nonzero += 1;
+                            }
+
+                            // ── Springboard standout cohort ──
+                            // A first-team player in one of the exporter
+                            // bands who is plainly above his league's own
+                            // starter level, young enough to be bought.
+                            // This is the population every calibration
+                            // target in the campaign is written against.
+                            if band == SquadBand::Main
+                                && (STANDOUT_LEAGUE_MIN..=STANDOUT_LEAGUE_MAX)
+                                    .contains(&club_league_reputation)
+                                && (STANDOUT_AGE_MIN..=STANDOUT_AGE_MAX).contains(&age)
+                            {
+                                // Neutral context: the harness measures
+                                // STANDING (how far above his league he is),
+                                // which the boyhood-club and isolation terms
+                                // do not touch. Reusing the shipped model
+                                // keeps the census and the simulation from
+                                // disagreeing about who a standout is.
+                                let assessed = BigStagePull::assess(
+                                    player,
+                                    date,
+                                    &BigStagePullContext {
+                                        league_reputation: club_league_reputation,
+                                        continentally_isolated: false,
+                                        squad_tier: TeamType::Main,
+                                        at_favourite_club: false,
+                                    },
+                                );
+                                if assessed.standing >= STANDOUT_STANDING_BAR {
+                                    report.cohort.total += 1;
+                                    report.cohort.ages.push(age);
+                                    let foreign_watchers = watchers
+                                        .get(&player.id)
+                                        .map(|set| set.iter().any(|c| *c != country.id))
+                                        .unwrap_or(false);
+                                    if foreign_watchers {
+                                        report.cohort.with_foreign_file += 1;
+                                    }
+                                    let foreign_bid = live_negotiation_countries
+                                        .get(&player.id)
+                                        .map(|set| set.iter().any(|c| *c != country.id))
+                                        .unwrap_or(false);
+                                    if foreign_bid {
+                                        report.cohort.with_live_foreign_bid += 1;
+                                    }
+                                    if let Some(league_id) =
+                                        club.teams.main().and_then(|t| t.league_id)
+                                    {
+                                        let league_name = country
+                                            .leagues
+                                            .leagues
+                                            .iter()
+                                            .find(|l| l.id == league_id)
+                                            .map(|l| l.name.clone())
+                                            .unwrap_or_else(|| "—".to_string());
+                                        let row = report
+                                            .cohort
+                                            .per_league
+                                            .entry(league_id)
+                                            .or_insert((league_name, 0));
+                                        row.1 += 1;
+                                    }
+                                }
                             }
 
                             // Big-stage ambition, by tier.
@@ -610,9 +1153,30 @@ impl MarketCensus {
             }
         }
 
+        // ---- hoard ------------------------------------------------
+        // Top clubs by cash, and whether that cash is reachable. A club
+        // whose balance is several years of income while its budget is a
+        // fraction of one is not rich — it is a leak.
+        let mut by_balance: Vec<(&u32, &ClubFacts)> = club_facts.iter().collect();
+        by_balance.sort_by(|a, b| b.1.balance.cmp(&a.1.balance));
+        report.hoard = by_balance
+            .into_iter()
+            .take(HOARD_ROWS)
+            .map(|(club_id, c)| HoardRow {
+                name: c.name.clone(),
+                balance: c.balance,
+                annual_income: c.annual_income,
+                transfer_budget: c.transfer_budget,
+                gross_spend: gross_spend.get(club_id).copied().unwrap_or(0.0),
+            })
+            .collect();
+
         report
     }
 }
+
+/// How many clubs the hoard table reports.
+const HOARD_ROWS: usize = 20;
 
 // ---------------------------------------------------------------------
 // Rendering
@@ -659,6 +1223,285 @@ impl ReportPrinter {
         }
         values.sort_unstable();
         values[values.len() / 2]
+    }
+
+    /// The springboard block: does a standout in a sub-elite league get
+    /// bought by a bigger one, at the ages and fees the real market does
+    /// it at — and is anybody's money actually moving?
+    ///
+    /// Every line here answers a question the rest of the report cannot.
+    /// Move VOLUME was always healthy; direction was never measured, so a
+    /// world in which the exporter leagues were terminal posted exactly
+    /// The live-market section: did the seven layers actually run, and did
+    /// they produce a market rather than a faster queue?
+    fn print_live_market(report: &MarketReport) {
+        let live = &report.live;
+        println!("\n-- LIVE MARKET (planner / watchlist / ledger / pricing) --");
+
+        let brief_share = Self::pct(live.clubs_with_brief, report.clubs);
+        println!(
+            "briefs: {} of {} clubs ({brief_share:.1}%), {} slots  |  tiers A {} / B {} / C {}",
+            live.clubs_with_brief,
+            report.clubs,
+            live.briefed_slots,
+            live.tier_a,
+            live.tier_b,
+            live.tier_c,
+        );
+        if !live.money_slack.is_empty() {
+            let mut slack: Vec<f64> = live.money_slack.iter().map(|s| *s as f64).collect();
+            let mean = slack.iter().sum::<f64>() / slack.len() as f64;
+            println!(
+                "money slack: mean {mean:.2}, median {:.2}, clubs above 0.30 {:.1}%",
+                Self::median(&mut slack),
+                Self::pct(
+                    live.money_slack.iter().filter(|s| **s > 0.30).count(),
+                    live.money_slack.len()
+                ),
+            );
+        }
+
+        if !live.watchlist_sizes.is_empty() {
+            let carried = live.watchlist_sizes.iter().filter(|n| **n > 0).count();
+            let total: usize = live.watchlist_sizes.iter().sum();
+            println!(
+                "watchlists: {} of {} clubs carry one, mean depth {:.1}",
+                carried,
+                live.watchlist_sizes.len(),
+                total as f64 / live.watchlist_sizes.len().max(1) as f64,
+            );
+            match live.board_overlap() {
+                // The herd guard. Above ~35 % the biggest clubs are all
+                // chasing the same names, the market becomes one auction,
+                // and everybody who loses it signs nobody.
+                Some(overlap) => println!(
+                    "top-{} board overlap: {:.1}% of the smaller board (target <= 35%)",
+                    LiveMarketCensus::OVERLAP_CLUBS,
+                    overlap * 100.0
+                ),
+                None => println!("top-club board overlap: not enough boards to compare"),
+            }
+        }
+
+        let sell_total: usize = live.sell_list_sizes.iter().sum();
+        println!(
+            "sell lists: {} entries, {} marketed, on {} clubs",
+            sell_total,
+            live.marketed_players,
+            live.sell_list_sizes.iter().filter(|n| **n > 0).count(),
+        );
+
+        if !live.squad_sizes.is_empty() {
+            let mut sizes: Vec<f64> = live.squad_sizes.iter().map(|n| *n as f64).collect();
+            // "Trimmed" rather than "in violation": omitting the weakest
+            // foreigners at registration is how a club MEETS the quota, not
+            // how it breaks it. The number to watch is whether it grows —
+            // a club buying past its own country's rule is wasting money.
+            println!(
+                "senior squads: median {:.0}, max {:.0}, over the board cap {} ({:.1}%)  |  \
+                 squads the foreigner quota trims {} ({:.1}%)",
+                Self::median(&mut sizes),
+                sizes.iter().copied().fold(0.0f64, f64::max),
+                live.squads_over_cap,
+                Self::pct(live.squads_over_cap, live.squad_sizes.len()),
+                live.regulation_violations,
+                Self::pct(live.regulation_violations, live.squad_sizes.len()),
+            );
+        }
+
+        if !live.big_move_ages.is_empty() {
+            let mut ages: Vec<f64> = live.big_move_ages.iter().map(|a| *a as f64).collect();
+            let in_band = live
+                .big_move_ages
+                .iter()
+                .filter(|a| (19..=29).contains(*a))
+                .count();
+            println!(
+                "fee moves >= {:.0}M: {}, median age {:.1} (real ~24), {:.1}% aged 19-29 (real ~90%)",
+                LiveMarketCensus::BIG_MOVE_FEE / 1_000_000.0,
+                ages.len(),
+                Self::median(&mut ages),
+                Self::pct(in_band, live.big_move_ages.len()),
+            );
+        }
+
+        println!(
+            "stories: contested agreements {}, deadline-week {}, sell-list conversions {}, \
+             agent-led approaches {}",
+            live.contested_agreements,
+            live.deadline_agreements,
+            live.sell_list_conversions,
+            live.agent_led_approaches,
+        );
+
+        let mut leagues: Vec<(&u32, &(String, f64))> = live.gross_spend_by_league.iter().collect();
+        leagues.sort_by(|a, b| b.1.1.partial_cmp(&a.1.1).unwrap_or(Ordering::Equal));
+        if !leagues.is_empty() {
+            println!("gross fee spend by buying league (top 8):");
+            for (_, (name, spend)) in leagues.iter().take(8) {
+                println!("  {name:<28} {:.1}M", spend / 1_000_000.0);
+            }
+        }
+
+        // Price level is the slowest-moving instrument here. It is SEEDED
+        // per country by the database (England 1.5, Spain 1.2, …), so the
+        // number to read across two runs is the drift, not the level: a
+        // country that has moved more than a tenth in a year is the
+        // inflation spiral this model exists to bound.
+        let mut levels: Vec<&(String, f32)> = live.price_levels.iter().collect();
+        levels.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        let spread: Vec<f32> = levels.iter().map(|(_, l)| *l).collect();
+        println!(
+            "price level across {} countries: min {:.3}, max {:.3}  (compare run-to-run for drift)",
+            spread.len(),
+            spread.iter().copied().fold(f32::INFINITY, f32::min),
+            spread.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+        );
+        for (name, level) in levels.iter().take(6) {
+            println!("  {name:<28} {level:.3}");
+        }
+    }
+
+    /// the same headline numbers as one in which they were springboards.
+    fn print_springboard(report: &MarketReport) {
+        let flow = &report.flow;
+        let seasons = flow.season_count() as f64;
+
+        println!("\n-- FLOW MATRIX (permanent moves, from band → to band) --");
+        println!(
+            "{:<20} {:<20} {:>7} {:>12} {:>12} {:>7}",
+            "from", "to", "moves", "median fee", "max fee", "med age"
+        );
+        for from in BandLadder::RUNGS.iter().rev() {
+            for to in BandLadder::RUNGS.iter().rev() {
+                let cell = flow.cell(from, to);
+                if cell.is_empty() {
+                    continue;
+                }
+                let mut fees: Vec<f64> = cell.iter().map(|m| m.fee).collect();
+                let mut ages: Vec<f64> = cell
+                    .iter()
+                    .filter_map(|m| m.age)
+                    .map(|a| a as f64)
+                    .collect();
+                println!(
+                    "{:<20} {:<20} {:>7} {:>12.0} {:>12.0} {:>7.0}",
+                    from,
+                    to,
+                    cell.len(),
+                    Self::median(&mut fees),
+                    fees.iter().copied().fold(0.0f64, f64::max),
+                    Self::median(&mut ages),
+                );
+            }
+        }
+        // The two cells this campaign is about, plus the reverse flow that
+        // must survive it.
+        for (from, to) in [
+            ("strong 7000-8499", "elite 8500+"),
+            ("mid 5500-6999", "elite 8500+"),
+            ("mid 5500-6999", "strong 7000-8499"),
+            ("elite 8500+", "strong 7000-8499"),
+        ] {
+            let n = flow.cell(from, to).len();
+            println!(
+                "  {from:<20} → {to:<20} {n:>5} total, {:.1}/season",
+                n as f64 / seasons
+            );
+        }
+
+        let step_ups = flow.step_ups();
+        let mut step_ages: Vec<f64> = step_ups
+            .iter()
+            .filter_map(|m| m.age)
+            .map(|a| a as f64)
+            .collect();
+        let mut step_income: Vec<f64> = step_ups
+            .iter()
+            .filter_map(|m| m.fee_over_seller_income)
+            .collect();
+        let mut step_fees: Vec<f64> = step_ups.iter().map(|m| m.fee).collect();
+        let cross_border = step_ups.iter().filter(|m| m.cross_border).count();
+        println!(
+            "step-ups (age {}-{}, band strictly up): {} total, {:.1}/season, \
+             {} cross-border ({:.1}%)  |  median age {:.0}, median fee {:.0}, \
+             median fee/seller income {:.2}",
+            FlowMatrix::STEP_UP_AGE_MIN,
+            FlowMatrix::STEP_UP_AGE_MAX,
+            step_ups.len(),
+            step_ups.len() as f64 / seasons,
+            cross_border,
+            Self::pct(cross_border, step_ups.len()),
+            Self::median(&mut step_ages),
+            Self::median(&mut step_fees),
+            Self::median(&mut step_income),
+        );
+
+        let c = &report.cohort;
+        println!(
+            "\n-- STANDOUT COHORT (Main squad, league {}-{}, age {}-{}, standing >= {:.1}) --",
+            STANDOUT_LEAGUE_MIN,
+            STANDOUT_LEAGUE_MAX,
+            STANDOUT_AGE_MIN,
+            STANDOUT_AGE_MAX,
+            STANDOUT_STANDING_BAR,
+        );
+        let mut cohort_ages: Vec<f64> = c.ages.iter().map(|a| *a as f64).collect();
+        println!(
+            "size {}  |  median age {:.0}  |  carried by a FOREIGN club {} ({:.1}%)  \
+             |  live foreign bid {} ({:.1}%)",
+            c.total,
+            Self::median(&mut cohort_ages),
+            c.with_foreign_file,
+            Self::pct(c.with_foreign_file, c.total),
+            c.with_live_foreign_bid,
+            Self::pct(c.with_live_foreign_bid, c.total),
+        );
+
+        // Exporter drain: standouts sold UP per league per season, next to
+        // how many that league is holding. An over-correction that empties
+        // the Super Lig is as wrong as one that never sells.
+        println!("\n-- EXPORTER DRAIN (standouts sold up, per league per season) --");
+        let mut sold_up_per_league: HashMap<u32, (String, usize)> = HashMap::new();
+        for m in &step_ups {
+            if let Some((id, name)) = &m.from_league {
+                let row = sold_up_per_league.entry(*id).or_insert((name.clone(), 0));
+                row.1 += 1;
+            }
+        }
+        let mut drains: Vec<(&u32, &(String, usize))> = sold_up_per_league.iter().collect();
+        drains.sort_by(|a, b| b.1.1.cmp(&a.1.1));
+        if drains.is_empty() {
+            println!("  none");
+        }
+        for (league_id, (name, sold)) in drains.into_iter().take(12) {
+            let holding = c.per_league.get(league_id).map(|(_, n)| *n).unwrap_or(0);
+            println!(
+                "  {name:<34} sold up {:>5.1}/season   (currently holding {holding} standouts)",
+                *sold as f64 / seasons,
+            );
+        }
+
+        println!("\n-- HOARD (top {HOARD_ROWS} clubs by balance) --");
+        println!(
+            "{:<30} {:>14} {:>10} {:>10} {:>10}",
+            "club", "balance", "bal/inc", "budget/inc", "spend/bud"
+        );
+        for row in &report.hoard {
+            let inc = row.annual_income.max(1) as f64;
+            println!(
+                "{:<30} {:>14.0} {:>10.2} {:>10.2} {:>10.2}",
+                row.name,
+                row.balance as f64,
+                row.balance as f64 / inc,
+                row.transfer_budget / inc,
+                if row.transfer_budget > 0.0 {
+                    row.gross_spend / row.transfer_budget
+                } else {
+                    0.0
+                },
+            );
+        }
     }
 
     fn print(report: &mut MarketReport, data: &SimulatorData, day: u32) {
@@ -815,6 +1658,9 @@ impl ReportPrinter {
             "  would listen, by league: {}",
             Self::top(&p.stage_inclined_by_league_band, 6)
         );
+
+        Self::print_springboard(report);
+        Self::print_live_market(report);
 
         println!("\n-- parked primes (24+ on a B / Second / Reserve squad) --");
         println!(

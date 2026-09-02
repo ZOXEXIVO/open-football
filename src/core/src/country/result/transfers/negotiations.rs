@@ -24,10 +24,15 @@ use crate::transfers::negotiation::{
     NegotiationPhase, NegotiationRejectionReason, TransferNegotiation,
 };
 use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
+use crate::transfers::pipeline::asset_ledger::ReplacementScarcity;
+use crate::transfers::pipeline::auction::AuctionState;
+use crate::transfers::pipeline::planning::{BriefTier, PlanningCadence};
 use crate::transfers::pipeline::plausibility::{
     TransferMovePlausibility, TransferPlausibilityBuilder, TransferPlausibilityEvaluator,
-    TransferPlausibilityReason, TransferPlausibilityVerdict,
+    TransferPlausibilityInputs, TransferPlausibilityReason, TransferPlausibilityVerdict,
 };
+use crate::transfers::pipeline::playing_time::PlayingTimeExpectation;
+use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::pipeline::{LoanOutReason, PipelineProcessor};
 use crate::transfers::scouting_region::ScoutingRegion;
 use crate::transfers::window::PlayerValuationCalculator;
@@ -37,6 +42,91 @@ use crate::{
     TransferInterestSource, TransferInterestStage, WageCalculator,
 };
 use chrono::NaiveDate;
+
+/// What a fee is worth to the club being asked to sell it, measured
+/// against the one number that decides these deals in real life: the
+/// seller's own annual income.
+///
+/// Both resolvers used to read the fee only against the ASKING PRICE. That
+/// is the right yardstick between peers — a Serie A club selling to
+/// another Serie A club is haggling over a valuation — and it is the wrong
+/// one when a giant calls a mid-table club abroad. A key man at asking
+/// from a far bigger club engaged at 26% per approach and then went on a
+/// rejection cooldown, no matter that the offer was worth half the
+/// seller's yearly revenue. Real clubs at that level do not turn that
+/// down; the decision leaves the coach's hands and becomes the chairman's.
+///
+/// So: a second axis. `windfall` is 0 for an ordinary fee and 1 for one
+/// that changes the club's year, and it does exactly two things —
+/// it forgives the *importance* damper on engagement, and it shaves the
+/// premium the seller holds out for. It never touches the absolute
+/// [`SellerFeeFloor`], the insult guard, or the rival penalty.
+pub(crate) struct SellerWindfall {
+    /// 0..1 — how transformative this fee is for the selling club.
+    pub(crate) ratio: f32,
+    /// 0..1 — how close the club is to its wage ceiling. A solvent club
+    /// pressed against its wage budget has a reason of its own to bank a
+    /// fee and free the shirt.
+    pub(crate) wage_pressure: f32,
+}
+
+impl SellerWindfall {
+    /// Fee ÷ annual income below which a bid is just money. Fifteen per
+    /// cent of a year's revenue is a normal transfer for a selling club and
+    /// changes nothing about how it behaves.
+    const W0: f32 = 0.15;
+    /// Span above `W0` over which the windfall saturates. At 60% of a
+    /// year's income the sale is the club's whole financial story for the
+    /// season.
+    const W1: f32 = 0.45;
+    /// Wage-bill-to-budget ratio at which a club is at its ceiling.
+    const WAGE_CEILING: f32 = 0.95;
+    /// Most the reservation premium eases on a full windfall.
+    const RESERVATION_EASE: f64 = 0.25;
+    /// Most it eases on wage-cap pressure alone.
+    const WAGE_PRESSURE_EASE: f64 = 0.10;
+
+    /// Score a fee against a seller's finances. `annual_income` is the
+    /// annualised trailing figure (memory `club_finance_fm_rebuild` — never
+    /// the raw trailing sum, which understates a young world by 12/N).
+    pub(crate) fn of(fee: f64, annual_income: i64, wage_bill: i64, wage_budget: i64) -> Self {
+        let ratio = if annual_income <= 0 {
+            0.0
+        } else {
+            (((fee / annual_income as f64) as f32 - Self::W0) / Self::W1).clamp(0.0, 1.0)
+        };
+        // How far past the wage ceiling the club is running, saturating at
+        // 10% over. Below the ceiling this is zero: a club with room has no
+        // wage reason to sell anybody.
+        let wage_pressure = if wage_budget <= 0 {
+            0.0
+        } else {
+            let load = wage_bill as f32 / wage_budget as f32;
+            ((load - Self::WAGE_CEILING) / 0.10).clamp(0.0, 1.0)
+        };
+        SellerWindfall {
+            ratio,
+            wage_pressure,
+        }
+    }
+
+    /// Neutral windfall — used where the seller's finances are genuinely
+    /// unavailable, so the model behaves exactly as it did before.
+    pub(crate) fn none() -> Self {
+        SellerWindfall {
+            ratio: 0.0,
+            wage_pressure: 0.0,
+        }
+    }
+
+    /// How far the seller's reservation premium eases. Never lowers the
+    /// absolute [`SellerFeeFloor`] — the floor guards the outcome, this
+    /// only moves the premium the seller holds out for above asking.
+    pub(crate) fn reservation_ease(&self) -> f64 {
+        self.ratio as f64 * Self::RESERVATION_EASE
+            + self.wage_pressure as f64 * Self::WAGE_PRESSURE_EASE
+    }
+}
 
 /// Everything one resolution tick produced beyond in-place market
 /// mutations. `deferred` is the classic club-to-club execution queue;
@@ -216,6 +306,7 @@ impl CountryResult {
                         personal_terms: n.current_offer.personal_terms.clone(),
                         foreign_terms_floor_blocked: n.foreign_terms_floor_blocked,
                         foreign_seller_importance: n.foreign_seller_importance,
+                        foreign_seller_finances: n.foreign_seller_finances,
                     }
                 }
                 None => continue,
@@ -466,6 +557,114 @@ impl CountryResult {
             .unwrap_or(false)
     }
 
+    /// League-reputation gain that makes a buyer a genuine step up, and so
+    /// someone the player's agent has already been talking to. Mirrors
+    /// [`crate::transfers::pipeline::plausibility::TransferPlausibilityInputs::AGENT_MIN_STAGE_GAIN`]
+    /// — the discovery side and the approach side must agree about what
+    /// counts as a bigger stage.
+    const AGENT_MIN_STAGE_GAIN: u16 = 1200;
+    /// Engagement points a fully-committed player's own willingness adds to
+    /// a step-up buyer's approach. Sized against the base unsolicited
+    /// chance (35): at full pull it is the difference between a cold call
+    /// and a conversation the seller was half expecting.
+    const AGENT_LIFT: f32 = 20.0;
+
+    /// The selling club's finances for the windfall model — read live for a
+    /// domestic seller, off the staged snapshot for a foreign one (his club
+    /// sits in another country's borrow while this negotiation resolves).
+    fn seller_windfall(
+        country: &Country,
+        neg_data: &NegotiationData,
+        date: NaiveDate,
+    ) -> SellerWindfall {
+        if let Some((income, wages, wage_budget)) = neg_data.foreign_seller_finances {
+            return SellerWindfall::of(neg_data.offer_amount, income, wages, wage_budget);
+        }
+        let Some(club) = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.selling_club_id)
+        else {
+            return SellerWindfall::none();
+        };
+        SellerWindfall::of(
+            neg_data.offer_amount,
+            club.finance.estimated_annual_income(date),
+            club.teams
+                .iter()
+                .map(|t| t.get_annual_salary() as i64)
+                .sum(),
+            club.board
+                .season_targets
+                .as_ref()
+                .map(|t| t.wage_budget.max(0) as i64)
+                .unwrap_or(0),
+        )
+    }
+
+    /// True when the selling club's own watchlist carries a name at the
+    /// departing player's position that the fee on the table would fund.
+    ///
+    /// Reads the seller's board, not the world: a club is only comforted by
+    /// a replacement it has actually identified. A club with no brief and no
+    /// board has no successor by construction, which is the honest reading —
+    /// it has not thought about it.
+    fn seller_has_successor(country: &Country, neg_data: &NegotiationData) -> bool {
+        let Some(selling_club) = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.selling_club_id)
+        else {
+            return false;
+        };
+        let Some(group) = selling_club
+            .teams
+            .main()
+            .or_else(|| selling_club.teams.teams.first())
+            .and_then(|team| {
+                team.players
+                    .players
+                    .iter()
+                    .find(|p| p.id == neg_data.player_id)
+                    .map(|p| p.position().position_group())
+            })
+        else {
+            return false;
+        };
+        selling_club
+            .transfer_plan
+            .watchlist
+            .iter()
+            .any(|e| e.position_group == group && e.estimated_value <= neg_data.offer_amount)
+    }
+
+    /// Live rival bids on one player, and the highest of them.
+    ///
+    /// Read from the negotiation table rather than tracked separately: the
+    /// bids that are already in flight ARE the auction. The negotiation
+    /// being resolved is excluded, so a buyer never bids against itself.
+    fn auction_state(country: &Country, neg_id: u32, player_id: u32) -> AuctionState {
+        let mut rivals = 0u32;
+        let mut leading_bid = 0.0_f64;
+        for n in country.transfer_market.negotiations.values() {
+            if n.player_id != player_id || n.id == neg_id {
+                continue;
+            }
+            if !matches!(
+                n.status,
+                NegotiationStatus::Pending | NegotiationStatus::Countered
+            ) {
+                continue;
+            }
+            rivals += 1;
+            leading_bid = leading_bid.max(n.current_offer.base_fee.amount);
+        }
+        AuctionState {
+            rivals,
+            leading_bid,
+        }
+    }
+
     fn resolve_initial_approach(
         country: &mut Country,
         neg_id: u32,
@@ -525,9 +724,11 @@ impl CountryResult {
         // wall) is no longer a reason to refuse to talk — it is negotiated
         // in the club-negotiation phase via the seller reservation. See the
         // note where `chance` is finalized below.
-        let seller_delta = match &plausibility {
-            Some(TransferPlausibilityVerdict::Allow(adj)) => adj.seller_acceptance_delta,
-            _ => 0.0_f32,
+        let (seller_delta, importance_penalty) = match &plausibility {
+            Some(TransferPlausibilityVerdict::Allow(adj)) => {
+                (adj.seller_acceptance_delta, adj.importance_penalty)
+            }
+            _ => (0.0_f32, 0.0_f32),
         };
 
         let ratio = if neg_data.asking_price > 0.0 {
@@ -586,6 +787,103 @@ impl CountryResult {
         // buyer's own maximum, so no bid could ever clear it.
         chance += seller_delta;
 
+        // …but "he is our key man" is the COACH's answer. Whether the club
+        // says no is the chairman's, and his answer turns on what the money
+        // does to the club's year. A bid worth a large slice of the
+        // seller's annual income gives back the importance damper in
+        // proportion to how transformative it is — which is exactly the
+        // decision that was missing when a mid-table foreign club refused
+        // a giant at asking price and then went on a rejection cooldown.
+        // Nothing else is forgiven: the rival penalty, the insult guard and
+        // the absolute fee floor are untouched.
+        let windfall = Self::seller_windfall(country, neg_data, date);
+        chance += importance_penalty * windfall.ratio;
+
+        // The agent channel. A player drawn to a bigger stage is quietly
+        // circulated, and a club that can offer him one finds the seller
+        // readier to talk — this is what turns a cold 26% call into a real
+        // conversation. Step-up buyers only: a lateral or downward move
+        // gets nothing, so the reverse flow is untouched.
+        let stage_gain = neg_data
+            .buying_league_reputation
+            .saturating_sub(neg_data.selling_league_reputation);
+        let agent_led = stage_gain >= Self::AGENT_MIN_STAGE_GAIN
+            && neg_data.player_stage_inclination
+                >= TransferPlausibilityInputs::AGENT_INCLINATION_BAR;
+        if stage_gain >= Self::AGENT_MIN_STAGE_GAIN {
+            chance += neg_data.player_stage_inclination.clamp(0.0, 1.0) * Self::AGENT_LIFT;
+        }
+        if agent_led {
+            country.transfer_market.story.agent_led_approaches += 1;
+        }
+
+        if TransferTrace::is(neg_data.player_id) {
+            // Seller-side economics, the half of the funnel that leaves no
+            // trace anywhere else: what the club thinks he is, what the fee
+            // is worth to it, and how close it is to its wage ceiling.
+            let seller_line = country
+                .clubs
+                .iter()
+                .find(|c| c.id == neg_data.selling_club_id)
+                .map(|club| {
+                    let asset = find_player_in_country(country, neg_data.player_id)
+                        .map(|p| SquadAssetProtection::classify(p, club, date))
+                        .map(|c| c.label())
+                        .unwrap_or("unknown");
+                    let income = club.finance.estimated_annual_income(date);
+                    let wages: i64 = club
+                        .teams
+                        .iter()
+                        .map(|t| t.get_annual_salary() as i64)
+                        .sum();
+                    format!(
+                        "club={} asset={asset} income={income} wages={wages} \
+                         fee/income={:.2}",
+                        club.name,
+                        if income > 0 {
+                            neg_data.offer_amount / income as f64
+                        } else {
+                            0.0
+                        },
+                    )
+                })
+                .unwrap_or_else(|| {
+                    let (income, wages, budget) =
+                        neg_data.foreign_seller_finances.unwrap_or((0, 0, 0));
+                    format!(
+                        "club={} (foreign) income={income} wages={wages} wage_budget={budget} \
+                         fee/income={:.2}",
+                        neg_data.selling_club_name,
+                        if income > 0 {
+                            neg_data.offer_amount / income as f64
+                        } else {
+                            0.0
+                        },
+                    )
+                });
+            TransferTrace::line(neg_data.player_id, "seller", seller_line);
+            TransferTrace::line(
+                neg_data.player_id,
+                "approach",
+                format!(
+                    "buyer={} seller={} fee={:.0} asking={:.0} ratio={:.2} \
+                     seller_delta={:.1} importance_give_back={:.1} windfall={:.2} \
+                     wage_pressure={:.2} pull={:.2} stage_gain={}",
+                    neg_data.buying_club_id,
+                    neg_data.selling_club_id,
+                    neg_data.offer_amount,
+                    neg_data.asking_price,
+                    ratio,
+                    seller_delta,
+                    importance_penalty * windfall.ratio,
+                    windfall.ratio,
+                    windfall.wage_pressure,
+                    neg_data.player_stage_inclination,
+                    stage_gain,
+                ),
+            );
+        }
+
         if ratio >= 1.15 {
             chance += 30.0;
         } else if ratio >= 1.0 {
@@ -603,27 +901,14 @@ impl CountryResult {
             chance -= 10.0;
         }
 
-        // Competition bonus: when several buyers are bidding for the
-        // same player the seller has leverage and is more inclined to
-        // engage with the leading offer. Read once off the market.
-        // Each extra rival lifts the chance by +5, capped to avoid
-        // freebie acceptances at insulting bids.
-        let competing_bids = country
-            .transfer_market
-            .negotiations
-            .values()
-            .filter(|n| {
-                n.player_id == neg_data.player_id
-                    && n.id != neg_id
-                    && matches!(
-                        n.status,
-                        NegotiationStatus::Pending | NegotiationStatus::Countered
-                    )
-            })
-            .count() as f32;
-        if competing_bids > 0.0 {
-            chance += (competing_bids * 5.0).min(15.0);
-        }
+        // Competition: when several buyers are bidding for the same player
+        // the seller has leverage and is more inclined to engage. What
+        // competition mostly moves, though, is the FEE, not whether the
+        // seller picks up the phone — that half lives in
+        // [`AuctionState::floor`], read by the fee resolver below. Here it
+        // is only the engagement lift, saturating rather than compounding.
+        let auction = Self::auction_state(country, neg_id, neg_data.player_id);
+        chance += auction.seller_leverage();
 
         // Rivalry friction: seller reluctant to strengthen a rival. Softened
         // when the buyer is clearly bigger (pragmatic payday) or when the
@@ -840,7 +1125,73 @@ impl CountryResult {
             seller_reservation = (seller_reservation - concession).max(1.0);
         }
 
+        // What the fee does to the seller's year. A club holds out for a
+        // premium over asking because it does not need the money; one being
+        // offered a large fraction of its annual revenue does. The second
+        // term is the wage ceiling: a solvent club already at its wage
+        // budget banks the fee AND frees the shirt, so it holds out less
+        // for its highest earners. Neither eases the absolute
+        // `SellerFeeFloor` — that still refuses the acceptance below, and
+        // the clamp keeps the reservation in the same band it always had.
+        let windfall = Self::seller_windfall(country, neg_data, date);
+        seller_reservation -= windfall.reservation_ease();
+
+        // Can the seller replace him with the money? A fee is only worth
+        // taking if it buys a successor, and a club with nobody on its own
+        // board to spend it on holds out — harder the later in the window it
+        // gets, because a sale it cannot reinvest is a hole it carries all
+        // season. This is also one of the two things that bound the drain:
+        // without it, a buyer whose marginal dollar is worth a third of the
+        // seller's could strip an exporting league bare.
+        //
+        // Foreign sellers live in another country's borrow and their board
+        // cannot be read from here, so the term is simply absent for them —
+        // it never invents a premium it cannot justify.
+        //
+        // Absent too for a player the club has ALREADY decided to move on:
+        // listed, asking to leave, not needed, or quietly marketed on its own
+        // ledger. Holding out for a successor is what a club does when it is
+        // asked for a man it wants to keep; a decision to sell is a decision
+        // that the hole is acceptable. The first census applied the term to
+        // every domestic sale and priced ordinary business out of reach.
+        if neg_data.selling_country_id.is_none() && !neg_data.is_loan {
+            let marketed = country
+                .clubs
+                .iter()
+                .find(|c| c.id == neg_data.selling_club_id)
+                .map(|c| c.transfer_plan.is_marketed(neg_data.player_id))
+                .unwrap_or(false);
+            if !neg_data.player_is_available && !marketed {
+                let has_successor = Self::seller_has_successor(country, neg_data);
+                seller_reservation += ReplacementScarcity::lift(
+                    has_successor,
+                    importance,
+                    PlanningCadence::deadline_window(country, date).pressure(),
+                );
+            }
+        }
+
         seller_reservation = seller_reservation.clamp(0.55, 1.55);
+
+        if TransferTrace::is(neg_data.player_id) {
+            TransferTrace::line(
+                neg_data.player_id,
+                "fee",
+                format!(
+                    "round={round} buyer={} fee={:.0} asking={:.0} ratio={:.2} \
+                     importance={:.2} reservation={:.2} windfall={:.2} ease={:.3} \
+                     below_floor={below_floor}",
+                    neg_data.buying_club_id,
+                    neg_data.offer_amount,
+                    neg_data.asking_price,
+                    ratio,
+                    importance,
+                    seller_reservation,
+                    windfall.ratio,
+                    windfall.reservation_ease(),
+                ),
+            );
+        }
 
         let mut chance: f32 = if ratio >= seller_reservation + 0.20 {
             92.0
@@ -854,12 +1205,52 @@ impl CountryResult {
             8.0
         };
 
+        // What the market around this player is doing, and how close the
+        // window is to shutting. Both are read once here — the acceptance
+        // roll below and the buyer's escalation further down share them.
+        let auction = Self::auction_state(country, neg_id, neg_data.player_id);
+        let deadline = PlanningCadence::deadline_window(country, date);
+
+        // In a contested sale the seller is not choosing between this bid and
+        // nothing: it is choosing between this bid and the best one on the
+        // table. A bid behind the leader is not the one that gets taken, and
+        // in the last days — when there is no time left for another round —
+        // the leader is taken rather than held out on.
+        if auction.is_contested() {
+            if auction.leads_with(neg_data.offer_amount) {
+                chance += AuctionState::LEADER_BONUS * (1.0 + deadline.pressure());
+            } else {
+                chance *= AuctionState::TRAILING_SHARE;
+            }
+        }
+
         chance = chance.clamp(5.0, 95.0);
         let roll = FloatUtils::random(0.0, 100.0);
 
         // A below-floor bid can never be accepted, whatever the roll — the
         // floor guards the outcome while the rounds guard the process.
         if !below_floor && roll < chance {
+            // Story counters: the beats that tell a live market from a
+            // procurement queue. Diagnostics only — a layer whose counter
+            // stays at zero has not landed, whatever the move totals say.
+            if !neg_data.is_loan {
+                let marketed = country
+                    .clubs
+                    .iter()
+                    .find(|c| c.id == neg_data.selling_club_id)
+                    .map(|c| c.transfer_plan.is_marketed(neg_data.player_id))
+                    .unwrap_or(false);
+                let story = &mut country.transfer_market.story;
+                if auction.is_contested() {
+                    story.contested_agreements += 1;
+                }
+                if deadline.is_deadline_week() {
+                    story.deadline_agreements += 1;
+                }
+                if marketed {
+                    story.sell_list_conversions += 1;
+                }
+            }
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 negotiation.advance_to_personal_terms(date);
             }
@@ -927,6 +1318,62 @@ impl CountryResult {
                 if let Some(f) = &floor {
                     target = target.max(f.min_fee);
                 }
+                // What the buyer would have reached for before any of the
+                // market layers existed: the seller's reservation, inside
+                // its budget. This is the calibrated baseline reach and the
+                // floor of everything below.
+                let legacy_target = target;
+
+                // ── The auction ─────────────────────────────────────
+                //
+                // Somebody else is already in front. A buyer that wants him
+                // has to clear the leading bid by a real margin or it is
+                // simply not in the conversation — and the one whose own
+                // valuation runs out first stops raising and drops away.
+                // This is what turns rivalry into money; the seller-side
+                // engagement lift alone never moved a fee.
+                if auction.is_contested() {
+                    target = target.max(auction.floor());
+                }
+
+                // ── The deadline ────────────────────────────────────
+                //
+                // A club whose season plan still has a hole in it pays over
+                // the odds in the last days. Cover does not: there is
+                // always another body, and the loan market is open.
+                let tier = negotiation.brief_tier.unwrap_or(BriefTier::B);
+                let premium = deadline.premium_for(tier, true);
+                if premium > 0.0 && neg_data.asking_price > 0.0 {
+                    target += neg_data.asking_price * premium;
+                }
+
+                // ── The buyer's own number ──────────────────────────
+                //
+                // Everything above says what it would TAKE to win him.
+                // This says what he is worth to this buyer. A club walks
+                // away from a bidding war at its own ceiling, which is why
+                // two clubs chasing one player do not converge on the same
+                // fee — the richer one, whose marginal dollar is worth less,
+                // simply has further to go.
+                //
+                // The ceiling caps only the EXTENSION above the legacy
+                // reach — the auction floor and the deadline premium —
+                // never the reach itself. Three censuses showed why: with
+                // this market's fees an order of magnitude below its wages,
+                // the deal value nets wages off a small sporting benefit and
+                // comes out under the seller's price for exactly the deals
+                // real clubs do (a strong-league side buying an elite club's
+                // surplus, a mid-rich elite side buying a modest upgrade),
+                // and those cells fell 40 % below HEAD. Until the fee scale
+                // is reconciled the ceiling is not a trustworthy walk-away
+                // price below the calibrated baseline, so it does not act
+                // there. Where it does act — who keeps raising once a
+                // bidding war has pushed the price past the ask — is the
+                // half of the story it was built for.
+                if let Some(ceiling) = negotiation.buyer_ceiling_fee {
+                    target = target.min(ceiling.max(legacy_target));
+                }
+
                 let escalation = 0.45 + urgency * 0.25;
                 let current_amount = negotiation.current_offer.base_fee.amount;
                 let mut new_amount = FormattingUtils::round_fee(
@@ -1286,6 +1733,37 @@ impl CountryResult {
                     neg_data.buying_league_reputation,
                 );
 
+                // Will I play? The question a footballer weighing a move
+                // asks first, and the one personal terms never read. The
+                // buyer's brief already says what shirt it is offering; the
+                // seller-side importance already says what he currently is.
+                // The gap between them is the term — compensable, so a
+                // bigger stage or a much bigger wage can still buy a bench
+                // seat, which is exactly how the real decision works.
+                let importance = Self::calculate_player_importance(
+                    country,
+                    neg_data.player_id,
+                    neg_data.selling_club_id,
+                );
+                let current_wage = player
+                    .contract
+                    .as_ref()
+                    .map(|c| c.salary as f64)
+                    .unwrap_or(0.0);
+                chance += PlayingTimeExpectation::terms_delta(
+                    importance,
+                    neg_data
+                        .personal_terms
+                        .as_ref()
+                        .and_then(|t| t.squad_status_promise.as_ref()),
+                    PlayingTimeExpectation::compensation(
+                        neg_data.selling_league_reputation,
+                        neg_data.buying_league_reputation,
+                        current_wage,
+                        neg_data.offered_annual_wage.unwrap_or(0) as f64,
+                    ),
+                );
+
                 // Market-reality reset: a long-unsold listed player has
                 // watched the market decline him at his level, and the
                 // prestige / age / ambition resistance above fades as his
@@ -1324,6 +1802,25 @@ impl CountryResult {
                 neg_data.player_stage_inclination,
                 neg_data.selling_league_reputation,
                 neg_data.buying_league_reputation,
+            );
+            // Same playing-time read as the domestic branch, off the
+            // seller-side importance staged at creation — the buyer's
+            // country cannot see the player's own depth chart. The
+            // reservation wage carries the relocation premium, so it is the
+            // honest denominator for "is this a big enough raise to sit on a
+            // bench abroad?".
+            chance += PlayingTimeExpectation::terms_delta(
+                neg_data.foreign_seller_importance.unwrap_or(0.55),
+                neg_data
+                    .personal_terms
+                    .as_ref()
+                    .and_then(|t| t.squad_status_promise.as_ref()),
+                PlayingTimeExpectation::compensation(
+                    neg_data.selling_league_reputation,
+                    neg_data.buying_league_reputation,
+                    neg_data.staged_reservation_wage.unwrap_or(0) as f64,
+                    neg_data.offered_annual_wage.unwrap_or(0) as f64,
+                ),
             );
             wage_negotiable = StagedWageAssessment::apply(neg_data, &mut chance);
         }
@@ -3096,6 +3593,7 @@ mod development_pathway_protection_tests {
                 personal_terms: None,
                 foreign_terms_floor_blocked: false,
                 foreign_seller_importance: None,
+                foreign_seller_finances: None,
             }
         }
     }
@@ -3358,6 +3856,7 @@ mod seller_fee_floor_tests {
                 personal_terms: None,
                 foreign_terms_floor_blocked: false,
                 foreign_seller_importance: None,
+                foreign_seller_finances: None,
             }
         }
 
@@ -3951,6 +4450,7 @@ mod saga_visibility_tests {
                 personal_terms: None,
                 foreign_terms_floor_blocked: false,
                 foreign_seller_importance: None,
+                foreign_seller_finances: None,
             }
         }
 
@@ -4123,5 +4623,89 @@ mod saga_visibility_tests {
             !p.statuses.has(PlayerStatusType::Bid),
             "pool free agents have their own market-state machinery"
         );
+    }
+}
+
+#[cfg(test)]
+mod seller_windfall_tests {
+    use super::SellerWindfall;
+
+    /// A mid-table Super Lig club: roughly $113M a year of income, a $72M
+    /// wage bill and a $72M wage budget — the club that held the reported
+    /// player for seven seasons.
+    struct Exporter;
+
+    impl Exporter {
+        const INCOME: i64 = 113_000_000;
+        const WAGES: i64 = 71_900_000;
+        const WAGE_BUDGET: i64 = 72_200_000;
+
+        fn windfall(fee: f64) -> SellerWindfall {
+            SellerWindfall::of(fee, Self::INCOME, Self::WAGES, Self::WAGE_BUDGET)
+        }
+    }
+
+    #[test]
+    fn an_ordinary_fee_changes_nothing() {
+        // A $10M bid is 9% of the year — below `W0`. The seller behaves
+        // exactly as it always did, which is what keeps peer-to-peer
+        // haggling unchanged.
+        let w = Exporter::windfall(10_000_000.0);
+        assert_eq!(w.ratio, 0.0, "ratio {}", w.ratio);
+    }
+
+    #[test]
+    fn a_fee_worth_half_the_year_is_answered_by_the_chairman() {
+        // $53M against $113M of income — the reported player's own market
+        // value. This is the case the whole model exists for.
+        let w = Exporter::windfall(53_000_000.0);
+        assert!(
+            w.ratio > 0.6,
+            "a fee worth ~47% of annual income must read as a near-total windfall, got {}",
+            w.ratio
+        );
+        assert!(w.reservation_ease() > 0.15, "{}", w.reservation_ease());
+    }
+
+    #[test]
+    fn the_windfall_saturates_rather_than_running_away() {
+        let huge = Exporter::windfall(500_000_000.0);
+        assert_eq!(huge.ratio, 1.0);
+        assert!(
+            huge.reservation_ease() <= 0.35,
+            "the reservation ease must stay bounded, got {}",
+            huge.reservation_ease()
+        );
+    }
+
+    #[test]
+    fn a_club_at_its_wage_ceiling_eases_even_on_a_modest_fee() {
+        // Wage bill at 99.6% of budget: the sale funds the squad. The ease
+        // is real but small — this is acceptance, never availability.
+        let pressed = SellerWindfall::of(10_000_000.0, Exporter::INCOME, 72_000_000, 72_200_000);
+        assert_eq!(pressed.ratio, 0.0, "the fee itself is ordinary");
+        assert!(pressed.wage_pressure > 0.0, "{}", pressed.wage_pressure);
+        assert!(
+            pressed.reservation_ease() <= 0.10,
+            "wage pressure alone must not move the reservation far: {}",
+            pressed.reservation_ease()
+        );
+    }
+
+    #[test]
+    fn a_club_with_wage_room_feels_no_pressure() {
+        let roomy = SellerWindfall::of(10_000_000.0, Exporter::INCOME, 40_000_000, 72_200_000);
+        assert_eq!(roomy.wage_pressure, 0.0);
+    }
+
+    #[test]
+    fn an_unknown_seller_behaves_exactly_as_before() {
+        // No income on record (a freshly generated world, or a foreign
+        // seller whose snapshot is missing): the model must be inert, not
+        // guess.
+        let unknown = SellerWindfall::of(50_000_000.0, 0, 0, 0);
+        assert_eq!(unknown.ratio, 0.0);
+        assert_eq!(unknown.reservation_ease(), 0.0);
+        assert_eq!(SellerWindfall::none().reservation_ease(), 0.0);
     }
 }

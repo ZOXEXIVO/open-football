@@ -186,6 +186,24 @@
                                 <div class="match-loader-fill" id="match-loader-fill"></div>
                             </div>
                             <p class="match-loader-note">{{ i18n.t("match_loading_note") }}</p>
+                            {# What the viewer is HOLDING, phase by phase.
+
+                               Empty and invisible unless `?perf=1` asked for
+                               it, because it is a diagnostic and not part of
+                               the product — but it is the only diagnostic that
+                               reaches the device this page fails on. iOS kills
+                               the whole renderer process when a tab crosses
+                               its memory ceiling, which leaves no console, no
+                               stack and no error page; a phone has no
+                               inspector to attach either, short of a Mac and a
+                               cable. The phase line and these figures stay on
+                               screen until the reload takes them, so the
+                               person holding the device can read which course
+                               the scene died on and what it was holding when
+                               it did. Untranslated on purpose: it is numbers
+                               and two English words, for whoever is chasing a
+                               crash. #}
+                            <p class="match-loader-bill" id="match-loader-bill" hidden></p>
                         </div>
                         <button type="button" id="match-fullscreen" class="match-fullscreen"
                                 title="{{ i18n.t("match_fullscreen") }}"
@@ -480,6 +498,7 @@
     const phase = document.getElementById("match-loader-phase");
     const track = document.getElementById("match-loader-track");
     const fill = document.getElementById("match-loader-fill");
+    const bill = document.getElementById("match-loader-bill");
 
     // What each stretch of the wait is worth, end to end. The download is the
     // only one with a real fraction inside it; the rest advance a step at a
@@ -551,8 +570,28 @@
 
     // The viewer's own progress. Registered before `init` so the first course
     // cannot be laid before anybody is listening.
+    // Whether the memory readout is wanted at all. Read once, from the same
+    // `?perf=1` that turns the frame-cost strip on inside the viewer.
+    const instrumented = new URLSearchParams(location.search).get("perf") === "1";
+
+    // What the viewer says it is holding, written beside the phase it said it
+    // at. See the note on the element itself for why a phone needs this on
+    // screen rather than in a console.
+    function weigh(detail) {
+        if (!instrumented || !bill || typeof detail.heap !== "number") {
+            return;
+        }
+        bill.hidden = false;
+        bill.textContent =
+            (detail.footprint || "?") +
+            " · heap " + Math.round(detail.heap) +
+            " (peak " + Math.round(detail.peak) + ")" +
+            " · assets " + Math.round(detail.assets) + " MiB";
+    }
+
     document.addEventListener("match-viewer-progress", (event) => {
         const detail = event.detail || {};
+        weigh(detail);
         if (detail.phase === "ready") {
             finish();
             return;
@@ -712,6 +751,46 @@
             // that is failing is the only bisection available there.
             if (config && ["handheld", "roomy"].includes(asked.get("device"))) {
                 config.device = asked.get("device");
+            }
+            // …and the four knobs that take the scene APART, which is a
+            // different job from `?device=` and the reason they exist
+            // separately from it.
+            //
+            // `?device=handheld` builds the small scene; these say WHICH part
+            // of the big one was too large. A tab killed for its memory leaves
+            // no console, no stack and no error page — the renderer is
+            // destroyed and the browser simply starts the page again — so on
+            // the phone that is failing there is nothing to read afterwards
+            // and nothing to attach a debugger to. Bisection from the address
+            // bar is the whole instrument:
+            //
+            //   ?crowd=off      the four banks of spectators, ~88% of the
+            //                   scene's geometry
+            //   ?squad=off      the twenty-two and their faces
+            //   ?stage=1.3      how many megapixels the replay is drawn into,
+            //                   which sets the render attachments
+            //   ?readahead=1    how many chunks of the recording are parsed
+            //                   at once
+            //
+            // Each is validated here rather than in the viewer so a typo is an
+            // ignored parameter and not a match that will not open.
+            if (config && ["off", "handheld", "full"].includes(asked.get("crowd"))) {
+                config.crowd = asked.get("crowd");
+            }
+            if (config && asked.get("squad") === "off") {
+                config.squad = "off";
+            }
+            // ⚠ Both read through `has` first: `Number(null)` is 0, not NaN,
+            // so an absent `?readahead` would otherwise read as "fetch
+            // nothing ahead" and the replay would stall at every chunk
+            // boundary on every page in the game.
+            const megapixels = asked.has("stage") ? Number(asked.get("stage")) : NaN;
+            if (config && megapixels > 0 && megapixels <= 32) {
+                config.stage = megapixels;
+            }
+            const readAhead = asked.has("readahead") ? Number(asked.get("readahead")) : NaN;
+            if (config && Number.isInteger(readAhead) && readAhead >= 0 && readAhead <= 8) {
+                config.readahead = readAhead;
             }
             MatchViewer.start(JSON.stringify(config));
         })

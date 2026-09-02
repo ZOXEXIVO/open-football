@@ -48,7 +48,7 @@
 //! type is reached through a `use` at the file header.
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{Datelike, NaiveDate, Weekday};
 
@@ -57,7 +57,8 @@ use crate::transfers::pipeline::breakout::{
     BreakoutInputs, BreakoutPerformanceSignal, LeaguePerformanceLookup,
 };
 use crate::transfers::pipeline::circulation::BuyerScan;
-use crate::transfers::pipeline::loan_interest::InterestDraw;
+use crate::transfers::pipeline::helpers::ClubGroupRanks;
+use crate::transfers::pipeline::loan_interest::{ClubOpinion, InterestDraw};
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
 };
@@ -66,14 +67,16 @@ use crate::transfers::pipeline::recommendations::{
     ListedTargetVerdict, ListedTargetView, evaluate_listed_target,
 };
 use crate::transfers::pipeline::recruitment::{ScoutMonitoringSource, ScoutPlayerMonitoring};
+use crate::transfers::pipeline::standing::{CareerRecordSnapshot, StandingInputs, StandingSignal};
+use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::pipeline::{
     KnownPlayerMemory, RecommendationSource, RecommendationType, StaffRecommendation,
 };
-use crate::{Country, Person};
+use crate::{Club, Country, Person, PlayerFieldPositionGroup, PlayerPositionType};
 
-/// One breakout player the watch may surface — his market summary, the few
+/// One discovered player the watch may surface — his market summary, the few
 /// extra signals the listed-target view needs that the summary doesn't carry,
-/// and his discovery score.
+/// and the two discovery scores.
 struct BreakoutCandidate {
     summary: PlayerSummary,
     estimated_potential: u8,
@@ -81,7 +84,19 @@ struct BreakoutCandidate {
     days_available: i64,
     recent_interest_count: u8,
     failed_scans: u16,
+    /// Output-based discovery ([`BreakoutPerformanceSignal`]) — a scoreline.
     breakout_score: f32,
+    /// Standing-based discovery ([`StandingSignal`]) — a scout's read of
+    /// where he sits in his league. Zero for the youth path, whose whole
+    /// point is that a 16-year-old has no senior standing to measure.
+    standing_score: f32,
+    /// True when it was the STANDING read that admitted him, not his
+    /// output. A standing find is a judgement about level rather than a
+    /// headline, so the buyer applies the extra relevance test in
+    /// [`InvestmentRelevance`] before opening a file — otherwise every
+    /// club in a stronger league would file every competent first-choice
+    /// player in every weaker one.
+    admitted_on_standing: bool,
 }
 
 /// One accepted find the apply pass will file on a buyer's books.
@@ -91,8 +106,9 @@ struct WatchAction {
     player_id: u32,
     player_club_id: u32,
     player_country_id: u32,
-    position: crate::PlayerPositionType,
-    position_group: crate::PlayerFieldPositionGroup,
+    position: PlayerPositionType,
+    position_group: PlayerFieldPositionGroup,
+    age: u8,
     appearances: u16,
     assessed_ability: u8,
     assessed_potential: u8,
@@ -100,27 +116,174 @@ struct WatchAction {
     estimated_value: f64,
 }
 
+/// Whether a standing find is worth a file at THIS buyer.
+///
+/// Output discovery answers itself: a man scoring freely is interesting to
+/// anyone above him. Standing discovery does not — "one of the better
+/// central midfielders in Turkey" is a transformative signing for a
+/// mid-table Bundesliga side and a squad filler for Real Madrid, and
+/// without a buyer-side test the same name would land on all twenty rich
+/// clubs' books in the same week.
+///
+/// So a standing find is filed only where he would rank near the top of the
+/// buyer's own depth chart **by the buyer's belief** — never by the truth
+/// (memory `loan_market_argmax_predictability`: gates read truth, rankings
+/// read belief) — and only when he fits the buyer's asset window: an
+/// expensive permanent purchase is a young man's market, while an older
+/// player is fine when he is cheap.
+struct InvestmentRelevance {
+    /// How near the top of his group a standing find has to project.
+    /// Continuous in reputation: a giant wants a top-2 man, a Continental
+    /// side is happy with a top-4.
+    top_k: usize,
+    /// The buyer's believed abilities in each position group, descending.
+    /// Built once per buyer per pass.
+    believed_by_group: HashMap<PlayerFieldPositionGroup, Vec<f32>>,
+    /// The club's best `judging_player_ability` — how sharp the belief is.
+    judging: u8,
+    club_id: u32,
+    /// Fee above which the purchase is a genuine asset commitment rather
+    /// than an opportunistic pickup, and so faces the age window.
+    asset_commitment_fee: f64,
+}
+
+impl InvestmentRelevance {
+    /// Age above which a fee-heavy permanent purchase stops being an asset
+    /// and starts being a two-season rental. Matches the real ceiling of
+    /// the step-up market (Ünder 20 … Tosun 26; a 27-year-old still moves,
+    /// for less).
+    const ASSET_AGE_CEILING: u8 = 27;
+    /// Share of the buyer's transfer budget above which a purchase is read
+    /// as an asset commitment.
+    const ASSET_COMMITMENT_SHARE: f64 = 0.30;
+
+    fn build(club: &Club, rep_score: f32, judging: u8, transfer_budget: f64) -> Self {
+        // Top-2 for a club at the very top of the reputation ladder,
+        // widening continuously to top-7 for a small one — a smaller club
+        // is improved by a wider band of players, and knows it.
+        let top_k = (2.0 + (1.0 - rep_score.clamp(0.0, 1.0)) * 5.0)
+            .round()
+            .max(1.0) as usize;
+
+        let mut believed_by_group: HashMap<PlayerFieldPositionGroup, Vec<f32>> = HashMap::new();
+        if let Some(team) = club.teams.main().or_else(|| club.teams.teams.first()) {
+            for p in team.players.players.iter() {
+                let opinion = ClubOpinion::of(club.id, p.id, judging);
+                believed_by_group
+                    .entry(p.position().position_group())
+                    .or_default()
+                    .push(
+                        opinion.believed_ability(PipelineProcessor::position_evaluation_ability(p)),
+                    );
+            }
+        }
+        for abilities in believed_by_group.values_mut() {
+            abilities.sort_by(|a, b| b.partial_cmp(a).unwrap_or(Ordering::Equal));
+        }
+
+        InvestmentRelevance {
+            top_k,
+            believed_by_group,
+            judging,
+            club_id: club.id,
+            asset_commitment_fee: transfer_budget.max(0.0) * Self::ASSET_COMMITMENT_SHARE,
+        }
+    }
+
+    /// True when this candidate is worth a file at this buyer on standing
+    /// alone.
+    fn admits(&self, summary: &PlayerSummary) -> bool {
+        // Asset window. A cheap older player is a perfectly ordinary
+        // signing; an expensive one is an asset the club will not resell.
+        if summary.age > Self::ASSET_AGE_CEILING
+            && summary.estimated_value > self.asset_commitment_fee
+        {
+            return false;
+        }
+        let believed = ClubOpinion::of(self.club_id, summary.player_id, self.judging)
+            .believed_ability(summary.skill_ability);
+        let better = self
+            .believed_by_group
+            .get(&summary.position_group)
+            .map(|abilities| abilities.iter().filter(|a| **a > believed).count())
+            .unwrap_or(0);
+        better < self.top_k
+    }
+}
+
 impl PipelineProcessor {
-    /// Per-pass cap on NEW breakout monitors a single club opens, so the
-    /// watch builds a club's shortlist gradually rather than in one flood.
+    /// Per-pass cap on NEW monitors a single club opens at the FLOOR of the
+    /// reputation ladder, so the watch builds a club's books gradually
+    /// rather than in one flood. Scaled up with reputation by
+    /// [`Self::breakout_watch_per_pass`]: a global recruitment department
+    /// opens more files a week than a one-scout club, and capping both at
+    /// three was the throughput wall that let a giant see a standout and
+    /// still never get round to filing him.
     const BREAKOUT_WATCH_PER_PASS: usize = 3;
+    /// Reputation-scaled headroom on top of [`Self::BREAKOUT_WATCH_PER_PASS`].
+    const BREAKOUT_WATCH_PER_PASS_REACH: f32 = 4.0;
     /// Soft ceiling on a club's total active monitoring rows before the watch
     /// stops adding more — keeps the books from growing without bound.
     const BREAKOUT_WATCH_MONITOR_CAP: usize = 30;
+    /// Reputation-scaled headroom on top of [`Self::BREAKOUT_WATCH_MONITOR_CAP`].
+    const BREAKOUT_WATCH_MONITOR_CAP_REACH: f32 = 30.0;
 
-    /// Big-stage pull a foreign player must carry before his own transfer
-    /// request counts as a lead in its own right. Set at the visible-mood
-    /// level: he is publicly restless, not merely open to offers.
-    const TOUTED_MIN_INCLINATION: f32 = 0.40;
-    /// League-reputation gain the watching country must offer over his
-    /// current one before that lead means anything. A sideways move
-    /// answers nothing he is asking for.
+    /// League-reputation gain the watching country must offer over the
+    /// player's current one before his own restlessness counts as a lead.
+    /// A sideways move answers nothing he is asking for.
     const TOUTED_MIN_STAGE_GAIN: u16 = 1200;
     /// He still has to be a footballer worth the call. Roughly half the
     /// ordinary breakout bar: enough to exclude a journeyman with an
     /// agent, low enough to surface the good defenders and holding
     /// midfielders whose seasons produce no headline numbers at all.
+    /// The absolute floor under the pull relief below.
     const TOUTED_BREAKOUT_FLOOR: f32 = 22.0;
+    /// How far a fully-committed player's own wish to leave lowers the
+    /// discovery bar at a club that can offer him a bigger stage.
+    ///
+    /// This generalises what used to be an on/off bypass gated on a FORMAL
+    /// transfer request. Requiring the request inverted the market: a
+    /// player's agent circulates him long before he ever hands one in, and
+    /// `request_bar` is deliberately high (0.68), so in practice the bypass
+    /// almost never fired. Now the relief is continuous in the pull itself
+    /// — at the visible-mood level (0.40) it moves the bar 45 → 35, at full
+    /// commitment it reaches the absolute floor and stops there.
+    const PULL_DISCOVERY_RELIEF: f32 = 25.0;
+
+    /// New monitoring files this club may open in one pass.
+    pub(in crate::transfers::pipeline) fn breakout_watch_per_pass(rep_score: f32) -> usize {
+        Self::BREAKOUT_WATCH_PER_PASS
+            + (rep_score.clamp(0.0, 1.0) * Self::BREAKOUT_WATCH_PER_PASS_REACH).round() as usize
+    }
+
+    /// Total active monitoring rows this club carries before the watch stops
+    /// adding.
+    pub(in crate::transfers::pipeline) fn breakout_watch_monitor_cap(rep_score: f32) -> usize {
+        Self::BREAKOUT_WATCH_MONITOR_CAP
+            + (rep_score.clamp(0.0, 1.0) * Self::BREAKOUT_WATCH_MONITOR_CAP_REACH).round() as usize
+    }
+
+    /// Discovery bar for one candidate at one watching country.
+    ///
+    /// The base is [`BreakoutPerformanceSignal::BREAKOUT_THRESHOLD`] — that
+    /// number is calibrated for lower-division discovery and is deliberately
+    /// NOT lowered. What moves is how much of it a player's own wish to
+    /// leave buys back, and only where the watcher can actually offer him
+    /// the bigger stage he wants.
+    fn discovery_bar(
+        inclination: f32,
+        seller_league_reputation: u16,
+        best_watching_league_reputation: u16,
+    ) -> f32 {
+        let bigger_stage = best_watching_league_reputation
+            >= seller_league_reputation.saturating_add(Self::TOUTED_MIN_STAGE_GAIN);
+        if !bigger_stage {
+            return BreakoutPerformanceSignal::BREAKOUT_THRESHOLD;
+        }
+        (BreakoutPerformanceSignal::BREAKOUT_THRESHOLD
+            - Self::PULL_DISCOVERY_RELIEF * inclination.clamp(0.0, 1.0))
+        .max(Self::TOUTED_BREAKOUT_FLOOR)
+    }
 
     /// Weekly, year-round breakout watch. Surfaces high-form players to
     /// plausible buyers as scout monitoring plus a staff recommendation
@@ -149,7 +312,21 @@ impl PipelineProcessor {
 
         let performance_lookup = LeaguePerformanceLookup::build(country);
 
-        // ── Collect breakout candidates (immutable read). ──
+        // Strength of the best competition this country can offer. A player
+        // agitating for a bigger stage is only a lead for clubs whose stage
+        // is actually bigger, and the discovery-bar relief is priced against
+        // exactly that. Hoisted above the domestic walk because both the
+        // home and the foreign pass measure against it.
+        let best_league_reputation = country
+            .leagues
+            .leagues
+            .iter()
+            .filter(|l| !l.friendly)
+            .map(|l| l.reputation)
+            .max()
+            .unwrap_or(0);
+
+        // ── Collect discovery candidates (immutable read). ──
         let mut candidates: Vec<BreakoutCandidate> = Vec::new();
         for club in &country.clubs {
             let parent_league_reputation = club
@@ -159,6 +336,10 @@ impl PipelineProcessor {
                 .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
                 .map(|l| l.reputation)
                 .unwrap_or(0);
+            // One sorted-group snapshot per club. The standing read asks
+            // where every player sits in his own depth chart, and the
+            // per-call fallback re-sorts the group for each question.
+            let group_ranks = ClubGroupRanks::build(club);
 
             for team in &club.teams.teams {
                 let is_youth_squad = team.team_type.is_youth();
@@ -195,16 +376,63 @@ impl PipelineProcessor {
                             parent_league_reputation,
                         )
                     };
-                    if !breakout.is_breakout() {
+                    let skill_ability = Self::position_evaluation_ability(player);
+
+                    // Standing: what a scout in the stands takes away
+                    // rather than what the scoreline says. A youth-squad
+                    // player has no senior standing to read, so the youth
+                    // path stays purely output-driven.
+                    //
+                    // Computed from the cheap reads — the club's group ranks
+                    // are snapshotted once per club above, and the ledger
+                    // walk is bounded by his own career. The full market
+                    // summary is built only for a player who has already
+                    // been ADMITTED: it prices a valuation and re-sorts the
+                    // squad, and paying that for every player in the country
+                    // every Monday is the difference between a weekly pass
+                    // and a weekly stall.
+                    let standing = if is_youth_squad {
+                        0.0
+                    } else {
+                        let record = CareerRecordSnapshot::read(player, group);
+                        StandingSignal::compute(&StandingInputs {
+                            position_group: group,
+                            skill_ability,
+                            age,
+                            league_reputation: parent_league_reputation,
+                            position_group_rank: group_ranks.rank(player.id),
+                            international_apps: player.player_attributes.international_apps,
+                            prior_season_rating: record.prior_season_rating,
+                            prior_season_appearances: record.prior_season_appearances,
+                            seasons_as_regular: record.seasons_as_regular,
+                        })
+                        .score
+                    };
+
+                    // A home candidate is corroborated, so he faces the full
+                    // discovery bar on either signal: the pull relief below
+                    // exists for the CROSS-BORDER read, where the evidence a
+                    // scout has is thinner and the player's own wish to leave
+                    // is what puts his name in front of anyone.
+                    let admitted_on_standing = standing
+                        >= BreakoutPerformanceSignal::BREAKOUT_THRESHOLD
+                        && standing > breakout.score;
+                    if !breakout.is_breakout() && !admitted_on_standing {
                         continue;
                     }
 
                     // The candidate walk already holds the (club, player)
                     // pair — build the summary directly instead of
-                    // re-finding the player with a country-wide scan.
-                    let summary = Self::build_player_summary(country, club, player, date);
+                    // re-finding the player with a country-wide scan, and
+                    // hand it the group snapshot so it doesn't re-sort.
+                    let summary = Self::build_player_summary_ranked(
+                        country,
+                        club,
+                        player,
+                        date,
+                        Some(&group_ranks),
+                    );
 
-                    let skill_ability = Self::position_evaluation_ability(player);
                     let estimated_potential = skill_ability
                         + Self::estimate_growth_potential(
                             age,
@@ -214,6 +442,27 @@ impl PipelineProcessor {
                             player.skills.mental.anticipation,
                             skill_ability,
                         );
+
+                    if TransferTrace::is(player.id) {
+                        TransferTrace::line(
+                            player.id,
+                            "discovery",
+                            format!(
+                                "home country={} breakout={:.1} standing={:.1} bar={:.1} \
+                                 pull={:.2} rank={} caps={} prior={:.2}/{} regular_seasons={}",
+                                country.code,
+                                breakout.score,
+                                standing,
+                                BreakoutPerformanceSignal::BREAKOUT_THRESHOLD,
+                                player.big_stage_inclination,
+                                summary.seller_ctx.position_group_rank,
+                                summary.international_apps,
+                                summary.career_record.prior_season_rating,
+                                summary.career_record.prior_season_appearances,
+                                summary.career_record.seasons_as_regular,
+                            ),
+                        );
+                    }
 
                     candidates.push(BreakoutCandidate {
                         summary,
@@ -229,6 +478,8 @@ impl PipelineProcessor {
                             .map(|s| s.failed_scans)
                             .unwrap_or(0),
                         breakout_score: breakout.score,
+                        standing_score: standing,
+                        admitted_on_standing,
                     });
                 }
             }
@@ -243,17 +494,6 @@ impl PipelineProcessor {
         // Clubs look for talent DOWN the football ladder, the same
         // convention the scouting pass applies.
         let country_reputation = country.reputation;
-        // Strength of the best competition this country can offer. A player
-        // agitating for a bigger stage is only a lead for clubs whose stage
-        // is actually bigger.
-        let best_league_reputation = country
-            .leagues
-            .leagues
-            .iter()
-            .filter(|l| !l.friendly)
-            .map(|l| l.reputation)
-            .max()
-            .unwrap_or(0);
         for s in foreign_players
             .iter()
             .copied()
@@ -271,27 +511,61 @@ impl PipelineProcessor {
                 scoring_rank: None,
                 recent_award_points: 0.0,
             });
-            // A player who has formally asked to leave a league he has
-            // outgrown is himself a lead — that is what an agent's phone
-            // call IS, and it is how most of these moves actually begin.
-            // Output alone will never surface a defender or a holding
-            // midfielder from a sub-elite league however obviously ready he
-            // is, because the breakout signal can only read goals.
-            //
-            // It lowers the bar; it does not remove it. He still has to be
-            // wanting out, drawn strongly enough to have reached a formal
-            // request, and looking at a genuinely bigger stage than the one
-            // he is on — this country's best competition, not merely a
-            // different one.
-            let touted_by_his_own_ambition = s.seller_ctx.is_transfer_requested
-                && s.seller_ctx.big_stage_inclination >= Self::TOUTED_MIN_INCLINATION
-                && best_league_reputation
-                    >= s.seller_ctx
-                        .league_reputation
-                        .saturating_add(Self::TOUTED_MIN_STAGE_GAIN);
-            if !breakout.is_breakout()
-                && !(touted_by_his_own_ambition && breakout.score >= Self::TOUTED_BREAKOUT_FLOOR)
-            {
+            // What a scout in the stands takes away that no scoreline
+            // carries: how far above his own league's starter level he
+            // plays, where he sits in his club's depth chart, how often his
+            // country picks him, and whether the season is a record or a
+            // sample. This is the read that surfaces the defenders and
+            // holding midfielders the breakout signal is structurally
+            // blind to.
+            let standing = StandingSignal::compute(&StandingInputs {
+                position_group: s.position_group,
+                skill_ability: s.skill_ability,
+                age: s.age,
+                league_reputation: s.seller_ctx.league_reputation,
+                position_group_rank: s.seller_ctx.position_group_rank,
+                international_apps: s.international_apps,
+                prior_season_rating: s.career_record.prior_season_rating,
+                prior_season_appearances: s.career_record.prior_season_appearances,
+                seasons_as_regular: s.career_record.seasons_as_regular,
+            })
+            .score;
+
+            // A player who wants out of a league he has outgrown is himself
+            // a lead — that is what an agent's phone call IS, and it is how
+            // most of these moves actually begin. It lowers the bar; it
+            // never removes it, and only for a watcher who can genuinely
+            // offer him a bigger stage.
+            let bar = Self::discovery_bar(
+                s.seller_ctx.big_stage_inclination,
+                s.seller_ctx.league_reputation,
+                best_league_reputation,
+            );
+            let admitted_on_standing = standing >= bar && standing > breakout.score;
+
+            if TransferTrace::is(s.player_id) {
+                TransferTrace::line(
+                    s.player_id,
+                    "discovery",
+                    format!(
+                        "watcher={} breakout={:.1} standing={:.1} bar={:.1} pull={:.2} \
+                         rank={} caps={} prior={:.2}/{} regular_seasons={} admitted={}",
+                        country.code,
+                        breakout.score,
+                        standing,
+                        bar,
+                        s.seller_ctx.big_stage_inclination,
+                        s.seller_ctx.position_group_rank,
+                        s.international_apps,
+                        s.career_record.prior_season_rating,
+                        s.career_record.prior_season_appearances,
+                        s.career_record.seasons_as_regular,
+                        breakout.score.max(standing) >= bar,
+                    ),
+                );
+            }
+
+            if breakout.score.max(standing) < bar {
                 continue;
             }
             let estimated_potential = s.skill_ability
@@ -313,6 +587,8 @@ impl PipelineProcessor {
                 recent_interest_count: 0,
                 failed_scans: 0,
                 breakout_score: breakout.score,
+                standing_score: standing,
+                admitted_on_standing,
             });
         }
 
@@ -327,7 +603,21 @@ impl PipelineProcessor {
                 continue;
             }
             let plan = &club.transfer_plan;
-            if !plan.initialized || plan.scout_monitoring.len() >= Self::BREAKOUT_WATCH_MONITOR_CAP
+            let club_overall_score = club
+                .teams
+                .main()
+                .or_else(|| club.teams.teams.first())
+                .map(|t| t.reputation.overall_score())
+                .unwrap_or(0.0);
+            // How many files this department carries at once, and how many
+            // it may open this week. Both widen with reputation: a global
+            // recruitment operation runs a far longer watch list than a club
+            // with one part-time scout, and holding every club to the same
+            // three-a-week ceiling was itself a wall — a giant could see a
+            // standout abroad and simply never have a slot to file him in.
+            if !plan.initialized
+                || plan.scout_monitoring.len()
+                    >= Self::breakout_watch_monitor_cap(club_overall_score)
             {
                 continue;
             }
@@ -351,16 +641,25 @@ impl PipelineProcessor {
             // demand-driven scouting pass uses. This one gate is what
             // keeps "form travels" meaning "as far as your scouts do".
             let home_region = ScoutingRegion::from_country(country.continent_id, &country.code);
-            let club_overall_score = club
-                .teams
-                .main()
-                .or_else(|| club.teams.teams.first())
-                .map(|t| t.reputation.overall_score())
-                .unwrap_or(0.0);
             let reach: HashSet<ScoutingRegion> =
                 Self::reputation_scout_regions(home_region, club_overall_score)
                     .into_iter()
                     .collect();
+
+            // Buyer-side relevance for a STANDING find — see
+            // [`InvestmentRelevance`]. Built once per buyer; the belief it
+            // ranks on is the club's own, so twenty rich clubs do not all
+            // file the same name in the same week.
+            let relevance = InvestmentRelevance::build(
+                club,
+                club_overall_score,
+                resolved.best_scout_judging_ability(),
+                club.finance
+                    .transfer_budget
+                    .as_ref()
+                    .map(|b| b.amount)
+                    .unwrap_or(plan.total_budget),
+            );
 
             let mut scored: Vec<(&BreakoutCandidate, f32)> = candidates
                 .iter()
@@ -385,6 +684,26 @@ impl PipelineProcessor {
                     if plan.is_rejected(s.player_id, date) {
                         return None;
                     }
+                    // A standing find is a judgement about LEVEL, not a
+                    // headline, so it only becomes a file where the buyer
+                    // would actually be improved by him and where he fits
+                    // the club's asset window. Output finds skip this: a
+                    // man scoring freely is interesting to everyone above
+                    // him, which is exactly what makes him a breakout.
+                    if c.admitted_on_standing && !relevance.admits(s) {
+                        if TransferTrace::is(s.player_id) {
+                            TransferTrace::line(
+                                s.player_id,
+                                "buyer",
+                                format!(
+                                    "club={} ({}) REJECT not-top-{} or outside asset window \
+                                     (age {}, value {:.0})",
+                                    club.name, club.id, relevance.top_k, s.age, s.estimated_value,
+                                ),
+                            );
+                        }
+                        return None;
+                    }
                     // Staged plausibility veto — importance / country route /
                     // step-down realism. Unsolicited: we're scouting on form.
                     if matches!(
@@ -397,6 +716,16 @@ impl PipelineProcessor {
                         ),
                         Some(TransferPlausibilityVerdict::HardReject(_))
                     ) {
+                        if TransferTrace::is(s.player_id) {
+                            TransferTrace::line(
+                                s.player_id,
+                                "buyer",
+                                format!(
+                                    "club={} ({}) REJECT staged plausibility hard-reject",
+                                    club.name, club.id,
+                                ),
+                            );
+                        }
                         return None;
                     }
 
@@ -410,7 +739,12 @@ impl PipelineProcessor {
                         is_transfer_requested: s.seller_ctx.is_transfer_requested,
                         is_unhappy: s.seller_ctx.is_unhappy,
                         is_loan_listed: s.is_loan_listed,
-                        breakout_score: c.breakout_score,
+                        // The listed-target model ranks on "how strongly does
+                        // his form say take a look" — a standing read answers
+                        // the same question from the other side, so the
+                        // stronger of the two is the honest discovery signal
+                        // to rank him with.
+                        breakout_score: c.breakout_score.max(c.standing_score),
                         world_reputation: s.world_reputation,
                         current_reputation: s.current_reputation,
                         ambition: c.ambition,
@@ -447,9 +781,23 @@ impl PipelineProcessor {
                 .enumerate()
                 .map(|(i, (_, score))| (i as u32, *score))
                 .collect();
-            let drawn = InterestDraw::pick_several(&slate, Self::BREAKOUT_WATCH_PER_PASS);
+            let drawn = InterestDraw::pick_several(
+                &slate,
+                Self::breakout_watch_per_pass(club_overall_score),
+            );
             for (cand, _score) in drawn.into_iter().map(|i| &scored[i as usize]) {
                 let s = &cand.summary;
+                let discovery = cand.breakout_score.max(cand.standing_score);
+                if TransferTrace::is(s.player_id) {
+                    TransferTrace::line(
+                        s.player_id,
+                        "buyer",
+                        format!(
+                            "club={} ({}) FILED discovery={:.1} (breakout {:.1} / standing {:.1})",
+                            club.name, club.id, discovery, cand.breakout_score, cand.standing_score,
+                        ),
+                    );
+                }
                 actions.push(WatchAction {
                     club_id: club.id,
                     recommender_staff_id: recommender_id,
@@ -458,13 +806,14 @@ impl PipelineProcessor {
                     player_country_id: s.country_id,
                     position: s.position,
                     position_group: s.position_group,
+                    age: s.age,
                     appearances: s.appearances,
                     assessed_ability: s.skill_ability,
                     assessed_potential: cand.estimated_potential,
-                    // Confidence scales with breakout strength so a clear
-                    // breakout lands meeting-ready — the interest can flow
+                    // Confidence scales with discovery strength so a clear
+                    // find lands meeting-ready — the interest can flow
                     // straight into the shortlist when the window opens.
-                    confidence: (0.5 + (cand.breakout_score / 100.0) * 0.35).min(0.85),
+                    confidence: (0.5 + (discovery / 100.0) * 0.35).min(0.85),
                     estimated_value: s.estimated_value,
                 });
             }
@@ -481,7 +830,12 @@ impl PipelineProcessor {
                     .teams
                     .teams
                     .first()
-                    .map(|t| Self::staff_recommendation_cap(t.reputation.level()))
+                    .map(|t| {
+                        Self::staff_recommendation_cap_score(
+                            t.reputation.level(),
+                            t.reputation.overall_score(),
+                        )
+                    })
                     .unwrap_or(0);
                 let plan = &mut club.transfer_plan;
                 if plan
@@ -521,6 +875,7 @@ impl PipelineProcessor {
                     last_known_country_id: action.player_country_id,
                     position: action.position,
                     position_group: action.position_group,
+                    age: action.age,
                     assessed_ability: action.assessed_ability,
                     assessed_potential: action.assessed_potential,
                     confidence: action.confidence,
@@ -570,6 +925,7 @@ mod breakout_watch_tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};
+    use crate::transfers::pipeline::standing::CareerRecordSnapshot;
     use crate::transfers::pipeline::{
         SellerPlausibilityContext, TransferNeedReason, TransferRequestStatus,
     };
@@ -762,8 +1118,11 @@ mod breakout_watch_tests {
                     market_resignation: 0.0,
                     club_matches_played: 0,
                     big_stage_inclination: 0.0,
+                    is_marketed: false,
                 },
                 language_profile: LanguageProfile::default(),
+                international_apps: 0,
+                career_record: CareerRecordSnapshot::default(),
             }
         }
 
@@ -897,5 +1256,57 @@ mod breakout_watch_tests {
                 .is_empty(),
             "a low-reputation club's scouting reach stops at its own backyard"
         );
+    }
+}
+
+#[cfg(test)]
+mod discovery_bar_tests {
+    use super::*;
+
+    /// A Super Lig club (rep 7300) watched from a country whose best
+    /// competition is the Premier League (rep 9200) — a genuine step up.
+    const EXPORTER_LEAGUE: u16 = 7_300;
+    const BIG_STAGE: u16 = 9_200;
+
+    #[test]
+    fn a_settled_player_faces_the_full_bar() {
+        let bar = PipelineProcessor::discovery_bar(0.0, EXPORTER_LEAGUE, BIG_STAGE);
+        assert_eq!(bar, BreakoutPerformanceSignal::BREAKOUT_THRESHOLD);
+    }
+
+    #[test]
+    fn a_visibly_restless_player_lowers_it_by_a_third() {
+        // The level the shipped model calls "publicly restless" (0.40) is
+        // where the old on/off bypass used to sit — and it needed a FORMAL
+        // request on top, which is why it almost never fired.
+        let bar = PipelineProcessor::discovery_bar(0.40, EXPORTER_LEAGUE, BIG_STAGE);
+        assert!((bar - 35.0).abs() < 0.01, "bar was {bar}");
+    }
+
+    #[test]
+    fn the_relief_bottoms_out_at_the_absolute_floor() {
+        let bar = PipelineProcessor::discovery_bar(1.0, EXPORTER_LEAGUE, BIG_STAGE);
+        assert_eq!(bar, PipelineProcessor::TOUTED_BREAKOUT_FLOOR);
+    }
+
+    #[test]
+    fn a_watcher_who_is_no_bigger_a_stage_gets_no_relief() {
+        // A sideways move answers nothing the player is asking for, so his
+        // willingness cannot lower anybody's bar.
+        let bar = PipelineProcessor::discovery_bar(1.0, EXPORTER_LEAGUE, EXPORTER_LEAGUE + 400);
+        assert_eq!(bar, BreakoutPerformanceSignal::BREAKOUT_THRESHOLD);
+    }
+
+    #[test]
+    fn throughput_widens_with_reputation_and_never_shrinks() {
+        let minnow_pass = PipelineProcessor::breakout_watch_per_pass(0.0);
+        let giant_pass = PipelineProcessor::breakout_watch_per_pass(1.0);
+        assert_eq!(minnow_pass, PipelineProcessor::BREAKOUT_WATCH_PER_PASS);
+        assert!(giant_pass > minnow_pass, "{giant_pass} !> {minnow_pass}");
+
+        let minnow_cap = PipelineProcessor::breakout_watch_monitor_cap(0.0);
+        let giant_cap = PipelineProcessor::breakout_watch_monitor_cap(1.0);
+        assert_eq!(minnow_cap, PipelineProcessor::BREAKOUT_WATCH_MONITOR_CAP);
+        assert!(giant_cap > minnow_cap, "{giant_cap} !> {minnow_cap}");
     }
 }

@@ -1,3 +1,4 @@
+use crate::app::bill::MemoryBill;
 use crate::app::config::ViewerConfig;
 use crate::app::perf::FrameCost;
 use crate::app::quality::{Quality, Tier};
@@ -1088,14 +1089,21 @@ impl Timeline {
             // question asked of a slow frame here is which of the two
             // pictures produced it — and the answer may have changed since
             // the replay started. See `Quality::relent`.
+            // …and the BYTES, which on the device this readout matters most on
+            // are the only thing on it that can be read at all. A phone has no
+            // console — Safari's inspector needs a Mac and a cable — so this
+            // strip is the whole instrument, and the failure it is being
+            // pointed at is a tab that is killed rather than a frame that is
+            // late. See [`MemoryBill`].
             let wanted = format!(
-                "{} {} {}",
+                "{} {} {} {}",
                 cost.strip(),
                 match quality.tier() {
                     Tier::Multisampled => "msaa4",
                     Tier::PostProcessed => "fxaa",
                 },
                 stage.readout(),
+                MemoryBill::strip(),
             );
             if text.as_str() != wanted {
                 **text = wanted;

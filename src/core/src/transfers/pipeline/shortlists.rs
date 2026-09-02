@@ -80,6 +80,12 @@ fn depth_weight(depth: &PositionDepth, candidate_ability: u8) -> f32 {
 }
 
 impl PipelineProcessor {
+    /// Score lift a candidate the club has been carrying on its year-round
+    /// watchlist gets over a cold market find. Deliberately the same modest
+    /// size as the recruitment-meeting endorsement: preparation should tilt
+    /// a close call, not overrule a scout who has actually seen the player.
+    const WATCHLIST_LIFT: f32 = 1.10;
+
     /// Value at or below which a club with no transfer budget can still
     /// take a player on: a token payment a board signs off out of running
     /// cash, not a transfer fee it has to find.
@@ -320,11 +326,29 @@ impl PipelineProcessor {
                         } else {
                             1.0
                         };
+                        // The club's own standing board. A name the
+                        // recruitment department has been carrying and
+                        // watching all year is not the same proposition as
+                        // one a scout happened to file last week, and the
+                        // shortlist is where that year of work has to
+                        // show — otherwise the watchlist is knowledge that
+                        // never reaches a decision. Its belief score is
+                        // already the club's own, so this reads the board's
+                        // ORDER rather than re-scoring the player.
+                        let watchlist_mult = match plan
+                            .watchlist
+                            .iter()
+                            .position(|e| e.player_id == r.player_id)
+                        {
+                            Some(_) => Self::WATCHLIST_LIFT,
+                            None => 1.0,
+                        };
                         let score = base_score
                             * depth_mult
                             * risk_multiplier
                             * role_mult
                             * meeting_mult
+                            * watchlist_mult
                             * plausibility_mult;
 
                         ShortlistCandidate {
@@ -661,6 +685,20 @@ impl PipelineProcessor {
                     None
                 };
                 let snapshot = player_snapshots.get(&top.player_id).copied();
+                // A FOREIGN target appears on no roster in this country, so
+                // the snapshot walk above cannot see him and the board was
+                // handed a proposal with no age, no ability and no
+                // economics — precisely on the biggest and least reversible
+                // purchases a club makes. The club's own institutional
+                // memory of him is the honest substitute: it is what its
+                // scouts believe, which is all a board ever has.
+                let foreign_memory = if snapshot.is_none() {
+                    plan.known_players
+                        .iter()
+                        .find(|m| m.player_id == top.player_id)
+                } else {
+                    None
+                };
 
                 // Build the economics dossier from real data where we have
                 // it, leaving genuinely unavailable signals neutral rather
@@ -697,8 +735,12 @@ impl PipelineProcessor {
                     remaining_transfer_budget,
                     priority: req.priority.clone(),
                     reason: req.reason.clone(),
-                    player_age: snapshot.map(|s| s.age),
-                    player_ability: snapshot.map(|s| s.ability),
+                    player_age: snapshot
+                        .map(|s| s.age)
+                        .or_else(|| foreign_memory.map(|m| m.age)),
+                    player_ability: snapshot
+                        .map(|s| s.ability)
+                        .or_else(|| foreign_memory.map(|m| m.assessed_ability)),
                     squad_avg_ability,
                     shortlist_score: top.score,
                     dossier: dossier_summary,

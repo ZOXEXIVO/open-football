@@ -4,7 +4,8 @@ use crate::context::GlobalContext;
 use crate::shared::Currency;
 use crate::shared::CurrencyValue;
 use crate::{
-    ClubFinanceResult, ClubFinancialBalanceHistory, ClubSponsorship, ClubSponsorshipContract,
+    ClubFinanceResult, ClubFinancialBalanceHistory, ClubPhilosophy, ClubSponsorship,
+    ClubSponsorshipContract,
 };
 use chrono::Duration;
 use chrono::NaiveDate;
@@ -362,16 +363,44 @@ impl ClubFinances {
         self.balance.balance -= amount;
     }
 
+    /// Share of a sale that comes straight back as buying power for a club
+    /// that keeps its players by default. The rest stays on the balance
+    /// sheet as cash — which is what makes a sale genuinely change a club's
+    /// finances rather than merely rotating one asset into another.
+    pub const REINVEST_SHARE: f64 = 0.5;
+    /// The same share for a club whose whole model is to develop and sell.
+    /// It recycles more because the next signing IS the business: it sells
+    /// one peak asset and buys three or four younger, cheaper ones.
+    pub const REINVEST_SHARE_TRADER: f64 = 0.8;
+
     // Helper method to add transfer income
     pub fn add_transfer_income(&mut self, amount: f64) {
+        self.add_transfer_income_at(amount, Self::REINVEST_SHARE);
+    }
+
+    /// Share of a sale one club's model recycles into the market.
+    pub fn reinvest_share_for(philosophy: &ClubPhilosophy) -> f64 {
+        match philosophy {
+            ClubPhilosophy::DevelopAndSell => Self::REINVEST_SHARE_TRADER,
+            _ => Self::REINVEST_SHARE,
+        }
+    }
+
+    /// Book a sale and recycle `reinvest_share` of it into buying power.
+    ///
+    /// The share is the caller's because it is a property of the CLUB, not
+    /// of the money: a develop-and-sell side turns a sale straight back into
+    /// the market, while a club selling to balance its books does not. See
+    /// [`Self::REINVEST_SHARE`].
+    pub fn add_transfer_income_at(&mut self, amount: f64, reinvest_share: f64) {
         self.balance.push_income(amount as i64);
 
-        // Add 50% of transfer income to transfer budget
+        let recycled = amount * reinvest_share.clamp(0.0, 1.0);
         if let Some(ref mut budget) = self.transfer_budget {
-            budget.amount += amount * 0.5;
+            budget.amount += recycled;
         } else {
             self.transfer_budget = Some(CurrencyValue {
-                amount: amount * 0.5,
+                amount: recycled,
                 currency: Currency::Usd,
             });
         }

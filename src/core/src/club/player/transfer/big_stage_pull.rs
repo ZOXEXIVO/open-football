@@ -313,7 +313,10 @@ impl BigStagePull {
     /// A straight line through those endpoints demanded ~128 of a player
     /// in the 7000–8499 band whose league's real starter sits at 118, so
     /// the classic exporter leagues produced almost no ambition at all.
-    fn league_starter_ability(league_reputation: u16, _config: &BigStagePullConfig) -> f32 {
+    pub(crate) fn league_starter_ability(
+        league_reputation: u16,
+        _config: &BigStagePullConfig,
+    ) -> f32 {
         /// `(reputation ÷ 10000, median starter ability)`.
         const ANCHORS: [(f32, f32); 6] = [
             (0.00, 70.0),

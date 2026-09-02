@@ -1,6 +1,7 @@
 use super::LeagueResult;
 use super::data_access::LeagueProcessAccess;
 use crate::HappinessEventType;
+use crate::Person;
 use crate::PlayerFieldPositionGroup;
 use crate::PlayerPositionType;
 use crate::club::mind::organs::memory::ActorRef;
@@ -347,6 +348,7 @@ impl LeagueResult {
                         last_known_country_id: current_country_id,
                         position: player.position(),
                         position_group: player.position().position_group(),
+                        age: player.age(date),
                         assessed_ability,
                         assessed_potential,
                         confidence: if is_friendly { 0.28 } else { 0.48 },

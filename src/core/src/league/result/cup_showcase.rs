@@ -764,6 +764,7 @@ impl LeagueResult {
                                 last_known_country_id: country_id,
                                 position: cand.position,
                                 position_group: cand.position_group,
+                                age: cand.age,
                                 assessed_ability: cand.assessed_ability,
                                 assessed_potential: cand.assessed_potential,
                                 confidence: ShowcaseAssessment::tier_initial_confidence(cand.tier),

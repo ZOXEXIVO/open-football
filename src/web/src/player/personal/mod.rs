@@ -11,9 +11,12 @@ use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use chrono::NaiveDate;
 use core::Player;
+use core::PlayerPreferredFoot;
+use core::PlayerSquadStatus;
 use core::PlayerStatusType;
 use core::SimulatorData;
 use core::StaffPosition;
+use core::TeamType;
 use core::club::player::mind;
 use core::utils::FormattingUtils;
 use serde::Deserialize;
@@ -68,6 +71,11 @@ pub struct PlayerPersonalTemplate {
     /// a mind with nothing in it yet — a fresh save, or a player whose
     /// side has not ticked since he arrived.
     pub mind: Option<MindDto>,
+    /// Whether the club column of the morale panel has anything to
+    /// say — a manager he has a relationship with, or memories of
+    /// this club. Both are optional; the column is skipped when
+    /// neither is there.
+    pub has_club_ties: bool,
 }
 
 pub struct FavoriteClubDto {
@@ -76,6 +84,9 @@ pub struct FavoriteClubDto {
 }
 
 pub struct PersonalityDto {
+    /// Centre of the radar, where every axis starts.
+    pub cx: f32,
+    pub cy: f32,
     pub radar_points: String,
     pub radar_grid_4: String,
     pub radar_grid_3: String,
@@ -107,6 +118,9 @@ pub struct HappinessFactorDto {
     pub name: String,
     pub value: i8,
     pub label: String,
+    /// Bar length in percent of the whole ledger track, 0..=50 — see
+    /// `HappinessLedger::bar`.
+    pub bar: u8,
 }
 
 pub struct ManagerRelationshipDto {
@@ -223,7 +237,7 @@ pub async fn player_personal_action(
                     .teams
                     .teams
                     .iter()
-                    .find(|t| t.team_type == core::TeamType::Main)
+                    .find(|t| t.team_type == TeamType::Main)
                     .map(|t| t.slug.clone())
                     .unwrap_or_default();
                 FavoriteClubDto {
@@ -240,6 +254,9 @@ pub async fn player_personal_action(
         simulator_data.date.date(),
         &i18n,
     );
+
+    let has_club_ties = manager_relationship.is_some()
+        || mind.as_ref().is_some_and(|m| !m.memories.is_empty());
 
     let player_info = get_player_info(player, &i18n);
     let reputation = get_reputation(player, &i18n);
@@ -316,6 +333,7 @@ pub async fn player_personal_action(
         player_info,
         reputation,
         mind,
+        has_club_ties,
     }
     .into_response())
 }
@@ -323,7 +341,7 @@ pub async fn player_personal_action(
 fn get_personality(player: &Player) -> PersonalityDto {
     let attrs = &player.attributes;
 
-    let values: [u8; 8] = [
+    PersonalityRadar::plot([
         attrs.adaptability.round().clamp(1.0, 20.0) as u8,
         attrs.ambition.round().clamp(1.0, 20.0) as u8,
         attrs.controversy.round().clamp(1.0, 20.0) as u8,
@@ -332,8 +350,15 @@ fn get_personality(player: &Player) -> PersonalityDto {
         attrs.professionalism.round().clamp(1.0, 20.0) as u8,
         attrs.sportsmanship.round().clamp(1.0, 20.0) as u8,
         attrs.temperament.round().clamp(1.0, 20.0) as u8,
-    ];
-    let names = [
+    ])
+}
+
+/// Lays the eight hidden attributes out on the radar the personality
+/// panel draws.
+struct PersonalityRadar;
+
+impl PersonalityRadar {
+    const NAMES: [&'static str; 8] = [
         "adaptability",
         "ambition",
         "controversy",
@@ -344,78 +369,84 @@ fn get_personality(player: &Player) -> PersonalityDto {
         "temperament",
     ];
 
-    // Centered in a 400x280 viewBox with enough room for labels
-    let cx: f32 = 200.0;
-    let cy: f32 = 140.0;
-    let max_r: f32 = 75.0;
-    let label_r: f32 = 90.0;
-    let n = values.len();
+    /// Centred in a 440x280 viewBox. The polygon is drawn at nearly the
+    /// full height; the extra width is what keeps the longest label,
+    /// "Sportsmanship", inside the left edge with its value after it.
+    const CX: f32 = 220.0;
+    const CY: f32 = 140.0;
+    const MAX_R: f32 = 96.0;
+    const LABEL_R: f32 = 114.0;
 
-    let angle_at = |i: usize| -> f32 {
-        std::f32::consts::PI * 2.0 * (i as f32) / (n as f32) - std::f32::consts::FRAC_PI_2
-    };
+    fn angle_at(i: usize) -> f32 {
+        std::f32::consts::PI * 2.0 * (i as f32) / (Self::NAMES.len() as f32)
+            - std::f32::consts::FRAC_PI_2
+    }
 
-    let grid_polygon = |radius: f32| -> String {
-        (0..n)
+    fn grid_polygon(radius: f32) -> String {
+        (0..Self::NAMES.len())
             .map(|i| {
-                let a = angle_at(i);
-                format!("{:.1},{:.1}", cx + radius * a.cos(), cy + radius * a.sin())
+                let a = Self::angle_at(i);
+                format!(
+                    "{:.1},{:.1}",
+                    Self::CX + radius * a.cos(),
+                    Self::CY + radius * a.sin()
+                )
             })
             .collect::<Vec<_>>()
             .join(" ")
-    };
-
-    let mut data_points = Vec::new();
-    let mut radar_axes = Vec::new();
-    let mut radar_items = Vec::new();
-
-    for i in 0..n {
-        let angle = angle_at(i);
-        let ratio = values[i] as f32 / 20.0;
-        data_points.push(format!(
-            "{:.1},{:.1}",
-            cx + max_r * ratio * angle.cos(),
-            cy + max_r * ratio * angle.sin()
-        ));
-
-        radar_axes.push(RadarAxisDto {
-            x2: cx + max_r * angle.cos(),
-            y2: cy + max_r * angle.sin(),
-        });
-
-        let lx = cx + label_r * angle.cos();
-        let ly = cy + label_r * angle.sin();
-        let anchor = if angle.cos().abs() < 0.01 {
-            "middle"
-        } else if angle.cos() > 0.0 {
-            "start"
-        } else {
-            "end"
-        };
-
-        radar_items.push(RadarLabelDto {
-            name: names[i].to_string(),
-            value: values[i],
-            x: lx,
-            y: ly,
-            anchor: anchor.to_string(),
-        });
     }
 
-    PersonalityDto {
-        radar_points: data_points.join(" "),
-        radar_grid_4: grid_polygon(max_r),
-        radar_grid_3: grid_polygon(max_r * 0.75),
-        radar_grid_2: grid_polygon(max_r * 0.5),
-        radar_grid_1: grid_polygon(max_r * 0.25),
-        radar_axes,
-        radar_items,
+    fn plot(values: [u8; 8]) -> PersonalityDto {
+        let mut data_points = Vec::new();
+        let mut radar_axes = Vec::new();
+        let mut radar_items = Vec::new();
+
+        for (i, name) in Self::NAMES.iter().enumerate() {
+            let angle = Self::angle_at(i);
+            let ratio = values[i] as f32 / 20.0;
+            data_points.push(format!(
+                "{:.1},{:.1}",
+                Self::CX + Self::MAX_R * ratio * angle.cos(),
+                Self::CY + Self::MAX_R * ratio * angle.sin()
+            ));
+
+            radar_axes.push(RadarAxisDto {
+                x2: Self::CX + Self::MAX_R * angle.cos(),
+                y2: Self::CY + Self::MAX_R * angle.sin(),
+            });
+
+            let anchor = if angle.cos().abs() < 0.01 {
+                "middle"
+            } else if angle.cos() > 0.0 {
+                "start"
+            } else {
+                "end"
+            };
+
+            radar_items.push(RadarLabelDto {
+                name: name.to_string(),
+                value: values[i],
+                x: Self::CX + Self::LABEL_R * angle.cos(),
+                y: Self::CY + Self::LABEL_R * angle.sin(),
+                anchor: anchor.to_string(),
+            });
+        }
+
+        PersonalityDto {
+            cx: Self::CX,
+            cy: Self::CY,
+            radar_points: data_points.join(" "),
+            radar_grid_4: Self::grid_polygon(Self::MAX_R),
+            radar_grid_3: Self::grid_polygon(Self::MAX_R * 0.75),
+            radar_grid_2: Self::grid_polygon(Self::MAX_R * 0.5),
+            radar_grid_1: Self::grid_polygon(Self::MAX_R * 0.25),
+            radar_axes,
+            radar_items,
+        }
     }
 }
 
 fn get_player_info(player: &Player, i18n: &I18n) -> PlayerInfoDto {
-    use core::{PlayerPreferredFoot, PlayerSquadStatus};
-
     let preferred_foot = match player.preferred_foot {
         PlayerPreferredFoot::Left => i18n.t("foot_left"),
         PlayerPreferredFoot::Right => i18n.t("foot_right"),
@@ -447,7 +478,7 @@ fn get_player_info(player: &Player, i18n: &I18n) -> PlayerInfoDto {
             FormattingUtils::format_money(contract.salary as f64),
             i18n.t("per_year")
         );
-        let expiry = contract.expiration.format("%d.%m.%Y").to_string();
+        let expiry = i18n.format_date(contract.expiration);
         (status.to_string(), wage, expiry)
     } else {
         (String::new(), String::new(), String::new())
@@ -532,37 +563,58 @@ fn get_happiness_factors(player: &Player, i18n: &I18n) -> Vec<HappinessFactorDto
     // Core seven factors (existing) plus the six derived "life in the
     // team" factors. Surface them all so the user can answer "why is
     // Messi unhappy at this club?" without guessing.
-    let factors = [
-        ("factor_playing_time", f.playing_time),
-        ("factor_salary", f.salary_satisfaction),
-        ("factor_manager", f.manager_relationship),
-        ("factor_ambition_fit", f.ambition_fit),
-        ("factor_injury", f.injury_frustration),
-        ("factor_role_clarity", f.role_clarity),
-        ("factor_coach_credibility", f.coach_credibility),
-        ("factor_dressing_room_status", f.dressing_room_status),
-        ("factor_club_fit", f.club_fit),
-        ("factor_pressure_load", f.pressure_load),
-        ("factor_promise_trust", f.promise_trust),
-    ];
+    HappinessLedger::rows(
+        &[
+            ("factor_playing_time", f.playing_time),
+            ("factor_salary", f.salary_satisfaction),
+            ("factor_manager", f.manager_relationship),
+            ("factor_ambition_fit", f.ambition_fit),
+            ("factor_injury", f.injury_frustration),
+            ("factor_role_clarity", f.role_clarity),
+            ("factor_coach_credibility", f.coach_credibility),
+            ("factor_dressing_room_status", f.dressing_room_status),
+            ("factor_club_fit", f.club_fit),
+            ("factor_pressure_load", f.pressure_load),
+            ("factor_promise_trust", f.promise_trust),
+        ],
+        i18n,
+    )
+}
 
-    factors
-        .iter()
-        .filter(|(_, val)| val.abs() > 0.5)
-        .map(|(key, val)| {
-            let label = i18n.t(FactorSentiment::i18n_key(*val));
-            HappinessFactorDto {
+/// The happiness factors as the morale panel lists them: a ledger of
+/// what is pulling him each way, worst first.
+struct HappinessLedger;
+
+impl HappinessLedger {
+    /// A factor this close to zero says nothing and is left off.
+    const SILENT: f32 = 0.5;
+
+    fn rows(factors: &[(&str, f32)], i18n: &I18n) -> Vec<HappinessFactorDto> {
+        let mut factors = factors.to_vec();
+        // Worst first: the panel exists to answer "why is he unhappy",
+        // so the reader meets the cause before the consolation.
+        factors.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+        factors
+            .iter()
+            .filter(|(_, val)| val.abs() > Self::SILENT)
+            .map(|(key, val)| HappinessFactorDto {
                 name: i18n.t(key).to_string(),
                 value: val.round().clamp(-10.0, 10.0) as i8,
-                label: label.to_string(),
-            }
-        })
-        .collect()
+                label: i18n.t(FactorSentiment::i18n_key(*val)).to_string(),
+                bar: Self::bar(*val),
+            })
+            .collect()
+    }
+
+    /// Bar length in percent of the whole track. Half the track is a
+    /// full-strength factor, so a bar never crosses the centre line.
+    fn bar(value: f32) -> u8 {
+        (value.abs() * 5.0).round().clamp(0.0, 50.0) as u8
+    }
 }
 
 fn get_concerns(player: &Player, i18n: &I18n) -> Vec<String> {
-    use core::PlayerStatusType;
-
     let statuses = player.statuses.get();
     let mut concerns = Vec::new();
 
@@ -865,4 +917,270 @@ fn get_mind(player: &Player, club_id: u32, today: NaiveDate, i18n: &I18n) -> Opt
         sentiment: (sentiment * 100.0).clamp(-100.0, 100.0) as i8,
         sentiment_label: i18n.t(sentiment_label).to_string(),
     })
+}
+
+#[cfg(test)]
+mod page_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Matías Daniele's page as it stood in June 2034: every block of
+    /// the layout populated, including the branches a settled player
+    /// never shows.
+    struct Fixture;
+
+    impl Fixture {
+        fn i18n() -> I18n {
+            let raw = std::fs::read_to_string("assets/i18n/en.json").expect("en bundle");
+            let map: HashMap<String, String> =
+                serde_json::from_str(&raw).expect("en bundle is a flat map");
+            I18n::for_test(map)
+        }
+
+        fn want(name: &str, status: &str, pressure: u8, unspoken: bool) -> MindWantDto {
+            MindWantDto {
+                name: name.to_string(),
+                status: status.to_string(),
+                unspoken,
+                deadline: None,
+                blocked: None,
+                pressure,
+            }
+        }
+
+        fn template() -> PlayerPersonalTemplate {
+            let i18n = Self::i18n();
+            let happiness_factors = HappinessLedger::rows(
+                &[
+                    ("factor_playing_time", -7.0),
+                    ("factor_salary", 7.0),
+                    ("factor_manager", -3.0),
+                    ("factor_ambition_fit", 0.2),
+                    ("factor_injury", 0.0),
+                    ("factor_role_clarity", 3.0),
+                    ("factor_coach_credibility", -2.0),
+                    ("factor_dressing_room_status", -3.0),
+                    ("factor_club_fit", 2.0),
+                    ("factor_pressure_load", -0.3),
+                    ("factor_promise_trust", -6.0),
+                ],
+                &i18n,
+            );
+            let mut wants = vec![
+                Self::want("To be paid what he is worth", "Demanding it", 72, false),
+                Self::want("To go home", "Has said so", 58, false),
+                Self::want("A settled future", "Shapes every decision", 47, true),
+                Self::want("To learn the language", "Has said so", 41, false),
+                Self::want("Out, anywhere", "Shapes every decision", 22, true),
+                Self::want("First-team football", "Shapes every decision", 18, true),
+                Self::want("His place back", "Beginning to feel it", 6, true),
+            ];
+            wants[0].blocked = Some("He has only just arrived".to_string());
+            wants[1].deadline = Some("Has given it until 01.09.2034".to_string());
+
+            PlayerPersonalTemplate {
+                css_version: "test",
+                computer_name: "test",
+                cpu_brand: "test",
+                cores_count: 1,
+                title: "Matías Daniele".to_string(),
+                sub_title_prefix: "GK".to_string(),
+                sub_title_suffix: String::new(),
+                sub_title: "AC Milan".to_string(),
+                sub_title_link: "/en/teams/ac-milan".to_string(),
+                sub_title_country_code: String::new(),
+                header_color: "#c8102e".to_string(),
+                foreground_color: "#ffffff".to_string(),
+                menu_sections: Vec::new(),
+                lang: "en".to_string(),
+                active_tab: "personal",
+                player_id: 2000200423,
+                player_slug: "2000200423-matias-daniele".to_string(),
+                club_id: 1,
+                is_on_loan: false,
+                is_injured: false,
+                is_unhappy: true,
+                is_force_match_selection: false,
+                is_on_watchlist: false,
+                events_count: 133,
+                interested_clubs_count: 2,
+                awards_count: 1,
+                news_count: 8,
+                personality: PersonalityRadar::plot([2, 3, 19, 18, 19, 6, 3, 2]),
+                morale: MoraleDto {
+                    value: 14,
+                    label: i18n.t("morale_very_poor").to_string(),
+                },
+                happiness_factors,
+                concerns: vec![
+                    i18n.t("concern_unhappy").to_string(),
+                    i18n.t("concern_transfer_request").to_string(),
+                ],
+                behaviour: i18n.t("behaviour_good").to_string(),
+                manager_relationship: Some(ManagerRelationshipDto {
+                    manager_name: "Riccardo Greco".to_string(),
+                    level: 4,
+                    label: i18n.t("rel_neutral").to_string(),
+                    trust: 100,
+                    respect: 40,
+                }),
+                favorite_clubs: vec![FavoriteClubDto {
+                    name: "Belgrano".to_string(),
+                    slug: "belgrano".to_string(),
+                }],
+                player_info: PlayerInfoDto {
+                    birth_date: "2 Jan 2004".to_string(),
+                    preferred_foot: i18n.t("foot_right").to_string(),
+                    leadership: 10,
+                    determination: 11,
+                    work_rate: 7,
+                    condition: 91,
+                    fitness: 100,
+                    squad_status: i18n.t("squad_backup_player").to_string(),
+                    salary: "3.1M per year".to_string(),
+                    contract_expiry: "16 Jun 2035".to_string(),
+                    international_apps: 12,
+                    international_goals: 3,
+                    languages: vec![
+                        PlayerLanguageDto {
+                            name: "Spanish".to_string(),
+                            proficiency: 100,
+                            level: i18n.t("lang_level_native").to_string(),
+                            is_native: true,
+                        },
+                        PlayerLanguageDto {
+                            name: "Italian".to_string(),
+                            proficiency: 32,
+                            level: i18n.t("lang_level_basic").to_string(),
+                            is_native: false,
+                        },
+                    ],
+                },
+                reputation: ReputationDto {
+                    current: 45,
+                    current_label: i18n.t("rep_national").to_string(),
+                    home: 47,
+                    home_label: i18n.t("rep_national").to_string(),
+                    world: 18,
+                    world_label: i18n.t("rep_regional").to_string(),
+                },
+                mind: Some(MindDto {
+                    wants,
+                    memories: vec![MindMemoryDto {
+                        text: "He won everything here".to_string(),
+                        warm: true,
+                    }],
+                    sentiment: 40,
+                    sentiment_label: i18n.t("mind_sentiment_fond").to_string(),
+                }),
+                has_club_ties: true,
+                i18n,
+            }
+        }
+    }
+
+    /// The ledger is read worst first, and a factor that says nothing
+    /// is not on it.
+    #[test]
+    fn ledger_lists_worst_first_and_drops_the_silent() {
+        let i18n = Fixture::i18n();
+        let rows = HappinessLedger::rows(
+            &[
+                ("factor_salary", 7.0),
+                ("factor_injury", 0.2),
+                ("factor_playing_time", -7.0),
+                ("factor_manager", -3.0),
+            ],
+            &i18n,
+        );
+
+        let values: Vec<i8> = rows.iter().map(|r| r.value).collect();
+        assert_eq!(values, vec![-7, -3, 7]);
+        assert_eq!(rows[0].name, "Playing Time");
+    }
+
+    /// Half the track is a full-strength factor; nothing crosses the
+    /// centre line however far the value is clamped from.
+    #[test]
+    fn a_full_strength_factor_reaches_the_centre_line_and_no_further() {
+        assert_eq!(HappinessLedger::bar(7.0), 35);
+        assert_eq!(HappinessLedger::bar(-10.0), 50);
+        assert_eq!(HappinessLedger::bar(-14.0), 50);
+        assert_eq!(HappinessLedger::bar(0.0), 0);
+    }
+
+    /// Every block of the page renders from the fixture — the flags,
+    /// the ledger, the wants with their tag, and the club column —
+    /// and the ledger opens on the worst factor.
+    #[test]
+    fn every_block_of_the_page_renders() {
+        let html = Fixture::template().render().expect("render");
+
+        for marker in [
+            "fm-mh-flag\"",
+            "fm-mh-ledger-row",
+            "fm-mh-want is-unspoken",
+            "fm-mh-want-tag",
+            "fm-mh-want-note is-blocked",
+            "fm-mh-manager-name",
+            "fm-mh-memories",
+            "fm-pp-rep-tile",
+            "fm-pp-trait-val td_10",
+            "fm-radar-val",
+        ] {
+            assert!(html.contains(marker), "missing {marker}");
+        }
+
+        let ledger = html.find("fm-mh-ledger-row").expect("ledger");
+        let after = &html[ledger..];
+        assert!(after.find("Playing Time").unwrap() < after.find("Salary Satisfaction").unwrap());
+    }
+
+    /// Writes a self-contained copy of the page so the layout can be
+    /// looked at in a browser without starting the server:
+    ///
+    /// ```text
+    /// PERSONAL_PREVIEW_DIR=<dir> cargo test -p web --lib player_personal_preview -- --ignored
+    /// ```
+    #[test]
+    #[ignore]
+    fn player_personal_preview() {
+        let Ok(dir) = std::env::var("PERSONAL_PREVIEW_DIR") else {
+            return;
+        };
+        std::fs::create_dir_all(&dir).expect("preview dir");
+
+        let page = Fixture::template().render().expect("render");
+
+        // The rendered page links assets by absolute URL, which a
+        // `file://` load cannot resolve — inline the two stylesheets the
+        // layout actually depends on and drop the rest.
+        let bootstrap =
+            std::fs::read_to_string("assets/static/css/bootstrap.min.css").expect("bootstrap");
+        let style = std::fs::read_to_string("assets/static/css/style.css").expect("stylesheet");
+
+        let mut html = page;
+        for link in [
+            "<link href=\"/static/css/bootstrap.min.css\" rel=\"stylesheet\">",
+            "<link href=\"/static/css/flags.css\" rel=\"stylesheet\">",
+            "<link href=\"/static/css/font.min.css\" rel=\"stylesheet\">",
+        ] {
+            html = html.replace(link, "");
+        }
+        if let Some(start) = html.find("<link href=\"/static/css/styles.min.css") {
+            if let Some(end) = html[start..].find('>') {
+                html.replace_range(start..start + end + 1, "");
+            }
+        }
+        html = html.replace(
+            "</head>",
+            &format!("<style>{bootstrap}</style><style>{style}</style></head>"),
+        );
+
+        std::fs::write(
+            std::path::Path::new(&dir).join("player-personal.html"),
+            html,
+        )
+        .expect("write preview");
+    }
 }

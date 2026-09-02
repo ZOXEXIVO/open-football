@@ -255,22 +255,43 @@ impl CountryResult {
         // pre-contract is legal year-round inside the six-month window.
         PreContractManager::stage(country, current_date, &config);
 
+        // ── Year-round: planning and knowledge ──────────────────────
+        //
+        // Everything from the squad review to the recruitment meeting used
+        // to sit inside the window gate, which is what made the pipeline a
+        // procurement department rather than a market: close the window and
+        // the recruitment department stopped existing, so a club walked into
+        // June with no plan, no watchlist and no dossiers, and spent the
+        // window discovering what it needed.
+        //
+        // These passes carry their own cadences (monthly planning, weekly
+        // scouting and meetings), so moving them out here does not multiply
+        // the work by the length of the year — it spreads the same work
+        // across it, which is the point. The passes that MOVE money or
+        // players stay inside the window below.
+        PipelineProcessor::evaluate_squads(country, current_date);
+        PipelineProcessor::generate_staff_recommendations(country, current_date);
+        PipelineProcessor::process_staff_recommendations(country, current_date);
+        // The club's standing knowledge of the market: names within reach
+        // and within the brief's envelope for each shirt it means to fill.
+        // Weekly, all year — a scout does not stop watching football in
+        // October, and this is what makes the first day of the window start
+        // from a written agenda instead of a cold pool.
+        PipelineProcessor::refresh_watchlists(country, world_pool, current_date);
+        PipelineProcessor::assign_scouts(country, current_date);
+        PipelineProcessor::assign_scouts_to_matches(country, current_date);
+        PipelineProcessor::process_match_scouting(country, current_date);
+        PipelineProcessor::process_scouting(country, &foreign_players, current_date);
+        PipelineProcessor::run_recruitment_meetings(country, current_date);
+
         if window_open {
             debug!("Transfer window is OPEN - simulating pipeline-driven market activity");
             Self::list_players_from_pipeline(country, current_date, &mut summary);
-            PipelineProcessor::evaluate_squads(country, current_date);
-            PipelineProcessor::generate_staff_recommendations(country, current_date);
-            PipelineProcessor::process_staff_recommendations(country, current_date);
             // Market-circulation / diagnosis: record interest in (or a
             // coherent block reason for) every available signed player,
             // right after the recommendation sweep so this tick's interest
             // is already visible.
             PipelineProcessor::circulate_available_players(country, current_date);
-            PipelineProcessor::assign_scouts(country, current_date);
-            PipelineProcessor::assign_scouts_to_matches(country, current_date);
-            PipelineProcessor::process_match_scouting(country, current_date);
-            PipelineProcessor::process_scouting(country, &foreign_players, current_date);
-            PipelineProcessor::run_recruitment_meetings(country, current_date);
             PipelineProcessor::build_shortlists(country, current_date);
             PipelineProcessor::evaluate_board_approvals(country, current_date);
             PipelineProcessor::initiate_negotiations(country, current_date);

@@ -1,5 +1,7 @@
+use crate::app::bill::{Held, MemoryBill};
 use crate::app::config::ViewerConfig;
 use crate::app::perf::FrameCost;
+use crate::app::quality::{Footprint, Quality};
 use crate::recording::playback::{Playback, RecordedSpans};
 use crate::recording::replay::{
     ChunkPayload, MatchEvent, RecordingMetadata, ReplayTracks, Sample, StateEntry,
@@ -410,6 +412,10 @@ pub struct ChunkLoader {
     /// otherwise hold the loading overlay over an empty pitch waiting for a
     /// squad that is never coming.
     nothing: bool,
+    /// How many chunks are kept in flight ahead of the playhead — see
+    /// [`Self::READ_AHEAD`]. Settled once, from the footprint and whatever the
+    /// address bar said, by [`Self::bootstrap`].
+    read_ahead: usize,
 }
 
 impl Default for ChunkLoader {
@@ -426,6 +432,9 @@ impl Default for ChunkLoader {
             retry_in: 0.0,
             ready: false,
             nothing: false,
+            // Corrected by `bootstrap`, which is the first place the footprint
+            // and the config are both in reach.
+            read_ahead: Self::READ_AHEAD,
         }
     }
 }
@@ -441,13 +450,58 @@ impl ChunkLoader {
     /// third of a second, in one frame, with nothing else able to run.
     const PARSE_BUDGET_MS: f32 = 3.0;
 
+    /// **How many chunks are fetched ahead of the playhead**, and what a
+    /// handheld gets instead.
+    ///
+    /// Two is enough at normal speed; the extra one is for the `.dev/match`
+    /// harness, which plays back at up to 16x, and for a backgrounded tab that
+    /// can cross a chunk boundary in a single frame. (The comment said two and
+    /// the range `current..=current + 2` asked for three, which is the version
+    /// that was actually running.)
+    ///
+    /// On a handheld it is ONE, and the reason is not bandwidth. A full-scope
+    /// chunk is 4.4 MB of JSON; the worker's `JSON.parse` builds some 26 MiB
+    /// of JS objects out of it, and three in flight is 79–106 MiB of JS heap
+    /// landing at the worst possible moment — during the bring-up, alongside
+    /// the crowd and the attachments, on the device whose tab is killed for
+    /// exactly this. Reading one at a time costs a stall only if the network
+    /// cannot keep five minutes ahead of real time.
+    const READ_AHEAD: usize = 2;
+    const READ_AHEAD_HANDHELD: usize = 1;
+
+    /// **How many chunks either side of the playhead stay resident.**
+    ///
+    /// A chunk is five minutes of twenty-three tracks. Two either side is a
+    /// quarter of an hour of match in memory around wherever the viewer is
+    /// looking, which is more than any scrub reaches for and far less than the
+    /// whole ninety minutes the loader used to accumulate and never let go of.
+    ///
+    /// Read with [`Self::evict`], which is where the argument is.
+    const RESIDENT: usize = 2;
+
     /// Whether this recording has anything in it to play at all.
     pub fn nothing_to_play(&self) -> bool {
         self.nothing
     }
 
-    /// Kicks off the metadata request that everything else waits on.
-    pub fn bootstrap(mut loader: ResMut<ChunkLoader>, config: Res<ViewerConfig>) {
+    /// Kicks off the metadata request that everything else waits on, and
+    /// settles how far ahead of the playhead this device reads.
+    ///
+    /// The read-ahead is decided here rather than in `Default` because that is
+    /// where the two things it depends on first exist together: the footprint
+    /// the scene is being built at, and the page's own `?readahead=`.
+    pub fn bootstrap(
+        mut loader: ResMut<ChunkLoader>,
+        config: Res<ViewerConfig>,
+        quality: Res<Quality>,
+    ) {
+        loader.read_ahead = match config.readahead {
+            Some(asked) => asked.min(Self::READ_AHEAD),
+            None => match quality.footprint() {
+                Footprint::Roomy => Self::READ_AHEAD,
+                Footprint::Handheld => Self::READ_AHEAD_HANDHELD,
+            },
+        };
         loader.request_metadata(&config);
     }
 
@@ -558,9 +612,6 @@ impl ChunkLoader {
             return;
         }
 
-        // Two chunks of read-ahead. One is enough at normal speed, but the dev
-        // harness plays back at up to 16x and a backgrounded tab can jump a
-        // chunk boundary in a single frame.
         let current = loader.chunk_index(playback.time_ms);
         // Plus whichever chunk holds the next clip. On a goals-only recording
         // the playhead crosses the gap in one frame (`Playback::advance`), and
@@ -571,7 +622,8 @@ impl ChunkLoader {
             .next_start(playback.time_ms)
             .map(|start| loader.chunk_index(start));
 
-        for index in (current..=current + 2).chain(upcoming) {
+        let ahead = loader.read_ahead;
+        for index in (current..=current + ahead).chain(upcoming) {
             if index >= loader.chunk_count {
                 continue;
             }
@@ -582,6 +634,82 @@ impl ChunkLoader {
                 continue;
             }
             loader.request_chunk(&config, index);
+        }
+
+        // …and everything far enough behind the playhead goes. See
+        // [`Self::evict`].
+        loader.evict(&mut tracks, current, upcoming);
+        // The level, not a total: the window both grows and is emptied. See
+        // [`MemoryBill::hold`].
+        MemoryBill::hold(Held::Recording, tracks.resident_bytes());
+    }
+
+    /// **Drops the chunks the playhead has left behind.**
+    ///
+    /// ⚠ **Nothing was ever evicted.** Every chunk a session touched stayed in
+    /// [`ReplayTracks`] for the life of the tab, so a full recording ended at
+    /// some 93–110 MiB resident and a seek across the match pulled every chunk
+    /// of it in. The game's own default scope keeps only the goals and is
+    /// under a megabyte, which is why this went unnoticed — but `.dev/match`
+    /// and `--match-recording-full` are a second, independent way to be killed
+    /// for memory, and they are the two configurations somebody chasing this
+    /// bug is most likely to be running.
+    ///
+    /// The window is [`Self::RESIDENT`] chunks either side of the playhead,
+    /// plus whichever chunk holds the next clip — the same exception the
+    /// read-ahead makes, and for the same reason: on a goals-only recording
+    /// the playhead crosses a twenty-chunk gap in one frame, and a window
+    /// measured in adjacent chunks would throw away the thing it is about to
+    /// need.
+    ///
+    /// **The `requested` guard is reset with the samples**, which is the half
+    /// of this that is easy to get wrong: that set is what stops a chunk being
+    /// asked for twice, so a chunk evicted and not un-requested is a chunk
+    /// that can never come back, and a seek to it would sit on a frozen frame
+    /// forever.
+    fn evict(&mut self, tracks: &mut ReplayTracks, current: usize, upcoming: Option<usize>) {
+        let keep =
+            |index: usize| index.abs_diff(current) <= Self::RESIDENT || Some(index) == upcoming;
+        let dropped: Vec<usize> = self
+            .loaded
+            .iter()
+            .copied()
+            .filter(|index| !keep(*index))
+            .collect();
+        if dropped.is_empty() {
+            return;
+        }
+        // Kept as spans of TIME rather than as a single window, because the
+        // clip exception is not adjacent to anything: on a goals-only
+        // recording the next clip can be twenty chunks away, and the samples
+        // that belong to it have to survive a sweep that keeps only the
+        // playhead's neighbours.
+        //
+        // The chunks still being read are in here too. They are not in
+        // `loaded` yet — that is what `loaded` MEANS, see [`Self::read_on`] —
+        // and a sweep that forgot them would drop the half of a chunk that had
+        // already been folded in while the loader went on believing it had
+        // read all of it.
+        let span = |index: usize| {
+            (
+                index as f64 * self.chunk_duration_ms,
+                (index + 1) as f64 * self.chunk_duration_ms,
+            )
+        };
+        let held: Vec<(f64, f64)> = self
+            .loaded
+            .iter()
+            .copied()
+            .filter(|index| keep(*index))
+            .chain(self.unread.iter().map(|chunk| chunk.index))
+            .map(span)
+            .collect();
+        tracks.keep_within(&held);
+        for index in dropped {
+            self.loaded.remove(&index);
+            // Un-asked as well as un-held, or a seek back could never fetch
+            // it again. See the note above.
+            self.requested.remove(&index);
         }
     }
 
@@ -616,6 +744,27 @@ impl ChunkLoader {
                         // a dropped frame.
                         if let Some(quads) = positions.get(first * 4..(first + count) * 4) {
                             tracks.absorb_player_quads(player_id, quads);
+                        }
+                        // **Given back as it drains.** The spans were written
+                        // in ascending order and are taken from the BACK, so
+                        // the part just read is always the tail of the buffer
+                        // and cutting it off cannot disturb what is left.
+                        //
+                        // Without this the whole flat array — one and a half
+                        // megabytes for a five-minute chunk — stayed alive
+                        // beside the tracks being built out of it, for as many
+                        // frames as the budgeted read takes. Two copies of a
+                        // chunk, at the moment the read-ahead is fetching the
+                        // next two.
+                        //
+                        // Shrunk only once the buffer is half empty, which is
+                        // the ordinary amortisation: `truncate` alone returns
+                        // no pages at all, and shrinking on every one of the
+                        // twenty-three players would copy the remainder
+                        // twenty-three times to save the same bytes once.
+                        positions.truncate(first * 4);
+                        if positions.len() * 2 <= positions.capacity() {
+                            positions.shrink_to_fit();
                         }
                         if spent() {
                             return;

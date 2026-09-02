@@ -2,7 +2,10 @@ use crate::DatabaseEntity;
 use crate::generators::{PlayerGenerator, StaffGenerator};
 use crate::loaders::ContinentEntity;
 use core::league::LeagueCollection;
-use core::{Country, CountryGeneratorData, CountryPricing, CountrySettings, SkinColorDistribution};
+use core::{
+    Country, CountryGeneratorData, CountryPricing, CountryRegulations, CountrySettings,
+    SkinColorDistribution,
+};
 use rayon::prelude::*;
 
 use super::DatabaseGenerator;
@@ -96,6 +99,12 @@ impl DatabaseGenerator {
                     .clubs(clubs)
                     .reputation(country.reputation)
                     .settings(settings)
+                    // Squad-registration rules from the country's own
+                    // public regulations — foreigner quotas where the rule
+                    // counts passports, homegrown minimums where it counts
+                    // them the way this model can read. `None` everywhere
+                    // else, so nothing is invented.
+                    .regulations(CountryRegulations::for_country_code(&country.code))
                     .generator_data(generator_data)
                     .build()
                     .expect("Failed to build Country")

@@ -440,15 +440,32 @@ impl Serialize for ResultMatchPositionData {
         S: Serializer,
     {
         let has_states = self.track_events && !self.player_states.is_empty();
-        let field_count =
-            2 + if self.track_events { 2 } else { 0 } + if has_states { 1 } else { 0 };
+        // Ball, players, the event log where there is one, and the state
+        // lines where there are any. See the note below for the fifth key that
+        // used to be here and was never read.
+        let field_count = 2 + usize::from(self.track_events) + usize::from(has_states);
         let mut map = serializer.serialize_map(Some(field_count))?;
 
         map.serialize_entry("ball", &self.ball)?;
         map.serialize_entry("players", &self.players)?;
 
         if self.track_events {
-            map.serialize_entry("passes", &self.passes)?;
+            // ⚠ **`passes` is deliberately not written.**
+            //
+            // It was, into every chunk of every recording, and nothing has
+            // ever read it back: the viewer's `ChunkPayload` has no such
+            // field, so serde skipped it on the way in and the bytes existed
+            // only to be inflated, decoded and thrown away — on a phone, on
+            // the browser's only thread, three chunks at a time. The passes
+            // are used inside the engine, where they live in memory
+            // (`get_passes_in_window`); it is only the wire copy that was
+            // waste.
+            //
+            // Dropping a key is backwards-compatible in both directions here.
+            // A recording already on disk still carries it and every reader
+            // ignores unknown keys; a recording written now simply has one
+            // fewer. Should the viewer ever want them, they come back as a
+            // field on `ChunkPayload` and a line here.
             map.serialize_entry("events", &self.events)?;
         }
 

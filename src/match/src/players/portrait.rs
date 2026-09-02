@@ -25,9 +25,7 @@
 use crate::app::config::{PlayerInfo, ViewerConfig};
 use crate::art::textures::{Portrait, Textures};
 use crate::players::actors::PlayerActor;
-use crate::players::body::{BodyParts, DressedFlesh, Flesh, Thatch};
-#[cfg(test)]
-use crate::players::body::Grain;
+use crate::players::body::{BodyParts, DressedFlesh, Flesh, Grain, Thatch};
 use crate::players::kit::{Complexion, Wardrobe};
 use bevy::prelude::*;
 use std::collections::VecDeque;
@@ -633,7 +631,17 @@ pub struct Portraits {
     /// Finished pictures, waiting for a frame to be folded in. Browser
     /// fetches resolve on the JS microtask queue, which has no access to the
     /// ECS — same arrangement as [`crate::recording::loader::ChunkLoader`].
+    ///
+    /// ⚠ **Bounded, at [`Self::MAILBOX`].** A `Portrait` is a decoded bitmap
+    /// and this queue is drained one per frame ([`Self::A_FRAME`]), so nothing
+    /// but [`Self::SPACING`] was keeping it shallow — a spacing that exists
+    /// for a completely different reason and could be tuned for that reason
+    /// tomorrow. See the cap for what it costs to be wrong about that.
     inbox: Arc<Mutex<Vec<(u32, Portrait)>>>,
+    /// How finely this squad is cut, which decides how large a face sheet a
+    /// photograph is painted onto. See
+    /// [`Grain::face`](crate::players::body::Grain::face).
+    grain: Grain,
     /// Men who have been dressed and not yet asked about, oldest first. See
     /// [`Self::ask`], which is what takes them off it.
     outbox: VecDeque<(u32, Vec<(String, Framing)>)>,
@@ -680,14 +688,35 @@ impl Portraits {
     /// milliseconds and no spacing at all.
     const SPACING: f32 = 0.10;
 
+    /// **The most decoded pictures the mailbox will hold**, past which the
+    /// oldest is dropped and its man keeps the face this crate painted him.
+    ///
+    /// ⚠ **The spacing above is a MEMORY bound and was only ever documented
+    /// as a timing one.** A `Portrait` is a decoded bitmap sitting in the wasm
+    /// heap, arrivals are folded in at one a frame, and nothing else stood
+    /// between "the network answered faster than the replay drew" and a queue
+    /// of them. In the ordinary case it is never more than one or two deep —
+    /// a tenth of a second between requests against a frame every few
+    /// milliseconds — but the case that matters is the one where frames stop
+    /// being every few milliseconds: a phone mid-bring-up, which is exactly
+    /// when the whole squad's photographs are in flight and exactly when the
+    /// tab is closest to being killed.
+    ///
+    /// Four, which is more than a healthy session ever reaches and small
+    /// enough that being wrong about the pacing costs four bitmaps rather than
+    /// twenty-two. Dropping the OLDEST rather than refusing the newest, so a
+    /// backlog resolves toward the men currently being dressed.
+    const MAILBOX: usize = 4;
+
     /// An empty mailbox and the ramp to move players along it.
-    pub fn waiting(wardrobe: &Wardrobe) -> Portraits {
+    pub fn waiting(wardrobe: &Wardrobe, grain: Grain) -> Portraits {
         Portraits {
             faces: Vec::new(),
             complexions: wardrobe.complexions(),
             inbox: Arc::new(Mutex::new(Vec::new())),
             outbox: VecDeque::new(),
             cooldown: 0.0,
+            grain,
         }
     }
 
@@ -755,6 +784,11 @@ impl Portraits {
             for (url, framing) in sources {
                 if let Some(picture) = Self::picture(&url, framing).await {
                     if let Ok(mut inbox) = inbox.lock() {
+                        // Oldest first, so a backlog resolves toward the men
+                        // being dressed now — see [`Self::MAILBOX`].
+                        while inbox.len() >= Self::MAILBOX {
+                            inbox.remove(0);
+                        }
                         inbox.push((id, picture));
                     }
                     return;
@@ -833,6 +867,10 @@ impl Portraits {
         }
 
         let layout = BodyParts::face_layout();
+        // How large a sheet to paint him onto — the same decision that cut the
+        // rest of him, taken once when the squad was assembled. See
+        // [`Grain::face`].
+        let grain = portraits.grain;
         for (id, picture) in arrivals {
             let Some(player) = config.players.iter().find(|player| player.id == id) else {
                 continue;
@@ -863,7 +901,8 @@ impl Portraits {
                 look.skin = Color::srgb(tone.x, tone.y, tone.z);
             }
             if let Some((_, material)) = portraits.faces.iter().find(|(face, _)| *face == id) {
-                let sheet = images.add(Textures::photographed_face(&layout, &look, &picture));
+                let sheet =
+                    images.add(Textures::photographed_face(&layout, &look, &picture, grain));
                 if let Some(mut material) = materials.get_mut(material) {
                     // The base colour has been carrying his complexion, which
                     // is what a head with no picture on it is painted in. A
@@ -1463,7 +1502,8 @@ mod tests {
             beard: Beard::Stubble,
             shaved: true,
         };
-        let sheet = Textures::photographed_face(&BodyParts::face_layout(), &look, &patch);
+        let sheet =
+            Textures::photographed_face(&BodyParts::face_layout(), &look, &patch, Grain::FULL);
         // Level zero only: a pictured sheet carries a mip chain behind it, and
         // everything below is looking at the sheet itself.
         let base = (sheet.width() * sheet.height() * 4) as usize;

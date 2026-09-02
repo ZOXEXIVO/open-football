@@ -1,3 +1,4 @@
+use crate::app::bill::{Held, MemoryBill};
 use crate::app::config::{PlayerInfo, TeamColors, ViewerConfig};
 use crate::art::textures::{Beard, FaceLook, Textures};
 use bevy::asset::RenderAssetUsages;
@@ -845,6 +846,12 @@ impl Wardrobe {
         if self.faces.iter().any(|(id, _)| *id == player.id) {
             return;
         }
+        // Everything below is his alone rather than shared with the squad, so
+        // it goes on the per-player half of the bill beside his face — see
+        // [`MemoryBill::charge`]. Uncharged it would file a team sheet's worth
+        // of numbers and names under the stadium's scenery, and the two grow
+        // for entirely different reasons.
+        let _charge = MemoryBill::charge(Held::Faces);
         let ink = self.prints[Self::strip_index(player)];
 
         if player.shirt_number > 0 {

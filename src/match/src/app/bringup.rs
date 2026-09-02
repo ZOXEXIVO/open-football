@@ -50,7 +50,9 @@
 //! opening shot of the ceremony, which is the one place in the replay it is
 //! guaranteed to be noticed. See [`Self::squad_on_screen`].
 
-use crate::app::quality::Quality;
+use crate::app::bill::MemoryBill;
+use crate::app::config::ViewerConfig;
+use crate::app::quality::{Footprint, Quality};
 use crate::players::actors::{PlayerActor, Undressed};
 use crate::recording::loader::ChunkLoader;
 use bevy::prelude::*;
@@ -110,13 +112,26 @@ impl Default for Bringup {
 impl Bringup {
     /// How many frames the stadium is spread over.
     ///
-    /// One per thing that brings a shader with it, which is what sets the
-    /// number: the playing surface (normal-mapped and vertex-coloured), the
-    /// surround (the same vertex layout WITHOUT the relief, which is a
-    /// separate program), the paint, the goals and the stands. Splitting them
-    /// finer would buy nothing — a course that queues no new pipeline costs a
-    /// frame and returns a frame.
-    pub const COURSES: usize = 5;
+    /// The first five are one per thing that brings a SHADER with it, which is
+    /// what set the number originally: the playing surface (normal-mapped and
+    /// vertex-coloured), the surround (the same vertex layout WITHOUT the
+    /// relief, which is a separate program), the paint, the goals, and the
+    /// ground the stands sit on. Splitting those finer would buy nothing — a
+    /// course that queues no new pipeline costs a frame and returns a frame.
+    ///
+    /// ⚠ **The last four are not about shaders at all, and that is why they
+    /// were added.** They raise one bank of seating each, and all four share
+    /// the material the fifth course already linked, so none of them queues a
+    /// pipeline. What they buy is MEMORY: four spectator meshes built on one
+    /// frame are four of them alive at once, and on wasm32 the worst instant of
+    /// the load is the size of the tab for the rest of the session. See
+    /// [`Stands`](crate::scene::pitch::Stands), which carries the measurement,
+    /// and [`MemoryBill`](crate::app::bill::MemoryBill) for why a peak here is
+    /// permanent.
+    ///
+    /// So a course is now "a frame the bring-up is allowed to spend", and the
+    /// two reasons to spend one are a shader link and a large allocation.
+    pub const COURSES: usize = 9;
 
     /// Updates to let go by before the first course is laid.
     ///
@@ -203,23 +218,29 @@ impl Bringup {
         mut bringup: ResMut<Bringup>,
         mut quality: ResMut<Quality>,
         loader: Res<ChunkLoader>,
+        config: Res<ViewerConfig>,
         time: Res<Time<Real>>,
         squad: Query<&Visibility, (With<PlayerActor>, Without<Undressed>)>,
     ) {
         if bringup.told == Some(Phase::Ready) {
             return;
         }
+        // Carried onto every phase the page is told about. It is the one
+        // decision in this viewer that changes the whole scene and the one
+        // nobody can read off the screen, and this is where a device with no
+        // console gets to see it — see [`Footprint::probe`].
+        let footprint = quality.footprint();
 
         if !bringup.warmed() {
             bringup.warming += 1;
-            bringup.announce(Phase::Starting);
+            bringup.announce(Phase::Starting, footprint);
             return;
         }
 
         if bringup.course <= Self::COURSES {
             let laid = bringup.course;
             bringup.course += 1;
-            bringup.announce(Phase::Building(laid));
+            bringup.announce(Phase::Building(laid), footprint);
             if bringup.course > Self::COURSES {
                 // The shader compiles are behind us; frame times mean
                 // something again. See [`Quality::relent`].
@@ -243,7 +264,7 @@ impl Bringup {
             } else {
                 Phase::Squad
             };
-            bringup.announce(phase);
+            bringup.announce(phase, footprint);
             return;
         }
 
@@ -251,8 +272,13 @@ impl Bringup {
         // going ready with no chunk to wait for. Nobody will ever be dressed,
         // so waiting for the squad would hold the overlay over an empty pitch
         // for the rest of the session.
-        if loader.nothing_to_play() {
-            bringup.announce(Phase::Ready);
+        //
+        // `?squad=off` is the same situation arrived at deliberately — a
+        // bisection knob, see [`ViewerConfig::squad`] — and it has to be named
+        // here or the overlay never comes off the one scene somebody is
+        // holding a failing phone to look at.
+        if loader.nothing_to_play() || config.squad_is_off() {
+            bringup.announce(Phase::Ready, footprint);
             return;
         }
 
@@ -261,16 +287,29 @@ impl Bringup {
         } else {
             Phase::Recording
         };
-        bringup.announce(phase);
+        bringup.announce(phase, footprint);
     }
 
     /// Tells the page, once per phase.
-    fn announce(&mut self, phase: Phase) {
+    ///
+    /// **Every phase is also a memory reading**, and that is the whole of the
+    /// instrument this crate has on a device with no console. A tab killed for
+    /// its memory leaves nothing behind, but the phase line and the figures
+    /// beside it are on the SCREEN until the reload takes them, so whoever is
+    /// holding the phone can read which course the scene died on and what it
+    /// was holding when it did. See [`MemoryBill`].
+    fn announce(&mut self, phase: Phase, footprint: Footprint) {
         if self.told == Some(phase) {
             return;
         }
         self.told = Some(phase);
-        Progress::dispatch(phase, Self::COURSES);
+        Progress::dispatch(phase, Self::COURSES, footprint);
+        // The whole bill once, where the scene has stopped growing and
+        // everything in it has been made. Not on every phase: it is eight
+        // figures, and eight figures printed nine times is a log nobody reads.
+        if phase == Phase::Ready {
+            MemoryBill::announce(&MemoryBill::line());
+        }
     }
 }
 
@@ -283,7 +322,7 @@ impl Progress {
     const EVENT: &'static str = "match-viewer-progress";
 
     #[cfg(target_arch = "wasm32")]
-    fn dispatch(phase: Phase, courses: usize) {
+    fn dispatch(phase: Phase, courses: usize, footprint: Footprint) {
         use wasm_bindgen::JsValue;
 
         let (name, done) = match phase {
@@ -301,6 +340,29 @@ impl Progress {
         set("phase", JsValue::from_str(name));
         set("done", JsValue::from_f64(done as f64));
         set("total", JsValue::from_f64(courses as f64));
+        // **What the viewer is holding, at the moment it says so.** In
+        // megabytes, because the page shows this to a person and a person
+        // reads megabytes. See [`Bringup::announce`] for why every phase
+        // carries it.
+        set(
+            "footprint",
+            JsValue::from_str(match footprint {
+                Footprint::Handheld => "handheld",
+                Footprint::Roomy => "roomy",
+            }),
+        );
+        set(
+            "heap",
+            JsValue::from_f64(MemoryBill::mib(MemoryBill::heap()) as f64),
+        );
+        set(
+            "peak",
+            JsValue::from_f64(MemoryBill::mib(MemoryBill::peak()) as f64),
+        );
+        set(
+            "assets",
+            JsValue::from_f64(MemoryBill::mib(MemoryBill::total()) as f64),
+        );
 
         let init = web_sys::CustomEventInit::new();
         init.set_detail(&detail);
@@ -314,5 +376,5 @@ impl Progress {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn dispatch(_phase: Phase, _courses: usize) {}
+    fn dispatch(_phase: Phase, _courses: usize, _footprint: Footprint) {}
 }

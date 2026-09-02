@@ -854,6 +854,7 @@ mod tests {
     use crate::club::player::language::LanguageProfile;
     use crate::transfers::ScoutingRegion;
     use crate::transfers::pipeline::SellerPlausibilityContext;
+    use crate::transfers::pipeline::standing::CareerRecordSnapshot;
     use crate::{PlayerPositionType, PositionCoverage};
 
     /// Test fixture: builds a `PlayerSummary` with a baseline "anonymous
@@ -933,6 +934,8 @@ mod tests {
                 contract_months_remaining: self.contract_months,
                 salary: self.salary,
                 language_profile: LanguageProfile::default(),
+                international_apps: 0,
+                career_record: CareerRecordSnapshot::default(),
                 seller_ctx: SellerPlausibilityContext {
                     club_reputation_score: (self.club_world_rep.max(0) as f32 / 10000.0),
                     league_reputation: 5500,
@@ -946,6 +949,7 @@ mod tests {
                     market_resignation: 0.0,
                     club_matches_played: 0,
                     big_stage_inclination: 0.0,
+                    is_marketed: false,
                 },
             }
         }

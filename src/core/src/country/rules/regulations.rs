@@ -28,6 +28,60 @@ impl CountryRegulations {
         }
     }
 
+    /// Squad rules for one country, from that country's public
+    /// registration regulations.
+    ///
+    /// Only rules this model can actually express are populated, and the
+    /// distinction matters: the fields here are NATIONALITY-based (domestic
+    /// vs foreign, by `country_id`), so a country whose real rule is
+    /// EU/non-EU (Spain, Italy) or club-trained (the UEFA homegrown rule as
+    /// most of western Europe applies it) is left `None` rather than
+    /// approximated by a nationality count that would be badly wrong — La
+    /// Liga squads are full of EU "foreigners" its three-slot non-EU rule
+    /// never touched.
+    ///
+    /// What IS populated is the set of leagues whose rule genuinely counts
+    /// passports: the Turkish, Russian, Ukrainian, Asian, Gulf, Brazilian
+    /// and North-American limits, plus England's homegrown minimum, where
+    /// the nationality proxy the field documents is close enough to the
+    /// real quota to be worth enforcing.
+    ///
+    /// Both two- and three-letter codes are matched because the shipped
+    /// database uses both, exactly as the transfer calendar's own lookup
+    /// does.
+    pub fn for_country_code(code: &str) -> Self {
+        let normalized = code.trim().to_ascii_lowercase();
+        let mut regulations = Self::new();
+        regulations.foreign_player_limit = match normalized.as_str() {
+            // Registered-foreigner quotas. Figures are the squad
+            // REGISTRATION limits (not the narrower on-pitch ones), since
+            // that is what `omitted_for_foreign_limit` enforces.
+            "tr" | "tur" => Some(14),
+            "ru" | "rus" => Some(13),
+            "ua" | "ukr" => Some(11),
+            "mx" | "mex" => Some(10),
+            "br" | "bra" => Some(9),
+            "sa" | "sau" => Some(8),
+            "ae" | "are" => Some(8),
+            "us" | "usa" | "ca" | "can" => Some(8),
+            "cn" | "chn" => Some(6),
+            "jp" | "jpn" => Some(5),
+            "kr" | "kor" => Some(5),
+            "qa" | "qat" => Some(5),
+            "ir" | "irn" => Some(4),
+            _ => None,
+        };
+        regulations.homegrown_requirements = match normalized.as_str() {
+            // Eight of a twenty-five-man list. The real rule counts
+            // club-trained players rather than passports; the nationality
+            // proxy this field documents lands close because the two
+            // overlap heavily in practice.
+            "gb" | "eng" | "gbr" => Some(8),
+            _ => None,
+        };
+        regulations
+    }
+
     /// Decide which players a squad must omit at registration time to
     /// satisfy `foreign_player_limit`. Players are sorted by ability
     /// ascending — the lowest-ability foreigners are dropped first so
@@ -173,5 +227,47 @@ mod tests {
         regs.salary_cap = Some(50_000_000.0);
         assert!(regs.salary_cap_exceeded(60_000_000.0));
         assert!(!regs.salary_cap_exceeded(40_000_000.0));
+    }
+
+    #[test]
+    fn a_country_whose_quota_counts_passports_gets_one() {
+        assert_eq!(
+            CountryRegulations::for_country_code("tr").foreign_player_limit,
+            Some(14)
+        );
+        assert_eq!(
+            CountryRegulations::for_country_code("TUR").foreign_player_limit,
+            Some(14),
+            "both code lengths and either case, exactly as the transfer calendar reads them"
+        );
+    }
+
+    #[test]
+    fn a_country_whose_real_rule_is_eu_based_gets_nothing() {
+        // Spain's three-slot rule counts NON-EU players; La Liga squads are
+        // full of EU "foreigners" it never touched. A nationality proxy here
+        // would bench half the league.
+        for code in ["es", "esp", "it", "ita", "de", "deu", "fr", "fra"] {
+            let regs = CountryRegulations::for_country_code(code);
+            assert_eq!(
+                regs.foreign_player_limit, None,
+                "{code} has no passport-counting quota this model can express"
+            );
+        }
+    }
+
+    #[test]
+    fn england_carries_a_homegrown_minimum_and_no_foreigner_cap() {
+        let regs = CountryRegulations::for_country_code("eng");
+        assert_eq!(regs.homegrown_requirements, Some(8));
+        assert_eq!(regs.foreign_player_limit, None);
+    }
+
+    #[test]
+    fn an_unknown_country_is_left_entirely_alone() {
+        let regs = CountryRegulations::for_country_code("zz");
+        assert_eq!(regs.foreign_player_limit, None);
+        assert_eq!(regs.homegrown_requirements, None);
+        assert_eq!(regs.salary_cap, None);
     }
 }

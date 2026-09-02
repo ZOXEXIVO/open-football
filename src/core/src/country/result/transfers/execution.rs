@@ -16,7 +16,7 @@ use crate::transfers::pipeline::{
     LoanOutCandidate, LoanOutReason, LoanOutStatus, PipelineProcessor,
 };
 use crate::{
-    ChangeType, Club, ClubDirectionContext, ClubDirectionEvidence, ClubDirectionKind,
+    ChangeType, Club, ClubDirectionContext, ClubDirectionEvidence, ClubDirectionKind, ClubFinances,
     ClubPhilosophy, Country, NewSigningThreatContext, NewSigningThreatReason, Player,
     PlayerClubContract, PlayerFieldPositionGroup, PlayerPlanRole, PlayerSquadStatus,
     RelationshipChange, ReputationLevel, RivalThreatResponse, TeamInfo, TeamType,
@@ -822,7 +822,12 @@ pub(crate) fn execute_transfer_within_country(
         // Credit the upfront portion now; deferred installment tranches
         // arrive over time via the settlement walk.
         if player.is_some() {
-            selling_club.finance.add_transfer_income(upfront);
+            // Sale proceeds recycle into buying power at a rate that is a
+            // property of the CLUB, not of the money: a develop-and-sell
+            // side turns a sale straight back into the market, a club
+            // selling to balance its books banks most of it.
+            let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
+            selling_club.finance.add_transfer_income_at(upfront, share);
         }
 
         // Emit per-teammate dressing-room events on the leftover squad.
@@ -900,7 +905,10 @@ pub(crate) fn execute_transfer_within_country(
             if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
                 TransferExecution::add_to_main_team(selling_club, player);
                 // Reverse the upfront credit booked above.
-                selling_club.finance.add_transfer_income(-upfront);
+                // At the SAME recycle share it was booked at, or the
+                // budget keeps a slice of a sale that never happened.
+                let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
+                selling_club.finance.add_transfer_income_at(-upfront, share);
             }
             return false;
         }
@@ -997,7 +1005,8 @@ pub(crate) fn execute_transfer_within_country(
             );
             if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
                 TransferExecution::add_to_main_team(selling_club, player);
-                selling_club.finance.add_transfer_income(-upfront);
+                let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
+                selling_club.finance.add_transfer_income_at(-upfront, share);
             }
             return false;
         };
@@ -1361,7 +1370,8 @@ fn take_player_from_selling_country(
         if is_loan {
             selling_club.finance.receive_loan_fee(fee);
         } else {
-            selling_club.finance.add_transfer_income(fee);
+            let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
+            selling_club.finance.add_transfer_income_at(fee, share);
         }
     }
 
@@ -2103,7 +2113,10 @@ fn return_player_to_selling_country(
             if is_loan {
                 selling_club.finance.refund_loan_fee(credited_fee);
             } else {
-                selling_club.finance.add_transfer_income(-credited_fee);
+                let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
+                selling_club
+                    .finance
+                    .add_transfer_income_at(-credited_fee, share);
             }
         }
     }

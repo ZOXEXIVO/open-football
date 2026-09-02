@@ -1,4 +1,6 @@
+use crate::app::bill::{Held, MemoryBill};
 use crate::art::typeface::Stencil;
+use crate::players::body::Grain;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{Image, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
@@ -1495,7 +1497,7 @@ impl Textures {
     /// this draws.
     #[cfg(test)]
     pub fn face(images: &mut Assets<Image>, layout: &FaceLayout, look: &FaceLook) -> Handle<Image> {
-        images.add(Self::face_sheet(layout, look, None))
+        images.add(Self::face_sheet(layout, look, None, Grain::FULL))
     }
 
     /// The same head with a real picture of it laid over the front — his
@@ -1506,42 +1508,68 @@ impl Textures {
     /// everything the camera never saw — the sides, the back, the underside of
     /// the jaw — is still the generated face, and the two meet on a soft edge
     /// rather than a cut.
-    pub fn photographed_face(layout: &FaceLayout, look: &FaceLook, portrait: &Portrait) -> Image {
-        Self::face_sheet(layout, look, Some(portrait))
+    pub fn photographed_face(
+        layout: &FaceLayout,
+        look: &FaceLook,
+        portrait: &Portrait,
+        grain: Grain,
+    ) -> Image {
+        Self::face_sheet(layout, look, Some(portrait), grain)
     }
 
-    fn face_sheet(layout: &FaceLayout, look: &FaceLook, portrait: Option<&Portrait>) -> Image {
+    fn face_sheet(
+        layout: &FaceLayout,
+        look: &FaceLook,
+        portrait: Option<&Portrait>,
+        grain: Grain,
+    ) -> Image {
+        // One of these per man, and a photographed one carries a mip chain —
+        // 341 KiB apiece at `PICTURE`'s full size. Charged apart from the
+        // scenery because the two grow for entirely different reasons: the
+        // stadium is built once, and this is built again every time somebody's
+        // photograph lands.
+        let _charge = MemoryBill::charge(Held::Faces);
         /// Wide enough that an eye — three centimetres of a fifty-six
         /// centimetre circumference — lands about nine texels across, which is
         /// the least an iris and a pupil can be told apart in.
         const WIDTH: u32 = 128;
         const HEIGHT: u32 = 96;
-        /// …and what a PICTURE gets, which is more than five times as many
-        /// texels.
-        ///
-        /// The sheet above is sized to the rule the rest of this file works
-        /// to: one texel on about one pixel at the range a face is looked at
-        /// from. That rule is right for a painted face, whose features are
-        /// drawn to be legible at exactly that size — and wrong for a
-        /// photograph, which is not a diagram of a face but a picture of one.
-        /// Squeezed onto the painted sheet a man's own head shot comes out as
-        /// a tinted smudge: the fifty texels across the front of his face are
-        /// enough to say "a face" and nowhere near enough to say WHOSE.
-        ///
-        /// SQUARE rather than the 4:3 the painted one is, because the two
-        /// axes are not the same problem. Across, the sheet has always had
-        /// more texels than a head shot has pixels to fill them. Down, at 192,
-        /// it had 580 to the metre against the photograph's 700 — so the last
-        /// sixth of the detail in every face was being thrown away at the one
-        /// step that had it to spare. 256 puts the sheet ahead of the picture
-        /// on both axes, which is where the limit belongs.
-        ///
-        /// The cost of breaking the rule is minification crawl, and the answer
-        /// to that is the mip chain below rather than a smaller sheet.
-        const PICTURE: (u32, u32) = (256, 256);
 
+        // …and what a PICTURE gets, which is more than five times as many
+        // texels.
+        //
+        // The sheet above is sized to the rule the rest of this file works
+        // to: one texel on about one pixel at the range a face is looked at
+        // from. That rule is right for a painted face, whose features are
+        // drawn to be legible at exactly that size — and wrong for a
+        // photograph, which is not a diagram of a face but a picture of one.
+        // Squeezed onto the painted sheet a man's own head shot comes out as
+        // a tinted smudge: the fifty texels across the front of his face are
+        // enough to say "a face" and nowhere near enough to say WHOSE.
+        //
+        // SQUARE rather than the 4:3 the painted one is, because the two
+        // axes are not the same problem. Across, the sheet has always had
+        // more texels than a head shot has pixels to fill them. Down, at 192,
+        // it had 580 to the metre against the photograph's 700 — so the last
+        // sixth of the detail in every face was being thrown away at the one
+        // step that had it to spare. 256 puts the sheet ahead of the picture
+        // on both axes, which is where the limit belongs.
+        //
+        // The cost of breaking the rule is minification crawl, and the answer
+        // to that is the mip chain below rather than a smaller sheet.
+        //
+        // ⚠ **And it is the grain's to say now, not this constant's.** The
+        // argument above is a picture argument and it is right — on a machine
+        // with the memory to hold it. There is one of these per man, with a
+        // full mip chain, which is 341 KiB each and the largest per-player
+        // allocation a squad has; on a phone that is nine megabytes across a
+        // team sheet, on a device whose tab is killed for what it holds.
+        // [`Grain::SPARE`] halves the side, which quarters the sheet, and at
+        // the range a handheld watches a match from the picture is
+        // indistinguishable — the head is a few dozen pixels across and the
+        // sheet was several times what the screen could show either way.
         let (width, height) = if portrait.is_some() {
-            PICTURE
+            (grain.face(), grain.face())
         } else {
             (WIDTH, HEIGHT)
         };
@@ -2295,10 +2323,33 @@ impl Textures {
         /// in the frame — see `quality`, which handles the other one.
         const ACROSS_A_LEAF: u16 = 4;
 
+        // ⚠ **The order of these four lines is a memory decision.**
+        //
+        // This is the first course of the bring-up and the largest transient
+        // in it. Four buffers want to exist here — the two height fields, the
+        // albedo's texels and the relief's — at four megabytes each, and each
+        // of the last two then grows into a mip chain half as big again. Left
+        // to fall out naturally they overlapped: `dry` was still alive while
+        // the relief was rasterised, and both chains were built with both
+        // fields still standing, which measured 25–30 MiB of peak on the heap.
+        //
+        // On wasm32 a peak is not a peak, it is a floor: linear memory only
+        // grows, so every byte held at the worst instant of the load is a byte
+        // the browser counts against the tab for the rest of the session — and
+        // on iOS crossing that ceiling is not a slow frame, it is the renderer
+        // being killed. See [`MemoryBill`](crate::app::bill::MemoryBill).
+        //
+        // So each buffer is dropped the moment nothing needs it again: `dry`
+        // once the colour is written, `lit` once the relief is taken off it,
+        // and each set of texels as its chain consumes it. Peak ~12 MiB.
+        drop(dry);
+        let relief = Self::relief(SIZE, &lit);
+        drop(lit);
+
         Turf {
             albedo: images.add(Self::tiled(Self::mipped(SIZE, SIZE, data), ALONG_THE_PITCH)),
             relief: images.add(Self::tiled(
-                Self::mipped_linear(SIZE, SIZE, Self::relief(SIZE, &lit)),
+                Self::mipped_linear(SIZE, SIZE, relief),
                 ACROSS_A_LEAF,
             )),
         }
@@ -2413,6 +2464,27 @@ impl Textures {
         Self::mipped_capped(width, height, base, format, u32::MAX)
     }
 
+    /// ⚠ **The chain is built IN PLACE, in one buffer, and that is a memory
+    /// decision rather than a tidiness one.**
+    ///
+    /// It used to accumulate a `Vec` per level and then concatenate the lot
+    /// into a `Vec::new()`. Three costs, all of them paid at once on the
+    /// browser's only thread during the first course of the bring-up: every
+    /// level alive at the same time as the copy of it, the copy itself, and
+    /// the copy's buffer DOUBLING its way up from nothing while all of that
+    /// stood. For the pitch's two 1024-square sheets that came to some 17 MiB
+    /// of transient per sheet against 5.6 MiB of chain.
+    ///
+    /// On a desktop it would be nothing; on wasm32 it is permanent. Linear
+    /// memory only ever grows — there is no `memory.shrink` — so a peak the
+    /// allocator later reuses is still a page the browser counts against the
+    /// tab forever. See [`MemoryBill`](crate::app::bill::MemoryBill).
+    ///
+    /// So: the total is worked out first, the base buffer is grown to it once,
+    /// and every level is filtered out of the bytes already in the buffer and
+    /// pushed onto its own end. Reading level *n* while writing level *n+1* is
+    /// safe by index because the two never overlap — a level starts where its
+    /// parent ended — and no reference is held across the push.
     fn mipped_capped(
         width: u32,
         height: u32,
@@ -2420,16 +2492,26 @@ impl Textures {
         format: TextureFormat,
         cap: u32,
     ) -> Image {
-        let mut levels: Vec<(u32, u32, Vec<u8>)> = vec![(width, height, base)];
-        while (levels.len() as u32) < cap
-            && levels
-                .last()
-                .is_some_and(|(across, down, _)| *across > 1 || *down > 1)
-        {
-            let (across, down, source) = levels.last().expect("seeded above");
-            let (across, down) = (*across, *down);
+        // How many levels there are and what they come to, before a byte
+        // moves. Every format this is called with is four bytes a texel.
+        let mut mip_level_count = 1u32;
+        let (mut across, mut down) = (width, height);
+        let mut total = (width * height * 4) as usize;
+        while mip_level_count < cap && (across > 1 || down > 1) {
+            across = (across / 2).max(1);
+            down = (down / 2).max(1);
+            total += (across * down * 4) as usize;
+            mip_level_count += 1;
+        }
+
+        let mut data = base;
+        data.reserve_exact(total.saturating_sub(data.len()));
+        let (mut across, mut down) = (width, height);
+        // Where the level being READ starts. Level 0 is at the front.
+        let mut start = 0usize;
+        for _ in 1..mip_level_count {
             let (half_across, half_down) = ((across / 2).max(1), (down / 2).max(1));
-            let mut next = Vec::with_capacity((half_across * half_down * 4) as usize);
+            let next = data.len();
             // Row and column offsets hoisted out of the sample loop. The
             // obvious way to write this recomputes `(y * width + x) * 4 +
             // channel` for all four taps of all four channels of every texel,
@@ -2439,27 +2521,23 @@ impl Textures {
             // of them. Same arithmetic, same clamping at the far edge, an
             // eighth of the address maths.
             for y in 0..half_down {
-                let top = ((y * 2).min(down - 1) * across) as usize * 4;
-                let bottom = ((y * 2 + 1).min(down - 1) * across) as usize * 4;
+                let top = start + ((y * 2).min(down - 1) * across) as usize * 4;
+                let bottom = start + ((y * 2 + 1).min(down - 1) * across) as usize * 4;
                 for x in 0..half_across {
                     let left = (x * 2).min(across - 1) as usize * 4;
                     let right = (x * 2 + 1).min(across - 1) as usize * 4;
                     for channel in 0..4 {
-                        let sum = source[top + left + channel] as u32
-                            + source[top + right + channel] as u32
-                            + source[bottom + left + channel] as u32
-                            + source[bottom + right + channel] as u32;
-                        next.push((sum / 4) as u8);
+                        let sum = data[top + left + channel] as u32
+                            + data[top + right + channel] as u32
+                            + data[bottom + left + channel] as u32
+                            + data[bottom + right + channel] as u32;
+                        data.push((sum / 4) as u8);
                     }
                 }
             }
-            levels.push((half_across, half_down, next));
-        }
-
-        let mip_level_count = levels.len() as u32;
-        let mut data = Vec::new();
-        for (_, _, level) in &levels {
-            data.extend_from_slice(level);
+            start = next;
+            across = half_across;
+            down = half_down;
         }
 
         // `Image::new` asserts that the buffer is exactly one mip level, so the
@@ -2479,6 +2557,10 @@ impl Textures {
         image.texture_descriptor.mip_level_count = mip_level_count;
         image.data = Some(data);
         image.sampler = ImageSampler::linear();
+        // Told here because here is where the bytes are made, and a moment
+        // from now the only copy of them is in the driver. Charged to whatever
+        // the caller said it was drawing — see [`MemoryBill::charge`].
+        MemoryBill::sheet(&image);
         image
     }
 
@@ -3022,6 +3104,7 @@ impl Textures {
         // Everything here is a gradient or a glyph a few centimetres across on
         // screen — point sampling would draw them as a staircase.
         image.sampler = ImageSampler::linear();
+        MemoryBill::sheet(&image);
         image
     }
 

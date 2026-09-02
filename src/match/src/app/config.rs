@@ -91,6 +91,50 @@ pub struct ViewerConfig {
     /// the device that is failing.
     #[serde(default)]
     pub device: Option<String>,
+    /// **How much crowd to build**: `"off"`, `"handheld"` or `"full"`. Absent
+    /// means the footprint decides — see
+    /// [`Throng::of`](crate::scene::crowd::Throng::of).
+    ///
+    /// The first of four knobs that exist for one purpose: BISECTION on a
+    /// device with no console. A tab that is killed for its memory leaves
+    /// nothing behind — no stack, no error, no error page — so the only way to
+    /// find out which part of the scene was too big is to be able to take the
+    /// parts out one at a time from the address bar of the phone that is
+    /// failing, and see which one lets the match open. The crowd is first
+    /// because it is computed to be some 88% of the scene's GPU bytes.
+    ///
+    /// Reachable as `?crowd=off`.
+    #[serde(default)]
+    pub crowd: Option<String>,
+    /// **Whether the twenty-two are built at all**: `"off"` leaves the pitch
+    /// empty. Second bisection knob, and the second largest thing in the
+    /// scene once the faces are counted.
+    ///
+    /// It is not a watchable replay and is not meant to be one. What it
+    /// answers is whether the stadium ALONE fits, which is the question a tab
+    /// that dies during the squad's first frame is asking.
+    ///
+    /// Reachable as `?squad=off`.
+    #[serde(default)]
+    pub squad: Option<String>,
+    /// **How many megapixels the replay may be drawn into**, overriding what
+    /// the footprint would spend — see
+    /// [`Stage::budget`](crate::app::stage::Stage::budget). Third bisection
+    /// knob, and the one that moves the render attachments, which are the
+    /// largest allocation in the scene that is not geometry.
+    ///
+    /// Reachable as `?stage=1.3`.
+    #[serde(default)]
+    pub stage: Option<f32>,
+    /// **How many chunks of the recording to keep in flight ahead of the
+    /// playhead**, overriding what the footprint would read — see
+    /// [`ChunkLoader`](crate::recording::loader::ChunkLoader). Fourth
+    /// bisection knob, and the only one that matters on a FULL recording,
+    /// where a chunk is 4.4 MB of JSON and three of them are parsed at once.
+    ///
+    /// Reachable as `?readahead=1`.
+    #[serde(default)]
+    pub readahead: Option<usize>,
     /// Whether to walk the two teams out before the replay starts — the line
     /// on the touchline, and the camera that goes down it. See
     /// [`Lineup`](crate::broadcast::lineup::Lineup).
@@ -199,6 +243,16 @@ impl ViewerConfig {
     /// engine's overlay implies the frame's and not the other way round.
     pub fn instrumented(&self) -> bool {
         self.debug || self.perf
+    }
+
+    /// Whether the page asked for an empty pitch — see [`Self::squad`].
+    ///
+    /// Read in two places that are a long way apart, so the string test is
+    /// written once: the spawn that would build the bodies, and
+    /// [`Bringup`](crate::app::bringup::Bringup), which would otherwise hold
+    /// the loading overlay forever waiting for a squad that is never coming.
+    pub fn squad_is_off(&self) -> bool {
+        self.squad.as_deref() == Some("off")
     }
 
     pub fn metadata_url(&self) -> String {
@@ -390,6 +444,10 @@ impl ViewerConfig {
             perf: false,
             grain: None,
             device: None,
+            crowd: None,
+            squad: None,
+            stage: None,
+            readahead: None,
             lineup: true,
             fps_cap: Self::high_refresh(),
         }

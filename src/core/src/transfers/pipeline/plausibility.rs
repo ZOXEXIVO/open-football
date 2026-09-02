@@ -269,6 +269,16 @@ pub struct TransferPlausibilityAdjustment {
     /// offer ratio is acceptable. Always >= 1.0 — important players at
     /// big clubs require a premium over their headline value.
     pub minimum_fee_multiplier: f64,
+    /// How much of `seller_acceptance_delta` is the **importance** damper
+    /// alone, as a positive magnitude (the delta already has it subtracted).
+    ///
+    /// Broken out because importance is the one seller friction a big
+    /// enough fee overrules. "He is our key man" is a coach's answer; the
+    /// chairman's answer depends on what the money does to the club's year,
+    /// and the resolver cannot tell the importance penalty apart from the
+    /// sporting-drop or rivalry penalties once they are summed into one
+    /// number. See `SellerWindfall` in the negotiation resolver.
+    pub importance_penalty: f32,
 }
 
 impl TransferPlausibilityAdjustment {
@@ -278,6 +288,7 @@ impl TransferPlausibilityAdjustment {
             seller_acceptance_delta: 0.0,
             player_terms_delta: 0.0,
             minimum_fee_multiplier: 1.0,
+            importance_penalty: 0.0,
         }
     }
 }
@@ -374,6 +385,28 @@ pub struct TransferPlausibilityInputs {
     /// [`crate::WageCalculator::expected_annual_wage_raw`]) so the
     /// evaluator stays free of wage policy.
     pub expected_annual_wage: u32,
+    /// The player's stored [`crate::club::player::transfer::BigStagePull`]
+    /// score, 0..1 — how strongly he is drawn toward a bigger competition.
+    ///
+    /// Read here as the **agent channel**: a player who wants a bigger
+    /// stage is quietly circulated long before he ever hands in a formal
+    /// request, and that circulation is what makes a club at his level
+    /// approachable at all. Before this, the market could only see a
+    /// player's willingness AFTER a bid existed (personal terms), so the
+    /// one signal that decides whether a bid happens was invisible at the
+    /// moment it mattered.
+    pub player_stage_inclination: f32,
+    /// The selling club's own asset ledger has this player on its sell list
+    /// — it would answer a call about him at the right price. See
+    /// [`super::asset_ledger::AssetLedger`].
+    ///
+    /// This is the state real clubs spend most of their business in: not
+    /// listed, not asking to leave, but privately for sale. It is a
+    /// SELLER-side signal, which is what distinguishes it from the agent
+    /// channel above (a player-side one), and it is deliberately never a
+    /// public status — no `Lst`, no event, no override of the squad-asset
+    /// protections.
+    pub seller_marketed: bool,
 }
 
 impl TransferPlausibilityInputs {
@@ -481,7 +514,66 @@ impl TransferPlausibilityInputs {
             return AvailabilityStrength::Soft;
         }
 
+        // The agent channel. A good player in a decent league who wants a
+        // bigger one is circulated by his agent — that is how most of these
+        // moves actually begin, and it happens long before (and usually
+        // instead of) a formal transfer request, whose bar is deliberately
+        // high. So a buyer who can genuinely offer him a bigger stage finds
+        // a door already ajar.
+        //
+        // `Soft` on purpose, and no higher: it eases the seller's
+        // importance dampers, it does NOT unlock the hard importance /
+        // step-down gate (`unlocks_hard_gate`), waive the wage floor
+        // (`waives_wage_floor`), or touch the fee. And it is gated on the
+        // buyer's league actually being the bigger stage, so it can never
+        // open a step down — which is exactly the flow this must not break.
+        if self.is_agent_circulated() {
+            return AvailabilityStrength::Soft;
+        }
+
+        // The seller's own sell list. A club that has decided a player is a
+        // peak-value asset, a contract it will not renew, or a wage it needs
+        // off the books does not announce it — it answers the phone. That
+        // in-between state is where most real business lives, and the market
+        // had no way to express it: a player was either publicly listed or
+        // completely off the table.
+        //
+        // `Soft`, like the agent channel, and for the same reasons: it eases
+        // the seller's importance dampers, and it does NOT unlock the hard
+        // gate, waive the wage floor, or move the fee. Banded by
+        // affordability rather than by reputation — a club that could not
+        // fund him was never going to be told.
+        if self.is_seller_marketed() {
+            return AvailabilityStrength::Soft;
+        }
+
         AvailabilityStrength::None
+    }
+
+    /// True when the seller would answer a call about this player AND the
+    /// buyer could plausibly fund him — the "right band" a quiet sale is
+    /// circulated in.
+    pub fn is_seller_marketed(&self) -> bool {
+        self.seller_marketed && self.estimated_value <= self.affordability_max_fee()
+    }
+
+    /// Big-stage pull at or above which a player is quietly on the market
+    /// through his agent. Matches `BigStagePullConfig::inclination_bar`
+    /// (0.22) — the level the model itself calls "he would listen".
+    pub const AGENT_INCLINATION_BAR: f32 = 0.22;
+    /// League-reputation gain the buyer must offer before that willingness
+    /// means anything. Same 1200 the year-round watch uses: a sideways move
+    /// answers nothing he is asking for.
+    pub const AGENT_MIN_STAGE_GAIN: u16 = 1200;
+
+    /// True when the player's own wish for a bigger stage, plus a buyer who
+    /// can actually offer one, makes him quietly gettable.
+    pub fn is_agent_circulated(&self) -> bool {
+        self.player_stage_inclination >= Self::AGENT_INCLINATION_BAR
+            && self.buyer_league_rep
+                >= self
+                    .seller_league_rep
+                    .saturating_add(Self::AGENT_MIN_STAGE_GAIN)
     }
 
     /// Largest fee the buyer can plausibly cover. Normally `1.40 ×` the
@@ -1163,12 +1255,14 @@ impl TransferMovePlausibility {
         if importance >= 0.75 {
             adj.shortlist_score_multiplier *= 0.55;
             adj.seller_acceptance_delta -= 18.0;
+            adj.importance_penalty += 18.0;
             adj.minimum_fee_multiplier += 0.25;
         }
 
         if very_important {
             adj.shortlist_score_multiplier *= 0.45;
             adj.seller_acceptance_delta -= 28.0;
+            adj.importance_penalty += 28.0;
             adj.minimum_fee_multiplier += 0.45;
         }
 
@@ -1397,6 +1491,8 @@ impl TransferPlausibilityBuilder {
             buyer_wage_budget: buyer_ctx.buyer_wage_budget,
             buyer_total_wages: buyer_ctx.buyer_total_wages,
             expected_annual_wage,
+            player_stage_inclination: seller.big_stage_inclination,
+            seller_marketed: seller.is_marketed,
         })
     }
 
@@ -1571,6 +1667,8 @@ impl TransferPlausibilityBuilder {
             buyer_wage_budget: buyer_ctx.buyer_wage_budget,
             buyer_total_wages: buyer_ctx.buyer_total_wages,
             expected_annual_wage,
+            player_stage_inclination: player.big_stage_inclination,
+            seller_marketed: selling_club.transfer_plan.is_marketed(player.id),
         }
     }
 
@@ -1650,6 +1748,8 @@ mod tests {
             buyer_wage_budget: 5_000_000,
             buyer_total_wages: 3_500_000,
             expected_annual_wage: 1_000_000,
+            player_stage_inclination: 0.0,
+            seller_marketed: false,
         }
     }
 
@@ -1697,6 +1797,8 @@ mod tests {
             buyer_wage_budget: 20_000_000,
             buyer_total_wages: 10_000_000,
             expected_annual_wage: 800_000,
+            player_stage_inclination: 0.0,
+            seller_marketed: false,
         }
     }
 
@@ -2847,6 +2949,8 @@ mod tests {
             buyer_wage_budget: 3_000_000,
             buyer_total_wages: 1_500_000,
             expected_annual_wage: 400_000,
+            player_stage_inclination: 0.0,
+            seller_marketed: false,
         }
     }
 
@@ -3024,5 +3128,117 @@ mod tests {
         // could (covered above) — so it is the implausibility, not a config
         // floor, that closes the cold approach.
         assert!(a.blocking_reason.is_some());
+    }
+}
+
+#[cfg(test)]
+mod agent_channel_tests {
+    use super::*;
+
+    /// A contented key man at a mid-table Super Lig club — no listing, no
+    /// request, no unhappiness, a full contract. Every availability signal
+    /// the model had was absent, which is exactly why nothing could reach
+    /// him.
+    struct AgentFixtures;
+
+    impl AgentFixtures {
+        fn contented_standout() -> TransferPlausibilityInputs {
+            TransferPlausibilityInputs {
+                buyer_rep: 0.85,
+                seller_rep: 0.55,
+                buyer_league_rep: 9_200,
+                seller_league_rep: 7_300,
+                buyer_world_rep: 8_800,
+                seller_world_rep: 5_200,
+                player_world_rep: 5_000,
+                player_current_rep: 5_600,
+                player_home_rep: 6_000,
+                player_age: 24,
+                position_group: PlayerFieldPositionGroup::Midfielder,
+                is_listed: false,
+                is_loan_listed: false,
+                is_transfer_requested: false,
+                is_unhappy: false,
+                squad_status: PlayerSquadStatus::KeyPlayer,
+                contract_months_remaining: 48,
+                current_salary: 5_200_000,
+                estimated_value: 53_000_000.0,
+                player_appearances: 30,
+                seller_club_matches: 34,
+                seller_position_rank: 0,
+                player_ca: 145,
+                best_group_ca_at_seller: 145,
+                is_loan: false,
+                is_unsolicited: true,
+                seller_in_debt: false,
+                release_clause_triggered: false,
+                listing_resignation: 0.0,
+                same_country: false,
+                same_league_or_division: false,
+                country_pair_blocked: false,
+                buyer_transfer_budget: 290_000_000.0,
+                buyer_wage_budget: 700_000_000,
+                buyer_total_wages: 340_000_000,
+                expected_annual_wage: 9_000_000,
+                player_stage_inclination: 0.35,
+                seller_marketed: false,
+            }
+        }
+    }
+
+    #[test]
+    fn a_willing_player_at_a_smaller_stage_is_quietly_gettable() {
+        let inputs = AgentFixtures::contented_standout();
+        assert!(inputs.is_agent_circulated());
+        assert_eq!(inputs.availability_strength(), AvailabilityStrength::Soft);
+    }
+
+    #[test]
+    fn a_settled_player_is_not() {
+        // Same move, but he is not drawn to a bigger stage at all.
+        let inputs = TransferPlausibilityInputs {
+            player_stage_inclination: 0.05,
+            ..AgentFixtures::contented_standout()
+        };
+        assert!(!inputs.is_agent_circulated());
+        assert_eq!(inputs.availability_strength(), AvailabilityStrength::None);
+    }
+
+    #[test]
+    fn a_lateral_move_is_not_a_lead() {
+        // He wants a bigger stage; this buyer is not one. The channel must
+        // stay shut, or every peer club would read a restless player as
+        // available.
+        let inputs = TransferPlausibilityInputs {
+            buyer_league_rep: 7_400,
+            ..AgentFixtures::contented_standout()
+        };
+        assert!(!inputs.is_agent_circulated());
+        assert_eq!(inputs.availability_strength(), AvailabilityStrength::None);
+    }
+
+    #[test]
+    fn the_reverse_flow_is_untouched() {
+        // The 30-year-old big-five star joining a Super Lig club: the buyer
+        // is a SMALLER stage, so the agent channel cannot fire and cannot
+        // manufacture availability for a step down.
+        let inputs = TransferPlausibilityInputs {
+            buyer_league_rep: 7_300,
+            seller_league_rep: 9_200,
+            player_age: 31,
+            player_stage_inclination: 0.0,
+            seller_marketed: false,
+            ..AgentFixtures::contented_standout()
+        };
+        assert!(!inputs.is_agent_circulated());
+    }
+
+    #[test]
+    fn the_channel_never_unlocks_the_hard_gate_or_the_wage_floor() {
+        // Soft is deliberately the ceiling: the agent opens a conversation,
+        // he does not waive the level or wage realism downstream.
+        let strength = AgentFixtures::contented_standout().availability_strength();
+        assert!(!strength.unlocks_hard_gate());
+        assert!(!strength.waives_wage_floor());
     }
 }

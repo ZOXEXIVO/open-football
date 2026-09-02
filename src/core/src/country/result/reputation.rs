@@ -1,9 +1,11 @@
 use super::CountryResult;
 use crate::Country;
+use crate::country::economy::inflation::MarketInflation;
 use crate::league::League;
 use crate::league::LeagueResult;
+use crate::transfers::TransferType;
 use crate::utils::DateUtils;
-use chrono::NaiveDate;
+use chrono::{Duration, NaiveDate};
 use log::debug;
 
 impl CountryResult {
@@ -16,6 +18,48 @@ impl CountryResult {
     pub(crate) fn update_economic_factors(country: &mut Country, date: NaiveDate) {
         if DateUtils::is_month_beginning(date) {
             country.economic_factors.monthly_update();
+        }
+        Self::update_market_price_level(country, date);
+    }
+
+    /// Move the country's transfer-market price level once a year.
+    ///
+    /// `price_level` feeds every player valuation and the board's own budget
+    /// ceiling, and it was loaded once from the country data and never moved
+    /// again — so a league could treble its television income over a decade
+    /// and its players' valuations would not notice.
+    ///
+    /// The driver is DEMAND against the money behind it (gross fees paid ÷
+    /// what the country's clubs earn), never the valuations themselves: a
+    /// market that re-priced off its own prices would spiral. See
+    /// [`MarketInflation`].
+    fn update_market_price_level(country: &mut Country, date: NaiveDate) {
+        if !MarketInflation::is_repricing_day(date) {
+            return;
+        }
+        let year_ago = date - Duration::days(365);
+        let gross_spend: f64 = country
+            .transfer_market
+            .transfer_history
+            .iter()
+            .filter(|t| t.transfer_date >= year_ago)
+            .filter(|t| matches!(t.transfer_type, TransferType::Permanent))
+            .map(|t| t.fee.amount.max(0.0))
+            .sum();
+        let league_income: f64 = country
+            .clubs
+            .iter()
+            .map(|c| c.finance.estimated_annual_income(date).max(0) as f64)
+            .sum();
+
+        let current = country.settings.pricing.price_level;
+        let next = MarketInflation::next_level(current, gross_spend, league_income);
+        if (next - current).abs() > f32::EPSILON {
+            debug!(
+                "Country {} price level {:.3} -> {:.3} (spend {:.0} / income {:.0})",
+                country.name, current, next, gross_spend, league_income
+            );
+            country.settings.pricing.price_level = next;
         }
     }
 

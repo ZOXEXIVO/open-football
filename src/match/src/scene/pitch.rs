@@ -1,3 +1,4 @@
+use crate::app::bill::{Held, MemoryBill};
 use crate::app::config::ViewerConfig;
 use crate::app::quality::Quality;
 use crate::art::textures::{Textures, Turf};
@@ -78,6 +79,146 @@ impl Bank {
                 *visibility = wanted;
             }
         }
+    }
+}
+
+/// **One bank, planned but not yet poured.**
+///
+/// Everything about a flight of steps that comes off the FIXTURE, worked out
+/// in one pass so the four of them can be built one frame at a time without
+/// the arithmetic being done four frames apart from the venue it answers to.
+pub struct BankPlan {
+    terrace: Terrace,
+    stand: Stand,
+    /// The rotation about Y that points this bank inward.
+    turn: f32,
+    /// Anything that differs per bank. Without it all four draw the same
+    /// crowd in the same places and the two ends are visibly one photograph.
+    seed: u32,
+}
+
+/// What the desktop memory harness in [`crate::app::bill`] needs to seat a
+/// bank without a `World` behind it. Nothing in the running viewer reads a
+/// plan except [`Pitch::raise_bank`], which owns it.
+#[cfg(test)]
+impl BankPlan {
+    pub(crate) fn terrace(&self) -> &Terrace {
+        &self.terrace
+    }
+
+    pub(crate) fn stand(&self) -> Stand {
+        self.stand
+    }
+}
+
+/// **The four banks, and the frames they are still owed.**
+///
+/// ⚠ **All four used to go up on one frame**, at the end of the last course of
+/// the bring-up, and that one frame was the largest allocation in the whole
+/// session: four spectator meshes at up to 30 MB apiece, every one of them
+/// alive at once, and each still alive on the NEXT frame while the renderer
+/// extracted it. Computed at some 175 MiB of transient on a computer and 85 on
+/// a phone.
+///
+/// On a desktop that is a spike nobody would ever notice. On wasm32 it is
+/// permanent: linear memory has no `memory.shrink`, so the browser accounts the
+/// high-water mark for the rest of the session however much of it dlmalloc
+/// hands back — and on iOS crossing the tab's ceiling does not draw slowly, it
+/// kills the renderer. See [`MemoryBill`](crate::app::bill::MemoryBill).
+///
+/// So the plan is laid on the course that builds the ground and the banks are
+/// raised one per course after it. Each is built, extracted and freed before
+/// the next is started, which turns one 175 MiB peak into four 40 MiB ones.
+///
+/// It costs nothing else. All four share one material and one mesh layout, so
+/// no course after the first queues a render pipeline — which is the thing
+/// [`Bringup`](crate::app::bringup::Bringup) is spending frames on in the first
+/// place, and the reason a course that queues no pipeline "costs a frame and
+/// returns a frame".
+#[derive(Resource)]
+pub struct Stands {
+    /// Still to raise. Popped off the BACK, so the plan reads in the order the
+    /// banks go up: the far touchline first, because it is the one the
+    /// broadcast rest shot is looking at.
+    pending: Vec<BankPlan>,
+    seating: Handle<StandardMaterial>,
+    trim: Handle<StandardMaterial>,
+    spectators: Spectators,
+    stature: Stature,
+    throng: Option<Throng>,
+}
+
+impl Stands {
+    /// **The four banks as the flights of steps they are**: how far round, how
+    /// far back off the paint, how many rows at a GREAT ground, and how high
+    /// one step is. What `stature` does to the row count is the whole
+    /// difference between Old Trafford and an academy pitch.
+    ///
+    /// **A great ground is 34 rows and 24 m of stand**, up from 21 and 13.4.
+    /// Thirteen metres is a lower tier, and a bowl built to only that reads as
+    /// a low wall with a great deal of sky over it whoever is playing — which
+    /// is what a Moscow derby looked like.
+    ///
+    /// The rake that gets there is steeper than a staircase: 0.72 m up for
+    /// 0.95 m back is 37°, and no step anybody walks up is built like that. It
+    /// is not pretending to be one. A real ground reaches this height by
+    /// STACKING tiers — a lower bowl, a cantilever, an upper ring — and one
+    /// rake standing in for three is the trade this scene makes, so the rake is
+    /// pitched at the steepest a real upper tier is built to rather than at the
+    /// shallowest a step can be. The alternative is depth, and there is none to
+    /// spend: see [`Pitch::TREAD`].
+    ///
+    /// The two touchlines first. The near one used to be left out because the
+    /// broadcast gantry hangs over it and a stand there is a wall across the
+    /// shot — but the rig walks all the way round the ground now, so leaving it
+    /// out is a hole in the stadium from three quarters of the arc. It is built
+    /// like the others and [`Bank::cull`] takes out whichever one the lens is
+    /// inside, which is what standing in a stand actually looks like.
+    ///
+    /// Then both ends, rotated a quarter turn so their rows recede down the x
+    /// axis instead of the z one — one each way, which is what puts them behind
+    /// opposite goals.
+    pub fn plan(stature: Stature) -> Vec<BankPlan> {
+        let along = Field::HALF_LENGTH + Pitch::END_MARGIN;
+        let across = Field::HALF_WIDTH + Pitch::SIDE_MARGIN;
+        // How far each bank wraps past the corner of the playing surface. A
+        // great ground carries its terracing well round the corners; a village
+        // one stops at the goal line, and left at the full wrap would read as
+        // a running track rather than as a small stadium.
+        let touchline_span = along * 2.0 + stature.overhang(6.0, 30.0);
+        let end_span = across * 2.0 + stature.overhang(4.0, 24.0);
+        let side = across + Pitch::SIDE_SETBACK;
+        let end = along + Pitch::END_SETBACK;
+
+        let mut plans: Vec<BankPlan> = [
+            (Stand::Side, 0.0, touchline_span, side, 34, 0.72),
+            (Stand::Side, PI, touchline_span, side, 34, 0.72),
+            (Stand::HomeEnd, FRAC_PI_2, end_span, end, 31, 0.70),
+            (Stand::AwayEnd, -FRAC_PI_2, end_span, end, 31, 0.70),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(
+            |(bank, (stand, turn, length, from, most, riser))| BankPlan {
+                terrace: Terrace {
+                    length,
+                    rows: stature.rows(most),
+                    riser,
+                    tread: Pitch::TREAD,
+                    from,
+                    slab: Pitch::SLAB,
+                },
+                stand,
+                turn,
+                seed: bank as u32 + 1,
+            },
+        )
+        .collect();
+        // Reversed once here rather than popped off the front every course: a
+        // `Vec` has no cheap front, and the order the banks appear in is worth
+        // controlling — the far touchline is what the rest shot is pointed at.
+        plans.reverse();
+        plans
     }
 }
 
@@ -790,7 +931,7 @@ impl Pitch {
             ..default()
         });
         commands.spawn((
-            Mesh3d(meshes.add(Sward::mow(turned, Self::TURF_TILE))),
+            Mesh3d(Self::stock(meshes, Sward::mow(turned, Self::TURF_TILE))),
             MeshMaterial3d(playing_surface),
         ));
     }
@@ -842,7 +983,10 @@ impl Pitch {
         // (pinned at +0.02) hanging under it. The fetching player's boots
         // did the same.
         commands.spawn((
-            Mesh3d(meshes.add(Sward::rough(SURROUND, Self::TURF_TILE))),
+            Mesh3d(Self::stock(
+                &mut meshes,
+                Sward::rough(SURROUND, Self::TURF_TILE),
+            )),
             MeshMaterial3d(surround),
             Transform::from_xyz(0.0, -0.01, 0.0),
         ));
@@ -890,7 +1034,7 @@ impl Pitch {
             &mut materials,
             &mut images,
             &config,
-            Throng::of(quality.footprint()),
+            Throng::of(quality.footprint(), config.crowd.as_deref()),
         );
     }
 
@@ -954,7 +1098,10 @@ impl Pitch {
             cull_mode: None,
             ..default()
         });
-        commands.spawn((Mesh3d(meshes.add(lines.build())), MeshMaterial3d(paint)));
+        commands.spawn((
+            Mesh3d(Self::stock(meshes, lines.build())),
+            MeshMaterial3d(paint),
+        ));
     }
 
     /// Folds one piece of scenery into a buffer that is accumulating others,
@@ -966,6 +1113,23 @@ impl Pitch {
     /// and the entity is what this viewer pays for. Measured on a machine
     /// where the scene renders in the same 3.9 ms at 1280x720 and at
     /// 3840x2160, so the pixels are free and the walk is not.
+    /// **Registers a piece of the ground and puts its bytes on the bill.**
+    ///
+    /// Every `meshes.add` in this file goes through here, and the only reason
+    /// it exists is that nothing downstream can do the counting. These are
+    /// `RenderAssetUsages::RENDER_WORLD` meshes: the moment one has been
+    /// extracted its vertex data is dropped from the main world, so a system
+    /// walking `Assets<Mesh>` afterwards finds handles with nothing behind
+    /// them. See [`MemoryBill`], which carries the whole argument.
+    ///
+    /// The crowd is NOT stocked through here — it is charged to its own kind
+    /// by [`Spectators::seat`], because it is most of the scene's bytes and a
+    /// bill that folded it into the concrete would answer nothing.
+    pub(crate) fn stock(meshes: &mut Assets<Mesh>, mesh: Mesh) -> Handle<Mesh> {
+        MemoryBill::mesh(Held::Ground, &mesh);
+        meshes.add(mesh)
+    }
+
     fn gather(buffer: &mut Option<Mesh>, piece: Mesh) {
         match buffer {
             Some(gathered) => gathered
@@ -988,7 +1152,7 @@ impl Pitch {
         materials: &mut Assets<StandardMaterial>,
         images: &mut Assets<Image>,
         venue: &ViewerConfig,
-        throng: Throng,
+        throng: Option<Throng>,
     ) {
         let stature = Stature::of(&venue.venue);
 
@@ -1115,7 +1279,7 @@ impl Pitch {
 
         for (panels, face) in adverts {
             commands.spawn((
-                Mesh3d(meshes.add(face)),
+                Mesh3d(Self::stock(meshes, face)),
                 MeshMaterial3d(materials.add(StandardMaterial {
                     base_color: Color::WHITE,
                     base_color_texture: Some(advert.clone()),
@@ -1141,10 +1305,13 @@ impl Pitch {
         }
 
         if let Some(mesh) = boards {
-            commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(board)));
+            commands.spawn((Mesh3d(Self::stock(meshes, mesh)), MeshMaterial3d(board)));
         }
         if let Some(mesh) = trims {
-            commands.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(trim.clone())));
+            commands.spawn((
+                Mesh3d(Self::stock(meshes, mesh)),
+                MeshMaterial3d(trim.clone()),
+            ));
         }
 
         // Four banks of seating, open to the sky — none of these stands is
@@ -1185,79 +1352,50 @@ impl Pitch {
             ),
         );
 
-        // How far each bank wraps past the corner of the playing surface. A
-        // great ground carries its terracing well round the corners; a village
-        // one stops at the goal line, and left at the full wrap would read as
-        // a running track rather than as a small stadium.
-        let touchline_span = along * 2.0 + stature.overhang(6.0, 30.0);
-        let end_span = across * 2.0 + stature.overhang(4.0, 24.0);
+        // …and the four banks themselves are NOT built here. They are planned
+        // here and raised one per frame — see [`Stands`], which carries the
+        // whole argument, and the courses in `lib.rs` that spend the frames.
+        commands.insert_resource(Stands {
+            pending: Stands::plan(stature),
+            seating,
+            trim: trim.clone(),
+            spectators,
+            stature,
+            throng,
+        });
+    }
 
-        // The four banks as the flights of steps they are: how far round, how
-        // far back off the paint, how many rows at a GREAT ground, and how
-        // high one step is. What `stature` does to the row count is the whole
-        // difference between Old Trafford and an academy pitch.
-        //
-        // **A great ground is 34 rows and 24 m of stand**, up from 21 and
-        // 13.4. Thirteen metres is a lower tier, and a bowl built to only that
-        // reads as a low wall with a great deal of sky over it whoever is
-        // playing — which is what a Moscow derby looked like.
-        //
-        // The rake that gets there is steeper than a staircase: 0.72 m up for
-        // 0.95 m back is 37°, and no step anybody walks up is built like that.
-        // It is not pretending to be one. A real ground reaches this height by
-        // STACKING tiers — a lower bowl, a cantilever, an upper ring — and one
-        // rake standing in for three is the trade this scene makes, so the
-        // rake is pitched at the steepest a real upper tier is built to rather
-        // than at the shallowest a step can be. The alternative is depth, and
-        // there is none to spend: see [`Self::TREAD`].
-        //
-        // The two touchlines first. The near one used to be left out because
-        // the broadcast gantry hangs over it and a stand there is a wall
-        // across the shot — but the rig walks all the way round the ground
-        // now, so leaving it out is a hole in the stadium from three quarters
-        // of the arc. It is built like the others and `Bank::cull` takes out
-        // whichever one the lens is inside, which is what standing in a stand
-        // actually looks like.
-        //
-        // Then both ends, rotated a quarter turn so their rows recede down the
-        // x axis instead of the z one — one each way, which is what puts them
-        // behind opposite goals.
-        let side = across + Self::SIDE_SETBACK;
-        let end = along + Self::END_SETBACK;
-        for (bank, (stand, turn, length, from, most, riser)) in [
-            (Stand::Side, 0.0, touchline_span, side, 34, 0.72),
-            (Stand::Side, PI, touchline_span, side, 34, 0.72),
-            (Stand::HomeEnd, FRAC_PI_2, end_span, end, 31, 0.70),
-            (Stand::AwayEnd, -FRAC_PI_2, end_span, end, 31, 0.70),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let terrace = Terrace {
-                length,
-                rows: stature.rows(most),
-                riser,
-                tread: Self::TREAD,
-                from,
-                slab: Self::SLAB,
-            };
-            Self::spawn_stand(
-                commands,
-                meshes,
-                &seating,
-                &trim,
-                &spectators,
-                &terrace,
-                stature,
-                stand,
-                turn,
-                // Anything that differs per bank. Without it all four draw the
-                // same crowd in the same places and the two ends are visibly
-                // one photograph.
-                bank as u32 + 1,
-                throng,
-            );
-        }
+    /// **One bank of the four**, popped off the plan the last course laid.
+    ///
+    /// Registered four times over four courses of the bring-up — see
+    /// [`Stands`] — and does nothing at all once the plan is empty, which is
+    /// what makes a ground with fewer banks than courses harmless.
+    pub fn raise_bank(
+        mut commands: Commands,
+        mut meshes: ResMut<Assets<Mesh>>,
+        stands: Option<ResMut<Stands>>,
+    ) {
+        let Some(mut stands) = stands else {
+            return;
+        };
+        let Some(plan) = stands.pending.pop() else {
+            return;
+        };
+        let (seating, trim) = (stands.seating.clone(), stands.trim.clone());
+        let (stature, throng) = (stands.stature, stands.throng);
+        Self::spawn_stand(
+            &mut commands,
+            &mut meshes,
+            &seating,
+            &trim,
+            &stands.spectators,
+            &plan.terrace,
+            stature,
+            plan.stand,
+            plan.turn,
+            plan.seed,
+            throng,
+        );
     }
 
     /// One bank of seating and the people in it, built in its own local space
@@ -1278,7 +1416,7 @@ impl Pitch {
         stand: Stand,
         turn: f32,
         seed: u32,
-        throng: Throng,
+        throng: Option<Throng>,
     ) {
         /// Fraction of the way up the lit walkway runs.
         const TIER: f32 = 0.35;
@@ -1343,7 +1481,7 @@ impl Pitch {
                 .merge(&step().translated_by(offset))
                 .expect("every row is the same cuboid");
         }
-        let flight = meshes.add(flight);
+        let flight = Self::stock(meshes, flight);
         let foot = terrace.slab_centre(0);
 
         // The bank's own extent, so `Bank::cull` can tell whether the
@@ -1375,7 +1513,14 @@ impl Pitch {
             // The crowd, as one more mesh on the same steps. A child of the
             // bank rather than a thing of its own, so `Bank::cull` takes the
             // people out with the structure they are sitting on.
-            if let Some(crowd) = spectators.seat(meshes, terrace, stature, stand, seed, throng) {
+            //
+            // No throng at all is `?crowd=off` — a bisection knob and never a
+            // fixture, see [`Throng::of`]. The concrete still goes up, which is
+            // the point of it: an empty ground says whether the SPECTATORS are
+            // what the device could not hold.
+            if let Some(crowd) = throng
+                .and_then(|throng| spectators.seat(meshes, terrace, stature, stand, seed, throng))
+            {
                 bank.spawn(crowd);
             }
 
@@ -1391,7 +1536,10 @@ impl Pitch {
             if Stature::tiered(terrace.rows) {
                 let tier = terrace.rows as f32 * TIER;
                 bank.spawn((
-                    Mesh3d(meshes.add(Cuboid::new(terrace.length, 0.5, 1.1))),
+                    Mesh3d(Self::stock(
+                        meshes,
+                        Cuboid::new(terrace.length, 0.5, 1.1).into(),
+                    )),
                     MeshMaterial3d(trim.clone()),
                     Transform::from_xyz(
                         0.0,

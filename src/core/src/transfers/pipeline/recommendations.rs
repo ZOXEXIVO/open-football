@@ -487,6 +487,35 @@ impl PipelineProcessor {
         }
     }
 
+    /// Headroom the very biggest departments carry on top of
+    /// [`Self::staff_recommendation_cap`] at full reputation.
+    const RECOMMENDATION_CAP_REACH: f32 = 6.0;
+
+    /// [`Self::staff_recommendation_cap`], widened continuously across the
+    /// top tier.
+    ///
+    /// A flat six was the queue bound that made the standout-abroad channel
+    /// self-defeating: the same cap that keeps a National side from
+    /// drowning in tips also meant a club with a global scouting network
+    /// could hold six standing recommendations in the entire world, and any
+    /// seventh name — including a foreign marquee its own watch had just
+    /// found — was silently dropped. The small-club tiers are unchanged
+    /// (their recruitment genuinely does run on a handful of tips); above
+    /// them the queue grows with the department that fills it.
+    pub(in crate::transfers::pipeline) fn staff_recommendation_cap_score(
+        rep: ReputationLevel,
+        score: f32,
+    ) -> usize {
+        let base = Self::staff_recommendation_cap(rep);
+        match rep {
+            ReputationLevel::Regional
+            | ReputationLevel::Local
+            | ReputationLevel::Amateur
+            | ReputationLevel::National => base,
+            _ => base + (score.clamp(0.0, 1.0) * Self::RECOMMENDATION_CAP_REACH).round() as usize,
+        }
+    }
+
     pub fn generate_staff_recommendations(country: &mut Country, date: NaiveDate) {
         // Only runs weekly (same schedule as should_evaluate)
         if !Self::should_evaluate_for(country, date) {
@@ -1744,13 +1773,12 @@ impl PipelineProcessor {
         // Small clubs get higher cap
         for action in actions {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
-                let rep = club
-                    .teams
-                    .teams
-                    .first()
+                let team = club.teams.teams.first();
+                let rep = team
                     .map(|t| t.reputation.level())
                     .unwrap_or(ReputationLevel::Amateur);
-                let cap = Self::staff_recommendation_cap(rep);
+                let rep_score = team.map(|t| t.reputation.overall_score()).unwrap_or(0.0);
+                let cap = Self::staff_recommendation_cap_score(rep, rep_score);
                 if club.transfer_plan.staff_recommendations.len() < cap {
                     let rec = action.recommendation;
                     let recommender_id = rec.recommender_staff_id;
@@ -1817,6 +1845,28 @@ impl PipelineProcessor {
         enum RecommendationProcessKind {
             AddToShortlist {
                 shortlist_request_id: u32,
+                candidate: ShortlistCandidate,
+            },
+            /// The recommendation fits an OPEN request that has no
+            /// shortlist yet — open one for it and put him on it.
+            ///
+            /// Without this branch the recommendation fell down a hole. A
+            /// matching request with no shortlist satisfied the `if let
+            /// Some(req)` arm, found nothing to add to, and returned — while
+            /// the create-a-request arm below is an `else`, so it never ran
+            /// either. In other words the club's own recruitment department
+            /// silently discarded a name precisely when its coach had ALSO
+            /// asked for that position: the more a club wanted a player
+            /// there, the less likely it was to act on the one it had
+            /// found. Only a shortlist that a scouting assignment happened
+            /// to have produced could ever receive him.
+            SeedShortlist {
+                request_id: u32,
+                /// The REQUEST's allocation, not the candidate's fee — the
+                /// shortlist's budget is what the club set aside for the
+                /// position, and every downstream affordability check
+                /// reads it.
+                allocation: f64,
                 candidate: ShortlistCandidate,
             },
             CreateRequest {
@@ -1965,6 +2015,31 @@ impl PipelineProcessor {
                                 },
                             });
                         }
+                    } else if rec.confidence >= 0.6
+                        && rec.assessed_ability >= 50
+                        && req.budget_allocation > 0.0
+                    {
+                        // The request is open, funded and empty. Open its
+                        // shortlist with the name the department has
+                        // actually found — see `SeedShortlist`. A
+                        // zero-allocation request is deliberately excluded:
+                        // those are the free-agent matcher's territory, and
+                        // a shortlist would route them into the paid
+                        // negotiation path they carry no money for.
+                        actions.push(RecommendationProcessAction {
+                            club_id: club.id,
+                            kind: RecommendationProcessKind::SeedShortlist {
+                                request_id: req.id,
+                                allocation: req.budget_allocation,
+                                candidate: ShortlistCandidate {
+                                    player_id: rec.player_id,
+                                    score: rec.assessed_ability as f32 / 200.0
+                                        + rec.confidence * 0.1,
+                                    estimated_fee: rec.estimated_fee,
+                                    status: ShortlistCandidateStatus::Available,
+                                },
+                            },
+                        });
                     }
                 } else if rec.confidence >= 0.6 && rec.assessed_ability >= 50 {
                     // No existing request — create a new one
@@ -1991,9 +2066,24 @@ impl PipelineProcessor {
                         continue;
                     }
 
-                    // Allocate 15% of available budget
+                    // Fund the PLAYER, not a flat slice of the pot.
+                    //
+                    // A marquee recommendation used to be allocated a flat
+                    // 15% of the available budget, which for a giant is a
+                    // fraction of what its own scouts said the target
+                    // costs. The request then arrived at the board with a
+                    // fee three or four times its allocation — read as
+                    // gross financial indiscipline — and at the shortlist
+                    // with a ceiling no candidate worth recommending could
+                    // fit under. The recommendation is a named player with
+                    // an estimated fee attached, so the honest allocation
+                    // is that fee, bounded by the share of the budget one
+                    // signing may consume.
                     let available_budget = plan.available_budget();
-                    let alloc = available_budget * 0.15;
+                    let alloc = rec
+                        .estimated_fee
+                        .max(available_budget * 0.15)
+                        .min(available_budget * Self::MAX_INVESTMENT_SHARE);
 
                     if alloc <= 0.0 {
                         continue;
@@ -2055,11 +2145,69 @@ impl PipelineProcessor {
                             shortlist.candidates.push(candidate);
                         }
                     }
-                    RecommendationProcessKind::CreateRequest { request, candidate } => {
+                    RecommendationProcessKind::SeedShortlist {
+                        request_id,
+                        allocation,
+                        candidate,
+                    } => {
+                        // Guard against two recommendations seeding the same
+                        // request in one pass — the second joins the first's
+                        // list instead of opening a rival one.
+                        if let Some(existing) = plan
+                            .shortlists
+                            .iter_mut()
+                            .find(|s| s.transfer_request_id == request_id)
+                        {
+                            if !existing
+                                .candidates
+                                .iter()
+                                .any(|c| c.player_id == candidate.player_id)
+                            {
+                                existing.candidates.push(candidate);
+                            }
+                        } else {
+                            let mut shortlist = TransferShortlist::new(request_id, allocation);
+                            shortlist.candidates.push(candidate);
+                            plan.shortlists.push(shortlist);
+                        }
+                        // Downstream (the board review, the negotiation
+                        // pass) keys on the request being Shortlisted.
+                        if let Some(req) = plan
+                            .transfer_requests
+                            .iter_mut()
+                            .find(|r| r.id == request_id)
+                        {
+                            if matches!(
+                                req.status,
+                                TransferRequestStatus::Pending
+                                    | TransferRequestStatus::ScoutingActive
+                            ) {
+                                req.status = TransferRequestStatus::Shortlisted;
+                            }
+                        }
+                    }
+                    RecommendationProcessKind::CreateRequest {
+                        mut request,
+                        candidate,
+                    } => {
                         let req_id = request.id;
                         if req_id >= plan.next_request_id {
                             plan.next_request_id = req_id + 1;
                         }
+                        // The shortlist is attached here and now, so the
+                        // request is Shortlisted — not Pending.
+                        //
+                        // This is what puts the marquee path in front of
+                        // the board. `review_shortlist_proposals` only
+                        // reviews requests at `Shortlisted`, so a
+                        // recommendation-created request sat at `Pending`
+                        // with `board_approved == None` for its whole life
+                        // and the negotiation pass — which only refuses
+                        // `Some(false)` — pursued it unchallenged. The
+                        // single most expensive purchase a club can make
+                        // was the one purchase its chairman was never
+                        // asked about.
+                        request.status = TransferRequestStatus::Shortlisted;
                         plan.transfer_requests.push(request);
                         let mut shortlist = TransferShortlist::new(req_id, candidate.estimated_fee);
                         shortlist.candidates.push(candidate);

@@ -21,6 +21,33 @@ pub struct TransferMarket {
     /// at country tick time. Empty for clubs that haven't bought
     /// anyone with installment-style deals.
     pub pending_clauses: Vec<PendingTransferClause>,
+    /// Cumulative counts of the market's *stories* — the beats that tell a
+    /// live market from a procurement queue. Diagnostics only: nothing in
+    /// the engine reads them back, and the census in `.dev/transfers` is
+    /// their consumer.
+    pub story: MarketStoryCounters,
+}
+
+/// How often the market did the things a real one does.
+///
+/// A census can count moves; it cannot see WHY a move looked the way it did.
+/// These four say whether the mechanisms that were added actually fire: did
+/// anybody fight over a player, did anything close because the clock ran out,
+/// did a quiet sell-list entry ever convert, did an agent's phone call ever
+/// start a deal. A layer that ships with its counter at zero has not landed,
+/// whatever the aggregate move totals say.
+#[derive(Debug, Clone, Default)]
+pub struct MarketStoryCounters {
+    /// Fee agreed on a player who had at least one other live bid.
+    pub contested_agreements: u32,
+    /// Fee agreed inside the window's last days.
+    pub deadline_agreements: u32,
+    /// Fee agreed for a player his club had quietly marketed rather than
+    /// listed — see [`crate::transfers::pipeline::AssetLedger`].
+    pub sell_list_conversions: u32,
+    /// Approaches opened on the agent channel — a player circulated to a
+    /// bigger stage rather than a club answering an advertisement.
+    pub agent_led_approaches: u32,
 }
 
 /// A future financial obligation arising from a clause that fires
@@ -208,6 +235,7 @@ impl TransferMarket {
             transfer_history: Vec::new(),
             next_negotiation_id: 1,
             pending_clauses: Vec::new(),
+            story: MarketStoryCounters::default(),
         }
     }
 

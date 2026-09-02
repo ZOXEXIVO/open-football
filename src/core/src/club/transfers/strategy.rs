@@ -11,7 +11,9 @@ use crate::transfers::pipeline::{
 };
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
-use crate::{ClubPhilosophy, Person, Player, PlayerPositionType, PlayerStatusType};
+use crate::{
+    ClubPhilosophy, Person, Player, PlayerPositionType, PlayerSquadStatus, PlayerStatusType,
+};
 use chrono::{Datelike, NaiveDate};
 
 // ============================================================
@@ -1268,6 +1270,24 @@ impl PersonalTermsPackager {
         }
     }
 
+    /// The brief's promised role, in the shape an offer carries it.
+    /// `None` for the statuses a signing is never promised (a club does not
+    /// offer a man `NotNeeded`), which sends the caller to the motive-based
+    /// fallback.
+    fn promise_from_squad_status(status: &PlayerSquadStatus) -> Option<PromisedSquadStatus> {
+        match status {
+            PlayerSquadStatus::KeyPlayer => Some(PromisedSquadStatus::KeyPlayer),
+            PlayerSquadStatus::FirstTeamRegular => Some(PromisedSquadStatus::FirstTeamRegular),
+            PlayerSquadStatus::FirstTeamSquadRotation | PlayerSquadStatus::MainBackupPlayer => {
+                Some(PromisedSquadStatus::FirstTeamSquadRotation)
+            }
+            PlayerSquadStatus::HotProspectForTheFuture | PlayerSquadStatus::DecentYoungster => {
+                Some(PromisedSquadStatus::HotProspectForTheFuture)
+            }
+            _ => None,
+        }
+    }
+
     fn squad_status_promise(
         strategy: &ClubTransferStrategy,
         _player: &Player,
@@ -1277,6 +1297,17 @@ impl PersonalTermsPackager {
     ) -> Option<PromisedSquadStatus> {
         if star {
             return Some(PromisedSquadStatus::KeyPlayer);
+        }
+        // The brief already decided what shirt this search is for — a
+        // transformative signing is promised a key role, an upgrade a
+        // starting one, cover a rotation seat — so the promise the buyer
+        // makes is the promise it planned, not a second guess from the
+        // motive. The motive mapping below stays as the fallback for
+        // requests raised by paths that predate the brief.
+        if let Some(req) = ctx.request {
+            if let Some(promised) = Self::promise_from_squad_status(&req.promised_status) {
+                return Some(promised);
+            }
         }
         if let Some(req) = ctx.request {
             return Some(match req.reason {

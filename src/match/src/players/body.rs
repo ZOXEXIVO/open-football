@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
+use crate::app::bill::MemoryBill;
 use crate::app::quality::Tier;
 use crate::art::textures::FaceLayout;
 use crate::players::actors::Actors;
@@ -349,6 +350,19 @@ pub struct Grain {
     curve: usize,
     /// Rings from pole to pole on a blob.
     stacks: usize,
+    /// **How large a sheet a man's PHOTOGRAPH is painted onto**, in texels a
+    /// side.
+    ///
+    /// The one entry here that is not geometry, and it is here because it is
+    /// the same decision: how much of a footballer this machine is being asked
+    /// to hold. A photographed face is a square sheet with a full mip chain —
+    /// 341 KiB at 256, 85 at 128 — and there is one per man, so it is the
+    /// largest per-player allocation in the squad and the only part of a
+    /// player that grows with the team sheet rather than being shared.
+    ///
+    /// See [`Textures::face_sheet`](crate::art::textures::Textures), which is
+    /// the only reader, and [`Self::SPARE`] for what a phone gets.
+    face: u32,
 }
 
 impl Grain {
@@ -374,12 +388,17 @@ impl Grain {
     ///   readily as a faceted one.
     /// - **`blob_sides` 48 / `stacks` 28** for the joint balls and a keeper's
     ///   digits, which are centimetres across.
+    /// - **`face` 256**, which is the sheet a photograph needs to still be a
+    ///   picture of a particular man rather than a tinted smudge — the whole
+    ///   argument is at
+    ///   [`Textures::face_sheet`](crate::art::textures::Textures).
     pub const FULL: Grain = Grain {
         sides: 128,
         head_sides: 128,
         blob_sides: 48,
         curve: 8,
         stacks: 28,
+        face: 256,
     };
 
     /// What an integrated part draws.
@@ -399,14 +418,30 @@ impl Grain {
     /// is not being asked to choose between a smooth thigh and a faceted one.
     /// It is being asked to choose between a faceted thigh and a slideshow.
     ///
+    /// The face SHEET is cut in half as well, and that one is not about the
+    /// picture at all — 256 squared with its mip chain is 341 KiB per man
+    /// where 128 is 85, which over a squad of thirty-six is nine megabytes on
+    /// a device that is killed for holding too much. It costs a photograph
+    /// looked at from the gantry nothing: at that range a head is a few dozen
+    /// pixels across and the sheet was already several times what the screen
+    /// could show. It is legible when the camera is flown to arm's length,
+    /// which is the trade [`Grain`] makes everywhere else too.
+    ///
     /// Measured over the part list this cuts one outfielder from 377,024
-    /// triangles to a little over 60,000, and the squad from ~8 M to ~1.3 M.
+    /// triangles to 76,864, and the squad from ~8.3 M to ~1.69 M.
+    ///
+    /// ⚠ The second figure said "a little over 60,000" and the third "~1.3 M",
+    /// and both were stale — the part list had moved under them. Counted off
+    /// the same walk [`BodyParts::triangles`] makes, which is the figure the
+    /// frame-cost line prints, so the two cannot drift apart again without one
+    /// of them being obviously wrong on screen.
     pub const SPARE: Grain = Grain {
         sides: 48,
         head_sides: 64,
         blob_sides: 16,
         curve: 4,
         stacks: 14,
+        face: 128,
     };
 
     /// Which one this machine gets.
@@ -439,9 +474,16 @@ impl Grain {
     /// that grows elevenfold without anybody noticing.
     pub fn describe(&self) -> String {
         format!(
-            "sides {}, head {}, blob {}, curve {}",
-            self.sides, self.head_sides, self.blob_sides, self.curve
+            "sides {}, head {}, blob {}, curve {}, face {}",
+            self.sides, self.head_sides, self.blob_sides, self.curve, self.face
         )
+    }
+
+    /// How large a photographed face sheet this grain is painted onto, in
+    /// texels a side. The one figure here that leaves the lathe — see
+    /// [`Self::face`].
+    pub fn face(&self) -> u32 {
+        self.face
     }
 }
 
@@ -1592,9 +1634,33 @@ impl BodyParts {
     /// cuffs, the shorts legs, the sock tops — are read back out of the store,
     /// folded into their parents, and their own handles dropped at the end of
     /// this function, so nothing of them survives to be uploaded twice.
+    /// ⚠ **Each cut is TAKEN out of the store as it is used**, not copied out
+    /// of it, and that is a memory decision rather than a stylistic one.
+    ///
+    /// This used to clone every cut and leave the original in `Assets<Mesh>`
+    /// until the whole function returned, so at the last line the store held
+    /// the fourteen cuts, the seven merged parts built from them AND the
+    /// clones in between — measured at 20.5 MiB of transient at
+    /// [`Grain::FULL`] for a working set of 10.2. On wasm32 linear memory only
+    /// grows, so that peak is a floor the tab carries for the rest of the
+    /// session; on iOS crossing the tab's ceiling kills the renderer outright.
+    /// See [`MemoryBill`](crate::app::bill::MemoryBill).
+    ///
+    /// Two cuts are still copied, because two are worn twice: the upper arm
+    /// goes into a short sleeve and a long one, and the forearm is both
+    /// sleeved for a keeper and carried over bare for everybody else. Each is
+    /// copied for its first use and taken for its last, which is why the order
+    /// of the blocks below is not free to change.
     pub fn new(meshes: &mut Assets<Mesh>, grain: Grain) -> Self {
         let cuts = Self::tailor(meshes, grain);
-        let cut = |meshes: &Assets<Mesh>, handle: &Handle<Mesh>| {
+        // Out of the store, leaving nothing behind.
+        let taken = |meshes: &mut Assets<Mesh>, handle: Handle<Mesh>| {
+            meshes
+                .remove(&handle)
+                .expect("every cut part was just added")
+        };
+        // …and the one that has to stay, for a part worn twice.
+        let copied = |meshes: &Assets<Mesh>, handle: &Handle<Mesh>| {
             meshes
                 .get(handle)
                 .expect("every cut part was just added")
@@ -1602,34 +1668,38 @@ impl BodyParts {
         };
 
         let torso = Sculptor::outfitted(vec![
-            (cut(meshes, &cuts.torso), Swatch::Shirt),
-            (cut(meshes, &cuts.collar), Swatch::Trim),
+            (taken(meshes, cuts.torso), Swatch::Shirt),
+            (taken(meshes, cuts.collar), Swatch::Trim),
         ]);
-        let pelvis = Sculptor::clad(cut(meshes, &cuts.pelvis), Swatch::Shorts);
+        let pelvis = Sculptor::clad(taken(meshes, cuts.pelvis), Swatch::Shorts);
+        // The short sleeve first, copying the arm…
         let arm_sleeved = Sculptor::outfitted(vec![
-            (cut(meshes, &cuts.upper_arm), Swatch::Skin),
-            (cut(meshes, &cuts.sleeve), Swatch::Shirt),
-            (cut(meshes, &cuts.cuff), Swatch::Trim),
+            (copied(meshes, &cuts.upper_arm), Swatch::Skin),
+            (taken(meshes, cuts.sleeve), Swatch::Shirt),
+            (taken(meshes, cuts.cuff), Swatch::Trim),
         ]);
+        // …and the keeper's long one second, which is what takes it away.
         let arm_sleeved_long = Sculptor::outfitted(vec![
-            (cut(meshes, &cuts.upper_arm), Swatch::Skin),
-            (cut(meshes, &cuts.sleeve_long), Swatch::Shirt),
+            (taken(meshes, cuts.upper_arm), Swatch::Skin),
+            (taken(meshes, cuts.sleeve_long), Swatch::Shirt),
         ]);
+        // The forearm is copied and never taken: the bare one is carried over
+        // into the working set below, where an outfielder wears it.
         let forearm_sleeved = Sculptor::outfitted(vec![
-            (cut(meshes, &cuts.forearm), Swatch::Skin),
-            (cut(meshes, &cuts.sleeve_forearm), Swatch::Shirt),
-            (cut(meshes, &cuts.cuff_forearm), Swatch::Trim),
+            (copied(meshes, &cuts.forearm), Swatch::Skin),
+            (taken(meshes, cuts.sleeve_forearm), Swatch::Shirt),
+            (taken(meshes, cuts.cuff_forearm), Swatch::Trim),
         ]);
         let thigh = Sculptor::outfitted(vec![
-            (cut(meshes, &cuts.thigh), Swatch::Skin),
-            (cut(meshes, &cuts.shorts_leg), Swatch::Shorts),
+            (taken(meshes, cuts.thigh), Swatch::Skin),
+            (taken(meshes, cuts.shorts_leg), Swatch::Shorts),
         ]);
         let shin = Sculptor::outfitted(vec![
-            (cut(meshes, &cuts.shin), Swatch::Socks),
-            (cut(meshes, &cuts.sock_top), Swatch::Shorts),
+            (taken(meshes, cuts.shin), Swatch::Socks),
+            (taken(meshes, cuts.sock_top), Swatch::Shorts),
         ]);
 
-        BodyParts {
+        let parts = BodyParts {
             torso: meshes.add(torso),
             pelvis: meshes.add(pelvis),
             arm_sleeved: meshes.add(arm_sleeved),
@@ -1649,6 +1719,52 @@ impl BodyParts {
             number: cuts.number,
             name: cuts.name,
             name_front: cuts.name_front,
+        };
+        parts.narrow(meshes);
+        parts
+    }
+
+    /// **Halves the index buffer of every part that can spare the width.**
+    ///
+    /// A footballer is lathed in pieces, and the largest piece of him at
+    /// [`Grain::FULL`] is a torso of some twenty thousand vertices — two
+    /// thirds of the way under the 65,536 a sixteen-bit index can reach, and
+    /// at [`Grain::SPARE`] it is nowhere near. So every index in the squad's
+    /// working set is a `u32` carrying a number that fits in a `u16`, which is
+    /// two bytes a triangle corner thrown away: 2.2 MiB at FULL and half a
+    /// megabyte at SPARE, uploaded once and held for the session.
+    ///
+    /// Done here rather than in [`Sculptor::build`] deliberately. The parts
+    /// above are MERGED — a shirt takes its collar, a thigh takes the leg of
+    /// the shorts — and `Mesh::merge` has to be handed two meshes with the
+    /// same index width. Narrowing at the lathe would mean a small part
+    /// arriving as `U16` at a large one that is still `U32`; narrowing once at
+    /// the end, after everything that is going to be merged has been, cannot.
+    ///
+    /// Silently leaves anything too large alone, which is the honest answer:
+    /// this is a saving, not a constraint, and a part that grew past the limit
+    /// should get a bigger index rather than a panic.
+    fn narrow(&self, meshes: &mut Assets<Mesh>) {
+        let mut working = Vec::new();
+        self.each(&mut |handle| working.push(handle.clone()));
+        for handle in working {
+            let Some(mut mesh) = meshes.get_mut(&handle) else {
+                continue;
+            };
+            // A `u16` reaches vertex 65,535, so a mesh of 65,536 is the
+            // largest that can be addressed.
+            if mesh.count_vertices() > u16::MAX as usize + 1 {
+                continue;
+            }
+            let narrowed: Option<Vec<u16>> = match mesh.indices() {
+                Some(Indices::U32(indices)) => {
+                    Some(indices.iter().map(|index| *index as u16).collect())
+                }
+                _ => None,
+            };
+            if let Some(narrowed) = narrowed {
+                mesh.insert_indices(Indices::U16(narrowed));
+            }
         }
     }
 
@@ -1661,6 +1777,64 @@ impl BodyParts {
     /// opportunity anything has to count them. See
     /// [`FrameCost::note_geometry`](crate::app::perf::FrameCost::note_geometry).
     ///
+    /// **…and what the working set comes to in BYTES**, which is a different
+    /// question from the one above and is asked for a different failure.
+    ///
+    /// Triangles are what the frame costs; these are what the tab holds. And
+    /// unlike the triangle figure this counts every distinct mesh ONCE rather
+    /// than counting a paired part twice: an arm is uploaded to the driver a
+    /// single time and worn twice, so a squad of twenty-two costs exactly this
+    /// and not twenty-two times it. The per-player half of the bill is the
+    /// textures, which [`Wardrobe`](crate::players::kit::Wardrobe) and the
+    /// portraits account for themselves.
+    ///
+    /// Asked here for the reason [`Self::triangles`] is: these are
+    /// `RENDER_WORLD` meshes and this is the last moment anything can see
+    /// them. See [`MemoryBill`](crate::app::bill::MemoryBill).
+    pub fn bytes(&self, meshes: &Assets<Mesh>) -> usize {
+        let mut total = 0;
+        self.each(&mut |handle| {
+            total += meshes.get(handle).map_or(0, MemoryBill::mesh_bytes);
+        });
+        total
+    }
+
+    /// Every distinct mesh in the working set, once each.
+    ///
+    /// Written out rather than derived because there is nothing to derive it
+    /// from — the struct is eighteen named fields and two small arrays — and
+    /// the one thing a reader has to be able to check is that the list is
+    /// complete. A part missing from here is a part missing from the bill.
+    fn each(&self, visit: &mut impl FnMut(&Handle<Mesh>)) {
+        for handle in [
+            &self.torso,
+            &self.pelvis,
+            &self.head,
+            &self.arm_sleeved,
+            &self.arm_sleeved_long,
+            &self.forearm,
+            &self.forearm_sleeved,
+            &self.glove,
+            &self.finger,
+            &self.fingertip,
+            &self.thumb,
+            &self.thigh,
+            &self.shin,
+            &self.boot,
+            &self.number,
+            &self.name,
+            &self.name_front,
+        ] {
+            visit(handle);
+        }
+        for handle in &self.hand {
+            visit(handle);
+        }
+        for handle in self.hair.iter().flatten() {
+            visit(handle);
+        }
+    }
+
     /// An outfielder rather than a keeper, because twenty of the twenty-two
     /// are one and a squad's cost is his cost times twenty. Paired parts are
     /// counted twice, which is what a man wears.
@@ -7123,6 +7297,66 @@ mod tests {
         match std::env::var("MATCH_FIGURE_GRAIN").as_deref() {
             Ok("spare") => Grain::SPARE,
             _ => Grain::FULL,
+        }
+    }
+
+    /// **What one footballer costs at each grain**, counted off the part list
+    /// rather than read off a comment.
+    ///
+    /// Both figures were written down in prose and both went stale: `SPARE`
+    /// said "a little over 60,000" while the part list had moved to 76,864,
+    /// and the squad figure with it. A number that only exists in a doc
+    /// comment is a number nobody is checking, and the whole reason the
+    /// frame-cost line prints this one is the elevenfold regression that went
+    /// unnoticed for months (see [`FrameCost::note_geometry`]).
+    ///
+    /// Bounds rather than equalities, wide enough that a modelling change is
+    /// free and tight enough that a `SIDES` going from 32 to 128 by accident
+    /// cannot pass.
+    #[test]
+    fn a_footballer_costs_what_his_grain_says_he_does() {
+        let count = |grain| {
+            let mut meshes = Assets::<Mesh>::default();
+            let parts = BodyParts::new(&mut meshes, grain);
+            parts.triangles(&meshes)
+        };
+        let full = count(Grain::FULL);
+        let spare = count(Grain::SPARE);
+        assert!(
+            (360_000..400_000).contains(&full),
+            "a full-grain outfielder came to {full} triangles"
+        );
+        assert!(
+            (65_000..90_000).contains(&spare),
+            "a spare-grain outfielder came to {spare} triangles"
+        );
+    }
+
+    /// **Every part of the working set is indexed sixteen bits wide.**
+    ///
+    /// Not a modelling constraint — a saving. The largest piece of a
+    /// footballer at [`Grain::FULL`] is well under the 65,536 vertices a
+    /// `u16` reaches, so every `u32` index in the squad is two bytes thrown
+    /// away, held for the length of the session on a device that is killed for
+    /// holding too much. See [`BodyParts::narrow`].
+    ///
+    /// Pinned because it is invisible: a part that grew past the limit would
+    /// quietly go back to `U32` and draw identically.
+    #[test]
+    fn the_squad_is_indexed_as_narrowly_as_it_can_be() {
+        for grain in [Grain::FULL, Grain::SPARE] {
+            let mut meshes = Assets::<Mesh>::default();
+            let parts = BodyParts::new(&mut meshes, grain);
+            let mut wide = 0;
+            parts.each(&mut |handle| {
+                let Some(mesh) = meshes.get(handle) else {
+                    return;
+                };
+                if matches!(mesh.indices(), Some(Indices::U32(_))) {
+                    wide += 1;
+                }
+            });
+            assert_eq!(wide, 0, "{wide} parts are still indexed 32 bits wide");
         }
     }
 

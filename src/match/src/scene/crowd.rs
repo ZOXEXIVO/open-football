@@ -12,6 +12,7 @@
 //! description the crowd is seated on, so a spectator cannot end up standing
 //! in mid-air or buried in the row in front of him.
 
+use crate::app::bill::{Held, MemoryBill};
 use crate::app::config::VenueInfo;
 use crate::app::quality::Footprint;
 use crate::art::textures::{CrowdPalette, Textures};
@@ -501,13 +502,26 @@ impl Throng {
     /// Which one this device gets. One decision, taken from the same
     /// [`Footprint`] that decides the sampling and the squad's grain, so a
     /// scene cannot come out thinned in one place and not in another.
-    pub fn of(footprint: Footprint) -> Throng {
-        match footprint {
-            Footprint::Roomy => Self::FULL,
-            Footprint::Handheld => Self::HANDHELD,
+    ///
+    /// **`None` is an empty ground**, and it is reachable only from the
+    /// address bar (`?crowd=off`). It is not a quality setting — no fixture
+    /// ever gets it — it is a bisection knob, and it exists for the same
+    /// reason [`Footprint::of`] takes an override: the failure this file was
+    /// written for happens on somebody else's phone, produces no console and
+    /// no error page, and the only way to find out whether the crowd is what
+    /// is too big is to be able to take it out from the device that is
+    /// failing.
+    pub fn of(footprint: Footprint, asked: Option<&str>) -> Option<Throng> {
+        match asked {
+            Some("off") => None,
+            Some("full") => Some(Self::FULL),
+            Some("handheld") => Some(Self::HANDHELD),
+            _ => Some(match footprint {
+                Footprint::Roomy => Self::FULL,
+                Footprint::Handheld => Self::HANDHELD,
+            }),
         }
     }
-
 }
 
 pub struct Crowd;
@@ -763,8 +777,30 @@ impl Crowd {
             _ => CrowdPalette::colours as fn(&CrowdPalette, u32) -> Vec2,
         };
 
-        let mut figures =
-            Figures::with_capacity((slots * terrace.rows) as f32 * occupancy, throng);
+        // **A census before a stitch.** The buffers below come to tens of
+        // megabytes on a full bank and a `Vec` that outgrows its reservation
+        // doubles, so the reservation is counted off the same hashes the
+        // placement uses rather than estimated from the occupancy — see
+        // [`Figures::exactly`], and [`Figures::leg_vertices`] for the fifty
+        // megabytes of permanent heap the old estimate was buying.
+        //
+        // It costs a second pass over rows x slots doing nothing but hashes:
+        // some five thousand of them on the largest bank in the game, against
+        // the ten thousand figures the pass below then turns.
+        let (mut seated, mut standing) = (0usize, 0usize);
+        for row in 0..terrace.rows {
+            for slot in 0..slots {
+                if Self::taken(seed, occupancy, row, slot).is_none() {
+                    continue;
+                }
+                seated += 1;
+                let head = Self::hash(seed ^ Self::COMPLEXION, row as u32, slot as u32);
+                if Posture::of(Self::unit(head >> 16), afoot).afoot() {
+                    standing += 1;
+                }
+            }
+        }
+        let mut figures = Figures::exactly(seated, standing, throng);
 
         for row in 0..terrace.rows {
             let step = terrace.step(row);
@@ -772,13 +808,9 @@ impl Crowd {
                 // Whether anybody is here at all, against the density of THIS
                 // corner of the bank rather than the ground's average — see
                 // [`Self::CLUMPING`].
-                let roll = Self::hash(seed, row as u32, slot as u32);
-                let here = occupancy
-                    * (1.0 - Self::CLUMPING * 0.5
-                        + Self::CLUMPING * Self::clumping(seed, row, slot));
-                if Self::unit(roll) >= here.clamp(0.0, 1.0) {
+                let Some(roll) = Self::taken(seed, occupancy, row, slot) else {
                     continue;
-                }
+                };
 
                 let stagger = (Self::unit(roll >> 8) - 0.5) * 2.0 * Self::STAGGER * spacing;
                 let x = run * -0.5 + spacing * (slot as f32 + 0.5) + stagger;
@@ -902,6 +934,22 @@ impl Crowd {
         }
 
         figures.into_mesh()
+    }
+
+    /// **Whether anybody is in this place at all**, and the draw that decides
+    /// everything else about him if he is.
+    ///
+    /// One method rather than six lines written out twice, because it is asked
+    /// twice: once by the census that sizes the buffers and once by the pass
+    /// that fills them, and the two have to agree exactly or the reservation
+    /// is wrong in the direction that costs a doubling. Tested against the
+    /// density of THIS corner of the bank rather than the ground's average —
+    /// see [`Self::CLUMPING`].
+    fn taken(seed: u32, occupancy: f32, row: usize, slot: usize) -> Option<u32> {
+        let roll = Self::hash(seed, row as u32, slot as u32);
+        let here = occupancy
+            * (1.0 - Self::CLUMPING * 0.5 + Self::CLUMPING * Self::clumping(seed, row, slot));
+        (Self::unit(roll) < here.clamp(0.0, 1.0)).then_some(roll)
     }
 
     /// **How busy this corner of the bank is**, 0..1, varying smoothly across
@@ -1218,6 +1266,16 @@ pub struct Spectators {
     palette: CrowdPalette,
 }
 
+/// What the desktop memory harness in [`crate::app::bill`] needs to fill a
+/// bank without spawning one. Nothing in the running viewer reaches past
+/// [`Spectators::seat`].
+#[cfg(test)]
+impl Spectators {
+    pub(crate) fn palette(&self) -> &CrowdPalette {
+        &self.palette
+    }
+}
+
 impl Spectators {
     /// Paints the palette and registers the material. `home` and `trim` are
     /// the shirt of the side whose ground it is: its support is what is in
@@ -1256,6 +1314,12 @@ impl Spectators {
         throng: Throng,
     ) -> Option<(Mesh3d, MeshMaterial3d<StandardMaterial>)> {
         let crowd = Crowd::fill(terrace, stature, stand, &self.palette, seed, throng)?;
+        // Said here because here is the last place anybody can say it: the
+        // mesh is `RENDER_WORLD`-only and its vertex data is gone from the
+        // main world the moment it has been extracted. The crowd is the
+        // largest thing in this scene by a long way, and a bill that could not
+        // name it would not be a bill.
+        MemoryBill::mesh(Held::Crowd, &crowd);
         Some((
             Mesh3d(meshes.add(crowd)),
             MeshMaterial3d(self.material.clone()),
@@ -1284,18 +1348,17 @@ struct Figures {
     normals: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
     indices: Vec<u32>,
+    /// What the reservation was, so [`Self::into_mesh`] can check that the
+    /// bank came to exactly it. See [`Self::exactly`] — a reservation that is
+    /// out by a percent is not a percent wrong, it is a doubling.
+    reserved: (usize, usize),
 }
 
 impl Figures {
-    /// Vertices to a spectator: his torso's rings, his head's — a point wider,
-    /// because its `u` runs the whole way round and the two ends of it are the
-    /// same place with different tile coordinates — the crown that closes it,
-    /// and two arms with the back of a hand on the end of each.
-    ///
-    /// Only a reservation, so it costs nothing to be a little out: the men on
-    /// their feet carry a pair of legs this does not count, and they are a
-    /// tenth of a main stand. It costs a re-allocation of a very large buffer
-    /// to be far out.
+    /// Vertices to a SEATED spectator: his torso's rings, his head's — a point
+    /// wider, because its `u` runs the whole way round and the two ends of it
+    /// are the same place with different tile coordinates — the crown that
+    /// closes it, and two arms with the back of a hand on the end of each.
     fn vertices(throng: Throng) -> usize {
         Crowd::BODY.len() * throng.body_sides
             + Crowd::SKULL.len() * (throng.skull_sides + 1)
@@ -1314,13 +1377,47 @@ impl Figures {
             + 2 * (2 * 2 * throng.limb_sides + throng.limb_sides))
     }
 
-    fn with_capacity(figures: f32, throng: Throng) -> Self {
-        let figures = figures.ceil().max(0.0) as usize;
+    /// **And the pair of legs a man on his FEET carries on top of that** — two
+    /// tubes of three rings each, no cap on either, because the far end of a
+    /// leg is inside a step.
+    ///
+    /// ⚠ **These used to be left out of the reservation altogether**, on the
+    /// reasoning that a tenth of a bank is standing and a reservation costs
+    /// nothing to be a little out. It costs a great deal. A `Vec` that has to
+    /// grow DOUBLES, so being three percent short meant each of positions,
+    /// normals, uvs and indices allocating a second buffer twice the size of
+    /// the first and copying itself into it: a 25 MB buffer became 50 MB for
+    /// the length of a memcpy, four times over, on each of four banks.
+    ///
+    /// On a desktop that is a garbage figure nobody would ever see. On wasm32
+    /// linear memory only grows, so the worst instant of the load is the size
+    /// of the tab for the rest of the session — see
+    /// [`MemoryBill`](crate::app::bill::MemoryBill), and note that this is why
+    /// the counts below are COUNTED rather than estimated.
+    fn leg_vertices(throng: Throng) -> usize {
+        2 * (3 * throng.limb_sides)
+    }
+
+    fn leg_indices(throng: Throng) -> usize {
+        3 * (2 * (2 * 2 * throng.limb_sides))
+    }
+
+    /// Buffers for exactly `seated` figures, `standing` of whom have legs.
+    ///
+    /// **Exactly**, not approximately. Both counts come off a census pass over
+    /// the same hashes the placement itself uses — see [`Crowd::fill`] — which
+    /// is a few thousand hash evaluations against four buffers that between
+    /// them are a hundred megabytes on a full ground. It is the one arithmetic
+    /// in this file where being close is worth nothing at all.
+    fn exactly(seated: usize, standing: usize, throng: Throng) -> Self {
+        let vertices = seated * Self::vertices(throng) + standing * Self::leg_vertices(throng);
+        let indices = seated * Self::indices(throng) + standing * Self::leg_indices(throng);
         Figures {
-            positions: Vec::with_capacity(figures * Self::vertices(throng)),
-            normals: Vec::with_capacity(figures * Self::vertices(throng)),
-            uvs: Vec::with_capacity(figures * Self::vertices(throng)),
-            indices: Vec::with_capacity(figures * Self::indices(throng)),
+            positions: Vec::with_capacity(vertices),
+            normals: Vec::with_capacity(vertices),
+            uvs: Vec::with_capacity(vertices),
+            indices: Vec::with_capacity(indices),
+            reserved: (vertices, indices),
         }
     }
 
@@ -1407,6 +1504,18 @@ impl Figures {
     }
 
     fn into_mesh(mut self) -> Option<Mesh> {
+        // The reservation is the whole of what keeps this bank inside one
+        // allocation each, and it is arithmetic over three tables that a
+        // change to any ring list would silently invalidate. Checked here
+        // rather than trusted, in debug, so every crowd test in this file is
+        // also a test of it.
+        debug_assert_eq!(
+            (self.positions.len(), self.indices.len()),
+            self.reserved,
+            "the crowd reserved {:?} and filled {:?}",
+            self.reserved,
+            (self.positions.len(), self.indices.len()),
+        );
         if self.positions.is_empty() {
             return None;
         }
@@ -2168,13 +2277,12 @@ mod tests {
             from: 40.0,
             slab: Pitch::SLAB,
         };
-        let count = |throng| {
+        let built = |throng| {
             Crowd::fill(&bank, stature, Stand::Side, &palette, 1, throng)
                 .expect("a full bank holds a crowd")
-                .count_vertices()
         };
-        let full = count(Throng::FULL);
-        let handheld = count(Throng::HANDHELD);
+        let (full_bank, handheld_bank) = (built(Throng::FULL), built(Throng::HANDHELD));
+        let (full, handheld) = (full_bank.count_vertices(), handheld_bank.count_vertices());
         // Both levers have to be pulling: the figure is already frugal at
         // 8/8/4, so cutting its sides alone is worth about a third and the
         // rest has to come from seating fewer people.
@@ -2191,6 +2299,59 @@ mod tests {
             (handheld as f32) > full as f32 * 0.25,
             "a handheld builds {handheld} vertices against {full}, which is not a crowd"
         );
+
+        // **…and a ceiling in BYTES, which the ratio above cannot give.**
+        //
+        // A ratio pins the handheld scene to the roomy one, and a change that
+        // raised both would sail through it — which is exactly what happened
+        // on the way here: the figure went from fifty-six vertices to a
+        // hundred and thirty and every proportional test still passed. What
+        // WebKit kills a tab for is an absolute number, so one is written
+        // down.
+        //
+        // Counted off the mesh's own layout (32 bytes a vertex — position,
+        // normal, uv — and four a `U32` index) rather than off a stride
+        // written here, so a change to the vertex format moves this figure
+        // instead of quietly invalidating it.
+        //
+        // 15 MiB for the largest bank a great ground builds, against the
+        // 12.6 MiB it comes to today. Four banks and a phone is holding some
+        // 50 MiB of spectators, which is what the whole 3-4 GB device has been
+        // measured to survive alongside the module, the attachments and the
+        // squad. See the bill in `docs/match_viewer_handheld_memory_prompt.md`.
+        let bytes = MemoryBill::mesh_bytes(&handheld_bank);
+        assert!(
+            bytes < 15 * 1024 * 1024,
+            "a handheld bank holds {:.1} MiB of spectators",
+            bytes as f32 / (1024.0 * 1024.0),
+        );
+    }
+
+    /// **The address bar can take the crowd out**, and cannot be given
+    /// nonsense.
+    ///
+    /// The bisection knob — see [`Throng::of`]. It matters that a typo falls
+    /// through to the device's own answer rather than to an empty ground: the
+    /// person typing it is on a phone that will not open a match, and a
+    /// stadium with nobody in it looks exactly like a stadium with nobody in
+    /// it whether that was asked for or not.
+    #[test]
+    fn the_page_can_empty_the_ground_and_cannot_be_given_nonsense() {
+        assert_eq!(Throng::of(Footprint::Roomy, Some("off")), None);
+        assert_eq!(
+            Throng::of(Footprint::Roomy, Some("handheld")),
+            Some(Throng::HANDHELD)
+        );
+        assert_eq!(
+            Throng::of(Footprint::Handheld, Some("full")),
+            Some(Throng::FULL)
+        );
+        // Anything else is the device's own answer.
+        assert_eq!(
+            Throng::of(Footprint::Handheld, Some("of")),
+            Some(Throng::HANDHELD)
+        );
+        assert_eq!(Throng::of(Footprint::Roomy, None), Some(Throng::FULL));
     }
 
     /// Nobody stands in mid-air, and nobody stands on the pitch side of the

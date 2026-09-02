@@ -1,12 +1,21 @@
 use chrono::NaiveDate;
 use log::debug;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use crate::club::board::ChairmanAmbition;
 use crate::club::player::contract::{AffordabilityInput, ContractStalemate, StalemateLevel};
-use crate::club::staff::perception::{EstimationContext, PotentialEstimator};
+use crate::club::staff::perception::{AbilityEstimator, EstimationContext, PotentialEstimator};
 use crate::club::team::squad::{MIN_FIRST_TEAM_SQUAD, SquadAssetClass, SquadAssetContext};
 use crate::transfers::TransferWindowManager;
+use crate::transfers::pipeline::asset_ledger::{
+    AssetLedger, AssetRow, LedgerContext, SellListEntry,
+};
+use crate::transfers::pipeline::planning::{
+    BriefTier, PlanInputs, PlanningCadence, RecruitmentBrief, SquadPlanner,
+};
 use crate::transfers::pipeline::processor::{PipelineProcessor, SquadPlayerInfo};
+use crate::transfers::pipeline::trace::TransferTrace;
+use crate::transfers::window::PlayerValuationCalculator;
 
 use crate::transfers::pipeline::{
     ClubTransferPlan, LoanOutCandidate, LoanOutReason, LoanOutStatus, TransferNeedPriority,
@@ -31,6 +40,16 @@ struct SquadEvaluation {
     force_transfer_list: Vec<u32>,
     total_budget: f64,
     max_concurrent: u32,
+    /// What the club is shopping for and on what terms — see
+    /// [`crate::transfers::pipeline::planning::SquadPlanner`]. The requests
+    /// above are emitted from it; the brief itself is stored on the plan so
+    /// the year-round watchlist and the shortlist builder can recruit
+    /// against it.
+    brief: Option<RecruitmentBrief>,
+    /// Who the club would sell, and for how much — see
+    /// [`crate::transfers::pipeline::asset_ledger::AssetLedger`]. Marketed,
+    /// never listed.
+    sell_list: Vec<SellListEntry>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,6 +198,215 @@ pub(in crate::transfers::pipeline) fn compute_group_needs(
     }
 
     needs
+}
+
+/// How much a club wants to convert money into a better player it does not
+/// strictly need.
+///
+/// Every other buying motive the evaluator raises is a form of patching:
+/// `FormationGap` when a shirt is empty, `QualityUpgrade` when the weakest
+/// slot is below the tier baseline, `DepthCover` when the group is thin.
+/// A squad whose starters are all above the baseline therefore produced no
+/// request at all — and with no request there is no scout assignment, no
+/// shortlist, no board proposal and no bid. That is why clubs sitting on
+/// billions never called for the best sub-elite players in the world: they
+/// had nothing to patch.
+///
+/// Real elite recruitment also buys to raise the ceiling and to own assets,
+/// and how hard it does so is continuous in four things a club already
+/// carries: how big it is, how bold the chairman is, what the club is FOR,
+/// and how much money is sitting idle behind the wage bill.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::transfers::pipeline) struct InvestmentAppetite {
+    /// 0..1. Zero means the club does not shop for players it does not need.
+    pub score: f32,
+}
+
+impl InvestmentAppetite {
+    /// Reputation below which discretionary investment is not a thing a club
+    /// does — its money is spoken for by the squad it already has. Set just
+    /// under the National/Continental line.
+    const REPUTATION_FLOOR: f32 = 0.45;
+    /// Reputation above the floor at which standing alone fully justifies
+    /// shopping for improvement.
+    const REPUTATION_SPAN: f32 = 0.45;
+    /// Idle-cash ratio — `(balance − annual wages) ÷ annual income` — below
+    /// which the club has no spare money at all. Slightly negative: a club
+    /// whose cash is a little under its wage bill is normal, not distressed.
+    const CASH_FLOOR: f32 = -0.30;
+    /// Span from that floor to "sitting on a year of income beyond the wage
+    /// bill", where the money term saturates.
+    const CASH_SPAN: f32 = 1.0;
+
+    /// Score the appetite for one club.
+    pub(in crate::transfers::pipeline) fn of(club: &Club, rep_score: f32, date: NaiveDate) -> Self {
+        let standing =
+            ((rep_score - Self::REPUTATION_FLOOR) / Self::REPUTATION_SPAN).clamp(0.0, 1.0);
+        if standing <= 0.0 {
+            return InvestmentAppetite { score: 0.0 };
+        }
+
+        // No revenue evidence yet — a freshly generated world, or a club
+        // whose first month has not closed. A club that has not earned
+        // anything cannot know what it can afford to spend on a player it
+        // does not need, and reading a missing denominator as "infinitely
+        // cash-rich" would hand every club in the world full appetite for
+        // its first month. Fail closed, exactly as the board's own
+        // cold-start budget seed does.
+        let annual_income = club.finance.estimated_annual_income(date);
+        if annual_income <= 0 {
+            return InvestmentAppetite { score: 0.0 };
+        }
+        let annual_wages: i64 = club
+            .teams
+            .iter()
+            .map(|t| t.get_annual_salary() as i64)
+            .sum();
+        let idle_cash = club.finance.balance.balance - annual_wages;
+        let cash_ratio = idle_cash as f32 / annual_income as f32;
+        let money = ((cash_ratio - Self::CASH_FLOOR) / Self::CASH_SPAN).clamp(0.0, 1.0);
+
+        // A bold chairman spends to be seen spending; a cautious one wants a
+        // reason. Same ladder the board's transfer tolerance uses.
+        let chairman = match club.board.chairman.ambition {
+            ChairmanAmbition::Reckless => 1.30,
+            ChairmanAmbition::Ambitious => 1.12,
+            ChairmanAmbition::Balanced => 1.0,
+            ChairmanAmbition::Conservative => 0.75,
+        };
+        // What the club is FOR. A side built to compete now converts money
+        // into first-team quality; a develop-and-sell club buys assets too,
+        // and a loan-focused one barely buys at all.
+        let philosophy = match club.philosophy {
+            ClubPhilosophy::SignToCompete => 1.20,
+            ClubPhilosophy::DevelopAndSell => 1.05,
+            ClubPhilosophy::Balanced => 1.0,
+            ClubPhilosophy::LoanFocused => 0.55,
+        };
+
+        InvestmentAppetite {
+            score: (standing * money * chairman * philosophy).clamp(0.0, 1.0),
+        }
+    }
+
+    /// True when the club shops for improvement it does not need.
+    pub(in crate::transfers::pipeline) fn is_active(&self) -> bool {
+        self.score > 0.0
+    }
+}
+
+/// One name the club's own watch is already carrying that would improve the
+/// first team enough to be worth a request of its own.
+pub(in crate::transfers::pipeline) struct InvestmentTarget {
+    pub group: PlayerFieldPositionGroup,
+    pub representative_pos: PlayerPositionType,
+    /// The bar the request advertises: what the club's own top-`k` man in
+    /// this group is worth. Anything below it is not an investment.
+    pub min_ability: u8,
+    /// What the recruitment department believes he would cost.
+    pub estimated_fee: f64,
+    /// How far the believed target sits ABOVE that bar — the size of the
+    /// improvement, which is what decides which group a club spends its
+    /// one discretionary signing on.
+    pub improvement: i16,
+}
+
+/// The bridge from "our scouts are watching him" to "raise a request".
+///
+/// A `SquadInvestment` request is only honest when the club already has a
+/// specific answer on its books — otherwise it is a blank brief that the
+/// scouting pass would fill with whoever happens to be nearby, which is how
+/// a discretionary budget turns into squad churn. So the watch reads the
+/// club's OWN institutional memory (monitoring rows plus the known-player
+/// record the year-round watch writes) and keeps only names that clear the
+/// club's own top-`k` at their position and fit the asset window.
+pub(in crate::transfers::pipeline) struct InvestmentWatch {
+    targets: Vec<InvestmentTarget>,
+}
+
+impl InvestmentWatch {
+    /// How stale a scouting memory may be and still count as a live lead.
+    /// Roughly one transfer window plus the close season.
+    const MEMORY_FRESH_DAYS: i64 = 180;
+    /// Investment requests a club raises in one evaluation. More than a
+    /// couple at once is a rebuild, not an investment.
+    const MAX_TARGETS: usize = 2;
+
+    pub(in crate::transfers::pipeline) fn build(
+        club: &Club,
+        squad: &[SquadPlayerInfo],
+        rep_score: f32,
+        date: NaiveDate,
+    ) -> Self {
+        // The same top-`k` ladder the discovery side files against: a giant
+        // wants a top-2 man, a smaller club is improved by a wider band.
+        let top_k = (2.0 + (1.0 - rep_score.clamp(0.0, 1.0)) * 5.0)
+            .round()
+            .max(1.0) as usize;
+        let plan = &club.transfer_plan;
+
+        let mut targets: Vec<InvestmentTarget> = Vec::new();
+        // Names the department is ACTIVELY watching. The known-player
+        // memory alone is not a lead — it holds up to 120 rows, most of
+        // them opponents seen once in a match — so the monitoring board is
+        // the filter, indexed once rather than rescanned per memory.
+        let monitored: HashSet<u32> = plan.scout_monitoring.iter().map(|m| m.player_id).collect();
+        for memory in plan.known_players.iter() {
+            if (date - memory.last_seen).num_days() > Self::MEMORY_FRESH_DAYS {
+                continue;
+            }
+            if !monitored.contains(&memory.player_id) {
+                continue;
+            }
+            // The band the request itself will carry (see
+            // `TransferRequest::new` for `SquadInvestment`). Filtering here
+            // as well keeps the club from raising a request its own age
+            // band would then reject every candidate for.
+            if !(20..=27).contains(&memory.age) {
+                continue;
+            }
+            // Would he be one of our best `k` in this group? Measured
+            // against what the club knows about its own players and what
+            // its scouts believe about him — never against hidden ability
+            // on either side.
+            let mut group_abilities: Vec<u8> = squad
+                .iter()
+                .filter(|p| p.primary_position.position_group() == memory.position_group)
+                .map(|p| p.current_ability)
+                .collect();
+            group_abilities.sort_unstable_by(|a, b| b.cmp(a));
+            let kth = group_abilities.get(top_k.saturating_sub(1)).copied();
+            let Some(bar) = kth else {
+                // Fewer than `k` players in the group at all: that is a
+                // depth problem the other needs already own.
+                continue;
+            };
+            if memory.assessed_ability <= bar {
+                continue;
+            }
+            if targets.iter().any(|t| t.group == memory.position_group) {
+                continue;
+            }
+            targets.push(InvestmentTarget {
+                group: memory.position_group,
+                representative_pos: memory.position,
+                min_ability: bar,
+                improvement: memory.assessed_ability as i16 - bar as i16,
+                estimated_fee: memory.estimated_fee,
+            });
+        }
+
+        // Best first: the biggest jump over what the club already has. A
+        // club with one discretionary signing in it should spend it where
+        // it gains most, not where its own squad happens to be strongest.
+        targets.sort_by(|a, b| b.improvement.cmp(&a.improvement));
+        targets.truncate(Self::MAX_TARGETS);
+        InvestmentWatch { targets }
+    }
+
+    pub(in crate::transfers::pipeline) fn targets(&self) -> &[InvestmentTarget] {
+        &self.targets
+    }
 }
 
 /// Succession-planning calculus for one aging incumbent. Pure helpers —
@@ -507,13 +735,35 @@ impl ProspectPathway {
 }
 
 impl PipelineProcessor {
+    /// Largest share of a club's available transfer budget one
+    /// discretionary [`TransferNeedReason::SquadInvestment`] request may
+    /// carry.
+    ///
+    /// A marquee signing IS most of a window's spending — that is what
+    /// makes it marquee — so the old flat 15% share was itself a wall: the
+    /// request could never carry the fee its own named target commanded.
+    ///
+    /// Defined AS the planner's transformative envelope rather than as a
+    /// second number that happens to match it: a discretionary signing the
+    /// scouts found and one the brief planned for are the same decision
+    /// arriving by different doors, and they must not be able to drift
+    /// apart. See [`BriefTier::A_SHARE`].
+    pub(in crate::transfers::pipeline) const MAX_INVESTMENT_SHARE: f64 = BriefTier::A_SHARE;
+
     // ============================================================
     // Step 2: Squad Evaluation - Coach-driven, formation-based
     // ============================================================
 
     pub fn evaluate_squads(country: &mut Country, date: NaiveDate) {
         let is_window_start = Self::is_window_start_for(country, date);
-        let should_evaluate = is_window_start || Self::should_evaluate_for(country, date);
+        // Three cadences now reach this pass. The window ones are unchanged
+        // (daily for the first week, then Mondays); the year-round planning
+        // cadence is what makes a club that has no window open still write
+        // down what it is trying to own — the whole point of L1. See
+        // [`PlanningCadence`].
+        let should_evaluate = is_window_start
+            || Self::should_evaluate_for(country, date)
+            || PlanningCadence::should_plan(country, date);
         let window_mgr = TransferWindowManager::for_country(country, date);
         let current_window = window_mgr.current_window_dates(country.id, date);
         // The mid-season checkpoint — "he still has no minutes, do
@@ -582,6 +832,19 @@ impl PipelineProcessor {
 
                 plan.total_budget = eval.total_budget;
                 plan.max_concurrent_negotiations = eval.max_concurrent;
+
+                // The brief and the ledger REPLACE their predecessors rather
+                // than accumulating: they are the club's current intent and
+                // its current prices, and a stale slot is worse than none.
+                // Both survive `reset_for_window` on purpose — a brief is
+                // written six weeks ahead of the window and is exactly the
+                // preparation the reset must not throw away.
+                if let Some(brief) = eval.brief {
+                    plan.brief = Some(brief);
+                    plan.last_plan_date = Some(date);
+                }
+                plan.sell_list = eval.sell_list;
+                plan.last_ledger_date = Some(date);
 
                 // Track the highest request ID so re-evaluations don't create duplicate IDs
                 if let Some(max_id) = eval.requests.iter().map(|r| r.id).max() {
@@ -696,6 +959,8 @@ impl PipelineProcessor {
                 force_transfer_list: Vec::new(),
                 total_budget: budget,
                 max_concurrent: 1,
+                brief: None,
+                sell_list: Vec::new(),
             };
         }
 
@@ -736,6 +1001,8 @@ impl PipelineProcessor {
                 force_transfer_list: Vec::new(),
                 total_budget: budget,
                 max_concurrent: 1,
+                brief: None,
+                sell_list: Vec::new(),
             };
         }
 
@@ -1008,105 +1275,153 @@ impl PipelineProcessor {
             available_budget * (0.20 + (1.0 - squad_satisfaction as f64) * 0.20)
         };
 
-        // Generate one request per group with priority and budget
-        // appropriate to the kind of need. Fund in PRIORITY order, not
-        // formation order: the multipliers can over-demand the pot, and
-        // walking GK → DEF → MID → FWD meant a fully-funded Optional GK
-        // depth request could exhaust the budget before a Critical
-        // forward FormationGap was even emitted — the club then never
-        // learned it had a hole up front.
-        let mut ordered_needs: Vec<&GroupNeed> = group_needs.iter().collect();
-        ordered_needs.sort_by_key(|need| match need.kind {
-            NeedKind::FormationGap => 0u8,
-            NeedKind::QualityUpgrade => 1,
-            NeedKind::DepthCover => 2,
+        // ── The brief ────────────────────────────────────────────────
+        //
+        // The gap-driven needs above are one INPUT to the plan, not the plan
+        // itself. They answer "what is missing?"; the planner answers "what
+        // is this club trying to own, and what can it pay for it?" — so a
+        // side whose XI is entirely above the divisional baseline, which
+        // produced no request at all under the old loop, now briefs its
+        // weakest starting shirt when it has both an objective and the money.
+        //
+        // Everything downstream is unchanged in shape: one request per
+        // briefed shirt, funded from the same pot, escalated by the same
+        // memory of failed searches. What the request now carries in
+        // addition is the TIER (how transformative), the improvement bar,
+        // and the shirt the club is promising.
+        let brief = SquadPlanner::plan(&PlanInputs {
+            club,
+            squad: &squad,
+            position_coverage: &position_coverage,
+            formation_positions,
+            rep_score,
+            available_budget,
+            group_needs: &group_needs,
+            date,
+            squad_size: squad.len(),
+            max_squad_size: club
+                .board
+                .season_targets
+                .as_ref()
+                .map(|t| t.max_squad_size as usize)
+                .unwrap_or(0),
         });
-        for need in ordered_needs {
-            let group = need.group;
-            let baseline = Self::tier_starter_ca_score(rep_score, group);
-            let (base_priority, reason, min_ca, ideal_ca) = match need.kind {
-                NeedKind::FormationGap => (
-                    TransferNeedPriority::Critical,
-                    TransferNeedReason::FormationGap,
-                    baseline.saturating_sub(12),
-                    baseline,
-                ),
-                NeedKind::QualityUpgrade => (
-                    TransferNeedPriority::Important,
-                    TransferNeedReason::QualityUpgrade,
-                    baseline.saturating_sub(8),
-                    baseline.saturating_add(5),
-                ),
-                NeedKind::DepthCover => (
-                    TransferNeedPriority::Optional,
-                    TransferNeedReason::DepthCover,
-                    baseline.saturating_sub(15),
-                    baseline.saturating_sub(5),
-                ),
-            };
+
+        for slot in brief.slots.iter() {
             // How many times the club has already come up short here. A need
             // raised for the first time escalates by nothing at all; one the
             // club has been carrying since last summer is put to the board
             // as Critical, on a wider brief and with the funding to match.
-            let escalation = club.transfer_plan.escalation_for(group, &reason, date);
-            let priority = escalation.priority(base_priority);
-            // Funding follows the priority the need is actually raised at,
-            // which for an unescalated need is exactly the multiplier its
-            // kind always carried (Critical 1.5 / Important 1.0 / Optional
-            // 0.6). An escalated search gets the bigger pot with it, instead
-            // of being labelled urgent and funded like an afterthought.
-            let mult = match priority {
-                TransferNeedPriority::Critical => 1.5,
-                TransferNeedPriority::Important => 1.0,
-                TransferNeedPriority::Optional => 0.6,
-            };
-
-            let alloc = (budget_per_need * mult).min(available_budget - budget_used);
-            if alloc <= 0.0 {
-                // A dry pot means the club can't pay a FEE — it does not
-                // mean the club has stopped needing players, and it is not
-                // a reason to forget the need entirely. Every zero-budget
-                // need is still recorded, at zero allocation, so the paths
-                // that cost nothing can serve it: the free-agent matcher,
-                // the loan market (whose own affordability runs off cash
-                // balance, not the transfer budget), and Bosman
-                // pre-contracts. Dropping the lower-priority ones left a
-                // loss-making club with no recorded interest in anything
-                // beyond an outright formation hole — so nobody scouted
-                // for it, no loan scan matched it, and clubs that in real
-                // football live entirely on frees and loans signed nobody
-                // at all. The paid negotiation path is unaffected: it
-                // refuses zero-allocation requests downstream.
-                requests.push(
-                    TransferRequest::new(
-                        next_id,
-                        need.representative_pos,
-                        priority,
-                        reason,
-                        min_ca,
-                        ideal_ca,
-                        0.0,
-                    )
-                    .escalated(escalation),
-                );
-                next_id += 1;
-                continue;
-            }
-
+            let escalation = club
+                .transfer_plan
+                .escalation_for(slot.group, &slot.reason, date);
+            let priority = escalation.priority(slot.priority.clone());
+            // The envelope IS the funding decision — the planner already
+            // sized it against the tier and what is left of the pot. A dry
+            // pot means the club can't pay a FEE; it does not mean the club
+            // has stopped needing players, so the request is still recorded
+            // at zero allocation and the paths that cost nothing can serve
+            // it: the free-agent matcher, the loan market (whose own
+            // affordability runs off cash balance, not the transfer budget),
+            // and Bosman pre-contracts. The paid negotiation path refuses
+            // zero-allocation requests downstream, as before.
+            let alloc = slot.envelope.min((available_budget - budget_used).max(0.0));
             requests.push(
                 TransferRequest::new(
                     next_id,
-                    need.representative_pos,
+                    slot.position,
                     priority,
-                    reason,
-                    min_ca,
-                    ideal_ca,
-                    alloc,
+                    slot.reason.clone(),
+                    slot.min_ability(),
+                    slot.ideal_ability(),
+                    alloc.max(0.0),
                 )
+                .briefed(slot)
                 .escalated(escalation),
             );
             next_id += 1;
-            budget_used += alloc;
+            budget_used += alloc.max(0.0);
+        }
+
+        // ──────────────────────────────────────────────────────────
+        // STEP 3b: Squad investment — buying to get better, not to patch
+        // ──────────────────────────────────────────────────────────
+        //
+        // The needs above all answer "what is missing?". This one answers
+        // "who would make us better, and can we afford him?" — and it only
+        // asks once the club's own watch has an ANSWER on the books. A
+        // request with nobody behind it is a scouting brief; a request
+        // raised because the recruitment department is already watching a
+        // man who would walk into the side is a decision.
+        //
+        // Nothing new happens after the request: it feeds the ordinary
+        // scout → meeting → shortlist → board → negotiation chain, and the
+        // board still has to approve the fee.
+        let appetite = InvestmentAppetite::of(club, rep_score, date);
+        if let Some(traced) = TransferTrace::target() {
+            if club
+                .transfer_plan
+                .known_players
+                .iter()
+                .any(|m| m.player_id == traced)
+            {
+                TransferTrace::line(
+                    traced,
+                    "need",
+                    format!(
+                        "club={} ({}) rep={:.2} investment_appetite={:.2} \
+                         available_budget={:.0} used={:.0} groups_needed={}",
+                        club.name,
+                        club.id,
+                        rep_score,
+                        appetite.score,
+                        available_budget,
+                        budget_used,
+                        group_needs.len(),
+                    ),
+                );
+            }
+        }
+        if appetite.is_active() && budget_used < available_budget {
+            let watch = InvestmentWatch::build(club, &squad, rep_score, date);
+            for target in watch.targets() {
+                if budget_used >= available_budget {
+                    break;
+                }
+                // One live investment request per group — the (group,
+                // reason) dedup in `evaluate_squads` enforces this across
+                // ticks, this stops a single tick raising two.
+                if requests.iter().any(|r: &TransferRequest| {
+                    r.position.position_group() == target.group
+                        && r.reason == TransferNeedReason::SquadInvestment
+                }) {
+                    continue;
+                }
+                // Fund the actual player, not a flat share of the pot. A
+                // marquee purchase sized at 15% of the budget was a wall
+                // in its own right: the request could never carry the fee
+                // its own named target commanded, so either the board
+                // vetoed it on over-allocation or the shortlist admitted
+                // nobody who cost what he was worth.
+                let alloc = target
+                    .estimated_fee
+                    .min(available_budget * Self::MAX_INVESTMENT_SHARE)
+                    .min(available_budget - budget_used);
+                if alloc <= 0.0 {
+                    continue;
+                }
+                requests.push(TransferRequest::new(
+                    next_id,
+                    target.representative_pos,
+                    TransferNeedPriority::Optional,
+                    TransferNeedReason::SquadInvestment,
+                    target.min_ability,
+                    target.min_ability.saturating_add(10),
+                    alloc,
+                ));
+                next_id += 1;
+                budget_used += alloc;
+            }
         }
 
         // ──────────────────────────────────────────────────────────
@@ -1620,6 +1935,15 @@ impl PipelineProcessor {
             mid_season_window,
         );
 
+        // ── The asset ledger ─────────────────────────────────────────
+        //
+        // Priced last, because the sell list reads what the brief asked for:
+        // a club whose plan wants more money than it has is a more willing
+        // seller than the same club with its window already funded. Nothing
+        // here lists anybody — an entry is a price and a readiness, and the
+        // auto-listing sweeps keep every veto they had.
+        let sell_list = Self::price_squad(club, players, &squad, &asset_ctx, &brief, date);
+
         SquadEvaluation {
             club_id: club.id,
             requests,
@@ -1627,7 +1951,123 @@ impl PipelineProcessor {
             force_transfer_list,
             total_budget: budget,
             max_concurrent,
+            brief: Some(brief),
+            sell_list,
         }
+    }
+
+    /// Value every contracted player the way the club would if somebody
+    /// called about him, and decide who it would actually sell.
+    ///
+    /// Split out of the evaluation body because it is a self-contained
+    /// seller-side pass: it reads the roster and the brief and writes
+    /// nothing.
+    fn price_squad(
+        club: &Club,
+        players: &[Player],
+        squad: &[SquadPlayerInfo],
+        asset_ctx: &SquadAssetContext,
+        brief: &RecruitmentBrief,
+        date: NaiveDate,
+    ) -> Vec<SellListEntry> {
+        let squad_average_level = asset_ctx.squad_avg_level();
+        // Depth-chart rank per group, from the same observable levels the
+        // asset classifier used, so "third choice" means one thing.
+        let mut group_levels: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
+        for player in players.iter().filter(|p| !p.is_on_loan()) {
+            group_levels
+                .entry(player.position().position_group())
+                .or_default()
+                .push(AbilityEstimator::observable_level(player));
+        }
+        for levels in group_levels.values_mut() {
+            levels.sort_unstable_by(|a, b| b.cmp(a));
+        }
+
+        // A club prices its own players in its own market context — the
+        // same blended league + club reputation the seller-advertised asking
+        // price already uses, so the ledger and the listing agree.
+        let (league_rep, club_rep) = PlayerValuationCalculator::seller_context_from_club(club);
+
+        let annual_wages: f64 = club
+            .teams
+            .iter()
+            .map(|t| t.get_annual_salary() as f64)
+            .sum();
+        let ctx = LedgerContext {
+            philosophy: club.philosophy.clone(),
+            annual_wages,
+            wage_budget: club
+                .finance
+                .wage_budget
+                .as_ref()
+                .map(|w| w.amount)
+                .unwrap_or(0.0),
+            brief_envelope: brief.slots.iter().map(|s| s.envelope).sum(),
+            available_budget: club
+                .finance
+                .transfer_budget
+                .as_ref()
+                .map(|b| b.amount)
+                .unwrap_or(0.0),
+            squad_size: squad.len(),
+            max_squad_size: club
+                .board
+                .season_targets
+                .as_ref()
+                .map(|t| t.max_squad_size as usize)
+                .unwrap_or(0),
+            in_debt: club.finance.balance.balance < 0,
+        };
+
+        let rows: Vec<AssetRow> = players
+            .iter()
+            .filter(|p| !p.is_on_loan())
+            .filter_map(|player| {
+                let info = squad.iter().find(|s| s.player_id == player.id)?;
+                let group = player.position().position_group();
+                let observable_level = AbilityEstimator::observable_level(player);
+                let rank = group_levels
+                    .get(&group)
+                    .map(|levels| {
+                        levels
+                            .iter()
+                            .filter(|level| **level > observable_level)
+                            .count()
+                    })
+                    .unwrap_or(0);
+                Some(AssetRow {
+                    player_id: player.id,
+                    group,
+                    age: info.age,
+                    contract_months_remaining: info.contract_months_remaining,
+                    estimated_value: PlayerValuationCalculator::calculate_value(
+                        player, date, league_rep, club_rep,
+                    )
+                    .amount,
+                    annual_wage: player
+                        .contract
+                        .as_ref()
+                        .map(|c| c.salary as f64 * 12.0)
+                        .unwrap_or(0.0),
+                    asset_class: info.asset_class,
+                    observable_level,
+                    squad_average_level,
+                    believed_ceiling: info.estimated_potential,
+                    group_rank: rank.min(u8::MAX as usize) as u8,
+                    is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
+                    stage_pull: player.big_stage_inclination,
+                    renewal_blocked: Self::renewal_exhausted(player, date),
+                    signing_protected: player.signing_protection_active(date),
+                    // A player months from fitness cannot be sold now, and
+                    // pricing him as though he could would have the club
+                    // marketing an empty shirt.
+                    unsellable: info.is_injured && info.recovery_days > 60,
+                })
+            })
+            .collect();
+
+        AssetLedger::build(&rows, &ctx, date)
     }
 
     /// Position-glut detector. Independent of age, deficit, or
@@ -3552,6 +3992,154 @@ mod goalkeeper_prospect_tests {
         assert!(
             GkFx::gk_development_request(&eval).is_none(),
             "a club that already has a young keeper must not sign another keeper prospect"
+        );
+    }
+}
+
+#[cfg(test)]
+mod investment_appetite_tests {
+    //! Whether a club shops for a player it does not need — the motive that
+    //! did not exist. Every buying need the evaluator raised was a form of
+    //! patching, so a squad with no hole raised nothing, and a club with no
+    //! request never scouted, never shortlisted and never bid.
+
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::finance::ClubFinancialBalance;
+    use crate::shared::Location;
+    use crate::{
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, MatchTacticType, PlayerCollection,
+        StaffCollection, Tactics, TeamBuilder, TeamCollection, TeamReputation, TeamType,
+        TrainingSchedule,
+    };
+    use chrono::NaiveTime;
+
+    struct AppetiteFx;
+
+    impl AppetiteFx {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap()
+        }
+
+        /// A club with a full year of income on the books, a given balance
+        /// and a given reputation. Wages are zero (an empty roster), so
+        /// `idle_cash` is exactly the balance and the cash axis is the only
+        /// thing under test.
+        fn club(reputation: u16, balance: i64, annual_income: i64) -> Club {
+            let main = TeamBuilder::new()
+                .id(10)
+                .league_id(Some(1))
+                .club_id(100)
+                .name("Main".into())
+                .slug("main".into())
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(Vec::new()))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(reputation, reputation, reputation))
+                .tactics(Some(Tactics::new(MatchTacticType::T442)))
+                .training_schedule(TrainingSchedule::new(
+                    NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                    NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+                ))
+                .build()
+                .unwrap();
+
+            let mut finance = ClubFinances::new(balance, Vec::new());
+            // Twelve closed months, so `estimated_annual_income` is the
+            // plain sum rather than an annualised guess.
+            for month in 1..=12u32 {
+                let mut snap = ClubFinancialBalance::new(balance);
+                snap.income = annual_income / 12;
+                finance
+                    .history
+                    .add(NaiveDate::from_ymd_opt(2026, month, 1).unwrap(), snap);
+            }
+
+            Club::new(
+                100,
+                "Test FC".to_string(),
+                Location::new(1),
+                finance,
+                ClubAcademy::new(10),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![main]),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn rep_score(club: &Club) -> f32 {
+            club.teams
+                .main()
+                .map(|t| t.reputation.overall_score())
+                .unwrap_or(0.0)
+        }
+    }
+
+    #[test]
+    fn a_giant_sitting_on_years_of_income_shops_for_improvement() {
+        // Manchester City's shape: ~$1.8bn in the bank against ~$600M of
+        // income. This club watched one of the best midfielders in the
+        // world play seven seasons in Turkey and never called.
+        let club = AppetiteFx::club(9_500, 1_839_000_000, 600_000_000);
+        let appetite =
+            InvestmentAppetite::of(&club, AppetiteFx::rep_score(&club), AppetiteFx::date());
+        assert!(appetite.is_active());
+        assert!(appetite.score > 0.5, "score {}", appetite.score);
+    }
+
+    #[test]
+    fn a_club_whose_cash_is_spoken_for_barely_does() {
+        // Same reputation, no reserves: it can still be improved, but the
+        // money for a player it does not need is not there.
+        let club = AppetiteFx::club(9_500, 0, 600_000_000);
+        let appetite =
+            InvestmentAppetite::of(&club, AppetiteFx::rep_score(&club), AppetiteFx::date());
+        assert!(
+            appetite.score < 0.45,
+            "a break-even giant must not shop like a cash-rich one: {}",
+            appetite.score
+        );
+    }
+
+    #[test]
+    fn a_small_club_never_shops_for_players_it_does_not_need() {
+        // Below the reputation floor there is no discretionary market at
+        // all, however the balance sheet looks.
+        let club = AppetiteFx::club(2_000, 500_000_000, 10_000_000);
+        let appetite =
+            InvestmentAppetite::of(&club, AppetiteFx::rep_score(&club), AppetiteFx::date());
+        assert!(!appetite.is_active(), "score {}", appetite.score);
+    }
+
+    #[test]
+    fn a_world_with_no_revenue_history_yet_produces_no_appetite() {
+        // A freshly generated club has no income on record. A missing
+        // denominator must never read as infinite wealth.
+        let club = AppetiteFx::club(9_500, 1_000_000_000, 0);
+        let appetite =
+            InvestmentAppetite::of(&club, AppetiteFx::rep_score(&club), AppetiteFx::date());
+        assert!(!appetite.is_active(), "score {}", appetite.score);
+    }
+
+    #[test]
+    fn a_bolder_chairman_shops_harder_than_a_cautious_one() {
+        let mut bold = AppetiteFx::club(9_000, 800_000_000, 400_000_000);
+        bold.board.chairman.ambition = ChairmanAmbition::Reckless;
+        let mut cautious = AppetiteFx::club(9_000, 800_000_000, 400_000_000);
+        cautious.board.chairman.ambition = ChairmanAmbition::Conservative;
+
+        let bold_score =
+            InvestmentAppetite::of(&bold, AppetiteFx::rep_score(&bold), AppetiteFx::date()).score;
+        let cautious_score = InvestmentAppetite::of(
+            &cautious,
+            AppetiteFx::rep_score(&cautious),
+            AppetiteFx::date(),
+        )
+        .score;
+        assert!(
+            bold_score > cautious_score,
+            "{bold_score} !> {cautious_score}"
         );
     }
 }

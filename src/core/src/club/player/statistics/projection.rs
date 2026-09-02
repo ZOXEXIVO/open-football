@@ -1137,6 +1137,31 @@ impl PlayerStatisticsProjection {
         // alone.
         Self::fill_career_gaps(&mut result);
 
+        // The anchor current-season spell — "where the player is right
+        // now" — is the most recent thing in his career and must top its
+        // season, even above a loan he played earlier that same season.
+        // The classic case: a multi-season loan that just ENDED, with the
+        // player back at his parent club (0 apps). Chronologically the loan
+        // came first and the return second, so the parent-return row sits
+        // on top; the loan-outranks-home rule below is for PAST seasons and
+        // must not float that finished loan above the club he now plays for.
+        // Matched by (season, team, league) rather than seq_id, which a
+        // reserve re-place can corrupt. Uses the same active-else-latest
+        // anchor as the ledger so the row carrying the live counter is
+        // also the one protected on top.
+        let current_year = Self::current_season_year(history, current_date);
+        let anchor_entry =
+            Self::live_anchor_index(history, current_date).map(|idx| &history.current[idx]);
+        let active_row_key: Option<(u16, String, String)> =
+            anchor_entry.map(|e| (current_year, e.team_slug.clone(), e.league_slug.clone()));
+        // The club the player is registered at RIGHT NOW under a PERMANENT
+        // spell (a loan anchor is not a home continuation — the parent he is
+        // borrowed from is the Nava shape, and that registration must stay
+        // below the loan). Feeds the continuing-home test below.
+        let active_home_slug: Option<&str> = anchor_entry
+            .filter(|e| !e.is_loan)
+            .map(|e| e.team_slug.as_str());
+
         // Within-season ordering of a loan spell against the owning-club
         // (home) row hinges on whether that home spell CONTINUES. Two
         // mirror-image real cases share the same storage shape — one loan
@@ -1178,6 +1203,19 @@ impl PlayerStatisticsProjection {
         // mis-ranked below the Danubio loan it followed) — while still
         // dropping the Nava registration below the loan, since his parent row
         // is 0-app both this season and next (still loaned out).
+        //
+        // A third arm covers the season that has just ROLLED OVER — the
+        // reported Fernando Gimenez case (Nacional, three seasons on loan at
+        // Inter, then home). His 2034/35 Nacional return row has 0 apps, and
+        // so does the 2035/36 Nacional row it continues into, because that
+        // campaign has barely started: both content tests fail, and the
+        // finished Inter loan floated above the club he had already come
+        // home to. Standing at the club TODAY under a permanent registration
+        // is content in its own right — the strongest proof a return stuck —
+        // so a home row whose continuation is the live anchor is promoted
+        // whatever its apps say. A player still out on loan is untouched:
+        // his anchor is the BORROWING club, so the parent registration he is
+        // borrowed from never qualifies and Nava keeps his loan on top.
         let continuing_homes: HashSet<(u16, String, String)> = {
             // Every (season, club) that has a NON-loan row — the raw "same
             // club appears next season" continuity signal.
@@ -1204,8 +1242,18 @@ impl PlayerStatisticsProjection {
                     }
                     let next = (r.season.start_year + 1, r.team_slug.as_str());
                     let this_content = r.statistics.total_games() > 0 || r.transfer_fee.is_some();
+                    // "He is there now" is content in its own right. The
+                    // season this row continues into is the CURRENT one, and
+                    // its 0 apps only mean the campaign has barely started —
+                    // the player is at that club today, under a permanent
+                    // registration, which is the strongest possible proof
+                    // the return stuck.
+                    let next_is_current_club = current_year == r.season.start_year + 1
+                        && active_home_slug.is_some_and(|slug| slug == r.team_slug);
                     non_loan_seasons.contains(&next)
-                        && (this_content || non_loan_content_seasons.contains(&next))
+                        && (this_content
+                            || non_loan_content_seasons.contains(&next)
+                            || next_is_current_club)
                 })
                 .map(|r| {
                     (
@@ -1216,23 +1264,6 @@ impl PlayerStatisticsProjection {
                 })
                 .collect()
         };
-        // The anchor current-season spell — "where the player is right
-        // now" — is the most recent thing in his career and must top its
-        // season, even above a loan he played earlier that same season.
-        // The classic case: a multi-season loan that just ENDED, with the
-        // player back at his parent club (0 apps). Chronologically the loan
-        // came first and the return second, so the parent-return row sits
-        // on top; the loan-outranks-home rule below is for PAST seasons and
-        // must not float that finished loan above the club he now plays for.
-        // Matched by (season, team, league) rather than seq_id, which a
-        // reserve re-place can corrupt. Uses the same active-else-latest
-        // anchor as the ledger so the row carrying the live counter is
-        // also the one protected on top.
-        let current_year = Self::current_season_year(history, current_date);
-        let active_row_key: Option<(u16, String, String)> =
-            Self::live_anchor_index(history, current_date)
-                .map(|idx| &history.current[idx])
-                .map(|e| (current_year, e.team_slug.clone(), e.league_slug.clone()));
 
         // Higher rank renders first (on top) within a season: the active
         // spell outranks a continuing home, which outranks loans, which
@@ -2334,6 +2365,55 @@ mod tests {
             ]),
             "the active parent-return row must top the current season, above the \
              loan the player just finished"
+        );
+    }
+
+    #[test]
+    fn returned_home_stays_above_finished_loan_after_the_season_rolls_over() {
+        // Fernando Gimenez repro (live player page): a Nacional player spends
+        // three seasons on loan at Inter, the loan ends inside 2034/35, and he
+        // goes home. The season then rolls over. His 2034/35 Nacional return
+        // row has 0 apps, and so does the 2035/36 Nacional row it continues
+        // into — that campaign has barely started — so BOTH content arms fail
+        // and the finished Inter loan floated above the club he had already
+        // come home to. He is at Nacional today under a permanent
+        // registration, which settles the order on its own.
+        let mut hist = PlayerStatisticsHistory::new();
+        hist.season_ledger
+            .push(ledger_league(1, 2032, "inter", "serie-a", true, 43));
+        hist.season_ledger
+            .push(ledger_league(2, 2033, "inter", "serie-a", true, 33));
+        hist.season_ledger
+            .push(ledger_league(3, 2034, "inter", "serie-a", true, 17));
+        // The return leg: 0 apps and no fee, kept by the quiet-row collapse
+        // only because it covered a real slice of the season.
+        let mut back_home = ledger_league(4, 2034, "nacional", "primera-division", false, 0);
+        back_home.coverage_days = Some(160);
+        hist.season_ledger.push(back_home);
+        hist.current
+            .push(active_home("nacional", "primera-division", 2035, 5));
+
+        let live_league = PlayerStatistics::default();
+        let live_friendly = PlayerStatistics::default();
+        let live = PlayerLiveStatsInput {
+            league: &live_league,
+            friendly: &live_friendly,
+            cups: &[],
+            friendly_source_slug: "",
+        };
+
+        let rows = PlayerStatisticsProjection::player_history_rows(&hist, &live, d(2035, 10, 1));
+        assert_eq!(
+            order_of(&rows),
+            expect(&[
+                ("nacional", 2035, false),
+                ("nacional", 2034, false),
+                ("inter", 2034, true),
+                ("inter", 2033, true),
+                ("inter", 2032, true),
+            ]),
+            "the club the player returned to must sit above the loan that ended, \
+             before he has played a game of the new season"
         );
     }
 

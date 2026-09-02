@@ -129,6 +129,11 @@ pub(crate) struct NegotiationData {
     /// `None` for domestic moves, whose importance is recomputed live in
     /// the resolver.
     pub(crate) foreign_seller_importance: Option<f32>,
+    /// Foreign moves only: `(annual income, annual wage bill, wage budget)`
+    /// for the selling club, staged at creation — see the twin field on
+    /// [`crate::transfers::negotiation::TransferNegotiation`]. `None` for
+    /// domestic moves, whose seller is readable live.
+    pub(crate) foreign_seller_finances: Option<(i64, i64, i64)>,
 }
 
 /// A completed negotiation that needs execution at SimulatorData level.

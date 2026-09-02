@@ -308,6 +308,18 @@ impl MatchViewer {
                     Pitch::paint_markings.run_if(Bringup::on(3)),
                     Pitch::raise_goals.run_if(Bringup::on(4)),
                     Pitch::build_stands.run_if(Bringup::on(5)),
+                    // …and one bank of seating per frame after it. Not a
+                    // shader each — all four share the material the course
+                    // above linked — but an ALLOCATION each, and the largest
+                    // in the scene. Built together they were all alive on one
+                    // frame and again on the next while the renderer extracted
+                    // them; built apart, each is freed before the next
+                    // starts. See `Stands`, and `app::bill` for why a
+                    // transient peak on wasm32 is a permanent bill.
+                    Pitch::raise_bank.run_if(Bringup::on(6)),
+                    Pitch::raise_bank.run_if(Bringup::on(7)),
+                    Pitch::raise_bank.run_if(Bringup::on(8)),
+                    Pitch::raise_bank.run_if(Bringup::on(9)),
                 )
                     .chain()
                     .run_if(Bringup::building)

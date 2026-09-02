@@ -1,5 +1,6 @@
 use crate::PlayerFieldPositionGroup;
 use crate::transfers::offer::TransferOffer;
+use crate::transfers::pipeline::planning::BriefTier;
 use crate::transfers::reason::TransferReason;
 use crate::utils::IntegerUtils;
 use chrono::Duration;
@@ -130,6 +131,14 @@ pub struct TransferNegotiation {
     /// equivalent domestic move. `None` for domestic moves, whose importance
     /// recomputes live.
     pub foreign_seller_importance: Option<f32>,
+    /// Foreign moves only: the selling club's annualised income, wage bill
+    /// and wage budget, captured at creation. The seller lives in another
+    /// country's borrow at resolution time, so the one number that decides
+    /// these deals in real life — what the fee is worth against the
+    /// club's own year — has to travel with the negotiation. `None` for
+    /// domestic moves, which read the seller's books live.
+    /// Order: `(annual income, annual wage bill, wage budget)`.
+    pub foreign_seller_finances: Option<(i64, i64, i64)>,
     /// Loan-in target's `(position group, ability)` captured at creation.
     /// The borrower depth cap folds pending loans by resolving each
     /// negotiation's player in-country — impossible for FOREIGN targets,
@@ -137,6 +146,24 @@ pub struct TransferNegotiation {
     /// re-opened the loan over-accumulation hole. `None` for permanent
     /// deals and for legacy rows (the fold then falls back to the lookup).
     pub loan_target_profile: Option<(PlayerFieldPositionGroup, u8)>,
+    /// The highest fee at which this deal is still worth doing to THIS
+    /// buyer — the fee where its
+    /// [`crate::transfers::pipeline::UpgradeMath`] value reaches zero,
+    /// captured at creation.
+    ///
+    /// This is what a bidding war resolves on: two clubs keep raising until
+    /// one of them reaches its own number and stops. Without it the
+    /// escalation had only the seller's asking price to aim at, so every
+    /// buyer converged on the same figure and nobody ever outbid anybody.
+    /// `None` for negotiations opened by paths that do not value a squad
+    /// improvement (loans, free agents, legacy rows); the escalation then
+    /// falls back to its budget cap exactly as before.
+    pub buyer_ceiling_fee: Option<f64>,
+    /// How transformative the buying club means this signing to be — the
+    /// [`crate::transfers::pipeline::planning::BriefTier`] of the request it
+    /// answers, captured at creation. Drives the opening ratio and the
+    /// deadline premium. `None` for negotiations with no brief behind them.
+    pub brief_tier: Option<BriefTier>,
 }
 
 impl TransferNegotiation {
@@ -202,7 +229,10 @@ impl TransferNegotiation {
             selling_club_name: String::new(),
             foreign_terms_floor_blocked: false,
             foreign_seller_importance: None,
+            foreign_seller_finances: None,
             loan_target_profile: None,
+            buyer_ceiling_fee: None,
+            brief_tier: None,
         }
     }
 
