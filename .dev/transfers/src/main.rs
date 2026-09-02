@@ -39,6 +39,7 @@ use core::club::player::transfer::{BigStagePull, BigStagePullContext};
 use core::club::team::squad::{SquadAssetClass, SquadAssetContext};
 use core::country::result::transfers::free_agent_audit::FreeAgentMarketAuditor;
 use core::club::player::statistics::StuckCareerScan;
+use core::club::board::ownership::ClubBenefactor;
 use core::transfers::ScoutingRegion;
 use core::transfers::pipeline::appraisal::TermsRefusalCause;
 use core::transfers::pipeline::planning::BriefTier;
@@ -1760,6 +1761,49 @@ struct PlayerSnapshot {
     tenure_days: u16,
     nationality_country_id: u32,
     nationality_region: Option<u8>,
+    /// He is at this club on LOAN — `contract_loan` is set.
+    ///
+    /// Without it every loan leg read as a permanent move: a loan
+    /// physically relocates the player, so the day-to-day club change
+    /// banked the loan out AND the return as wage moves at a ratio of
+    /// ≈ 1.0, diluting the pay-cut share from both ends, and a buyout
+    /// (which mutates the contract in place, never changing the club id)
+    /// was unreachable as a conversion.
+    on_loan: bool,
+    /// The club that OWNS him. His own club when he is not on loan.
+    owner_club_id: u32,
+}
+
+/// What a day-to-day club change actually was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MoveKind {
+    /// Owned there, owned here — the only kind that carries a wage.
+    Permanent,
+    /// Lent out.
+    LoanOut,
+    /// Back from a loan, at the club that owns him.
+    LoanReturn,
+    /// Lent somewhere and then bought by the same club.
+    LoanConversion,
+}
+
+impl MoveKind {
+    /// Classify by BOTH snapshots' loan state — never by the club id
+    /// alone, which cannot tell a season away from a sale.
+    fn classify(before: &PlayerSnapshot, now: &PlayerSnapshot) -> Option<Self> {
+        // A buyout keeps him where he is and flips the contract, so it
+        // never shows as a club change. Catch it first.
+        if before.club_id == now.club_id {
+            return (before.on_loan && !now.on_loan && now.owner_club_id == now.club_id)
+                .then_some(MoveKind::LoanConversion);
+        }
+        Some(match (before.on_loan, now.on_loan) {
+            (_, true) => MoveKind::LoanOut,
+            (true, false) if now.club_id == before.owner_club_id => MoveKind::LoanReturn,
+            (true, false) => MoveKind::Permanent,
+            (false, false) => MoveKind::Permanent,
+        })
+    }
 }
 
 /// What the player's own state said about him when the move began.
@@ -1839,6 +1883,13 @@ struct LoanHomeMove {
     converted: bool,
     /// The loan date, so conversions can be dated against it.
     day: u32,
+    /// Half-year bucket the loan fell in — the cohort's outcome is read
+    /// against the window it qualified in.
+    window: u32,
+    /// His own country's top flight is a league worth going back to
+    /// (≥ 6000). The design's home split is written for this half of the
+    /// population; a weak home league should show home loans near zero.
+    strong_home_league: bool,
     player_id: u32,
     to_club_id: u32,
 }
@@ -1869,14 +1920,41 @@ struct PlayerSideCensus {
     /// the population Part I.3 is written against, sampled the day they
     /// first qualify so the "share loaned next window" denominator is a
     /// cohort rather than a moving target.
-    stuck_cohort: HashSet<u32>,
+    /// Player id → the window he first qualified in, so "loaned in the
+    /// FOLLOWING window" is answerable: membership is evaluated at each
+    /// window OPEN and the outcome is a loan before that window's close.
+    stuck_cohort: HashMap<u32, u32>,
     stuck_cohort_loaned: HashSet<u32>,
     loans_home: Vec<LoanHomeMove>,
     terms: TermsOutcomes,
+    /// Top-flight reputation of each country, so "his HOME league" can be
+    /// asked about a passport rather than a postcode. Built once.
+    home_league_reputation: HashMap<u32, u16>,
+    /// Cross-border moves, split by kind — the compatriot-loophole guard
+    /// is about PERMANENT flow alone.
+    cross_border_permanent: u32,
+    cross_border_loan: u32,
+    /// Owner-funded clubs and what their cheques did. Refreshed each day
+    /// from the world; only the latest reading is kept per club.
+    benefactors: HashMap<u32, BenefactorRow>,
+    /// Idle-cash trajectory of the five biggest benefactors, sampled per
+    /// print period — the drain shape.
+    idle_trail: Vec<(u32, Vec<i64>)>,
     /// Negotiations already banked, so a multi-day rejection is counted
     /// once.
     seen_negotiations: HashSet<(u32, u32)>,
     day: u32,
+}
+
+/// One owner-funded club, as the census sees it.
+#[derive(Debug, Clone)]
+struct BenefactorRow {
+    name: String,
+    league_reputation: u16,
+    benefactor: f32,
+    idle_cash: i64,
+    /// Owner envelope per brief tier: granted and consumed.
+    envelopes: [(f64, f64); 3],
 }
 
 impl PlayerSideCensus {
@@ -1896,6 +1974,38 @@ impl PlayerSideCensus {
     const CUT_RATIO: f64 = 0.8;
     /// Conversion window for a home loan.
     const CONVERSION_DAYS: u32 = 730;
+    /// A home top flight at or above this reputation is a league worth
+    /// going back to — the split the design's loan-home band is written
+    /// against.
+    const STRONG_HOME_LEAGUE: u16 = 6_000;
+    /// Days in a transfer-window bucket. Half a year: the summer and the
+    /// January windows, one bucket each, which is the granularity
+    /// "loaned in the FOLLOWING window" needs.
+    const WINDOW_DAYS: u32 = 183;
+
+    /// Which half-year bucket a day falls in.
+    fn window_index(day: u32) -> u32 {
+        day / Self::WINDOW_DAYS
+    }
+
+    /// Bank today's idle cash for the five biggest benefactors. Called at
+    /// each print, so the trail is the drain SHAPE across the run rather
+    /// than a single reading — "does the pot regenerate?" is not a
+    /// question a snapshot can answer.
+    fn sample_idle_trail(&mut self) {
+        let mut top: Vec<(u32, f32, i64)> = self
+            .benefactors
+            .iter()
+            .map(|(id, row)| (*id, row.benefactor, row.idle_cash))
+            .collect();
+        top.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+        for (club_id, _, idle) in top.into_iter().take(5) {
+            match self.idle_trail.iter_mut().find(|(id, _)| *id == club_id) {
+                Some((_, trail)) => trail.push(idle),
+                None => self.idle_trail.push((club_id, vec![idle])),
+            }
+        }
+    }
 
     /// Walk the world once and fold today into the running census.
     fn observe(&mut self, data: &SimulatorData, day: u32) {
@@ -1908,6 +2018,25 @@ impl PlayerSideCensus {
         let mut club_country: HashMap<u32, u32> = HashMap::new();
         let mut club_benefactor: HashMap<u32, f32> = HashMap::new();
         let mut club_region: HashMap<u32, u8> = HashMap::new();
+        // Each country's TOP-FLIGHT reputation, so "is his home league
+        // worth going back to?" is a lookup on a passport rather than a
+        // question nobody could answer. Built once — league reputations
+        // do not move inside a run.
+        if self.home_league_reputation.is_empty() {
+            for continent in &data.continents {
+                for country in &continent.countries {
+                    let best = country
+                        .leagues
+                        .leagues
+                        .iter()
+                        .map(|l| l.reputation)
+                        .max()
+                        .unwrap_or(0);
+                    self.home_league_reputation.insert(country.id, best);
+                }
+            }
+        }
+        self.benefactors.clear();
         for continent in &data.continents {
             for country in &continent.countries {
                 let region = region_code(country.continent_id, &country.code);
@@ -1924,6 +2053,38 @@ impl PlayerSideCensus {
                     club_country.insert(club.id, country.id);
                     club_benefactor.insert(club.id, club.board.ownership.benefactor);
                     club_region.insert(club.id, region);
+                    // Who the owners actually are, and what their cheques
+                    // have bought this season (D3 / D4).
+                    if club.board.ownership.benefactor >= Self::BENEFACTOR_BAR {
+                        let wages: i64 =
+                            club.teams.iter().map(|t| t.get_annual_salary() as i64).sum();
+                        let envelopes = club
+                            .board
+                            .season_targets
+                            .as_ref()
+                            .map(|t| {
+                                [BriefTier::A, BriefTier::B, BriefTier::C].map(|tier| {
+                                    (
+                                        t.owner_envelopes.granted(tier),
+                                        t.owner_envelopes.consumed(tier),
+                                    )
+                                })
+                            })
+                            .unwrap_or([(0.0, 0.0); 3]);
+                        self.benefactors.insert(
+                            club.id,
+                            BenefactorRow {
+                                name: club.name.clone(),
+                                league_reputation: league_rep,
+                                benefactor: club.board.ownership.benefactor,
+                                idle_cash: ClubBenefactor::idle_cash(
+                                    club.finance.balance.balance,
+                                    wages,
+                                ) as i64,
+                                envelopes,
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -1980,6 +2141,15 @@ impl PlayerSideCensus {
                                 tenure_days: tenure_days(player, date),
                                 nationality_country_id: player.country_id,
                                 nationality_region: player.home_region().map(region_of),
+                                on_loan: player.contract_loan.is_some(),
+                                // Who OWNS him: the parent named on the
+                                // loan contract, or this club when he is
+                                // nobody's loanee.
+                                owner_club_id: player
+                                    .contract_loan
+                                    .as_ref()
+                                    .and_then(|c| c.loan_from_club_id)
+                                    .unwrap_or(club.id),
                             };
                             self.fold_move(player.id, &snap, &club_benefactor, &club_region);
                             today.insert(player.id, snap);
@@ -2004,33 +2174,51 @@ impl PlayerSideCensus {
         // he stays in the denominator, so "share loaned next window" is a
         // rate over a fixed population rather than a moving one.
         if now.age <= Self::STUCK_MAX_AGE
+            && !now.on_loan
             && now.nationality_country_id != 0
             && now.nationality_country_id != now.country_id
             && now.starter_ratio < Self::STUCK_STARTER_BAR
             && now.tenure_days >= Self::STUCK_TENURE_DAYS
         {
-            self.stuck_cohort.insert(player_id);
+            self.stuck_cohort
+                .entry(player_id)
+                .or_insert_with(|| Self::window_index(self.day));
         }
 
         let Some(before) = self.snapshots.get(&player_id).copied() else {
             return;
         };
-        if before.club_id == now.club_id {
+        let Some(kind) = MoveKind::classify(&before, now) else {
             return;
+        };
+
+        // Cross-border flow, split by KIND. The compatriot-loophole guard
+        // is "zero change in cross-border PERMANENT flow from the reach
+        // arm", and a matrix that mixed loans into it could never say so.
+        if before.country_id != now.country_id {
+            match kind {
+                MoveKind::Permanent | MoveKind::LoanConversion => {
+                    self.cross_border_permanent += 1
+                }
+                MoveKind::LoanOut => self.cross_border_loan += 1,
+                MoveKind::LoanReturn => {}
+            }
         }
 
         // A home loan that converts: he was lent here, and now the same
         // club owns him.
-        for loan in self.loans_home.iter_mut() {
-            if loan.player_id == player_id
-                && loan.to_club_id == now.club_id
-                && self.day.saturating_sub(loan.day) <= Self::CONVERSION_DAYS
-            {
-                loan.converted = true;
+        if matches!(kind, MoveKind::LoanConversion) {
+            for loan in self.loans_home.iter_mut() {
+                if loan.player_id == player_id
+                    && loan.to_club_id == now.club_id
+                    && self.day.saturating_sub(loan.day) <= Self::CONVERSION_DAYS
+                {
+                    loan.converted = true;
+                }
             }
         }
 
-        if self.stuck_cohort.contains(&player_id) {
+        if matches!(kind, MoveKind::LoanOut) && self.stuck_cohort.contains_key(&player_id) {
             self.stuck_cohort_loaned.insert(player_id);
             let destination = if now.nationality_country_id != 0
                 && now.nationality_country_id == now.country_id
@@ -2047,11 +2235,24 @@ impl PlayerSideCensus {
                 destination,
                 converted: false,
                 day: self.day,
+                window: Self::window_index(self.day),
+                strong_home_league: self
+                    .home_league_reputation
+                    .get(&now.nationality_country_id)
+                    .copied()
+                    .unwrap_or(0)
+                    >= Self::STRONG_HOME_LEAGUE,
                 player_id,
                 to_club_id: now.club_id,
             });
         }
 
+        // ONLY a permanent move carries a wage. A loan leg pays the
+        // parent's deal at a ratio of ≈ 1.0 in both directions, and
+        // banking it diluted every cell of the pay-cut table.
+        if !matches!(kind, MoveKind::Permanent) {
+            return;
+        }
         if before.wage == 0 || now.wage == 0 {
             return;
         }
@@ -2133,8 +2334,73 @@ impl PlayerSidePrinter {
 
         Self::wage_census(census);
         Self::money_moves(census);
+        Self::owners(census);
         Self::loan_home(census);
+        Self::cross_border(census);
         Self::terms(census);
+    }
+
+    /// Who the world's owner-funded clubs actually are, what their cheques
+    /// have bought, and what is left of the pile.
+    ///
+    /// The share is the first thing to read after any change to
+    /// `ClubBenefactor::signal`: the DB's honest answer is a handful of
+    /// clubs — five Saudi sides, Zenit, Krasnodar, Inter Miami, a few
+    /// more — and anything above ≈ 2 % of the world means the signal is
+    /// reading reserves as an owner again.
+    fn owners(census: &PlayerSideCensus) {
+        if census.benefactors.is_empty() {
+            println!("  owners: no club reads as owner-funded");
+            return;
+        }
+        let mut rows: Vec<&BenefactorRow> = census.benefactors.values().collect();
+        rows.sort_by(|a, b| {
+            b.benefactor
+                .partial_cmp(&a.benefactor)
+                .unwrap_or(Ordering::Equal)
+        });
+        println!("  owners: {} clubs at benefactor ≥ 0.5", rows.len());
+        println!(
+            "    {:<28} {:>6} {:>6} {:>12} {:>26}",
+            "club", "league", "b", "idle cash", "envelope A/B/C used"
+        );
+        for row in rows.iter().take(20) {
+            let used = |i: usize| -> String {
+                let (granted, consumed) = row.envelopes[i];
+                if granted <= 0.0 {
+                    "—".to_string()
+                } else {
+                    format!("{:.0}%", 100.0 * consumed / granted)
+                }
+            };
+            println!(
+                "    {:<28} {:>6} {:>6.2} {:>12} {:>8} {:>8} {:>8}",
+                row.name.chars().take(28).collect::<String>(),
+                row.league_reputation,
+                row.benefactor,
+                row.idle_cash,
+                used(0),
+                used(1),
+                used(2),
+            );
+        }
+        for (club_id, trail) in &census.idle_trail {
+            let Some(row) = census.benefactors.get(club_id) else {
+                continue;
+            };
+            let shape: Vec<String> = trail.iter().map(|v| format!("{}", v / 1_000_000)).collect();
+            println!("    drain {:<24} {}M", row.name, shape.join(" → "));
+        }
+    }
+
+    /// Does the reach arm move PERMANENT business? It must not — that is
+    /// the compatriot-loophole guard, and it is only a guard if it is a
+    /// printed number.
+    fn cross_border(census: &PlayerSideCensus) {
+        println!(
+            "  cross-border flow: {} permanent, {} loans",
+            census.cross_border_permanent, census.cross_border_loan
+        );
     }
 
     /// Does anybody take a cut, and who? The share of permanent moves at
@@ -2247,6 +2513,63 @@ impl PlayerSidePrinter {
             100.0 * (moved - home - region) as f64 / moved as f64,
             100.0 * converted as f64 / moved as f64,
         );
+
+        // The design's band is written for men whose own top flight is
+        // worth going back to. Split it, because the other half SHOULD
+        // read near zero home moves — a Ghanaian at a Premier League club
+        // is loaned inside Europe, and the level gates say so.
+        for (label, strong) in [("home league ≥ 6000", true), ("weak home league", false)] {
+            let cell: Vec<&LoanHomeMove> = census
+                .loans_home
+                .iter()
+                .filter(|l| l.strong_home_league == strong)
+                .collect();
+            if cell.is_empty() {
+                continue;
+            }
+            let at_home = cell
+                .iter()
+                .filter(|l| l.destination == HomeDestination::HomeCountry)
+                .count();
+            let in_region = cell
+                .iter()
+                .filter(|l| l.destination == HomeDestination::HomeRegion)
+                .count();
+            println!(
+                "    {:<20} {:>5} loans, {:.0}% home country, {:.0}% home region",
+                label,
+                cell.len(),
+                100.0 * at_home as f64 / cell.len() as f64,
+                100.0 * in_region as f64 / cell.len() as f64,
+            );
+        }
+
+        // …and the promise the band is actually about: he qualifies in one
+        // window, and is he lent in the NEXT one?
+        let mut by_window: Vec<(u32, usize, usize)> = Vec::new();
+        for (player_id, qualified_in) in &census.stuck_cohort {
+            let loaned_next = census
+                .loans_home
+                .iter()
+                .any(|l| l.player_id == *player_id && l.window <= qualified_in + 1);
+            match by_window.iter_mut().find(|(w, _, _)| w == qualified_in) {
+                Some(row) => {
+                    row.1 += 1;
+                    row.2 += usize::from(loaned_next);
+                }
+                None => by_window.push((*qualified_in, 1, usize::from(loaned_next))),
+            }
+        }
+        by_window.sort_by_key(|(w, _, _)| *w);
+        for (window, cohort, next) in by_window {
+            println!(
+                "    window {:<3} cohort {:>4}, loaned by the next window {:>4} ({:.0}%)",
+                window,
+                cohort,
+                next,
+                100.0 * next as f64 / cohort.max(1) as f64,
+            );
+        }
     }
 
     /// Whose decision killed the deal, and by how much.
@@ -2345,11 +2668,13 @@ impl SimHarness {
             {
                 let mut report = MarketCensus::collect(&self.data);
                 ReportPrinter::print(&mut report, &self.data, day);
+                self.player_side.sample_idle_trail();
                 PlayerSidePrinter::print(&self.player_side);
             }
         }
         let mut report = MarketCensus::collect(&self.data);
         ReportPrinter::print(&mut report, &self.data, days);
+        self.player_side.sample_idle_trail();
         PlayerSidePrinter::print(&self.player_side);
         eprintln!(
             "simulated {days} days in {:.1}s",
