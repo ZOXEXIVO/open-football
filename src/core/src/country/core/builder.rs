@@ -1,3 +1,4 @@
+use crate::context::TournamentClocks;
 use crate::country::national::{NationalTeam, NationalTeamLevel};
 use crate::league::{DomesticCup, LeagueCollection, LeaguePlayoff};
 use crate::transfers::market::TransferMarket;
@@ -190,6 +191,8 @@ impl CountryBuilder {
             regulations: self.regulations.unwrap_or_else(CountryRegulations::new),
             retired_players: Vec::new(),
             last_snapshotted_season_year: None,
+            months_to_tournament: u8::MAX,
+            tournament_clocks: TournamentClocks::default(),
         })
     }
 }

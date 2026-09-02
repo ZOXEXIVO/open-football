@@ -31,6 +31,7 @@ use crate::club::player::contract::PlayerSquadStatus;
 use crate::transfers::pipeline::auction::DeadlineWindow;
 use crate::transfers::pipeline::evaluation::{GroupNeed, NeedKind, group_depth_requirement};
 use crate::transfers::pipeline::processor::{PipelineProcessor, SquadPlayerInfo};
+use crate::transfers::pipeline::wage_power::WagePower;
 use crate::transfers::pipeline::{TransferNeedPriority, TransferNeedReason};
 use crate::transfers::window::TransferCalendar;
 use crate::{Club, ClubPhilosophy, Country, PlayerFieldPositionGroup, PlayerPositionType};
@@ -109,13 +110,23 @@ impl BriefTier {
         matches!(self, BriefTier::C)
     }
 
-    /// How far below the plan's target for the shirt a candidate may sit and
-    /// still be worth watching. Tight for the signings that are meant to
-    /// change the side, wide for the bench.
+    /// How far below the DIVISIONAL baseline a candidate may sit and still
+    /// be worth looking at for this tier. Tight for the signings that are
+    /// meant to change the side, wide for the bench.
+    ///
+    /// Measured against the baseline, not the objective-shifted target, on
+    /// purpose. The objective moves the level a club AIMS at; for three
+    /// censuses it had been moving the level it would LOOK at as well — a
+    /// contender's floor sat at `baseline − 2` against the `baseline − 8`
+    /// every upgrade search had before the brief existed, and that is
+    /// exactly the band a sub-elite standout occupies when an elite club
+    /// shops. `mid → elite` sat 25 % under HEAD while every other cell
+    /// recovered. The numbers are the pre-brief upgrade band (8) and cover
+    /// band (15); the wider gap band lives on [`BriefSlot`].
     pub fn level_tolerance(self) -> i16 {
         match self {
             BriefTier::A => 8,
-            BriefTier::B => 10,
+            BriefTier::B => 8,
             BriefTier::C => 15,
         }
     }
@@ -170,7 +181,6 @@ impl MoneySlack {
     /// Read one club's slack. `committed` is what the brief has already
     /// allocated this pass.
     pub fn of(club: &Club, date: NaiveDate, budget: f64, committed: f64) -> Self {
-        let annual_income = club.finance.estimated_annual_income(date).max(0) as f64;
         let annual_wages: f64 = club
             .teams
             .iter()
@@ -178,6 +188,19 @@ impl MoneySlack {
             .sum();
         let idle_cash =
             (club.finance.balance.balance as f64 - annual_wages * Self::WAGE_COVER_YEARS).max(0.0);
+        // What the club earns, plus what its owner puts in.
+        //
+        // Income alone is the wrong denominator for a club whose money
+        // does not come from its gate: the value model would read a Gulf
+        // side's next dollar against a small league's revenue, price an
+        // upgrade at that league's rate, and set a ceiling fee no
+        // European seller would look at. `spend_power` is the honest
+        // figure, and it is one ratio off the balance sheet — no list, no
+        // flag (memory `feedback_balance_system_not_cases`).
+        let annual_income = WagePower::spend_power(
+            club.finance.estimated_annual_income(date).max(0) as f64,
+            club.board.ownership.owner_subsidy_per_year(idle_cash),
+        );
 
         // No revenue evidence yet — a freshly generated world, or a club
         // whose first month has not closed. Reading a missing denominator
@@ -290,9 +313,21 @@ impl Ambition {
 /// Built before any need is raised, so the brief below can measure the
 /// squad the club HAS against the squad the objective asks for rather than
 /// against a divisional average nobody chose.
+/// One formation shirt's two levels: what the division fields there, and
+/// what this club's objective asks for there.
+#[derive(Debug, Clone, Copy)]
+struct SlotLevel {
+    position: PlayerPositionType,
+    /// Divisional starter baseline, unshifted — the admission floor is
+    /// measured against this.
+    baseline: u8,
+    /// Baseline shifted by the objective — what the club aims at.
+    target: u8,
+}
+
 pub struct SquadPlan {
-    /// Target observable level per formation slot, in slot order.
-    slot_targets: Vec<(PlayerPositionType, u8)>,
+    /// Levels per formation slot, in slot order.
+    slot_targets: Vec<SlotLevel>,
     /// Bodies the plan wants per group, formation slots included.
     depth_targets: HashMap<PlayerFieldPositionGroup, usize>,
     /// Median age band the plan steers toward.
@@ -319,7 +354,11 @@ impl SquadPlan {
                 let group = pos.position_group();
                 let baseline = PipelineProcessor::tier_starter_ca_score(inputs.rep_score, group);
                 let target = (baseline as i16 + shift).clamp(20, 200) as u8;
-                (*pos, target)
+                SlotLevel {
+                    position: *pos,
+                    baseline,
+                    target,
+                }
             })
             .collect();
 
@@ -362,21 +401,31 @@ impl SquadPlan {
 
     /// Level the plan asks for in one shirt.
     pub fn target_for(&self, position: PlayerPositionType) -> u8 {
+        self.slot_level(position).map(|s| s.target).unwrap_or(0)
+    }
+
+    /// The divisional baseline for one shirt — what the club looks at
+    /// candidates against, as opposed to what it aims at.
+    pub fn baseline_for(&self, position: PlayerPositionType) -> u8 {
+        self.slot_level(position).map(|s| s.baseline).unwrap_or(0)
+    }
+
+    /// The exact shirt if the formation fields it; otherwise the strongest
+    /// slot in its group — a shirt outside the formation (an escalated
+    /// request naming a role the side does not currently play) takes the
+    /// group's own levels.
+    fn slot_level(&self, position: PlayerPositionType) -> Option<SlotLevel> {
         self.slot_targets
             .iter()
-            .find(|(pos, _)| *pos == position)
-            .map(|(_, level)| *level)
-            .unwrap_or_else(|| {
-                // A shirt outside the formation (an escalated request naming
-                // a role the side does not currently play) takes the group's
-                // own target.
+            .find(|s| s.position == position)
+            .copied()
+            .or_else(|| {
                 let group = position.position_group();
                 self.slot_targets
                     .iter()
-                    .filter(|(pos, _)| pos.position_group() == group)
-                    .map(|(_, level)| *level)
-                    .max()
-                    .unwrap_or(0)
+                    .filter(|s| s.position.position_group() == group)
+                    .max_by_key(|s| s.target)
+                    .copied()
             })
     }
 
@@ -410,7 +459,15 @@ pub struct BriefSlot {
     pub envelope: f64,
     pub age_band: (u8, u8),
     pub promised_status: PlayerSquadStatus,
+    /// The level the plan AIMS at in this shirt: the divisional baseline
+    /// shifted by the club's objective.
     pub target_level: u8,
+    /// The divisional starter baseline itself, unshifted — the level the
+    /// club LOOKS at candidates against. Kept apart from the target because
+    /// a contender aims above its division and shops in it: raising the
+    /// admission floor with the objective hid every sub-elite standout from
+    /// the clubs that buy them.
+    pub baseline_level: u8,
     pub incumbent_level: u8,
     /// The motive the request carries downstream — the existing enum, so
     /// scouting, the loan market and the UI are unchanged.
@@ -419,17 +476,28 @@ pub struct BriefSlot {
 }
 
 impl BriefSlot {
+    /// Admission band below the divisional baseline for an EMPTY shirt —
+    /// the band a formation gap always had. Wider than an upgrade's: the
+    /// club needs somebody who can wear the shirt, not somebody who would
+    /// improve on nobody.
+    pub const EMPTY_SHIRT_TOLERANCE: i16 = 12;
+
     /// Ability floor the request advertises.
     ///
     /// Two floors, and the binding one wins: a candidate must be a real
     /// improvement on the man already in the shirt AND at least somewhere
-    /// near the level the plan asks for. An empty shirt has no incumbent, so
+    /// near the divisional baseline. An empty shirt has no incumbent, so
     /// only the second speaks — which is what stops a formation gap
     /// admitting anybody with a pulse.
     pub fn min_ability(&self) -> u8 {
         let over_incumbent = self.incumbent_level as i16 + self.min_gain;
-        let near_target = self.target_level as i16 - self.tier.level_tolerance();
-        over_incumbent.max(near_target).clamp(1, 200) as u8
+        let tolerance = if self.incumbent_level == 0 {
+            Self::EMPTY_SHIRT_TOLERANCE
+        } else {
+            self.tier.level_tolerance()
+        };
+        let near_baseline = self.baseline_level as i16 - tolerance;
+        over_incumbent.max(near_baseline).clamp(1, 200) as u8
     }
 
     /// Ability the club would ideally sign — the plan's target for the
@@ -630,6 +698,7 @@ impl SquadPlanner {
                 age_band,
                 promised_status: tier.promised_status(),
                 target_level: cand.target,
+                baseline_level: plan.baseline_for(cand.position),
                 incumbent_level: cand.incumbent_level,
                 reason,
                 priority,
@@ -817,10 +886,11 @@ impl SquadPlanner {
                 ),
                 promised_status: BriefTier::C.promised_status(),
                 target_level: target,
+                baseline_level: plan.baseline_for(position),
                 // Cover is measured against the divisional floor, not
                 // against a starter: a bench player who is merely somewhere
                 // near the level is doing his job.
-                incumbent_level: target.saturating_sub(15),
+                incumbent_level: plan.baseline_for(position).saturating_sub(15),
                 reason: TransferNeedReason::DepthCover,
                 priority: TransferNeedPriority::Optional,
             });
@@ -926,6 +996,7 @@ mod planning_tests {
                 min_squad_size: 18,
                 expected_position,
                 min_acceptable_position: expected_position.saturating_add(5),
+                ..Default::default()
             }
         }
 
@@ -988,6 +1059,7 @@ mod planning_tests {
                 age_band: (20, 30),
                 promised_status: PlayerSquadStatus::FirstTeamRegular,
                 target_level: 140,
+                baseline_level: 140,
                 incumbent_level: 0,
                 reason: TransferNeedReason::FormationGap,
                 priority: TransferNeedPriority::Critical,
@@ -1134,7 +1206,7 @@ mod planning_tests {
         let empty = Fx::empty_slot();
         assert_eq!(
             empty.min_ability(),
-            140 - BriefTier::B.level_tolerance() as u8
+            140 - BriefSlot::EMPTY_SHIRT_TOLERANCE as u8
         );
 
         // A slot with a good incumbent is bound by the improvement instead.
@@ -1177,6 +1249,35 @@ mod planning_tests {
     #[test]
     fn a_develop_and_sell_plan_steers_younger() {
         assert!(SquadPlan::AGE_PROFILE_DEVELOP.1 < SquadPlan::AGE_PROFILE_COMPETE.1);
+    }
+
+    #[test]
+    fn a_contender_looks_at_the_division_and_aims_above_it() {
+        // Censuses 2–4: `mid → elite` sat at 30–33 against HEAD's 40 while
+        // every other cell recovered. The objective shift moves the level a
+        // contender AIMS at, and it had been moving the level it would LOOK
+        // at too — a floor of `baseline − 2` against the `baseline − 8` an
+        // upgrade search always had, which is exactly the band a sub-elite
+        // standout sits in when an elite club shops.
+        let slot = BriefSlot {
+            baseline_level: 160,
+            target_level: 168,
+            incumbent_level: 145,
+            tier: BriefTier::B,
+            min_gain: BriefTier::B.min_gain(),
+            gap: 23,
+            ..Fx::empty_slot()
+        };
+        assert_eq!(
+            slot.min_ability(),
+            160 - BriefTier::B.level_tolerance() as u8,
+            "the floor is the division's band, not the ambition's"
+        );
+        assert_eq!(
+            slot.ideal_ability(),
+            168,
+            "the ambition still sets what the club aims at"
+        );
     }
 
     // ── The planner end to end ───────────────────────────────────────

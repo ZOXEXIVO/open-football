@@ -20,6 +20,31 @@
 
 use crate::transfers::offer::PromisedSquadStatus;
 
+/// The shirt a LOAN offer promises.
+///
+/// A loan carried no promise at all, so the appraisal read
+/// [`PlayingTimeExpectation::promised_standing`]`(None)` = 0.50 — "he will
+/// have to earn it" — on the one kind of move whose entire purpose is
+/// minutes. The Part V loan rows are written against a Regular promise
+/// (`R` +0.23); the shipped path was giving +0.13.
+///
+/// The borrower has already answered the question by the time it makes the
+/// offer: `BorrowerDepth::would_get_loan_minutes` is a gate every loan
+/// clears, and it runs at its stricter bar on a development loan. So a
+/// development loan promises a regular starting place and a cover loan
+/// promises rotation, which is exactly what the two are for.
+pub struct LoanPromise;
+
+impl LoanPromise {
+    pub fn for_loan(is_development: bool) -> Option<PromisedSquadStatus> {
+        Some(if is_development {
+            PromisedSquadStatus::FirstTeamRegular
+        } else {
+            PromisedSquadStatus::FirstTeamSquadRotation
+        })
+    }
+}
+
 /// The playing-time term on personal terms.
 pub struct PlayingTimeExpectation;
 

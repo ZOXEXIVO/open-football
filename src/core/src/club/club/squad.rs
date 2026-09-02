@@ -6,7 +6,9 @@ use crate::club::player::calculators::{
 };
 use crate::club::staff::perception::{AbilityEstimator, CoachProfile, DevelopmentFormEvidence};
 use crate::club::team::squad::SquadAssetContext;
-use crate::transfers::pipeline::{LoanOutCandidate, LoanOutReason, LoanOutStatus};
+use crate::transfers::pipeline::{
+    LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
+};
 use crate::{
     ContractType, Person, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerStatusType,
     TeamType,
@@ -332,6 +334,7 @@ impl Club {
                     reason: LoanOutReason::Surplus,
                     status: LoanOutStatus::Identified,
                     loan_fee: 0.0,
+                    preferred_destination: LoanDestinationPreference::Any,
                 });
         }
 

@@ -5,7 +5,7 @@ use rustc_hash::FxHashSet;
 use std::collections::{HashMap, HashSet};
 
 use crate::SimulatorData;
-use crate::club::player::calculators::{ContractValuation, ValuationContext};
+use crate::transfers::pipeline::wage_power::BuyerLevelWage;
 use crate::club::player::transfer::FreeAgentBlockReason;
 use crate::country::result::transfers::FreeAgentBumpBatch;
 use crate::country::result::transfers::types::can_club_accept_player;
@@ -17,6 +17,10 @@ use crate::transfers::market::{
 use crate::transfers::negotiation::NegotiationStatus;
 use crate::transfers::offer::{TransferClause, TransferOffer};
 use crate::transfers::pipeline::ScoutMonitoringStatus;
+use crate::transfers::pipeline::appraisal::PlayerStance;
+use crate::transfers::pipeline::appraisal_inputs::{
+    AvailabilityView, PlayerStanceBuilder, StanceInputs,
+};
 use crate::transfers::pipeline::planning::{BriefTier, PlanningCadence};
 use crate::transfers::pipeline::plausibility::{
     TransferMovePlausibility, TransferMoveStage, TransferPlausibilityBuilder,
@@ -32,8 +36,8 @@ use crate::transfers::pipeline::{
 use crate::transfers::reason::TransferReason;
 use crate::utils::FormattingUtils;
 use crate::{
-    ClubPhilosophy, ClubTransferStrategy, Country, Person, Player, PlayerFieldPositionGroup,
-    PlayerSquadStatus, PlayerStatusType, ReputationLevel, StaffPosition, TransferStrategyContext,
+    ClubPhilosophy, ClubTransferStrategy, Country, Person, PlayerFieldPositionGroup,
+    PlayerStatusType, ReputationLevel, StaffPosition, TransferStrategyContext,
     WageCalculator,
 };
 
@@ -589,16 +593,30 @@ impl PipelineProcessor {
                     // −18 to −5 and seldom converged. His current standing is
                     // the best proxy for the role a suitor is buying — it
                     // mirrors the reservation side's assumed status.
-                    let offered_annual_wage = ContractValuation::evaluate(
-                        player,
-                        &Self::buyer_wage_context(
-                            player,
-                            player.age(date),
-                            buying_rep_score,
-                            buying_league_reputation,
-                        ),
-                    )
-                    .expected_wage;
+                    //
+                    // The package the buyer built already carries this
+                    // figure (`PersonalTermsPackager` prices the same
+                    // curve for the same promise), and it is the one the
+                    // contract is installed on — so take it when it is
+                    // there rather than computing a second number that
+                    // can differ from the one he says yes to.
+                    let offered_annual_wage = offer
+                        .personal_terms
+                        .as_ref()
+                        .and_then(|t| t.annual_wage)
+                        .filter(|w| *w > 0)
+                        .unwrap_or_else(|| {
+                            BuyerLevelWage::evaluate(
+                                player,
+                                player.age(date),
+                                buying_rep_score,
+                                buying_league_reputation,
+                                offer
+                                    .personal_terms
+                                    .as_ref()
+                                    .and_then(|t| t.squad_status_promise),
+                            )
+                        });
 
                     let tier = request.map(|r| r.tier).unwrap_or(BriefTier::B);
                     let deal = if is_loan {
@@ -868,7 +886,7 @@ impl PipelineProcessor {
                     negotiation.player_name = action.player_name.clone();
                     negotiation.selling_club_name = action.selling_club_name.clone();
                     negotiation.player_sold_from = action.player_sold_from.clone();
-                    negotiation.offered_salary = Some(action.offered_annual_wage);
+                    negotiation.open_salary_at(action.offered_annual_wage);
                     negotiation.buying_league_reputation = action.buying_league_reputation;
                     negotiation.selling_league_reputation = action.selling_league_reputation;
                     negotiation.player_stage_inclination = action.player_stage_inclination;
@@ -990,35 +1008,17 @@ impl PipelineProcessor {
     /// and wage room for the DevelopmentSigning branch — all observable
     /// signals, never the hidden biological PA.
     #[allow(clippy::too_many_arguments)]
-    /// Valuation context for the wage a BUYER offers a target — mirrors the
-    /// personal-terms reservation side so both run through one
-    /// `ContractValuation` curve. The intended role is proxied by the
-    /// player's current squad status (the reservation side assumes the same),
-    /// so a KeyPlayer is offered a KeyPlayer wage rather than the plain market
-    /// figure his demand then towered over. `months_remaining` is neutral here
-    /// — it only widens the acceptable band, never `expected_wage`.
-    fn buyer_wage_context(
-        player: &Player,
-        age: u8,
-        buyer_reputation_score: f32,
-        buyer_league_reputation: u16,
-    ) -> ValuationContext {
-        let (squad_status, current_salary) = player
-            .contract
-            .as_ref()
-            .map(|c| (c.squad_status.clone(), c.salary))
-            .unwrap_or((PlayerSquadStatus::FirstTeamRegular, 0));
-        ValuationContext {
-            age,
-            club_reputation_score: buyer_reputation_score,
-            league_reputation: buyer_league_reputation,
-            squad_status,
-            current_salary,
-            months_remaining: 24,
-            has_market_interest: true,
-        }
-    }
-
+    /// Valuation context for the wage a BUYER offers a target.
+    ///
+    /// The role priced is the one the buyer is **promising**, not the one
+    /// the player currently holds. Pricing off his current status meant a
+    /// club offering a bench seat still paid for the key player he was
+    /// leaving behind, and a club offering him the shirt paid for the
+    /// backup he had become — and the player's own side, which reads the
+    /// promise, then disagreed with the offer about what deal was on the
+    /// table. `months_remaining` stays neutral: it only widens the
+    /// acceptable band, never `expected_wage`, and the leverage that
+    /// matters now lives in the appraisal's money weight.
     fn determine_transfer_approach(
         rep_level: &ReputationLevel,
         budget: f64,
@@ -2109,6 +2109,13 @@ impl PipelineProcessor {
             /// Selling club's `(annual income, wage bill, wage budget)` — see
             /// the staged field on the negotiation.
             foreign_seller_finances: (i64, i64, i64),
+            /// The player's own side of the appraisal, captured here
+            /// because this is the last moment his country is in scope.
+            /// See [`crate::transfers::pipeline::appraisal::PlayerStance`].
+            staged_stance: PlayerStance,
+            /// Sporting distance of the move — needs both clubs, so it is
+            /// read here rather than guessed at resolution.
+            staged_sporting_drop: f32,
         }
 
         let mut resolved: Vec<ResolvedNeg> = Vec::new();
@@ -2382,6 +2389,36 @@ impl PipelineProcessor {
             // The seller's books, staged now: at resolution time this club
             // sits inside another country's borrow, so the windfall model
             // could not otherwise ask what the fee is worth to him.
+            // The player's own side of the decision, captured while his
+            // country is still in scope. Personal terms are resolved by the
+            // BUYING country's pass, where he is unreachable — so without
+            // this the cross-border path could only fall back to a bare
+            // prestige wall, which is precisely what refused every money
+            // move before the money was looked at (L1).
+            let staged_sporting_drop =
+                TransferPlausibilityEvaluator::sporting_drop(&plausibility_inputs);
+            // No listing is bound to a cross-border approach — the buyer
+            // reads his badges, not a row in its own market.
+            let availability = AvailabilityView::read(player, is_loan, None);
+            let staged_stance = PlayerStanceBuilder::build(&StanceInputs {
+                player,
+                seller_country: sell_country,
+                seller_club: sell_club,
+                buyer_club_id: cand.buying_club_id,
+                rep_diff: buying_rep - selling_rep,
+                importance: foreign_seller_importance,
+                // The ONE availability reading, type-matched to the deal
+                // on the table ([`AvailabilityView`]): a loan-listed man
+                // was collecting the seller's-advert push toward a
+                // PERMANENT move abroad and not toward the same move at
+                // home.
+                listed_by_club: availability.listed_by_club,
+                available: availability.available_soft,
+                months_to_tournament: sell_country
+                    .months_to_tournament_for(player.nationality_continent_id),
+                date,
+            });
+
             let foreign_seller_finances = (
                 sell_club.finance.estimated_annual_income(date),
                 sell_club
@@ -2499,13 +2536,27 @@ impl PipelineProcessor {
             // clearable at all.
             //
             // Wage first — the deal valuation needs it. Same role-aware
-            // curve as the domestic path (see `buyer_wage_context`) so offer
-            // and player demand can't diverge on the squad-status premium.
-            let offered_annual_wage = ContractValuation::evaluate(
-                player,
-                &Self::buyer_wage_context(player, player_age, buying_rep, buying_league_reputation),
-            )
-            .expected_wage;
+            // curve as the domestic path ([`BuyerLevelWage`]) so offer and
+            // player demand can't diverge on the squad-status premium, and
+            // the package's own figure when it carries one, so the
+            // contract installs the wage he said yes to.
+            let offered_annual_wage = offer
+                .personal_terms
+                .as_ref()
+                .and_then(|t| t.annual_wage)
+                .filter(|w| *w > 0)
+                .unwrap_or_else(|| {
+                    BuyerLevelWage::evaluate(
+                        player,
+                        player_age,
+                        buying_rep,
+                        buying_league_reputation,
+                        offer
+                            .personal_terms
+                            .as_ref()
+                            .and_then(|t| t.squad_status_promise),
+                    )
+                });
 
             let tier = request.map(|r| r.tier).unwrap_or(BriefTier::B);
             let deal = if is_loan {
@@ -2639,6 +2690,8 @@ impl PipelineProcessor {
                 foreign_terms_floor_blocked,
                 foreign_seller_importance,
                 foreign_seller_finances,
+                staged_stance,
+                staged_sporting_drop,
             });
         }
 
@@ -2685,7 +2738,7 @@ impl PipelineProcessor {
                     negotiation.player_sold_from = action.player_sold_from;
                     negotiation.player_name = action.player_name;
                     negotiation.selling_club_name = action.selling_club_name;
-                    negotiation.offered_salary = Some(action.offered_annual_wage);
+                    negotiation.open_salary_at(action.offered_annual_wage);
                     // The player's resolution-time reservation for a
                     // cross-border move: his expected wage at the buyer
                     // plus a ~10% relocation premium. The opening offer
@@ -2700,6 +2753,8 @@ impl PipelineProcessor {
                     negotiation.foreign_terms_floor_blocked = action.foreign_terms_floor_blocked;
                     negotiation.foreign_seller_importance = Some(action.foreign_seller_importance);
                     negotiation.foreign_seller_finances = Some(action.foreign_seller_finances);
+                    negotiation.staged_stance = Some(action.staged_stance);
+                    negotiation.staged_sporting_drop = Some(action.staged_sporting_drop);
                     negotiation.buyer_ceiling_fee = action.buyer_ceiling_fee;
                     negotiation.brief_tier = action.brief_tier;
                 }
@@ -3634,7 +3689,9 @@ mod dev_pathway_cleanup_tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
-    use crate::transfers::pipeline::{LoanOutCandidate, LoanOutReason, LoanOutStatus};
+    use crate::transfers::pipeline::{
+        LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
+    };
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
         Player, PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType,
@@ -3710,6 +3767,7 @@ mod dev_pathway_cleanup_tests {
                 reason: LoanOutReason::DevelopmentPathway,
                 status: LoanOutStatus::Identified,
                 loan_fee: 0.0,
+                preferred_destination: LoanDestinationPreference::Any,
             }
         }
 

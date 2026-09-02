@@ -204,7 +204,7 @@ impl FreeAgentNegotiationStager {
                 // No fee to negotiate — the player's decision is the
                 // only open question, so skip straight to his phase.
                 negotiation.advance_to_personal_terms(date);
-                negotiation.offered_salary = Some(action.terms.annual_wage);
+                negotiation.open_salary_at(action.terms.annual_wage);
                 // The staged wage was priced through the free-agent market
                 // chain (role, decay, desperation) — it IS the reservation,
                 // so the resolution-side wage check scores it at par

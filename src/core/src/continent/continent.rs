@@ -144,6 +144,18 @@ impl Continent {
             .national_team_competitions
             .months_to_next_tournament(ctx.simulation.date.date());
 
+        // …and stamped on the country itself as well as on its context.
+        // The transfer market runs outside `GlobalContext`, and the
+        // player-side appraisal needs the same clock the mind reads.
+        let world_clocks = ctx.simulation.tournament_clocks.clone();
+        self.countries.par_iter_mut().for_each(|c| {
+            c.months_to_tournament = tournament_clock;
+            // …and every OTHER confederation's alongside it, so a
+            // foreigner in this league is priced against the tournament HE
+            // might play in (C7). An `Arc` clone, not a map copy.
+            c.tournament_clocks = world_clocks.clone();
+        });
+
         let country_ctxs: Vec<GlobalContext<'gc>> = self
             .countries
             .par_iter()

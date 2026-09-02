@@ -50,6 +50,7 @@ pub enum DecisionKind {
     IncreaseTransferBudget,
     CutTransferBudget,
     AdjustWageBudget,
+    OwnerTopUp,
     ApproveFacilityUpgrade,
     RejectFacilityUpgrade,
     DemandPlayerSale,
@@ -84,6 +85,14 @@ pub enum BoardDecision {
         reason: DecisionReason,
     },
     AdjustWageBudget {
+        amount: i64,
+        reason: DecisionReason,
+    },
+    /// The owner puts money back into the club — a yearly top-up of the
+    /// pile his own cheques are drawn on. Booked as OWNER FUNDING, never
+    /// as revenue, so it cannot flatter the P&L or inflate next season's
+    /// revenue-derived budgets.
+    OwnerTopUp {
         amount: i64,
         reason: DecisionReason,
     },
@@ -122,6 +131,7 @@ impl BoardDecision {
             BoardDecision::IncreaseTransferBudget { .. } => "increase_transfer_budget",
             BoardDecision::CutTransferBudget { .. } => "cut_transfer_budget",
             BoardDecision::AdjustWageBudget { .. } => "adjust_wage_budget",
+            BoardDecision::OwnerTopUp { .. } => "owner_top_up",
             BoardDecision::ApproveFacilityUpgrade { .. } => "approve_facility_upgrade",
             BoardDecision::RejectFacilityUpgrade { .. } => "reject_facility_upgrade",
             BoardDecision::DemandPlayerSale { .. } => "demand_player_sale",
@@ -146,6 +156,7 @@ impl BoardDecision {
             BoardDecision::IncreaseTransferBudget { .. } => DecisionKind::IncreaseTransferBudget,
             BoardDecision::CutTransferBudget { .. } => DecisionKind::CutTransferBudget,
             BoardDecision::AdjustWageBudget { .. } => DecisionKind::AdjustWageBudget,
+            BoardDecision::OwnerTopUp { .. } => DecisionKind::OwnerTopUp,
             BoardDecision::ApproveFacilityUpgrade { .. } => DecisionKind::ApproveFacilityUpgrade,
             BoardDecision::RejectFacilityUpgrade { .. } => DecisionKind::RejectFacilityUpgrade,
             BoardDecision::DemandPlayerSale { .. } => DecisionKind::DemandPlayerSale,
@@ -167,6 +178,7 @@ impl BoardDecision {
             BoardDecision::IncreaseTransferBudget { reason, .. }
             | BoardDecision::CutTransferBudget { reason, .. }
             | BoardDecision::AdjustWageBudget { reason, .. }
+            | BoardDecision::OwnerTopUp { reason, .. }
             | BoardDecision::RejectFacilityUpgrade { reason, .. }
             | BoardDecision::DemandPlayerSale { reason }
             | BoardDecision::BlockTransfer { reason, .. }
@@ -186,6 +198,7 @@ impl BoardDecision {
             BoardDecision::IncreaseTransferBudget { .. }
                 | BoardDecision::CutTransferBudget { .. }
                 | BoardDecision::AdjustWageBudget { .. }
+                | BoardDecision::OwnerTopUp { .. }
                 | BoardDecision::ApproveFacilityUpgrade { .. }
                 | BoardDecision::CompleteTakeover
         )
@@ -232,6 +245,10 @@ mod tests {
             BoardDecision::AdjustWageBudget {
                 amount: 1,
                 reason: DecisionReason::WageControl,
+            },
+            BoardDecision::OwnerTopUp {
+                amount: 1,
+                reason: DecisionReason::OwnerInjection,
             },
             BoardDecision::ApproveFacilityUpgrade {
                 facility: BoardFacility::Training,
@@ -285,6 +302,7 @@ mod tests {
             DecisionKind::IncreaseTransferBudget,
             DecisionKind::CutTransferBudget,
             DecisionKind::AdjustWageBudget,
+            DecisionKind::OwnerTopUp,
             DecisionKind::ApproveFacilityUpgrade,
             DecisionKind::CompleteTakeover,
         ];
@@ -301,6 +319,7 @@ mod tests {
                 DecisionKind::IncreaseTransferBudget
                 | DecisionKind::CutTransferBudget
                 | DecisionKind::AdjustWageBudget
+                | DecisionKind::OwnerTopUp
                 | DecisionKind::RejectFacilityUpgrade
                 | DecisionKind::DemandPlayerSale
                 | DecisionKind::BlockTransfer

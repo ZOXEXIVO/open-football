@@ -476,6 +476,7 @@
   "dec_reason_blocked_by_depth": "Blocked by squad depth at his position",
   "dec_reason_needs_first_team_minutes": "Needs first-team minutes — loaned out to play",
   "dec_reason_asset_value_protection": "Loaned to protect resale value while developing",
+  "dec_reason_unsettled_abroad": "Unsettled abroad — loaned out to play and to settle",
   "dec_reason_released_failed_renewal": "Released after failed renewal talks",
   "dec_reason_released_free": "Released by mutual agreement",
   "dec_reason_released_surplus": "Released as surplus to requirements",

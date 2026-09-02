@@ -286,6 +286,14 @@ pub(in crate::transfers::pipeline) struct DestinationAppeal {
     pub existing_placements: u8,
     /// Development loan (the parent is buying him minutes) vs cover loan.
     pub is_development: bool,
+    /// How much this destination answers where he wants to be —
+    /// [`super::HomeLoanPull::factor`], 1.0 when it says nothing.
+    ///
+    /// The parent's ranking and the player's own appraisal have to agree
+    /// about a home move: the appraisal already pays `home_region` for an
+    /// Argentine loaned within Brazil, so a broadcast that ignored it
+    /// offered him somewhere he would then refuse.
+    pub home_pull: f32,
 }
 
 impl DestinationAppeal {
@@ -331,7 +339,7 @@ impl DestinationAppeal {
         // per-tick `claimed_loans` guard only ever saw a single pass.
         let crowding = 1.0 / (1.0 + self.existing_placements as f32 * 0.45);
 
-        (0.35 + standing) * stage * minutes * coaching * crowding
+        (0.35 + standing) * stage * minutes * coaching * crowding * self.home_pull.max(0.0)
     }
 }
 
@@ -785,6 +793,7 @@ mod tests {
                 training_rating: 12,
                 existing_placements: 0,
                 is_development: true,
+                home_pull: 1.0,
             }
             .score()
         };
@@ -810,6 +819,7 @@ mod tests {
                 training_rating: 14,
                 existing_placements: placements,
                 is_development: true,
+                home_pull: 1.0,
             }
             .score()
         };
@@ -830,6 +840,7 @@ mod tests {
                 training_rating: 8,
                 existing_placements: 0,
                 is_development: dev,
+                home_pull: 1.0,
             }
             .score()
         };
@@ -842,6 +853,7 @@ mod tests {
                 training_rating: 16,
                 existing_placements: 0,
                 is_development: dev,
+                home_pull: 1.0,
             }
             .score()
         };

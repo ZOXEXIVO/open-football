@@ -17,9 +17,11 @@ use crate::transfers::pipeline::processor::{PipelineProcessor, SquadPlayerInfo};
 use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::window::PlayerValuationCalculator;
 
+use crate::club::player::adaptation::AdaptationSquadContext;
+use crate::transfers::pipeline::loan_home::{SquadHomeContext, UnsettledAbroadScan};
 use crate::transfers::pipeline::{
-    ClubTransferPlan, LoanOutCandidate, LoanOutReason, LoanOutStatus, TransferNeedPriority,
-    TransferNeedReason, TransferRequest, TransferRequestStatus,
+    ClubTransferPlan, LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
+    TransferNeedPriority, TransferNeedReason, TransferRequest, TransferRequestStatus,
 };
 use crate::transfers::squad_needs::{EmergencyGroupSlot, FirstTeamSquadNeeds};
 use crate::{
@@ -797,7 +799,17 @@ impl PipelineProcessor {
                 continue;
             }
 
-            let eval = Self::evaluate_single_club(club, date, current_window, mid_season_window);
+            let eval = Self::evaluate_single_club(
+                club,
+                date,
+                current_window,
+                mid_season_window,
+                &SquadHomeContext {
+                    country_id: country.id,
+                    country_code: &country.code,
+                    continent_id: country.continent_id,
+                },
+            );
             evaluations.push(eval);
         }
 
@@ -930,6 +942,11 @@ impl PipelineProcessor {
         // playing. Threaded from the caller because the club alone has no
         // country context to resolve its own transfer calendar.
         mid_season_window: bool,
+        // Where this squad actually is. A club carries no country of its
+        // own, and "is this player a foreigner here?" — the question the
+        // unsettled-abroad loan reason turns on — cannot be answered
+        // without one.
+        home: &SquadHomeContext<'_>,
     ) -> SquadEvaluation {
         let mut requests = Vec::new();
         let mut loan_outs = Vec::new();
@@ -1898,6 +1915,8 @@ impl PipelineProcessor {
             current_window,
             asset_ctx.is_early_season(),
             mid_season_window,
+            home,
+            rep_score,
         );
 
         // Position-glut sweep: catches surplus the loan-out branches
@@ -2192,6 +2211,7 @@ impl PipelineProcessor {
                             reason: LoanOutReason::Surplus,
                             status: LoanOutStatus::Identified,
                             loan_fee: 0.0,
+                            preferred_destination: LoanDestinationPreference::Any,
                         });
                     }
                 }
@@ -2423,6 +2443,7 @@ impl PipelineProcessor {
                         reason,
                         status: LoanOutStatus::Identified,
                         loan_fee: 0.0,
+                        preferred_destination: LoanDestinationPreference::Any,
                     });
                 }
                 PathwayAction::Sell => {
@@ -2641,6 +2662,7 @@ impl PipelineProcessor {
     }
 
     /// Identify loan-out candidates based on club reputation tier.
+    #[allow(clippy::too_many_arguments)]
     fn identify_loan_outs(
         squad: &[SquadPlayerInfo],
         rep_level: &ReputationLevel,
@@ -2653,6 +2675,8 @@ impl PipelineProcessor {
         current_window: Option<(NaiveDate, NaiveDate)>,
         early_season: bool,
         is_january: bool,
+        home: &SquadHomeContext<'_>,
+        club_reputation_score: f32,
     ) {
         // Philosophy-based loan-out aggressiveness
         let (age_threshold, ability_gap, min_appearances_pct) = match philosophy {
@@ -2792,6 +2816,13 @@ impl PipelineProcessor {
             } else {
                 avg_ability
             };
+            // The best man in his position — what "blocked" is measured
+            // against. A group average says nothing about whether the man
+            // ahead of him is going to move.
+            let group_best: u8 = group_ranks
+                .first()
+                .map(|(_, ca)| *ca)
+                .unwrap_or(player_info.current_ability);
             // Depth cushion: extra CA-below-group-average the player needs
             // to exceed before any "surplus / lack of minutes" branch will
             // fire. Rank 0 (main) needs a massive deficit; rank 3+ needs
@@ -2802,6 +2833,76 @@ impl PipelineProcessor {
                 2 => 5,
                 _ => 0,
             };
+
+            // ── The young foreigner who has not settled ─────────────
+            //
+            // Every branch below is about a CEILING: is he good enough to
+            // grow, is he blocked by a better man, is he surplus. None of
+            // them is about whether he has settled, so a Brazilian
+            // twenty-one-year-old a season into the Premier League with
+            // three starts and no language was invisible to all of them —
+            // and the single most common loan in world football never
+            // happened here.
+            //
+            // This one fires at EVERY reputation tier and bypasses the
+            // potential / age-threshold gates, because it is not a
+            // judgement about how good he is. It keeps every protection
+            // that matters: the first-team asset guard (which ran above),
+            // the same-window rule and the squad-minimum floor.
+            //
+            // What it must NOT keep is a depth-rank floor. The archetype
+            // is the second-best man in his position who never starts —
+            // a `rank >= 2` test excluded exactly him, at every tier, and
+            // the cushion was applied in the LOOSENING direction where
+            // every sibling branch tightens with it. The candidate test is
+            // his START SHARE (inside `UnsettledAbroadScan`) plus a
+            // ceiling read against the best man in his group, tightened by
+            // how high up the chart he sits — the same shape as the
+            // branches below.
+            if player_info.age <= UnsettledAbroadScan::MAX_AGE
+                && (player_info.current_ability as i16)
+                    < group_best as i16 - depth_cushion
+            {
+                let adaptation = Some(
+                    player.adaptation_score(
+                        date,
+                        home.country_code,
+                        club_reputation_score,
+                        Some(formation_positions),
+                        &AdaptationSquadContext {
+                            same_language_teammates: player
+                                .squad_social_view
+                                .as_ref()
+                                .map(|v| v.same_language_teammates)
+                                .unwrap_or(0),
+                            same_nationality_teammates: player
+                                .squad_social_view
+                                .as_ref()
+                                .map(|v| v.same_nationality_teammates)
+                                .unwrap_or(0),
+                            // Neutral, as the weekly pass reads it. The
+                            // struct default is 0.0 — "the dressing room
+                            // is at war" — a −7.5 adaptation bias that
+                            // inflated the candidate list wherever it was
+                            // unknown.
+                            squad_chemistry: 50.0,
+                            ..AdaptationSquadContext::default()
+                        },
+                    ),
+                );
+                if let Some(scan) = UnsettledAbroadScan::read(player, home, adaptation, date) {
+                    if scan.is_candidate() {
+                        loan_outs.push(LoanOutCandidate {
+                            player_id: player_info.player_id,
+                            reason: LoanOutReason::UnsettledAbroad,
+                            status: LoanOutStatus::Identified,
+                            loan_fee: 0.0,
+                            preferred_destination: scan.preference,
+                        });
+                        continue;
+                    }
+                }
+            }
 
             match rep_level {
                 ReputationLevel::Elite | ReputationLevel::Continental => {
@@ -2823,6 +2924,7 @@ impl PipelineProcessor {
                             reason: LoanOutReason::NeedsGameTime,
                             status: LoanOutStatus::Identified,
                             loan_fee: 0.0,
+                            preferred_destination: LoanDestinationPreference::Any,
                         });
                         continue;
                     }
@@ -2849,6 +2951,7 @@ impl PipelineProcessor {
                                 reason: LoanOutReason::BlockedByBetterPlayer,
                                 status: LoanOutStatus::Identified,
                                 loan_fee: 0.0,
+                                preferred_destination: LoanDestinationPreference::Any,
                             });
                             continue;
                         }
@@ -2865,6 +2968,7 @@ impl PipelineProcessor {
                             reason: LoanOutReason::PostInjuryFitness,
                             status: LoanOutStatus::Identified,
                             loan_fee: 0.0,
+                            preferred_destination: LoanDestinationPreference::Any,
                         });
                         continue;
                     }
@@ -2880,6 +2984,7 @@ impl PipelineProcessor {
                             reason: LoanOutReason::LackOfPlayingTime,
                             status: LoanOutStatus::Identified,
                             loan_fee: 0.0,
+                            preferred_destination: LoanDestinationPreference::Any,
                         });
                         continue;
                     }
@@ -2901,6 +3006,7 @@ impl PipelineProcessor {
                             reason: LoanOutReason::NeedsGameTime,
                             status: LoanOutStatus::Identified,
                             loan_fee: 0.0,
+                            preferred_destination: LoanDestinationPreference::Any,
                         });
                         continue;
                     }
@@ -2912,6 +3018,7 @@ impl PipelineProcessor {
                             reason: LoanOutReason::LackOfPlayingTime,
                             status: LoanOutStatus::Identified,
                             loan_fee: 0.0,
+                            preferred_destination: LoanDestinationPreference::Any,
                         });
                         continue;
                     }
@@ -2934,6 +3041,7 @@ impl PipelineProcessor {
                             reason: LoanOutReason::NeedsGameTime,
                             status: LoanOutStatus::Identified,
                             loan_fee: 0.0,
+                            preferred_destination: LoanDestinationPreference::Any,
                         });
                         continue;
                     }
@@ -2967,6 +3075,7 @@ impl PipelineProcessor {
                     reason: LoanOutReason::Surplus,
                     status: LoanOutStatus::Identified,
                     loan_fee: 0.0,
+                    preferred_destination: LoanDestinationPreference::Any,
                 });
                 continue;
             }
@@ -2983,6 +3092,7 @@ impl PipelineProcessor {
                     reason: LoanOutReason::FinancialRelief,
                     status: LoanOutStatus::Identified,
                     loan_fee: 0.0,
+                    preferred_destination: LoanDestinationPreference::Any,
                 });
             }
         }
@@ -3457,6 +3567,7 @@ mod stalled_prospect_tests {
             reason: LoanOutReason::Surplus,
             status: LoanOutStatus::Identified,
             loan_fee: 0.0,
+            preferred_destination: LoanDestinationPreference::Any,
         }];
         let mut force_list = Vec::new();
         PipelineProcessor::identify_stalled_prospects(
@@ -3659,6 +3770,12 @@ mod stalled_prospect_tests {
             None,
             false,
             false,
+            &SquadHomeContext {
+                country_id: 1,
+                country_code: "en",
+                continent_id: 1,
+            },
+            0.5,
         );
         loan_outs
     }
@@ -3910,7 +4027,17 @@ mod goalkeeper_prospect_tests {
                 .add(GkFx::player(2, PlayerPositionType::Goalkeeper, 175, 37));
         }
 
-        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None, false);
+        let eval = PipelineProcessor::evaluate_single_club(
+            &club,
+            GkFx::date(),
+            None,
+            false,
+            &SquadHomeContext {
+                country_id: 1,
+                country_code: "en",
+                continent_id: 1,
+            },
+        );
         let succession = GkFx::gk_succession_request(&eval);
         assert!(
             succession.is_some(),
@@ -3941,7 +4068,17 @@ mod goalkeeper_prospect_tests {
                 .add(GkFx::player(2, PlayerPositionType::Goalkeeper, 180, 21));
         }
 
-        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None, false);
+        let eval = PipelineProcessor::evaluate_single_club(
+            &club,
+            GkFx::date(),
+            None,
+            false,
+            &SquadHomeContext {
+                country_id: 1,
+                country_code: "en",
+                continent_id: 1,
+            },
+        );
         assert!(
             GkFx::gk_succession_request(&eval).is_none(),
             "don't shop for what the academy already delivered"
@@ -3957,7 +4094,17 @@ mod goalkeeper_prospect_tests {
             ReputationLevel::Continental
         );
 
-        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None, false);
+        let eval = PipelineProcessor::evaluate_single_club(
+            &club,
+            GkFx::date(),
+            None,
+            false,
+            &SquadHomeContext {
+                country_id: 1,
+                country_code: "en",
+                continent_id: 1,
+            },
+        );
 
         let gk = GkFx::gk_development_request(&eval);
         assert!(
@@ -3988,7 +4135,17 @@ mod goalkeeper_prospect_tests {
                 .add(GkFx::player(2, PlayerPositionType::Goalkeeper, 140, 19));
         }
 
-        let eval = PipelineProcessor::evaluate_single_club(&club, GkFx::date(), None, false);
+        let eval = PipelineProcessor::evaluate_single_club(
+            &club,
+            GkFx::date(),
+            None,
+            false,
+            &SquadHomeContext {
+                country_id: 1,
+                country_code: "en",
+                continent_id: 1,
+            },
+        );
         assert!(
             GkFx::gk_development_request(&eval).is_none(),
             "a club that already has a young keeper must not sign another keeper prospect"

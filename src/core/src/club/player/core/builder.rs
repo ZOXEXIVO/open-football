@@ -4,6 +4,7 @@ use crate::club::player::load::PlayerLoad;
 use crate::club::player::mind::PlayerMind;
 use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::{PlayerTrait, generate_player_traits};
+use crate::transfers::pipeline::HomePull;
 use crate::club::{
     PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerMailbox, PlayerSkills,
     PlayerTraining,
@@ -223,6 +224,8 @@ impl PlayerBuilder {
             birth_date: self.birth_date.ok_or("birth_date is required")?,
             country_id: self.country_id.ok_or("country_id is required")?,
             nationality_continent_id: 0,
+            nationality_region: None,
+            home_pull: HomePull::default(),
             behaviour: self.behaviour.unwrap_or_default(),
             attributes: self.attributes.ok_or("attributes is required")?,
             happiness: self.happiness.unwrap_or_else(PlayerHappiness::new),

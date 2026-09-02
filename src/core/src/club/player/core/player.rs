@@ -9,7 +9,7 @@ use crate::club::player::happiness::{
 };
 use crate::club::player::injury::processing::MedicalStaffQuality;
 use crate::club::player::interaction::ManagerInteractionLog;
-use crate::club::player::language::PlayerLanguage;
+use crate::club::player::language::{LanguageProfile, PlayerLanguage};
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::mailbox::PlayerContractAsk;
 use crate::club::player::mind::{
@@ -31,6 +31,8 @@ use crate::club::{
 };
 use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
+use crate::transfers::ScoutingRegion;
+use crate::transfers::pipeline::HomePull;
 use crate::utils::DateUtils;
 use crate::{
     CompetitionStatistics, IndividualTrainingPlan, Person, PersonAttributes, PlayerDecisionHistory,
@@ -165,6 +167,22 @@ pub struct Player {
     /// the desire pipeline doesn't need to walk the simulator world.
     /// 0 = unknown (gates that read it fail closed).
     pub nationality_continent_id: u32,
+    /// Footballing region of the player's **nationality** — never his
+    /// club's. Denormalised in the same world-load pass as
+    /// `nationality_continent_id`, because the region needs the country
+    /// CODE and a player's own country is unreachable from inside another
+    /// country's borrow.
+    ///
+    /// This is what lets a Brazilian at Arsenal read as a South American
+    /// to the loan market instead of as a Western European, which is the
+    /// whole reason the loan home could never happen. `None` = not seeded
+    /// (a regen born after load); [`Player::home_region`] degrades to a
+    /// continent-only classification rather than lying.
+    pub nationality_region: Option<ScoutingRegion>,
+    /// How badly he wants to go home, read once a week when the mind
+    /// builds its picture. See [`HomePull`] — the market pool reads these
+    /// fields instead of rebuilding a `MindSituation` per player per day.
+    pub home_pull: HomePull,
     pub behaviour: PersonBehaviour,
     pub attributes: PersonAttributes,
 
@@ -710,6 +728,25 @@ impl Player {
     }
     pub fn languages(&self) -> &[PlayerLanguage] {
         &self.languages
+    }
+
+    /// The footballing region his passport belongs to.
+    ///
+    /// Prefers the seeded value; falls back to a continent-only
+    /// classification for a player generated after world load, which is
+    /// exact for South America and Oceania and approximate elsewhere.
+    /// `None` only when even the continent is unknown — the callers then
+    /// use his club's region, which is the honest "no view".
+    pub fn home_region(&self) -> Option<ScoutingRegion> {
+        self.nationality_region.or_else(|| {
+            (self.nationality_continent_id != 0)
+                .then(|| ScoutingRegion::from_country(self.nationality_continent_id, ""))
+        })
+    }
+
+    /// His languages as the market reads them.
+    pub fn language_profile(&self) -> LanguageProfile {
+        LanguageProfile::from_languages(&self.languages)
     }
     pub fn last_transfer_date(&self) -> Option<NaiveDate> {
         self.last_transfer_date
@@ -1403,17 +1440,32 @@ impl Player {
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
             let mut situation = self.mind_situation(now.date(), country_code);
             situation.club_reputation = (team_reputation / 10_000.0).clamp(0.0, 1.0);
+            // His OWN federation's calendar. A tournament clock belongs to
+            // a passport: a Brazilian at Arsenal is counting down to the
+            // Copa, not the Euros, and the country he plays in was the
+            // only clock the mind could see. A native's nationality
+            // continent is his club's, so nothing moves for him.
             situation.months_to_tournament = ctx
-                .country
-                .as_ref()
-                .map(|c| c.months_to_tournament)
-                .unwrap_or(u8::MAX);
+                .simulation
+                .tournament_clocks
+                .months_for(self.nationality_continent_id)
+                .unwrap_or_else(|| {
+                    ctx.country
+                        .as_ref()
+                        .map(|c| c.months_to_tournament)
+                        .unwrap_or(u8::MAX)
+                });
             // The week's mood, swept into memory before the faculties
             // reflect on it — so a fallout with the manager on Thursday
             // is already something he remembers when he thinks about his
             // future on Monday, rather than a week later.
             self.remember_recent_mood(ctx.club.as_ref().map(|c| c.id), now.date());
             self.mind.tick_with(&mind_ctx, &situation);
+            // …and how badly he wants to go home, read here because the
+            // mind has just thought and the picture is already built. The
+            // transfer pool then reads two fields instead of rebuilding
+            // this for every player in the world every day.
+            self.home_pull = HomePull::read(self, &situation, now.date());
             // Decay interaction log so old talks don't keep the cooldown
             // gates cold past their useful window.
             self.interactions.decay(now.date());

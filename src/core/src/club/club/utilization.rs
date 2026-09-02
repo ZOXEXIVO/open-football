@@ -5,7 +5,9 @@ use crate::club::staff::goalkeeping::{KeeperAdvice, KeeperRoomPlan};
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext, SquadEvidenceContext};
 use crate::shared::{Currency, CurrencyValue};
-use crate::transfers::pipeline::{LoanOutCandidate, LoanOutReason, LoanOutStatus};
+use crate::transfers::pipeline::{
+    LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
+};
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
@@ -537,6 +539,7 @@ impl Club {
                     reason: LoanOutReason::LackOfPlayingTime,
                     status: LoanOutStatus::Listed,
                     loan_fee,
+                    preferred_destination: LoanDestinationPreference::Any,
                 });
         }
 
@@ -1375,6 +1378,7 @@ mod tests {
             min_squad_size: 0,
             expected_position: 5,
             min_acceptable_position: 10,
+            ..Default::default()
         });
 
         club.audit_squad_utilization(Fx::date());
@@ -1454,6 +1458,7 @@ mod tests {
             min_squad_size: 0,
             expected_position: 5,
             min_acceptable_position: 10,
+            ..Default::default()
         });
 
         club.audit_squad_utilization(Fx::date());

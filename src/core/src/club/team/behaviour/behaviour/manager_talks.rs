@@ -7,6 +7,8 @@
 
 use super::TeamBehaviour;
 use crate::club::player::ManagerPromiseKind;
+use crate::club::player::mind::GoalKind;
+use crate::transfers::pipeline::{HomeLoanGates, HomePull, UnsettledAbroadScan};
 use crate::club::player::calculators::{
     AutomaticReleaseEligibility, FreeAgentReleaseReason, ReleaseEligibilityContext,
 };
@@ -34,6 +36,12 @@ impl TeamBehaviour {
     /// the window the returnee audit reads it over, so the two halves of
     /// the same arc agree about when the sentence stops counting.
     const DONE_WITH_LOANS_WINDOW_DAYS: u16 = 180;
+
+    /// How formed a `GoOutOnLoan` want has to be before he takes it to the
+    /// coach. Below `HomeLoanGates::WANTS_HOME_BAR` on purpose: wanting
+    /// minutes is a lower bar than wanting to go home, and the same want
+    /// carries a man who is not homesick at all.
+    const LOAN_WANT_BAR: f32 = 0.3;
 
     /// Date-aware. The interaction-log cooldown gate needs the
     /// simulation date so re-asking the same player about the same topic
@@ -417,7 +425,12 @@ impl TeamBehaviour {
                 continue;
             }
 
-            // Already has a transfer request or loan status
+            // Already has a transfer request or loan status.
+            //
+            // The homesick youngster no longer needs an exception here:
+            // `pursue_loan_home` writes his wants and stamps no `Req` at
+            // all (`processing.rs`, fix (a)), so he arrives at this loop
+            // clean and reaches the home route below.
             if player.statuses.has(PlayerStatusType::Req)
                 || player.statuses.has(PlayerStatusType::Loa)
             {
@@ -480,6 +493,42 @@ impl TeamBehaviour {
                 &HappinessEventType::WantsToProveHimselfAtParent,
                 Self::DONE_WITH_LOANS_WINDOW_DAYS,
             );
+
+            // ── Check 0a: the man who wants a season somewhere he plays ──
+            //
+            // Ahead of every band below, because it answers a question
+            // none of them asks. Check 0 needs `age >= 24` for a main-team
+            // player and only yields a LOAN request under 23; Check 1
+            // needs a prospect squad status; Check 2 needs `age < 23`. So
+            // a homesick 23-to-25-year-old non-starter — the exact
+            // archetype of the loan home — fell through every one of them
+            // and got no channel at all, while the mind was carrying
+            // `GoHome` and `GoOutOnLoan` the whole time. Nothing in the
+            // file read either goal.
+            //
+            // Over 25 he is not sent somewhere to settle; he asks to
+            // leave, and Check 0 / Check 2 already do that.
+            let wants_a_season_away = player.home_pull.desire >= HomeLoanGates::WANTS_HOME_BAR
+                || player.mind.pressure_of(GoalKind::GoOutOnLoan) >= Self::LOAN_WANT_BAR;
+            if age <= UnsettledAbroadScan::MAX_AGE
+                && !done_with_loans
+                && wants_a_season_away
+                && player.happiness.starter_ratio < HomePull::SETTLED_STARTER_SHARE
+                && !player
+                    .interactions
+                    .topic_on_cooldown(topic_for_talk(ManagerTalkType::LoanRequest), current_date)
+            {
+                // He is asking for the move his own wants describe, so
+                // the push is those wants rather than a personality roll.
+                let priority = ((player
+                    .home_pull
+                    .desire
+                    .max(player.mind.pressure_of(GoalKind::GoOutOnLoan))
+                    * 100.0) as u32)
+                    + age as u32 * 10;
+                candidates.push((player.id, ManagerTalkType::LoanRequest, priority));
+                continue;
+            }
 
             if (reserve_team && age >= 20)
                 || (main_team && age >= 24)

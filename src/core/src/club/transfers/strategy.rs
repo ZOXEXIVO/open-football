@@ -1,5 +1,5 @@
 use crate::club::board::{ClubVision, FinancialStance, SigningPreference, VisionYouthFocus};
-use crate::club::player::calculators::WageCalculator;
+use crate::transfers::pipeline::wage_power::BuyerLevelWage;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::offer::{
@@ -1190,20 +1190,6 @@ impl PersonalTermsPackager {
         contract_years: u8,
         age: u8,
     ) -> PersonalTermsOffer {
-        let wage = WageCalculator::expected_annual_wage(
-            player,
-            age,
-            ctx.buyer_reputation_score,
-            ctx.league_reputation,
-        );
-        let wage_discount = match strategy.recruitment.financial_stance {
-            FinancialStance::Austerity => 0.88,
-            FinancialStance::Conservative => 0.95,
-            FinancialStance::Balanced => 1.00,
-            FinancialStance::Ambitious => 1.06,
-        };
-        let annual_wage = ((wage as f32) * wage_discount).round() as u32;
-
         let ca = player.player_attributes.current_ability;
         let star = ca >= 150 || player.player_attributes.world_reputation >= 6000;
         // Prospect framing reads the scouts' belief (or the observable
@@ -1212,6 +1198,42 @@ impl PersonalTermsPackager {
             .scout_assessed_potential
             .unwrap_or_else(|| PotentialEstimator::observable_ceiling(player, ctx.date));
         let prospect = age <= 23 && assessed_potential as i16 - ca as i16 >= 15;
+
+        // Squad-role promise: drawn from the transfer request reason +
+        // player ability. Critical formation gaps imply a starter
+        // promise; cheap reinforcements get rotation; prospects come
+        // in as hot-prospect.
+        //
+        // Priced BEFORE the wage, because the wage is the wage for THAT
+        // shirt.
+        let role_promise = Self::squad_status_promise(strategy, player, ctx, prospect, star);
+
+        // ONE wage curve, shared with the figure staged on the
+        // negotiation ([`BuyerLevelWage`]).
+        //
+        // The packager used to price a plain `WageCalculator` figure with
+        // no status premium while the negotiation staged a
+        // `ContractValuation` at the PROMISED status — up to ~1.65× apart,
+        // and the contract installed on completion was the packager's. A
+        // Key-Player promise accepted at round 0 therefore installed a
+        // wage the man had never said yes to, and the salary-happiness
+        // model read him as underpaid from his first day.
+        let wage = BuyerLevelWage::evaluate(
+            player,
+            age,
+            ctx.buyer_reputation_score,
+            ctx.league_reputation,
+            role_promise,
+        );
+        // The club's own philosophy still bites — on that figure, not on a
+        // parallel one.
+        let wage_discount = match strategy.recruitment.financial_stance {
+            FinancialStance::Austerity => 0.88,
+            FinancialStance::Conservative => 0.95,
+            FinancialStance::Balanced => 1.00,
+            FinancialStance::Ambitious => 1.06,
+        };
+        let annual_wage = ((wage as f32) * wage_discount).round() as u32;
 
         // Signing bonus: 0–35% of annual wage depending on star quality
         // and the buyer's addon preference. Cash-poor buyers don't pay
@@ -1238,12 +1260,6 @@ impl PersonalTermsPackager {
             let pct = if star { 0.08 } else { 0.04 };
             (base_fee * pct).round() as u32
         };
-
-        // Squad-role promise: drawn from the transfer request reason +
-        // player ability. Critical formation gaps imply a starter
-        // promise; cheap reinforcements get rotation; prospects come
-        // in as hot-prospect.
-        let role_promise = Self::squad_status_promise(strategy, player, ctx, prospect, star);
 
         // Release clause: an ambitious buyer chasing a star pays the
         // headline number but commits to a release tag so the seller

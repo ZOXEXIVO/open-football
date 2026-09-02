@@ -1,3 +1,5 @@
+pub mod appraisal;
+pub mod appraisal_inputs;
 pub mod asset_ledger;
 pub(crate) mod auction;
 mod breakout;
@@ -6,6 +8,7 @@ mod circulation;
 mod evaluation;
 mod exposure;
 mod helpers;
+mod loan_home;
 mod loan_interest;
 mod loan_market;
 mod negotiations;
@@ -22,6 +25,7 @@ pub(crate) mod squad_fit;
 pub mod standing;
 pub mod trace;
 pub mod upgrade_math;
+pub mod wage_power;
 pub mod watchlist;
 
 use crate::club::player::contract::PlayerSquadStatus;
@@ -32,13 +36,24 @@ use chrono::NaiveDate;
 use std::collections::HashMap;
 
 // Re-export PipelineProcessor and PlayerSummary for external use
+pub use self::appraisal::{
+    Appraisal, AppraisalConfig, OfferKind, OfferView, PlayerDisposition, PlayerOfferAppraisal,
+    PlayerStance, TermsRefusalCause,
+};
+pub use self::appraisal_inputs::{
+    AvailabilityView, OfferViewBuilder, PlayerStanceBuilder, StanceInputs,
+};
 pub use self::asset_ledger::{AssetLedger, SellListEntry, SellMotive};
+pub use self::loan_home::{
+    HomeLoanGates, HomeLoanPull, HomePull, SquadHomeContext, UnsettledAbroadScan,
+};
 pub use self::planning::{BriefSlot, MoneySlack, SquadPlanner};
 pub use self::processor::PipelineProcessor;
 pub use self::processor::{PlayerSummary, SellerPlausibilityContext};
 pub use self::standing::CareerRecordSnapshot;
 pub use self::trace::TransferTrace;
 pub use self::upgrade_math::{DealValue, MoneyUtility, UpgradeMath};
+pub use self::wage_power::{BuyerLevelWage, OwnerEnvelopes, WagePower};
 pub use self::watchlist::MarketKnowledge;
 // Recruitment department types — meetings, votes, monitoring rows.
 pub use self::recruitment::{
@@ -233,7 +248,65 @@ mod processor {
         /// cross-country loan/scout filters used to re-derive this (a
         /// country-code string match) for every foreign player on every
         /// scanning country's pass.
+        ///
+        /// **This is his CLUB's region, not his own** — every geographic
+        /// field above (`country_id`, `continent_id`, `country_code`,
+        /// `region`) is stamped from where he plays. The nationality
+        /// fields below are where he is FROM, and the difference is the
+        /// entire loan-home pathway: a Brazilian at Arsenal reads as a
+        /// Western European here and as a South American there.
         pub region: ScoutingRegion,
+        /// Country of his passport.
+        pub nationality_country_id: u32,
+        /// Continent of his passport. 0 when unknown.
+        pub nationality_continent_id: u32,
+        /// Footballing region of his passport, from
+        /// [`crate::Player::home_region`]. `None` when his nationality has
+        /// never been seeded.
+        ///
+        /// It does NOT fall back to the club's region. That read — "he is
+        /// from here" — paid a home-region pull to every borrower in the
+        /// league he already plays in, for a man whose home nobody knows.
+        /// Unknown fails closed: no home, no pull.
+        pub nationality_region: Option<ScoutingRegion>,
+        /// Rolling share of recent competitive matches he has started,
+        /// 0..1. The one number that says whether a foreign signing has
+        /// settled into the side or is watching it.
+        pub starter_share: f32,
+        /// How long he has actually been this club's player, in days —
+        /// `StuckCareerScan::club_tenure_days`, never bare
+        /// `days_since_transfer` (a loan return re-stamps that, memory
+        /// `loan_pipeline`).
+        pub tenure_days: u16,
+        /// How badly he wants to go home, 0..1 — the mind's `GoHome`
+        /// pressure, a recent `WantsReturnHome` mood, or raw cultural
+        /// isolation, whichever is loudest.
+        pub return_home_desire: f32,
+        /// Personality on the raw 1–20 attribute scale, so a stance built
+        /// from a summary can carry the same three drives the live builder
+        /// reads off the mind.
+        ///
+        /// Without them a cross-border stance guessed: ambition came off
+        /// `determination`, loyalty and adaptability sat at the neutral
+        /// 0.5, and a loyalty-18 boyhood-club Brazilian read as a 0.125
+        /// attachment abroad against 0.35+ at home — the appraisal
+        /// disagreeing with itself about the same man across a border.
+        pub ambition: u8,
+        pub loyalty: u8,
+        pub adaptability: u8,
+        /// The mind's own restlessness and settledness, 0..1 — the MAX of
+        /// `GoOutOnLoan` / `LeaveThisClub` / `PlayFirstTeamFootball`, and
+        /// the stronger of `StayAtThisClub` / `BecomeAClubLegend`. Same
+        /// two reads `PlayerStance::with_mind` performs live, computed
+        /// once when the pool is built.
+        pub leave_pressure: f32,
+        pub stay_pressure: f32,
+        /// His parent has posted him to the world as a man who would go
+        /// home. Set only for LOAN candidates (see
+        /// `PipelineProcessor::broadcast_listed_loans`) so this never
+        /// becomes a permanent-transfer discovery channel that bypasses
+        /// the springboard reach model.
+        pub home_return_wanted: bool,
         /// Compact snapshot of the languages the player speaks (native +
         /// learned abroad). Recruitment reads it against the buying
         /// country's language mask so clubs lean toward candidates who
@@ -1065,6 +1138,36 @@ pub enum LoanOutReason {
     /// value) sitting in the stands — loaned to keep his development and
     /// market value alive rather than letting the asset rot.
     AssetValueProtection,
+    /// A young foreigner who has not settled and is not playing.
+    ///
+    /// The one loan reason that is about **settling** rather than ceiling:
+    /// it fires at every reputation tier, bypasses the potential and
+    /// age-threshold gates that guard the development reasons, and reads a
+    /// blend of how badly he wants to go home, how poorly he has adapted,
+    /// and how little he is playing. This is the Gabigol / Vitinho / Kaio
+    /// Jorge population — a prospect a season into a stronger league with a
+    /// handful of starts and no language — and before it existed the
+    /// parent club had no reason at all to send him anywhere.
+    UnsettledAbroad,
+}
+
+/// Where a loan-out candidate would rather go.
+///
+/// Carried on the candidate so the parent's broadcast ranking can prefer
+/// what he wants without a nationality table anywhere: "home" is
+/// `Player.country_id == borrower country` and "home region" is his
+/// passport's [`ScoutingRegion`], nothing else. The LEVEL gates are
+/// untouched — a Ghanaian at a Premier League club still cannot be loaned
+/// into a 3400-reputation league, and that is correct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LoanDestinationPreference {
+    /// No geography in it — send him wherever he will play.
+    #[default]
+    Any,
+    /// He would rather be in his own country.
+    HomeCountry,
+    /// Failing that, his own continent.
+    HomeRegion,
 }
 
 impl LoanOutReason {
@@ -1086,6 +1189,9 @@ impl LoanOutReason {
                 | LoanOutReason::BlockedByDepth
                 | LoanOutReason::BlockedByBetterPlayer
                 | LoanOutReason::AssetValueProtection
+                // The unsettled foreigner is being lent BECAUSE he is not
+                // playing; a bench somewhere else answers nothing.
+                | LoanOutReason::UnsettledAbroad
         )
     }
 }
@@ -1104,6 +1210,10 @@ pub struct LoanOutCandidate {
     pub reason: LoanOutReason,
     pub status: LoanOutStatus,
     pub loan_fee: f64,
+    /// Where he would rather go, read off his own wants at the moment the
+    /// parent decided to lend him. A ranking term on the broadcast, never
+    /// a gate — see [`LoanDestinationPreference`].
+    pub preferred_destination: LoanDestinationPreference,
 }
 
 /// Per-player state for a staged availability broadcast (the seller-side
@@ -1272,6 +1382,14 @@ pub struct ClubTransferPlan {
     /// is the hoarding control — capped per window by club tier so elite
     /// clubs can't stockpile teenagers.
     pub prospect_buys_this_window: u8,
+
+    /// Compatriot loan sweeps this club has run this window.
+    ///
+    /// An Elite or Continental club does not trawl foreign loan markets;
+    /// it does sign the boy its own league produced when his club posts
+    /// him. That is ONE approach per window, not a licence to run the
+    /// ordinary foreign scan for as long as somebody stays posted.
+    pub compatriot_sweeps_this_window: u8,
 
     /// Prospect-purchase negotiations currently in flight. Incremented
     /// when the negotiation opens, released on resolution — so a failed
@@ -1462,6 +1580,7 @@ impl ClubTransferPlan {
             transfer_broadcasts: HashMap::new(),
             manager_review_until: None,
             prospect_buys_this_window: 0,
+            compatriot_sweeps_this_window: 0,
             prospect_pursuits_active: 0,
             staff_recommendations: Vec::new(),
             scout_match_assignments: Vec::new(),
@@ -1717,6 +1836,7 @@ impl ClubTransferPlan {
         self.shortlists.clear();
         self.loan_out_candidates.clear();
         self.prospect_buys_this_window = 0;
+        self.compatriot_sweeps_this_window = 0;
         self.prospect_pursuits_active = 0;
         self.staff_recommendations.clear();
         self.scout_match_assignments.clear();

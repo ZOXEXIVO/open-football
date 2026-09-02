@@ -1,10 +1,11 @@
 use crate::MatchTacticType;
 use crate::club::board::BoardManagerMeeting;
 use crate::club::board::context::FfpStatus;
+use crate::club::finance::DebtStanding;
 use crate::club::board::decision::{BoardDecision, DecisionReason};
 use crate::club::board::infrastructure::FacilityReview;
 use crate::club::board::manager_market::ManagerCandidate;
-use crate::club::board::ownership::{OwnershipModel, OwnershipType};
+use crate::club::board::ownership::{ClubBenefactor, OwnershipModel, OwnershipType};
 use crate::club::board::pressure::{BoardPressure, SupporterEvent};
 use crate::club::board::promise::{BoardPromise, PromiseLedger, PromiseType};
 use crate::club::board::relationship::ManagerRelationship;
@@ -16,6 +17,7 @@ use crate::club::board::takeover::{TakeoverEngine, TakeoverWatch};
 use crate::club::team::reputation::AchievementType;
 use crate::club::{BoardContext, BoardMood, BoardMoodState, BoardResult, StaffClubContract};
 use crate::context::{GlobalContext, SimulationContext};
+use crate::transfers::pipeline::wage_power::OwnerEnvelopes;
 use crate::transfers::pipeline::{TransferNeedPriority, TransferNeedReason};
 use chrono::Duration;
 use chrono::{Datelike, NaiveDate};
@@ -306,10 +308,18 @@ pub struct BoardDossierSummary {
     pub matches_watched: u16,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SeasonTargets {
     pub transfer_budget: i32,
     pub wage_budget: i32,
+    /// The slice of [`Self::wage_budget`] the OWNER is funding rather than
+    /// the club's revenue. Held separately so the negotiation's wage power
+    /// can take it back out of the mandate before adding the tier envelope
+    /// — otherwise the same cheque is counted on both arms.
+    pub owner_subsidy: i64,
+    /// That cheque, split per brief tier and drawn down as shirts are
+    /// signed. See [`OwnerEnvelopes`].
+    pub owner_envelopes: OwnerEnvelopes,
     pub max_squad_size: u8,
     pub min_squad_size: u8,
     /// Expected league finish position (1-based). Board judges performance against this.
@@ -812,6 +822,36 @@ impl ClubBoard {
             if let Some(board_ctx) = &ctx.board {
                 let current_year = today.year();
                 self.evaluate_long_term_vision(current_year, &mut result);
+                // What the owner is funding, re-read once a season on a
+                // three-year half-life — BEFORE the budgets, so this
+                // year's wage mandate and transfer ceiling both spend it.
+                let flipped = self.ownership.refresh_benefactor(
+                    board_ctx.balance,
+                    board_ctx.total_annual_wages as i64,
+                    board_ctx.projected_annual_income,
+                );
+                if flipped {
+                    // A club whose owner has started funding it gets the
+                    // new archetype's boardroom too, not just its label.
+                    Self::map_chairman_knobs(&mut self.chairman, &self.ownership);
+                }
+                // What the owner puts BACK this year. Booked as funding
+                // rather than revenue (`push_owner_investment`), so the
+                // market's inflation read still sees spend without income.
+                let idle_now = ClubBenefactor::idle_cash(
+                    board_ctx.balance,
+                    board_ctx.total_annual_wages as i64,
+                );
+                let top_up = self.ownership.annual_top_up(
+                    idle_now,
+                    matches!(board_ctx.debt_standing, DebtStanding::Emergency),
+                );
+                if top_up >= 1.0 {
+                    result.decisions.push(BoardDecision::OwnerTopUp {
+                        amount: top_up as i64,
+                        reason: DecisionReason::OwnerInjection,
+                    });
+                }
                 self.calculate_season_targets(board_ctx);
 
                 // Promises whose deadline lapsed unfulfilled break now and
@@ -1012,7 +1052,24 @@ impl ClubBoard {
         } else {
             0.0
         };
-        let raw_budget = (revenue_budget + seed_budget).max(reserve_floor).max(0.0);
+        // An owner-funded club spends its owner's cash on fees as well as
+        // on wages: the 8 % idle-cash share below is what a club prudently
+        // reinvests, and it is nothing like what a benefactor will write a
+        // cheque for. Same `benefactor × idle × 0.35` envelope as the wage
+        // subsidy, so one ratio governs both halves of what a club pays.
+        let idle_cash =
+            ClubBenefactor::idle_cash(board_ctx.balance, board_ctx.total_annual_wages as i64);
+        let owner_fee_headroom =
+            ClubBenefactor::subsidy_per_year(self.ownership.benefactor, 1.0, idle_cash);
+        // …and the cheque is SPENDABLE, not merely permitted. Lifting only
+        // the ceiling left it nowhere to land: a low-income cash-rich club
+        // sits on the reserve floor, far under its ceiling, so a $53M ask
+        // was priced affordable by `spend_power` and then never bid,
+        // because bids are sized against `season_targets.transfer_budget`.
+        let raw_budget = (revenue_budget + seed_budget)
+            .max(reserve_floor)
+            .max(owner_fee_headroom)
+            .max(0.0);
 
         let eco = board_ctx.country_economic_factor as f64;
         let price = board_ctx.country_price_level as f64;
@@ -1042,14 +1099,9 @@ impl ClubBoard {
         // real clubs of that size actually operate in.
         const INCOME_SHARE: f64 = 0.25;
         const IDLE_CASH_SHARE: f64 = 0.08;
-        /// Years of wage bill a club is assumed to want in the bank before
-        /// any of its cash reads as idle.
-        const WAGE_COVER_YEARS: f64 = 1.5;
         let annual_income = board_ctx.trailing_annual_income.max(0) as f64;
-        let idle_cash = (board_ctx.balance as f64
-            - board_ctx.total_annual_wages as f64 * WAGE_COVER_YEARS)
-            .max(0.0);
-        let club_headroom = INCOME_SHARE * annual_income + IDLE_CASH_SHARE * idle_cash;
+        let club_headroom =
+            INCOME_SHARE * annual_income + IDLE_CASH_SHARE * idle_cash + owner_fee_headroom;
         let budget_ceiling = (price_ceiling.min(eco_ceiling) + club_headroom) * tier_factor;
         let mut transfer_budget = raw_budget.min(budget_ceiling) as i32;
 
@@ -1069,6 +1121,18 @@ impl ClubBoard {
         .min(board_ctx.debt_standing.wage_ratio_ceiling());
 
         let current_wages = board_ctx.total_annual_wages as f64;
+        // What the owner is putting into the wage bill this year. Held on
+        // the targets as well as folded into the mandate, because the
+        // negotiation's wage power has to take it back OUT before adding a
+        // tier envelope — the same cheque on both arms was the "$33M shirt
+        // is $55M" defect.
+        let owner_subsidy = if projected_income < 1.0 {
+            // No revenue evidence: the mandate below is the existing bill
+            // and carries no owner money, so neither does the ledger.
+            0.0
+        } else {
+            self.ownership.owner_subsidy_per_year(idle_cash)
+        };
         let wage_budget = if projected_income < 1.0 {
             // No revenue evidence yet (a freshly created club): hold the
             // mandate at the existing bill rather than inventing a cut.
@@ -1092,7 +1156,14 @@ impl ClubBoard {
             // The mandate can now fall — but by at most 15% per recompute,
             // because squads unwind through expiries and sales, not
             // overnight.
-            (projected_income * target_ratio).max(current_wages * 0.85)
+            //
+            // …plus what the owner is funding. A club whose cash its
+            // revenue cannot explain can hold a wage its revenue cannot
+            // explain either — that is the entire mechanism behind the
+            // Saudi, Chinese, Russian and MLS windows, and it needs no
+            // league list to express (memory
+            // `feedback_balance_system_not_cases`).
+            (projected_income * target_ratio).max(current_wages * 0.85) + owner_subsidy
         } as i32;
 
         // Squad size limits based on reputation
@@ -1160,6 +1231,8 @@ impl ClubBoard {
         self.season_targets = Some(SeasonTargets {
             transfer_budget,
             wage_budget,
+            owner_subsidy: owner_subsidy as i64,
+            owner_envelopes: OwnerEnvelopes::split(owner_subsidy),
             max_squad_size: max_squad,
             min_squad_size: min_squad,
             expected_position: expected,
@@ -1671,6 +1744,28 @@ impl ClubBoard {
         }
     }
 
+    /// Ownership archetype → legacy chairman knobs.
+    ///
+    /// One table, called both at bootstrap and whenever the archetype
+    /// changes under a club — a flip that set the ownership type and left
+    /// the chairman's ambition and patience on the old owner's row was
+    /// exactly the half-derived state the audit found.
+    fn map_chairman_knobs(chairman: &mut ChairmanProfile, owner: &OwnershipModel) {
+        chairman.ambition = match owner.ownership_type {
+            OwnershipType::StateBacked => ChairmanAmbition::Reckless,
+            OwnershipType::Consortium if owner.wealth() >= 70 => ChairmanAmbition::Ambitious,
+            OwnershipType::FamilyOwned | OwnershipType::MemberOwned => {
+                ChairmanAmbition::Conservative
+            }
+            _ => ChairmanAmbition::Balanced,
+        };
+        chairman.patience = match owner.ownership_type {
+            OwnershipType::StateBacked | OwnershipType::PrivateEquity => ChairmanPatience::Low,
+            OwnershipType::MemberOwned | OwnershipType::FamilyOwned => ChairmanPatience::High,
+            _ => ChairmanPatience::Medium,
+        };
+    }
+
     /// Derive the ownership archetype + opening vision from durable club
     /// signals. Runs once, on the first simulate tick that has context.
     fn bootstrap_personality(&mut self, ctx: &BoardContext, seed: u32) {
@@ -1678,24 +1773,22 @@ impl ClubBoard {
             ctx.reputation_score,
             ctx.balance,
             ctx.country_economic_factor,
+            // The PROJECTION, not the trailing sum. Bootstrap runs on the
+            // first tick a club has context, when its finance history is
+            // still empty — reading the trailing zero made every
+            // cash-positive club in the world state-backed with a Reckless
+            // chairman for four seasons of EMA decay.
+            ClubBenefactor::signal(
+                ctx.balance,
+                ctx.total_annual_wages as i64,
+                ctx.projected_annual_income,
+            ),
             seed,
         );
 
         // Map ownership → legacy chairman knobs so budget / patience logic
         // reflects the derived owner.
-        self.chairman.ambition = match owner.ownership_type {
-            OwnershipType::StateBacked => ChairmanAmbition::Reckless,
-            OwnershipType::Consortium if owner.wealth >= 70 => ChairmanAmbition::Ambitious,
-            OwnershipType::FamilyOwned | OwnershipType::MemberOwned => {
-                ChairmanAmbition::Conservative
-            }
-            _ => ChairmanAmbition::Balanced,
-        };
-        self.chairman.patience = match owner.ownership_type {
-            OwnershipType::StateBacked | OwnershipType::PrivateEquity => ChairmanPatience::Low,
-            OwnershipType::MemberOwned | OwnershipType::FamilyOwned => ChairmanPatience::High,
-            _ => ChairmanPatience::Medium,
-        };
+        Self::map_chairman_knobs(&mut self.chairman, &owner);
 
         // Opening vision from archetype — gives clubs distinct stories.
         self.vision.preferred_squad_profile = match owner.ownership_type {
@@ -1735,6 +1828,14 @@ impl ClubBoard {
         };
 
         self.ownership = owner;
+        // The pile the owner was first seen holding — what the yearly
+        // top-up refills towards, so a benefactor's cash is a fund he
+        // maintains rather than a one-off pot that drains in three
+        // windows.
+        self.ownership.stamp_idle_at_derive(ClubBenefactor::idle_cash(
+            ctx.balance,
+            ctx.total_annual_wages as i64,
+        ));
         self.personality_initialized = true;
     }
 
@@ -2467,6 +2568,7 @@ mod board_behaviour_tests {
             min_squad_size: 18,
             expected_position: expected,
             min_acceptable_position: min_acceptable,
+            ..Default::default()
         }
     }
 
@@ -2964,10 +3066,12 @@ mod board_behaviour_tests {
             let mut board = ClubBoard::new();
             board.ownership = OwnershipModel {
                 ownership_type: OwnershipType::PrivateEquity,
-                wealth: 45,
+                base_wealth: 45,
                 interference: 55,
                 risk_tolerance: 65,
                 exit_pressure: 80,
+                benefactor: 0.0,
+                idle_at_derive: 0.0,
             };
             let mut ctx = BoardContext::new();
             ctx.balance = -80_000_000;
@@ -2996,10 +3100,12 @@ mod board_behaviour_tests {
         let mut board = ClubBoard::new();
         board.ownership = OwnershipModel {
             ownership_type: OwnershipType::MemberOwned,
-            wealth: 25,
+            base_wealth: 25,
             interference: 20,
             risk_tolerance: 25,
             exit_pressure: 60,
+            benefactor: 0.0,
+            idle_at_derive: 0.0,
         };
         board.vision.financial_stance = FinancialStance::Conservative;
         board.vision.long_term_goal = Some(LongTermGoal::Survive);
@@ -3014,7 +3120,7 @@ mod board_behaviour_tests {
         for seed in 0..3u32 {
             let mut board = member_owned_board();
             board.apply_takeover_completion(seed);
-            assert!(board.ownership.wealth >= 70, "new owner should be wealthy");
+            assert!(board.ownership.wealth() >= 70, "new owner should be wealthy");
             assert_eq!(board.confidence.level, 60);
             // Relationship was reset (trust_results back above the crisis level).
             assert!(board.relationship.trust_results >= 50);
@@ -3097,10 +3203,12 @@ mod board_behaviour_tests {
         let mut board = ClubBoard::new();
         board.ownership = OwnershipModel {
             ownership_type: OwnershipType::StateBacked,
-            wealth: 90,
+            base_wealth: 90,
             interference: 60,
             risk_tolerance: 80,
             exit_pressure: 5,
+            benefactor: 0.0,
+            idle_at_derive: 0.0,
         };
         board.vision.infrastructure_priority = InfrastructurePriority::Training;
         let mut ctx = BoardContext::new();
@@ -3280,7 +3388,7 @@ mod board_behaviour_tests {
         b.bootstrap_personality(&ctx, 1234);
 
         assert_eq!(a.ownership.ownership_type, b.ownership.ownership_type);
-        assert_eq!(a.ownership.wealth, b.ownership.wealth);
+        assert_eq!(a.ownership.wealth(), b.ownership.wealth());
         assert_eq!(a.ownership.risk_tolerance, b.ownership.risk_tolerance);
         assert!(a.personality_initialized);
     }
@@ -3401,10 +3509,12 @@ mod board_behaviour_tests {
         let mut board = ClubBoard::new();
         board.ownership = OwnershipModel {
             ownership_type: OwnershipType::PrivateEquity,
-            wealth: 45,
+            base_wealth: 45,
             interference: 55,
             risk_tolerance: 65,
             exit_pressure: 80,
+            benefactor: 0.0,
+            idle_at_derive: 0.0,
         };
         board.season_targets = Some(targets(10, 18));
         let mut ctx = BoardContext::new();

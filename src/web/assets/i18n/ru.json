@@ -476,6 +476,7 @@
   "dec_reason_blocked_by_depth": "Заблокирован глубиной состава на своей позиции",
   "dec_reason_needs_first_team_minutes": "Нужны минуты в основе — отдан в аренду ради игры",
   "dec_reason_asset_value_protection": "Отдан в аренду для сохранения трансферной стоимости",
+  "dec_reason_unsettled_abroad": "Не прижился за границей — отдан в аренду ради игровой практики",
   "dec_reason_released_failed_renewal": "Освобождён после провала переговоров о продлении",
   "dec_reason_released_free": "Расторжение по обоюдному согласию",
   "dec_reason_released_surplus": "Отпущен как лишний в составе",

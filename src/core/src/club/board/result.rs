@@ -480,6 +480,14 @@ impl BoardResult {
                         budget.amount = (budget.amount + *amount as f64).max(0.0);
                     }
                 }
+                BoardDecision::OwnerTopUp { amount, .. } => {
+                    // Owner funding, not revenue: the cash arrives on the
+                    // balance sheet without ever entering the P&L, so
+                    // next season's revenue-derived budgets and the
+                    // market's inflation read are untouched by it.
+                    club.finance.balance.push_owner_investment(*amount);
+                    club.record_affair(ClubAffair::OwnerBailout { amount: *amount }, today);
+                }
                 BoardDecision::ApproveFacilityUpgrade { facility, cost } => {
                     // Only a change somebody can see is news. An upgrade
                     // that found nothing to upgrade debits no cash and

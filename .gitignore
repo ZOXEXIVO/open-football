@@ -19,6 +19,7 @@ publish
 artifacts
 
 dist
+docs
 
 # macOS finder metadata
 .DS_Store

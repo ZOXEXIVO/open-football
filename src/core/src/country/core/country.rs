@@ -1,3 +1,4 @@
+use crate::context::TournamentClocks;
 use crate::MatchRuntime;
 use crate::club::academy::result::ClubAcademyResult;
 use crate::club::{BoardResult, ClubFinanceResult, PlayerCollectionResult};
@@ -135,6 +136,34 @@ pub struct Country {
     /// `snapshot_player_season_statistics` once for each season it
     /// processes.
     pub last_snapshotted_season_year: Option<u16>,
+
+    /// Months until the confederation's next major tournament, `u8::MAX`
+    /// for none in view. Stamped by the continent tick from the same
+    /// arithmetic that fills [`crate::country::CountryContext`].
+    ///
+    /// Denormalised onto the country because the transfer market runs
+    /// outside `GlobalContext`: a squad-edge international eleven months
+    /// from a tournament weighs a money move very differently from the
+    /// same man in the summer after one, and personal terms had no way to
+    /// know which he was.
+    pub months_to_tournament: u8,
+    /// Every confederation's calendar, republished on this country each
+    /// tick. The transfer market runs outside `GlobalContext`, and a
+    /// player's tournament clock belongs to his PASSPORT — see
+    /// [`crate::context::TournamentClocks`].
+    pub tournament_clocks: TournamentClocks,
+}
+
+impl Country {
+    /// Months to the tournament THIS player might be picked for. Falls
+    /// back to the country's own confederation when his passport has
+    /// never been stamped, which is the honest no-view and the right
+    /// answer for a native.
+    pub fn months_to_tournament_for(&self, nationality_continent_id: u32) -> u8 {
+        self.tournament_clocks
+            .months_for(nationality_continent_id)
+            .unwrap_or(self.months_to_tournament)
+    }
 }
 
 /// Season boundary dates derived from a country's primary league settings.

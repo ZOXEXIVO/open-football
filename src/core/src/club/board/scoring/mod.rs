@@ -329,6 +329,7 @@ mod tests {
             min_squad_size: 18,
             expected_position: 8,
             min_acceptable_position: 13,
+            ..Default::default()
         }
     }
 

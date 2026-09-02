@@ -26,6 +26,16 @@ pub struct BoardContext {
     pub trailing_annual_income: i64,
     /// Total operating expenses across the trailing twelve months.
     pub trailing_annual_outcome: i64,
+    /// A year's income the club can be judged on TODAY: the trailing
+    /// estimate once any month has closed, and a
+    /// [`crate::club::finance::RevenueModel::projected_annual`] reading of
+    /// its own standing before that.
+    ///
+    /// Every ratio whose denominator is a year of revenue reads this
+    /// rather than the raw trailing sum, because on the first tick of a
+    /// new world the trailing sum is zero for every club in it and a zero
+    /// denominator does not mean "infinitely rich".
+    pub projected_annual_income: i64,
     /// FFP standing. Throttles transfer budget when breached/watchlisted.
     pub ffp_status: FfpStatus,
     /// Where the club sits on the debt ladder. Caps the wage mandate and,
@@ -131,6 +141,7 @@ impl BoardContext {
             country_price_level: 1.0,
             trailing_annual_income: 0,
             trailing_annual_outcome: 0,
+            projected_annual_income: 0,
             ffp_status: FfpStatus::Clean,
             debt_standing: DebtStanding::Solvent,
             league_position: 0,

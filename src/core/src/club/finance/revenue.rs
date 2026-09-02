@@ -278,6 +278,27 @@ impl RevenueModel {
 
     // ── Aggregate ────────────────────────────────────────────────────────
 
+    /// Home matches an ordinary league season puts in an ordinary month.
+    /// A 38-game season is 19 at home across ten playing months.
+    const HOME_MATCHES_PER_MONTH: u32 = 2;
+
+    /// What this club would earn over a full year on its CURRENT standing,
+    /// with no finance history at all.
+    ///
+    /// A freshly created world has no monthly snapshots, so every trailing
+    /// figure is zero and every ratio built on one is undefined. The
+    /// budget seed, the debt facility and — most consequentially — the
+    /// benefactor signal all need a denominator before the club has lived
+    /// a month. This is that denominator, built from the same three lines
+    /// the club will actually bill: it is a projection, not a promise, and
+    /// callers holding a real trailing year always prefer that.
+    pub fn projected_annual(inputs: &RevenueInputs) -> i64 {
+        let mut projection = inputs.clone();
+        projection.home_matches = Self::HOME_MATCHES_PER_MONTH;
+        // Neutral form: a projection cannot know how the season will go.
+        Self::monthly(&projection, 1.0).total().saturating_mul(12)
+    }
+
     /// Full monthly revenue for a club.
     pub fn monthly(inputs: &RevenueInputs, facilities_multiplier: f32) -> MonthlyRevenue {
         let (broadcast_base, broadcast_merit) = Self::broadcast(inputs);
@@ -346,6 +367,58 @@ mod tests {
         assert!(
             annual > 450_000_000 && annual < 1_100_000_000,
             "elite annual revenue out of band: {annual}"
+        );
+    }
+
+    #[test]
+    fn a_first_season_projection_reads_the_owner_from_data() {
+        use crate::club::board::ownership::ClubBenefactor;
+
+        // A Gulf side on the first tick of a new world: no finance
+        // history at all, ≈ $250M in the bank, a small league. The
+        // projection has to put its income near the P0 census's ≈ $40M so
+        // the benefactor signal lands on the Gulf row from DATA rather
+        // than from a missing divisor.
+        let gulf = RevenueInputs {
+            reputation_score: 0.45,
+            league_tier: 1,
+            league_position: 2,
+            league_size: 18,
+            tv_market: 0.15,
+            sponsorship_market: 0.15,
+            attendance_factor: 0.7,
+            price_level: 0.9,
+            stadium_capacity: 25_000,
+            recent_wins_ratio: 0.6,
+            home_matches: 0,
+            parachute: None,
+        };
+        let projected = RevenueModel::projected_annual(&gulf);
+        let signal = ClubBenefactor::signal(250_000_000, 0, projected);
+        let census_row = ClubBenefactor::signal(250_000_000, 0, 40_000_000);
+        assert!(
+            (signal - census_row).abs() < 0.05,
+            "day-one reading {signal} should reproduce the census row {census_row} \
+             (projected income {projected})"
+        );
+
+        // …and a Ligue 2 side with $30M and a $10M wage bill is not.
+        let second_tier = RevenueInputs {
+            reputation_score: 0.30,
+            league_tier: 2,
+            stadium_capacity: 16_000,
+            tv_market: 0.80,
+            sponsorship_market: 0.80,
+            attendance_factor: 0.8,
+            price_level: 1.2,
+            ..gulf.clone()
+        };
+        let modest = RevenueModel::projected_annual(&second_tier);
+        assert!(modest > 0, "a second-tier club still earns something");
+        assert_eq!(
+            ClubBenefactor::signal(30_000_000, 10_000_000, modest),
+            0.0,
+            "reserves are not an owner"
         );
     }
 

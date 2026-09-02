@@ -36,8 +36,8 @@ impl FacilityReview {
         }
         let cash_share = ctx.balance.max(0) / 2;
         let profit = ctx.profit_loss_12m.max(0);
-        let owner_help = if owner.wealth >= 60 {
-            (owner.wealth as i64) * 400_000
+        let owner_help = if owner.wealth() >= 60 {
+            (owner.wealth() as i64) * 400_000
         } else {
             0
         };
@@ -119,7 +119,7 @@ impl FacilityReview {
         // board doesn't pour concrete on the back of one good month.
         let wants_stadium = match vision.infrastructure_priority {
             InfrastructurePriority::Stadium => ctx.attendance_ratio >= 1.1,
-            _ => owner.wealth >= 70 && ctx.attendance_ratio >= 1.2,
+            _ => owner.wealth() >= 70 && ctx.attendance_ratio >= 1.2,
         };
         if wants_stadium {
             let cost = Self::cost_of(ctx, BoardFacility::Stadium);
@@ -191,7 +191,7 @@ mod tests {
         let mut vision = ClubVision::default();
         vision.infrastructure_priority = InfrastructurePriority::Training;
         let owner = OwnershipModel {
-            wealth: 80,
+            base_wealth: 80,
             ..Default::default()
         };
         let decisions = FacilityReview::run(&rich_ctx(), &vision, &owner);
@@ -228,7 +228,7 @@ mod tests {
         ctx.profit_loss_12m = -5_000_000;
         let vision = ClubVision::default(); // InfrastructurePriority::None
         let owner = OwnershipModel {
-            wealth: 30,
+            base_wealth: 30,
             ..Default::default()
         };
         let decisions = FacilityReview::run(&ctx, &vision, &owner);
@@ -247,7 +247,7 @@ mod tests {
         ctx.attendance_ratio = 1.25;
         let vision = ClubVision::default();
         let owner = OwnershipModel {
-            wealth: 85,
+            base_wealth: 85,
             ..Default::default()
         };
         let decisions = FacilityReview::run(&ctx, &vision, &owner);
@@ -274,7 +274,7 @@ mod tests {
         ctx.attendance_ratio = 1.15;
         let vision = ClubVision::default(); // no stadium priority
         let owner = OwnershipModel {
-            wealth: 90,
+            base_wealth: 90,
             ..Default::default()
         };
         let decisions = FacilityReview::run(&ctx, &vision, &owner);

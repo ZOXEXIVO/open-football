@@ -2,9 +2,12 @@ use chrono::{Datelike, NaiveDate};
 use log::debug;
 
 use crate::club::player::language::{Language, LanguageProfile};
+use crate::club::player::mind::GoalKind;
+use crate::club::player::statistics::StuckCareerScan;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::pipeline::breakout::LeaguePerformanceLookup;
 use crate::transfers::pipeline::helpers::ClubGroupRanks;
+use crate::transfers::pipeline::loan_home::HomeLoanGates;
 use crate::transfers::pipeline::loan_interest::InterestDraw;
 use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferMoveStage, TransferPlausibilityBuilder,
@@ -17,7 +20,8 @@ use crate::transfers::pipeline::recruitment::ScoutMonitoringSource;
 use crate::transfers::pipeline::scouting_config::{RealismTarget, ScoutingConfig};
 use crate::transfers::pipeline::standing::CareerRecordSnapshot;
 use crate::transfers::pipeline::{
-    ClubTransferPlan, DetailedScoutingReport, PlayerObservation, ReportRiskFlag,
+    ClubTransferPlan, DetailedScoutingReport, LoanDestinationPreference, PlayerObservation,
+    ReportRiskFlag,
     ScoutMatchAssignment, ScoutingAssignment, ScoutingRecommendation, TransferNeedPriority,
     TransferRequest, TransferRequestStatus,
 };
@@ -890,6 +894,18 @@ impl PipelineProcessor {
             // One sorted-group snapshot per club replaces the per-player
             // rank/best re-sorts (same values, O(squad·log) once).
             let group_ranks = ClubGroupRanks::build(club);
+            // Loan-out candidates the parent has already decided WHERE it
+            // would send — the `UnsettledAbroad` read that names a home
+            // country or a home region. That decision is itself a posting
+            // (C5), so a candidate identified this tick reaches the world
+            // in the same pass rather than a window later.
+            let home_preferences: Vec<u32> = club
+                .transfer_plan
+                .loan_out_candidates
+                .iter()
+                .filter(|c| c.preferred_destination != LoanDestinationPreference::Any)
+                .map(|c| c.player_id)
+                .collect();
 
             for team in &club.teams.teams {
                 for player in &team.players.players {
@@ -940,6 +956,52 @@ impl PipelineProcessor {
                         continent_id: country.continent_id,
                         region: country_region,
                         country_code: country.code.clone(),
+                        // Where he is FROM, alongside where he plays. The
+                        // loan market could not see the difference, so a
+                        // Brazilian prospect's own league had no way to
+                        // recognise one of its own exports.
+                        nationality_country_id: player.country_id,
+                        nationality_continent_id: player.nationality_continent_id,
+                        nationality_region: player.home_region(),
+                        starter_share: player.happiness.starter_ratio,
+                        tenure_days: StuckCareerScan::club_tenure_days(player, date)
+                            .unwrap_or(i64::from(u16::MAX))
+                            .clamp(0, i64::from(u16::MAX))
+                            as u16,
+                        // Read off the weekly cache, not rebuilt here: the
+                        // mind thinks weekly and `WantsReturnHome` fires on
+                        // a 60-day cooldown, so a per-player-per-day
+                        // `MindSituation` build bought nothing (C10).
+                        return_home_desire: player.home_pull.desire,
+                        // The parent's own posting: a foreigner the club
+                        // has put on the loan market — by badge, by its own
+                        // candidate list, or because the candidate carries
+                        // a destination preference — whose want to go home
+                        // has formed. This is the ONE bit that crosses a
+                        // border (no `&mut` travels, the borrower reads a
+                        // bool) and it is deliberately scoped to LOANS, so
+                        // the home-visibility arm can never become a
+                        // permanent-transfer discovery channel that
+                        // bypasses the springboard reach model (Part VIII,
+                        // "the compatriot loophole").
+                        home_return_wanted: HomeLoanGates::is_posted(
+                            player.home_pull.wanted,
+                            home_preferences.contains(&player.id),
+                        ),
+                        ambition: player.attributes.ambition as u8,
+                        loyalty: player.attributes.loyalty as u8,
+                        adaptability: player.attributes.adaptability as u8,
+                        leave_pressure: player
+                            .mind
+                            .pressure_of(GoalKind::GoOutOnLoan)
+                            .max(player.mind.pressure_of(GoalKind::LeaveThisClub))
+                            .max(player.mind.pressure_of(GoalKind::PlayFirstTeamFootball))
+                            .clamp(0.0, 1.0),
+                        stay_pressure: player
+                            .mind
+                            .pressure_of(GoalKind::StayAtThisClub)
+                            .max(player.mind.pressure_of(GoalKind::BecomeAClubLegend))
+                            .clamp(0.0, 1.0),
                         player_name: player.full_name.to_string(),
                         club_name: club.name.clone(),
                         position: player.position(),

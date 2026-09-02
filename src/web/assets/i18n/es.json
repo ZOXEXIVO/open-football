@@ -476,6 +476,7 @@
   "dec_reason_blocked_by_depth": "Bloqueado por la profundidad de la plantilla en su posición",
   "dec_reason_needs_first_team_minutes": "Necesita minutos en el primer equipo — cedido para jugar",
   "dec_reason_asset_value_protection": "Cedido para proteger su valor de reventa",
+  "dec_reason_unsettled_abroad": "No se adaptó en el extranjero — cedido para jugar",
   "dec_reason_released_failed_renewal": "Liberado tras negociaciones de renovación fallidas",
   "dec_reason_released_free": "Liberado por mutuo acuerdo",
   "dec_reason_released_surplus": "Liberado por exceso de plantilla",

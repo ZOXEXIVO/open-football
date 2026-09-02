@@ -476,6 +476,7 @@
   "dec_reason_blocked_by_depth": "被同位置的陣容深度擋住",
   "dec_reason_needs_first_team_minutes": "需要一線隊上場時間 — 外租以獲得出場機會",
   "dec_reason_asset_value_protection": "外租以保護其轉會價值",
+  "dec_reason_unsettled_abroad": "在海外難以適應 — 外租以獲得出場時間",
   "dec_reason_released_failed_renewal": "續約談判失敗後解約",
   "dec_reason_released_free": "雙方同意解約",
   "dec_reason_released_surplus": "因陣容過剩被釋出",

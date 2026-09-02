@@ -1056,6 +1056,7 @@ impl CountryResult {
                 LoanOutReason::BlockedByDepth => "dec_reason_blocked_by_depth",
                 LoanOutReason::NeedsFirstTeamMinutes => "dec_reason_needs_first_team_minutes",
                 LoanOutReason::AssetValueProtection => "dec_reason_asset_value_protection",
+                LoanOutReason::UnsettledAbroad => "dec_reason_unsettled_abroad",
             };
             return ListingDecision::Loan {
                 reason: reason.to_string(),
@@ -1557,7 +1558,7 @@ mod tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings, Season};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
-    use crate::transfers::pipeline::{LoanOutCandidate, LoanOutStatus};
+    use crate::transfers::pipeline::{LoanDestinationPreference, LoanOutCandidate, LoanOutStatus};
     use crate::{
         ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
         PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
@@ -1752,6 +1753,7 @@ mod tests {
                 reason: LoanOutReason::LackOfPlayingTime,
                 status: LoanOutStatus::Listed,
                 loan_fee: 0.0,
+                preferred_destination: LoanDestinationPreference::Any,
             });
         let mut country = Fixture::country(club);
         country.transfer_market.add_listing(TransferListing::new(

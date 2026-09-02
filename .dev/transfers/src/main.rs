@@ -38,6 +38,9 @@ use core::club::player::core::player::TransferRequestReason;
 use core::club::player::transfer::{BigStagePull, BigStagePullContext};
 use core::club::team::squad::{SquadAssetClass, SquadAssetContext};
 use core::country::result::transfers::free_agent_audit::FreeAgentMarketAuditor;
+use core::club::player::statistics::StuckCareerScan;
+use core::transfers::ScoutingRegion;
+use core::transfers::pipeline::appraisal::TermsRefusalCause;
 use core::transfers::pipeline::planning::BriefTier;
 use core::transfers::{
     TransferListingOrigin, TransferListingStatus, TransferListingType, TransferType,
@@ -1722,18 +1725,587 @@ impl ReportPrinter {
 }
 
 // ---------------------------------------------------------------------
+// The player's side of the market — P0 instrumentation
+// ---------------------------------------------------------------------
+//
+// Everything above measures the market as a flow of moves. None of it can
+// answer the three questions the player-side model exists to settle:
+//
+//   * does anybody take a PAY CUT to move, and who?
+//   * does money in a weak league ever buy a good player out of a strong
+//     one, and at what multiple?
+//   * does a stuck foreign prospect go home on loan, and does it convert?
+//
+// The transfer record carries no wage, so the wage question has to be
+// answered by watching: a snapshot of every player each day, and a
+// comparison when his club changes. That is the only way to see a cut at
+// all, and it is why this census is a running tracker rather than a
+// report-time walk.
+
+/// One player, as he was yesterday. The comparison that turns "he moved"
+/// into "he moved and took 60 % less".
+#[derive(Debug, Clone, Copy)]
+struct PlayerSnapshot {
+    club_id: u32,
+    wage: u32,
+    /// League reputation of the club he was at, so a move's direction is a
+    /// comparison rather than a lookup.
+    league_reputation: u16,
+    country_id: u32,
+    age: u8,
+    /// The availability signal he carried BEFORE the move — the cell the
+    /// pay-cut share is bucketed by.
+    availability: Availability,
+    starter_ratio: f32,
+    tenure_days: u16,
+    nationality_country_id: u32,
+    nationality_region: Option<u8>,
+}
+
+/// What the player's own state said about him when the move began.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Availability {
+    None,
+    Unhappy,
+    Requested,
+    Listed,
+}
+
+impl Availability {
+    fn label(self) -> &'static str {
+        match self {
+            Availability::None => "no signal",
+            Availability::Unhappy => "Unh",
+            Availability::Requested => "Req",
+            Availability::Listed => "listed",
+        }
+    }
+
+    const ALL: [Availability; 4] = [
+        Availability::None,
+        Availability::Unhappy,
+        Availability::Requested,
+        Availability::Listed,
+    ];
+}
+
+/// One completed permanent move, with both wages.
+#[derive(Debug, Clone, Copy)]
+struct WageMove {
+    ratio: f64,
+    age: u8,
+    availability: Availability,
+    /// −1 down a band, 0 the same, +1 up.
+    direction: i8,
+    /// The buyer's owner-funding read, 0..1.
+    buyer_benefactor: f32,
+    /// Buyer league reputation minus seller's.
+    league_gap: i32,
+}
+
+impl WageMove {
+    fn age_band(&self) -> &'static str {
+        match self.age {
+            0..=23 => "≤23",
+            24..=27 => "24–27",
+            28..=30 => "28–30",
+            _ => "31+",
+        }
+    }
+
+    fn direction_label(&self) -> &'static str {
+        match self.direction {
+            i8::MIN..=-1 => "down",
+            0 => "same",
+            _ => "up",
+        }
+    }
+
+    /// A money move: the buyer's cash cannot be explained by its revenue,
+    /// and its league is clearly weaker than the one it is buying out of.
+    /// No country list, no flag — two numbers.
+    fn is_money_move(&self) -> bool {
+        self.buyer_benefactor >= PlayerSideCensus::BENEFACTOR_BAR
+            && self.league_gap <= -PlayerSideCensus::MONEY_MOVE_LEAGUE_GAP
+    }
+}
+
+/// One loan out of a stronger league by a stuck young foreigner.
+#[derive(Debug, Clone, Copy)]
+struct LoanHomeMove {
+    /// Where he went, relative to where he is from.
+    destination: HomeDestination,
+    /// Converted to a permanent at the same club inside two years.
+    converted: bool,
+    /// The loan date, so conversions can be dated against it.
+    day: u32,
+    player_id: u32,
+    to_club_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HomeDestination {
+    HomeCountry,
+    HomeRegion,
+    Elsewhere,
+}
+
+/// How personal terms actually ended, and why.
+#[derive(Debug, Default)]
+struct TermsOutcomes {
+    agreed: usize,
+    /// Refusals by cause label.
+    refused: HashMap<&'static str, usize>,
+    /// `reservation ÷ offered` on every refusal that named a number.
+    demand_ratios: Vec<f64>,
+}
+
+/// The running player-side census. Fed once a day; printed with the rest.
+#[derive(Debug, Default)]
+struct PlayerSideCensus {
+    snapshots: HashMap<u32, PlayerSnapshot>,
+    wage_moves: Vec<WageMove>,
+    /// Foreign U23s with a start share under the bar after six months —
+    /// the population Part I.3 is written against, sampled the day they
+    /// first qualify so the "share loaned next window" denominator is a
+    /// cohort rather than a moving target.
+    stuck_cohort: HashSet<u32>,
+    stuck_cohort_loaned: HashSet<u32>,
+    loans_home: Vec<LoanHomeMove>,
+    terms: TermsOutcomes,
+    /// Negotiations already banked, so a multi-day rejection is counted
+    /// once.
+    seen_negotiations: HashSet<(u32, u32)>,
+    day: u32,
+}
+
+impl PlayerSideCensus {
+    /// Owner funding at which a club reads as bankrolled rather than
+    /// merely solvent — [`ClubBenefactor::STATE_BACKED_BAR`].
+    const BENEFACTOR_BAR: f32 = 0.5;
+    /// League-reputation gap that makes a purchase a MONEY move rather
+    /// than an ordinary one: the buyer is buying out of a clearly stronger
+    /// competition than its own.
+    const MONEY_MOVE_LEAGUE_GAP: i32 = 1_500;
+    /// Below this share of starts a young foreigner is not playing.
+    const STUCK_STARTER_BAR: f32 = 0.20;
+    /// …and this long is enough for that to be a verdict.
+    const STUCK_TENURE_DAYS: u16 = 180;
+    const STUCK_MAX_AGE: u8 = 23;
+    /// A cut, as the calibration table defines one.
+    const CUT_RATIO: f64 = 0.8;
+    /// Conversion window for a home loan.
+    const CONVERSION_DAYS: u32 = 730;
+
+    /// Walk the world once and fold today into the running census.
+    fn observe(&mut self, data: &SimulatorData, day: u32) {
+        self.day = day;
+        let date = data.date.date();
+
+        // Club-level facts the move classification needs, resolved once
+        // per day rather than per player.
+        let mut club_league: HashMap<u32, u16> = HashMap::new();
+        let mut club_country: HashMap<u32, u32> = HashMap::new();
+        let mut club_benefactor: HashMap<u32, f32> = HashMap::new();
+        let mut club_region: HashMap<u32, u8> = HashMap::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                let region = region_code(country.continent_id, &country.code);
+                for club in &country.clubs {
+                    let league_rep = club
+                        .teams
+                        .main()
+                        .or_else(|| club.teams.teams.first())
+                        .and_then(|t| t.league_id)
+                        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                        .map(|l| l.reputation)
+                        .unwrap_or(0);
+                    club_league.insert(club.id, league_rep);
+                    club_country.insert(club.id, country.id);
+                    club_benefactor.insert(club.id, club.board.ownership.benefactor);
+                    club_region.insert(club.id, region);
+                }
+            }
+        }
+
+        // ---- personal-terms outcomes -------------------------------
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for negotiation in country.transfer_market.negotiations.values() {
+                    let key = (country.id, negotiation.id);
+                    if let Some(cause) = negotiation.terms_refusal_cause {
+                        if self.seen_negotiations.insert(key) {
+                            *self.terms.refused.entry(refusal_label(cause)).or_insert(0) += 1;
+                            if let (Some(reservation), Some(offered)) = (
+                                negotiation.terms_reservation_wage,
+                                negotiation.offered_salary,
+                            ) {
+                                if offered > 0 {
+                                    self.terms
+                                        .demand_ratios
+                                        .push(reservation as f64 / offered as f64);
+                                }
+                            }
+                        }
+                    } else if matches!(
+                        negotiation.phase,
+                        core::transfers::NegotiationPhase::MedicalAndFinalization { .. }
+                    ) && self.seen_negotiations.insert(key)
+                    {
+                        self.terms.agreed += 1;
+                    }
+                }
+            }
+        }
+
+        // ---- the daily player walk ---------------------------------
+        let mut today: HashMap<u32, PlayerSnapshot> = HashMap::with_capacity(self.snapshots.len());
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    let league_reputation = club_league.get(&club.id).copied().unwrap_or(0);
+                    for team in &club.teams.teams {
+                        for player in &team.players.players {
+                            let Some(contract) = player.contract.as_ref() else {
+                                continue;
+                            };
+                            let snap = PlayerSnapshot {
+                                club_id: club.id,
+                                wage: contract.salary,
+                                league_reputation,
+                                country_id: country.id,
+                                age: DateUtils::age(player.birth_date, date),
+                                availability: availability_of(player),
+                                starter_ratio: player.happiness.starter_ratio,
+                                tenure_days: tenure_days(player, date),
+                                nationality_country_id: player.country_id,
+                                nationality_region: player.home_region().map(region_of),
+                            };
+                            self.fold_move(player.id, &snap, &club_benefactor, &club_region);
+                            today.insert(player.id, snap);
+                        }
+                    }
+                }
+            }
+        }
+        self.snapshots = today;
+    }
+
+    /// Compare a player against yesterday, and bank whatever the
+    /// comparison says.
+    fn fold_move(
+        &mut self,
+        player_id: u32,
+        now: &PlayerSnapshot,
+        club_benefactor: &HashMap<u32, f32>,
+        club_region: &HashMap<u32, u8>,
+    ) {
+        // The stuck cohort is sampled continuously: once a man qualifies
+        // he stays in the denominator, so "share loaned next window" is a
+        // rate over a fixed population rather than a moving one.
+        if now.age <= Self::STUCK_MAX_AGE
+            && now.nationality_country_id != 0
+            && now.nationality_country_id != now.country_id
+            && now.starter_ratio < Self::STUCK_STARTER_BAR
+            && now.tenure_days >= Self::STUCK_TENURE_DAYS
+        {
+            self.stuck_cohort.insert(player_id);
+        }
+
+        let Some(before) = self.snapshots.get(&player_id).copied() else {
+            return;
+        };
+        if before.club_id == now.club_id {
+            return;
+        }
+
+        // A home loan that converts: he was lent here, and now the same
+        // club owns him.
+        for loan in self.loans_home.iter_mut() {
+            if loan.player_id == player_id
+                && loan.to_club_id == now.club_id
+                && self.day.saturating_sub(loan.day) <= Self::CONVERSION_DAYS
+            {
+                loan.converted = true;
+            }
+        }
+
+        if self.stuck_cohort.contains(&player_id) {
+            self.stuck_cohort_loaned.insert(player_id);
+            let destination = if now.nationality_country_id != 0
+                && now.nationality_country_id == now.country_id
+            {
+                HomeDestination::HomeCountry
+            } else if now.nationality_region.is_some()
+                && now.nationality_region == club_region.get(&now.club_id).copied()
+            {
+                HomeDestination::HomeRegion
+            } else {
+                HomeDestination::Elsewhere
+            };
+            self.loans_home.push(LoanHomeMove {
+                destination,
+                converted: false,
+                day: self.day,
+                player_id,
+                to_club_id: now.club_id,
+            });
+        }
+
+        if before.wage == 0 || now.wage == 0 {
+            return;
+        }
+        let league_gap = now.league_reputation as i32 - before.league_reputation as i32;
+        self.wage_moves.push(WageMove {
+            ratio: now.wage as f64 / before.wage as f64,
+            age: before.age,
+            availability: before.availability,
+            direction: match league_gap {
+                g if g >= 750 => 1,
+                g if g <= -750 => -1,
+                _ => 0,
+            },
+            buyer_benefactor: club_benefactor.get(&now.club_id).copied().unwrap_or(0.0),
+            league_gap,
+        });
+    }
+}
+/// Small helpers the player-side census needs. Free of the harness's own
+/// state so they read the way a football fact reads.
+fn availability_of(player: &core::Player) -> Availability {
+    if player.statuses.has(PlayerStatusType::Req) {
+        Availability::Requested
+    } else if player.statuses.has(PlayerStatusType::Unh) {
+        Availability::Unhappy
+    } else if player.statuses.has(PlayerStatusType::Lst)
+        || player.statuses.has(PlayerStatusType::Loa)
+    {
+        Availability::Listed
+    } else {
+        Availability::None
+    }
+}
+
+/// The honest anchor for a stay — a loan return re-stamps
+/// `last_transfer_date` (memory `loan_pipeline`).
+fn tenure_days(player: &core::Player, date: NaiveDate) -> u16 {
+    StuckCareerScan::club_tenure_days(player, date)
+        .unwrap_or(i64::from(u16::MAX))
+        .clamp(0, i64::from(u16::MAX)) as u16
+}
+
+fn region_of(region: ScoutingRegion) -> u8 {
+    ScoutingRegion::all()
+        .iter()
+        .position(|r| *r == region)
+        .unwrap_or(usize::MAX) as u8
+}
+
+fn region_code(continent_id: u32, country_code: &str) -> u8 {
+    region_of(ScoutingRegion::from_country(continent_id, country_code))
+}
+
+fn refusal_label(cause: TermsRefusalCause) -> &'static str {
+    match cause {
+        TermsRefusalCause::WageDemand => "wage demand",
+        TermsRefusalCause::SportingStepDown => "sporting step down",
+        TermsRefusalCause::Role => "role",
+        TermsRefusalCause::Place => "place",
+        TermsRefusalCause::Attachment => "attachment",
+    }
+}
+
+fn median(values: &mut [f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    values[values.len() / 2]
+}
+
+/// Prints the three questions the player-side model exists to settle.
+struct PlayerSidePrinter;
+
+impl PlayerSidePrinter {
+    fn print(census: &PlayerSideCensus) {
+        println!();
+        println!("── The player's side ─────────────────────────────────");
+
+        Self::wage_census(census);
+        Self::money_moves(census);
+        Self::loan_home(census);
+        Self::terms(census);
+    }
+
+    /// Does anybody take a cut, and who? The share of permanent moves at
+    /// under 80 % of the previous wage, cell by cell.
+    fn wage_census(census: &PlayerSideCensus) {
+        let moves = &census.wage_moves;
+        if moves.is_empty() {
+            println!("  wage census: no wage-bearing moves observed yet");
+            return;
+        }
+        let cuts = moves
+            .iter()
+            .filter(|m| m.ratio < PlayerSideCensus::CUT_RATIO)
+            .count();
+        let mut all: Vec<f64> = moves.iter().map(|m| m.ratio).collect();
+        println!(
+            "  wage census: {} moves, {:.0}% at a cut (<0.8x), median ratio {:.2}x",
+            moves.len(),
+            100.0 * cuts as f64 / moves.len() as f64,
+            median(&mut all),
+        );
+        println!("    {:<8} {:<10} {:<6} {:>6} {:>8} {:>8}", "age", "signal", "dir", "n", "cut %", "median");
+        for band in ["≤23", "24–27", "28–30", "31+"] {
+            for signal in Availability::ALL {
+                for dir in ["up", "same", "down"] {
+                    let cell: Vec<&WageMove> = moves
+                        .iter()
+                        .filter(|m| {
+                            m.age_band() == band
+                                && m.availability == signal
+                                && m.direction_label() == dir
+                        })
+                        .collect();
+                    if cell.len() < 5 {
+                        continue;
+                    }
+                    let cut = cell
+                        .iter()
+                        .filter(|m| m.ratio < PlayerSideCensus::CUT_RATIO)
+                        .count();
+                    let mut ratios: Vec<f64> = cell.iter().map(|m| m.ratio).collect();
+                    println!(
+                        "    {:<8} {:<10} {:<6} {:>6} {:>7.0}% {:>7.2}x",
+                        band,
+                        signal.label(),
+                        dir,
+                        cell.len(),
+                        100.0 * cut as f64 / cell.len() as f64,
+                        median(&mut ratios),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Money out of a weak league into a strong one's players. Two ratios
+    /// decide membership — owner funding and the league gap — so the Gulf,
+    /// Russia and MLS appear or do not appear on their own.
+    fn money_moves(census: &PlayerSideCensus) {
+        let cell: Vec<&WageMove> = census
+            .wage_moves
+            .iter()
+            .filter(|m| m.is_money_move())
+            .collect();
+        if cell.is_empty() {
+            println!("  money moves: none — no benefactor club bought out of a stronger league");
+            return;
+        }
+        let mut multiples: Vec<f64> = cell.iter().map(|m| m.ratio).collect();
+        let mut ages: Vec<f64> = cell.iter().map(|m| m.age as f64).collect();
+        let under_26 = cell.iter().filter(|m| m.age < 26).count();
+        println!(
+            "  money moves: {} — median age {:.0}, {:.0}% under 26, median wage multiple {:.1}x",
+            cell.len(),
+            median(&mut ages),
+            100.0 * under_26 as f64 / cell.len() as f64,
+            median(&mut multiples),
+        );
+    }
+
+    /// The stuck foreign prospect: is he lent, and does he go home?
+    fn loan_home(census: &PlayerSideCensus) {
+        if census.stuck_cohort.is_empty() {
+            println!("  loan home: no stuck foreign U23 cohort yet");
+            return;
+        }
+        let loaned = census.stuck_cohort_loaned.len();
+        let home = census
+            .loans_home
+            .iter()
+            .filter(|l| l.destination == HomeDestination::HomeCountry)
+            .count();
+        let region = census
+            .loans_home
+            .iter()
+            .filter(|l| l.destination == HomeDestination::HomeRegion)
+            .count();
+        let converted = census.loans_home.iter().filter(|l| l.converted).count();
+        let moved = census.loans_home.len().max(1);
+        println!(
+            "  loan home: cohort {} stuck foreign U23, {} moved ({:.0}%)",
+            census.stuck_cohort.len(),
+            loaned,
+            100.0 * loaned as f64 / census.stuck_cohort.len() as f64,
+        );
+        println!(
+            "    destinations: {:.0}% home country, {:.0}% home region, {:.0}% elsewhere; {:.0}% converted",
+            100.0 * home as f64 / moved as f64,
+            100.0 * region as f64 / moved as f64,
+            100.0 * (moved - home - region) as f64 / moved as f64,
+            100.0 * converted as f64 / moved as f64,
+        );
+    }
+
+    /// Whose decision killed the deal, and by how much.
+    fn terms(census: &PlayerSideCensus) {
+        let refused: usize = census.terms.refused.values().sum();
+        let total = census.terms.agreed + refused;
+        if total == 0 {
+            println!("  personal terms: nothing resolved yet");
+            return;
+        }
+        println!(
+            "  personal terms: {} agreed, {} refused ({:.0}% agreed)",
+            census.terms.agreed,
+            refused,
+            100.0 * census.terms.agreed as f64 / total as f64,
+        );
+        let mut causes: Vec<(&&str, &usize)> = census.terms.refused.iter().collect();
+        causes.sort_by(|a, b| b.1.cmp(a.1));
+        for (cause, count) in causes {
+            println!(
+                "    {:<20} {:>5} ({:.0}%)",
+                cause,
+                count,
+                100.0 * *count as f64 / refused.max(1) as f64
+            );
+        }
+        let mut ratios = census.terms.demand_ratios.clone();
+        if !ratios.is_empty() {
+            println!(
+                "    median demand ÷ offered on a refusal: {:.2}x",
+                median(&mut ratios)
+            );
+        }
+    }
+}
+// ---------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------
 
 struct SimHarness {
     data: SimulatorData,
+    /// The player-side census is a running tracker, not a report-time
+    /// walk: the transfer record carries no wage, so the only way to see a
+    /// pay cut at all is to hold yesterday's number and compare.
+    player_side: PlayerSideCensus,
 }
 
 impl SimHarness {
     fn generate() -> Self {
         let database = DatabaseLoader::load();
         let data = DatabaseGenerator::generate(&database);
-        SimHarness { data }
+        let mut harness = SimHarness {
+            data,
+            player_side: PlayerSideCensus::default(),
+        };
+        // Day zero: every player's starting wage, so the very first
+        // window's moves already have a "before" to compare against.
+        harness.player_side.observe(&harness.data, 0);
+        harness
     }
 
     fn tick(&mut self) -> SimulationResult {
@@ -1758,6 +2330,7 @@ impl SimHarness {
         let start = Instant::now();
         for day in 1..=days {
             self.tick();
+            self.player_side.observe(&self.data, day);
             if day % 25 == 0 {
                 eprintln!(
                     "  … day {day}/{days}  {}  ({:.0}s elapsed)",
@@ -1772,10 +2345,12 @@ impl SimHarness {
             {
                 let mut report = MarketCensus::collect(&self.data);
                 ReportPrinter::print(&mut report, &self.data, day);
+                PlayerSidePrinter::print(&self.player_side);
             }
         }
         let mut report = MarketCensus::collect(&self.data);
         ReportPrinter::print(&mut report, &self.data, days);
+        PlayerSidePrinter::print(&self.player_side);
         eprintln!(
             "simulated {days} days in {:.1}s",
             start.elapsed().as_secs_f64()

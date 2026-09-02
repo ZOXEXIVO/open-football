@@ -476,6 +476,7 @@
   "dec_reason_blocked_by_depth": "Mevkisindeki kadro derinliği nedeniyle önü kapalı",
   "dec_reason_needs_first_team_minutes": "A takımda oynama süresine ihtiyacı var — oynaması için kiralandı",
   "dec_reason_asset_value_protection": "Satış değerini korumak için kiralandı",
+  "dec_reason_unsettled_abroad": "Yurt dışında uyum sağlayamadı — oynamak için kiralandı",
   "dec_reason_released_failed_renewal": "Sözleşme uzatma görüşmeleri başarısız olduktan sonra serbest bırakıldı",
   "dec_reason_released_free": "Karşılıklı anlaşmayla serbest bırakıldı",
   "dec_reason_released_surplus": "Kadro fazlası olarak serbest bırakıldı",

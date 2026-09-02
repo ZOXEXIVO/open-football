@@ -1073,6 +1073,7 @@ mod tests {
                 min_squad_size: 18,
                 expected_position: 5,
                 min_acceptable_position: 10,
+                ..Default::default()
             });
         }
         club

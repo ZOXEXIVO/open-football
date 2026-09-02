@@ -15,12 +15,13 @@ use crate::country::result::transfers::GlobalFreeAgentSummary;
 use crate::country::result::transfers::free_agent_market_calc::FreeAgentMarketCalculator;
 use crate::league::{LeagueTable, MatchStorage};
 use crate::shared::SimulatorDataIndexes;
+use crate::transfers::ScoutingRegion;
 use crate::transfers::TransferPool;
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use crate::utils::IntegerUtils;
 use crate::utils::random::engine as rng_engine;
 use crate::{Person, Player, Staff};
-use chrono::{Duration, NaiveDate, NaiveDateTime};
+use chrono::{Datelike, Duration, NaiveDate, NaiveDateTime};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -207,19 +208,58 @@ impl SimulatorData {
         data
     }
 
-    /// Populate `Player.nationality_continent_id` from `country_info` for
-    /// every player on every roster + retired + national-team + free-agent
-    /// pool. Called once at construction time after `country_info` is
-    /// populated. Cheap parallel pass.
+    /// Populate `Player.nationality_continent_id` and
+    /// `Player.nationality_region` from `country_info` for every player on
+    /// every roster + retired + national-team + free-agent pool. Called once
+    /// at construction time after `country_info` is populated. Cheap
+    /// parallel pass.
+    ///
+    /// The region needs the country CODE, which is exactly what a player's
+    /// own nationality cannot supply from inside another country's borrow —
+    /// so it is denormalised here alongside the continent and read
+    /// everywhere through [`Player::home_region`].
+    /// Days on which the world re-stamps passports.
+    ///
+    /// Everything created after load — an academy intake, a regen, a
+    /// synthetic international — starts with `nationality_continent_id`
+    /// 0 and `nationality_region` `None`, and an unstamped passport reads
+    /// as "no home" everywhere the loan-home pathway looks. The two
+    /// transfer-window opens are when that matters, and the pass skips
+    /// anyone already stamped, so it costs a walk and nothing else.
+    pub fn is_nationality_reseed_day(date: NaiveDate) -> bool {
+        date.day() == 1 && matches!(date.month(), 1 | 7)
+    }
+
     pub fn seed_player_nationality_continents(&mut self) {
-        let lookup: HashMap<u32, u32> = self
+        let lookup: HashMap<u32, (u32, ScoutingRegion)> = self
             .country_info
             .iter()
-            .map(|(k, v)| (*k, v.continent_id))
+            .map(|(k, v)| {
+                (
+                    *k,
+                    (
+                        v.continent_id,
+                        ScoutingRegion::from_country(v.continent_id, &v.code),
+                    ),
+                )
+            })
             .collect();
         if lookup.is_empty() {
             return;
         }
+        let stamp = |player: &mut Player| {
+            if player.nationality_continent_id != 0 && player.nationality_region.is_some() {
+                return;
+            }
+            if let Some((continent_id, region)) = lookup.get(&player.country_id) {
+                if player.nationality_continent_id == 0 {
+                    player.nationality_continent_id = *continent_id;
+                }
+                if player.nationality_region.is_none() {
+                    player.nationality_region = Some(*region);
+                }
+            }
+        };
         self.continents
             .par_iter_mut()
             .flat_map(|continent| continent.countries.par_iter_mut())
@@ -227,20 +267,12 @@ impl SimulatorData {
                 for club in &mut country.clubs {
                     for team in club.teams.iter_mut() {
                         for player in &mut team.players.players {
-                            if player.nationality_continent_id == 0 {
-                                if let Some(cid) = lookup.get(&player.country_id) {
-                                    player.nationality_continent_id = *cid;
-                                }
-                            }
+                            stamp(player);
                         }
                     }
                 }
                 for player in &mut country.retired_players {
-                    if player.nationality_continent_id == 0 {
-                        if let Some(cid) = lookup.get(&player.country_id) {
-                            player.nationality_continent_id = *cid;
-                        }
-                    }
+                    stamp(player);
                 }
                 for player in country
                     .national_team
@@ -248,19 +280,11 @@ impl SimulatorData {
                     .iter_mut()
                     .chain(country.u21_national_team.generated_squad.iter_mut())
                 {
-                    if player.nationality_continent_id == 0 {
-                        if let Some(cid) = lookup.get(&player.country_id) {
-                            player.nationality_continent_id = *cid;
-                        }
-                    }
+                    stamp(player);
                 }
             });
         for player in &mut self.free_agents {
-            if player.nationality_continent_id == 0 {
-                if let Some(cid) = lookup.get(&player.country_id) {
-                    player.nationality_continent_id = *cid;
-                }
-            }
+            stamp(player);
         }
     }
 

@@ -2,6 +2,7 @@ use crate::club::player::events::transfer_social::TransferContinentalPath;
 use crate::transfers::market::TransferListingOrigin;
 use crate::transfers::negotiation::NegotiationPhase;
 use crate::transfers::offer::{PersonalTermsOffer, TransferClause};
+use crate::transfers::pipeline::appraisal::PlayerStance;
 use crate::{
     Club, Country, Player, PlayerPositionType, TransferInterestSource, TransferInterestStage,
 };
@@ -80,7 +81,11 @@ pub(crate) struct NegotiationData {
     pub(crate) listing_origin: Option<TransferListingOrigin>,
     /// Country the player is sold from (None = same as buying country)
     pub(crate) selling_country_id: Option<u32>,
-    /// Selling country's continent_id (for geographic preference)
+    /// Selling country's continent_id. The geographic preference now
+    /// rides on the staged [`PlayerStance`] (which carries where the
+    /// player actually lives, not just where his club is registered);
+    /// this stays as the negotiation's own record of the route.
+    #[allow(dead_code)]
     pub(crate) selling_continent_id: Option<u32>,
     /// Selling country's code (for geographic preference)
     pub(crate) selling_country_code: String,
@@ -134,6 +139,12 @@ pub(crate) struct NegotiationData {
     /// [`crate::transfers::negotiation::TransferNegotiation`]. `None` for
     /// domestic moves, whose seller is readable live.
     pub(crate) foreign_seller_finances: Option<(i64, i64, i64)>,
+    /// The player's own side of the appraisal, staged at creation — see
+    /// [`crate::transfers::negotiation::TransferNegotiation::staged_stance`].
+    /// `None` for domestic moves, which rebuild it live each round.
+    pub(crate) staged_stance: Option<PlayerStance>,
+    /// Sporting distance of the move, staged with the stance.
+    pub(crate) staged_sporting_drop: Option<f32>,
 }
 
 /// A completed negotiation that needs execution at SimulatorData level.

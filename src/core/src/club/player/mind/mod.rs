@@ -97,6 +97,9 @@ pub use organs::memory::{
 };
 
 use crate::club::person::PersonAttributes;
+use crate::transfers::pipeline::appraisal::{
+    Appraisal, AppraisalConfig, OfferView, PlayerOfferAppraisal, PlayerStance,
+};
 use chrono::NaiveDate;
 use std::cmp::Ordering;
 
@@ -438,6 +441,48 @@ impl PlayerMind {
     #[inline]
     pub fn leaning(&self, option: MindOption) -> f32 {
         self.deliberate(option).net()
+    }
+
+    /// What he makes of an actual offer.
+    ///
+    /// [`Self::deliberate`] answers "how do I feel about that club?" —
+    /// `JoinClub(u32)` carries a club id and nothing else, so the
+    /// faculties can reason about *memory* of the place and about current
+    /// wants, and about the OFFER not at all. This is the other half: the
+    /// money, the stage, the shirt, the distance and the push, weighed by
+    /// [`PlayerOfferAppraisal`] against a stance the caller has already
+    /// built.
+    ///
+    /// The two are complementary and deliberately not merged. No faculty
+    /// computes money or sport — that is the appraisal's job; and the
+    /// appraisal computes no memory of a club — that is theirs, and it
+    /// reaches the utility through `PlayerStance::buyer_sentiment`.
+    ///
+    /// Read-only, like every other verdict: weighing a move does not
+    /// change what he wants. Acting on it does, and that happens at the
+    /// call site through the ordinary goal writes.
+    pub fn appraise_offer(
+        &self,
+        stance: &PlayerStance,
+        offer: &OfferView,
+        disposition: f32,
+        cfg: &AppraisalConfig,
+    ) -> Appraisal {
+        PlayerOfferAppraisal::appraise(stance, offer, disposition, cfg)
+    }
+
+    /// The reasons behind [`Self::appraise_offer`] — what he would SAY
+    /// about the move, as opposed to what he decides.
+    ///
+    /// Pairs the faculties' club-memory verdict with the numeric one so a
+    /// newspaper desk or the decisions register can print why without
+    /// inventing anything.
+    pub fn reasons_for_offer(&self, offer: &OfferView) -> ReasonSet {
+        if offer.kind.is_loan() {
+            self.deliberate(MindOption::AcceptLoan(offer.buyer_club_id))
+        } else {
+            self.deliberate(MindOption::JoinClub(offer.buyer_club_id))
+        }
     }
 
     /// The periodic think. Called from `Player::simulate`; cheap enough

@@ -383,6 +383,49 @@ impl Club {
 
         (wins_ratio, position, total)
     }
+
+    /// A year's income this club can be judged on today.
+    ///
+    /// The trailing estimate as soon as any month has closed; before that,
+    /// [`RevenueModel::projected_annual`] on the club's own standing. A
+    /// world's first tick has no finance history at all, and a zero
+    /// denominator is what made every cash-positive club read as an
+    /// owner-funded one (`ClubBenefactor::signal`).
+    pub(super) fn projected_annual_income(
+        &self,
+        ctx: &GlobalContext<'_>,
+        league_tier: u8,
+        date: NaiveDate,
+    ) -> i64 {
+        let trailing = self.finance.estimated_annual_income(date);
+        if trailing > 0 {
+            return trailing;
+        }
+        let Some(main) = self.teams.main() else {
+            return 0;
+        };
+        let reputation_score = main.reputation.overall_score();
+        let (recent_wins_ratio, league_position, league_size) =
+            self.compute_team_form_and_position(ctx);
+        let country = ctx.country.as_ref();
+        let inputs = RevenueInputs {
+            reputation_score,
+            league_tier: league_tier.max(1),
+            league_position,
+            league_size,
+            tv_market: country.map(|c| c.tv_revenue_multiplier).unwrap_or(1.0),
+            sponsorship_market: country
+                .map(|c| c.sponsorship_market_strength)
+                .unwrap_or(1.0),
+            attendance_factor: country.map(|c| c.stadium_attendance_factor).unwrap_or(1.0),
+            price_level: get_price_level(ctx) as f32,
+            stadium_capacity: self.facilities.capacity_or_estimate(reputation_score),
+            recent_wins_ratio,
+            home_matches: 0, // replaced by the projection's own cadence
+            parachute: self.finance.parachute,
+        };
+        RevenueModel::projected_annual(&inputs)
+    }
 }
 
 /// Board cash-deployment policy. A club keeps a working reserve of

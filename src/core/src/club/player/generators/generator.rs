@@ -4,6 +4,7 @@ use crate::club::player::load::PlayerLoad;
 use crate::club::player::maturation::{MaturationGroup, SkillMaturation};
 use crate::club::player::mind::PlayerMind;
 use crate::club::player::rapport::PlayerRapport;
+use crate::transfers::pipeline::HomePull;
 use crate::shared::FullName;
 use crate::utils::IntegerUtils;
 use crate::{
@@ -1090,6 +1091,8 @@ impl PlayerGenerator {
             birth_date,
             country_id,
             nationality_continent_id: 0,
+            nationality_region: None,
+            home_pull: HomePull::default(),
             behaviour: PersonBehaviour {
                 state: PersonBehaviourState::Normal,
             },

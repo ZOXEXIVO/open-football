@@ -17,7 +17,7 @@ use crate::club::board::manager_market;
 use crate::club::player::development::CoachingEffect;
 use crate::competitions::simulation::GlobalCompetitionSimulator;
 use crate::config::SimulatorConfig;
-use crate::context::{GlobalContext, SimulationContext};
+use crate::context::{GlobalContext, SimulationContext, TournamentClocks};
 use crate::continent::ContinentAwardOutcome;
 use crate::continent::ContinentBuildOutput;
 use crate::continent::ContinentResult;
@@ -91,7 +91,35 @@ impl FootballSimulator {
 
         let current_date = data.date;
 
-        let ctx = GlobalContext::new(SimulationContext::new(data.date));
+        // Every confederation's calendar, published once for the whole
+        // world. A tournament clock belongs to a passport, not a postcode
+        // (C7) — a Brazilian at Arsenal counts down to the Copa, not the
+        // Euros — and only the world level can see them all.
+        let tournament_clocks = TournamentClocks::new(
+            data.continents
+                .iter()
+                .map(|c| {
+                    (
+                        c.id,
+                        c.national_team_competitions
+                            .months_to_next_tournament(current_date.date()),
+                    )
+                })
+                .collect(),
+        );
+        let ctx = GlobalContext::new(
+            SimulationContext::new(data.date).with_tournament_clocks(tournament_clocks.clone()),
+        );
+
+        // Where the world's players are FROM. Seeded once at load, and
+        // re-run at each season turn because everything created since —
+        // an academy intake, a regen, a synthetic international — starts
+        // with an unstamped passport, and an unstamped passport reads as
+        // "no home" everywhere the loan-home pathway looks. Cheap: a
+        // parallel pass that skips anyone already stamped.
+        if SimulatorData::is_nationality_reseed_day(current_date.date()) {
+            data.seed_player_nationality_continents();
+        }
 
         // National-team call-ups run at the world level so a player's
         // nationality and their club's continent can differ. Must

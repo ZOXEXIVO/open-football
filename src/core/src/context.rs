@@ -7,6 +7,7 @@ use crate::club::{BoardContext, ClubContext, ClubFinanceContext, PlayerContext, 
 use crate::continent::ContinentContext;
 use crate::country::{CountryContext, SeasonDates};
 use crate::league::LeagueContext;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -267,11 +268,54 @@ impl<'gc> GlobalContext<'gc> {
     }
 }
 
+/// Months to each confederation's next major tournament, keyed by
+/// continent id.
+///
+/// A tournament clock belongs to a PASSPORT, not to a postcode. Every
+/// country was stamped with its own confederation's calendar and the mind
+/// read that, so a Brazilian at Arsenal counted down to the Euros and a
+/// Ghanaian in Spain never felt the AFCON at all — while the whole point
+/// of the term is a man measuring a move against the tournament HE might
+/// play in. Published once at the world level, read by nationality.
+///
+/// Empty (the default) means nobody has published a calendar this tick;
+/// callers then keep whatever their country says, which is the old
+/// behaviour and the correct one for a native.
+#[derive(Debug, Clone, Default)]
+pub struct TournamentClocks {
+    by_continent: Arc<HashMap<u32, u8>>,
+}
+
+impl TournamentClocks {
+    pub fn new(by_continent: HashMap<u32, u8>) -> Self {
+        TournamentClocks {
+            by_continent: Arc::new(by_continent),
+        }
+    }
+
+    /// Months to the tournament this passport plays in. `None` for an
+    /// unstamped nationality or an unpublished calendar — the caller then
+    /// falls back to where he plays.
+    pub fn months_for(&self, nationality_continent_id: u32) -> Option<u8> {
+        if nationality_continent_id == 0 {
+            return None;
+        }
+        self.by_continent.get(&nationality_continent_id).copied()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_continent.is_empty()
+    }
+}
+
 #[derive(Clone)]
 pub struct SimulationContext {
     pub date: NaiveDateTime,
     pub day: u8,
     pub hour: u8,
+    /// How far off each confederation's next major tournament is, by
+    /// continent id. See [`TournamentClocks`].
+    pub tournament_clocks: TournamentClocks,
 }
 
 impl SimulationContext {
@@ -280,7 +324,14 @@ impl SimulationContext {
             date,
             day: date.day() as u8,
             hour: date.hour() as u8,
+            tournament_clocks: TournamentClocks::default(),
         }
+    }
+
+    /// Stamp the world's tournament calendars onto the tick.
+    pub fn with_tournament_clocks(mut self, clocks: TournamentClocks) -> Self {
+        self.tournament_clocks = clocks;
+        self
     }
 
     #[inline]

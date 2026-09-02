@@ -126,10 +126,16 @@ impl TakeoverEngine {
         };
         OwnershipModel {
             ownership_type,
-            wealth,
+            base_wealth: wealth,
             interference: 70,
             risk_tolerance: 85,
             exit_pressure: 5,
+            // A new owner arrives with intent, not with a cheque already
+            // written. What he actually funds is read off the balance
+            // sheet at the next season's refresh — never granted by the
+            // archetype, or every takeover would mint a Gulf club.
+            benefactor: 0.0,
+            idle_at_derive: 0.0,
         }
     }
 }
@@ -210,7 +216,7 @@ mod tests {
     #[test]
     fn post_takeover_owner_is_wealthier() {
         let owner = TakeoverEngine::post_takeover_owner(0);
-        assert!(owner.wealth >= 70);
+        assert!(owner.wealth() >= 70);
         assert!(owner.exit_pressure < 20);
     }
 }

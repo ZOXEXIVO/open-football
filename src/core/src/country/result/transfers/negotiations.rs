@@ -5,10 +5,7 @@ use super::types::{
     DeferredTransfer, NegotiationData, PendingPlayerSignal, TransferActivitySummary,
     find_player_in_country, find_player_in_country_mut,
 };
-use crate::club::player::agent::PlayerAgent;
-use crate::club::player::calculators::{
-    ContractValuation, ValuationContext, squad_status_wage_factor,
-};
+use crate::club::board::ownership::ClubBenefactor;
 use crate::club::player::events::transfer_social::{
     TransferContinentalPath, TransferInterestSignal,
 };
@@ -24,22 +21,28 @@ use crate::transfers::negotiation::{
     NegotiationPhase, NegotiationRejectionReason, TransferNegotiation,
 };
 use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
+use crate::transfers::pipeline::appraisal::{
+    AppraisalConfig, OfferKind, OfferView, PlayerDisposition, PlayerOfferAppraisal, PlayerStance,
+    TermsRefusalCause,
+};
+use crate::transfers::pipeline::appraisal_inputs::{
+    AvailabilityView, OfferViewBuilder, PlayerStanceBuilder, StanceInputs,
+};
 use crate::transfers::pipeline::asset_ledger::ReplacementScarcity;
 use crate::transfers::pipeline::auction::AuctionState;
 use crate::transfers::pipeline::planning::{BriefTier, PlanningCadence};
 use crate::transfers::pipeline::plausibility::{
-    TransferMovePlausibility, TransferPlausibilityBuilder, TransferPlausibilityEvaluator,
-    TransferPlausibilityInputs, TransferPlausibilityReason, TransferPlausibilityVerdict,
+    TransferPlausibilityBuilder, TransferPlausibilityEvaluator, TransferPlausibilityInputs,
+    TransferPlausibilityVerdict,
 };
-use crate::transfers::pipeline::playing_time::PlayingTimeExpectation;
 use crate::transfers::pipeline::trace::TransferTrace;
+use crate::transfers::pipeline::wage_power::{BuyerLevelWage, OwnerEnvelopeReservations, WagePower};
 use crate::transfers::pipeline::{LoanOutReason, PipelineProcessor};
-use crate::transfers::scouting_region::ScoutingRegion;
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::{FloatUtils, FormattingUtils};
 use crate::{
     Club, Country, Player, PlayerSquadStatus, PlayerStatusType, PlayerValueCalculator,
-    TransferInterestSource, TransferInterestStage, WageCalculator,
+    TransferInterestSource, TransferInterestStage,
 };
 use chrono::NaiveDate;
 
@@ -224,45 +227,11 @@ impl CountryResult {
                     // listings created to back unsolicited approaches
                     // are explicitly excluded so that the bonuses
                     // downstream don't reward stale plumbing.
-                    let player_is_available = {
-                        let from_statuses =
-                            super::types::find_player_in_country(country, n.player_id)
-                                .map(|p| {
-                                    let listed_for_permanent =
-                                        p.statuses.has(PlayerStatusType::Lst);
-                                    let loaned_listed = p.statuses.has(PlayerStatusType::Loa);
-                                    let requested = p.statuses.has(PlayerStatusType::Req);
-                                    let unhappy = p.statuses.has(PlayerStatusType::Unh);
-                                    let not_needed = p
-                                        .contract
-                                        .as_ref()
-                                        .map(|c| {
-                                            matches!(c.squad_status, PlayerSquadStatus::NotNeeded)
-                                        })
-                                        .unwrap_or(false);
-                                    // Permanent vs loan listings count
-                                    // for the corresponding move only.
-                                    let listing_supports =
-                                        match (n.is_loan, listed_for_permanent, loaned_listed) {
-                                            (false, true, _) => true,
-                                            (true, _, true) => true,
-                                            _ => false,
-                                        };
-                                    listing_supports || requested || unhappy || not_needed
-                                })
-                                .unwrap_or(false);
-                        let from_listing = listing_origin
-                            .map(|o| {
-                                matches!(
-                                    o,
-                                    TransferListingOrigin::SellerListed
-                                        | TransferListingOrigin::LoanOutListed
-                                        | TransferListingOrigin::EndOfContract
-                                )
-                            })
+                    let player_is_available =
+                        super::types::find_player_in_country(country, n.player_id)
+                            .map(|p| AvailabilityView::read(p, n.is_loan, listing_origin))
+                            .map(|v| v.available_soft)
                             .unwrap_or(false);
-                        from_statuses || from_listing
-                    };
 
                     let sell_on_percentage = n.current_offer.clauses.iter().find_map(|c| {
                         if let TransferClause::SellOnClause(pct) = c {
@@ -307,6 +276,8 @@ impl CountryResult {
                         foreign_terms_floor_blocked: n.foreign_terms_floor_blocked,
                         foreign_seller_importance: n.foreign_seller_importance,
                         foreign_seller_finances: n.foreign_seller_finances,
+                        staged_stance: n.staged_stance,
+                        staged_sporting_drop: n.staged_sporting_drop,
                     }
                 }
                 None => continue,
@@ -544,6 +515,19 @@ impl CountryResult {
     /// Rivalry is an acceptance-chance friction (stronger at seller's end),
     /// not a hard block — a big enough bid or a player who forces the move
     /// still gets a deal through.
+    /// How much of the BUYING club's spending its owner, rather than its
+    /// revenue, is paying for — 0..1. The buyer is always in this country
+    /// (the negotiation is resolved by its own pass), so this is readable
+    /// on domestic and cross-border deals alike.
+    fn buyer_benefactor(country: &Country, buying_club_id: u32) -> f32 {
+        country
+            .clubs
+            .iter()
+            .find(|c| c.id == buying_club_id)
+            .map(|c| c.board.ownership.benefactor)
+            .unwrap_or(0.0)
+    }
+
     fn seller_views_buyer_as_rival(
         country: &Country,
         selling_club_id: u32,
@@ -924,6 +908,19 @@ impl CountryResult {
             if rep_diff > 0.25 {
                 rival_penalty -= 12.0;
             }
+            // …and so is a buyer whose money its own revenue cannot
+            // explain. "Clearly bigger" is not only reputation: a club
+            // sells to money it would not sell to a rival for, which is
+            // the whole reason a mid-table side lets a starter go to the
+            // Gulf and not to the team above it (L5).
+            //
+            // Continuous in the ratio, not a step at the state-backed bar:
+            // a 0.49 benefactor and a 0.51 one are the same club, and a
+            // cliff there is exactly the kind of threshold the whole model
+            // exists to avoid.
+            let benefactor = Self::buyer_benefactor(country, neg_data.buying_club_id);
+            rival_penalty -=
+                12.0 * (benefactor / ClubBenefactor::STATE_BACKED_BAR).clamp(0.0, 1.0);
             if neg_data.asking_price > 0.0 && neg_data.offer_amount >= neg_data.asking_price * 1.5 {
                 rival_penalty -= 15.0;
             }
@@ -1468,6 +1465,25 @@ impl CountryResult {
         }
     }
 
+    /// The player's side of the deal — [`PlayerOfferAppraisal`], once.
+    ///
+    /// This used to be an additive pile of roughly twenty hand-set bumps
+    /// rolled once against a uniform, with a hard willingness floor in
+    /// front of it and a separate reservation-wage ladder behind it. A
+    /// player whose wage demand was already met got ONE roll, so a
+    /// 60-point deal died four times in ten on luck alone; a Gulf club
+    /// offering a Premier League star four times his money was refused by
+    /// a −110-per-prestige-point wall before the money was even read; and
+    /// a contented starter halved his wage for a smaller club half the
+    /// time because nothing in the chain knew what he currently earned.
+    ///
+    /// Now: one utility, one seeded disposition per negotiation, and a
+    /// reservation wage that falls out of the same arithmetic. Wage rounds
+    /// move the utility rather than re-rolling the die, so an offer raised
+    /// to his demand IS accepted. The old willingness floor survives as a
+    /// *consequence* — an important starter with no push has an `S + P − A`
+    /// no wage a club can hold will pay for — and its three reasons
+    /// survive as [`TermsRefusalCause`] labels.
     fn resolve_personal_terms(
         country: &mut Country,
         neg_id: u32,
@@ -1476,469 +1492,134 @@ impl CountryResult {
         date: NaiveDate,
         outcomes: &mut NegotiationOutcomes,
     ) {
+        let cfg = AppraisalConfig::default();
         let is_foreign = neg_data.selling_country_id.is_some();
-        // Set inside the domestic branch once the player's reservation wage
-        // and the buyer's offered wage are both known — `(reservation, offered)`.
-        // Drives the iterative wage negotiation at the tail of this function.
-        let mut wage_negotiable: Option<(f64, f64)> = None;
 
-        // ── Player-willingness hard floor ──
-        // Before any probability roll, a player with NO availability signal
-        // hard-refuses a move his career incentives reject: a clear sporting
-        // step down, a lower-league move in his prime, or dropping to a
-        // clearly lower-reputation club in his own market. Any genuine
-        // reason to leave — a transfer request, a real listing, unhappiness,
-        // a near-expiry contract, a triggered release clause — clears this
-        // floor (handled inside `player_terms_floor`), leaving only the
-        // probability texture below. This is the spec's "personal terms are
-        // not only a probability roll" requirement: availability opens the
-        // door, it does not make a first-team player accept a bad move.
+        // ── The two inputs ──────────────────────────────────────
         //
-        // Domestic moves recompute the floor live (the seller-side data is in
-        // this country). Foreign moves can't — the player's club, rank, and
-        // status live abroad — so the verdict was captured from the full
-        // cross-border assessment at negotiation creation and rides on the
-        // negotiation. Mirrors the domestic gate so a Serie C/B side can't
-        // pass personal terms with a Spartak first-teamer on a lucky roll.
-        let terms_floor_blocked = if is_foreign {
-            neg_data.foreign_terms_floor_blocked
-        } else {
-            Self::player_terms_floor_for(country, neg_data, date).is_some()
-        };
-        if terms_floor_blocked {
-            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                negotiation
-                    .reject_with_reason(NegotiationRejectionReason::PlayerRejectedPersonalTerms);
+        // The stance is FROZEN for the life of the personal-terms phase,
+        // on both paths: built once, on the first round, and staged on the
+        // negotiation the way a cross-border deal's has always been.
+        //
+        // Rebuilding it live at every round was the "raise to the
+        // reservation ⇒ deterministic yes" guarantee's one hole. A
+        // matchday between rounds moves `starter_ratio`, an `Unh` can
+        // clear (−0.35), resignation moves — and because the buyer raises
+        // to exactly `1.02 × reservation`, a drift of more than
+        // `w_m · ln(1.02)` ≈ 0.01 turned a paid-for yes into a terminal
+        // refusal. Foreign deals were already immune.
+        //
+        // `deadline_urgency` stays live: it sits on the OFFER, it is the
+        // buyer's clock rather than the player's situation, and it only
+        // ever pushes up.
+        //
+        // The staged plausibility inputs are the expensive part and both
+        // halves want them — importance for the stance, the sporting drop
+        // for the offer — so they are built once, together.
+        let mut stance = neg_data.staged_stance;
+        let mut sporting_drop = neg_data.staged_sporting_drop;
+        if stance.is_none() && !is_foreign {
+            if let Some((built, drop)) = Self::stance_for(country, neg_data, date) {
+                stance = Some(built);
+                sporting_drop = Some(drop);
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation.staged_stance = Some(built);
+                    negotiation.staged_sporting_drop = Some(drop);
+                }
             }
-            Self::reopen_listing_for_player(country, neg_data.player_id);
-            Self::clear_saga_statuses(country, neg_id, neg_data.player_id);
-            PipelineProcessor::on_negotiation_resolved(
-                country,
-                neg_data.buying_club_id,
+        }
+        // A global-pool free agent has no club, no depth chart and no
+        // country to be read from — and he is exactly the man for whom the
+        // decision genuinely IS the money against a fair anchor plus the
+        // shirt on offer. Everything else stays at its no-view default.
+        let stance = stance.unwrap_or_else(|| {
+            let offered = neg_data.offered_annual_wage.unwrap_or(0) as f64;
+            let fair = neg_data
+                .staged_reservation_wage
+                .map(|w| w as f64)
+                .filter(|w| *w > 0.0)
+                .unwrap_or(offered);
+            PlayerStance::from_terms(
+                neg_data.player_age,
+                neg_data.player_ambition,
+                offered.max(fair),
+                fair,
+            )
+        });
+
+        // The buyer's opening figure, stamped on the negotiation now if
+        // nothing staged one — see [`Self::ensure_opening_salary`].
+        let offered_annual_wage = Self::ensure_opening_salary(country, neg_id, neg_data);
+        let offer = Self::offer_view_for(
+            country,
+            neg_data,
+            offered_annual_wage,
+            &stance,
+            sporting_drop,
+            date,
+        );
+
+        // ε — his private disposition on THIS negotiation, drawn once and
+        // re-derived identically on every round.
+        let disposition =
+            PlayerDisposition::for_negotiation(
+                country.id,
+                neg_id,
                 neg_data.player_id,
-                false,
+                neg_data.buying_club_id,
+                cfg.disposition_sigma,
             );
-            return;
-        }
+        let appraisal = PlayerOfferAppraisal::appraise(&stance, &offer, disposition, &cfg);
 
-        // Foreign loans start lower: unfamiliar country, language, likely
-        // wage cut. Players don't jump across borders for a bit-part role
-        // as readily as they change clubs within their own league.
-        let mut chance: f32 = if is_foreign && neg_data.is_loan {
-            45.0
-        } else if is_foreign {
-            50.0
-        } else {
-            60.0
-        };
-
-        // Apply the player-side adjustment from the shared plausibility
-        // layer — prime-age starters stepping down inside the same
-        // domestic market get a sharp negative delta here unless the
-        // availability exemption (Req/Unh/etc.) softens it.
-        if let Some(TransferPlausibilityVerdict::Allow(adj)) =
-            Self::plausibility_for(country, neg_data, date)
-        {
-            chance += adj.player_terms_delta;
-        }
-
-        // Release clause: the player almost always welcomes the move they
-        // negotiated the escape route for. Overrides downward-move and
-        // salary resistance below.
-        if !is_foreign && Self::clause_triggers_sale(country, neg_data) {
-            chance += 45.0;
-        }
-
-        // End-of-window pressure: players prefer a signed deal over an
-        // expired negotiation that drops them back into limbo. Country-
-        // aware variant honours non-European calendars (MLS, Argentine,
-        // Russian) when computing the deadline.
-        chance += Self::deadline_urgency_for(country, date) * 15.0;
-
-        if neg_data.player_is_available {
-            chance += 10.0;
-        }
-
-        let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
-        if rep_diff > 0.3 {
-            chance += 25.0;
-        } else if rep_diff > 0.15 {
-            chance += 15.0;
-        } else if rep_diff < -0.3 {
-            chance -= 20.0;
-        } else if rep_diff < -0.15 {
-            chance -= 10.0;
-        }
-
-        // Age + reputation interaction: how players at different career stages
-        // evaluate upward vs downward moves
-        let age = neg_data.player_age;
-        let ambition = neg_data.player_ambition;
-
-        if age < 23 {
-            // Young players dream big — they want to develop at the highest level.
-            // Resist downward moves strongly; welcome upward moves for development.
-            if rep_diff > 0.1 {
-                chance += 5.0; // Happy to move up
-            } else if rep_diff < -0.3 {
-                chance -= 20.0; // "I'm not throwing away my career"
-            } else if rep_diff < -0.1 {
-                chance -= 12.0; // Reluctant to step down
-            }
-        } else if age <= 28 {
-            // Prime years — players want the best competition and exposure.
-            // Very resistant to downward moves; moving up is welcome.
-            if rep_diff > 0.15 {
-                chance += 5.0;
-            } else if rep_diff < -0.3 {
-                chance -= 15.0; // Strong resistance in peak years
-            } else if rep_diff < -0.1 {
-                chance -= 10.0;
-            }
-        } else {
-            // Veteran players — pragmatic, value playing time and money.
-            // Accept downward moves more easily, especially for salary.
-            chance += 5.0;
-        }
-
-        // Ambition: ambitious players dream of top clubs and resist stepping down.
-        // Low-ambition players are more content wherever they are.
-        if ambition > 0.7 {
-            if rep_diff > 0.1 {
-                chance += 10.0; // Ambitious + moving up = eager
-            } else if rep_diff < -0.1 {
-                // Scale penalty with the gap: bigger drop = stronger refusal
-                let penalty = if rep_diff < -0.3 { 20.0 } else { 12.0 };
-                chance -= penalty;
-            }
-        } else if ambition < 0.4 {
-            // Low ambition: less bothered by prestige, more accepting
-            if rep_diff < -0.1 {
-                chance += 5.0;
-            }
-        }
-
-        // For domestic, check salary and player-specific details
-        let mut moving_to_favorite = false;
-        if neg_data.selling_country_id.is_none() {
-            if let Some(player) = find_player_in_country(country, neg_data.player_id) {
-                // Favorite club bonus — a player moving to a childhood/legend
-                // club accepts terms eagerly, and the usual downward/prestige
-                // penalties are muted. Already-populated list, previously
-                // ignored in every decision path.
-                if player.favorite_clubs.contains(&neg_data.buying_club_id) {
-                    chance += 25.0;
-                    moving_to_favorite = true;
-                }
-
-                // Agent bias: greedy reps depress acceptance; loyal reps push
-                // the client to stay put unless the move is a clear step up.
-                let agent = PlayerAgent::for_player(player);
-                chance += agent.personal_terms_delta(rep_diff);
-
-                let current_salary = player
-                    .contract
-                    .as_ref()
-                    .map(|c| c.salary as f64)
-                    .unwrap_or(500.0);
-
-                // Reservation wage: what the player expects to earn at the buying
-                // club given their ability, age, and the destination's tier. The
-                // offered wage (staged by the pipeline; falls back to a proxy of
-                // the current deal if absent) is compared against this.
-                //
-                // Use ContractValuation so the renewal AI and transfer
-                // pipeline agree on the wage curve. Best-guess destination
-                // role: the same tier the player currently holds —
-                // transfers within tier are the common case; promotions
-                // and demotions do happen but personal terms negotiates
-                // off the player's perceived market value, not a role
-                // they haven't yet been promised.
-                let club_rep_score = (neg_data.buying_rep).clamp(0.0, 1.0);
-                let assumed_status = player
-                    .contract
-                    .as_ref()
-                    .map(|c| c.squad_status.clone())
-                    .unwrap_or(PlayerSquadStatus::FirstTeamRegular);
-                let val_ctx = ValuationContext {
-                    age,
-                    club_reputation_score: club_rep_score,
-                    league_reputation: neg_data.buying_league_reputation,
-                    squad_status: assumed_status,
-                    current_salary: current_salary as u32,
-                    months_remaining: 24,
-                    has_market_interest: true,
-                };
-                let reservation_wage =
-                    ContractValuation::evaluate(player, &val_ctx).expected_wage as f64;
-                // Underlying open-market wage referenced for guard-rails
-                // below (so the silence-the-warning path stays explicit).
-                let _ = WageCalculator::expected_annual_wage(
-                    player,
-                    age,
-                    club_rep_score,
-                    neg_data.buying_league_reputation,
-                );
-                let _ = squad_status_wage_factor; // imported for future use
-                let offered_salary = neg_data
-                    .offered_annual_wage
-                    .map(|w| w as f64)
-                    .unwrap_or_else(|| current_salary.max(500.0) * 1.05);
-                let wage_gap = offered_salary / reservation_wage.max(500.0);
-                let salary_ratio = offered_salary / current_salary.max(500.0);
-                // If the deal later fails on money, the buyer can improve its
-                // offer toward the player's reservation rather than walking.
-                wage_negotiable = Some((reservation_wage.max(500.0), offered_salary));
-
-                // Gap vs reservation wage drives the primary pass/fail signal;
-                // ratio-to-current adds flavour for veterans chasing paydays.
-                if wage_gap >= 1.15 {
-                    chance += 15.0;
-                } else if wage_gap >= 0.95 {
-                    chance += 5.0;
-                } else if wage_gap >= 0.80 {
-                    chance -= 5.0;
-                } else if wage_gap >= 0.65 {
-                    chance -= 18.0;
-                } else {
-                    chance -= 35.0;
-                }
-
-                if salary_ratio >= 2.0 && age >= 29 {
-                    chance += 10.0;
-                } else if salary_ratio >= 1.3 && age >= 29 {
-                    chance += 6.0;
-                } else if salary_ratio < 0.8 {
-                    chance -= 10.0;
-                }
-
-                if player.statuses.has(PlayerStatusType::Req) {
-                    chance += 25.0; // Wants out — will accept more
-                } else if player.statuses.has(PlayerStatusType::Unh) {
-                    chance += 20.0; // Unhappy — willing to move
-                }
-
-                // Does this move answer what he actually wants? A player
-                // drawn toward a bigger stage weighs the LEAGUE, not just
-                // the badge: he will stretch for a mid-table side in a top
-                // division and stall on a lateral move to a bigger club in
-                // the same kind of competition, because the second one
-                // doesn't change his career. Without this every bidder
-                // looked alike to him and he signed for whoever asked
-                // first — which is how a Russian league star ended up in
-                // Turkey while Spain was still deciding.
-                chance += StageAmbitionMatch::terms_delta(
-                    player.big_stage_inclination,
-                    neg_data.selling_league_reputation,
-                    neg_data.buying_league_reputation,
-                );
-
-                // Will I play? The question a footballer weighing a move
-                // asks first, and the one personal terms never read. The
-                // buyer's brief already says what shirt it is offering; the
-                // seller-side importance already says what he currently is.
-                // The gap between them is the term — compensable, so a
-                // bigger stage or a much bigger wage can still buy a bench
-                // seat, which is exactly how the real decision works.
-                let importance = Self::calculate_player_importance(
-                    country,
-                    neg_data.player_id,
-                    neg_data.selling_club_id,
-                );
-                let current_wage = player
-                    .contract
-                    .as_ref()
-                    .map(|c| c.salary as f64)
-                    .unwrap_or(0.0);
-                chance += PlayingTimeExpectation::terms_delta(
-                    importance,
-                    neg_data
-                        .personal_terms
-                        .as_ref()
-                        .and_then(|t| t.squad_status_promise.as_ref()),
-                    PlayingTimeExpectation::compensation(
-                        neg_data.selling_league_reputation,
-                        neg_data.buying_league_reputation,
-                        current_wage,
-                        neg_data.offered_annual_wage.unwrap_or(0) as f64,
-                    ),
-                );
-
-                // Market-reality reset: a long-unsold listed player has
-                // watched the market decline him at his level, and the
-                // prestige / age / ambition resistance above fades as his
-                // resignation builds (the same clock the seller's fee-floor
-                // erosion runs on). Only for a step-down — an upward move
-                // needs no such help.
-                if rep_diff < 0.0 {
-                    chance += player.market_resignation(date) * 30.0;
-                }
-            } else if neg_data.selling_club_id == 0 {
-                // Global-pool free agent — he lives in the simulator-level
-                // pool, unreachable from the country borrow, so score the
-                // wage from the reservation staged at negotiation creation.
-                // Before this, pool signings skipped the money question
-                // entirely: the offered wage never moved the roll and a
-                // money-shaped failure could never be rescued.
-                wage_negotiable = StagedWageAssessment::apply(neg_data, &mut chance);
-            }
-        } else {
-            // Foreign player — same age/ambition checks already applied
-            // above. His contract can't be read from here, so the wage is
-            // scored against the reservation staged at creation (which
-            // carries the relocation premium a player expects for crossing
-            // a border). Meeting it earns the same bonus the domestic path
-            // grants; falling short opens the iterative wage rounds below —
-            // previously a purely-money failure on a foreign move was
-            // terminal, with no way for the buyer to sweeten the deal.
-            if rep_diff > 0.2 {
-                chance += 10.0;
-            }
-            // Same stage-ambition read as the domestic branch, off the
-            // inclination staged at creation — this is the path a move from
-            // a sub-elite league to a top-five one actually travels, so it
-            // is the one that most needs to know he wants it.
-            chance += StageAmbitionMatch::terms_delta(
-                neg_data.player_stage_inclination,
-                neg_data.selling_league_reputation,
-                neg_data.buying_league_reputation,
-            );
-            // Same playing-time read as the domestic branch, off the
-            // seller-side importance staged at creation — the buyer's
-            // country cannot see the player's own depth chart. The
-            // reservation wage carries the relocation premium, so it is the
-            // honest denominator for "is this a big enough raise to sit on a
-            // bench abroad?".
-            chance += PlayingTimeExpectation::terms_delta(
-                neg_data.foreign_seller_importance.unwrap_or(0.55),
-                neg_data
-                    .personal_terms
-                    .as_ref()
-                    .and_then(|t| t.squad_status_promise.as_ref()),
-                PlayingTimeExpectation::compensation(
-                    neg_data.selling_league_reputation,
-                    neg_data.buying_league_reputation,
-                    neg_data.staged_reservation_wage.unwrap_or(0) as f64,
-                    neg_data.offered_annual_wage.unwrap_or(0) as f64,
+        if TransferTrace::is(neg_data.player_id) {
+            TransferTrace::line(
+                neg_data.player_id,
+                "terms",
+                format!(
+                    "round={round} buyer={} age={} ambition={:.2} offered={:.0} anchor={:.0} \
+                     {}{} -> {}",
+                    neg_data.buying_club_id,
+                    neg_data.player_age,
+                    neg_data.player_ambition,
+                    offer.offered_wage,
+                    PlayerOfferAppraisal::anchor(&stance),
+                    // What the retired hard floor would have said. Kept as
+                    // a diagnostic, not a gate: the whole point of the
+                    // appraisal is that the same refusal now has a price.
+                    // Only cross-border deals ever set it — printing it on
+                    // a domestic one is a constant `false`.
+                    if is_foreign {
+                        format!("legacy_floor={} ", neg_data.foreign_terms_floor_blocked)
+                    } else {
+                        String::new()
+                    },
+                    appraisal.explain(),
+                    if appraisal.accepts() { "AGREED" } else { "no" },
                 ),
             );
-            wage_negotiable = StagedWageAssessment::apply(neg_data, &mut chance);
         }
 
-        // Player reluctance to return to a club that sold them.
-        // The feeling of rejection is strong — but context matters:
-        // - Sold cheaply → player felt undervalued → strong resentment
-        // - Club is much bigger → prestige pull can overcome hurt pride
-        // - Ambitious player → may want to prove themselves, reduces penalty
-        // - Older player → more pragmatic, sentimental about returning "home"
-        // - Player was unhappy/requested transfer → less resentment (they wanted out)
-        if let Some((sold_club_id, sold_fee)) = &neg_data.player_sold_from {
-            if *sold_club_id == neg_data.buying_club_id {
-                // Base: player doesn't want to go back to club that rejected them
-                let mut return_penalty: f32 = 25.0;
-
-                // Sold cheaply relative to current offer → felt undervalued
-                if *sold_fee > 0.0 && neg_data.offer_amount > sold_fee * 3.0 {
-                    return_penalty += 10.0;
-                }
-
-                // Club is much bigger → prestige can overcome pride
-                if rep_diff > 0.3 {
-                    return_penalty -= 15.0;
-                } else if rep_diff > 0.15 {
-                    return_penalty -= 8.0;
-                }
-
-                // Ambitious players want to prove themselves at big clubs
-                if neg_data.player_ambition > 0.7 && rep_diff > 0.1 {
-                    return_penalty -= 8.0;
-                }
-
-                // Older players are more pragmatic
-                if neg_data.player_age >= 30 {
-                    return_penalty -= 5.0;
-                }
-
-                chance -= return_penalty.max(5.0);
-            }
-        }
-
-        // Geographic preference: players resist moves to less prestigious regions.
-        // A favorite-club destination overrides this — a Barca-raised kid will
-        // go from Bayern to Barcelona even though W.Europe→W.Europe is a wash
-        // and a prestige-drop would otherwise penalise (hypothetically).
-        if let Some(sell_continent_id) = neg_data.selling_continent_id {
-            let buying_region = ScoutingRegion::from_country(country.continent_id, &country.code);
-            let selling_region =
-                ScoutingRegion::from_country(sell_continent_id, &neg_data.selling_country_code);
-
-            if buying_region != selling_region && !moving_to_favorite {
-                let buy_prestige = buying_region.league_prestige();
-                let sell_prestige = selling_region.league_prestige();
-                let prestige_drop = sell_prestige - buy_prestige;
-
-                if prestige_drop > 0.0 {
-                    // Moving to less prestigious region — players resist this.
-                    // Previously 60× was too soft: a 0.55 drop (W.Europe→S.America)
-                    // only cost −33, leaving ~27% acceptance for prime-age players.
-                    let base_penalty = prestige_drop * 110.0;
-
-                    // Ambitious players resist prestige drops more
-                    let ambition_factor = if neg_data.player_ambition > 0.7 {
-                        1.5
-                    } else if neg_data.player_ambition > 0.5 {
-                        1.0
-                    } else {
-                        0.7
-                    };
-
-                    // Veterans (30+) accept drops more easily for money/playing time,
-                    // but a very large drop still stings regardless of age.
-                    let age_factor = if prestige_drop > 0.4 {
-                        if neg_data.player_age >= 32 {
-                            0.7
-                        } else if neg_data.player_age >= 30 {
-                            0.85
-                        } else {
-                            1.0
-                        }
-                    } else if neg_data.player_age >= 32 {
-                        0.3
-                    } else if neg_data.player_age >= 30 {
-                        0.5
-                    } else {
-                        1.0
-                    };
-
-                    chance -= base_penalty * ambition_factor * age_factor;
-                } else if prestige_drop < -0.1 {
-                    // Moving to a MORE prestigious region. The 20× here
-                    // against 110×(×1.5) above made the model roughly eight
-                    // times as resistant to going down as it was eager to
-                    // go up: a Spaniard offered Russia lost ~82 points, a
-                    // Russian offered Spain gained ~10. Loss aversion is
-                    // real, so the asymmetry stays — but at a ratio that
-                    // still lets the upward move be a pull rather than a
-                    // rounding error, and scaled by the same ambition that
-                    // sharpens the resistance downward.
-                    let ambition_factor = if neg_data.player_ambition > 0.7 {
-                        1.3
-                    } else if neg_data.player_ambition > 0.5 {
-                        1.0
-                    } else {
-                        0.8
-                    };
-                    chance += (-prestige_drop) * 45.0 * ambition_factor;
-                }
-            }
-        }
-
-        chance = chance.clamp(5.0, 95.0);
-        let roll = FloatUtils::random(0.0, 100.0);
-
-        if roll < chance {
+        if appraisal.accepts() {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                // One number, both slots. The wage he said yes to IS the
+                // wage the contract installs — the package's figure and
+                // the staged offer are written together by
+                // `open_salary_at` / `raise_offered_salary`, and a path
+                // that ever set only one of them would install a salary
+                // nobody agreed.
+                debug_assert!(
+                    negotiation
+                        .current_offer
+                        .personal_terms
+                        .as_ref()
+                        .and_then(|t| t.annual_wage)
+                        .map(|w| Some(w) == negotiation.offered_salary)
+                        .unwrap_or(true),
+                    "agreed wage diverged from the staged offer"
+                );
                 negotiation.advance_to_medical(date);
+                negotiation.terms_refusal_cause = None;
+                negotiation.terms_reservation_wage = Some(appraisal.reservation_wage);
             }
             // Personal terms agreed — the player has said yes and only
             // the medical stands between him and the move. `Trn`
@@ -1960,26 +1641,45 @@ impl CountryResult {
             return;
         }
 
-        // ── Iterative wage negotiation ──
-        // A failed roll is not automatically a dead deal. If the obstacle is
-        // money — the offered wage sits below the player's reservation — and
-        // the wage rounds aren't spent, the buyer improves its offer toward
-        // the player's ask and the player re-evaluates next tick. Clubs meet
-        // partway on wages rather than a single coin-flip killing an otherwise
-        // sensible move. Capped so a deal can't be won purely by attrition,
-        // and the buyer never bids above the player's own reservation.
+        // ── The buyer answers the demand, if it can hold it ─────
+        //
+        // Not a second roll: the disposition is already drawn, so raising
+        // the offer to the reservation is a *deterministic* yes. What
+        // decides the deal now is whether this buyer's wage power reaches
+        // his number — level wage stretched, room under the board's
+        // mandate, or a slice of an owner's yearly subsidy (L4).
         const MAX_WAGE_ROUNDS: u8 = 2;
+        // Could this buyer have paid his number at all? The answer is the
+        // refusal's cause when it is no — a man who would sign for more
+        // than the club can hold refused on the WAGE, however the axes
+        // read (L3 step 3).
+        let power = Self::wage_power_for(country, neg_id, neg_data, &offer);
+        let wage_unreachable = power
+            .as_ref()
+            .map(|p| !p.can_reach(appraisal.reservation_wage as f64))
+            .unwrap_or(false);
         if round < MAX_WAGE_ROUNDS {
-            if let Some((reservation, offered)) = wage_negotiable {
-                if offered < reservation * 0.98 {
-                    let improved = (offered + (reservation - offered) * 0.6).min(reservation);
-                    let improved = improved.round() as u32;
-                    if improved as f64 > offered {
+            if let Some(power) = power {
+                let reservation = appraisal.reservation_wage as f64;
+                let target = (reservation * 1.02).min(power.ceiling);
+                if power.can_reach(reservation) && target > offer.offered_wage {
+                    // Close 60 % of the gap, as before — except on the
+                    // last round, which closes it, so a deal the buyer
+                    // can genuinely afford is not lost to arithmetic.
+                    let close = if round + 1 >= MAX_WAGE_ROUNDS {
+                        1.0
+                    } else {
+                        0.6
+                    };
+                    let improved =
+                        (offer.offered_wage + (target - offer.offered_wage) * close).round() as u32;
+                    if improved as f64 > offer.offered_wage {
                         if let Some(negotiation) =
                             country.transfer_market.negotiations.get_mut(&neg_id)
                         {
                             negotiation.raise_offered_salary(improved);
                             negotiation.advance_personal_terms_round(date);
+                            negotiation.terms_reservation_wage = Some(appraisal.reservation_wage);
                         }
                         return;
                     }
@@ -1987,10 +1687,30 @@ impl CountryResult {
             }
         }
 
-        // Terminal rejection — the wage rounds are spent, the gap is not about
-        // money, or the buyer can't sensibly improve the offer.
+        Self::reject_personal_terms(
+            country,
+            neg_id,
+            neg_data,
+            outcomes,
+            Some(appraisal.refusal_cause(wage_unreachable)),
+            Some(appraisal.reservation_wage),
+        );
+    }
+
+    /// The player said no. One exit, so the saga beat, the listing reopen
+    /// and the diagnostics can never disagree about which of them ran.
+    fn reject_personal_terms(
+        country: &mut Country,
+        neg_id: u32,
+        neg_data: &NegotiationData,
+        outcomes: &mut NegotiationOutcomes,
+        cause: Option<TermsRefusalCause>,
+        reservation_wage: Option<u32>,
+    ) {
         if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
             negotiation.reject_with_reason(NegotiationRejectionReason::PlayerRejectedPersonalTerms);
+            negotiation.terms_refusal_cause = cause;
+            negotiation.terms_reservation_wage = reservation_wage;
         }
         Self::reopen_listing_for_player(country, neg_data.player_id);
         Self::clear_saga_statuses(country, neg_id, neg_data.player_id);
@@ -2018,6 +1738,292 @@ impl CountryResult {
             neg_data.player_id,
             false,
         );
+    }
+
+    /// The player's side of a DOMESTIC negotiation, rebuilt live, with the
+    /// sporting distance of the move alongside it.
+    ///
+    /// Both come out of one staged-plausibility build: the importance and
+    /// the drop are the same read of the same two clubs, and computing them
+    /// separately would walk the seller's squad twice per round.
+    ///
+    /// `None` when the deal is cross-border, when either club has gone, or
+    /// when the player cannot be found in this country — the pool free
+    /// agent among them, who is staged instead.
+    fn stance_for(
+        country: &Country,
+        neg_data: &NegotiationData,
+        date: NaiveDate,
+    ) -> Option<(PlayerStance, f32)> {
+        if neg_data.selling_country_id.is_some() {
+            return None;
+        }
+        let buyer = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.buying_club_id)?;
+        let seller = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.selling_club_id)?;
+        let player = find_player_in_country(country, neg_data.player_id)?;
+        // The ONE importance formula, from the staged plausibility model —
+        // the domestic and foreign paths must not disagree about what a
+        // player is to his club (Part VIII, "two importance formulas").
+        let inputs = TransferPlausibilityBuilder::from_clubs(
+            country,
+            buyer,
+            seller,
+            player,
+            neg_data.asking_price.max(neg_data.offer_amount),
+            neg_data.is_loan,
+            neg_data.is_unsolicited,
+            date,
+        );
+        let availability =
+            AvailabilityView::read(player, neg_data.is_loan, neg_data.listing_origin);
+        let stance = PlayerStanceBuilder::build(&StanceInputs {
+            player,
+            seller_country: country,
+            seller_club: seller,
+            buyer_club_id: neg_data.buying_club_id,
+            rep_diff: neg_data.buying_rep - neg_data.selling_rep,
+            importance: TransferPlausibilityEvaluator::player_importance(&inputs),
+            listed_by_club: availability.listed_by_club,
+            available: availability.available_soft,
+            months_to_tournament: country.months_to_tournament_for(player.nationality_continent_id),
+            date,
+        });
+        Some((
+            stance,
+            TransferPlausibilityEvaluator::sporting_drop(&inputs),
+        ))
+    }
+
+    /// What is on the table, this round.
+    ///
+    /// `staged_drop` is the sporting distance read alongside the stance
+    /// and frozen with it, so both halves of the appraisal describe the
+    /// same moment for every round of the phase.
+    fn offer_view_for(
+        country: &Country,
+        neg_data: &NegotiationData,
+        offered_annual_wage: Option<u32>,
+        stance: &PlayerStance,
+        staged_drop: Option<f32>,
+        date: NaiveDate,
+    ) -> OfferView {
+        let kind = if neg_data.is_loan {
+            OfferKind::Loan
+        } else {
+            OfferKind::Permanent
+        };
+        // The wage he would actually draw.
+        //
+        // A LOAN pays nothing new: the borrower picks up a share of the
+        // deal he already has, so the offer sits exactly on his anchor and
+        // the money axis is silent (Part VIII, "the loan that pays"). A
+        // permanent move draws the figure the buyer has tabled.
+        let staged_wage = offered_annual_wage
+            .map(|w| w as f64)
+            .filter(|w| *w > 0.0);
+        let offered_wage = if neg_data.is_loan {
+            PlayerOfferAppraisal::anchor(stance)
+        } else {
+            staged_wage
+                .or(neg_data.staged_reservation_wage.map(|w| w as f64))
+                .unwrap_or(stance.current_wage)
+        };
+
+        let sporting_drop = staged_drop.unwrap_or(
+            // No plausibility inputs to hand (a pool free agent, or a club
+            // that has gone): fall back to the club-reputation gap alone,
+            // on the same 0.55 weight the full read gives it, rather than
+            // pretending the move is lateral.
+            0.55 * (neg_data.selling_rep - neg_data.buying_rep),
+        );
+
+        let mut offer = OfferViewBuilder::build(
+            kind,
+            country,
+            neg_data.buying_club_id,
+            stance,
+            offered_wage,
+            neg_data
+                .personal_terms
+                .as_ref()
+                .and_then(|t| t.squad_status_promise),
+            sporting_drop,
+        );
+
+        // End-of-window pressure: players prefer a signed deal over an
+        // expired negotiation that drops them back into limbo.
+        offer.deadline_urgency = Self::deadline_urgency_for(country, date);
+        // The escape route he negotiated for himself. He almost always
+        // welcomes the move the clause was written for.
+        offer.release_clause_triggered =
+            neg_data.selling_country_id.is_none() && Self::clause_triggers_sale(country, neg_data);
+        // Being asked back by the club that sold him. Context matters:
+        // sold cheaply against the current offer reads as having been
+        // undervalued; a much bigger club now, or a man old enough to be
+        // pragmatic, takes the sting out.
+        if let Some((sold_club_id, sold_fee)) = &neg_data.player_sold_from {
+            if *sold_club_id == neg_data.buying_club_id {
+                let mut sting: f32 = 1.0;
+                if *sold_fee > 0.0 && neg_data.offer_amount > sold_fee * 3.0 {
+                    sting += 0.4;
+                }
+                let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
+                if rep_diff > 0.3 {
+                    sting -= 0.6;
+                } else if rep_diff > 0.15 {
+                    sting -= 0.3;
+                }
+                sting -= 0.4 * stance.career_spent;
+                offer.returning_to_seller = sting.clamp(0.2, 1.4);
+            }
+        }
+        offer
+    }
+
+    /// What the BUYING club can hold for this shirt. The buyer is always in
+    /// this country — the negotiation is resolved by its own pass — so this
+    /// works identically on domestic and cross-border deals.
+    /// The buyer's opening wage, stamped on the negotiation as BOTH the
+    /// offer and the anchor when nothing staged one.
+    ///
+    /// A negotiation created without a salary used to reach the first
+    /// appraisal with the PLAYER's own number in the offer slot — the view
+    /// falls back through `staged_reservation_wage` to `current_wage` — so
+    /// the buyer's "level" and the player's demand were the same figure,
+    /// `can_reach` was trivially true, and the buyer raised to 1.02× of
+    /// whatever it happened to be. The level is what the buyer's own
+    /// reputation says the promised shirt is worth, and it is stamped
+    /// before the round rather than latched after one.
+    fn ensure_opening_salary(
+        country: &mut Country,
+        neg_id: u32,
+        neg_data: &NegotiationData,
+    ) -> Option<u32> {
+        if let Some(wage) = neg_data.offered_annual_wage.filter(|w| *w > 0) {
+            return Some(wage);
+        }
+        if neg_data.is_loan {
+            // A loan tables no new wage at all — the borrower picks up a
+            // share of the deal he already has, and `wage_power_for`
+            // reads that directly. Stamping one here would write a salary
+            // into the personal-terms package and install it on the loan
+            // contract.
+            return None;
+        }
+        let wage = (Self::buyer_level_wage(country, neg_data)? as f64).max(1.0) as u32;
+        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+            negotiation.open_salary_at(wage);
+        }
+        Some(wage)
+    }
+
+    /// [`BuyerLevelWage`] for the shirt the buyer is promising. `None`
+    /// when the player is not reachable from this country — a cross-border
+    /// deal, which always stages its wage at creation anyway.
+    fn buyer_level_wage(country: &Country, neg_data: &NegotiationData) -> Option<u32> {
+        let player = find_player_in_country(country, neg_data.player_id)?;
+        let promised = neg_data
+            .personal_terms
+            .as_ref()
+            .and_then(|t| t.squad_status_promise);
+        Some(BuyerLevelWage::evaluate(
+            player,
+            neg_data.player_age,
+            neg_data.buying_rep,
+            neg_data.buying_league_reputation,
+            promised,
+        ))
+    }
+
+    fn wage_power_for(
+        country: &Country,
+        neg_id: u32,
+        neg_data: &NegotiationData,
+        offer: &OfferView,
+    ) -> Option<WagePower> {
+        let buyer = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.buying_club_id)?;
+        // One lookup: the negotiation being resolved is the one whose id
+        // was passed in, and scanning the map by (player, buyer) twice
+        // found exactly the same row.
+        let negotiation = country.transfer_market.negotiations.get(&neg_id);
+        // The buyer's own LEVEL is where it opened, not where the last
+        // round left it: its power is a stretch on that figure, and
+        // re-anchoring on the raised offer would let the ceiling chase the
+        // offer up its own ladder.
+        let level_wage = negotiation
+            .and_then(|n| n.opening_salary)
+            .map(|w| w as f64)
+            .unwrap_or(offer.offered_wage)
+            .max(1.0);
+        // A loan draws the parent's wage, not a fresh salary: an owner's
+        // subsidy has no business raising one, so a borrower's power is
+        // exactly what it already offered.
+        if neg_data.is_loan {
+            return Some(WagePower {
+                level_wage,
+                ceiling: level_wage,
+                owner_subsidy: 0.0,
+                wage_headroom: 0.0,
+            });
+        }
+        // An unbriefed approach is COVER, not an upgrade. Defaulting to B
+        // handed the second-largest envelope to every deal that had never
+        // been through the planner.
+        let tier = negotiation
+            .and_then(|n| n.brief_tier)
+            .unwrap_or(BriefTier::C);
+        let reserved = OwnerEnvelopeReservations::open(
+            country,
+            neg_data.buying_club_id,
+            tier,
+            neg_id,
+        );
+        Some(WagePower::for_player(buyer, level_wage, tier, reserved))
+    }
+
+    /// A signed shirt draws the part of its wage the buyer's own level
+    /// cannot explain from its tier envelope, for the rest of the season.
+    ///
+    /// Called once, at completion — a negotiation still in flight is
+    /// covered by [`OwnerEnvelopeReservations`], and one that dies gives
+    /// its share back by simply disappearing from that fold.
+    fn consume_owner_envelope(country: &mut Country, buying_club_id: u32, neg_id: u32) {
+        let Some(negotiation) = country.transfer_market.negotiations.get(&neg_id) else {
+            return;
+        };
+        if negotiation.is_loan {
+            return;
+        }
+        let tier = negotiation.brief_tier.unwrap_or(BriefTier::C);
+        let level = negotiation
+            .opening_salary
+            .or(negotiation.offered_salary)
+            .unwrap_or(0) as f64;
+        let agreed = negotiation
+            .current_offer
+            .personal_terms
+            .as_ref()
+            .and_then(|t| t.annual_wage)
+            .or(negotiation.offered_salary)
+            .unwrap_or(0) as f64;
+        let draw = WagePower::envelope_draw(level, agreed);
+        if draw <= 0.0 {
+            return;
+        }
+        if let Some(buyer) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
+            if let Some(targets) = buyer.board.season_targets.as_mut() {
+                targets.owner_envelopes.consume(tier, draw);
+            }
+        }
     }
 
     fn resolve_medical(
@@ -2381,6 +2387,11 @@ impl CountryResult {
                 .map(|n| n.buying_club_id)
                 .collect();
 
+            // The owner's cheque is drawn down BEFORE the negotiation is
+            // closed out — the tier and the opening wage live on the row
+            // `complete_transfer` is about to retire.
+            Self::consume_owner_envelope(country, neg_data.buying_club_id, neg_id);
+
             if let Some(completed) = country.transfer_market.complete_transfer(
                 neg_id,
                 date,
@@ -2620,43 +2631,6 @@ impl CountryResult {
             date,
         );
         Some(TransferPlausibilityEvaluator::evaluate(&inputs))
-    }
-
-    /// The player-willingness hard floor for the current (domestic)
-    /// negotiation. `Some(reason)` means the player would refuse the move
-    /// outright at the personal-terms phase regardless of the wage offer;
-    /// `None` means the move is basically reasonable for him (or he has a
-    /// real reason to leave that clears the floor). Cross-country deals
-    /// return `None` — the selling-side context isn't carried here, and the
-    /// foreign personal-terms path keeps its own prestige/region logic.
-    fn player_terms_floor_for(
-        country: &Country,
-        neg_data: &NegotiationData,
-        date: NaiveDate,
-    ) -> Option<TransferPlausibilityReason> {
-        if neg_data.selling_country_id.is_some() {
-            return None;
-        }
-        let buyer = country
-            .clubs
-            .iter()
-            .find(|c| c.id == neg_data.buying_club_id)?;
-        let seller = country
-            .clubs
-            .iter()
-            .find(|c| c.id == neg_data.selling_club_id)?;
-        let player = find_player_in_country(country, neg_data.player_id)?;
-        let inputs = TransferPlausibilityBuilder::from_clubs(
-            country,
-            buyer,
-            seller,
-            player,
-            neg_data.asking_price.max(neg_data.offer_amount),
-            neg_data.is_loan,
-            neg_data.is_unsolicited,
-            date,
-        );
-        TransferMovePlausibility::player_terms_floor(&inputs)
     }
 
     /// Country-aware variant of [`Self::deadline_urgency`]. Reads the
@@ -3035,87 +3009,6 @@ impl SellerFeeFloor {
     }
 }
 
-/// Does this move give the player what he is chasing?
-///
-/// Everything else in the personal-terms model asks how big the buying
-/// CLUB is. That is the wrong question for the most ordinary ambition in
-/// football — a good player in a decent league wanting a better one. The
-/// club that answers it is often *smaller* than the one he is leaving: a
-/// mid-table Spanish side is a lesser club than Zenit and an
-/// incomparably bigger stage.
-///
-/// So this reads the move on the axis he cares about, scaled by how
-/// strongly he is drawn there in the first place (his stored
-/// [`crate::club::player::transfer::BigStagePull`] score). A player with
-/// no such itch is unaffected in either direction; a player consumed by it
-/// will stretch a long way for the right league and stall on a lateral
-/// move that changes nothing about his career.
-///
-/// Continuous and symmetric — nothing here blocks a move. A big enough
-/// wage, a guaranteed starting role or plain resignation can still carry
-/// a deal the player would rather not take, exactly as they do in life.
-pub(crate) struct StageAmbitionMatch;
-
-impl StageAmbitionMatch {
-    /// League-reputation gain that reads as a full step up in stage.
-    const FULL_STEP_GAIN: f32 = 1500.0;
-    /// Most a satisfying move can add to the personal-terms roll …
-    const MAX_BONUS: f32 = 22.0;
-    /// … and the most a move that ignores his ambition can subtract.
-    /// Deliberately smaller: wanting something better is a reason to say
-    /// yes to it, not a reason to refuse everything else.
-    const MAX_PENALTY: f32 = 14.0;
-
-    pub(crate) fn terms_delta(
-        inclination: f32,
-        selling_league_reputation: u16,
-        buying_league_reputation: u16,
-    ) -> f32 {
-        let pull = inclination.clamp(0.0, 1.0);
-        if pull <= 0.0 || selling_league_reputation == 0 || buying_league_reputation == 0 {
-            return 0.0;
-        }
-        let gain = buying_league_reputation as f32 - selling_league_reputation as f32;
-        let step = (gain / Self::FULL_STEP_GAIN).clamp(-1.0, 1.0);
-        if step >= 0.0 {
-            pull * step * Self::MAX_BONUS
-        } else {
-            pull * step * Self::MAX_PENALTY
-        }
-    }
-}
-
-/// Wage-gap scoring for negotiations whose player can't be re-read at
-/// resolution time (foreign moves, global-pool free agents). Mirrors the
-/// domestic reservation-wage table so the money lever behaves the same on
-/// every personal-terms path, and hands back the `(reservation, offered)`
-/// pair that arms the iterative wage rounds for these deals too.
-pub(crate) struct StagedWageAssessment;
-
-impl StagedWageAssessment {
-    pub(crate) fn apply(neg_data: &NegotiationData, chance: &mut f32) -> Option<(f64, f64)> {
-        let offered = neg_data.offered_annual_wage? as f64;
-        let reservation = neg_data
-            .staged_reservation_wage
-            .map(|w| w as f64)
-            .unwrap_or(offered)
-            .max(500.0);
-        let wage_gap = offered / reservation;
-        if wage_gap >= 1.15 {
-            *chance += 15.0;
-        } else if wage_gap >= 0.95 {
-            *chance += 5.0;
-        } else if wage_gap >= 0.80 {
-            *chance -= 5.0;
-        } else if wage_gap >= 0.65 {
-            *chance -= 18.0;
-        } else {
-            *chance -= 35.0;
-        }
-        Some((reservation, offered))
-    }
-}
-
 /// Builds the order in which the seller resolves multiple competing
 /// bids. When two clubs both bid for the same player and both reach a
 /// phase-ready point on the same tick, the seller doesn't accept
@@ -3228,54 +3121,6 @@ impl BuyerContinentalPathHint {
             }),
             _ => None,
         }
-    }
-}
-
-#[cfg(test)]
-mod stage_ambition_match_tests {
-    use super::StageAmbitionMatch;
-
-    /// Russian Premier League → a mid-table side in Spain. The buying club
-    /// is SMALLER, so every club-reputation term in the model reads this as
-    /// a step down; the league is 3000 points stronger, which is the whole
-    /// reason the player wants it.
-    #[test]
-    fn a_step_up_in_league_rewards_a_player_who_wants_one() {
-        let delta = StageAmbitionMatch::terms_delta(0.8, 6_500, 9_200);
-        assert!(delta > 15.0, "expected a strong pull, got {delta}");
-    }
-
-    #[test]
-    fn the_same_move_means_nothing_to_a_player_without_the_itch() {
-        assert_eq!(StageAmbitionMatch::terms_delta(0.0, 6_500, 9_200), 0.0);
-    }
-
-    /// A bigger club in an equally-strong league answers nothing he is
-    /// asking for, and he is measurably less keen than he would be on the
-    /// smaller club in the better league.
-    #[test]
-    fn a_lateral_move_reads_worse_than_a_step_up() {
-        let lateral = StageAmbitionMatch::terms_delta(0.8, 6_500, 6_500);
-        let step_up = StageAmbitionMatch::terms_delta(0.8, 6_500, 8_500);
-        assert_eq!(lateral, 0.0);
-        assert!(step_up > lateral);
-    }
-
-    #[test]
-    fn dropping_a_league_costs_him_but_less_than_climbing_one_gains() {
-        let down = StageAmbitionMatch::terms_delta(1.0, 8_500, 6_500);
-        let up = StageAmbitionMatch::terms_delta(1.0, 6_500, 8_500);
-        assert!(down < 0.0, "a step down should read worse, got {down}");
-        assert!(
-            up > -down,
-            "wanting better is a reason to say yes, not to refuse everything: {up} vs {down}"
-        );
-    }
-
-    #[test]
-    fn an_unknown_league_on_either_side_stays_neutral() {
-        assert_eq!(StageAmbitionMatch::terms_delta(0.9, 0, 9_000), 0.0);
-        assert_eq!(StageAmbitionMatch::terms_delta(0.9, 6_000, 0), 0.0);
     }
 }
 
@@ -3394,7 +3239,7 @@ mod development_pathway_protection_tests {
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};
     use crate::transfers::offer::TransferOffer;
-    use crate::transfers::pipeline::{LoanOutCandidate, LoanOutStatus};
+    use crate::transfers::pipeline::{LoanDestinationPreference, LoanOutCandidate, LoanOutStatus};
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
         PlayerAttributes, PlayerCollection, PlayerPlan, PlayerPosition, PlayerPositionType,
@@ -3495,6 +3340,7 @@ mod development_pathway_protection_tests {
                             reason: LoanOutReason::DevelopmentPathway,
                             status: LoanOutStatus::Listed,
                             loan_fee: 0.0,
+                            preferred_destination: LoanDestinationPreference::Any,
                         });
                 }
                 club
@@ -3585,6 +3431,8 @@ mod development_pathway_protection_tests {
                 selling_club_name: "Seller".to_string(),
                 offered_annual_wage: Some(50_000),
                 staged_reservation_wage: None,
+                staged_stance: None,
+                staged_sporting_drop: None,
                 buying_league_reputation: 5000,
                 selling_league_reputation: 5_000,
                 player_stage_inclination: 0.0,
@@ -3848,6 +3696,8 @@ mod seller_fee_floor_tests {
                 selling_club_name: "Spartak".to_string(),
                 offered_annual_wage: Some(50_000),
                 staged_reservation_wage: None,
+                staged_stance: None,
+                staged_sporting_drop: None,
                 buying_league_reputation: 6000,
                 selling_league_reputation: 5_000,
                 player_stage_inclination: 0.0,
@@ -4442,6 +4292,8 @@ mod saga_visibility_tests {
                 selling_club_name: "Club 1".to_string(),
                 offered_annual_wage: Some(60_000),
                 staged_reservation_wage: None,
+                staged_stance: None,
+                staged_sporting_drop: None,
                 buying_league_reputation: 6000,
                 selling_league_reputation: 5_000,
                 player_stage_inclination: 0.0,

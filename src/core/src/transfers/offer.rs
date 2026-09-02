@@ -1,3 +1,4 @@
+use crate::PlayerSquadStatus;
 use crate::shared::Currency;
 use crate::shared::CurrencyValue;
 use chrono::NaiveDate;
@@ -75,6 +76,29 @@ pub enum PromisedSquadStatus {
     FirstTeamRegular,
     FirstTeamSquadRotation,
     HotProspectForTheFuture,
+}
+
+impl PromisedSquadStatus {
+    /// The squad role this promise installs — and, before that, the role
+    /// the buyer's opening WAGE should be priced for.
+    ///
+    /// A club offering a bench seat used to price the man as the key
+    /// player he was leaving behind, and a club offering the shirt priced
+    /// him as the backup he had become, because the wage context read his
+    /// CURRENT status on both sides. Both are the wrong number for the
+    /// deal actually on the table.
+    pub fn as_squad_status(self) -> PlayerSquadStatus {
+        match self {
+            PromisedSquadStatus::KeyPlayer => PlayerSquadStatus::KeyPlayer,
+            PromisedSquadStatus::FirstTeamRegular => PlayerSquadStatus::FirstTeamRegular,
+            PromisedSquadStatus::FirstTeamSquadRotation => {
+                PlayerSquadStatus::FirstTeamSquadRotation
+            }
+            PromisedSquadStatus::HotProspectForTheFuture => {
+                PlayerSquadStatus::HotProspectForTheFuture
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

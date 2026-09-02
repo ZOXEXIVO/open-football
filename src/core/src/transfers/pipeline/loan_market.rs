@@ -11,17 +11,23 @@ use crate::transfers::market::{
     TransferListing, TransferListingOrigin, TransferListingStatus, TransferListingType,
 };
 use crate::transfers::negotiation::NegotiationStatus;
-use crate::transfers::offer::{TransferClause, TransferOffer};
+use crate::transfers::offer::{PersonalTermsOffer, TransferClause, TransferOffer};
+use crate::transfers::pipeline::appraisal_inputs::PlayerStanceBuilder;
+use crate::transfers::pipeline::loan_home::{HomeLoanGates, HomeLoanPull};
+use crate::transfers::pipeline::playing_time::LoanPromise;
 use crate::transfers::pipeline::loan_interest::{
     BorrowerTaste, DestinationAppeal, GroupPressure, InterestDraw, LoanApproachMemory,
     LoanCandidateProfile,
 };
 use crate::transfers::pipeline::plausibility::{
-    BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
+    BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityEvaluator,
+    TransferPlausibilityVerdict,
 };
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
 use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
-use crate::transfers::pipeline::{AvailabilityBroadcast, LoanOutStatus, TransferRequestStatus};
+use crate::transfers::pipeline::{
+    AvailabilityBroadcast, LoanDestinationPreference, LoanOutStatus, TransferRequestStatus,
+};
 use crate::transfers::reason::TransferReason;
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
@@ -383,6 +389,10 @@ impl PipelineProcessor {
             /// Seller-side asking that backs that synthetic listing. Equal to
             /// the real listing's asking for listed targets (then unused).
             seller_asking: f64,
+            /// The loan exists to buy minutes rather than to fill a hole —
+            /// the borrower cleared `would_get_loan_minutes` at its stricter
+            /// bar. Decides the shirt the offer promises ([`LoanPromise`]).
+            is_development: bool,
         }
 
         let mut actions: Vec<LoanScanAction> = Vec::new();
@@ -614,6 +624,7 @@ impl PipelineProcessor {
                         reason,
                         is_unsolicited: false,
                         seller_asking: best.asking_price,
+                        is_development: best.is_development,
                     });
                     scanned_position_groups.push(pos_group);
                     scans_this_club += 1;
@@ -705,6 +716,7 @@ impl PipelineProcessor {
                         reason: TransferReason::key("signing_reason_loan_opportunistic_upgrade"),
                         is_unsolicited: false,
                         seller_asking: opp.asking_price,
+                        is_development: opp.is_development,
                     });
                     scanned_position_groups.push(opp.position_group);
                     scans_this_club += 1;
@@ -767,6 +779,7 @@ impl PipelineProcessor {
                         reason: TransferReason::key("signing_reason_loan_midseason_reinforcement"),
                         is_unsolicited: false,
                         seller_asking: opp.asking_price,
+                        is_development: opp.is_development,
                     });
                 }
             }
@@ -867,6 +880,7 @@ impl PipelineProcessor {
                         reason: TransferReason::key("signing_reason_loan_development_approach"),
                         is_unsolicited: true,
                         seller_asking: tgt.asking_price,
+                        is_development: tgt.is_development,
                     });
                 }
             }
@@ -975,7 +989,13 @@ impl PipelineProcessor {
                     action.club_id,
                     date,
                 )),
-                personal_terms: None,
+                personal_terms: Some(PersonalTermsOffer {
+                    // A loan promises a shirt: minutes are what it is
+                    // for (B4 / [`LoanPromise`]). No wage — the borrower
+                    // picks up a share of the deal he already has.
+                    squad_status_promise: LoanPromise::for_loan(action.is_development),
+                    ..PersonalTermsOffer::default()
+                }),
                 offering_club_id: action.club_id,
                 offered_date: date,
             };
@@ -1032,6 +1052,12 @@ impl PipelineProcessor {
     /// widens to the next tier down.
     const BROADCAST_RESPONSE_DAYS: i64 = 14;
 
+    /// Days a posted `HomeCountry` candidate is held off the domestic push
+    /// so his own league's clubs get first refusal. A fortnight — the same
+    /// window one tier of the cascade gets, because that is what the
+    /// preference is worth: a head start, not a veto.
+    const HOME_FIRST_DAYS: i64 = 14;
+
     /// Seller-side loan placement. A resource-rich parent club (National
     /// reputation or above) actively offers each loan-listed player to
     /// other clubs instead of only waiting to be scanned: it broadcasts
@@ -1060,6 +1086,9 @@ impl PipelineProcessor {
         // Read the same window the borrower-side scan reads, so the appetite
         // gate below judges a club exactly as its own scan would.
         let is_january = Self::is_mid_season_window_for(country, date);
+        // The region this country plays in — every borrower in this pass
+        // is in it, so the home term is derived once.
+        let domestic_region = ScoutingRegion::from_country(country.continent_id, &country.code);
 
         // Players with an in-flight negotiation already have a pending
         // response: don't widen their net or open a second approach. Their
@@ -1103,6 +1132,14 @@ impl PipelineProcessor {
             age: u8,
             is_development: bool,
             asking: f64,
+            /// Where the parent decided he would rather go, and enough of
+            /// his passport to price it. The ranking and the appraisal have
+            /// to agree about a home move, or the parent offers him
+            /// somewhere he then refuses (C4).
+            preference: LoanDestinationPreference,
+            nationality_country_id: u32,
+            nationality_region: Option<ScoutingRegion>,
+            return_home_desire: f32,
         }
 
         let mut broadcastable: Vec<Broadcastable> = Vec::new();
@@ -1187,6 +1224,16 @@ impl PipelineProcessor {
                 age: player.age(date),
                 is_development,
                 asking: listing.asking_price.amount,
+                preference: parent_club
+                    .transfer_plan
+                    .loan_out_candidates
+                    .iter()
+                    .find(|cand| cand.player_id == listing.player_id)
+                    .map(|cand| cand.preferred_destination)
+                    .unwrap_or_default(),
+                nationality_country_id: player.country_id,
+                nationality_region: player.home_region(),
+                return_home_desire: player.home_pull.desire,
             });
         }
 
@@ -1236,6 +1283,10 @@ impl PipelineProcessor {
             player_id: u32,
             selling_club_id: u32,
             offer_amount: f64,
+            /// The parent listed him through the development pathway —
+            /// the loan exists to buy minutes. Decides the shirt the
+            /// offer promises ([`LoanPromise`]).
+            is_development: bool,
         }
         // A broadcast loan is the seller's own initiative — he put the
         // player on the loan list and is shopping him around — so an
@@ -1260,6 +1311,33 @@ impl PipelineProcessor {
         for b in &broadcastable {
             if in_negotiation.contains(&b.player_id) {
                 continue;
+            }
+            // ── Home first ──────────────────────────────────────────
+            //
+            // A man the parent decided should go HOME is not offered
+            // around his current country for the first fortnight. It is
+            // one more stage at the top of the existing high → low
+            // cascade, and it is what makes the preference real: without
+            // it the domestic push placed him the same day the parent
+            // formed the wish, and the foreign home market — which scans
+            // on its own clock — never got a look.
+            //
+            // After the fortnight everything opens. The preference is a
+            // head start, never a veto.
+            let wants_home_elsewhere = b.preference == LoanDestinationPreference::HomeCountry
+                && b.nationality_country_id != 0
+                && b.nationality_country_id != country.id;
+            if wants_home_elsewhere {
+                let posted_for = country
+                    .clubs
+                    .iter()
+                    .find(|c| c.id == b.parent_club_id)
+                    .and_then(|c| c.transfer_plan.loan_broadcasts.get(&b.player_id))
+                    .map(|br| (date - br.since).num_days())
+                    .unwrap_or(0);
+                if posted_for < Self::HOME_FIRST_DAYS {
+                    continue;
+                }
             }
             // A development loanee is shopped to the WHOLE market at once: the
             // parent evaluates every club that would actually play him and sends
@@ -1398,6 +1476,16 @@ impl PipelineProcessor {
                             date,
                         ),
                         is_development: b.is_development,
+                        // Same term the borrower-side scan and the
+                        // appraisal read, so all three agree about an
+                        // Argentine loaned within Brazil (C4).
+                        home_pull: HomeLoanPull::factor(
+                            b.nationality_country_id,
+                            b.nationality_region,
+                            country.id,
+                            domestic_region,
+                            b.return_home_desire,
+                        ),
                     }
                     .score(),
                 ));
@@ -1406,6 +1494,7 @@ impl PipelineProcessor {
                 actions.push(PushAction {
                     borrower_id,
                     player_id: b.player_id,
+                    is_development: b.is_development,
                     selling_club_id: b.parent_club_id,
                     offer_amount: FormattingUtils::round_fee(b.asking * 0.8),
                 });
@@ -1443,7 +1532,13 @@ impl PipelineProcessor {
                     action.borrower_id,
                     date,
                 )),
-                personal_terms: None,
+                personal_terms: Some(PersonalTermsOffer {
+                    // A loan promises a shirt: minutes are what it is
+                    // for (B4 / [`LoanPromise`]). No wage — the borrower
+                    // picks up a share of the deal he already has.
+                    squad_status_promise: LoanPromise::for_loan(action.is_development),
+                    ..PersonalTermsOffer::default()
+                }),
                 offering_club_id: action.borrower_id,
                 offered_date: date,
             };
@@ -1956,6 +2051,7 @@ impl PipelineProcessor {
 
         // The scanning country's own region — used to block loans from
         // clearly more prestigious regions (Paraguay can't loan from England).
+        let country_id = country.id;
         let club_region = ScoutingRegion::from_country(country.continent_id, &country.code);
         let club_region_prestige = club_region.league_prestige();
 
@@ -1972,6 +2068,7 @@ impl PipelineProcessor {
                 // `Loa` badge is not required for a loan approach. Importance
                 // is gated below by the staged (unsolicited) plausibility.
                 let approachable = p.is_loan_listed
+                    || p.home_return_wanted
                     || (p.age <= MAX_LOAN_TARGET_AGE
                         && ForeignUnsolicitedLoanTarget::looks_loanable(
                             p.age,
@@ -1981,6 +2078,14 @@ impl PipelineProcessor {
                 if !approachable {
                     return false;
                 }
+                // A player is never a stranger in his own country. The
+                // level gates below read truth and stay exactly as they
+                // were — what changes is that his own federation is not
+                // "a smaller country" to him, and his own continent is a
+                // smaller step than a stranger's (L7.3).
+                let is_home_country =
+                    p.nationality_country_id != 0 && p.nationality_country_id == country_id;
+                let is_home_region = !is_home_country && p.nationality_region == Some(club_region);
                 // Country-reputation step-down. A player from a more
                 // prestigious footballing nation isn't a realistic loan-in
                 // for a smaller country — EXCEPT development-profile
@@ -1989,10 +2094,13 @@ impl PipelineProcessor {
                 // prospect → a smaller league). The region-prestige gate
                 // below and the club-rep reality band downstream still bound
                 // how far the move can fall.
-                if !Self::foreign_loan_country_rep_ok(
-                    p.country_reputation,
-                    country_rep,
-                    ForeignUnsolicitedLoanTarget::is_development(p.age),
+                if !HomeLoanGates::country_rep_ok(
+                    Self::foreign_loan_country_rep_ok(
+                        p.country_reputation,
+                        country_rep,
+                        ForeignUnsolicitedLoanTarget::is_development(p.age),
+                    ),
+                    is_home_country,
                 ) {
                     return false;
                 }
@@ -2001,10 +2109,16 @@ impl PipelineProcessor {
                 // a development youngster drops abroad for guaranteed minutes
                 // (an Italian U18 → Romania). See `foreign_loan_region_ok`.
                 // `p.region` is precomputed at pool-build time.
-                Self::foreign_loan_region_ok(
+                HomeLoanGates::region_ok(
+                    Self::foreign_loan_region_ok(
+                        p.region.league_prestige(),
+                        club_region_prestige,
+                        ForeignUnsolicitedLoanTarget::is_development(p.age),
+                    ),
                     p.region.league_prestige(),
                     club_region_prestige,
-                    ForeignUnsolicitedLoanTarget::is_development(p.age),
+                    is_home_country,
+                    is_home_region,
                 )
             })
             .collect();
@@ -2012,6 +2126,15 @@ impl PipelineProcessor {
         if foreign_loans.is_empty() {
             return;
         }
+
+        // Posted compatriots, hoisted out of the per-club loop: the ONLY
+        // foreign loan market an Elite or Continental club opens, and a
+        // country-wide fact that has no business being recomputed per club.
+        let compatriots: Vec<&PlayerSummary> = foreign_loans
+            .iter()
+            .copied()
+            .filter(|p| p.home_return_wanted && p.nationality_country_id == country_id)
+            .collect();
 
         // Position-group partition for the request loop below — each
         // request used to walk the whole filtered pool to reject the
@@ -2032,6 +2155,18 @@ impl PipelineProcessor {
             player: PlayerSummary,
             offer_amount: f64,
             reason: TransferReason,
+            /// Age-classified development loan — the borrower cleared the
+            /// stricter minutes gate, so the offer promises a regular
+            /// shirt ([`LoanPromise`]).
+            is_development: bool,
+            /// This approach came from the compatriot sweep rather than
+            /// the ordinary foreign scan — one per club per window.
+            from_compatriot_sweep: bool,
+            /// What he is to his current club, and how far the move
+            /// falls — both read from the staged plausibility model here,
+            /// because at resolution time his club is abroad.
+            player_importance: f32,
+            sporting_drop: f32,
         }
 
         let mut actions: Vec<ForeignLoanAction> = Vec::new();
@@ -2065,15 +2200,50 @@ impl PipelineProcessor {
             // Elite clubs buy — they don't scan loan markets.
             // Continental only in January with negative balance.
             // Local/Amateur don't have the scouting reach for foreign markets.
-            let should_scan_foreign = match rep_level {
+            // Who runs the ORDINARY foreign loan scan — the request path
+            // plus the proactive pickup, over the whole foreign pool.
+            let ordinary_foreign_scan = match rep_level {
                 ReputationLevel::Elite => false,
                 ReputationLevel::Continental => is_january && club.finance.balance.balance < 0,
                 ReputationLevel::National | ReputationLevel::Regional => true,
                 _ => false, // Local/Amateur
             };
-            if !should_scan_foreign {
+            // …and who runs the COMPATRIOT SWEEP instead.
+            //
+            // A compatriot the world has been told would come home is a
+            // different proposition from a foreign loan market. Flamengo
+            // and Palmeiras do not trawl Europe for loanees — and they do
+            // sign the boy their own league produced when his club posts
+            // him. So the sweep opens exactly that door: the proactive
+            // branch alone, over the posted-compatriot slice alone, once
+            // per club per window.
+            //
+            // It used to be a country-wide `any()` that simply flipped
+            // `should_scan_foreign`, after which both branches iterated
+            // the FULL foreign pool with no compatriot restriction: one
+            // posted English 21-year-old at Ajax had every Elite English
+            // club running the ordinary foreign scan every pass for as
+            // long as he stayed posted.
+            let compatriot_sweep = !ordinary_foreign_scan
+                && matches!(
+                    rep_level,
+                    ReputationLevel::Elite | ReputationLevel::Continental
+                )
+                && plan.compatriot_sweeps_this_window == 0
+                && !compatriots.is_empty();
+            if !ordinary_foreign_scan && !compatriot_sweep {
                 continue;
             }
+            // The slice each branch actually looks at.
+            let scan_pool: &[&PlayerSummary] = if ordinary_foreign_scan {
+                &foreign_loans
+            } else {
+                &compatriots
+            };
+            // Standard of football on offer here — the division gate reads
+            // it against the parent's own competition, which travels on the
+            // summary (C12).
+            let borrower_league_rep = Self::club_league_reputation(country, club);
 
             // Check concurrent negotiation limits
             let actual_active = active_counts.get(&club.id).copied().unwrap_or(0);
@@ -2182,15 +2352,34 @@ impl PipelineProcessor {
                         answers_open_request: open_request_groups.contains(&p.position_group),
                     })
                     .map(|score| {
-                        if p.region == club_region {
-                            score * 1.45
-                        } else {
-                            score
-                        }
+                        // Local supply is real: a club looks in its own
+                        // backyard first. Kept exactly as it was — the
+                        // home pull competes with it rather than
+                        // replacing it, and the census decides.
+                        let local = if p.region == club_region { 1.45 } else { 1.0 };
+                        // …and a man's own country pulls him back, in
+                        // proportion to how much he wants it. Note this
+                        // reads his NATIONALITY region against the
+                        // borrower's, where `local` above reads his
+                        // CLUB's — the two used to be the same field, and
+                        // the same-region term therefore worked AGAINST a
+                        // return home.
+                        score
+                            * local
+                            * HomeLoanPull::factor(
+                                p.nationality_country_id,
+                                p.nationality_region,
+                                country_id,
+                                club_region,
+                                p.return_home_desire,
+                            )
                     })
             };
 
-            for request in unfulfilled {
+            // The request path walks the whole foreign pool by position
+            // group, so it belongs to the ordinary scan alone — a
+            // compatriot sweep never runs it.
+            for request in unfulfilled.filter(|_| ordinary_foreign_scan) {
                 if scans >= max_scans {
                     break;
                 }
@@ -2233,7 +2422,15 @@ impl PipelineProcessor {
                             // `p.region` is stamped from the same
                             // (continent, country-code) resolve at pool
                             // build time — no per-candidate re-resolve.
-                            && scout_regions.contains(&p.region)
+                            && HomeLoanGates::reach_ok(
+                                scout_regions.contains(&p.region),
+                                p.nationality_country_id,
+                                p.nationality_region,
+                                country_id,
+                                club_region,
+                                p.home_return_wanted,
+                                ForeignUnsolicitedLoanTarget::is_development(p.age),
+                            )
                             // Borrower-depth gate: if the borrower's
                             // squad is already full at this position
                             // group, accept only when the incoming
@@ -2259,12 +2456,17 @@ impl PipelineProcessor {
                             // gate as the domestic scan, anchored on the
                             // player's own club rather than his personal
                             // reputation.
-                            && Self::loan_reputation_drop_ok(
+                            && Self::loan_level_ok(
                                 team_rep,
                                 p.club_world_reputation.max(0) as u16,
                                 p.skill_ability,
                                 p.club_best_in_group,
                                 ForeignUnsolicitedLoanTarget::is_development(p.age),
+                                // Both competitions are in hand on a
+                                // cross-border loan: his is on the
+                                // summary, the borrower's is local (C12).
+                                p.seller_ctx.league_reputation,
+                                borrower_league_rep,
                             )
                             // Staged cross-border veto: an important player at
                             // a much stronger club abroad isn't a credible
@@ -2299,11 +2501,16 @@ impl PipelineProcessor {
                     // `format!` here dropped the request's "why" from every
                     // foreign request-driven loan's history row.
                     let reason = TransferReason::key(request.reason.as_signing_reason_key());
+                    let staged = ForeignLoanStance::read(&buyer_loan_ctx, best, date);
                     actions.push(ForeignLoanAction {
                         club_id: club.id,
                         player: (*best).clone(),
                         offer_amount: loan_fee,
                         reason,
+                        is_development: ForeignUnsolicitedLoanTarget::is_development(best.age),
+                        from_compatriot_sweep: false,
+                        player_importance: staged.0,
+                        sporting_drop: staged.1,
                     });
                     scanned_position_groups.push(pos_group);
                     scans += 1;
@@ -2328,10 +2535,13 @@ impl PipelineProcessor {
             // Bounded by the same per-club scan budget as the request path.
             let team_rep = team.reputation.world;
             if scans < max_scans {
-                let prospects: Vec<&&PlayerSummary> = foreign_loans
+                let prospects: Vec<&&PlayerSummary> = scan_pool
                     .iter()
                     .filter(|p| {
-                        p.is_loan_listed
+                        // A posted compatriot is his own advert — his
+                        // parent has told the world he would come home,
+                        // which is exactly the row a loan listing is.
+                        (p.is_loan_listed || p.home_return_wanted)
                             && ForeignUnsolicitedLoanTarget::is_development(p.age)
                             && !club.is_rival(p.club_id)
                             && !plan.is_loan_approach_barred(p.player_id, date)
@@ -2344,7 +2554,15 @@ impl PipelineProcessor {
                             // into a far smaller ecosystem than his club's.
                             && p.home_reputation <= (team_rep as f32 * 2.0) as i16
                             && team_rep >= (p.home_reputation.max(0) as f32 * 0.35) as u16
-                            && scout_regions.contains(&p.region)
+                            && HomeLoanGates::reach_ok(
+                                scout_regions.contains(&p.region),
+                                p.nationality_country_id,
+                                p.nationality_region,
+                                country_id,
+                                club_region,
+                                p.home_return_wanted,
+                                true,
+                            )
                             // Development profile throughout (gated above), so
                             // every borrower-side gate runs at its dev setting:
                             // the relaxed keeper room check (Fix A) lets him
@@ -2360,12 +2578,17 @@ impl PipelineProcessor {
                                 p.skill_ability,
                                 true,
                             )
-                            && Self::loan_reputation_drop_ok(
+                            && Self::loan_level_ok(
                                 team_rep,
                                 p.club_world_reputation.max(0) as u16,
                                 p.skill_ability,
                                 p.club_best_in_group,
                                 true,
+                                // Both competitions are in hand on a
+                                // cross-border loan: his is on the
+                                // summary, the borrower's is local (C12).
+                                p.seller_ctx.league_reputation,
+                                borrower_league_rep,
                             )
                             && !matches!(
                                 TransferPlausibilityBuilder::evaluate_summary(
@@ -2397,11 +2620,16 @@ impl PipelineProcessor {
                     // the scan counter or the scanned-groups set, so the loan
                     // action is all that's needed.
                     let loan_fee = FormattingUtils::round_fee(best.estimated_value * 0.1 * 0.8);
+                    let staged = ForeignLoanStance::read(&buyer_loan_ctx, best, date);
                     actions.push(ForeignLoanAction {
                         club_id: club.id,
                         player: (*best).clone(),
                         offer_amount: loan_fee,
                         reason: TransferReason::key("signing_reason_loan_foreign_prospect"),
+                        is_development: ForeignUnsolicitedLoanTarget::is_development(best.age),
+                        player_importance: staged.0,
+                        sporting_drop: staged.1,
+                        from_compatriot_sweep: compatriot_sweep,
                     });
                 }
             }
@@ -2445,9 +2673,28 @@ impl PipelineProcessor {
             // Same as the domestic loan path — explicit months-side
             // duration so the market history record matches the actual
             // loan length. The borrower is in the scanning country.
+            // A boy going home comes with a buy option. It is how these
+            // deals are actually written — Gerson, Kaio Jorge, Matheus
+            // Pereira all converted — and it is where the ~30 % conversion
+            // band in the census comes from. The option is withheld on an
+            // ordinary cold approach (a club does not price a permanent it
+            // has not asked about); a posted compatriot is not a cold
+            // approach, it is a homecoming his parent advertised.
+            let coming_home = action.player.home_return_wanted
+                && action.player.nationality_country_id != 0
+                && action.player.nationality_country_id == country.id;
+            let mut clauses = Vec::new();
+            if coming_home && action.player.estimated_value > 0.0 {
+                clauses.push(TransferClause::LoanOptionToBuy(CurrencyValue {
+                    amount: FormattingUtils::round_fee(
+                        action.player.estimated_value * Self::LOAN_OPTION_VALUE_FRACTION,
+                    ),
+                    currency: Currency::Usd,
+                }));
+            }
             let offer = TransferOffer {
                 base_fee: asking_price,
-                clauses: Vec::new(),
+                clauses,
                 salary_contribution: None,
                 contract_length_years: None,
                 loan_duration_months: Some(Self::loan_duration_to_season_end(
@@ -2455,7 +2702,13 @@ impl PipelineProcessor {
                     action.club_id,
                     date,
                 )),
-                personal_terms: None,
+                personal_terms: Some(PersonalTermsOffer {
+                    // A loan promises a shirt: minutes are what it is
+                    // for (B4 / [`LoanPromise`]). No wage — the borrower
+                    // picks up a share of the deal he already has.
+                    squad_status_promise: LoanPromise::for_loan(action.is_development),
+                    ..PersonalTermsOffer::default()
+                }),
                 offering_club_id: action.club_id,
                 offered_date: date,
             };
@@ -2472,6 +2725,7 @@ impl PipelineProcessor {
             ) {
                 if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                     negotiation.is_loan = true;
+                    negotiation.has_option_to_buy = coming_home;
                     negotiation.is_unsolicited = is_unsolicited;
                     negotiation.reason = action.reason;
                     negotiation.selling_country_id = Some(action.player.country_id);
@@ -2484,6 +2738,20 @@ impl PipelineProcessor {
                     // in-flight loan visible to the position cap.
                     negotiation.loan_target_profile =
                         Some((action.player.position_group, action.player.skill_ability));
+                    // The player is in another country's borrow by the time
+                    // he is asked, so his side of the appraisal is captured
+                    // here from the market summary — which is exactly what
+                    // this borrower actually knows about him. Without it a
+                    // cross-border loan fell back to the bare prestige wall
+                    // that made going home the least likely destination on
+                    // the board (L7.6).
+                    negotiation.staged_stance = Some(PlayerStanceBuilder::from_summary(
+                        &action.player,
+                        action.player_importance,
+                        action.player.region,
+                    ));
+                    negotiation.staged_sporting_drop = Some(action.sporting_drop);
+                    negotiation.open_salary_at(action.player.salary);
                 }
 
                 // Same standoff the domestic scan stamps — a club that has
@@ -2493,6 +2761,13 @@ impl PipelineProcessor {
                     buyer
                         .transfer_plan
                         .record_loan_approach(action.player.player_id, date);
+                    if action.from_compatriot_sweep {
+                        // One homecoming per window. The sweep is a door
+                        // for the boy a league produced, not a licence to
+                        // shop abroad.
+                        buyer.transfer_plan.compatriot_sweeps_this_window =
+                            buyer.transfer_plan.compatriot_sweeps_this_window.saturating_add(1);
+                    }
                 }
 
                 debug!(
@@ -2525,9 +2800,11 @@ impl PipelineProcessor {
     ///     young regulars tumbling far below their level — e.g. a Serie A
     ///     first-choice keeper loaned to Serie C.)
     ///
-    /// The club-standing half of [`LoanDestinationLevel`]; kept as a named
-    /// entry point for the paths that have no league context to offer (the
-    /// cross-border scan, whose own country/region gates cover that ground).
+    /// The club-standing half of [`LoanDestinationLevel`] on its own —
+    /// what [`Self::loan_level_ok`] reduces to when neither competition is
+    /// known. Every production path now has league context (C12), so this
+    /// is the named entry point the gate's own tests measure against.
+    #[cfg(test)]
     fn loan_reputation_drop_ok(
         borrower_rep: u16,
         parent_rep: u16,
@@ -2535,16 +2812,45 @@ impl PipelineProcessor {
         parent_best_in_group: u8,
         is_development: bool,
     ) -> bool {
+        Self::loan_level_ok(
+            borrower_rep,
+            parent_rep,
+            player_ability,
+            parent_best_in_group,
+            is_development,
+            0,
+            0,
+        )
+    }
+
+    /// Both halves of [`LoanDestinationLevel`], with the league context a
+    /// caller can supply.
+    ///
+    /// The cross-border scan used to pass 0/0 and stand the division gate
+    /// down entirely, although both reputations are in hand: the borrower's
+    /// own competition is local, and the parent's rides on the market
+    /// summary. Zero on either side still stands the gate down — that is
+    /// its own "unknown competition" rule, not a suspension.
+    #[allow(clippy::too_many_arguments)]
+    fn loan_level_ok(
+        borrower_rep: u16,
+        parent_rep: u16,
+        player_ability: u8,
+        parent_best_in_group: u8,
+        is_development: bool,
+        parent_league_rep: u16,
+        borrower_league_rep: u16,
+    ) -> bool {
         LoanDestinationLevel {
             ability: player_ability,
             parent_best_in_group,
             parent_rep,
             borrower_rep,
-            parent_league_rep: 0,
-            borrower_league_rep: 0,
+            parent_league_rep,
+            borrower_league_rep,
             is_development,
         }
-        .clears_club_standing()
+        .is_plausible()
     }
 
     /// Fraction of a player's market value an option to buy is struck at.
@@ -2964,6 +3270,41 @@ impl UnsolicitedLoanTarget {
         let avg_ok =
             level.is_development || level.ability >= borrower_avg_ability.saturating_sub(5);
         avg_ok && level.is_plausible()
+    }
+}
+
+/// The two seller-side numbers a cross-border loan has to carry with it.
+///
+/// Personal terms for a foreign loan are resolved by the BORROWING
+/// country's pass, where the player and his club are inside another
+/// country's borrow. What he is to that club, and how far the move falls,
+/// are therefore read here — from the same staged plausibility model the
+/// scan has already run for its own gates, so the two can never disagree
+/// (Part VIII, "two importance formulas").
+struct ForeignLoanStance;
+
+impl ForeignLoanStance {
+    /// `(importance, sporting_drop)`. Falls back to the mid-range read the
+    /// foreign fee resolver already uses when the summary cannot be
+    /// assessed at all.
+    fn read(
+        buyer_ctx: &BuyerPlausibilityContext,
+        target: &PlayerSummary,
+        date: NaiveDate,
+    ) -> (f32, f32) {
+        // A man his club has loan-listed is not a cold call. Reading every
+        // foreign loan as unsolicited held a genuinely advertised target
+        // to the stricter unsolicited bar and withheld the
+        // seller-advertised read from his own importance.
+        let is_unsolicited = !target.is_loan_listed;
+        TransferPlausibilityBuilder::from_summary(buyer_ctx, target, true, is_unsolicited, date)
+            .map(|inputs| {
+                (
+                    TransferPlausibilityEvaluator::player_importance(&inputs),
+                    TransferPlausibilityEvaluator::sporting_drop(&inputs),
+                )
+            })
+            .unwrap_or((0.55, 0.0))
     }
 }
 

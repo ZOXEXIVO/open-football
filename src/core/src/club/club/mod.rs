@@ -407,6 +407,11 @@ impl Club {
         // debt ratios sized off them read every young club as broke.
         board_ctx.trailing_annual_income = self.finance.estimated_annual_income(date);
         board_ctx.trailing_annual_outcome = self.finance.estimated_annual_outcome(date);
+        // …and a figure that exists even before the first month closes, so
+        // the ratios whose denominator is a year of revenue fail closed
+        // instead of dividing by nothing.
+        board_ctx.projected_annual_income =
+            self.projected_annual_income(&ctx, board_ctx.league_tier, date);
         board_ctx.ffp_status = if self.finance.is_ffp_breach(date) {
             FfpStatus::Breach
         } else if self.finance.is_ffp_watchlist(date) {
@@ -840,6 +845,7 @@ impl Club {
             country_price_level,
             trailing_annual_income: 0,
             trailing_annual_outcome: 0,
+            projected_annual_income: 0,
             ffp_status: FfpStatus::Clean,
             debt_standing: self.finance.debt.standing,
             league_position: 0,

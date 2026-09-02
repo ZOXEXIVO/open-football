@@ -1,5 +1,6 @@
 use crate::PlayerFieldPositionGroup;
 use crate::transfers::offer::TransferOffer;
+use crate::transfers::pipeline::appraisal::{PlayerStance, TermsRefusalCause};
 use crate::transfers::pipeline::planning::BriefTier;
 use crate::transfers::reason::TransferReason;
 use crate::utils::IntegerUtils;
@@ -86,6 +87,10 @@ pub struct TransferNegotiation {
     /// Annual wage the buying club has staged for the player. None until the
     /// pipeline fills it at negotiation start.
     pub offered_salary: Option<u32>,
+    /// The wage the buyer OPENED at, before any personal-terms round
+    /// raised it. `None` until the first raise, which is when it is
+    /// latched. See [`Self::raise_offered_salary`].
+    pub opening_salary: Option<u32>,
     /// The player's reservation wage captured at negotiation start, for
     /// negotiations whose player can't be re-read at resolution time
     /// (foreign moves, global-pool free agents). Foreign moves stage it
@@ -164,6 +169,26 @@ pub struct TransferNegotiation {
     /// answers, captured at creation. Drives the opening ratio and the
     /// deadline premium. `None` for negotiations with no brief behind them.
     pub brief_tier: Option<BriefTier>,
+    /// The player's own side of the appraisal, staged at creation.
+    ///
+    /// Personal terms are resolved by the BUYING country's pass, so on a
+    /// cross-border deal the player, his club, his depth chart and his mind
+    /// are all inside another country's borrow by the time he is asked.
+    /// Every player-side fact the appraisal reads is therefore captured
+    /// when the seller's country IS in scope, exactly as
+    /// `foreign_seller_importance` and `foreign_seller_finances` already
+    /// are. `None` for domestic deals, which rebuild it live each round.
+    pub staged_stance: Option<PlayerStance>,
+    /// Sporting distance of the move, staged alongside the stance — it
+    /// needs both clubs, and only creation has both.
+    pub staged_sporting_drop: Option<f32>,
+    /// Which axis the player refused on, once he has. Written by the
+    /// personal-terms resolver for the story, the census and the trace.
+    pub terms_refusal_cause: Option<TermsRefusalCause>,
+    /// What he said he would go for, in the round he refused. Paired with
+    /// the cause so a diagnostic can print "he would go for $31M a year;
+    /// we can pay $12M" rather than a bare probability.
+    pub terms_reservation_wage: Option<u32>,
 }
 
 impl TransferNegotiation {
@@ -213,6 +238,7 @@ impl TransferNegotiation {
             },
             phase_expiry,
             offered_salary: None,
+            opening_salary: None,
             staged_reservation_wage: None,
             selling_club_reputation,
             buying_club_reputation,
@@ -233,6 +259,10 @@ impl TransferNegotiation {
             loan_target_profile: None,
             buyer_ceiling_fee: None,
             brief_tier: None,
+            staged_stance: None,
+            staged_sporting_drop: None,
+            terms_refusal_cause: None,
+            terms_reservation_wage: None,
         }
     }
 
@@ -316,12 +346,39 @@ impl TransferNegotiation {
             .unwrap_or(current_date);
     }
 
+    /// Table the buyer's OPENING wage — the figure its own level implies.
+    ///
+    /// Sets the anchor at the same moment as the offer, because the two
+    /// are the same number at creation and the anchor is what every later
+    /// round's wage power is a stretch on. Leaving `opening_salary` for
+    /// `raise_offered_salary` to latch meant a path that never staged a
+    /// salary latched `None`, and round two then anchored on the raise —
+    /// 1.3 compounding into 1.69.
+    pub fn open_salary_at(&mut self, wage: u32) {
+        self.offered_salary = Some(wage);
+        if self.opening_salary.is_none() {
+            self.opening_salary = Some(wage);
+        }
+        if let Some(terms) = self.current_offer.personal_terms.as_mut() {
+            terms.annual_wage = Some(wage);
+        }
+    }
+
     /// Raise the wage the buyer is putting on the table during personal-terms
     /// negotiation. Updates both the loose `offered_salary` (which the
     /// acceptance roll reads) and the structured personal-terms package's
     /// annual wage (the authoritative figure installed on completion), so the
     /// wage the player accepts is exactly the wage he is then paid.
     pub fn raise_offered_salary(&mut self, new_wage: u32) {
+        // Remember where the buyer opened. Its wage POWER is a stretch on
+        // its own level wage, and if that anchor moved with each raise the
+        // ceiling would chase the offer up its own ladder — two rounds of
+        // 1.3× compounding into a club paying nearly 1.7× what its level
+        // says it can. The opening figure is the level; the raises are the
+        // stretch. Normally already stamped by `open_salary_at`.
+        if self.opening_salary.is_none() {
+            self.opening_salary = self.offered_salary;
+        }
         self.offered_salary = Some(new_wage);
         if let Some(terms) = self.current_offer.personal_terms.as_mut() {
             terms.annual_wage = Some(new_wage);

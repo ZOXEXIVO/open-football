@@ -1,7 +1,7 @@
 use crate::club::player::adaptation::{AdaptationFailureSignals, AdaptationSquadContext};
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::core::player::TransferRequestReason;
-use crate::club::player::mind::{GoalBridge, GoalKind, MindClock};
+use crate::club::player::mind::{GoalBridge, GoalEvidence, GoalKind, GoalOrigin, MindClock};
 use crate::club::player::player::Player;
 use crate::club::player::transfer::big_stage_pull::{BigStagePull, BigStagePullContext};
 use crate::club::player::{RestlessnessInputs, StuckCareerScan};
@@ -767,7 +767,22 @@ impl Player {
         }
 
         if !recently_transferred && self.return_home_request_pressure(now, ctx) {
-            active_reasons.push(TransferRequestReason::ReturnHome);
+            // The 21-year-old asks to go home FOR A SEASON; the
+            // 29-year-old asks to leave. Same homesickness, two different
+            // asks, and the simulator only ever knew how to make the
+            // second — which is why a stuck foreign prospect's route out
+            // was a transfer request that then *suppressed* his loan
+            // request (`process_playing_time_complaints` skips a `Req`
+            // holder), and the most common loan in world football could
+            // not happen.
+            //
+            // Continuous in runway, so there is no birthday at which the
+            // ask changes shape.
+            if self.home_loan_runway(now) > Self::HOME_LOAN_RUNWAY_BAR {
+                self.pursue_loan_home(now);
+            } else {
+                active_reasons.push(TransferRequestReason::ReturnHome);
+            }
         }
 
         if !recently_transferred && self.european_request_pressure(now) {
@@ -849,6 +864,66 @@ impl Player {
     ///   wanting first-team football gives it until the next window
     ///   before he escalates — which is a thing a real player does and
     ///   the current model has no way to represent at all.
+    /// Runway above which a homesick player asks for a loan rather than a
+    /// transfer. 0.7 is roughly age 25 — the top of the population Part I.3
+    /// describes, and the same bar
+    /// [`crate::transfers::pipeline::UnsettledAbroadScan`] uses.
+    const HOME_LOAN_RUNWAY_BAR: f32 = 0.7;
+
+    /// Pressure a freshly formed `GoHome` is seeded at.
+    ///
+    /// Just above [`crate::transfers::pipeline::HomeLoanGates`]'
+    /// `WANTS_HOME_BAR` of 0.4, so the want the mind has just formed can
+    /// carry the pathway by itself within a tick instead of waiting on
+    /// the legacy `WantsReturnHome` mood's recency to do it. It is not
+    /// seeded lightly: `return_home_request_pressure` has already found
+    /// isolation, tenure and a formed complaint before this runs.
+    const HOME_LOAN_SEED_PRESSURE: f32 = 0.45;
+
+    /// Years of prime left, 0..1 — the same curve
+    /// [`crate::club::player::mind::MindSituation::career_runway`] uses,
+    /// read here without building a whole situation.
+    fn home_loan_runway(&self, now: NaiveDate) -> f32 {
+        ((34.0 - DateUtils::age(self.birth_date, now) as f32) / 12.0).clamp(0.0, 1.0)
+    }
+
+    /// He wants to go home, and he wants to play — which for a man this
+    /// young means one season somewhere he will, not a move.
+    ///
+    /// Writes the two wants and stops. No `Req`, no listing, no status.
+    /// Two channels read them and neither needs a badge: the parent's own
+    /// loan sweep, through
+    /// [`crate::transfers::pipeline::UnsettledAbroadScan`], and the
+    /// manager-talk route's home check, which reads
+    /// [`crate::Player::home_pull`] and the `GoOutOnLoan` pressure written
+    /// here. So the ask reaches the club through the channels a loan
+    /// actually travels.
+    ///
+    /// The home want is seeded ABOVE
+    /// [`crate::transfers::pipeline::HomeLoanGates::WANTS_HOME_BAR`] on
+    /// purpose. It is written only when the pressure model has already
+    /// found real evidence, and a seed below the bar left the pathway
+    /// carried entirely by the legacy `WantsReturnHome` mood's recency —
+    /// the mind's own want could never clear its own posting bar.
+    fn pursue_loan_home(&mut self, now: NaiveDate) {
+        let today = MindClock::day(now);
+        let home = GoalBridge::from_transfer_request_reason(TransferRequestReason::ReturnHome);
+        self.mind.organs.goals.pursue(
+            home.goal,
+            home.origin,
+            home.evidence,
+            home.weight.max(Self::HOME_LOAN_SEED_PRESSURE),
+            today,
+        );
+        self.mind.organs.goals.pursue(
+            GoalKind::GoOutOnLoan,
+            GoalOrigin::Survival,
+            GoalEvidence::of(&[GoalEvidence::HOMESICK, GoalEvidence::NO_FIRST_TEAM_FOOTBALL]),
+            0.65,
+            today,
+        );
+    }
+
     fn feed_goals_from_reasons(&mut self, reasons: &[TransferRequestReason], now: NaiveDate) {
         if reasons.is_empty() {
             return;
@@ -1453,8 +1528,13 @@ impl Player {
     }
 
     fn return_home_request_pressure(&self, now: NaiveDate, _ctx: &TransferDesireContext) -> bool {
-        // Need a fair window (60-120 days post-transfer baseline).
-        let days = match self.days_since_transfer(now) {
+        // Need a fair window: two months as this club's player.
+        //
+        // TENURE, not `days_since_transfer` — the loan machinery re-stamps
+        // that on every return, so a serial loanee read as a brand-new
+        // arrival twice a year and the window never closed on him (memory
+        // `loan_pipeline`).
+        let days = match StuckCareerScan::club_tenure_days(self, now) {
             Some(d) if d >= 60 => d,
             _ => return false,
         };

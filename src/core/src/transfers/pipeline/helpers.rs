@@ -3,8 +3,12 @@ use rustc_hash::FxHashMap;
 
 use crate::club::player::events::transfer_social::TransferInterestSignal;
 use crate::club::player::language::LanguageProfile;
+use crate::club::player::mind::GoalKind;
+use crate::club::player::statistics::StuckCareerScan;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::ScoutingRegion;
+use crate::transfers::pipeline::LoanDestinationPreference;
+use crate::transfers::pipeline::loan_home::HomeLoanGates;
 use crate::transfers::pipeline::breakout::{BreakoutPerformanceSignal, LeaguePerformanceLookup};
 use crate::transfers::pipeline::processor::{
     PipelineProcessor, PlayerSummary, SellerPlausibilityContext,
@@ -344,6 +348,44 @@ impl PipelineProcessor {
             continent_id: country.continent_id,
             region: ScoutingRegion::from_country(country.continent_id, &country.code),
             country_code: country.code.clone(),
+            // Where he is FROM — see the twin block in
+            // `collect_player_pool`. Both builders must agree, or a
+            // candidate row and a pool row would describe two players.
+            nationality_country_id: player.country_id,
+            nationality_continent_id: player.nationality_continent_id,
+            nationality_region: player.home_region(),
+            starter_share: player.happiness.starter_ratio,
+            tenure_days: StuckCareerScan::club_tenure_days(player, date)
+                .unwrap_or(i64::from(u16::MAX))
+                .clamp(0, i64::from(u16::MAX)) as u16,
+            // The weekly cache, exactly as `collect_player_pool` reads it
+            // — the two builders describe the same man or they describe
+            // two different ones.
+            return_home_desire: player.home_pull.desire,
+            home_return_wanted: HomeLoanGates::is_posted(
+                player.home_pull.wanted,
+                club.transfer_plan
+                    .loan_out_candidates
+                    .iter()
+                    .any(|c| {
+                        c.player_id == player.id
+                            && c.preferred_destination != LoanDestinationPreference::Any
+                    }),
+            ),
+            ambition: player.attributes.ambition as u8,
+            loyalty: player.attributes.loyalty as u8,
+            adaptability: player.attributes.adaptability as u8,
+            leave_pressure: player
+                .mind
+                .pressure_of(GoalKind::GoOutOnLoan)
+                .max(player.mind.pressure_of(GoalKind::LeaveThisClub))
+                .max(player.mind.pressure_of(GoalKind::PlayFirstTeamFootball))
+                .clamp(0.0, 1.0),
+            stay_pressure: player
+                .mind
+                .pressure_of(GoalKind::StayAtThisClub)
+                .max(player.mind.pressure_of(GoalKind::BecomeAClubLegend))
+                .clamp(0.0, 1.0),
             player_name: player.full_name.to_string(),
             club_name: club.name.clone(),
             position: player.position(),

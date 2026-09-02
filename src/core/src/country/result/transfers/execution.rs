@@ -13,7 +13,7 @@ use crate::transfers::market::{ClauseTrigger, TransferMarket};
 use crate::transfers::negotiation::NegotiationStatus;
 use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
 use crate::transfers::pipeline::{
-    LoanOutCandidate, LoanOutReason, LoanOutStatus, PipelineProcessor,
+    LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus, PipelineProcessor,
 };
 use crate::{
     ChangeType, Club, ClubDirectionContext, ClubDirectionEvidence, ClubDirectionKind, ClubFinances,
@@ -2516,6 +2516,7 @@ impl DevelopmentLoanPathway {
                         reason: LoanOutReason::DevelopmentPathway,
                         status: LoanOutStatus::Identified,
                         loan_fee: 0.0,
+                        preferred_destination: LoanDestinationPreference::Any,
                     });
                 for team in &mut club.teams.teams {
                     if let Some(player) =
