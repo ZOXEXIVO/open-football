@@ -328,23 +328,37 @@ pub async fn league_get_action(
 
     let mut current_tour_schedule = Vec::new();
 
-    let now = simulator_data.date.date() + Duration::days(3);
+    let today = simulator_data.date.date();
 
-    let mut current_tour: Option<&ScheduleTour> = None;
-    for tour in league.schedule.tours.iter() {
-        if now >= tour.start_date() && now <= tour.end_date() {
-            current_tour = Some(tour);
-        }
-    }
-    if current_tour.is_none() {
-        for tour in league.schedule.tours.iter() {
-            if now >= tour.end_date() {
-                current_tour = Some(tour);
-            }
-        }
+    // A round is unveiled on its eve. Reaching further ahead than that
+    // swapped the last matchday's scorelines for a column of dashes days
+    // before anyone had kicked a ball, so the division's board stood empty
+    // through the gap week.
+    let reveal_date = today + Duration::days(1);
+
+    let tours = &league.schedule.tours;
+
+    // The round in play, or the last one to have kicked off. Its results
+    // hold the panel for as long as nothing newer has started.
+    let latest_started = tours.iter().filter(|t| t.start_date() <= today).last();
+
+    // The round to come, once it is within a day of its first kick-off.
+    // Disjoint from the one above, so a matchday never lists twice.
+    let next_up = tours
+        .iter()
+        .find(|t| t.start_date() > today && t.start_date() <= reveal_date);
+
+    let mut shown_tours: Vec<&ScheduleTour> = Vec::new();
+    shown_tours.extend(latest_started);
+    shown_tours.extend(next_up);
+
+    // Pre-season: nothing has kicked off yet, so the opening round stands
+    // in rather than leaving the board blank until the eve of matchday 1.
+    if shown_tours.is_empty() {
+        shown_tours.extend(tours.first());
     }
 
-    if let Some(tour) = current_tour {
+    for tour in shown_tours {
         for (key, group) in &tour.items.iter().chunk_by(|t| t.date.date()) {
             current_tour_schedule.push(TourSchedule {
                 date: key.format("%d.%m.%Y").to_string(),
