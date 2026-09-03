@@ -788,39 +788,73 @@ impl Pitch {
     /// The pitch as the mower left it: the shade the grass lies in going away
     /// from the roller, and the shade of the same grass lying back toward it.
     ///
-    /// Sampled off broadcast football rather than picked off a colour wheel.
-    /// Real grass on camera is a YELLOW-green — red comfortably ahead of blue —
-    /// and considerably less saturated than people expect, because a stadium is
-    /// lit flat and the camera is looking at dust, wear and seed heads as much
-    /// as at leaf. A blue-shifted green is snooker baize or AstroTurf, which is
-    /// what the first pair here (0.17 / 0.44 / 0.20) came out as.
+    /// **A game's green rather than a broadcast one.** The pair this replaces
+    /// (#325223 / #284620) was sampled off televised football and was a
+    /// faithful sample: a stadium is lit flat, the camera is looking at dust,
+    /// wear and seed heads as much as at leaf, and real grass on camera comes
+    /// out a dark, desaturated YELLOW-green with barely half as much green
+    /// again as red. It rendered at about rgb(94, 127, 83), which is exactly
+    /// what a pitch looks like on television — and is not what a football
+    /// GAME looks like. The turf is the background nine tenths of every frame
+    /// is drawn against, and twenty-two shirts have to be told apart on it
+    /// from the height a wide shot watches from.
     ///
-    /// The two are the same grass mown in opposite directions and NOT two
-    /// different greens. Leaf bent away from you reflects more sky and looks
-    /// lighter and slightly cooler; leaf bent toward you shows its shadowed
-    /// side and looks darker and a touch greyer. So the pair differs by about
-    /// 16% in luminance — the real figure for mowing stripes — and only
+    /// So the pair is aimed at the picture rather than at the camera: a lush,
+    /// natural green with nearly two and a half times as much green in it as
+    /// red, a hue of about 128° where the broadcast pair sat at 105°, and
+    /// two thirds again its saturation. It renders **rgb(52, 124, 62)** —
+    /// 11% less light than the broadcast pitch, and 29% less than the
+    /// mobile-game screenshot it was first set against.
+    ///
+    /// Every direction off this point was tried on the way to it, and each
+    /// has a name for what goes wrong. The screenshot renders rgb(65, 176, 57):
+    /// on a phone that is the look, on a monitor filling most of the frame it
+    /// GLARES, and taking the light out while keeping the saturation
+    /// (rgb(42, 138, 38)) still did. Further down, at rgb(45, 108, 43), the
+    /// green was calm but read as yellow; pushing the hue to 144° to cure
+    /// that — rgb(36, 103, 63) — read as CHEAP, because a dark teal is what
+    /// synthetic turf and a twenty-year-old game both look like. What reads
+    /// as expensive is what a good pitch under good light actually is: a
+    /// mid-tone, a little cool of pure green and no further, with its depth
+    /// coming from the stripe contrast and the sward's own variation rather
+    /// than from saturation. The old pitch failed the same test from the
+    /// other side — dark AND grey, which reads as a surface rather than as
+    /// grass.
+    ///
+    /// ⚠ **Neither number can be read on its own.** See the material in
+    /// `Self::spawn_playing_surface`, which turns the turf's specular OFF.
+    /// That sheen is a constant added after the albedo has had its say, so it
+    /// costs the darkest channels most: on one and the same sheet it was
+    /// worth 34 units of red and 38 of blue against only 14 of green, which
+    /// is desaturation by another name — most of the distance between the old
+    /// pitch and this one on red, and more than all of it on blue. With it on,
+    /// the floor it puts under red and blue sits at or above where this pair
+    /// renders them, so no green writable here arrives at all. The two changes
+    /// are one decision, and moving either alone undoes it.
+    ///
+    /// The two shades are the same grass mown in opposite directions and NOT
+    /// two different greens. Leaf bent away from you reflects more sky and
+    /// looks lighter and slightly cooler; leaf bent toward you shows its
+    /// shadowed side and looks darker and a touch greyer. So the pair differs
+    /// by about 16% in value — the real figure for mowing stripes — and only
     /// slightly in hue. Making them differ by brightness alone is what makes
-    /// stripes look painted on.
+    /// stripes look painted on. That 16% is a per-channel RATIO
+    /// (0.796 / 0.845 / 0.920 of the mown shade), so it rides through a change
+    /// of green untouched and never has to be re-derived.
     ///
-    /// Both are a third off the pair they replace (#497434 / #3A6230), which
-    /// were lit like a midday friendly.
+    /// A change written here is nothing like the same change on screen, and
+    /// the gap is worth knowing before reaching in: the scene is tonemapped,
+    /// and the tonemapper spends most of an albedo change compressing it. How
+    /// much depends entirely on where the pitch is standing — a third off the
+    /// OLD, dark albedo moved the rendered turf by 19%, while halving the
+    /// green from the bright pass this pair came down from took 44% off it.
+    /// So measure on RENDERED frames, with the upper stand and the hoarding as
+    /// controls; a control that moves is a framing difference or an exposure
+    /// shift, not a result.
     ///
-    /// A third off the ALBEDO is nothing like a third off the picture, and the
-    /// gap is worth knowing before reaching in here: the scene is tonemapped,
-    /// and the tonemapper spends most of a change this size compressing it.
-    /// Measured on the same broadcast frame, four patches of turf, with the
-    /// upper stand and the hoarding as controls (both moved under 0.3%, so
-    /// there is no exposure shift hiding in this):
-    ///
-    /// - a quarter off the albedo — the first attempt — moved the rendered
-    ///   turf by 12%, which does not read as a darker pitch. It reads as the
-    ///   same pitch.
-    /// - a third off, which is what is here, moves it by 19%.
-    ///
-    ///   mown  #325223    against  #284620   (16% darker, a shade greyer)
-    pub(crate) const MOWN: Color = Color::srgb(0.196, 0.323, 0.137);
-    const AGAINST: Color = Color::srgb(0.156, 0.273, 0.126);
+    ///   mown  #1D5126    against  #174523   (16% darker, a shade greyer)
+    pub(crate) const MOWN: Color = Color::srgb(0.113, 0.318, 0.150);
+    const AGAINST: Color = Color::srgb(0.090, 0.269, 0.138);
 
     /// How much pitch one tile of [`Textures::turf`] covers, in metres.
     ///
@@ -928,6 +962,29 @@ impl Pitch {
             base_color_texture: Some(grass.albedo.clone()),
             normal_map_texture: Some(grass.relief.clone()),
             perceptual_roughness: 1.0,
+            // **No specular.** Bevy gives every dielectric a white sheen —
+            // `reflectance` defaults to 0.5, which is an F0 of about 0.04 —
+            // and under this scene's very generous ambient fill (see the
+            // directional light above, and the `AmbientLight` the camera
+            // carries) that sheen is a large flat term added to every texel
+            // AFTER the albedo has been multiplied in.
+            //
+            // Which makes it a desaturator. It is the same white everywhere,
+            // so it is worth far more to the channels that have least: on one
+            // and the same sheet, turning it off took 34 units off the
+            // rendered red and 38 off the blue while taking only 14 off the
+            // green. On a surface that covers most of the frame that is not a
+            // highlight, it is a wash — and it is what held the turf grey
+            // through every attempt to write a greener `Self::MOWN`, none
+            // of which could reach past it.
+            //
+            // What is given up is real enough: wet grass under floodlights
+            // does catch the light. But at `perceptual_roughness` 1.0 none of
+            // it was ever a highlight anybody could point at, and the pitch
+            // is lit by an ambient fill standing in for four corners of
+            // floodlights rather than by anything with a direction to glint
+            // off.
+            reflectance: 0.0,
             ..default()
         });
         commands.spawn((
@@ -971,6 +1028,18 @@ impl Pitch {
             base_color: Self::SHADOW,
             base_color_texture: Some(grass.albedo.clone()),
             perceptual_roughness: 1.0,
+            // **No sheen out here either**, and for a stronger reason than on
+            // the pitch. `SHADOW` puts this ground at about a sixth of the
+            // playing surface's value, so a specular term that is a CONSTANT
+            // is a far larger share of what is left of it — and what it is
+            // mostly made of is the blue-white fill, which is the one thing
+            // this material's base colour exists to keep out. Measured on the
+            // far band of surround, its blue against its green fell from 0.60
+            // to 0.55 the moment the sheen came off. Leaving it on while the
+            // pitch loses it is how the surround drifts away from the grass it
+            // is supposed to be, and goes back to reading as a hole cut in
+            // the world.
+            reflectance: 0.0,
             ..default()
         });
         // ⚠ **Set 1 cm below the turf, not 5.** It only ever had to clear
