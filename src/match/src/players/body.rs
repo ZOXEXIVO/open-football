@@ -4263,7 +4263,7 @@ impl Joint {
                             // losses rather than poses, so they are paid for
                             // here — the same reason `SET_DROP` is.
                             - Self::stance_drop(gait)
-                            - Self::SAVE_DROP * gait.save * Self::stooping(gait)
+                            - Self::SAVE_DROP * Self::rooted(gait) * Self::stooping(gait)
                             // …and the height a keeper going UP to one
                             // actually gains, which is the other end of the
                             // same axis. See [`Joint::SAVE_RISE_HIP`].
@@ -4405,7 +4405,7 @@ impl Joint {
                 // ever looks like a motorbike falling the wrong way, this is
                 // the sign to flip.
                 let roll = Self::rocking(gait) + Self::WEIGHT_SHIFT * 0.8 * weight
-                    - Self::BANK * gait.turn;
+                    - Self::BANK * gait.turn * Self::banking(gait);
                 // A keeper with the ball stands up out of all of it. Two
                 // reasons, and the second is the load-bearing one: he does
                 // straighten up, and the arm angles above are measured off an
@@ -4463,11 +4463,26 @@ impl Joint {
                     * Quat::from_rotation_x(Self::DIVE_ARCH * 0.45 * gait.jump)
                     // Over his toes off the mark, back on his heels under the
                     // brakes — and lower over the ball when he has it.
-                    * Quat::from_rotation_x(
-                        Self::DRIVE_LEAN.0 * gait.drive.max(0.0)
-                            + Self::DRIVE_LEAN.1 * (-gait.drive).max(0.0)
-                            + Self::CARRY_LEAN * gait.carrying,
-                    )
+                    //
+                    // ⚠ **Along the way he is GOING, not along his chest.** A
+                    // lean into an acceleration points the way the
+                    // acceleration does, and for twenty-one players those
+                    // are the same axis; the goalkeeper is the man they are
+                    // not. He starts and stops thirteen to fifteen times a
+                    // minute (measured) and does most of it backwards or
+                    // across himself, and a forward pitch on a man driving
+                    // off BACKWARDS is a man falling over his own toes as he
+                    // retreats, every four seconds, all match — which is
+                    // the reported *"he leans awkwardly"*. The roll carries
+                    // the same sign as [`Joint::SHUFFLE_LEAN`]: toward
+                    // travel on his right is a negative turn about Z.
+                    * {
+                        let lean = Self::DRIVE_LEAN.0 * gait.drive.max(0.0)
+                            + Self::DRIVE_LEAN.1 * (-gait.drive).max(0.0);
+                        let way = Self::course_of_chest(gait);
+                        Quat::from_rotation_x(lean * way.y + Self::CARRY_LEAN * gait.carrying)
+                            * Quat::from_rotation_z(-lean * way.x)
+                    }
                     // Travelling ACROSS himself and travelling BACKWARDS —
                     // the two thirds of a goalkeeper's movement that a
                     // forward run cycle has nothing to say about. He leans
@@ -5112,7 +5127,7 @@ impl Joint {
                 let across = Quat::from_rotation_y(Self::opened(gait))
                     * Quat::from_rotation_z(
                         Self::abduct(gait, self.side)
-                            + Self::SAVE_STEP * gait.save * gait.save_aim.x * near_leg,
+                            + Self::SAVE_STEP * Self::rooted(gait) * gait.save_aim.x * near_leg,
                     );
                 // The run, plus what his legs do about a change of pace: feet
                 // driving out behind him off the mark, planted out in front
@@ -5128,7 +5143,10 @@ impl Joint {
                     // leg; the shape and the gain belong there, and the
                     // `asin` turns it back into a hip.
                     Self::swinging(gait, leg, amplitude) * gait.course.y
-                        + Self::DRIVE_HIP * gait.drive
+                        // …signed with the course for the same reason the
+                        // trunk's lean is: a man driving off backwards
+                        // plants his feet out in FRONT of himself.
+                        + Self::DRIVE_HIP * gait.drive * gait.course.y
                         + Self::SHUFFLE_HIP_PICKUP * picking,
                 );
                 // …and under him when he is bent over them. ⚠ The knee
@@ -5152,6 +5170,10 @@ impl Joint {
                     ),
                     Self::crouched(gait),
                 );
+                // ⚠ [`Joint::rooted`] and NOT `gait.save`, on the argument
+                // `crouched` makes one layer down: this is a slerp onto a
+                // fixed angle, and the engine steps him to nearly every
+                // ball he saves on his feet.
                 let ready = Self::held(
                     ready,
                     Quat::from_rotation_x(
@@ -5161,7 +5183,7 @@ impl Joint {
                             // See [`Joint::SAVE_RISE_HIP`].
                             + Self::SAVE_RISE_HIP * gait.save_aim.y.clamp(0.0, 1.0),
                     ),
-                    gait.save,
+                    Self::rooted(gait),
                 );
                 let leaping = Self::held(ready, Quat::from_rotation_x(Self::JUMP_HIP), gait.jump);
                 // In flight the legs trail — the near one straight behind
@@ -5254,7 +5276,8 @@ impl Joint {
                             + Self::SAVE_KNEE * Self::stooping(gait)
                             + Self::SAVE_RISE_KNEE * gait.save_aim.y.clamp(0.0, 1.0),
                     ),
-                    gait.save,
+                    // The legs' share of it — see the note at the hip.
+                    Self::rooted(gait),
                 );
                 let leaping = Self::held(saving, Quat::from_rotation_x(Self::JUMP_KNEE), gait.jump);
                 let diving = Self::held(
@@ -5743,7 +5766,61 @@ impl Joint {
     /// outside the save's own hold: the height he gains is a real one and is
     /// paid for at the hips, where there is no `save` weight to inherit.
     fn reaching(gait: Gait) -> f32 {
-        gait.save * gait.save_aim.y.clamp(0.0, 1.0)
+        Self::rooted(gait) * gait.save_aim.y.clamp(0.0, 1.0)
+    }
+
+    /// **The save as far as his LEGS are concerned**, 0..1 — the crouch, the
+    /// stoop and the rise onto his toes, which are things a man does with
+    /// his feet planted.
+    ///
+    /// The whole save used to reach the legs at `gait.save`, and the hip and
+    /// the knee take it through [`Joint::held`], which slerps them onto a
+    /// fixed angle at whatever weight it is given — the same fault
+    /// [`Joint::crouched`] documents for the set, one layer up. Measured off
+    /// a recording, of the frames on which a keeper on his feet has a
+    /// struck ball inside his reach, **98% have him travelling faster than
+    /// 1.5 m/s, at a median of 5.5–6.7 m/s**: the engine steps him to the
+    /// ball, and for the three tenths of a second the reach takes to open
+    /// he was slid across his goal with his legs held still — at exactly
+    /// the moment everybody is watching, which is the report: *"he moves
+    /// around the penalty area without moving his legs"*.
+    ///
+    /// The arms and the trunk keep the whole save: a keeper stepping to a
+    /// ball still puts his hands where it is and bends to it. Only the
+    /// stance stays with the man who is standing still to make it.
+    fn rooted(gait: Gait) -> f32 {
+        gait.save * (1.0 - Self::afoot(gait))
+    }
+
+    /// **How much of the bank into a turn his pace earns him**, 0..1.
+    ///
+    /// A lean into a turn is centripetal — `v·ω` against gravity — and at
+    /// no speed there is none. The bank was scaled by the turn rate alone,
+    /// and the rate a STANDING man can turn at is the highest in the rig
+    /// ([`Actors::PIVOT_RATE`] at rest is 7 rad/s, four times a
+    /// sprinter's), so a goalkeeper standing on his line following a ball
+    /// across his box banked seventeen degrees like a motorbike. Nobody
+    /// leans into a turn he is making on the spot.
+    fn banking(gait: Gait) -> f32 {
+        Actors::ease(gait.run * Actors::SPRINT / Self::BANK_PACE)
+    }
+    /// …and the pace, in metres a second, at which the whole bank is his.
+    const BANK_PACE: f32 = 1.5;
+
+    /// **Which way he is going, in the frame his CHEST is in** — the course
+    /// with the opening of the legs taken back out of it.
+    ///
+    /// [`Gait::course`] is deliberately in the frame of his LEGS, because
+    /// that is what every lateral term of the gait wants. The trunk's lean
+    /// into an acceleration is the one thing above the waist that wants the
+    /// direction of travel, and it wants it against the chest it tilts. The
+    /// inverse of [`crate::players::actors::Actors::underfoot`].
+    fn course_of_chest(gait: Gait) -> Vec2 {
+        let (sin, cos) = gait.open.sin_cos();
+        Vec2::new(
+            gait.course.x * cos + gait.course.y * sin,
+            gait.course.y * cos - gait.course.x * sin,
+        )
     }
 
     /// **How far his RIGHT leg is abducted through a side-step**, at this
