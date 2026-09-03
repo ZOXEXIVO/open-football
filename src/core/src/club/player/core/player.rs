@@ -165,8 +165,11 @@ pub struct Player {
     /// Continent id of the player's nationality country. Denormalised
     /// from the country lookup at world-load / player-generation time so
     /// the desire pipeline doesn't need to walk the simulator world.
-    /// 0 = unknown (gates that read it fail closed).
-    pub nationality_continent_id: u32,
+    /// `None` = not seeded (a regen born after load); gates that read it
+    /// fail closed. NEVER `0` for "unknown" — continent 0 is AFRICA
+    /// (`ScoutingRegion::from_country`), so a sentinel zero silently sent
+    /// every African abroad to his CLUB's tournament calendar.
+    pub nationality_continent_id: Option<u32>,
     /// Footballing region of the player's **nationality** — never his
     /// club's. Denormalised in the same world-load pass as
     /// `nationality_continent_id`, because the region needs the country
@@ -737,10 +740,13 @@ impl Player {
     /// exact for South America and Oceania and approximate elsewhere.
     /// `None` only when even the continent is unknown — the callers then
     /// use his club's region, which is the honest "no view".
+    ///
+    /// No `!= 0` guard: the continent is an `Option` precisely because 0
+    /// is Africa, and the guard read every African passport as unstamped.
     pub fn home_region(&self) -> Option<ScoutingRegion> {
         self.nationality_region.or_else(|| {
-            (self.nationality_continent_id != 0)
-                .then(|| ScoutingRegion::from_country(self.nationality_continent_id, ""))
+            self.nationality_continent_id
+                .map(|continent_id| ScoutingRegion::from_country(continent_id, ""))
         })
     }
 
@@ -1255,10 +1261,20 @@ impl Player {
     ///
     /// Gathered here rather than inside the mind so no faculty ever
     /// reaches back into `Player` for a field — every one of them stays
-    /// testable against a plain struct. `country_code` is used only to
-    /// decide whether he speaks the local language; pass `""` when it is
-    /// not known and he is read as at home.
-    pub fn mind_situation(&self, now: NaiveDate, country_code: &str) -> MindSituation {
+    /// testable against a plain struct.
+    ///
+    /// Two facts about where he is, and they are NOT the same fact.
+    /// `club_country_id` decides whether he is abroad (a passport
+    /// comparison); `country_code` decides whether he speaks the language
+    /// there. Pass `0` / `""` when neither is known and he is read as at
+    /// home, speaking the language — the honest no-view for a free agent
+    /// and for every unit test that builds a lone player.
+    pub fn mind_situation(
+        &self,
+        now: NaiveDate,
+        club_country_id: u32,
+        country_code: &str,
+    ) -> MindSituation {
         let squad_status = self.contract.as_ref().map(|c| c.squad_status.clone());
         let social = self.squad_social_view.as_ref();
         // Where he stands among the other twenty-odd men, written by the
@@ -1300,7 +1316,10 @@ impl Player {
                 ActorRef::staff(standing.head_coach_id)
             },
             club_reputation: 0.5,
-            is_abroad: !country_code.is_empty() && !self.speaks_local_language(country_code),
+            // The passport, not the phrasebook. See [`MindSituation::is_abroad`].
+            is_abroad: club_country_id != 0
+                && self.country_id != 0
+                && self.country_id != club_country_id,
             speaks_local_language: country_code.is_empty()
                 || self.speaks_local_language(country_code),
             familiar_teammates: social
@@ -1438,7 +1457,8 @@ impl Player {
             // learn from.
             let mind_ctx = self.mind_context(now.date(), ctx.club.as_ref().map(|c| c.id));
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
-            let mut situation = self.mind_situation(now.date(), country_code);
+            let club_country_id = ctx.country.as_ref().map(|c| c.id).unwrap_or(0);
+            let mut situation = self.mind_situation(now.date(), club_country_id, country_code);
             situation.club_reputation = (team_reputation / 10_000.0).clamp(0.0, 1.0);
             // His OWN federation's calendar. A tournament clock belongs to
             // a passport: a Brazilian at Arsenal is counting down to the

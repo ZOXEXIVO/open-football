@@ -808,6 +808,7 @@ impl PipelineProcessor {
                     country_id: country.id,
                     country_code: &country.code,
                     continent_id: country.continent_id,
+                    home_leagues: &country.home_leagues,
                 },
             );
             evaluations.push(eval);
@@ -2860,8 +2861,7 @@ impl PipelineProcessor {
             // how high up the chart he sits — the same shape as the
             // branches below.
             if player_info.age <= UnsettledAbroadScan::MAX_AGE
-                && (player_info.current_ability as i16)
-                    < group_best as i16 - depth_cushion
+                && (player_info.current_ability as i16) < group_best as i16 - depth_cushion
             {
                 let adaptation = Some(
                     player.adaptation_score(
@@ -3104,6 +3104,7 @@ mod stalled_prospect_tests {
     use super::*;
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::club::team::squad::SquadAssetClass;
+    use crate::context::HomeLeagueTable;
     use crate::league::Season;
     use crate::shared::fullname::FullName;
     use crate::{
@@ -3774,6 +3775,7 @@ mod stalled_prospect_tests {
                 country_id: 1,
                 country_code: "en",
                 continent_id: 1,
+                home_leagues: &HomeLeagueTable::default(),
             },
             0.5,
         );
@@ -3845,6 +3847,7 @@ mod goalkeeper_prospect_tests {
     use super::*;
     use crate::academy::ClubAcademy;
     use crate::club::player::core::builder::PlayerBuilder;
+    use crate::context::HomeLeagueTable;
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
     use crate::{
@@ -4036,6 +4039,7 @@ mod goalkeeper_prospect_tests {
                 country_id: 1,
                 country_code: "en",
                 continent_id: 1,
+                home_leagues: &HomeLeagueTable::default(),
             },
         );
         let succession = GkFx::gk_succession_request(&eval);
@@ -4077,6 +4081,7 @@ mod goalkeeper_prospect_tests {
                 country_id: 1,
                 country_code: "en",
                 continent_id: 1,
+                home_leagues: &HomeLeagueTable::default(),
             },
         );
         assert!(
@@ -4103,6 +4108,7 @@ mod goalkeeper_prospect_tests {
                 country_id: 1,
                 country_code: "en",
                 continent_id: 1,
+                home_leagues: &HomeLeagueTable::default(),
             },
         );
 
@@ -4144,6 +4150,7 @@ mod goalkeeper_prospect_tests {
                 country_id: 1,
                 country_code: "en",
                 continent_id: 1,
+                home_leagues: &HomeLeagueTable::default(),
             },
         );
         assert!(

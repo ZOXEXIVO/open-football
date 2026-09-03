@@ -16,4 +16,13 @@ pub struct CountryInfo {
     /// nationality's leagues aren't loaded — without this it falls back to
     /// `0` and an Argentinian free agent slips through to a Mali buyer.
     pub reputation: u16,
+    /// Reputation (0..10000) of the strongest league this country runs.
+    ///
+    /// The country's own reputation is a football-ecosystem score; this is
+    /// the standard of the competition a man coming home would actually
+    /// play in, and it is what decides whether "home" is a place to be
+    /// SEEN. `0` for a country with no leagues in this save, which fails
+    /// the bar closed. See
+    /// [`crate::transfers::pipeline::loan_home::UnsettledAbroadScan::HOME_LEAGUE_BAR`].
+    pub top_flight_reputation: u16,
 }

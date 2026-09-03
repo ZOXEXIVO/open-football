@@ -1632,8 +1632,10 @@ fn isolation_roll(player_id: u32, date: NaiveDate) -> f32 {
 /// signals from `GlobalContext` once and feeds them through.
 #[derive(Debug, Clone, Copy)]
 pub struct AdaptationFailureSignals {
-    /// Continent of the player's nationality country.
-    pub player_nationality_continent_id: u32,
+    /// Continent of the player's nationality country. `None` when his
+    /// passport has never been stamped; continent 0 is Africa, so a zero
+    /// sentinel would silently exempt a whole confederation.
+    pub player_nationality_continent_id: Option<u32>,
     /// Continent of the player's current club country. 0 if unknown.
     pub club_continent_id: u32,
     /// True if club country == player nationality country.
@@ -1699,14 +1701,15 @@ impl Player {
         let speaks_local = self.speaks_local_language(country_code);
         let adapt = self.attributes.adaptability.clamp(0.0, 20.0);
         let prof = self.attributes.professionalism.clamp(0.0, 20.0);
-        // Both ids must be known — if the caller passed 0 for either,
-        // we can't claim the move crossed a continent boundary, so the
-        // signal is dropped to avoid false positives on foreign-country
-        // players whose nationality continent the caller couldn't
-        // resolve.
-        let different_continent = signals.club_continent_id != 0
-            && signals.player_nationality_continent_id != 0
-            && signals.club_continent_id != signals.player_nationality_continent_id;
+        // His passport must be known — an unstamped nationality cannot be
+        // claimed to have crossed a continent, so the signal is dropped
+        // rather than guessed. It is an `Option` and not a zero sentinel
+        // because continent 0 is Africa: under the old `!= 0` guard no
+        // African abroad ever read as having left his continent, which is
+        // the single largest population the term exists for.
+        let different_continent = signals
+            .player_nationality_continent_id
+            .is_some_and(|nationality| nationality != signals.club_continent_id);
 
         // Repeated isolation events in the last 90 days — a chronic
         // outsider, not a one-off bad fortnight. Filter out the

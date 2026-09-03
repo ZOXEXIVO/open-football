@@ -36,7 +36,9 @@ use crate::transfers::pipeline::plausibility::{
     TransferPlausibilityVerdict,
 };
 use crate::transfers::pipeline::trace::TransferTrace;
-use crate::transfers::pipeline::wage_power::{BuyerLevelWage, OwnerEnvelopeReservations, WagePower};
+use crate::transfers::pipeline::wage_power::{
+    BuyerLevelWage, OwnerEnvelopeReservations, WagePower,
+};
 use crate::transfers::pipeline::{LoanOutReason, PipelineProcessor};
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::{FloatUtils, FormattingUtils};
@@ -919,8 +921,7 @@ impl CountryResult {
             // cliff there is exactly the kind of threshold the whole model
             // exists to avoid.
             let benefactor = Self::buyer_benefactor(country, neg_data.buying_club_id);
-            rival_penalty -=
-                12.0 * (benefactor / ClubBenefactor::STATE_BACKED_BAR).clamp(0.0, 1.0);
+            rival_penalty -= 12.0 * (benefactor / ClubBenefactor::STATE_BACKED_BAR).clamp(0.0, 1.0);
             if neg_data.asking_price > 0.0 && neg_data.offer_amount >= neg_data.asking_price * 1.5 {
                 rival_penalty -= 15.0;
             }
@@ -1561,14 +1562,13 @@ impl CountryResult {
 
         // ε — his private disposition on THIS negotiation, drawn once and
         // re-derived identically on every round.
-        let disposition =
-            PlayerDisposition::for_negotiation(
-                country.id,
-                neg_id,
-                neg_data.player_id,
-                neg_data.buying_club_id,
-                cfg.disposition_sigma,
-            );
+        let disposition = PlayerDisposition::for_negotiation(
+            country.id,
+            neg_id,
+            neg_data.player_id,
+            neg_data.buying_club_id,
+            cfg.disposition_sigma,
+        );
         let appraisal = PlayerOfferAppraisal::appraise(&stance, &offer, disposition, &cfg);
 
         if TransferTrace::is(neg_data.player_id) {
@@ -1654,10 +1654,18 @@ impl CountryResult {
         // than the club can hold refused on the WAGE, however the axes
         // read (L3 step 3).
         let power = Self::wage_power_for(country, neg_id, neg_data, &offer);
-        let wage_unreachable = power
-            .as_ref()
-            .map(|p| !p.can_reach(appraisal.reservation_wage as f64))
-            .unwrap_or(false);
+        // …on a PERMANENT deal. A loan negotiates no wage at all: the
+        // borrower picks up the parent's, `offered_wage = anchor` so
+        // `M ≡ 0`, and `wage_power_for` returns `ceiling = level_wage =
+        // the anchor`. The reservation is `anchor·exp(−(U+ε)/(0.5 w_m))`,
+        // so ANY loan with `U + ε < 0` sits above that ceiling and every
+        // loan refusal in the world was labelled `WageDemand` — 97 % of
+        // the census's causes, on deals where nobody discussed money.
+        let wage_unreachable = !neg_data.is_loan
+            && power
+                .as_ref()
+                .map(|p| !p.can_reach(appraisal.reservation_wage as f64))
+                .unwrap_or(false);
         if round < MAX_WAGE_ROUNDS {
             if let Some(power) = power {
                 let reservation = appraisal.reservation_wage as f64;
@@ -1824,9 +1832,7 @@ impl CountryResult {
         // deal he already has, so the offer sits exactly on his anchor and
         // the money axis is silent (Part VIII, "the loan that pays"). A
         // permanent move draws the figure the buyer has tabled.
-        let staged_wage = offered_annual_wage
-            .map(|w| w as f64)
-            .filter(|w| *w > 0.0);
+        let staged_wage = offered_annual_wage.map(|w| w as f64).filter(|w| *w > 0.0);
         let offered_wage = if neg_data.is_loan {
             PlayerOfferAppraisal::anchor(stance)
         } else {
@@ -1981,27 +1987,23 @@ impl CountryResult {
         let tier = negotiation
             .and_then(|n| n.brief_tier)
             .unwrap_or(BriefTier::C);
-        let reserved = OwnerEnvelopeReservations::open(
-            country,
-            neg_data.buying_club_id,
-            tier,
-            neg_id,
-        );
+        let reserved =
+            OwnerEnvelopeReservations::open(country, neg_data.buying_club_id, tier, neg_id);
         Some(WagePower::for_player(buyer, level_wage, tier, reserved))
     }
 
-    /// A signed shirt draws the part of its wage the buyer's own level
-    /// cannot explain from its tier envelope, for the rest of the season.
+    /// What a shirt about to be signed would draw from its tier envelope —
+    /// read off the negotiation BEFORE `complete_transfer` retires the row
+    /// that carries the tier and the opening wage.
     ///
-    /// Called once, at completion — a negotiation still in flight is
-    /// covered by [`OwnerEnvelopeReservations`], and one that dies gives
-    /// its share back by simply disappearing from that fold.
-    fn consume_owner_envelope(country: &mut Country, buying_club_id: u32, neg_id: u32) {
-        let Some(negotiation) = country.transfer_market.negotiations.get(&neg_id) else {
-            return;
-        };
+    /// Read and apply are two calls because the completion can fail: a
+    /// stale row makes `complete_transfer` return `None`, and the draw
+    /// used to have been taken already and was never given back. A move
+    /// that did not happen must not spend the owner's money.
+    fn owner_envelope_draw(country: &Country, neg_id: u32) -> Option<(BriefTier, f64)> {
+        let negotiation = country.transfer_market.negotiations.get(&neg_id)?;
         if negotiation.is_loan {
-            return;
+            return None;
         }
         let tier = negotiation.brief_tier.unwrap_or(BriefTier::C);
         let level = negotiation
@@ -2016,12 +2018,27 @@ impl CountryResult {
             .or(negotiation.offered_salary)
             .unwrap_or(0) as f64;
         let draw = WagePower::envelope_draw(level, agreed);
-        if draw <= 0.0 {
+        (draw > 0.0).then_some((tier, draw))
+    }
+
+    /// A signed shirt draws the part of its wage the buyer's own level
+    /// cannot explain from its tier envelope, for the rest of the season.
+    ///
+    /// Called once, on a completion that actually happened — a negotiation
+    /// still in flight is covered by [`OwnerEnvelopeReservations`], and one
+    /// that dies gives its share back by simply disappearing from that
+    /// fold.
+    fn consume_owner_envelope(
+        country: &mut Country,
+        buying_club_id: u32,
+        draw: Option<(BriefTier, f64)>,
+    ) {
+        let Some((tier, amount)) = draw else {
             return;
-        }
+        };
         if let Some(buyer) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             if let Some(targets) = buyer.board.season_targets.as_mut() {
-                targets.owner_envelopes.consume(tier, draw);
+                targets.owner_envelopes.consume(tier, amount);
             }
         }
     }
@@ -2387,10 +2404,11 @@ impl CountryResult {
                 .map(|n| n.buying_club_id)
                 .collect();
 
-            // The owner's cheque is drawn down BEFORE the negotiation is
-            // closed out — the tier and the opening wage live on the row
-            // `complete_transfer` is about to retire.
-            Self::consume_owner_envelope(country, neg_data.buying_club_id, neg_id);
+            // What the owner's cheque WOULD cover, read while the row
+            // still exists — the tier and the opening wage live on the
+            // negotiation `complete_transfer` is about to retire. It is
+            // only drawn if the completion actually happens.
+            let envelope_draw = Self::owner_envelope_draw(country, neg_id);
 
             if let Some(completed) = country.transfer_market.complete_transfer(
                 neg_id,
@@ -2399,6 +2417,7 @@ impl CountryResult {
                 from_team_name,
                 to_team_name,
             ) {
+                Self::consume_owner_envelope(country, neg_data.buying_club_id, envelope_draw);
                 summary.completed_transfers += 1;
                 summary.total_fees_exchanged += completed.fee.amount;
 

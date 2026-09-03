@@ -8,13 +8,16 @@
 //! bank. Meanwhile a break-even side could offer its level wage to anyone
 //! it fancied, for ever, because nothing said it could not.
 //!
-//! [`WagePower`] is the ceiling and [`WagePower::star_offer`] is the bid.
+//! [`WagePower`] is the CEILING, and nothing else. The bid is not modelled
+//! here: production opens at the buyer's own level and climbs toward the
+//! player's reservation across the wage rounds (L3), which is the design —
+//! so a second "what it would bid" formula living beside the ceiling was a
+//! model with no caller and was retired.
+//!
 //! The ceiling is the greater of three honest numbers — a stretch on the
-//! club's own level, the room left under the board's wage mandate, and the
-//! slice of the owner's yearly subsidy one shirt of this brief tier may
-//! carry. The bid is then the player's own reservation wage, clamped into
-//! `[level_wage, power]`: the buyer pays what it takes, up to what it has,
-//! and never more than the man is asking for.
+//! club's own level, the room left under the board's wage mandate with the
+//! owner's cheque taken back out of it, and what is left of the tier
+//! envelope that cheque was split into ([`OwnerEnvelopes`]).
 //!
 //! No league list and no money-club flag: everything above the club's own
 //! revenue comes from [`ClubBenefactor`], which is one ratio off the
@@ -164,7 +167,9 @@ impl WagePower {
             .sum();
         let targets = club.board.season_targets.as_ref();
         let mandate = targets.map(|t| t.wage_budget.max(0) as f64).unwrap_or(0.0);
-        let subsidy_in_mandate = targets.map(|t| t.owner_subsidy.max(0) as f64).unwrap_or(0.0);
+        let subsidy_in_mandate = targets
+            .map(|t| t.owner_subsidy.max(0) as f64)
+            .unwrap_or(0.0);
         let wage_headroom = (mandate - subsidy_in_mandate - committed).max(0.0);
 
         let owner_subsidy = targets

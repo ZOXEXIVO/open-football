@@ -1,4 +1,4 @@
-use crate::context::TournamentClocks;
+use crate::context::{HomeLeagueTable, TournamentClocks};
 use crate::country::national::{NationalTeam, NationalTeamLevel};
 use crate::league::{DomesticCup, LeagueCollection, LeaguePlayoff};
 use crate::transfers::market::TransferMarket;
@@ -193,6 +193,7 @@ impl CountryBuilder {
             last_snapshotted_season_year: None,
             months_to_tournament: u8::MAX,
             tournament_clocks: TournamentClocks::default(),
+            home_leagues: HomeLeagueTable::default(),
         })
     }
 }

@@ -296,15 +296,52 @@ impl TournamentClocks {
     /// Months to the tournament this passport plays in. `None` for an
     /// unstamped nationality or an unpublished calendar — the caller then
     /// falls back to where he plays.
-    pub fn months_for(&self, nationality_continent_id: u32) -> Option<u8> {
-        if nationality_continent_id == 0 {
-            return None;
-        }
-        self.by_continent.get(&nationality_continent_id).copied()
+    ///
+    /// The argument is an `Option` rather than a zero sentinel because
+    /// continent 0 is AFRICA: the old `== 0 → None` guard handed every
+    /// African abroad his CLUB's calendar, which is the one population the
+    /// passport clock exists for.
+    pub fn months_for(&self, nationality_continent_id: Option<u32>) -> Option<u8> {
+        self.by_continent.get(&nationality_continent_id?).copied()
     }
 
     pub fn is_empty(&self) -> bool {
         self.by_continent.is_empty()
+    }
+}
+
+/// The standard of every country's TOP FLIGHT, keyed by country id.
+///
+/// "Is his own league worth going back to?" is a question about a
+/// PASSPORT, and no country can answer it about anyone but itself — the
+/// transfer pipeline runs inside one country's borrow. So the world
+/// publishes the table once a tick and every country carries an `Arc` of
+/// it, exactly the way [`TournamentClocks`] carries the calendars.
+///
+/// This is a league-reputation lookup, not a list: no country is named
+/// anywhere, and a league that rises or falls moves its own countrymen
+/// with it (memory `feedback_balance_system_not_cases`).
+#[derive(Debug, Clone, Default)]
+pub struct HomeLeagueTable {
+    by_country: Arc<HashMap<u32, u16>>,
+}
+
+impl HomeLeagueTable {
+    pub fn new(by_country: HashMap<u32, u16>) -> Self {
+        HomeLeagueTable {
+            by_country: Arc::new(by_country),
+        }
+    }
+
+    /// Standard of the strongest league this country runs. `0` for a
+    /// country with no leagues in the save and for an unpublished table —
+    /// both fail every "worth going home for" bar closed.
+    pub fn reputation_of(&self, country_id: u32) -> u16 {
+        self.by_country.get(&country_id).copied().unwrap_or(0)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_country.is_empty()
     }
 }
 
@@ -316,6 +353,8 @@ pub struct SimulationContext {
     /// How far off each confederation's next major tournament is, by
     /// continent id. See [`TournamentClocks`].
     pub tournament_clocks: TournamentClocks,
+    /// What each country's best league is worth. See [`HomeLeagueTable`].
+    pub home_leagues: HomeLeagueTable,
 }
 
 impl SimulationContext {
@@ -325,12 +364,19 @@ impl SimulationContext {
             day: date.day() as u8,
             hour: date.hour() as u8,
             tournament_clocks: TournamentClocks::default(),
+            home_leagues: HomeLeagueTable::default(),
         }
     }
 
     /// Stamp the world's tournament calendars onto the tick.
     pub fn with_tournament_clocks(mut self, clocks: TournamentClocks) -> Self {
         self.tournament_clocks = clocks;
+        self
+    }
+
+    /// Stamp the world's top-flight standings onto the tick.
+    pub fn with_home_leagues(mut self, leagues: HomeLeagueTable) -> Self {
+        self.home_leagues = leagues;
         self
     }
 
@@ -495,5 +541,50 @@ mod tests {
         assert!(updated_global_ctx.board.is_some());
         assert!(updated_global_ctx.player.is_some());
         assert!(updated_global_ctx.staff.is_some());
+    }
+}
+
+/// A5 — the tournament clock belongs to a passport, and continent 0 is
+/// AFRICA. The old signature took a `u32` with 0 meaning "unknown", so
+/// every African abroad read his CLUB's calendar — the single largest
+/// population the passport clock exists for.
+#[cfg(test)]
+mod tournament_clock_tests {
+    use super::*;
+
+    /// `ScoutingRegion::from_country` maps continent 0 to Africa.
+    const AFRICA: u32 = 0;
+    const EUROPE: u32 = 1;
+
+    fn clocks() -> TournamentClocks {
+        TournamentClocks::new(HashMap::from([(AFRICA, 11u8), (EUROPE, 34u8)]))
+    }
+
+    #[test]
+    fn an_african_abroad_counts_down_to_his_own_tournament() {
+        let clocks = clocks();
+        assert_eq!(
+            clocks.months_for(Some(AFRICA)),
+            Some(11),
+            "eleven months to the AFCON, wherever he plays"
+        );
+        assert_eq!(clocks.months_for(Some(EUROPE)), Some(34));
+    }
+
+    #[test]
+    fn an_unstamped_passport_has_no_clock_of_its_own() {
+        assert_eq!(clocks().months_for(None), None);
+        // …and so does a nationality nobody published a calendar for.
+        assert_eq!(clocks().months_for(Some(99)), None);
+    }
+
+    /// What every country's best league is worth, published once for the
+    /// whole world and read by passport.
+    #[test]
+    fn a_home_league_lookup_fails_closed_on_a_country_it_has_never_heard_of() {
+        let table = HomeLeagueTable::new(HashMap::from([(7u32, 6_400u16)]));
+        assert_eq!(table.reputation_of(7), 6_400);
+        assert_eq!(table.reputation_of(8), 0);
+        assert_eq!(HomeLeagueTable::default().reputation_of(7), 0);
     }
 }

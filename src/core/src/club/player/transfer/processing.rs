@@ -43,8 +43,11 @@ pub struct TransferDesireContext {
     /// Continent id of the player's current club country (matches the
     /// values in `transfers::scouting_region`). 0 if unknown.
     pub club_continent_id: u32,
-    /// Continent id of the player's nationality country. 0 if unknown.
-    pub player_nationality_continent_id: u32,
+    /// Continent id of the player's nationality country. `None` when his
+    /// passport has never been stamped — never a `0` sentinel, because
+    /// continent 0 is Africa and every African abroad then read as
+    /// "nationality unknown".
+    pub player_nationality_continent_id: Option<u32>,
     /// Country / club country code for the local-language check.
     /// Empty if unknown.
     pub country_code: String,
@@ -1096,7 +1099,7 @@ impl Player {
     ) -> Option<CareerDesireKind> {
         let age = DateUtils::age(self.birth_date, now);
         let ca = self.player_attributes.current_ability;
-        let is_sa_heritage = ctx.player_nationality_continent_id == CONTINENT_SOUTH_AMERICA;
+        let is_sa_heritage = ctx.player_nationality_continent_id == Some(CONTINENT_SOUTH_AMERICA);
         let at_sa_club = ctx.club_continent_id == CONTINENT_SOUTH_AMERICA;
         let at_eu_club = ctx.club_continent_id == CONTINENT_EUROPE;
 
@@ -1238,7 +1241,7 @@ impl Player {
         }
 
         // Heritage gate: nationality continent must be South America.
-        if ctx.player_nationality_continent_id != CONTINENT_SOUTH_AMERICA {
+        if ctx.player_nationality_continent_id != Some(CONTINENT_SOUTH_AMERICA) {
             return false;
         }
 
@@ -2258,8 +2261,8 @@ mod career_desire_tests {
         p.happiness.morale = 30.0;
 
         let signals = AdaptationFailureSignals {
-            player_nationality_continent_id: 3, // South America
-            club_continent_id: 4,               // Asia
+            player_nationality_continent_id: Some(3), // South America
+            club_continent_id: 4,                     // Asia
             club_in_home_country: false,
             destination_is_favourite: false,
             same_language_or_nationality_teammates: 0,
@@ -2289,7 +2292,7 @@ mod career_desire_tests {
         p.happiness.factors.club_fit = 1.0;
 
         let signals = AdaptationFailureSignals {
-            player_nationality_continent_id: 3,
+            player_nationality_continent_id: Some(3),
             club_continent_id: 1, // Europe (different)
             club_in_home_country: false,
             destination_is_favourite: false,
@@ -2315,7 +2318,7 @@ mod career_desire_tests {
         p.happiness.morale = 30.0;
         p.happiness.factors.club_fit = -5.0;
         let signals = AdaptationFailureSignals {
-            player_nationality_continent_id: 3,
+            player_nationality_continent_id: Some(3),
             club_continent_id: 4,
             club_in_home_country: false,
             destination_is_favourite: false,
@@ -2338,7 +2341,7 @@ mod career_desire_tests {
         p.happiness.morale = 30.0;
         p.happiness.factors.club_fit = -5.0;
         let signals = AdaptationFailureSignals {
-            player_nationality_continent_id: 3,
+            player_nationality_continent_id: Some(3),
             club_continent_id: 4,
             club_in_home_country: false,
             destination_is_favourite: false,
@@ -2362,7 +2365,7 @@ mod career_desire_tests {
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "gb".to_string();
         ctx.club_continent_id = 1;
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         ctx.league_reputation = 9000;
         ctx.club_reputation = 0.55;
         ctx.main_league_tier = 1;
@@ -2383,7 +2386,7 @@ mod career_desire_tests {
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "gb".to_string();
         ctx.club_continent_id = 1;
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         ctx.league_reputation = 9000;
         ctx.club_reputation = 0.55;
         ctx.main_league_tier = 1;
@@ -2398,7 +2401,7 @@ mod career_desire_tests {
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "gb".to_string();
         ctx.club_continent_id = 1;
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         ctx.league_reputation = 9000;
         ctx.club_reputation = 0.7;
         ctx.main_league_tier = 1;
@@ -2415,7 +2418,7 @@ mod career_desire_tests {
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "jp".to_string();
         ctx.club_continent_id = 4;
-        ctx.player_nationality_continent_id = 3;
+        ctx.player_nationality_continent_id = Some(3);
         ctx.league_reputation = 4000;
         ctx.main_league_tier = 1;
         let fired = p.detect_copa_libertadores_desire(today, &ctx);
@@ -2436,7 +2439,7 @@ mod career_desire_tests {
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "ar".to_string();
         ctx.club_continent_id = 3; // South America
-        ctx.player_nationality_continent_id = 3;
+        ctx.player_nationality_continent_id = Some(3);
         ctx.league_reputation = 4500; // sub-Libertadores tier
         ctx.main_league_tier = 1;
         let fired = p.detect_copa_libertadores_desire(today, &ctx);
@@ -2453,7 +2456,7 @@ mod career_desire_tests {
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "es".to_string();
         ctx.club_continent_id = 1;
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         ctx.league_reputation = 9000;
         ctx.main_league_tier = 1;
         let fired = p.detect_copa_libertadores_desire(today, &ctx);
@@ -2468,7 +2471,7 @@ mod career_desire_tests {
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "jp".to_string();
         ctx.club_continent_id = 4;
-        ctx.player_nationality_continent_id = 3;
+        ctx.player_nationality_continent_id = Some(3);
         ctx.league_reputation = 5000;
         ctx.main_league_tier = 1;
         assert!(!p.detect_continental_competition_desire(today, &ctx));
@@ -2487,7 +2490,7 @@ mod career_desire_tests {
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "jp".to_string();
         ctx.club_continent_id = 4;
-        ctx.player_nationality_continent_id = 3;
+        ctx.player_nationality_continent_id = Some(3);
         ctx.league_reputation = 4000;
         ctx.main_league_tier = 1;
         p.process_transfer_desire(&mut result, today, &ctx);
@@ -2522,7 +2525,7 @@ mod career_desire_tests {
         p.happiness.factors.salary_satisfaction = -6.0;
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "es".to_string();
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &ctx);
         assert!(p.statuses.has(PlayerStatusType::Req));
@@ -2564,7 +2567,7 @@ mod career_desire_tests {
         p.happiness.factors.ambition_fit = -10.0;
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "es".to_string();
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &ctx);
         assert!(
@@ -2593,7 +2596,7 @@ mod career_desire_tests {
         p.happiness.factors.ambition_fit = -3.0;
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "es".to_string();
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &ctx);
         assert!(
@@ -2613,7 +2616,7 @@ mod career_desire_tests {
         p.happiness.factors.ambition_fit = -12.0;
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "es".to_string();
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &ctx);
         assert!(
@@ -2639,7 +2642,7 @@ mod career_desire_tests {
         let mut p = build(24, 16.0, 12.0, 10.0, 12.0, 1, 150, 4000, 400, today);
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "nl".to_string();
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         ctx.league_reputation = 6000;
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &ctx);
@@ -2671,7 +2674,7 @@ mod career_desire_tests {
             .add_event(HappinessEventType::MoveVetoedByClub, -6.0);
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "nl".to_string();
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         ctx.league_reputation = 6000;
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &ctx);
@@ -2691,7 +2694,7 @@ mod career_desire_tests {
         let mut p = build(24, 16.0, 12.0, 10.0, 12.0, 1, 150, 6000, 400, today);
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "es".to_string();
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         ctx.league_reputation = 9200;
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &ctx);
@@ -2713,7 +2716,7 @@ mod career_desire_tests {
         let mut p = build(26, 17.0, 2.0, 18.0, 13.0, 1, 128, 4000, 400, today);
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "ru".to_string();
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         ctx.league_reputation = 6000;
         ctx.country_uefa_suspended = true;
         let mut result = PlayerResult::new(p.id);
@@ -2734,7 +2737,7 @@ mod career_desire_tests {
         let mut p = build(26, 17.0, 12.0, 18.0, 12.0, 1, 145, 5000, 400, today);
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "ru".to_string();
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         ctx.league_reputation = 6000;
         ctx.country_uefa_suspended = true;
         ctx.destination_is_favourite = true;
@@ -2758,13 +2761,13 @@ mod career_desire_tests {
 
         let mut isolated_ctx = TransferDesireContext::default();
         isolated_ctx.country_code = "ru".to_string();
-        isolated_ctx.player_nationality_continent_id = 1;
+        isolated_ctx.player_nationality_continent_id = Some(1);
         isolated_ctx.league_reputation = 6000;
         isolated_ctx.country_uefa_suspended = true;
 
         let mut open_ctx = TransferDesireContext::default();
         open_ctx.country_code = "nl".to_string();
-        open_ctx.player_nationality_continent_id = 1;
+        open_ctx.player_nationality_continent_id = Some(1);
         open_ctx.league_reputation = 6000;
 
         let mut isolated = player.clone();
@@ -2792,7 +2795,7 @@ mod career_desire_tests {
         p.happiness.factors.ambition_fit = 2.0; // club still fits — not outgrown
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "es".to_string();
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &ctx);
         assert!(
@@ -2817,7 +2820,7 @@ mod career_desire_tests {
         p.happiness.factors.ambition_fit = 2.0;
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "es".to_string();
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &ctx);
         assert!(
@@ -2836,7 +2839,7 @@ mod career_desire_tests {
         p.happiness.factors.ambition_fit = 2.0;
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "es".to_string();
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &ctx);
         assert!(
@@ -2860,7 +2863,7 @@ mod career_desire_tests {
         );
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "es".to_string();
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &ctx);
         assert!(p.statuses.has(PlayerStatusType::Req));
@@ -2880,7 +2883,7 @@ mod career_desire_tests {
         let p = build(24, 14.0, 12.0, 10.0, 12.0, 30, 130, 5000, 60, today);
         let mut ctx = TransferDesireContext::default();
         ctx.club_continent_id = 4; // Asia
-        ctx.player_nationality_continent_id = 3; // South America
+        ctx.player_nationality_continent_id = Some(3); // South America
         let kind = p.primary_career_desire(today, &ctx);
         assert_eq!(kind, Some(CareerDesireKind::CopaLibertadoresAmbition));
     }
@@ -2891,7 +2894,7 @@ mod career_desire_tests {
         let p = build(23, 16.0, 12.0, 10.0, 12.0, 30, 150, 7000, 60, today);
         let mut ctx = TransferDesireContext::default();
         ctx.club_continent_id = 1; // Europe
-        ctx.player_nationality_continent_id = 3; // South America
+        ctx.player_nationality_continent_id = Some(3); // South America
         let kind = p.primary_career_desire(today, &ctx);
         assert_eq!(kind, Some(CareerDesireKind::EuropeanCompetitionAmbition));
     }
@@ -2956,7 +2959,7 @@ mod career_desire_tests {
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "gb".to_string();
         ctx.club_continent_id = access.club_continent_id;
-        ctx.player_nationality_continent_id = player_continent;
+        ctx.player_nationality_continent_id = Some(player_continent);
         ctx.league_reputation = access.league_reputation;
         ctx.club_reputation = access.club_reputation;
         ctx.league_position = access.league_position;
@@ -3168,7 +3171,7 @@ mod career_desire_tests {
         p.happiness
             .add_event_with_context(HappinessEventType::FeelingIsolated, -1.0, None, ctx);
         let signals = AdaptationFailureSignals {
-            player_nationality_continent_id: 3,
+            player_nationality_continent_id: Some(3),
             club_continent_id: 4,
             club_in_home_country: false,
             destination_is_favourite: false,
@@ -3199,7 +3202,7 @@ mod career_desire_tests {
         p.squad_social_view = Some(SquadSocialView::default());
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "jp".to_string();
-        ctx.player_nationality_continent_id = 3;
+        ctx.player_nationality_continent_id = Some(3);
         ctx.club_continent_id = 4;
         let mut result = PlayerResult::new(p.id);
         p.process_transfer_desire(&mut result, today, &ctx);
@@ -3314,7 +3317,7 @@ mod career_desire_tests {
         let mut ctx = TransferDesireContext::default();
         ctx.country_code = "ru".to_string();
         ctx.club_continent_id = 1;
-        ctx.player_nationality_continent_id = 1;
+        ctx.player_nationality_continent_id = Some(1);
         ctx.league_reputation = 7000;
         // Elite reputation that WOULD trip the suppression off-the-bat.
         ctx.club_reputation = 0.85;

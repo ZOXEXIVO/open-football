@@ -394,7 +394,6 @@ impl PlayerStance {
         !self.is_home_country(offer) && self.nationality_region == Some(offer.buyer_region)
     }
 
-
     /// Is he playing away from his own country at all?
     ///
     /// The gate on the whole home term. Without it every domestic move by a
@@ -1335,7 +1334,9 @@ mod tests {
     fn the_disposition_spreads_but_stays_bounded() {
         let cfg = AppraisalConfig::default();
         let draws: Vec<f32> = (0..4000)
-            .map(|i| PlayerDisposition::for_negotiation(1, i, i * 7 + 1, 900, cfg.disposition_sigma))
+            .map(|i| {
+                PlayerDisposition::for_negotiation(1, i, i * 7 + 1, 900, cfg.disposition_sigma)
+            })
             .collect();
         let mean = draws.iter().sum::<f32>() / draws.len() as f32;
         let var = draws.iter().map(|d| (d - mean) * (d - mean)).sum::<f32>() / draws.len() as f32;
@@ -1550,6 +1551,152 @@ mod tests {
         assert_eq!(
             appraise(&stance, &bench).refusal_cause(false),
             TermsRefusalCause::Role
+        );
+    }
+
+    /// B7 — a man who would sign for more money than the buyer can hold
+    /// refused on the WAGE, whatever the axes say. With an offer at or
+    /// above his anchor the money term is non-negative, so the axis
+    /// fallback could never reach that label on its own.
+    #[test]
+    fn an_unreachable_demand_is_a_wage_refusal_whatever_the_axes_say() {
+        let stance = PlayerStance {
+            current_wage: 4_000_000.0,
+            fair_wage_at_current: 4_000_000.0,
+            importance: 0.9,
+            loyalty_drive: 0.9,
+            at_favourite_club: true,
+            ..PlayerStance::neutral()
+        };
+        let generous = OfferView {
+            offered_wage: 6_000_000.0,
+            sporting_drop: 0.3,
+            ..OfferView::neutral()
+        };
+        let appraisal = appraise(&stance, &generous);
+        assert!(appraisal.money > 0.0, "the offer is a raise");
+        assert_eq!(
+            appraisal.refusal_cause(false),
+            TermsRefusalCause::Attachment,
+            "with no verdict from the buyer, the worst axis is the story"
+        );
+        assert_eq!(
+            appraisal.refusal_cause(true),
+            TermsRefusalCause::WageDemand,
+            "but a club that cannot reach his number lost him on money"
+        );
+    }
+
+    /// B3 — a loan pays the deal he already has, so the money axis is
+    /// silent by construction on both paths.
+    #[test]
+    fn a_loan_offer_at_the_anchor_reads_no_money_at_all() {
+        let stance = PlayerStance {
+            current_wage: 900_000.0,
+            fair_wage_at_current: 1_600_000.0,
+            ..PlayerStance::neutral()
+        };
+        let loan = OfferView {
+            kind: OfferKind::Loan,
+            offered_wage: PlayerOfferAppraisal::anchor(&stance),
+            ..OfferView::neutral()
+        };
+        assert!(appraise(&stance, &loan).money.abs() < 1e-6);
+    }
+
+    /// B12 — a man with no contract has no wage to blend, and blending the
+    /// floor into it made every offer read as a three- or four-unit raise.
+    #[test]
+    fn a_man_with_no_contract_anchors_on_what_he_is_worth() {
+        let free_agent = PlayerStance {
+            current_wage: 0.0,
+            fair_wage_at_current: 1_000_000.0,
+            ..PlayerStance::neutral()
+        };
+        assert_eq!(PlayerOfferAppraisal::anchor(&free_agent), 1_000_000.0);
+        let market_offer = OfferView {
+            offered_wage: 1_000_000.0,
+            ..OfferView::neutral()
+        };
+        assert!(appraise(&free_agent, &market_offer).money.abs() < 1e-6);
+    }
+
+    /// B6 — a free agent is tied to nobody and out of contract, and both
+    /// facts have to be said: the neutral stance is a settled player on a
+    /// running deal.
+    #[test]
+    fn a_free_agent_pays_no_attachment_and_carries_full_contract_pressure() {
+        let fa = PlayerStance::from_terms(28, 0.6, 0.0, 1_000_000.0);
+        assert_eq!(fa.loyalty_drive, 0.0);
+        assert_eq!(fa.contract_pressure, 1.0);
+        assert!(fa.available_soft);
+        let offer = OfferView {
+            offered_wage: 1_000_000.0,
+            ..OfferView::neutral()
+        };
+        let appraisal = appraise(&fa, &offer);
+        assert_eq!(appraisal.attachment, 0.0, "he is tied to nobody");
+        assert!(appraisal.push > 0.0, "his deal has run out");
+    }
+
+    /// B9 — an unstamped passport has no home, and must not borrow the
+    /// club's region for one.
+    #[test]
+    fn an_unknown_nationality_is_never_at_home() {
+        let unknown = PlayerStance {
+            nationality_country_id: 0,
+            nationality_region: None,
+            seller_country_id: 10,
+            ..PlayerStance::neutral()
+        };
+        let offer = OfferView {
+            buyer_country_id: 55,
+            buyer_region: ScoutingRegion::SouthAmerica,
+            ..OfferView::neutral()
+        };
+        assert!(!unknown.is_home_country(&offer));
+        assert!(!unknown.is_home_region(&offer));
+        assert_eq!(appraise(&unknown, &offer).home, 0.0);
+    }
+
+    /// B10 — the dressing room only changes language when the country
+    /// does. Arsenal → Chelsea cost a Brazilian 0.12·(1 − affinity).
+    #[test]
+    fn language_is_charged_across_a_border_and_not_down_the_road() {
+        let brazilian_in_england = PlayerStance {
+            nationality_country_id: 55,
+            nationality_region: Some(ScoutingRegion::SouthAmerica),
+            seller_country_id: 1,
+            seller_region: ScoutingRegion::WesternEurope,
+            ..PlayerStance::neutral()
+        };
+        let domestic = OfferView {
+            offered_wage: brazilian_in_england.current_wage,
+            buyer_country_id: 1,
+            buyer_region: ScoutingRegion::WesternEurope,
+            language_affinity: 0.2,
+            ..OfferView::neutral()
+        };
+        assert_eq!(appraise(&brazilian_in_england, &domestic).place, 0.0);
+
+        let abroad = OfferView {
+            buyer_country_id: 2,
+            ..domestic
+        };
+        assert!(appraise(&brazilian_in_england, &abroad).place < 0.0);
+    }
+
+    /// B8 — two countries allocate negotiation ids from their own
+    /// counters, so the id alone is not a seed.
+    #[test]
+    fn two_buyers_in_two_countries_do_not_share_a_temperament() {
+        let a = PlayerDisposition::for_negotiation(1, 17, 4242, 900, 0.22);
+        let b = PlayerDisposition::for_negotiation(2, 17, 4242, 901, 0.22);
+        assert!((a - b).abs() > 1e-6, "{a} vs {b}");
+        // …and it is still deterministic for the same negotiation.
+        assert_eq!(
+            a,
+            PlayerDisposition::for_negotiation(1, 17, 4242, 900, 0.22)
         );
     }
 }

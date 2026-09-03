@@ -1,10 +1,10 @@
 use crate::club::board::{ClubVision, FinancialStance, SigningPreference, VisionYouthFocus};
-use crate::transfers::pipeline::wage_power::BuyerLevelWage;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::offer::{
     PersonalTermsOffer, PromisedSquadStatus, TransferClause, TransferOffer,
 };
+use crate::transfers::pipeline::wage_power::BuyerLevelWage;
 use crate::transfers::pipeline::{
     BoardRecruitmentDossier, TransferApproach, TransferNeedPriority, TransferNeedReason,
     TransferRequest,

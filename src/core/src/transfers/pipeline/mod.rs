@@ -258,8 +258,10 @@ mod processor {
         pub region: ScoutingRegion,
         /// Country of his passport.
         pub nationality_country_id: u32,
-        /// Continent of his passport. 0 when unknown.
-        pub nationality_continent_id: u32,
+        /// Continent of his passport. `None` when his nationality has never
+        /// been seeded — never a `0` sentinel, because continent 0 is
+        /// Africa.
+        pub nationality_continent_id: Option<u32>,
         /// Footballing region of his passport, from
         /// [`crate::Player::home_region`]. `None` when his nationality has
         /// never been seeded.
@@ -1234,6 +1236,17 @@ pub struct AvailabilityBroadcast {
     /// When the current tier was first offered — drives the "no answer,
     /// widen the net" cascade once it ages past the response window.
     pub since: NaiveDate,
+    /// When the player was FIRST put on the market, set once when the
+    /// entry is created and never touched by a widen.
+    ///
+    /// The loan cascade resets `since` on every widen, and the widen
+    /// cadence and the home-first hold are the same fortnight — so
+    /// "posted for" oscillated 0 → 7 → 0 and never once reached
+    /// `HOME_FIRST_DAYS`. A `HomeCountry` candidate was held off the
+    /// domestic push for ever and the domestic market never offered him.
+    /// Anything measuring TIME ON THE MARKET reads this; only the tier
+    /// cascade reads `since`.
+    pub posted_since: NaiveDate,
 }
 
 // ============================================================

@@ -148,12 +148,17 @@ impl Continent {
         // The transfer market runs outside `GlobalContext`, and the
         // player-side appraisal needs the same clock the mind reads.
         let world_clocks = ctx.simulation.tournament_clocks.clone();
+        let home_leagues = ctx.simulation.home_leagues.clone();
         self.countries.par_iter_mut().for_each(|c| {
             c.months_to_tournament = tournament_clock;
             // …and every OTHER confederation's alongside it, so a
             // foreigner in this league is priced against the tournament HE
             // might play in (C7). An `Arc` clone, not a map copy.
             c.tournament_clocks = world_clocks.clone();
+            // …and what every country's best league is worth, so the
+            // loan-out sweep can ask "is HIS league worth going home to?"
+            // about a passport. Same `Arc` clone.
+            c.home_leagues = home_leagues.clone();
         });
 
         let country_ctxs: Vec<GlobalContext<'gc>> = self

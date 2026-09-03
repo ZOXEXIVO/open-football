@@ -4,12 +4,12 @@ use crate::club::player::load::PlayerLoad;
 use crate::club::player::mind::PlayerMind;
 use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::{PlayerTrait, generate_player_traits};
-use crate::transfers::pipeline::HomePull;
 use crate::club::{
     PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerMailbox, PlayerSkills,
     PlayerTraining,
 };
 use crate::shared::fullname::FullName;
+use crate::transfers::pipeline::HomePull;
 use crate::{
     PersonAttributes, Player, PlayerDecisionHistory, PlayerFoots, PlayerHappiness, PlayerPositions,
     PlayerPreferredFoot, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
@@ -223,7 +223,7 @@ impl PlayerBuilder {
             full_name: self.full_name.ok_or("full_name is required")?,
             birth_date: self.birth_date.ok_or("birth_date is required")?,
             country_id: self.country_id.ok_or("country_id is required")?,
-            nationality_continent_id: 0,
+            nationality_continent_id: None,
             nationality_region: None,
             home_pull: HomePull::default(),
             behaviour: self.behaviour.unwrap_or_default(),

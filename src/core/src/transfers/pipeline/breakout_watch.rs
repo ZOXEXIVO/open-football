@@ -1076,7 +1076,7 @@ mod breakout_watch_tests {
                 region: ScoutingRegion::from_country(1, "IT"),
                 country_code: "RU".into(),
                 nationality_country_id: 2,
-                nationality_continent_id: 1,
+                nationality_continent_id: Some(1),
                 nationality_region: Some(ScoutingRegion::from_country(1, "RU")),
                 starter_share: 0.8,
                 tenure_days: 900,

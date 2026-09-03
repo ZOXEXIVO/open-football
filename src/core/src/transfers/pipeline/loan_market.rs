@@ -13,8 +13,7 @@ use crate::transfers::market::{
 use crate::transfers::negotiation::NegotiationStatus;
 use crate::transfers::offer::{PersonalTermsOffer, TransferClause, TransferOffer};
 use crate::transfers::pipeline::appraisal_inputs::PlayerStanceBuilder;
-use crate::transfers::pipeline::loan_home::{HomeLoanGates, HomeLoanPull};
-use crate::transfers::pipeline::playing_time::LoanPromise;
+use crate::transfers::pipeline::loan_home::{HomeLoanGates, HomeLoanPull, UnsettledAbroadScan};
 use crate::transfers::pipeline::loan_interest::{
     BorrowerTaste, DestinationAppeal, GroupPressure, InterestDraw, LoanApproachMemory,
     LoanCandidateProfile,
@@ -23,8 +22,10 @@ use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityEvaluator,
     TransferPlausibilityVerdict,
 };
+use crate::transfers::pipeline::playing_time::LoanPromise;
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
 use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
+use crate::transfers::pipeline::trace::MarketSwitches;
 use crate::transfers::pipeline::{
     AvailabilityBroadcast, LoanDestinationPreference, LoanOutStatus, TransferRequestStatus,
 };
@@ -1262,12 +1263,15 @@ impl PipelineProcessor {
                 None => AvailabilityBroadcast {
                     tier: b.parent_tier,
                     since: date,
+                    posted_since: date,
                 },
                 Some(prev) => {
                     if (date - prev.since).num_days() >= Self::BROADCAST_RESPONSE_DAYS {
                         AvailabilityBroadcast {
                             tier: prev.tier.next_lower(),
                             since: date,
+                            // The tier moved; the posting did not.
+                            posted_since: prev.posted_since,
                         }
                     } else {
                         prev.clone()
@@ -1328,12 +1332,16 @@ impl PipelineProcessor {
                 && b.nationality_country_id != 0
                 && b.nationality_country_id != country.id;
             if wants_home_elsewhere {
+                // Against the FIRST posting, never against the current
+                // tier's stamp: Pass 2 re-stamps `since` on every widen,
+                // and the widen cadence IS this window, so the hold could
+                // never elapse.
                 let posted_for = country
                     .clubs
                     .iter()
                     .find(|c| c.id == b.parent_club_id)
                     .and_then(|c| c.transfer_plan.loan_broadcasts.get(&b.player_id))
-                    .map(|br| (date - br.since).num_days())
+                    .map(|br| (date - br.posted_since).num_days())
                     .unwrap_or(0);
                 if posted_for < Self::HOME_FIRST_DAYS {
                     continue;
@@ -1778,6 +1786,9 @@ impl PipelineProcessor {
                 AvailabilityBroadcast {
                     tier,
                     since: first_since,
+                    // The transfer cascade already anchors on the date the
+                    // listing cleared its grace, so the two agree.
+                    posted_since: first_since,
                 },
             );
         }
@@ -2038,6 +2049,35 @@ impl PipelineProcessor {
     // Step 7b: Loan Market Scanning (other countries)
     // ============================================================
 
+    /// Age band the proactive foreign pickup will take a man in.
+    ///
+    /// A COMPATRIOT his parent has posted is judged by the band the
+    /// posting itself uses ([`UnsettledAbroadScan::MAX_AGE`], the same 25
+    /// the manager-talk loan route reads); anybody else is a cold
+    /// development pickup and keeps the 23.
+    ///
+    /// Two bands because they answer different questions. "Would a
+    /// smaller club take a stranger's prospect off him?" is a development
+    /// question. "Would his own league take back one of its own, whose
+    /// club has said he can go?" is not — it is a homecoming, and the two
+    /// years between them are exactly the population the posting model
+    /// exists for.
+    fn home_pickup_age_ok(
+        age: u8,
+        home_return_wanted: bool,
+        nationality_country_id: u32,
+        borrower_country_id: u32,
+    ) -> bool {
+        let coming_home = home_return_wanted
+            && nationality_country_id != 0
+            && nationality_country_id == borrower_country_id;
+        if coming_home {
+            age <= UnsettledAbroadScan::MAX_AGE
+        } else {
+            ForeignUnsolicitedLoanTarget::is_development(age)
+        }
+    }
+
     pub fn scan_foreign_loan_market(
         country: &mut Country,
         foreign_players: &[&PlayerSummary],
@@ -2225,6 +2265,7 @@ impl PipelineProcessor {
             // club running the ordinary foreign scan every pass for as
             // long as he stayed posted.
             let compatriot_sweep = !ordinary_foreign_scan
+                && !MarketSwitches::compatriot_sweep_off()
                 && matches!(
                     rep_level,
                     ReputationLevel::Elite | ReputationLevel::Continental
@@ -2541,8 +2582,22 @@ impl PipelineProcessor {
                         // A posted compatriot is his own advert — his
                         // parent has told the world he would come home,
                         // which is exactly the row a loan listing is.
+                        //
+                        // …and he is not held to the 23 the ordinary cold
+                        // pickup uses. `UnsettledAbroadScan` posts men up
+                        // to 25, and so does the manager-talk route, so a
+                        // posted 24- or 25-year-old compatriot passed
+                        // every pool filter and was then invisible to
+                        // every Elite / Continental club in his own
+                        // country — reachable only by a National side
+                        // with an open request in his position.
                         (p.is_loan_listed || p.home_return_wanted)
-                            && ForeignUnsolicitedLoanTarget::is_development(p.age)
+                            && Self::home_pickup_age_ok(
+                                p.age,
+                                p.home_return_wanted,
+                                p.nationality_country_id,
+                                country_id,
+                            )
                             && !club.is_rival(p.club_id)
                             && !plan.is_loan_approach_barred(p.player_id, date)
                             && !scanned_position_groups.contains(&p.position_group)
@@ -2765,8 +2820,10 @@ impl PipelineProcessor {
                         // One homecoming per window. The sweep is a door
                         // for the boy a league produced, not a licence to
                         // shop abroad.
-                        buyer.transfer_plan.compatriot_sweeps_this_window =
-                            buyer.transfer_plan.compatriot_sweeps_this_window.saturating_add(1);
+                        buyer.transfer_plan.compatriot_sweeps_this_window = buyer
+                            .transfer_plan
+                            .compatriot_sweeps_this_window
+                            .saturating_add(1);
                     }
                 }
 
@@ -3205,7 +3262,7 @@ impl UnsolicitedLoanTarget {
     /// smaller club takes to get him minutes. Above it, only a genuinely
     /// surplus player is a credible cold loan target (generic cover, not
     /// development).
-    const DEVELOPMENT_AGE: u8 = 23;
+    const DEVELOPMENT_AGE: u8 = UnsettledAbroadScan::DEVELOPMENT_AGE;
 
     /// Classify a potential unsolicited loan target. Returns `Some(is_dev)`
     /// when the player may be cold-approached — `is_dev` selecting the
@@ -3320,7 +3377,7 @@ struct ForeignUnsolicitedLoanTarget;
 impl ForeignUnsolicitedLoanTarget {
     /// Young players up to this age qualify as development targets on a
     /// small gap; older players need a clear surplus gap.
-    const DEVELOPMENT_AGE: u8 = 23;
+    const DEVELOPMENT_AGE: u8 = UnsettledAbroadScan::DEVELOPMENT_AGE;
     /// CA below his club's best at the position that marks a young player as
     /// a development prospect (not the first-choice).
     const PROSPECT_GAP: u8 = 5;
@@ -4225,6 +4282,63 @@ mod unsolicited_loan_target_tests {
             &Fx::level(120, 125, 8000, 500, false)
         ));
     }
+
+    /// B4 — the compatriot sweep saw nobody over 23.
+    ///
+    /// The proactive foreign pickup is the ONLY branch an Elite or
+    /// Continental club runs on the compatriot slice, and it gated on the
+    /// cold-approach development age. `UnsettledAbroadScan` posts men up
+    /// to 25 and the manager-talk loan route reads the same 25, so a
+    /// posted 24- or 25-year-old compatriot passed every pool filter and
+    /// was then invisible to every big club in his own country —
+    /// reachable only by a National side with an open request in his
+    /// exact position.
+    ///
+    /// Two bands, because they answer different questions: taking a
+    /// stranger's prospect off him is a development decision; taking back
+    /// one of your own league's exports, whose club has said he can go,
+    /// is a homecoming.
+    #[test]
+    fn a_posted_compatriot_is_taken_at_the_age_his_posting_used() {
+        const BRAZIL: u32 = 55;
+        const ENGLAND: u32 = 1;
+
+        // A posted 24-year-old Brazilian, seen by a Brazilian club.
+        assert!(PipelineProcessor::home_pickup_age_ok(
+            24, true, BRAZIL, BRAZIL
+        ));
+        // …and 25, the oldest the posting model itself will name.
+        assert!(PipelineProcessor::home_pickup_age_ok(
+            UnsettledAbroadScan::MAX_AGE,
+            true,
+            BRAZIL,
+            BRAZIL
+        ));
+        // Past that the parent's answer is the market, not a loan.
+        assert!(!PipelineProcessor::home_pickup_age_ok(
+            UnsettledAbroadScan::MAX_AGE + 1,
+            true,
+            BRAZIL,
+            BRAZIL
+        ));
+
+        // The same 24-year-old at an ENGLISH club's door is an ordinary
+        // cold development pickup, and keeps the tighter band.
+        assert!(!PipelineProcessor::home_pickup_age_ok(
+            24, true, BRAZIL, ENGLAND
+        ));
+        // …as does a Brazilian nobody has posted.
+        assert!(!PipelineProcessor::home_pickup_age_ok(
+            24, false, BRAZIL, BRAZIL
+        ));
+        // Development-age men are reachable either way.
+        assert!(PipelineProcessor::home_pickup_age_ok(
+            UnsettledAbroadScan::DEVELOPMENT_AGE,
+            false,
+            BRAZIL,
+            ENGLAND
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -4334,6 +4448,7 @@ mod scan_loan_market_tests {
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue};
     use crate::transfers::market::{TransferListing, TransferListingOrigin, TransferListingType};
+    use crate::transfers::{LoanOutCandidate, LoanOutReason, LoanOutStatus};
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
         Player, PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition,
@@ -4876,6 +4991,79 @@ mod scan_loan_market_tests {
         assert!(
             !country.transfer_market.has_active_negotiation_for(200, 2),
             "a Regional parent lacks the loan-management resource to run a push"
+        );
+    }
+
+    /// B3 — the home-first hold has to release.
+    ///
+    /// A `HomeCountry` candidate is kept off the domestic push for a
+    /// fortnight so his own league gets first refusal. But Pass 2 reset
+    /// the broadcast's `since` on every widen, the widen cadence IS that
+    /// fortnight, and the hold read `since` — so "posted for" ran 0 → 7 →
+    /// 0 for ever and the domestic market never once offered him.
+    /// The hold now reads `posted_since`, stamped when the entry is
+    /// created and never touched again.
+    #[test]
+    fn a_home_first_hold_releases_although_the_tier_widened_on_the_same_day() {
+        let d0 = Fx::monday();
+
+        let parent_main = Fx::team(
+            10,
+            1,
+            TeamType::Main,
+            5500,
+            vec![
+                Fx::keeper(101, 120, 120, 28, false),
+                Fx::keeper(102, 118, 118, 26, false),
+                Fx::keeper(103, 115, 115, 30, false),
+            ],
+        );
+        // A foreign teenager his parent has decided should go HOME.
+        let mut prospect = Fx::keeper(200, 70, 150, 18, true);
+        prospect.country_id = 55;
+        let parent_reserve = Fx::team(11, 1, TeamType::Reserve, 4000, vec![prospect]);
+        let mut parent = Fx::club(1, vec![parent_main, parent_reserve], 50_000_000);
+        parent
+            .transfer_plan
+            .loan_out_candidates
+            .push(LoanOutCandidate {
+                player_id: 200,
+                reason: LoanOutReason::UnsettledAbroad,
+                status: LoanOutStatus::Identified,
+                loan_fee: 0.0,
+                preferred_destination: LoanDestinationPreference::HomeCountry,
+            });
+
+        // A domestic club at the same tier with a keeper vacancy — it
+        // would take him the moment the hold lets go.
+        let borrower_main = Fx::team(
+            20,
+            2,
+            TeamType::Main,
+            5500,
+            vec![
+                Fx::keeper(301, 55, 55, 27, false),
+                Fx::keeper(302, 50, 50, 29, false),
+            ],
+        );
+        let borrower = Fx::club(2, vec![borrower_main], 5_000_000);
+
+        let mut country = Fx::country(vec![parent, borrower]);
+        Fx::loan_list(&mut country, 200, 1, 11);
+
+        // Day 0: posted, and held — his own league gets first refusal.
+        PipelineProcessor::broadcast_listed_loans(&mut country, d0);
+        assert!(
+            !country.transfer_market.has_active_negotiation_for(200, 2),
+            "a HomeCountry candidate is not shopped domestically on the day he is posted"
+        );
+
+        // Day 14: the tier widens on this very tick — which used to reset
+        // the clock the hold reads, so it could never elapse.
+        PipelineProcessor::broadcast_listed_loans(&mut country, d0 + Duration::days(14));
+        assert!(
+            country.transfer_market.has_active_negotiation_for(200, 2),
+            "a fortnight is a head start, not a veto: the domestic push must open"
         );
     }
 }

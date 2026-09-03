@@ -1,7 +1,6 @@
 use crate::MatchTacticType;
 use crate::club::board::BoardManagerMeeting;
 use crate::club::board::context::FfpStatus;
-use crate::club::finance::DebtStanding;
 use crate::club::board::decision::{BoardDecision, DecisionReason};
 use crate::club::board::infrastructure::FacilityReview;
 use crate::club::board::manager_market::ManagerCandidate;
@@ -14,6 +13,7 @@ use crate::club::board::strategy::{
     InfrastructurePriority, ManagerAutonomy, ReviewFrequency, SquadProfile,
 };
 use crate::club::board::takeover::{TakeoverEngine, TakeoverWatch};
+use crate::club::finance::DebtStanding;
 use crate::club::team::reputation::AchievementType;
 use crate::club::{BoardContext, BoardMood, BoardMoodState, BoardResult, StaffClubContract};
 use crate::context::{GlobalContext, SimulationContext};
@@ -416,6 +416,35 @@ pub struct ClubBoard {
     /// Drives a cooldown so even a wealthy owner can't upgrade every single
     /// season — see `FacilityReview::COOLDOWN_SEASONS`.
     pub last_facility_upgrade_year: Option<i32>,
+    /// The finance figures the board last judged this club on. Written
+    /// every tick that carries a [`BoardContext`]; read by nothing in the
+    /// model. See [`BoardIncomeRead`].
+    pub last_income_read: BoardIncomeRead,
+}
+
+/// What the board last saw of the club's money.
+///
+/// A diagnostic surface, not an input: every number here is recomputed
+/// from `BoardContext` each tick, and nothing in the model reads it back.
+/// It exists because [`ClubBenefactor::signal`]'s inputs are otherwise
+/// unreachable from outside a tick — `projected_annual_income` is derived
+/// inside `Club::simulate` from a `GlobalContext` the census does not have
+/// — and a signal whose inputs cannot be printed cannot be argued with.
+/// The first benefactor read found four second-division clubs and no
+/// giant, and the census could not say why (memory
+/// `feedback_keep_match_debug_data`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BoardIncomeRead {
+    /// Twelve-month income from the finance history; 0 before a month has
+    /// closed.
+    pub trailing_annual_income: i64,
+    /// A year's income the club can be judged on today — the trailing sum
+    /// once it exists, its own revenue model's projection before that.
+    pub projected_annual_income: i64,
+    /// The whole club's wage bill for a year.
+    pub annual_wages: i64,
+    /// Cash in the bank.
+    pub balance: i64,
 }
 
 impl ClubBoard {
@@ -445,6 +474,7 @@ impl ClubBoard {
             season_month_index: 0,
             personality_initialized: false,
             last_facility_upgrade_year: None,
+            last_income_read: BoardIncomeRead::default(),
         }
     }
 
@@ -790,9 +820,34 @@ impl ClubBoard {
         // Derive the ownership archetype + opening vision once, the first
         // time we have club context to read. Different clubs get different
         // boards purely from durable signals — no hard-coded names.
+        // What the board is looking at, banked for the census before
+        // anything spends it (see [`BoardIncomeRead`]).
+        if let Some(board_ctx) = &ctx.board {
+            self.last_income_read = BoardIncomeRead {
+                trailing_annual_income: board_ctx.trailing_annual_income,
+                projected_annual_income: board_ctx.projected_annual_income,
+                annual_wages: board_ctx.total_annual_wages as i64,
+                balance: board_ctx.balance,
+            };
+        }
+
         if !self.personality_initialized {
             if let Some(board_ctx) = &ctx.board {
                 self.bootstrap_personality(board_ctx, result.club_id);
+            }
+        }
+
+        // …and a budget from the first tick, not from the first season
+        // start. `calculate_season_targets` had exactly one production
+        // caller — the season-start branch below — so from world creation
+        // until that date EVERY club in the world carried no mandate, no
+        // owner subsidy and empty envelopes, and `WagePower::for_player`
+        // fell back to `level x 1.30` for all of them. A whole first
+        // season with no owner cheque anywhere is the `—` column the
+        // census printed.
+        if self.season_targets.is_none() {
+            if let Some(board_ctx) = &ctx.board {
+                self.calculate_season_targets(board_ctx);
             }
         }
 
@@ -846,13 +901,28 @@ impl ClubBoard {
                     idle_now,
                     matches!(board_ctx.debt_standing, DebtStanding::Emergency),
                 );
-                if top_up >= 1.0 {
+                // …and the cheque is in the pot BEFORE the envelope is
+                // sized against it. `BoardDecision::OwnerTopUp` is applied
+                // later, in `BoardResult::process`, so the idle cash the
+                // envelope split reads was the PRE-top-up figure: a
+                // benefactor that had drained to zero sized its whole
+                // season off nothing and then banked the money the same
+                // tick. One local copy of the context, and the order the
+                // owner actually writes it in.
+                let funded_ctx;
+                let budget_ctx = if top_up >= 1.0 {
                     result.decisions.push(BoardDecision::OwnerTopUp {
                         amount: top_up as i64,
                         reason: DecisionReason::OwnerInjection,
                     });
-                }
-                self.calculate_season_targets(board_ctx);
+                    let mut ctx = (*board_ctx).clone();
+                    ctx.balance = ctx.balance.saturating_add(top_up as i64);
+                    funded_ctx = ctx;
+                    &funded_ctx
+                } else {
+                    board_ctx
+                };
+                self.calculate_season_targets(budget_ctx);
 
                 // Promises whose deadline lapsed unfulfilled break now and
                 // cost the manager board trust. Counted before they are
@@ -994,8 +1064,23 @@ impl ClubBoard {
         // in TV money get a meaningful budget; clubs running at a deficit
         // get nothing — even if the bank account looks healthy from a
         // recent owner injection.
-        let projected_income = board_ctx.trailing_annual_income.max(0) as f64;
-        let projected_expenses = board_ctx.trailing_annual_outcome.max(0) as f64;
+        // A year's income the club can be judged on TODAY: the trailing
+        // sum once a month has closed, its own revenue model's projection
+        // before that. The trailing sum alone is 0 for every club in a
+        // freshly created world, and every branch below that tests
+        // `projected_income < 1.0` then took its cold-start arm — which
+        // set `owner_subsidy = 0.0` and held the mandate at the existing
+        // bill, for the whole of season one.
+        let projected_income = board_ctx.projected_annual_income.max(0) as f64;
+        // The expense side has to be projected with it, or the first
+        // computation reads a club with a $110M wage bill as having no
+        // costs at all and hands it a year's revenue as free cash. The
+        // wage bill is the honest floor: it is most of what a club spends
+        // and it is the one figure the context always carries.
+        let projected_expenses = board_ctx
+            .trailing_annual_outcome
+            .max(board_ctx.total_annual_wages as i64)
+            .max(0) as f64;
         let projected_free_cash = (projected_income - projected_expenses).max(0.0);
 
         let ambition_mult = ambition_budget_multiplier(self.vision.long_term_goal);
@@ -1006,12 +1091,14 @@ impl ClubBoard {
             FfpStatus::Breach => 0.35,
         };
 
-        // Cold-start fallback: a freshly created club with no twelve-month
-        // history would have free_cash == 0 and never get a budget. Seed
-        // the calculation with a reputation-scaled allowance so the first
-        // season can make signings — slightly smaller than the legacy
-        // cash-based budget to avoid over-spending when the club hasn't
-        // earned anything yet.
+        // No-revenue fallback: a club whose own revenue model cannot even
+        // project a year — it has no main team — would have free_cash == 0
+        // and never get a budget. Seed the calculation with a
+        // reputation-scaled allowance so it can still make signings.
+        //
+        // Since `projected_income` reads the PROJECTION, this is no longer
+        // the whole world's first season; it is the handful of clubs with
+        // nothing to project from.
         let seed_budget = if projected_income < 1.0 {
             let cash = board_ctx.balance.max(0) as f64;
             let seed_pct = if rep >= 0.8 {
@@ -1127,14 +1214,15 @@ impl ClubBoard {
         // tier envelope — the same cheque on both arms was the "$33M shirt
         // is $55M" defect.
         let owner_subsidy = if projected_income < 1.0 {
-            // No revenue evidence: the mandate below is the existing bill
-            // and carries no owner money, so neither does the ledger.
+            // Nothing to project from at all: the mandate below is the
+            // existing bill and carries no owner money, so neither does
+            // the ledger.
             0.0
         } else {
             self.ownership.owner_subsidy_per_year(idle_cash)
         };
         let wage_budget = if projected_income < 1.0 {
-            // No revenue evidence yet (a freshly created club): hold the
+            // Nothing to project from (a club with no main team): hold the
             // mandate at the existing bill rather than inventing a cut.
             current_wages
         } else {
@@ -1832,10 +1920,11 @@ impl ClubBoard {
         // top-up refills towards, so a benefactor's cash is a fund he
         // maintains rather than a one-off pot that drains in three
         // windows.
-        self.ownership.stamp_idle_at_derive(ClubBenefactor::idle_cash(
-            ctx.balance,
-            ctx.total_annual_wages as i64,
-        ));
+        self.ownership
+            .stamp_idle_at_derive(ClubBenefactor::idle_cash(
+                ctx.balance,
+                ctx.total_annual_wages as i64,
+            ));
         self.personality_initialized = true;
     }
 
@@ -2340,6 +2429,9 @@ mod budget_tests {
         c.country_price_level = 1.0;
         c.trailing_annual_income = income;
         c.trailing_annual_outcome = outcome;
+        // What `Club::simulate` writes: the trailing sum once it exists,
+        // a revenue projection before that. The budgets read THIS.
+        c.projected_annual_income = income;
         c.ffp_status = ffp;
         c
     }
@@ -2766,6 +2858,7 @@ mod board_behaviour_tests {
         ctx.country_price_level = 1.0;
         ctx.trailing_annual_income = 60_000_000;
         ctx.trailing_annual_outcome = 40_000_000;
+        ctx.projected_annual_income = 60_000_000;
 
         let mut reckless = ClubBoard::new();
         reckless.bootstrap_personality(&ctx, 0);
@@ -3120,7 +3213,10 @@ mod board_behaviour_tests {
         for seed in 0..3u32 {
             let mut board = member_owned_board();
             board.apply_takeover_completion(seed);
-            assert!(board.ownership.wealth() >= 70, "new owner should be wealthy");
+            assert!(
+                board.ownership.wealth() >= 70,
+                "new owner should be wealthy"
+            );
             assert_eq!(board.confidence.level, 60);
             // Relationship was reset (trust_results back above the crisis level).
             assert!(board.relationship.trust_results >= 50);
@@ -3576,5 +3672,145 @@ mod asset_tolerance_tests {
         // Age shades a decision; it must never decide one.
         assert!(ClubBoard::asset_tolerance(16) <= 0.30);
         assert!(ClubBoard::asset_tolerance(40) >= -0.30);
+    }
+}
+
+/// The owner's money reaching the market at all.
+///
+/// Three defects, one symptom: every envelope column in the first clean
+/// census printed `—`. Nobody had `season_targets` until their first
+/// season start; the first computation read a trailing income of zero and
+/// set `owner_subsidy = 0`; and the yearly top-up was booked AFTER the
+/// envelope that should have spent it.
+#[cfg(test)]
+mod owner_money_tests {
+    use super::*;
+
+    struct Fx;
+
+    impl Fx {
+        /// A cash-rich club whose wage bill its revenue cannot carry —
+        /// the shape [`ClubBenefactor::signal`] is written for. No
+        /// finance history, as a freshly created world has none.
+        fn benefactor_ctx() -> BoardContext {
+            let mut ctx = BoardContext::new();
+            ctx.balance = 300_000_000;
+            ctx.total_annual_wages = 160_000_000;
+            ctx.reputation_score = 0.75;
+            ctx.country_economic_factor = 1.0;
+            ctx.country_price_level = 1.0;
+            ctx.league_size = 18;
+            // Nothing has closed yet: the trailing sums are empty and the
+            // projection is all the club can be judged on.
+            ctx.trailing_annual_income = 0;
+            ctx.trailing_annual_outcome = 0;
+            ctx.projected_annual_income = 80_000_000;
+            ctx
+        }
+    }
+
+    /// A2 — the budget exists from the first tick, not from the first
+    /// season start. Between world creation and that date every club in
+    /// the world carried no mandate and no envelope.
+    #[test]
+    fn a_board_has_targets_after_its_first_tick_on_any_date() {
+        let mut board = ClubBoard::new();
+        assert!(board.season_targets.is_none());
+        let ctx = Fx::benefactor_ctx();
+        board.bootstrap_personality(&ctx, 7);
+        // The `season_targets.is_none()` arm of `simulate`, on a date
+        // that is not a season start.
+        if board.season_targets.is_none() {
+            board.calculate_season_targets(&ctx);
+        }
+        let targets = board.season_targets.expect("a first tick sizes a budget");
+        assert!(targets.wage_budget > 0, "{}", targets.wage_budget);
+    }
+
+    /// A2 — …and that first computation carries the owner's cheque,
+    /// because it reads the PROJECTION. Reading the trailing zero took
+    /// the `projected_income < 1.0` arm, which sets the subsidy to zero
+    /// and holds the mandate at the existing bill.
+    #[test]
+    fn a_cold_start_benefactor_is_granted_an_envelope_on_its_first_tick() {
+        let ctx = Fx::benefactor_ctx();
+        let mut board = ClubBoard::new();
+        board.bootstrap_personality(&ctx, 7);
+        assert!(
+            board.ownership.benefactor >= ClubBenefactor::STATE_BACKED_BAR,
+            "the fixture must read as owner-funded: {}",
+            board.ownership.benefactor
+        );
+        board.calculate_season_targets(&ctx);
+        let targets = board.season_targets.expect("targets");
+        assert!(
+            targets.owner_subsidy > 0,
+            "a benefactor's first season must carry his cheque: {}",
+            targets.owner_subsidy
+        );
+        assert!(
+            targets.owner_envelopes.total_granted() > 0.0,
+            "…and it must be split into tier envelopes"
+        );
+    }
+
+    /// A3 — the top-up is in the pot before the envelope is sized against
+    /// it. An owner who refills a drained club on 1 July and whose
+    /// envelope is sized off the pre-refill balance bought nothing with
+    /// the money.
+    #[test]
+    fn a_drained_benefactor_sizes_its_envelope_off_the_refilled_pile() {
+        let mut ctx = Fx::benefactor_ctx();
+        let mut board = ClubBoard::new();
+        board.bootstrap_personality(&ctx, 7);
+
+        // He has spent it: wages still above revenue, cash cover gone.
+        ctx.balance = 1_000_000;
+        board.calculate_season_targets(&ctx);
+        let drained = board
+            .season_targets
+            .as_ref()
+            .expect("targets")
+            .owner_envelopes
+            .total_granted();
+
+        // Same tick, with the owner's yearly cheque folded into the idle
+        // cash the split reads — the order `simulate` now uses.
+        let mut funded = ctx.clone();
+        funded.balance = ctx.balance + 250_000_000;
+        board.calculate_season_targets(&funded);
+        let refilled = board
+            .season_targets
+            .as_ref()
+            .expect("targets")
+            .owner_envelopes
+            .total_granted();
+
+        assert!(
+            refilled > drained,
+            "the cheque that landed this tick must be spendable this tick: {refilled} vs {drained}"
+        );
+    }
+
+    /// A1 — the signal finds the club whose WAGES its revenue cannot
+    /// carry, not the one sitting on a pile. A second-division side with
+    /// database cash and a second-division wage bill is not a benefactor.
+    #[test]
+    fn a_cash_rich_club_living_inside_its_revenue_is_not_owner_funded() {
+        let mut ctx = BoardContext::new();
+        ctx.balance = 40_000_000;
+        ctx.total_annual_wages = 3_000_000;
+        ctx.reputation_score = 0.3;
+        ctx.country_economic_factor = 1.0;
+        ctx.country_price_level = 1.0;
+        ctx.projected_annual_income = 8_000_000;
+
+        let mut board = ClubBoard::new();
+        board.bootstrap_personality(&ctx, 3);
+        assert!(
+            board.ownership.benefactor < ClubBenefactor::STATE_BACKED_BAR,
+            "{}",
+            board.ownership.benefactor
+        );
     }
 }

@@ -456,4 +456,32 @@ mod personal_terms_round_tests {
         // the loose wage updates — and the call must not panic.
         assert!(n.current_offer.personal_terms.is_none());
     }
+
+    /// A7 — the anchor is stamped WITH the offer, not latched after a
+    /// raise. A path that never staged a salary latched `None`, so round
+    /// two anchored on the raise itself: 1.3 compounding into 1.69.
+    #[test]
+    fn the_opening_anchor_is_stamped_with_the_offer_and_never_moves() {
+        let date = NaiveDate::from_ymd_opt(2026, 7, 1).unwrap();
+        let mut n = negotiation(date);
+        assert!(n.opening_salary.is_none());
+
+        n.open_salary_at(1_000_000);
+        assert_eq!(n.offered_salary, Some(1_000_000));
+        assert_eq!(n.opening_salary, Some(1_000_000));
+
+        // Two rounds of raises. The offer climbs; the anchor does not.
+        n.raise_offered_salary(1_200_000);
+        n.raise_offered_salary(1_300_000);
+        assert_eq!(n.offered_salary, Some(1_300_000));
+        assert_eq!(
+            n.opening_salary,
+            Some(1_000_000),
+            "the buyer's LEVEL is where it opened"
+        );
+
+        // …and re-opening cannot move it either.
+        n.open_salary_at(1_500_000);
+        assert_eq!(n.opening_salary, Some(1_000_000));
+    }
 }

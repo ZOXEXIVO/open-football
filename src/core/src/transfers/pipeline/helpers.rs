@@ -8,8 +8,8 @@ use crate::club::player::statistics::StuckCareerScan;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::ScoutingRegion;
 use crate::transfers::pipeline::LoanDestinationPreference;
-use crate::transfers::pipeline::loan_home::HomeLoanGates;
 use crate::transfers::pipeline::breakout::{BreakoutPerformanceSignal, LeaguePerformanceLookup};
+use crate::transfers::pipeline::loan_home::HomeLoanGates;
 use crate::transfers::pipeline::processor::{
     PipelineProcessor, PlayerSummary, SellerPlausibilityContext,
 };
@@ -364,13 +364,10 @@ impl PipelineProcessor {
             return_home_desire: player.home_pull.desire,
             home_return_wanted: HomeLoanGates::is_posted(
                 player.home_pull.wanted,
-                club.transfer_plan
-                    .loan_out_candidates
-                    .iter()
-                    .any(|c| {
-                        c.player_id == player.id
-                            && c.preferred_destination != LoanDestinationPreference::Any
-                    }),
+                club.transfer_plan.loan_out_candidates.iter().any(|c| {
+                    c.player_id == player.id
+                        && c.preferred_destination != LoanDestinationPreference::Any
+                }),
             ),
             ambition: player.attributes.ambition as u8,
             loyalty: player.attributes.loyalty as u8,

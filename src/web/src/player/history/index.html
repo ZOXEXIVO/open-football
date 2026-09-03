@@ -12,7 +12,7 @@
             <thead>
                 <tr>
                     <th class="sq-season">{{ i18n.t("season") }}</th>
-                    <th class="sq-club"><span class="sq-club-name">{{ i18n.t("club") }}</span></th>
+                    <th class="sq-club"><span class="sq-club-name">{{ i18n.t("club") }}{# Zero-height copies of every club name in the table. They only reserve width, so every name box measures the longest name and the column keeps one left edge — see .sq-club-sizer. #}{% for club_name in club_name_sizers %}<span class="sq-club-sizer" aria-hidden="true">{{ club_name }}</span>{% endfor %}</span></th>
                     <th class="sq-nat">{{ i18n.t("nat") }}</th>
                     <th class="sq-league">{{ i18n.t("league") }}</th>
                     <th class="sq-fee">{{ i18n.t("fee") }}</th>
@@ -35,7 +35,7 @@
                         {% if !item.breakdown.is_empty() %}<span class="fm-history-row-toggle" aria-hidden="true"></span>{% endif %}
                         {{ item.season }}
                     </td>
-                    <td class="sq-club"><span class="sq-club-name">{% if !item.team_slug.is_empty() %}<a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a>{% else %}{{ item.team_name }}{% endif %}</span></td>
+                    <td class="sq-club"><span class="sq-club-name">{% if !item.team_slug.is_empty() %}<a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a>{% else %}{{ item.team_name }}{% endif %}{# Zero-height copies of every club name in the table. They only reserve width, so every name box measures the longest name and the column keeps one left edge — see .sq-club-sizer. #}{% for club_name in club_name_sizers %}<span class="sq-club-sizer" aria-hidden="true">{{ club_name }}</span>{% endfor %}</span></td>
                     <td class="sq-nat">{% if !item.country_code.is_empty() %}<a href="/{{ lang }}/countries/{{ item.country_slug }}"><span class="flag flag-{{ item.country_code }}" title="{{ item.country_name }}"></span> {{ item.country_name }}</a>{% endif %}</td>
                     <td class="sq-league">{% if !item.league_slug.is_empty() %}<a href="/{{ lang }}/leagues/{{ item.league_slug }}">{{ item.league_name }}</a>{% endif %}{# Zero-height copies of this season's breakdown labels. They only reserve column width so expanding the row can't resize the League column — see .sq-league-sizer. #}{% for comp in item.breakdown %}<span class="sq-league-sizer" aria-hidden="true">{{ comp.label }}</span>{% endfor %}</td>
                     <td class="sq-fee">{% if item.is_loan %}{{ i18n.t("loan") }}{% else if !item.transfer_fee.is_empty() %}{{ item.transfer_fee }}{% endif %}</td>

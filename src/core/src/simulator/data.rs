@@ -172,6 +172,13 @@ impl SimulatorData {
                         name: c.name.clone(),
                         continent_id: c.continent_id,
                         reputation: c.reputation,
+                        top_flight_reputation: c
+                            .leagues
+                            .leagues
+                            .iter()
+                            .map(|l| l.reputation)
+                            .max()
+                            .unwrap_or(0),
                     },
                 )
             })
@@ -222,8 +229,8 @@ impl SimulatorData {
     ///
     /// Everything created after load — an academy intake, a regen, a
     /// synthetic international — starts with `nationality_continent_id`
-    /// 0 and `nationality_region` `None`, and an unstamped passport reads
-    /// as "no home" everywhere the loan-home pathway looks. The two
+    /// `None` and `nationality_region` `None`, and an unstamped passport
+    /// reads as "no home" everywhere the loan-home pathway looks. The two
     /// transfer-window opens are when that matters, and the pass skips
     /// anyone already stamped, so it costs a walk and nothing else.
     pub fn is_nationality_reseed_day(date: NaiveDate) -> bool {
@@ -248,12 +255,12 @@ impl SimulatorData {
             return;
         }
         let stamp = |player: &mut Player| {
-            if player.nationality_continent_id != 0 && player.nationality_region.is_some() {
+            if player.nationality_continent_id.is_some() && player.nationality_region.is_some() {
                 return;
             }
             if let Some((continent_id, region)) = lookup.get(&player.country_id) {
-                if player.nationality_continent_id == 0 {
-                    player.nationality_continent_id = *continent_id;
+                if player.nationality_continent_id.is_none() {
+                    player.nationality_continent_id = Some(*continent_id);
                 }
                 if player.nationality_region.is_none() {
                     player.nationality_region = Some(*region);
@@ -306,6 +313,9 @@ impl SimulatorData {
             name,
             continent_id,
             reputation,
+            // A country registered through this path has no leagues in
+            // the save, so there is no top flight to go home to.
+            top_flight_reputation: 0,
         });
     }
 

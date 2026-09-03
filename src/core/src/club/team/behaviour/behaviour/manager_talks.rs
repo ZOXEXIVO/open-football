@@ -7,13 +7,12 @@
 
 use super::TeamBehaviour;
 use crate::club::player::ManagerPromiseKind;
-use crate::club::player::mind::GoalKind;
-use crate::transfers::pipeline::{HomeLoanGates, HomePull, UnsettledAbroadScan};
 use crate::club::player::calculators::{
     AutomaticReleaseEligibility, FreeAgentReleaseReason, ReleaseEligibilityContext,
 };
 use crate::club::player::happiness::{PlayingTimeFrustrationConfig, PlayingTimeOpportunityContext};
 use crate::club::player::interaction::{InteractionTone, InteractionTopic};
+use crate::club::player::mind::GoalKind;
 use crate::club::staff::CoachPlayerBond;
 use crate::club::team::behaviour::topic_for_talk;
 use crate::club::team::behaviour::{
@@ -21,6 +20,7 @@ use crate::club::team::behaviour::{
 };
 use crate::club::team::squad::SquadAssetContext;
 use crate::context::GlobalContext;
+use crate::transfers::pipeline::{HomeLoanGates, HomePull, UnsettledAbroadScan};
 use crate::utils::DateUtils;
 use crate::{
     ContractType, HappinessEventType, Player, PlayerCollection, PlayerFieldPositionGroup,

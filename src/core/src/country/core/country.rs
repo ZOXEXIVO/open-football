@@ -1,8 +1,8 @@
-use crate::context::TournamentClocks;
 use crate::MatchRuntime;
 use crate::club::academy::result::ClubAcademyResult;
 use crate::club::{BoardResult, ClubFinanceResult, PlayerCollectionResult};
 use crate::context::GlobalContext;
+use crate::context::{HomeLeagueTable, TournamentClocks};
 use crate::country::CountryResult;
 use crate::country::core::builder::CountryBuilder;
 use crate::country::national::NationalTeam;
@@ -152,6 +152,12 @@ pub struct Country {
     /// player's tournament clock belongs to his PASSPORT — see
     /// [`crate::context::TournamentClocks`].
     pub tournament_clocks: TournamentClocks,
+    /// What every country's best league is worth, republished here each
+    /// tick for the same reason the clocks are: the transfer market runs
+    /// outside `GlobalContext`, and "is his HOME league worth going back
+    /// to?" is a question about a passport that no single country can
+    /// answer. See [`crate::context::HomeLeagueTable`].
+    pub home_leagues: HomeLeagueTable,
 }
 
 impl Country {
@@ -159,7 +165,7 @@ impl Country {
     /// back to the country's own confederation when his passport has
     /// never been stamped, which is the honest no-view and the right
     /// answer for a native.
-    pub fn months_to_tournament_for(&self, nationality_continent_id: u32) -> u8 {
+    pub fn months_to_tournament_for(&self, nationality_continent_id: Option<u32>) -> u8 {
         self.tournament_clocks
             .months_for(nationality_continent_id)
             .unwrap_or(self.months_to_tournament)

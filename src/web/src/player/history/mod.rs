@@ -46,6 +46,10 @@ pub struct PlayerHistoryTemplate {
     pub player_slug: String,
     pub club_id: u32,
     pub items: Vec<PlayerHistorySeasonItem>,
+    /// Every club name the table shows, once each. The Club cells plant a
+    /// zero-height copy of the whole set, which is what makes each name box
+    /// as wide as the longest name and holds the column's left edge.
+    pub club_name_sizers: Vec<String>,
     pub totals: PlayerHistoryStats,
     pub is_goalkeeper: bool,
     pub is_on_loan: bool,
@@ -484,6 +488,16 @@ pub async fn player_history_action(
         })
         .collect();
 
+    // One entry per distinct club, in the order the rows introduce them. A
+    // career visits a handful of clubs, so a linear `contains` is cheaper
+    // than reaching for a set.
+    let mut club_name_sizers: Vec<String> = Vec::new();
+    for item in &items {
+        if !item.team_name.is_empty() && !club_name_sizers.contains(&item.team_name) {
+            club_name_sizers.push(item.team_name.clone());
+        }
+    }
+
     let totals = to_history_stats(&career_totals);
 
     if has_no_team {
@@ -513,6 +527,7 @@ pub async fn player_history_action(
             player_slug: canonical.clone(),
             club_id: 0,
             items,
+            club_name_sizers,
             totals,
             is_goalkeeper: player.position().is_goalkeeper(),
             is_on_loan: false,
@@ -567,6 +582,7 @@ pub async fn player_history_action(
             player_slug: canonical,
             club_id: team.club_id,
             items,
+            club_name_sizers,
             totals,
             is_goalkeeper: player.position().is_goalkeeper(),
             is_on_loan: player.is_on_loan(),

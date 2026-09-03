@@ -5,7 +5,6 @@ use rustc_hash::FxHashSet;
 use std::collections::{HashMap, HashSet};
 
 use crate::SimulatorData;
-use crate::transfers::pipeline::wage_power::BuyerLevelWage;
 use crate::club::player::transfer::FreeAgentBlockReason;
 use crate::country::result::transfers::FreeAgentBumpBatch;
 use crate::country::result::transfers::types::can_club_accept_player;
@@ -29,6 +28,7 @@ use crate::transfers::pipeline::plausibility::{
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::pipeline::upgrade_math::{TargetBelief, UpgradeMath};
+use crate::transfers::pipeline::wage_power::BuyerLevelWage;
 use crate::transfers::pipeline::{
     ShortlistCandidateStatus, TransferApproach, TransferNeedPriority, TransferNeedReason,
     TransferRequest, TransferRequestStatus,
@@ -37,8 +37,7 @@ use crate::transfers::reason::TransferReason;
 use crate::utils::FormattingUtils;
 use crate::{
     ClubPhilosophy, ClubTransferStrategy, Country, Person, PlayerFieldPositionGroup,
-    PlayerStatusType, ReputationLevel, StaffPosition, TransferStrategyContext,
-    WageCalculator,
+    PlayerStatusType, ReputationLevel, StaffPosition, TransferStrategyContext, WageCalculator,
 };
 
 /// Continuous buying aggressiveness from reputation ratio.

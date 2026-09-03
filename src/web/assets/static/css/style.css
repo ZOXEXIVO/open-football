@@ -3415,14 +3415,26 @@ a:active {
 /* The ledger: one diverging bar per factor, worst at the top. Half
    the track is a full-strength factor, so the spine is the zero. */
 .fm-mh-ledger {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 112px auto;
+    column-gap: 12px;
     list-style: none;
     margin: 0;
     padding: 0;
 }
 
+/* Columns on the list, borrowed back per row — the same arrangement
+   `.fm-mh-wants` uses, and for the same reason: a track sized per row
+   moves the bar with the verdict beside it. The fixed 96px this replaces
+   held the desktop line but was a guess at the longest verdict, and it
+   held nothing at all under the 480px rule below, where the third track
+   went `auto` and the bars went with it. `auto` on the list measures the
+   widest verdict once, in whatever language is printing. */
 .fm-mh-ledger-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 112px 96px;
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr) 112px auto;
+    grid-template-columns: subgrid;
     align-items: center;
     column-gap: 12px;
     padding: 4px 0;
@@ -3491,17 +3503,44 @@ a:active {
    tag is load-bearing rather than decorative — the Latent and Active
    rungs are the ones nobody has heard him say, and a manager reading
    this needs to tell a private want from a public one at a glance. */
+/* A want reads as the thing he wants on the left and how it is showing
+   on the right, with the strength of it drawn under the phrase that
+   names it — the bar measures the want, so it sits with the words for
+   the want rather than in a lane of its own.
+
+   The list owns the two columns and each row borrows them back with
+   `subgrid`. That is what holds the bars in line: the status phrase is
+   the one part of a want whose width the sim writes, "Has said so" runs
+   53px shorter than "Shapes every decision", and while each row sized
+   its own track that difference paid out sideways — three bars at three
+   different offsets down a column three rows long. Sized once on the
+   list, the widest phrase sets the column and every bar is the same
+   length in the same place. Where subgrid is unsupported the second
+   declaration drops and the row sizes its own tracks again — ragged, as
+   before, not broken. */
 .fm-mh-wants {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    column-gap: 12px;
     list-style: none;
     margin: 0;
     padding: 0;
 }
 
+/* Placed rather than flowed: the markup runs name, bar, status, and the
+   bar belongs on the second line under the status. */
 .fm-mh-want {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 56px auto;
-    align-items: center;
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: subgrid;
+    /* Baseline, not centre: a name that takes two lines — the Russian
+       'unspoken' tag wraps under its name — would otherwise float the
+       status phrase down between them instead of setting it against the
+       line the name starts on. */
+    align-items: baseline;
     column-gap: 12px;
+    row-gap: 5px;
     padding: 5px 0;
     border-bottom: 1px solid rgba(255, 255, 255, 0.03);
 }
@@ -3511,6 +3550,8 @@ a:active {
 }
 
 .fm-mh-want-body {
+    grid-column: 1;
+    grid-row: 1;
     min-width: 0;
 }
 
@@ -3550,6 +3591,8 @@ a:active {
 .fm-mh-want-bar {
     position: relative;
     display: block;
+    grid-column: 2;
+    grid-row: 2;
     height: 4px;
     background: #1a2a34;
     border-radius: 2px;
@@ -3568,6 +3611,8 @@ a:active {
 }
 
 .fm-mh-want-status {
+    grid-column: 2;
+    grid-row: 1;
     font-size: 11px;
     color: #6d8290;
     text-align: right;
@@ -3656,7 +3701,9 @@ a:active {
 }
 
 @media (max-width: 480px) {
-    .fm-mh-ledger-row {
+    /* The list, not the row: the row is a subgrid now and re-declaring
+       its tracks here would take the columns back off the list. */
+    .fm-mh-ledger {
         grid-template-columns: minmax(0, 1fr) 80px auto;
     }
 
@@ -5060,14 +5107,47 @@ a:active {
    column. Centring the cell alone centres each name on its own length, so
    Bari and Fiorentina start at different offsets and the column reads
    ragged; centring a box of one fixed width instead, with the name
-   left-aligned inside it, gives every row the same left edge. A name wider
-   than the box just widens it and stays centred, so nothing is ever clipped.
-   The width is in px, not em, because the header sets 10px against the
-   body's 14px and the two edges have to line up. */
+   left-aligned inside it, gives every row the same left edge. The width is
+   in px, not em, because the header sets 10px against the body's 14px and
+   the two edges have to line up.
+
+   148px is the floor, not the width. A name past it used to widen its own
+   box and nothing else, and a centred box that is wider starts further
+   left — which is how "Clube de Futebol Os Belenenses" came to sit 30px
+   adrift of the Portos above it. The `.sq-club-sizer` copies below give
+   every box the width of the longest name in the table, so a long name
+   moves the whole block left instead and the edge holds.
+
+   `vertical-align: top` because those copies are block boxes: on the
+   default baseline the inline-block takes its baseline from the last of
+   them and rides 10px up out of its own row. */
 .fm-history-table .sq-club-name {
     display: inline-block;
     min-width: 148px;
     text-align: left;
+    vertical-align: top;
+}
+
+/* Width-only copies of every club name in the table, one set inside each
+   name box — the same trick `.sq-league-sizer` plays a few rules down, and
+   hidden the same way: `visibility: hidden` so they still count toward the
+   box's intrinsic width, `height: 0` so they cost no vertical space, and
+   no `overflow: hidden`, which would zero the contribution they exist for. */
+.fm-history-table .sq-club-sizer {
+    display: block;
+    height: 0;
+    visibility: hidden;
+}
+
+/* The header prints 10px/700 uppercase on 0.5px tracking, so the same names
+   measure narrower there and its box would come out shorter than the body's,
+   putting the column label off the edge the names keep. Its copies are
+   pinned to the body cell's type instead. */
+.fm-history-table thead th.sq-club .sq-club-sizer {
+    font-size: 14px;
+    font-weight: 400;
+    letter-spacing: normal;
+    text-transform: none;
 }
 
 .fm-history-table thead th.sq-nat {
@@ -8491,6 +8571,12 @@ html.match-scroll-locked body {
        box still sits dead centre. */
     .fm-history-table .sq-club-name {
         min-width: 118px;
+    }
+
+    /* Header and body both print 12px here (rule at the foot of this
+       block), so the width-only copies follow them down. */
+    .fm-history-table thead th.sq-club .sq-club-sizer {
+        font-size: 12px;
     }
 
     .fm-history-table thead th.sq-club,

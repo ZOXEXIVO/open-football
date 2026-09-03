@@ -105,7 +105,18 @@ pub struct MindSituation {
     pub manager: ActorRef,
     /// Club reputation, 0..1.
     pub club_reputation: f32,
-    /// Is he playing abroad?
+    /// Is he playing outside his own country?
+    ///
+    /// A PASSPORT test — `player.country_id != club country id` — and
+    /// never a language one. It used to read "does not speak the local
+    /// language", so a Brazilian at Benfica, an Argentine at Sevilla, a
+    /// Colombian in Mexico and a Uruguayan in Argentina were all "at
+    /// home": never homesick, never posted, never seen by a club in the
+    /// league they came through. Those are the largest home-loan
+    /// populations in world football, and the census read 1 % home-country
+    /// loans because of this one line.
+    /// [`Self::speaks_local_language`] is the separate boolean it always
+    /// was, and the two together are what cultural isolation means.
     pub is_abroad: bool,
     /// Does he speak the local language?
     pub speaks_local_language: bool,

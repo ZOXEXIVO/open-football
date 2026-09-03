@@ -17,7 +17,7 @@ use crate::club::board::manager_market;
 use crate::club::player::development::CoachingEffect;
 use crate::competitions::simulation::GlobalCompetitionSimulator;
 use crate::config::SimulatorConfig;
-use crate::context::{GlobalContext, SimulationContext, TournamentClocks};
+use crate::context::{GlobalContext, HomeLeagueTable, SimulationContext, TournamentClocks};
 use crate::continent::ContinentAwardOutcome;
 use crate::continent::ContinentBuildOutput;
 use crate::continent::ContinentResult;
@@ -107,8 +107,21 @@ impl FootballSimulator {
                 })
                 .collect(),
         );
+        // …and what every country's best league is worth. Same shape and
+        // the same reason: "is his HOME league worth going back to?" is a
+        // question about a passport, and only the world level holds every
+        // country's answer. Read off `country_info`, which covers
+        // nationalities whose leagues are not in this save at all.
+        let home_leagues = HomeLeagueTable::new(
+            data.country_info
+                .values()
+                .map(|c| (c.id, c.top_flight_reputation))
+                .collect(),
+        );
         let ctx = GlobalContext::new(
-            SimulationContext::new(data.date).with_tournament_clocks(tournament_clocks.clone()),
+            SimulationContext::new(data.date)
+                .with_tournament_clocks(tournament_clocks.clone())
+                .with_home_leagues(home_leagues),
         );
 
         // Where the world's players are FROM. Seeded once at load, and

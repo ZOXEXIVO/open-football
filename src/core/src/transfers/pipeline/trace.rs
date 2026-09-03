@@ -60,3 +60,60 @@ impl TransferTrace {
         eprintln!("[of-trace {player_id}] {stage:<9} | {}", detail.as_ref());
     }
 }
+
+/// Market arms one census run can switch off, so ONE binary produces the
+/// A/B a volume guard needs.
+///
+/// Every band in the design's Part VI is written as "± 10 % of HEAD", and
+/// there was no HEAD: the pre-design commit carries a different harness,
+/// and the pre-polish run had every cash-positive club reading as
+/// state-backed. Comparing two builds compares two worlds; comparing two
+/// runs of one build with an arm disarmed compares one.
+///
+/// Each is read once, like [`TransferTrace::target`], and each fails
+/// CLOSED — an unset or unparseable variable leaves the arm on, which is
+/// production. Set to `1` to disarm:
+///
+/// * `OF_HOME_REACH_OFF` — [`super::loan_home::HomeLoanGates::reach_ok`]
+///   answers with the scout's own map alone, so no club sees a compatriot
+///   it could not otherwise scout.
+/// * `OF_COMPATRIOT_SWEEP_OFF` — an Elite / Continental club never runs
+///   the once-per-window posted-compatriot sweep.
+/// * `OF_OWNER_MONEY_OFF` — [`crate::club::board::ownership::ClubBenefactor::subsidy_per_year`]
+///   returns 0, which zeroes the wage subsidy, the tier envelopes and the
+///   owner's fee headroom together.
+pub struct MarketSwitches;
+
+impl MarketSwitches {
+    /// True when the named variable is set to something that parses as
+    /// "on". Read once per variable for the lifetime of the process.
+    fn disarmed(value: Option<&String>) -> bool {
+        value
+            .map(|v| matches!(v.trim(), "1" | "true" | "TRUE" | "on" | "yes"))
+            .unwrap_or(false)
+    }
+
+    fn read(name: &str) -> bool {
+        Self::disarmed(env::var(name).ok().as_ref())
+    }
+
+    /// The compatriot REACH arm — a home club seeing a posted export its
+    /// scouts never covered.
+    pub fn home_reach_off() -> bool {
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::read("OF_HOME_REACH_OFF"))
+    }
+
+    /// The Elite / Continental posted-compatriot sweep.
+    pub fn compatriot_sweep_off() -> bool {
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::read("OF_COMPATRIOT_SWEEP_OFF"))
+    }
+
+    /// Every cheque an owner writes: wage subsidy, tier envelopes and fee
+    /// headroom all size off one call.
+    pub fn owner_money_off() -> bool {
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::read("OF_OWNER_MONEY_OFF"))
+    }
+}

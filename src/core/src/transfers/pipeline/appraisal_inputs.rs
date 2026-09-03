@@ -18,13 +18,13 @@
 use super::appraisal::{OfferKind, OfferView, PlayerStance};
 use crate::club::player::calculators::{ContractValuation, ValuationContext};
 use crate::club::player::contract::agent::PlayerAgent;
-use crate::club::player::language::Language;
 use crate::club::player::happiness::processing::PlayingTimeFrustrationConfig;
+use crate::club::player::language::Language;
 use crate::club::player::mind::MindSituation;
 use crate::club::player::statistics::StuckCareerScan;
 use crate::transfers::ScoutingRegion;
-use crate::transfers::offer::PromisedSquadStatus;
 use crate::transfers::market::TransferListingOrigin;
+use crate::transfers::offer::PromisedSquadStatus;
 use crate::transfers::pipeline::PlayerSummary;
 use crate::{Club, Country, HappinessEventType, Player, PlayerSquadStatus, PlayerStatusType};
 use chrono::NaiveDate;
@@ -139,7 +139,7 @@ impl PlayerStanceBuilder {
         // The mind's own weekly picture, rebuilt from the same builder the
         // faculties read — never a second copy that can drift. Cheap: it is
         // fields, not scans.
-        let mut situation = player.mind_situation(date, &country.code);
+        let mut situation = player.mind_situation(date, country.id, &country.code);
         situation.months_to_tournament = inputs.months_to_tournament;
 
         let seller_rep_score = inputs
@@ -362,7 +362,6 @@ impl PlayerStanceBuilder {
         };
         recent.max(isolation).clamp(0.0, 1.0)
     }
-
 }
 
 /// Builds the buyer's side of the appraisal.
@@ -407,5 +406,158 @@ impl OfferViewBuilder {
             release_clause_triggered: false,
             returning_to_seller: 0.0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::appraisal::{AppraisalConfig, PlayerOfferAppraisal};
+    use super::*;
+    use crate::club::player::ability::position::PositionCoverage;
+    use crate::club::player::language::LanguageProfile;
+    use crate::transfers::pipeline::SellerPlausibilityContext;
+    use crate::transfers::pipeline::standing::CareerRecordSnapshot;
+    use crate::{PlayerFieldPositionGroup, PlayerPositionType};
+
+    /// A market summary of a homesick loyal Brazilian at an English club:
+    /// three starts in a season, a formed want, and the personality the
+    /// live builder would read straight off the player.
+    fn brazilian_at_arsenal() -> PlayerSummary {
+        PlayerSummary {
+            player_id: 1,
+            club_id: 100,
+            country_id: 1,
+            continent_id: 1,
+            region: ScoutingRegion::WesternEurope,
+            country_code: "GB".to_string(),
+            nationality_country_id: 55,
+            nationality_continent_id: Some(7),
+            nationality_region: Some(ScoutingRegion::SouthAmerica),
+            starter_share: 0.12,
+            tenure_days: 400,
+            return_home_desire: 0.7,
+            home_return_wanted: true,
+            ambition: 14,
+            loyalty: 18,
+            adaptability: 6,
+            leave_pressure: 0.55,
+            stay_pressure: 0.1,
+            player_name: "Test".to_string(),
+            club_name: "Test Club".to_string(),
+            position: PlayerPositionType::Striker,
+            position_group: PlayerFieldPositionGroup::Forward,
+            coverage: PositionCoverage::single(PlayerPositionType::Striker),
+            age: 21,
+            estimated_value: 8_000_000.0,
+            is_listed: false,
+            is_loan_listed: true,
+            skill_ability: 120,
+            average_rating: 6.6,
+            goals: 1,
+            assists: 0,
+            appearances: 8,
+            determination: 12.0,
+            work_rate: 12.0,
+            composure: 12.0,
+            anticipation: 12.0,
+            technical_avg: 12.0,
+            mental_avg: 12.0,
+            physical_avg: 12.0,
+            current_reputation: 3000,
+            home_reputation: 3000,
+            world_reputation: 3000,
+            country_reputation: 8000,
+            club_world_reputation: 8000,
+            club_best_in_group: 160,
+            is_injured: false,
+            contract_months_remaining: 36,
+            salary: 900_000,
+            language_profile: LanguageProfile::default(),
+            international_apps: 0,
+            career_record: CareerRecordSnapshot::default(),
+            seller_ctx: SellerPlausibilityContext {
+                club_reputation_score: 0.8,
+                league_reputation: 8000,
+                league_id: None,
+                position_group_rank: 3,
+                squad_status: PlayerSquadStatus::HotProspectForTheFuture,
+                is_transfer_requested: false,
+                is_unhappy: false,
+                in_debt: false,
+                days_on_market: 0,
+                market_resignation: 0.0,
+                club_matches_played: 30,
+                big_stage_inclination: 0.3,
+                is_marketed: false,
+            },
+        }
+    }
+
+    /// B5 — the same man, read live and read off a summary, has to agree.
+    ///
+    /// The eight axes the cross-border stance used to guess (ambition off
+    /// `determination`, loyalty and adaptability at the neutral 0.5, the
+    /// playing-time gap against a flat half, the push from the posting
+    /// flag alone) made a loyalty-18 boyhood-club Brazilian read as a
+    /// 0.125 attachment abroad against 0.35+ at home.
+    #[test]
+    fn a_stance_from_a_summary_agrees_with_the_live_one_on_a_loan() {
+        let summary = brazilian_at_arsenal();
+        let staged =
+            PlayerStanceBuilder::from_summary(&summary, 0.35, ScoutingRegion::WesternEurope);
+
+        // What the live builder would produce for the same player: the
+        // drives off his attributes, the wants off his mind, the gap
+        // against what his role implies.
+        let live = PlayerStance {
+            ambition_drive: 14.0 / 20.0,
+            loyalty_drive: 18.0 / 20.0,
+            adaptability_drive: 6.0 / 20.0,
+            leave_pressure: 0.55,
+            stay_pressure: 0.1,
+            playing_time_gap: 0.12 - 0.10,
+            ..staged
+        };
+
+        assert!((staged.loyalty_drive - live.loyalty_drive).abs() < 1e-6);
+        assert!((staged.ambition_drive - live.ambition_drive).abs() < 1e-6);
+        assert!((staged.adaptability_drive - live.adaptability_drive).abs() < 1e-6);
+        assert!((staged.playing_time_gap - live.playing_time_gap).abs() < 0.02);
+
+        let loan_home = OfferView {
+            kind: OfferKind::Loan,
+            offered_wage: PlayerOfferAppraisal::anchor(&staged),
+            buyer_country_id: 55,
+            buyer_region: ScoutingRegion::SouthAmerica,
+            promised_status: Some(PromisedSquadStatus::FirstTeamRegular),
+            crosses_continent: true,
+            ..OfferView::neutral()
+        };
+        let cfg = AppraisalConfig::default();
+        let a = PlayerOfferAppraisal::appraise(&staged, &loan_home, 0.0, &cfg);
+        let b = PlayerOfferAppraisal::appraise(&live, &loan_home, 0.0, &cfg);
+        assert!(
+            (a.utility - b.utility).abs() < 0.05,
+            "staged {:.3} vs live {:.3}",
+            a.utility,
+            b.utility
+        );
+        assert!(a.accepts(), "he goes home: {}", a.explain());
+    }
+
+    /// B14 — one reading of "listed", type-matched to the deal. A
+    /// loan-listed man is advertised for a LOAN, not for a sale.
+    #[test]
+    fn a_listing_supports_the_kind_of_deal_it_advertises() {
+        let cfg = AppraisalConfig::default();
+        let _ = cfg;
+        let summary = brazilian_at_arsenal();
+        // The summary path reads the same rule.
+        let stance =
+            PlayerStanceBuilder::from_summary(&summary, 0.35, ScoutingRegion::WesternEurope);
+        assert!(
+            stance.listed_by_club,
+            "he is loan-listed and this is a loan"
+        );
     }
 }

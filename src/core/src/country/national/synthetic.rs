@@ -9,9 +9,9 @@ use super::types::{NationalSelectionPolicy, NationalTeamLevel, SQUAD_SIZE, SYNTH
 use crate::club::player::interaction::ManagerInteractionLog;
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::mind::PlayerMind;
-use crate::transfers::pipeline::HomePull;
 use crate::club::player::rapport::PlayerRapport;
 use crate::shared::FullName;
+use crate::transfers::pipeline::HomePull;
 use crate::utils::IntegerUtils;
 use crate::{
     Mental, PersonAttributes, PersonBehaviour, PersonBehaviourState, Physical, Player,
@@ -150,7 +150,7 @@ impl NationalTeam {
             birth_date: NaiveDate::from_ymd_opt(year, month, day)
                 .unwrap_or(NaiveDate::from_ymd_opt(year, 1, 1).unwrap()),
             country_id,
-            nationality_continent_id: 0,
+            nationality_continent_id: None,
             nationality_region: None,
             home_pull: HomePull::default(),
             behaviour: PersonBehaviour {

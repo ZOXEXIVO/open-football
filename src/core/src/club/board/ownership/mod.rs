@@ -109,9 +109,9 @@ pub struct OwnershipModel {
     /// before any cheque he is actually writing. Independent of current
     /// cash — a rich owner can inject funds, a poor one cannot.
     ///
-    /// Two fields, not one running total: the owner's contribution
-    /// ([`Self::benefactor_wealth`]) is DERIVED from
-    /// [`Self::benefactor`] and added on read. Folding it in and
+    /// Two fields, not one running total: the owner's contribution is
+    /// DERIVED from [`Self::benefactor`] and added on read by
+    /// [`Self::wealth`]. Folding it in and
     /// subtracting it back out each season was lossy in both directions —
     /// a club deriving at 140 clamped to 100 and then gave back 40 to
     /// reach 60, although with no owner at all it would have been 100.
@@ -290,8 +290,7 @@ impl OwnershipModel {
         // clamped away.
         let rep_w = (reputation * 60.0) as i32;
         let eco_w = ((economic_factor - 1.0) * 25.0) as i32;
-        let base_wealth =
-            (25 + rep_w + eco_w + ownership_type.wealth_bias()).clamp(5, 100) as u8;
+        let base_wealth = (25 + rep_w + eco_w + ownership_type.wealth_bias()).clamp(5, 100) as u8;
 
         // Distressed balance (deep negative relative to nothing else we
         // know here) primes exit pressure a little.
@@ -450,14 +449,22 @@ mod tests {
         // high-wealth owner regardless of the archetype bucket.
         for seed in 0..5u32 {
             let m = OwnershipModel::derive(0.9, 100_000_000, 1.5, 0.0, seed);
-            assert!(m.wealth() >= 70, "elite owner wealth too low: {}", m.wealth());
+            assert!(
+                m.wealth() >= 70,
+                "elite owner wealth too low: {}",
+                m.wealth()
+            );
         }
     }
 
     #[test]
     fn small_club_derives_modest_owner() {
         let m = OwnershipModel::derive(0.2, 0, 0.8, 0.0, 0);
-        assert!(m.wealth() <= 55, "small club owner too rich: {}", m.wealth());
+        assert!(
+            m.wealth() <= 55,
+            "small club owner too rich: {}",
+            m.wealth()
+        );
         assert!(matches!(
             m.ownership_type,
             OwnershipType::LocalBusiness | OwnershipType::MemberOwned | OwnershipType::FamilyOwned
@@ -471,5 +478,114 @@ mod tests {
         assert_eq!(a.ownership_type, b.ownership_type);
         assert_eq!(a.wealth(), b.wealth());
         assert_eq!(a.risk_tolerance, b.risk_tolerance);
+    }
+
+    /// A6 — wealth is two fields read as one, so nothing ratchets and
+    /// nothing is lost to a clamp. The old running total derived at 140,
+    /// clamped to 100, then gave back 40 to reach 60 — for a club that
+    /// would have been 100 with no owner at all.
+    #[test]
+    fn the_owners_cheque_is_added_on_read_and_never_stored() {
+        let mut club = OwnershipModel::derive(0.95, 500_000_000, 1.5, 1.0, 0);
+        let base = club.base_wealth;
+        assert_eq!(club.wealth(), 100, "an elite state-backed side is maximal");
+        // His owner walks away. The base is untouched and the wealth is
+        // exactly what the club's own standing implies.
+        club.benefactor = 0.0;
+        assert_eq!(club.base_wealth, base, "nothing was folded in");
+        assert_eq!(club.wealth(), base.min(100));
+    }
+
+    /// A9 — the owner's funding enters the appetite ONCE, as its own
+    /// term. It used to go in twice: `benefactor → wealth +40 →
+    /// appetite +0.24 → subsidy +40 %`, with the subsidy already
+    /// multiplied by `benefactor`.
+    #[test]
+    fn the_injection_appetite_does_not_feed_on_its_own_subsidy() {
+        let plain = OwnershipModel {
+            base_wealth: 50,
+            risk_tolerance: 50,
+            benefactor: 0.0,
+            ..Default::default()
+        };
+        let funded = OwnershipModel {
+            benefactor: 1.0,
+            ..plain.clone()
+        };
+        // Base wealth is the same number in both — the owner's cheque
+        // reaches the appetite only through its own explicit term.
+        assert_eq!(plain.base_wealth, funded.base_wealth);
+        let lift = funded.injection_appetite() - plain.injection_appetite();
+        assert!(
+            (lift - OwnershipModel::BENEFACTOR_APPETITE).abs() < 1e-6,
+            "{lift}"
+        );
+    }
+
+    /// A4 — a committed owner puts money BACK. Bounded to half the gap
+    /// towards the pile he arrived with, so the pot is a fund he
+    /// maintains rather than one that drains in three windows — and never
+    /// above what he brought.
+    #[test]
+    fn a_committed_owner_refills_half_the_gap_and_never_more() {
+        let mut owner = OwnershipModel {
+            ownership_type: OwnershipType::StateBacked,
+            base_wealth: 80,
+            risk_tolerance: 85,
+            benefactor: 1.0,
+            ..Default::default()
+        };
+        owner.stamp_idle_at_derive(200_000_000.0);
+
+        // He has spent half the pile.
+        let top_up = owner.annual_top_up(100_000_000.0, false);
+        let appetite = owner.injection_appetite() as f64;
+        assert!(
+            (top_up - 100_000_000.0 * appetite * 0.5).abs() < 1.0,
+            "{top_up}"
+        );
+
+        // Full pile: nothing to refill.
+        assert_eq!(owner.annual_top_up(200_000_000.0, false), 0.0);
+        assert_eq!(owner.annual_top_up(500_000_000.0, false), 0.0);
+
+        // An owner heading for the exit stops writing cheques…
+        let leaving = OwnershipModel {
+            exit_pressure: OwnershipModel::TOP_UP_EXIT_BAR,
+            ..owner.clone()
+        };
+        assert_eq!(leaving.annual_top_up(0.0, false), 0.0);
+        // …and so does one whose club is already in emergency measures,
+        // where the debt model's own injection covers the shortfall.
+        assert_eq!(owner.annual_top_up(0.0, true), 0.0);
+    }
+
+    /// A5 — a flip re-derives the whole archetype, never just the label.
+    /// A club that was `LocalBusiness` and starts being funded gets the
+    /// state-backed risk and interference too.
+    #[test]
+    fn a_flip_to_state_backed_re_derives_the_archetype() {
+        let mut owner = OwnershipModel::derive(0.35, 250_000_000, 0.9, 0.0, 3);
+        assert_ne!(owner.ownership_type, OwnershipType::StateBacked);
+        let was_risk = owner.risk_tolerance;
+
+        // Four years of a wage bill the revenue cannot carry, with the
+        // cash in the bank to pay it.
+        let mut flipped = false;
+        for _ in 0..6 {
+            flipped |= owner.refresh_benefactor(250_000_000, 80_000_000, 40_000_000);
+        }
+        assert!(flipped, "the owner is funding the club");
+        assert_eq!(owner.ownership_type, OwnershipType::StateBacked);
+        assert_eq!(
+            owner.risk_tolerance,
+            OwnershipType::StateBacked.risk_tolerance()
+        );
+        assert_ne!(owner.risk_tolerance, was_risk);
+        assert_eq!(
+            owner.interference,
+            OwnershipType::StateBacked.interference()
+        );
+        assert!(owner.idle_at_derive > 0.0, "a new owner brings a pile");
     }
 }

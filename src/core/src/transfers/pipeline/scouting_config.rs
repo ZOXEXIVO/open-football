@@ -904,7 +904,7 @@ mod tests {
                 region: ScoutingRegion::from_country(1, "RU"),
                 country_code: "RU".to_string(),
                 nationality_country_id: 1,
-                nationality_continent_id: 1,
+                nationality_continent_id: Some(1),
                 nationality_region: Some(ScoutingRegion::from_country(1, "RU")),
                 starter_share: 0.5,
                 tenure_days: 900,

@@ -21,9 +21,8 @@ use crate::transfers::pipeline::scouting_config::{RealismTarget, ScoutingConfig}
 use crate::transfers::pipeline::standing::CareerRecordSnapshot;
 use crate::transfers::pipeline::{
     ClubTransferPlan, DetailedScoutingReport, LoanDestinationPreference, PlayerObservation,
-    ReportRiskFlag,
-    ScoutMatchAssignment, ScoutingAssignment, ScoutingRecommendation, TransferNeedPriority,
-    TransferRequest, TransferRequestStatus,
+    ReportRiskFlag, ScoutMatchAssignment, ScoutingAssignment, ScoutingRecommendation,
+    TransferNeedPriority, TransferRequest, TransferRequestStatus,
 };
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::IntegerUtils;

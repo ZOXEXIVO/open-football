@@ -34,10 +34,12 @@
 
 use super::LoanDestinationPreference;
 use super::appraisal_inputs::PlayerStanceBuilder;
+use super::trace::MarketSwitches;
+use crate::Player;
 use crate::club::player::mind::{GoalKind, MindSituation};
 use crate::club::player::statistics::StuckCareerScan;
+use crate::context::HomeLeagueTable;
 use crate::transfers::ScoutingRegion;
-use crate::Player;
 use chrono::NaiveDate;
 
 /// Where the squad being evaluated actually is.
@@ -50,6 +52,15 @@ pub struct SquadHomeContext<'a> {
     pub country_id: u32,
     pub country_code: &'a str,
     pub continent_id: u32,
+    /// What every country's best league is worth, republished on the
+    /// country each tick. Borrowed, so this stays `Copy` and the sweep
+    /// costs an `Arc` deref rather than a map clone per club.
+    ///
+    /// The parent needs it to answer a question about the CANDIDATE's
+    /// passport, not about itself: "is the league he came through strong
+    /// enough to warehouse him in?" No country can answer that from inside
+    /// its own borrow, which is why the world publishes the table.
+    pub home_leagues: &'a HomeLeagueTable,
 }
 
 impl SquadHomeContext<'_> {
@@ -61,6 +72,11 @@ impl SquadHomeContext<'_> {
     /// Is this player a foreigner at this club?
     pub fn is_foreign(&self, player: &Player) -> bool {
         player.country_id != 0 && player.country_id != self.country_id
+    }
+
+    /// Standard of the top flight in the country this player is FROM.
+    pub fn home_league_reputation(&self, player: &Player) -> u16 {
+        self.home_leagues.reputation_of(player.country_id)
     }
 }
 
@@ -159,6 +175,26 @@ impl UnsettledAbroadScan {
     /// Blended read at which the parent acts.
     pub const CANDIDATE_BAR: f32 = 0.4;
 
+    /// Oldest a player is still being SENT SOMEWHERE TO PLAY rather than
+    /// covered for. The one development band the loan market has: both
+    /// unsolicited-target classifiers read it, so a boy who is a
+    /// development loan to one branch is never cover to another.
+    pub const DEVELOPMENT_AGE: u8 = 23;
+
+    /// A home top flight at or above this reputation is a league a
+    /// development prospect can be warehoused in and still be SEEN.
+    ///
+    /// 6000 is the split the design's Part VI loan-home band is written
+    /// against — "30–50 % home country for men whose home top flight is
+    /// ≥ 6000, and near zero for the rest" — and it is the same number the
+    /// census buckets its stuck cohort by. Roughly the top fifteen
+    /// competitions in the world plus the strongest South American ones,
+    /// which is exactly the population that takes these loans (Brazil,
+    /// Argentina, Portugal, the Netherlands, Turkey…). A Ghanaian at a
+    /// Premier League club falls below it and is loaned inside Europe
+    /// instead, which is correct and what the level gates already say.
+    pub const HOME_LEAGUE_BAR: u16 = 6_000;
+
     /// Read a player. `adaptation_score` is passed in because it needs
     /// squad context the loan sweep does not hold; `None` leaves that axis
     /// silent rather than reading an unknown as a failure.
@@ -178,7 +214,7 @@ impl UnsettledAbroadScan {
         // The mind is the source of the want; the mood is the channel that
         // predates it. Taking the MAX rather than the sum keeps a player
         // who is homesick in both models from counting twice.
-        let situation = player.mind_situation(date, home.country_code);
+        let situation = player.mind_situation(date, home.country_id, home.country_code);
         let home_desire = player
             .mind
             .pressure_of(GoalKind::GoHome)
@@ -204,7 +240,13 @@ impl UnsettledAbroadScan {
             minutes_shortfall,
             unsettled,
             tenure_days,
-            preference: Self::preference_for(home_desire),
+            preference: Self::preference_for(
+                home_desire,
+                home.home_league_reputation(player),
+                player.home_region(),
+                home.region(),
+                situation.age <= Self::DEVELOPMENT_AGE,
+            ),
         })
     }
 
@@ -213,16 +255,66 @@ impl UnsettledAbroadScan {
         self.unsettled >= Self::CANDIDATE_BAR && self.tenure_days >= Self::MIN_TENURE_DAYS
     }
 
-    /// What he would ask for. A formed want points him home; a man who is
-    /// merely not playing wants minutes, wherever they are.
-    fn preference_for(home_desire: f32) -> LoanDestinationPreference {
-        if home_desire >= 0.55 {
+    /// Where the parent would send him.
+    ///
+    /// This used to read the homesickness axis alone, and the scan is a
+    /// MAX of three: a foreign prospect on 10 % of starts IS a candidate,
+    /// but with no mood at all he scored below the 0.25 floor, came out
+    /// `Any`, was never posted, and was loaned "elsewhere". That is the
+    /// 66 % cell the census printed.
+    ///
+    /// Part I.3's second initiator is the PARENT's decision — warehouse
+    /// the asset where it will play and be seen — and where it will be
+    /// seen is the league he came through, when that league is strong
+    /// enough to hold him. So the passport and the home league's standing
+    /// decide the destination, and the mood only sharpens it: a formed
+    /// want can raise `Any` to a home preference, and it never lowers one.
+    fn preference_for(
+        home_desire: f32,
+        home_league_reputation: u16,
+        home_region: Option<ScoutingRegion>,
+        club_region: ScoutingRegion,
+        is_development: bool,
+    ) -> LoanDestinationPreference {
+        // What his situation says, before he says anything. The region
+        // arm asks the question the level gate will ask anyway — is his
+        // own continent within one allowance of the one he plays in? —
+        // so the parent never forms a preference the market must refuse
+        // (memory `loan_market_argmax_predictability`).
+        let region_reachable = home_region.is_some_and(|region| {
+            region.league_prestige() + HomeLoanGates::REGION_ALLOWANCE
+                >= club_region.league_prestige()
+        });
+        let from_standing = if is_development && home_league_reputation >= Self::HOME_LEAGUE_BAR {
+            LoanDestinationPreference::HomeCountry
+        } else if region_reachable {
+            LoanDestinationPreference::HomeRegion
+        } else {
+            LoanDestinationPreference::Any
+        };
+        // …and what he says, on the old mood ladder.
+        let from_mood = if home_desire >= 0.55 {
             LoanDestinationPreference::HomeCountry
         } else if home_desire >= 0.25 {
             LoanDestinationPreference::HomeRegion
         } else {
             LoanDestinationPreference::Any
-        }
+        };
+        Self::stronger(from_standing, from_mood)
+    }
+
+    /// The more homeward of two preferences — the mood raises, never
+    /// lowers.
+    fn stronger(
+        a: LoanDestinationPreference,
+        b: LoanDestinationPreference,
+    ) -> LoanDestinationPreference {
+        let rank = |p: LoanDestinationPreference| match p {
+            LoanDestinationPreference::Any => 0u8,
+            LoanDestinationPreference::HomeRegion => 1,
+            LoanDestinationPreference::HomeCountry => 2,
+        };
+        if rank(a) >= rank(b) { a } else { b }
     }
 }
 
@@ -334,6 +426,12 @@ impl HomeLoanGates {
         if scout_reaches {
             return true;
         }
+        // The A/B arm: with the compatriot reach disarmed a club sees
+        // only what its own scouts cover, which is the HEAD every volume
+        // guard in Part VI is written against.
+        if MarketSwitches::home_reach_off() {
+            return false;
+        }
         if !home_return_wanted {
             return false;
         }
@@ -383,7 +481,8 @@ mod tests {
         let neighbour = HomeLoanPull::factor(brazil, Some(sa), 54, sa, 1.0);
         assert!(neighbour < full && neighbour > 1.0);
         // Somewhere else entirely is worth nothing extra beyond the want.
-        let elsewhere = HomeLoanPull::factor(brazil, Some(sa), 1, ScoutingRegion::WesternEurope, 0.0);
+        let elsewhere =
+            HomeLoanPull::factor(brazil, Some(sa), 1, ScoutingRegion::WesternEurope, 0.0);
         assert!((elsewhere - 1.0).abs() < 1e-5);
     }
 
@@ -418,32 +517,248 @@ mod tests {
         let we = ScoutingRegion::WesternEurope;
         // A Brazilian club with no Western-European scout, looking at a
         // Brazilian posted as wanting home: it knows him.
-        assert!(HomeLoanGates::reach_ok(false, 55, Some(sa), 55, sa, true, true));
+        assert!(HomeLoanGates::reach_ok(
+            false,
+            55,
+            Some(sa),
+            55,
+            sa,
+            true,
+            true
+        ));
         // The same club, the same lack of a scout, a Frenchman at the
         // same English club: it does not.
-        assert!(!HomeLoanGates::reach_ok(false, 1, Some(we), 55, sa, true, true));
+        assert!(!HomeLoanGates::reach_ok(
+            false,
+            1,
+            Some(we),
+            55,
+            sa,
+            true,
+            true
+        ));
         // And a Brazilian who has NOT been posted stays invisible — the
         // arm is scoped to the parent's own broadcast.
-        assert!(!HomeLoanGates::reach_ok(false, 55, Some(sa), 55, sa, false, true));
+        assert!(!HomeLoanGates::reach_ok(
+            false,
+            55,
+            Some(sa),
+            55,
+            sa,
+            false,
+            true
+        ));
         // A continental neighbour reaches him only on the development
         // profile.
-        assert!(HomeLoanGates::reach_ok(false, 55, Some(sa), 54, sa, true, true));
-        assert!(!HomeLoanGates::reach_ok(false, 55, Some(sa), 54, sa, true, false));
+        assert!(HomeLoanGates::reach_ok(
+            false,
+            55,
+            Some(sa),
+            54,
+            sa,
+            true,
+            true
+        ));
+        assert!(!HomeLoanGates::reach_ok(
+            false,
+            55,
+            Some(sa),
+            54,
+            sa,
+            true,
+            false
+        ));
+    }
+
+    /// B2 — the parent decides where he goes, and the mood only sharpens
+    /// it. A prospect who is merely not playing scores ≈ 0 on the
+    /// homesickness axis; reading that axis alone made him `Any`, so he
+    /// was never posted and was loaned "elsewhere".
+    #[test]
+    fn a_strong_home_league_is_a_destination_even_with_no_mood_at_all() {
+        let sa = ScoutingRegion::SouthAmerica;
+        let we = ScoutingRegion::WesternEurope;
+        // A Brazilian development candidate at a Western European club,
+        // saying nothing: home is where he will be seen.
+        assert_eq!(
+            UnsettledAbroadScan::preference_for(0.0, 6_400, Some(sa), we, true),
+            LoanDestinationPreference::HomeCountry
+        );
+        // A Ghanaian in the same seat: his own top flight is nowhere near
+        // the bar, and his region is a long way below the one he plays
+        // in, so the answer is "wherever you will play".
+        assert_eq!(
+            UnsettledAbroadScan::preference_for(
+                0.0,
+                2_800,
+                Some(ScoutingRegion::WestAfrica),
+                we,
+                true
+            ),
+            LoanDestinationPreference::Any
+        );
+        // Past the development band the parent is selling, not
+        // warehousing — the country preference is his own to voice.
+        assert_eq!(
+            UnsettledAbroadScan::preference_for(0.0, 6_400, Some(sa), sa, false),
+            LoanDestinationPreference::HomeRegion
+        );
     }
 
     #[test]
-    fn the_preference_follows_the_want_and_not_the_passport() {
+    fn the_mood_raises_the_preference_and_never_lowers_it() {
+        let we = ScoutingRegion::WesternEurope;
+        let wa = ScoutingRegion::WestAfrica;
+        // A weak home league says `Any`; a formed want overrides it —
+        // the man himself has spoken.
         assert_eq!(
-            UnsettledAbroadScan::preference_for(0.8),
+            UnsettledAbroadScan::preference_for(0.8, 2_800, Some(wa), we, true),
             LoanDestinationPreference::HomeCountry
         );
         assert_eq!(
-            UnsettledAbroadScan::preference_for(0.3),
+            UnsettledAbroadScan::preference_for(0.3, 2_800, Some(wa), we, true),
             LoanDestinationPreference::HomeRegion
         );
+        // …and a silent man with a strong home league keeps the
+        // standing's answer rather than the mood's.
         assert_eq!(
-            UnsettledAbroadScan::preference_for(0.0),
-            LoanDestinationPreference::Any
+            UnsettledAbroadScan::preference_for(
+                0.0,
+                6_400,
+                Some(ScoutingRegion::SouthAmerica),
+                we,
+                true
+            ),
+            LoanDestinationPreference::HomeCountry
         );
+    }
+
+    /// C5 — ONE posting predicate, and either half is enough. The world
+    /// pool used to require the formed want AND a loan badge while the
+    /// ranked-summary builder hard-coded `false`.
+    #[test]
+    fn a_posting_is_the_want_or_the_clubs_own_decision() {
+        // The want has formed: he is posted, badge or no badge.
+        assert!(HomeLoanGates::is_posted(true, false));
+        // The club has decided where he should go: also a posting, even
+        // though he has not said it out loud.
+        assert!(HomeLoanGates::is_posted(false, true));
+        // Neither: nothing to broadcast.
+        assert!(!HomeLoanGates::is_posted(false, false));
+    }
+
+    /// C10 / C5 — the want clears itself. A year of regular football
+    /// answers the question the posting asked, so nothing has to remember
+    /// to take the flag down.
+    #[test]
+    fn a_settled_year_takes_the_posting_down() {
+        let mut situation = MindSituation::neutral();
+        situation.is_abroad = true;
+        situation.days_at_club = HomePull::SETTLED_TENURE_DAYS;
+        situation.starter_ratio = HomePull::SETTLED_STARTER_SHARE;
+        let settled = HomePull {
+            desire: 0.9,
+            wanted: situation.is_abroad
+                && !(situation.days_at_club >= HomePull::SETTLED_TENURE_DAYS
+                    && situation.starter_ratio >= HomePull::SETTLED_STARTER_SHARE)
+                && 0.9 >= HomeLoanGates::WANTS_HOME_BAR,
+            computed_on: None,
+        };
+        assert!(!settled.wanted, "a year of starts is an answer");
+    }
+}
+
+/// B1 — "abroad" is a PASSPORT test, and it never was.
+///
+/// `MindSituation::is_abroad` read "does not speak the local language",
+/// so a Brazilian at Benfica, an Argentine at Sevilla, a Colombian in
+/// Mexico and a Uruguayan in Argentina were all at home: never homesick,
+/// never posted, never seen by a club in the league they came through.
+/// Those are the largest home-loan populations in world football, and the
+/// census read 1 % home-country loans because of this one line.
+#[cfg(test)]
+mod passport_tests {
+    use super::*;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::player::personality::language::{Language, PlayerLanguage};
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills,
+    };
+
+    const BRAZIL: u32 = 55;
+    const PORTUGAL: u32 = 11;
+
+    fn brazilian() -> crate::Player {
+        PlayerBuilder::new()
+            .id(1)
+            .full_name(FullName::new("A".into(), "B".into()))
+            .birth_date(NaiveDate::from_ymd_opt(2004, 1, 1).unwrap())
+            .country_id(BRAZIL)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .player_attributes(PlayerAttributes::default())
+            .languages(vec![PlayerLanguage::native(Language::Portuguese)])
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Striker,
+                    level: 20,
+                }],
+            })
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn a_brazilian_in_portugal_is_abroad_and_speaks_the_language() {
+        let player = brazilian();
+        let date = NaiveDate::from_ymd_opt(2026, 9, 3).unwrap();
+        let situation = player.mind_situation(date, PORTUGAL, "pt");
+        assert!(
+            situation.is_abroad,
+            "he is outside his own federation, whatever he speaks"
+        );
+        assert!(
+            situation.speaks_local_language,
+            "…and the language is a SEPARATE fact, not the same one"
+        );
+        assert!(
+            !situation.is_culturally_isolated(),
+            "a man who speaks the language is not isolated by it"
+        );
+    }
+
+    #[test]
+    fn the_same_man_at_home_is_not_abroad() {
+        let player = brazilian();
+        let date = NaiveDate::from_ymd_opt(2026, 9, 3).unwrap();
+        let situation = player.mind_situation(date, BRAZIL, "br");
+        assert!(!situation.is_abroad);
+        assert!(situation.speaks_local_language);
+    }
+
+    /// …and the consequence: the parent can now post him. Under the
+    /// language test `HomePull::wanted` was unreachable for exactly this
+    /// population, so `HomeLoanGates::is_posted` had nobody to say yes
+    /// about and the compatriot sweep swept an empty pool.
+    #[test]
+    fn a_homesick_brazilian_in_portugal_can_be_posted() {
+        let mut player = brazilian();
+        player.happiness.starter_ratio = 0.05;
+        let date = NaiveDate::from_ymd_opt(2026, 9, 3).unwrap();
+        let mut situation = player.mind_situation(date, PORTUGAL, "pt");
+        situation.days_at_club = 200;
+        // A formed want, whatever channel raised it.
+        let pull = HomePull {
+            desire: 0.6,
+            wanted: situation.is_abroad
+                && !(situation.days_at_club >= HomePull::SETTLED_TENURE_DAYS
+                    && situation.starter_ratio >= HomePull::SETTLED_STARTER_SHARE)
+                && 0.6 >= HomeLoanGates::WANTS_HOME_BAR,
+            computed_on: Some(date),
+        };
+        assert!(pull.wanted, "the passport is what opens the posting");
+        assert!(HomeLoanGates::is_posted(pull.wanted, false));
     }
 }
