@@ -85,6 +85,23 @@ pub struct PlayerActor {
     /// 390–660 ms; without a ramp the whole of it is a single frozen pose,
     /// which is what a save used to look like.
     stretch: f32,
+    /// Whether the airborne episode he is in is a SPLIT-STEP rather than a
+    /// dive — latched at take-off off the launch rate, and let go the
+    /// moment he climbs past [`Actors::HOP_CEILING`].
+    ///
+    /// The engine hops a keeper a few centimetres on the tick a shot is
+    /// struck, on the very axis the dive is read from, and read as a dive
+    /// it drew a man going full length over a two-inch bounce — arms out,
+    /// legs scissored, run cycle dead — twenty-odd times a match. Leaving
+    /// the ground is still the only thing that separates a dive from a
+    /// shuffle; what separates a dive from a hop is how fast he left it.
+    /// See [`Gait::hop`].
+    bounce: bool,
+    /// How far into the hop he is, 0..1, and how far into the absorb on the
+    /// way down, 0..1 — see [`Gait::hop`] and [`Gait::land`]. Only ever one
+    /// of them at a time, and for most of a match neither.
+    hop: f32,
+    land: f32,
     /// Seconds of MATCH time off the turf, and since the landing. Only one of
     /// the two ever runs.
     air: f32,
@@ -1082,6 +1099,32 @@ impl Actors {
     /// save along the floor is still a man leaving the ground, just not by
     /// much — and the frame he goes is the frame the run cycle has to stop.
     const AIRBORNE_FEET: f32 = 0.02;
+    /// **A split-step is not a dive**, and the launch is what tells them
+    /// apart: the rate he leaves the ground at, in metres per second of
+    /// match time, below which an airborne keeper is on a hop.
+    ///
+    /// The engine hops him 4-6 cm on the tick a shot is struck
+    /// (`KeeperSplitStep`), on the same height axis the dive rides, and
+    /// the lowest dive it ever produces peaks at 0.16 m. Those launch at
+    /// 0.9-1.1 m/s and 1.8 m/s respectively, and the recorder's 1 cm
+    /// quantisation and 3.75 cm dedup step only widen the gap: measured
+    /// through the sampler, a 5 cm hop reads 0.7-0.85 m/s over its first
+    /// sample and a floor dive 1.6. Sat between the two, with room.
+    const HOP_CLIMB: f32 = 1.25;
+    /// …and the height past which no hop is a hop, whatever it launched
+    /// like. The engine lets a dive push off FROM a split-step
+    /// (`MatchPlayer::leap` accepts a hopping keeper), so a bounce can
+    /// turn into a full-length save part way up; a tenth of a metre is
+    /// twice the biggest hop and well under the smallest dive.
+    const HOP_CEILING: f32 = 0.10;
+    /// Seconds of match time for the hop pose to come on once he is up.
+    /// Quick, like the sprawl — he is off the ground the moment his boots
+    /// leave it.
+    const HOP_ATTACK: f32 = 0.04;
+    /// Seconds of match time the landing crouch takes to give back. A
+    /// keeper absorbs the landing and is set again inside a fifth of a
+    /// second; longer and he reads as squatting.
+    const LAND_RELEASE: f32 = 0.18;
     /// Seconds of match time for the run cycle to give way once he leaves
     /// the ground. Barely a ramp at all: he is committed the moment his
     /// boots are off the grass, and a diving keeper still windmilling his
@@ -2664,7 +2707,10 @@ impl Actors {
             // keeper who was set and has just gone is still being caught up
             // with by his own average.
             let launch = actor.speed.max(observed);
-            let was_airborne = actor.air > 0.0;
+            // …and not a split-step: a hop accumulates no flight of its own,
+            // so a dive that pushes off from one starts its vector fresh on
+            // the frame the height says it is a dive.
+            let was_airborne = actor.air > 0.0 && !actor.bounce;
             let airborne = actor.track_flight(match_delta, launch, observed, playback.seeked);
             // And which way, recomputed every frame he is up there — for
             // exactly the reason it looks as though it should be latched.
@@ -2684,7 +2730,11 @@ impl Actors {
             // step — see [`PlayerActor::flight`]. The step is below the
             // resolution of the recording it is cut from, and read raw it
             // wobbled the topple axis a few degrees every sample boundary.
-            if airborne {
+            //
+            // …and not on a split-step, which travels nowhere and topples
+            // no one: the tip is the dive's, and a hop writing it would
+            // hand the next dive a lead side it never chose.
+            if airborne && !actor.bounce {
                 if !was_airborne {
                     actor.flight = Vec3::ZERO;
                 }
@@ -3091,7 +3141,7 @@ impl Actors {
             // while he waits.
             //
             // ⚠ **And it is what puts him down the lens.**
-            // `ChangeoverShot::close_up` stands the camera on his facing to
+            // `ChangeoverShot::pan` stands the camera on his facing to
             // open his beat, so his eyeline and the lens are the same line by
             // construction — as long as nothing has turned his head off it.
             0.0
@@ -3655,6 +3705,9 @@ impl PlayerActor {
             carrying: 0.0,
             dive: 0.0,
             stretch: 0.0,
+            bounce: false,
+            hop: 0.0,
+            land: 0.0,
             air: 0.0,
             down: 0.0,
             climb: 0.0,
@@ -3854,17 +3907,75 @@ impl PlayerActor {
 
         if seeked {
             // Nothing across a jump of the playhead is a trajectory. Land on
-            // whatever the frame itself says and start again.
+            // whatever the frame itself says and start again — and a frame
+            // that has him a few centimetres up is a split-step, not a dive,
+            // since nothing the engine calls a dive is ever that low.
             self.air = 0.0;
             self.down = 0.0;
             self.climb = 0.0;
             self.flat = 1.0;
-            self.dive = f32::from(airborne);
+            self.bounce = airborne && self.height <= Actors::HOP_CEILING;
+            self.hop = f32::from(self.bounce);
+            self.land = 0.0;
+            self.dive = f32::from(airborne && !self.bounce);
             self.stretch = self.dive;
         } else if airborne {
+            // **Is this a split-step or a dive?** Read off the rate he
+            // leaves the ground at — see [`Actors::HOP_CLIMB`] — but
+            // provisionally, across the whole of [`Actors::LAUNCH_WINDOW`]
+            // rather than off the first frame alone. The recorder's 30 ms
+            // clock is not aligned with the take-off tick, so the first
+            // sample of a real dive can land ten milliseconds after the
+            // push and read three centimetres: `FULL_LENGTH` below, a
+            // half-metre save, opens 0.03 then 0.12, and its first interval
+            // climbs at one metre a second — a hop's pace. Its second
+            // climbs at three. So a hop is what an episode is until a frame
+            // inside the window says otherwise, and after the window only
+            // the ceiling can: the engine lets a dive push off FROM the
+            // split-step (`MatchPlayer::leap` accepts a hopping keeper),
+            // and when it does the height says so before anything else.
+            //
+            // Either way the launch clock restarts from the frame that
+            // settles it, because that is the launch the topple has to be
+            // read from — measured from the hop's own take-off the window
+            // has closed and the dive would be drawn at whatever angle the
+            // last one left behind.
+            //
+            // …unless the recording already NAMES the flight. A keeper the
+            // engine has in `Diving` or `Jumping` is not on a split-step,
+            // however gently the first sample says he left the ground — see
+            // [`KeeperFlight`], which is the same answer the topple reads.
+            if self.air <= 0.0 {
+                self.bounce =
+                    climb < Actors::HOP_CLIMB && self.declared == KeeperFlight::Unknown;
+            } else if self.bounce
+                && (self.height > Actors::HOP_CEILING
+                    || (self.air <= Actors::LAUNCH_WINDOW && climb >= Actors::HOP_CLIMB))
+            {
+                self.bounce = false;
+                self.air = 0.0;
+                self.climb = 0.0;
+            }
             self.air += match_delta;
             self.down = 0.0;
             self.climb = self.climb.max(climb);
+            if self.bounce {
+                // Up on the hop: the legs gather, and nothing the dive owns
+                // moves. `flat` and the tip stay exactly as they were, and
+                // whatever a dive he has only just got up from still has
+                // left in it is given back at the recovery's own rate — a
+                // man with both feet off the grass is on his feet.
+                self.hop += (1.0 - self.hop) * (1.0 - (-match_delta / Actors::HOP_ATTACK).exp());
+                self.land = 0.0;
+                let release = 1.0 - (-match_delta / Actors::SPRAWL_RECOVERY).exp();
+                self.dive -= self.dive * release;
+                self.stretch -= self.stretch * release;
+                return airborne;
+            }
+            // A hop he dived out of hands its pose over at the dive's own
+            // rate, so the two cross rather than pop.
+            self.hop -= self.hop * (1.0 - (-match_delta / Actors::SPRAWL_ATTACK).exp());
+            self.land = 0.0;
             self.dive += (1.0 - self.dive) * (1.0 - (-match_delta / Actors::SPRAWL_ATTACK).exp());
             // The extension ratchets: it opens out across the flight and is
             // given back only by the recovery, because nobody folds himself
@@ -3884,6 +3995,9 @@ impl PlayerActor {
             self.down += match_delta;
             self.air = 0.0;
             self.climb = 0.0;
+            self.bounce = false;
+            self.hop = 0.0;
+            self.land = 0.0;
             // He lies there for a beat and then gets up — unless the
             // recording already has him moving, in which case standing him up
             // early is the lesser of the two lies. Measured: half of all
@@ -3926,6 +4040,17 @@ impl PlayerActor {
                 self.stretch -= self.stretch * release;
             }
         } else {
+            // On his feet with no dive to get up from. If he has just come
+            // down off a split-step the absorb starts now, in full — knees
+            // take the landing on the frame of contact, there is no ramp
+            // into it — and then gives back over [`Actors::LAND_RELEASE`].
+            if self.bounce || self.hop > 1e-3 {
+                self.land = 1.0;
+            } else {
+                self.land -= self.land * (1.0 - (-match_delta / Actors::LAND_RELEASE).exp());
+            }
+            self.bounce = false;
+            self.hop = 0.0;
             self.air = 0.0;
             self.down = 0.0;
             self.climb = 0.0;
@@ -4327,7 +4452,11 @@ impl PlayerActor {
             // thing that would give the whole animation away.
             run: (self.speed / Actors::SPRINT).clamp(0.0, 1.0)
                 * (1.0 - off_his_feet)
-                * (1.0 - jump),
+                * (1.0 - jump)
+                // …and not on the split-step either, for the same reason: a
+                // man with both feet off the grass is not taking a stride,
+                // however far the shuffle underneath the hop carried him.
+                * (1.0 - self.hop),
             phase: self.phase,
             signature: Complexion::carriage(self.id),
             idle: self.idle,
@@ -4378,7 +4507,7 @@ impl PlayerActor {
             drive: self.drive,
             // Nobody dribbles the ball off his feet, and nobody dribbles it
             // while he is swinging at it either.
-            carrying: self.carrying * (1.0 - off_his_feet) * (1.0 - jump),
+            carrying: self.carrying * (1.0 - off_his_feet) * (1.0 - jump) * (1.0 - self.hop),
             jump,
             // A keeper is set whenever the ball is near his goal — but not
             // while he is off his feet or holding it, both of which are
@@ -4402,6 +4531,13 @@ impl PlayerActor {
                     .max((self.height / Actors::REACH_HEIGHT).clamp(0.0, 1.0))
                     * (1.0 - self.carry * (1.0 - extended))
                     * (1.0 - self.settling())
+                    // ⚠ Not on the split-step. The height term above is a
+                    // claim that a man off the ground is reaching for
+                    // something, and a keeper on his hop is a few
+                    // centimetres up with his gloves exactly where the set
+                    // put them — throwing his arms out for it is the whole
+                    // of what made the hop read as a dive.
+                    * (1.0 - self.hop)
             } else {
                 0.0
             },
@@ -4455,7 +4591,10 @@ impl PlayerActor {
             // A man off his feet is not taking steps, whatever ground he is
             // covering — the same gate `run` carries, and it has to be here
             // too because this one deliberately bypasses `run`.
-            carry_ground: self.carry_ground * (1.0 - off_his_feet) * (1.0 - jump),
+            carry_ground: self.carry_ground
+                * (1.0 - off_his_feet)
+                * (1.0 - jump)
+                * (1.0 - self.hop),
             // The save on his feet, and therefore not while he is off them,
             // not once the ball is in his gloves, and not while he is
             // reacting to a goal.
@@ -4466,6 +4605,11 @@ impl PlayerActor {
                 * (1.0 - self.despair.max(self.elation)),
             save_aim: self.aim,
             parry: self.parry,
+            // The split-step, both halves. Deliberately NOT gating `set`:
+            // it is the set position that hops, gloves up throughout, and
+            // the landing is a deeper version of the same stance.
+            hop: self.hop,
+            land: self.land,
             keeper: f32::from(self.is_goalkeeper),
         }
     }
@@ -4654,6 +4798,125 @@ mod flight {
             "a keeper going flat across his goal is drawn jumping ({:.2})",
             dived.gait().jump
         );
+    }
+
+    /// A 5 cm split-step as the recorder would carry it: quantised to a
+    /// centimetre, sampled every 30 ms, a fifth of a second off the grass.
+    /// The 0.02 either side is under [`Actors::AIRBORNE_FEET`] and is what
+    /// the interpolation between a grounded sample and an airborne one
+    /// looks like on the frame it crosses the bar.
+    const SPLIT_STEP: [f32; 9] = [0.02, 0.04, 0.05, 0.05, 0.04, 0.02, 0.0, 0.0, 0.0];
+
+    /// The same replay as [`fly`], reporting the hop's two channels beside
+    /// the dive's switch.
+    fn bounce(heights: &[f32], pace: f32, tail: usize) -> Vec<(f32, f32, f32)> {
+        let mut actor = PlayerActor::new(1, true, true);
+        let mut frames = Vec::new();
+        for height in heights.iter().chain(std::iter::repeat_n(&0.0, tail)) {
+            actor.height = *height;
+            actor.speed = pace;
+            actor.track_flight(0.03, pace, pace, false);
+            frames.push((actor.dive, actor.hop, actor.land));
+        }
+        frames
+    }
+
+    /// **A split-step is a bounce, not a dive.**
+    ///
+    /// The engine hops a keeper a few centimetres on the tick a shot is
+    /// struck, on the same height axis the dive is read from. Through the
+    /// tracker as it stood, every one of them was a dive: the switch was
+    /// "off the ground", full stop, and a two-inch hop drew a man going full
+    /// length with both arms out. Now the launch rate decides — see
+    /// [`Actors::HOP_CLIMB`] — and what the hop drives is the hop channel
+    /// on the way up and the landing crouch on the way down, with the dive
+    /// never stirring.
+    #[test]
+    fn a_split_step_is_a_bounce_not_a_dive() {
+        let frames = bounce(&SPLIT_STEP, 0.3, 0);
+        let dived = frames.iter().map(|f| f.0).fold(0.0, f32::max);
+        assert!(dived < 0.05, "a split-step was drawn as a dive ({dived:.2})");
+        // Up: frames 1-4 are the ones above the bar.
+        let hopped = frames[1..5].iter().map(|f| f.1).fold(0.0, f32::max);
+        assert!(hopped > 0.5, "the hop never came on ({hopped:.2})");
+        // Down: the absorb lands in full on contact and gives back from
+        // there — never a step up, never a shelf.
+        assert!(frames[5].1 < 1e-3, "still hopping on the frame he lands");
+        assert!(
+            frames[6].2 > 0.3,
+            "no landing crouch the frame after touchdown ({:.2})",
+            frames[6].2
+        );
+        for pair in frames[5..].windows(2) {
+            assert!(
+                pair[1].2 <= pair[0].2 + 1e-6,
+                "the landing crouch came back up: {:.2} → {:.2}",
+                pair[0].2,
+                pair[1].2
+            );
+        }
+        assert!(
+            frames[8].2 < frames[6].2 * 0.9,
+            "the landing crouch does not give back ({:.2} → {:.2})",
+            frames[6].2,
+            frames[8].2
+        );
+    }
+
+    /// **…and a dive he pushes off from the split-step is a dive.**
+    ///
+    /// The engine allows exactly that — `MatchPlayer::leap` accepts a
+    /// keeper on a hop, because the hop exists to be pushed off from — so
+    /// the height climbs through the hop's ceiling part way up and the
+    /// tracker has to change its mind: the hop hands over, the dive comes
+    /// on, and the launch is read from the push-off rather than from the
+    /// two-inch bounce before it.
+    #[test]
+    fn a_dive_pushed_off_a_split_step_is_a_dive() {
+        const PUSHED_OFF: [f32; 13] = [
+            0.02, 0.04, 0.05, 0.14, 0.28, 0.38, 0.42, 0.40, 0.32, 0.20, 0.08, 0.0, 0.0,
+        ];
+        let frames = bounce(&PUSHED_OFF, 9.0, 0);
+        assert!(frames[2].1 > 0.5, "the hop never came on ({:.2})", frames[2].1);
+        let dived = frames.iter().map(|f| f.0).fold(0.0, f32::max);
+        assert!(dived > 0.9, "the dive out of the hop never came on ({dived:.2})");
+        assert!(
+            frames[7].1 < 0.1,
+            "still drawn hopping at the top of a dive ({:.2})",
+            frames[7].1
+        );
+        // And no landing crouch: he came down off a dive, and the dive's
+        // own recovery owns that.
+        assert!(frames[12].2 < 1e-3, "a dive landed into the hop's crouch");
+    }
+
+    /// **A recorded dive is still a dive**, both of them — including the
+    /// one whose first sample is three centimetres up because the
+    /// recorder's clock caught it ten milliseconds after the push, which
+    /// is exactly the sample a hop produces. The second interval is what
+    /// settles it. See [`Actors::HOP_CLIMB`].
+    #[test]
+    fn a_recorded_dive_is_still_a_dive() {
+        for (name, series) in [
+            ("full length", &FULL_LENGTH[..]),
+            ("along the floor", &ALONG_THE_FLOOR[..]),
+        ] {
+            let frames = bounce(series, 9.0, 0);
+            let dived = frames.iter().map(|f| f.0).fold(0.0, f32::max);
+            assert!(dived > 0.9, "the {name} dive was not drawn as one ({dived:.2})");
+            // A frame or two of hop before the second sample settles it is
+            // the push-off and is allowed; at the top of the flight there
+            // must be none of it left.
+            let apex = frames
+                .iter()
+                .enumerate()
+                .max_by(|a, b| series[a.0].partial_cmp(&series[b.0]).unwrap())
+                .map(|(_, f)| f.1)
+                .unwrap();
+            assert!(apex < 0.05, "the {name} dive is still hopping at its apex ({apex:.2})");
+            let landed = frames.iter().map(|f| f.2).fold(0.0, f32::max);
+            assert!(landed < 1e-3, "the {name} dive landed into a split-step crouch");
+        }
     }
     /// **A ball that comes OFF him is not drawn as a ball he caught.**
     ///
@@ -5780,7 +6043,7 @@ mod kicks {
 
     /// **A man waiting to come on looks straight down the lens.**
     ///
-    /// `ChangeoverShot::close_up` opens a substitution by standing the camera
+    /// `ChangeoverShot::pan` opens a substitution by standing the camera
     /// on the substitute's own FACING, a couple of metres in front of him — so
     /// his eyeline and the lens are the same line, and the only way he can be
     /// looking anywhere else is if something turned his head off his facing.

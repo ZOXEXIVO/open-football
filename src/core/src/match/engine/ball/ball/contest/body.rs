@@ -586,10 +586,12 @@ impl Ball {
         // one. Reported as full stretch for a man already off his feet so
         // that site does not stand a diving keeper up mid-dive, and as none
         // at all for one who was set: a body block is never a stretch.
+        // `is_launched`, NOT `is_airborne`: a keeper on his split-step is a
+        // few centimetres off the turf and has thrown himself at nothing.
         let already_diving = matches!(
             keeper.state,
             PlayerState::Goalkeeper(GoalkeeperState::Diving)
-        ) || keeper.is_airborne();
+        ) || keeper.is_launched();
 
         // Was this a shot he was in the way of? Only then is it a SAVE — a
         // cross clipping his hip is a deflection and nothing more, and

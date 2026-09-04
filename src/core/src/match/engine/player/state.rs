@@ -6,6 +6,7 @@ use crate::r#match::engine::flow::goal::GOAL_HEIGHT;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::EventCollection;
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::goalkeepers::states::common::KeeperSplitStep;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
@@ -386,6 +387,13 @@ impl PlayerMatchState {
 
         if let Some(state) = new_state {
             Self::change_state(player, state);
+            // A committed dive keeps the side it committed to for as long
+            // as it lasts, and no longer — see `MatchPlayer::dive_aim`.
+            player.dive_aim = if state == PlayerState::Goalkeeper(GoalkeeperState::Diving) {
+                state_change_result.dive_aim
+            } else {
+                None
+            };
             // A player who has just committed to leaving the ground does so
             // now, on the tick he decided. The rise lives outside `velocity`
             // and outside everything below — see `MatchPlayer::vertical_speed`
@@ -447,6 +455,20 @@ impl PlayerMatchState {
                 crate::mid_run_diag::KeeperActionDiag::note(7);
             }
             player.in_state_time += 1;
+        }
+
+        // The split-step. Applied here beside the leap rather than inside
+        // any one state, because the keeper can be in any of half a dozen
+        // states on the tick a shot is struck and the hop belongs to the
+        // strike, not to the state. `hop` refuses a man already off the
+        // ground, so a keeper who has just taken off for a dive above is
+        // left alone. See `KeeperSplitStep`.
+        if player_position_group == PlayerFieldPositionGroup::Goalkeeper {
+            if let Some(apex) = KeeperSplitStep::apex(player, tick_context) {
+                #[cfg(feature = "match-logs")]
+                crate::mid_run_diag::KeeperActionDiag::note(16);
+                player.hop(apex);
+            }
         }
 
         if let Some(velocity) = state_change_result.velocity {

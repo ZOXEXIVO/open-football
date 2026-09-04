@@ -3,7 +3,7 @@
 
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
-use crate::r#match::engine::ball::ball::Ball;
+use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::knock_diag::{KnockEnd, KnockSource};
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
@@ -414,6 +414,82 @@ impl SaveModel {
     /// keeper closes on the ball, and past a certain point the model stops
     /// describing a save and starts describing a block.
     const MAX_PROJECTION: f32 = 2.0;
+
+    // ── The tip over the bar ──────────────────────────────────────────
+    //
+    // A safe parry used to have one shape: sideways, flat, round the
+    // post — `velocity.z = 0` whatever the height the ball was taken at.
+    // A shot into the top corner that the keeper got his fingertips to
+    // therefore left his hands at 2.2 m travelling horizontally to a point
+    // beside the post, which is not a save anybody has seen. The save a
+    // keeper makes on a ball above his head is the other one: he turns it
+    // UP and OVER the bar, and the picture — a man at full stretch, the
+    // ball looping over the crossbar, the corner flag — is the most
+    // recognisable in goalkeeping. Both endings are the same corner, so
+    // this moves where the ball goes and nothing that is counted.
+
+    /// Contact height, in metres, above which a safe parry goes over the
+    /// bar rather than round the post. Chest-height and below he steers
+    /// it wide; above his head — 1.75 m is the top of an upright keeper's
+    /// chest, so this is a ball he has reached up for — the hands are
+    /// under the ball and the only way to turn it is upward.
+    pub(crate) const TIP_OVER_HEIGHT: f32 = 1.75;
+    /// …or the height the shot was going to cross the line at. A ball
+    /// dipping under the bar is played the same way even when the contact
+    /// itself is a shade lower than the bar above.
+    pub(crate) const TIP_OVER_CROSSING: f32 = 1.90;
+    /// How far above the bar the tipped ball crosses the line, in metres.
+    /// Enough that the crossbar's own swept cylinder (`GoalFrame`) cannot
+    /// catch it on the way out, with the drag the solve below ignores
+    /// paid for — measured through the real integrator by the tests.
+    pub(crate) const TIP_OVER_CLEARANCE: f32 = 0.50;
+    /// The pace of a tipped ball across the ground, in u/tick, and the
+    /// fewest ticks it takes to reach the line. A keeper on his own line
+    /// tips it almost straight up; the floor is what keeps the solve from
+    /// asking for eighty metres a second of climb over one tick of
+    /// travel, and 12 ticks of rise from the line is a ball looping four
+    /// or five metres over the bar, which is what one looks like.
+    const TIP_OUT_SPEED: f32 = 1.2;
+    const TIP_MIN_TICKS: f32 = 12.0;
+    /// Lateral spray on the tip, in radians either side of straight back
+    /// — a fingertip contact, not an aimed one.
+    pub(crate) const TIP_SPRAY: f32 = 0.15;
+
+    /// A/B control: `OF_KEEPER_TIP=off` keeps every safe parry round the
+    /// post. Same pattern and purpose as `KeeperPunt::armed` — read once
+    /// per process. Debug infrastructure, do not remove.
+    pub(crate) fn tip_over_armed() -> bool {
+        use std::sync::OnceLock;
+        static ARMED: OnceLock<bool> = OnceLock::new();
+        *ARMED.get_or_init(|| std::env::var("OF_KEEPER_TIP").as_deref() != Ok("off"))
+    }
+
+    /// Does a safe parry from `contact_z` on a shot crossing at
+    /// `crossing_z` go over the bar?
+    pub(crate) fn tips_over(contact_z: f32, crossing_z: f32) -> bool {
+        contact_z >= Self::TIP_OVER_HEIGHT || crossing_z >= Self::TIP_OVER_CROSSING
+    }
+
+    /// The velocity of a ball tipped from `contact` — x/y in game units,
+    /// z in metres, like every ball position — so that it crosses the goal
+    /// line at `exit_x` [`Self::TIP_OVER_CLEARANCE`] above the bar,
+    /// `spray` radians off straight back.
+    ///
+    /// The horizontal legs are solved in game units per tick and the
+    /// vertical one in metres per tick, and the two never meet: the only
+    /// thing they share is the flight time. Gravity alone; the drag the
+    /// physics applies on top is a couple of per cent over a flight this
+    /// short and is inside the clearance.
+    pub(crate) fn tip_over_velocity(contact: Vector3<f32>, exit_x: f32, spray: f32) -> Vector3<f32> {
+        let along = exit_x - contact.x;
+        let dist = along.abs().max(1.0);
+        let ticks = (dist / Self::TIP_OUT_SPEED).max(Self::TIP_MIN_TICKS);
+        let vx = along.signum() * dist / ticks;
+        let vy = vx.abs() * spray.tan();
+        let target_z = GOAL_HEIGHT + Self::TIP_OVER_CLEARANCE;
+        let vz = (target_z - contact.z + 0.5 * GRAVITY_PER_TICK * ticks * ticks) / ticks;
+        Vector3::new(vx, vy, vz.max(0.0))
+    }
 
     /// **The angle the keeper is covering, priced properly.**
     ///
@@ -1616,7 +1692,7 @@ impl Ball {
         }
 
         if outcome_roll < p_safe {
-            self.pending_save_site = 0; // parry — tipped round the post
+            self.pending_save_site = 0; // parry — tipped round the post, or over the bar
             #[cfg(feature = "match-logs")]
             {
                 crate::mid_run_diag::SAVE_PARRY_FIRED.fetch_add(1, Ordering::Relaxed);
@@ -1669,6 +1745,37 @@ impl Ball {
                 Some(PlayerSide::Right) => context.goal_positions.right.x,
                 None => self.position.x,
             };
+
+            // **Over the bar.** A ball he has reached UP for is turned
+            // upward — see the note at `SaveModel::TIP_OVER_HEIGHT`. It
+            // crosses the line between the posts above the crossbar, and
+            // `check_over_goal` gives the corner off his touch exactly as
+            // the endline resolver does for the ball round the post below.
+            // Everything else about the ending is the same: loose, his
+            // last touch, uncontestable for the run to the line, no
+            // `Intercepted`.
+            //
+            // The spray comes off the outcome roll already drawn rather
+            // than a fresh one, so the A/B arms consume the same RNG
+            // stream and can be compared match for match.
+            if SaveModel::tip_over_armed() && SaveModel::tips_over(contact_z, frame_z) {
+                #[cfg(feature = "match-logs")]
+                crate::mid_run_diag::KeeperActionDiag::note(17);
+                let share = ((outcome_roll - p_catch) / (p_safe - p_catch).max(1e-3))
+                    .clamp(0.0, 1.0);
+                let spray = (share - 0.5) * 2.0 * SaveModel::TIP_SPRAY;
+                self.velocity = SaveModel::tip_over_velocity(self.position, exit_x, spray);
+                self.position.z = contact_z;
+                self.current_owner = None;
+                let ticks = (exit_x - self.position.x).abs() / self.velocity.x.abs().max(1e-3);
+                self.flags.in_flight_state = ticks.ceil() as usize + 12;
+                self.claim_cooldown = 30;
+                self.record_touch(keeper_id, keeper_team, tick, false);
+                #[cfg(feature = "match-logs")]
+                self.close_keeper_knock(KnockEnd::Cleared);
+                return;
+            }
+
             let exit_y = if to_top {
                 (goal_y_for_side - GOAL_WIDTH - 10.0).max(3.0)
             } else {

@@ -45,8 +45,8 @@ pub use flight::{
 // `pub` for `dead_ball_diag` — the stall attribution counters are read by
 // the dev harness, same as `ownership::reception_diag`.
 pub use restarts::{
-    AwaitedRestart, CornerWalk, DeadBall, FoulWalk, OffsideLine, OffsideSnapshot,
-    PassOriginRestart, ThrowIn, awaited, offside, stall,
+    AwaitedRestart, CornerWalk, DeadBall, FoulWalk, GoalKickRunUp, OffsideLine, OffsideSnapshot,
+    PassOriginRestart, RunUpPhase, ThrowIn, awaited, offside, stall,
 };
 // The woodwork's own per-tick ball trace, and the whole-tick relocation
 // census. `flight_diag` below only sees `Ball::update`; `teleport` sees
@@ -206,6 +206,13 @@ pub struct Ball {
     /// A dead ball lying on the touchline waiting for its taker to WALK to
     /// it. See [`AwaitedRestart`].
     pub awaiting_restart: Option<AwaitedRestart>,
+    /// The goalkeeper's run-up to a long goal kick, while one is being
+    /// taken. See [`GoalKickRunUp`] and `KeeperGoalKick`.
+    pub goal_kick_run_up: Option<GoalKickRunUp>,
+    /// Whether the goal kick just handed over was taken LONG — decided at
+    /// placement and recorded here so the keeper's state machine kicks
+    /// what he ran up to. Cleared with the next dead ball.
+    pub goal_kick_long: bool,
     /// `(player, where he has to stand)` for the man CARRYING a dead ball
     /// to the spot it is taken from — the corner taker walking the ball to
     /// the arc, and nothing else.
@@ -764,6 +771,8 @@ impl Ball {
             cached_landing_position: Vector3::new(x, y, 0.0),
             pending_set_piece_teleport: None,
             awaiting_restart: None,
+            goal_kick_run_up: None,
+            goal_kick_long: false,
             pending_restart_station: None,
             pending_corner_teleports: Vec::new(),
             corner_shape: None,
@@ -1254,6 +1263,10 @@ impl Ball {
         // against a ball he has nothing to do with.
         self.throw_in_taker = None;
         self.last_touch_was_deliberate_kick = false;
+        // …and the goal-kick ceremony, whichever leg it was on. A new dead
+        // ball starts it from scratch.
+        self.goal_kick_run_up = None;
+        self.goal_kick_long = false;
     }
 
     /// Soft invariant check on the ball's lifecycle flags. Returns the

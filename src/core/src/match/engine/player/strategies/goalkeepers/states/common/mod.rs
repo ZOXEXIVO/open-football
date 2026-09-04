@@ -17,10 +17,16 @@ use crate::r#match::{MatchPlayerLite, PlayerSide, StateChangeResult, StateProces
 use crate::mid_run_diag::{KeeperActionDiag, KeeperDiveDiag};
 use nalgebra::Vector3;
 
+mod goal_kick;
 mod punt;
 mod release;
+mod set_piece;
+mod split_step;
+pub use goal_kick::*;
 pub use punt::*;
 pub use release::*;
+pub use set_piece::*;
+pub use split_step::*;
 
 /// Goalkeeper-specific activity intensity configuration
 pub struct GoalkeeperConfig;
@@ -406,6 +412,11 @@ impl KeeperRestPosition {
     /// could hand him a target the sweep model would immediately send him
     /// back from.
     pub fn for_keeper(ctx: &StateProcessingContext) -> Vector3<f32> {
+        // A dead ball at his goal has its own place to stand, and it is
+        // not a function of the ball's distance. See [`KeeperSetPieceStance`].
+        if let Some(mark) = KeeperSetPieceStance::point(ctx) {
+            return mark;
+        }
         let prof = GoalkeeperSkillProfile::from_ctx(ctx);
         let point = Self::point(
             ctx.ball().direction_to_own_goal(),
@@ -859,7 +870,7 @@ impl KeeperSetPosition {
 
     /// `+1` when the goal being defended is the left one, so "out of the
     /// goal" is `+x`; `-1` for the right-hand goal.
-    fn into_pitch(own_goal: Vector3<f32>, field_width: f32) -> f32 {
+    pub fn into_pitch(own_goal: Vector3<f32>, field_width: f32) -> f32 {
         if own_goal.x <= field_width * 0.5 {
             1.0
         } else {
@@ -1585,6 +1596,10 @@ impl KeeperSmother {
     /// Is this the moment? `None` means he keeps coming (or keeps
     /// standing) — it is not his ball to go to ground for yet.
     pub fn assess(ctx: &StateProcessingContext) -> Option<SmotherAttempt> {
+        // Nobody smothers a dead ball. See [`KeeperSetPieceStance`].
+        if KeeperSetPieceStance::pending(ctx).is_some() {
+            return None;
+        }
         // Somebody else's ball, in somebody else's feet.
         let carrier = ctx.players().opponents().with_ball().next()?;
         let ball = ctx.tick_context.positions.ball.position;
@@ -1972,6 +1987,14 @@ impl KeeperOneOnOne {
     /// The man he is in a duel with, if he is in one.
     pub fn duel(ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
         if Self::held_back() {
+            return None;
+        }
+        // A taker standing over a dead ball is not a man running at him.
+        // The `bearing_down` test below is vacuously TRUE of a body with
+        // no velocity, so a penalty taker placing the ball read as a
+        // breakaway and pulled the keeper 6.8 m off a line Law 14 says
+        // he must stay on. See [`KeeperSetPieceStance`].
+        if KeeperSetPieceStance::pending(ctx).is_some() {
             return None;
         }
         let carrier = ctx.players().opponents().with_ball().next()?;
@@ -2807,6 +2830,14 @@ impl KeeperShotDive {
             }
         }
         true
+    }
+
+    /// The `y` the dive is aimed at on the goal line: the crossing point
+    /// as he read it, unless he has COMMITTED to a side — a penalty guess
+    /// — in which case that side, for the life of the dive. See
+    /// [`KeeperPenaltyStance`] and `MatchPlayer::dive_aim`.
+    pub fn aim_y(ctx: &StateProcessingContext, target: &ShotTarget) -> f32 {
+        ctx.player.dive_aim.unwrap_or(target.goal_line_y)
     }
 
     /// Where the shot crosses the keeper's OWN depth — the point he is

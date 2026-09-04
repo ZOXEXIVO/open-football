@@ -1,5 +1,5 @@
-//! **The shot a substitution gets**: every man coming on, one at a time —
-//! his face, his name, and then his run onto the field.
+//! **The shot a substitution gets**: the men coming on — their faces, their
+//! names, and then their run onto the field.
 //!
 //! The broadcast rig is eighteen metres up and eighty back, looking down at
 //! the whole ground. That is the right camera for football and the wrong one
@@ -7,33 +7,41 @@
 //! exchange happens at the very bottom edge of the frame, and the whole point
 //! of playing it out is lost.
 //!
-//! So each man coming on gets a beat of his own, and it has three parts.
+//! So the change gets a beat of its own, and it has three parts.
 //!
-//! 1. **His face**, from a couple of metres in front of him on the grass. He
-//!    is standing at the fourth official's shoulder waiting to go on, square
-//!    to the line, looking out at the football.
-//! 2. **Round to his back**, where the name is printed and nowhere else. The
-//!    camera does not cut — it swings round him, rising and drawing back as it
-//!    goes, and comes to rest outside the touchline with the whole pitch in
-//!    front of him.
-//! 3. **And he goes.** The rig stays exactly where it stopped and he runs away
-//!    from it onto the field. Then it cuts to the next man and starts again.
+//! 1. **Their faces**, from a few metres in front of them on the grass. They
+//!    are standing in a row at the fourth official's shoulder waiting to go
+//!    on, square to the line, looking out at the football — and the rig stands
+//!    between them, off the middle of the row, and **pans along it**.
+//! 2. **Round to their backs**, where the names are printed and nowhere else.
+//!    The camera does not cut — it swings round them, rising and drawing back
+//!    as it goes, and comes to rest outside the touchline with the whole pitch
+//!    in front of them.
+//! 3. **And they go**, together. The rig stays exactly where it stopped and
+//!    they run away from it onto the field.
+//!
+//! ⚠ **One shot for the whole change, however many men are in it** (2026-09-04;
+//! before that each man had a beat of his own and the rest of the row stood at
+//! the gate through it, which cost a triple change 16.2 s of match clock
+//! against 7.2 now). What a second and a third man buy is the ground the pan
+//! has to cover to take them in — [`ChangeoverShot::PAN_MS`] apiece — and one
+//! man is simply a pan with nowhere to go, which is the close-up this shot
+//! started as.
 //!
 //! Nobody moves during the first two parts: the engine holds the window still
-//! for exactly as long as they take (see `SubstitutionBreak::PORTRAIT_MS`,
-//! which is [`ChangeoverShot::PORTRAIT_MS`] on the other side of the
+//! for exactly as long as they take (see `SubstitutionBreak::portrait_ms`,
+//! which is [`ChangeoverShot::portrait_ms`] on the other side of the
 //! recording), because a man cannot be shown standing at the gate and be
-//! running onto the pitch at the same time. And it holds the men after him for
-//! his run as well — [`ChangeoverShot::RUN_MS`] — so a triple change is three
-//! complete arrivals rather than one portrait each and then a scramble.
+//! running onto the pitch at the same time. Then it lets the whole row go at
+//! once and gives them [`ChangeoverShot::RUN_MS`] of running.
 //!
 //! **The men going off are not watched.** One of them leaves on the same tick
 //! as each substitute and they cross at the gate, which is a picture the shot
 //! catches in passing; none of them is ever the subject of it.
 //!
-//! **And then the touchline**, once the last man has gone: the rig stands
-//! outside the line level with the halfway line and points at the centre spot,
-//! holding the whole ground until play resumes.
+//! **And then the touchline**, once they have gone: the rig stands outside the
+//! line level with the halfway line and points at the centre spot, holding the
+//! whole ground until play resumes.
 //!
 //! It reads the substitutions straight off [`ViewerConfig`], including how
 //! long each one stopped the match for, so the shot lasts exactly as long as
@@ -49,13 +57,15 @@ use crate::scene::pitch::Pitch;
 use bevy::prelude::*;
 use std::f32::consts::PI;
 
-/// One change, as the camera needs it: when, and which men to work through
-/// one at a time.
+/// One change, as the camera needs it: when, and which men the shot is on.
 struct Change {
     from: f64,
     to: f64,
-    /// The men coming on, in the order the shot works through them — one
-    /// [`ChangeoverShot::BEAT_MS`] each.
+    /// The men coming on. **All of them share one shot** — the pan sweeps the
+    /// row they are standing in — so this is a set rather than a running
+    /// order; how many are in it is what buys the pan its time, see
+    /// [`ChangeoverShot::PAN_MS`]. Which end it starts from is decided off
+    /// their bodies, not off this list: see [`ChangeoverShot::settle`].
     coming_on: Vec<u32>,
     /// And the men they are replacing. **Nothing is ever pointed at them**;
     /// they are here so the sight-line test can leave them out — see
@@ -85,23 +95,25 @@ pub struct ChangeoverShot {
     /// so it takes it — the same ramp [`CameraSubject`]'s grip uses, for the
     /// same reason.
     grip: f32,
-    /// The beat this frame, if the shot is on one. `None` once it has worked
-    /// through them and moved to the touchline.
+    /// The beat this frame, if the shot is on one. `None` once the change is
+    /// over and the shot has moved to the touchline.
     ///
     /// Carried on the resource rather than worked out in [`Self::blend`]
-    /// because it is measured off the man's own transform, which only the
+    /// because it is measured off the men's own transforms, which only the
     /// system that queries the actors can see.
     portrait: Option<Portrait>,
-    /// **Where the rig planted itself behind the man it is watching**, and
-    /// which of the change's men that was.
+    /// **Where the rig planted itself behind the men it is watching**, and
+    /// which change that was — keyed on [`Change::from`], which is the one
+    /// thing that tells two changes apart when the playhead is scrubbed from
+    /// the middle of one into the middle of another.
     ///
-    /// ⚠ Everything else here is re-derived from the subject's own body every
-    /// frame, and for the run it cannot be: he is moving. A camera worked out
-    /// from a running man travels with him at eight metres a second, which is
-    /// a drone shot of the back of his head and not a touchline one. So the
-    /// position is taken once, at the end of his close-up, and held for as
-    /// long as he is the subject.
-    plant: Option<(usize, Vec3, f32)>,
+    /// ⚠ Everything else here is re-derived from the subjects' own bodies
+    /// every frame, and for the run it cannot be: they are moving. A camera
+    /// worked out from running men travels with them at eight metres a second,
+    /// which is a drone shot of the backs of their heads and not a touchline
+    /// one. So the position is taken once, at the end of the pan, and held for
+    /// as long as they are the subject.
+    plant: Option<(f64, Vec3, f32)>,
 }
 
 impl ChangeoverShot {
@@ -146,21 +158,34 @@ impl ChangeoverShot {
     /// the field forty-two metres away in the same frame.
     const LENS: f32 = 0.36;
 
-    /// **How long each man coming on stands still in front of the camera**,
-    /// in ms of match clock: a second and a half on his face, the swing round
-    /// him, and a second on his back — 3.4 s a man.
+    /// **How long the men coming on stand still in front of the camera**, in
+    /// ms of match clock, when there is ONE of them: a second and a half on
+    /// his face, the swing round him, and a second on his back — 3.4 s. See
+    /// [`Self::portrait_ms`] for what a second and a third man add.
     ///
     /// ⚠ **`SubstitutionBreak::PORTRAIT_MS` is this same figure and the two
     /// have to agree.** That is what stands the whole window still while this
     /// runs; this crate cannot depend on that one, so if either moves the other
-    /// moves with it. Hold for less than the shot and he sets off in the middle
-    /// of his own close-up; hold for more and the picture is on a man who has
-    /// already arrived while twenty-one others stand about.
+    /// moves with it. Hold for less than the shot and they set off in the
+    /// middle of it; hold for more and the picture is on men who have already
+    /// arrived while twenty-one others stand about.
     const PORTRAIT_MS: f64 = Self::FACE_MS + Self::TURN_MS + Self::BACK_MS;
-    /// The share of it spent looking at his face, which is where the beat
-    /// opens. He is square to the line watching the football, so this is a
+    /// The share of it spent looking at a face, which is where the beat opens.
+    /// He is square to the line watching the football, so this is a
     /// three-quarter rather than a stare.
     const FACE_MS: f64 = 1_400.0;
+    /// **And what every man past the first adds to that**, in ms: the time the
+    /// pan spends travelling from one of them to the next.
+    ///
+    /// They stand 1.75 m apart at the gate and the rig is a little under four
+    /// metres off the row, so nine tenths of a second a head is about
+    /// thirty degrees a second at its middle — a pan somebody is operating,
+    /// well under the half a metre per frame the swing is bounded by.
+    ///
+    /// ⚠ **`SubstitutionBreak::PAN_MS` is this same figure**, on
+    /// [`Self::PORTRAIT_MS`]'s terms: it is what holds the whole row still
+    /// while the pan crosses it.
+    const PAN_MS: f64 = 900.0;
     /// …and the swing from there round to his back.
     ///
     /// ⚠ **It is a longer move than it looks and it is sized by how fast the
@@ -179,26 +204,26 @@ impl ChangeoverShot {
     /// from the same spot, so the print is in frame for well over three
     /// seconds. What this buys is a beat of him standing before he goes.
     const BACK_MS: f64 = 800.0;
-    /// **And then he runs on, with the rig standing where it stopped.**
+    /// **And then they run on, with the rig standing where it stopped.**
     ///
     /// Two seconds at the engine's `ON` speed is sixteen metres, which is far
-    /// enough onto the field to read as a man arriving. He keeps going
-    /// afterwards — the camera does not, it cuts to the next man, or away.
+    /// enough onto the field to read as a man arriving. They keep going
+    /// afterwards — the camera does not, it walks home to the gantry.
     ///
     /// ⚠ **`SubstitutionBreak::RUN_MS` is this same figure**, on the same
-    /// terms as [`Self::PORTRAIT_MS`]: it is what holds the man after him
-    /// still while this runs — and, since 2026-08-26, what ENDS the window.
-    /// The engine no longer waits for either walker to arrive, so the last
-    /// man's run is the last thing in the change and the shot stops with it.
+    /// terms as [`Self::PORTRAIT_MS`]: it is what the engine gives the whole
+    /// row once it lets go of them — and, since 2026-08-26, what ENDS the
+    /// window. The engine no longer waits for any walker to arrive, so the run
+    /// is the last thing in the change and the shot stops with it.
     const RUN_MS: f64 = 2_000.0;
-    /// One man's whole turn in front of the camera. The next man's face is at
-    /// the end of it.
-    const BEAT_MS: f64 = Self::PORTRAIT_MS + Self::RUN_MS;
-    /// **Where the beat opens**, in metres in front of him and how high: close,
-    /// and level with his eyes.
+    /// **Where the beat opens**, in metres in front of a man and how high:
+    /// close, and level with his eyes.
     ///
     /// Under three metres, because a face is a tenth of the size of a shirt
-    /// and half a beat is spent on it.
+    /// and half a beat is spent on it. A change with more than one man in it
+    /// stands a little further off — see [`Self::pan`], which spends that
+    /// distance on having two of them share the frame as the pan crosses
+    /// between them.
     const FACE_OFF: (f32, f32) = (2.8, 1.65);
     /// And where the swing ends up: **behind him, outside the line, and up.**
     ///
@@ -257,7 +282,45 @@ impl ChangeoverShot {
     /// the shot is forced, the tighter it crops. That is the right way round:
     /// what the first beat is for is the print across his shoulders, and a
     /// shot cropped at his waist still has all of it.
+    ///
+    /// It is also the ceiling on the widening a ROW asks for — see
+    /// [`Self::ROW_FIT`] — though nothing a real gate produces reaches it:
+    /// the six men both sides can send on at one stoppage stand nine metres
+    /// end to end and ask for 0.35.
     const WIDEST: f32 = 0.30;
+    /// **How much room there is beside the subject at the end of the swing**,
+    /// in metres of ground either side of the aim.
+    ///
+    /// The lens is a VERTICAL angle — `TvCamera::FOV` over the magnification,
+    /// so 0.44 rad at [`Self::BACK_LENS`] — and a sixteen-by-nine frame is
+    /// 1.78 times as wide as it is tall. Seven and a quarter metres off a man
+    /// standing at the gate, that is 1.63 m of height and 2.9 m of width
+    /// either side of him.
+    ///
+    /// ⚠ **Which is what a row of men is measured against, and mostly it
+    /// already fits.** Substitutes stand 1.75 m apart, so a triple change
+    /// reaches 1.75 m either side of the middle and sits well inside this with
+    /// the frame to spare — the lens is left exactly where a single close-up
+    /// would have put it. Only past four men does the row outgrow the frame,
+    /// and then the lens opens by what is missing and no more. Over-opening
+    /// costs the thing the beat is for: the names, which have to be read off
+    /// shirts at seven metres.
+    ///
+    /// See [`Self::pan`], and [`Self::SHOULDER`] for the margin the end men
+    /// are given inside the edge.
+    const ROW_FIT: f32 = 2.9;
+    /// Half a man across the shoulders, in metres: what the man at the end of
+    /// a row needs inside the frame edge before the row counts as fitting.
+    const SHOULDER: f32 = 0.45;
+    /// The most men one shot will frame.
+    ///
+    /// Three changes a side at one stoppage is six, and the array is a stack
+    /// one on a path that runs every frame a change is on screen. Anybody past
+    /// it is still let onto the pitch by the engine — he is simply not one of
+    /// the bodies the framing is measured against, which for a seventh man
+    /// standing at the end of a row the lens has already had to crop is no
+    /// loss at all.
+    const ROW: usize = 8;
     /// **The box the lens may stand in**, in metres — [`Self::ALONG`] the
     /// pitch and [`Self::ACROSS`] it.
     ///
@@ -300,8 +363,8 @@ impl ChangeoverShot {
     /// How long a change lasts when the recording does not say — a document
     /// written before the engine played substitutions out, or one made on the
     /// instant path. One man's beat, which is what a window with one change in
-    /// it now costs exactly. See `SubstitutionInfo::break_ms`.
-    const ASSUMED_MS: f64 = Self::BEAT_MS;
+    /// it costs exactly. See `SubstitutionInfo::break_ms`.
+    const ASSUMED_MS: f64 = Self::PORTRAIT_MS + Self::RUN_MS;
     /// How long the shot lingers past the end of the change, in ms, before it
     /// walks back to the broadcast rig.
     ///
@@ -314,11 +377,30 @@ impl ChangeoverShot {
     /// rather than a cut.
     const LINGER_MS: f64 = 0.0;
 
+    /// **How long the pan takes to cross `men`**, in ms — the share of the
+    /// beat spent on their faces, before the swing round to their backs.
+    ///
+    /// One man is [`Self::FACE_MS`] of him looking down the lens and no pan at
+    /// all, which is the close-up this shot began as.
+    fn pan_ms(men: usize) -> f32 {
+        (Self::FACE_MS + Self::PAN_MS * men.saturating_sub(1) as f64) as f32
+    }
+
+    /// **And how long the whole close-up lasts** — the pan, the swing, and the
+    /// beat behind them — before the engine lets the row go.
+    ///
+    /// ⚠ **`SubstitutionBreak::portrait_ms` is this same function**, on
+    /// [`Self::PORTRAIT_MS`]'s terms. The two are the same arithmetic in two
+    /// crates that cannot see each other.
+    fn portrait_ms(men: usize) -> f64 {
+        Self::PORTRAIT_MS + Self::PAN_MS * men.saturating_sub(1) as f64
+    }
+
     /// Group the config's substitutions into one shot per stoppage.
     ///
     /// A double change is one moment and gets one shot: the marks share a
     /// timestamp, so anything within a second of another belongs with it — and
-    /// the camera then works through their men one at a time, which is why the
+    /// the camera then pans across their men as a row, which is why the
     /// grouping has to match the window the engine opened.
     pub fn arm(mut commands: Commands, config: Res<ViewerConfig>) {
         let mut changes: Vec<Change> = Vec::new();
@@ -376,7 +458,7 @@ impl ChangeoverShot {
     }
 
     /// Whether the shot should be on this frame, how far it has closed, and
-    /// which man it is looking at.
+    /// where the men it is looking at are standing.
     ///
     /// Runs after the bodies have been placed, like [`CameraSubject::settle`],
     /// because it measures the beats off the men themselves: where a man is
@@ -414,32 +496,70 @@ impl ChangeoverShot {
                 *visibility != Visibility::Hidden && change.coming_on.contains(&actor.id)
             })
         });
-        // Which man the shot is on, and how far through his beat we are. Past
-        // the last of them it is at the touchline, holding the ground until
-        // play resumes.
+        // Where the men of the change are standing and how far through their
+        // one beat we are. Past it the shot is at the touchline, holding the
+        // ground until play resumes.
         let beat = wanted.and_then(|change| {
-            let elapsed = now - change.from;
-            let index = (elapsed / Self::BEAT_MS).floor().max(0.0) as usize;
-            let man = *change.coming_on.get(index)?;
-            let (_, transform, _) = actors.iter().find(|(actor, _, visibility)| {
-                actor.id == man && **visibility != Visibility::Hidden
-            })?;
-            let into = (elapsed - index as f64 * Self::BEAT_MS) as f32;
+            // **The row, in the order it stands along the touchline**, which
+            // is the order the pan crosses it. A stack array, like `others`
+            // below — see [`Self::ROW`].
+            //
+            // ⚠ **Sorted along the line rather than taken in the order the
+            // ledger staged them.** Which side's change was recorded first is
+            // the substitution pass's business and has nothing to do with
+            // where its man ended up standing; a pan that took them in that
+            // order would double back on itself halfway across the row, and
+            // one move that reverses reads as two.
+            let mut row = [Vec3::ZERO; Self::ROW];
+            let mut heading = Vec3::ZERO;
+            let mut drawn = 0;
+            for (actor, at, visibility) in &actors {
+                if *visibility == Visibility::Hidden
+                    || !change.coming_on.contains(&actor.id)
+                    || drawn == row.len()
+                {
+                    continue;
+                }
+                row[drawn] = at.translation;
+                heading += Self::heading(at);
+                drawn += 1;
+            }
+            if drawn == 0 {
+                return None;
+            }
+            // They are all square to the same line, so the average of their
+            // facings is their facing — and it is what the swing is built on,
+            // so it must never be zero.
+            let heading = heading.try_normalize().unwrap_or(Vec3::Z);
+            let row = &mut row[..drawn];
+            let along = Vec3::Y.cross(heading);
+            row.sort_by(|left, right| left.dot(along).total_cmp(&right.dot(along)));
 
-            // **He is running — the rig stays where the swing left it.**
-            if into >= Self::PORTRAIT_MS as f32 {
+            // ⚠ **The beat is sized off the LEDGER and framed off the
+            // BODIES.** They are the same men except when a chunk holding one
+            // of them has not landed, and then the engine's window is still
+            // the length it was: sizing the beat off what happens to be drawn
+            // would end the shot while the men were still standing there.
+            let men = change.coming_on.len().max(drawn);
+            let into = (now - change.from) as f32;
+
+            // **They are running — the rig stays where the swing left it.**
+            if into >= Self::portrait_ms(men) as f32 {
                 let planted = shot
                     .plant
-                    .filter(|(on, _, _)| *on == index)
+                    .filter(|(on, _, _)| *on == change.from)
                     .map(|(_, stand, lens)| (stand, lens));
                 return Some(match planted {
-                    Some(planted) => (index, Self::watching(transform.translation, planted)),
+                    Some(planted) => (change.from, Self::watching(Self::together(row), planted)),
                     // Nothing to stand on: the playhead was scrubbed into the
-                    // middle of his run and the beat that would have planted
-                    // the camera never played. Take the shot off his back
-                    // where he is, which follows him rather than watching him
-                    // go — a scrub cuts anyway.
-                    None => (index, Self::close_up(transform, Self::PORTRAIT_MS as f32, &[])),
+                    // middle of the run and the beat that would have planted
+                    // the camera never played. Take the shot off their backs
+                    // where they are, which follows them rather than watching
+                    // them go — a scrub cuts anyway.
+                    None => (
+                        change.from,
+                        Self::pan(row, heading, men, Self::portrait_ms(men) as f32, &[]),
+                    ),
                 });
             }
 
@@ -450,11 +570,12 @@ impl ChangeoverShot {
             //
             // ⚠ **The men in the change are left out of it.** They are the
             // only bodies on the ground that move while the window is open —
-            // one substitute is already running on and one man is walking off
-            // — and a sight line that gave way to them would yank the lens
-            // about for the length of somebody else's close-up. They are also
-            // standing in a row 1.75 m apart at the gate, which the swing is
-            // meant to sweep past rather than dive in front of.
+            // the substitutes are already running on and the men they replaced
+            // are walking off — and a sight line that gave way to them would
+            // yank the lens about in the middle of the shot they are the
+            // subject of. They are also standing in a row 1.75 m apart at the
+            // gate, which the pan is meant to sweep along rather than dive in
+            // front of.
             let mut others = [Vec3::ZERO; 32];
             let mut count = 0;
             for (actor, at, visibility) in &actors {
@@ -466,19 +587,18 @@ impl ChangeoverShot {
                 }
             }
             Some((
-                index,
-                Self::close_up(transform, into, &others[..count]),
+                change.from,
+                Self::pan(row, heading, men, into, &others[..count]),
             ))
         });
 
         // **The rig plants at the end of the swing and holds.** Taken here,
         // on the last frame of the close-up, because that is the only frame
-        // that has both the man standing still and the camera at rest behind
-        // him — see [`Self::plant`].
-        let plant = match &beat {
-            Some((index, portrait)) => Some((*index, portrait.stand, portrait.lens)),
-            None => None,
-        };
+        // that has both the men standing still and the camera at rest behind
+        // them — see [`Self::plant`].
+        let plant = beat
+            .as_ref()
+            .map(|(change, portrait)| (*change, portrait.stand, portrait.lens));
         let portrait = beat.map(|(_, portrait)| portrait);
 
         // **A close-up cuts.** It is on screen for a second and a ramp would
@@ -516,29 +636,75 @@ impl ChangeoverShot {
         }
     }
 
-    /// The shot on one man, `into` ms into his own beat.
+    /// **The middle of the row**, which is where the camera stands off.
     ///
-    /// Everything here is in HIS frame rather than the pitch's: the camera
-    /// stands in front of his face whichever way he happens to be facing, and
-    /// swings round to his shoulders from there. `others` is everybody else
-    /// who is drawn, because the one thing this shot cannot do is put a body
-    /// between the lens and its subject — see [`Self::clear`].
+    /// The midpoint of its two ends rather than the mean of the bodies in it:
+    /// both sides may change at one stoppage and they do not have to change
+    /// the same number, so a mean sits toward whichever side sent on more and
+    /// the shot is no longer between them. This is equidistant from the two
+    /// men at the ends of the pan, which is what "between them" means.
+    fn between(row: &[Vec3]) -> Vec3 {
+        match (row.first(), row.last()) {
+            (Some(first), Some(last)) => first.lerp(*last, 0.5),
+            _ => Vec3::ZERO,
+        }
+    }
+
+    /// **Where they are once they are running**, which is what the aim holds
+    /// so the whole change stays in one frame.
     ///
-    /// Past [`Self::PORTRAIT_MS`] he is running and this is not called: the
+    /// ⚠ **The mean, and here it has to be** — [`Self::between`] reads the two
+    /// ENDS of a sorted row, and men running onto a pitch do not keep their
+    /// order: they are each headed for a different slot, so two of them cross
+    /// and the ends swap. Their positions are only equal in the direction the
+    /// sort is on, so the midpoint of the ends flicks sideways by however far
+    /// apart the pair were in the other one. A mean cannot: it is the same
+    /// point whatever order the bodies arrive in.
+    ///
+    /// On the row standing at the gate the two agree to within a few
+    /// centimetres, so the handover from the pan to the run is not a cut.
+    fn together(row: &[Vec3]) -> Vec3 {
+        if row.is_empty() {
+            return Vec3::ZERO;
+        }
+        row.iter().fold(Vec3::ZERO, |sum, man| sum + *man) / row.len() as f32
+    }
+
+    /// The shot on the men of a change, `into` ms into the one beat all of
+    /// them share. `men` is how many the LEDGER says are in it, which is what
+    /// the beat is sized by; `row` is the ones actually drawn, sorted along
+    /// the touchline, which is what it is aimed at.
+    ///
+    /// Everything here is in THEIR frame rather than the pitch's: the camera
+    /// stands in front of the row whichever way they happen to be facing,
+    /// **pans along it**, and swings round to their shoulders from there.
+    /// `others` is everybody else who is drawn, because the one thing this
+    /// shot cannot do is put a body between the lens and its subject — see
+    /// [`Self::clear`].
+    ///
+    /// Past [`Self::portrait_ms`] they are running and this is not called: the
     /// rig is planted where the swing left it — see [`Self::watching`].
-    fn close_up(transform: &Transform, into: f32, others: &[Vec3]) -> Portrait {
-        let boots = transform.translation;
-        let turn =
-            Self::ease(((into - Self::FACE_MS as f32) / Self::TURN_MS as f32).clamp(0.0, 1.0));
+    fn pan(row: &[Vec3], heading: Vec3, men: usize, into: f32, others: &[Vec3]) -> Portrait {
+        let centre = Self::between(row);
+        let first = row.first().copied().unwrap_or(centre);
+        let last = row.last().copied().unwrap_or(centre);
+        let half_span = (last - first).with_y(0.0).length() * 0.5;
+        // Half the ground between two of them, near enough — the row is
+        // evenly spaced by `Bench::GATE_PITCH` except where the two sides'
+        // gates meet in the middle of it.
+        let apart = half_span / (row.len().max(2) - 1) as f32;
+
+        let sweep = Self::ease((into / Self::pan_ms(men)).clamp(0.0, 1.0));
+        let turn = Self::ease(((into - Self::pan_ms(men)) / Self::TURN_MS as f32).clamp(0.0, 1.0));
 
         // ⚠ **The bearing is worked out for THIS frame, and so is everything
         // hung off it.**
         //
         // The obvious build takes the two end positions, clears each of them
         // once, and swings between them — and it puts the camera through
-        // people. The ends are dead behind him and dead in front; the metre of
-        // ground the lens actually travels over is neither, and it is where
-        // the man standing two metres to his left is. Measured on the first
+        // people. The ends are dead behind them and dead in front; the metre
+        // of ground the lens actually travels over is neither, and it is where
+        // the man standing two metres to one side is. Measured on the first
         // change of a real match: a team-mate 2.15 m away, the swing passing
         // within a foot of him, his body across the whole frame and then
         // through the near plane.
@@ -546,47 +712,82 @@ impl ChangeoverShot {
         // So the arc is a bearing that is re-cleared every frame. What comes
         // out is not a circle any more — the lens ducks in where somebody is
         // standing and comes back out after him — which is exactly what
-        // somebody carrying a camera round a man would do.
+        // somebody carrying a camera round a group would do.
         //
-        // It starts on his FACING and turns half a circle onto his back: the
-        // beat opens looking him in the face and ends on the name across his
-        // shoulders, because the second of those is the angle he then runs
-        // away down.
-        let bearing = Quat::from_rotation_y(turn * PI) * Self::heading(transform);
-        let wanted = Self::FACE_OFF.0 + (Self::BACK_OFF.0 - Self::FACE_OFF.0) * turn;
-        let reach = Self::clear(boots, bearing, wanted, others);
+        // It starts on their FACING and turns half a circle onto their backs:
+        // the beat opens looking them in the face and ends on the names across
+        // their shoulders, because the second of those is the angle they then
+        // run away down.
+        let bearing = Quat::from_rotation_y(turn * PI) * heading;
+        // **Where the pan stands: off the middle of the row, and half a man's
+        // spacing further back than a single close-up.**
+        //
+        // That last half-metre is what makes it one move over a group rather
+        // than a cut between close-ups. At [`Self::FACE_OFF`] the frame is
+        // 0.92 m of ground either side of the aim and the men are 1.75 m
+        // apart, so the one the pan is leaving is gone before the one it is
+        // going to arrives; half a spacing further off it is 1.22 m and the
+        // two of them share the frame across the middle of every sweep.
+        let front = Self::FACE_OFF.0 + apart;
+        let wanted = front + (Self::BACK_OFF.0 - front) * turn;
+        let reach = Self::clear(centre, bearing, wanted, others);
 
         Portrait {
             stand: Vec3::new(
-                boots.x + bearing.x * reach,
-                boots.y + Self::FACE_OFF.1 + (Self::BACK_OFF.1 - Self::FACE_OFF.1) * turn,
-                boots.z + bearing.z * reach,
+                centre.x + bearing.x * reach,
+                centre.y + Self::FACE_OFF.1 + (Self::BACK_OFF.1 - Self::FACE_OFF.1) * turn,
+                centre.z + bearing.z * reach,
             ),
-            aim: boots
+            // **The pan is in the AIM and nowhere else.** The rig is planted
+            // in front of them for the whole of it — a camera that tracked
+            // sideways along the row would be a dolly, and what a touchline
+            // camera does with a line of men waiting to come on is turn.
+            //
+            // It sweeps from the man at one end to the man at the other and
+            // then hands over to the swing, which carries it back to the
+            // middle of the row as the rig comes round behind them.
+            aim: first
+                .lerp(last, sweep)
                 .with_y(Self::FACE_AT)
-                .lerp(boots.with_y(Self::CHEST), turn),
+                .lerp(centre.with_y(Self::CHEST), turn),
             // **The lens opens with every metre the shot gives up**, so a man
             // it had to duck in past — or one the ground made it stop short of
-            // — does not change how big the subject comes out. Until
-            // [`Self::WIDEST`], where opening any further would be a fisheye
-            // and the shot crops instead.
-            lens: ((Self::FACE_LENS + (Self::BACK_LENS - Self::FACE_LENS) * turn) * reach / wanted)
+            // — does not change how big the subject comes out.
+            //
+            // And it opens again for a row that will not fit, but only as the
+            // shot comes round behind them: the pan frames one man at a time,
+            // where the beat on their backs has to hold every one of them.
+            // Anything up to a triple change already fits and is left alone —
+            // see [`Self::ROW_FIT`], which is why this is a `max` and not a
+            // sum.
+            //
+            // Both stop at [`Self::WIDEST`], where opening any further would
+            // be a fisheye and the shot crops instead.
+            lens: ((Self::FACE_LENS + (Self::BACK_LENS - Self::FACE_LENS) * turn)
+                * (Self::ROW_FIT / (half_span * turn + Self::SHOULDER).max(Self::ROW_FIT))
+                * reach
+                / wanted)
                 .max(Self::WIDEST),
         }
     }
 
-    /// The shot while he runs on: **the rig does not move.**
+    /// The shot while they run on: **the rig does not move.**
     ///
     /// `planted` is where the swing left it and how it was lensed, taken on
-    /// the last frame of his close-up and held. All that changes is the aim,
-    /// which stays on him, so he runs away down the middle of the frame with
-    /// the pitch opening out around him and the name still legible for the
-    /// first stride or two of it.
+    /// the last frame of the close-up and held. All that changes is the aim,
+    /// which stays on the middle of them, so they run away down the middle of
+    /// the frame with the pitch opening out around them and the names still
+    /// legible for the first stride or two of it.
+    ///
+    /// ⚠ **The aim is on the MIDDLE of the row and not on a man**, because
+    /// they fan out: each of them is running at a different slot, so a shot
+    /// held on one has the rest leaving the frame in the other direction.
+    /// [`Self::together`] is the point that keeps them together in it.
     ///
     /// Nothing is cleared here. Twenty-one men were standing still when the
-    /// camera planted and the two who are not are the pair this beat is
-    /// about — a lens that ducked out of the way of a man crossing the shot at
-    /// eight metres a second would be the only thing in it that lurched.
+    /// camera planted and the ones who are not are what this beat is about —
+    /// a lens that ducked out of the way of a man crossing the shot at eight
+    /// metres a second would be the only thing in it that lurched.
     fn watching(boots: Vec3, planted: (Vec3, f32)) -> Portrait {
         Portrait {
             stand: planted.0,
@@ -723,11 +924,30 @@ impl ChangeoverShot {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::broadcast::camera::TvCamera;
     use std::f32::consts::TAU;
 
     /// A man standing at `at`, facing `bearing` radians round from +Z.
     fn standing(at: Vec3, bearing: f32) -> Transform {
         Transform::from_translation(at).with_rotation(Quat::from_rotation_y(bearing))
+    }
+
+    /// **The shot on ONE man**, `into` ms into his beat — [`ChangeoverShot::pan`]
+    /// with nowhere to pan to, which is exactly what the real shot is handed
+    /// for a single change.
+    ///
+    /// A single change is much the commonest and it is the close-up this shot
+    /// was built as: no spread, so the rig stands at `FACE_OFF`, the sweep has
+    /// both ends on the same man, and the lens is not opened for a row of one.
+    /// Every assertion below that predates the row is written against it.
+    fn close_up(transform: &Transform, into: f32, others: &[Vec3]) -> Portrait {
+        ChangeoverShot::pan(
+            &[transform.translation],
+            ChangeoverShot::heading(transform),
+            1,
+            into,
+            others,
+        )
     }
 
     /// Which way a man on `bearing` is facing, worked out from the angle the
@@ -743,7 +963,7 @@ mod tests {
     ///
     /// **Horizontal**, because the height of the rig is a property of the beat
     /// and not of how far the shot was driven in — so it is exactly this that
-    /// [`ChangeoverShot::close_up`] holds constant when the ground or a body in
+    /// [`ChangeoverShot::pan`] holds constant when the ground or a body in
     /// the way costs it some of its distance.
     fn in_frame(shot: &Portrait, man: Vec3) -> f32 {
         shot.lens / (shot.stand - man).with_y(0.0).length()
@@ -765,7 +985,7 @@ mod tests {
     fn the_beat_opens_on_his_face() {
         for bearing in [0.0, 1.1, PI, -2.4] {
             let man = standing(Vec3::new(12.0, 0.0, -7.0), bearing);
-            let shot = ChangeoverShot::close_up(&man, 0.0, &[]);
+            let shot = close_up(&man, 0.0, &[]);
             let to_camera = (shot.stand - man.translation).with_y(0.0).normalize();
             assert!(
                 to_camera.dot(facing(bearing)) > 0.99,
@@ -783,7 +1003,7 @@ mod tests {
         // and it is the bearing he then runs away down.
         let bearing = 0.8;
         let man = standing(Vec3::new(-3.0, 0.0, 20.0), bearing);
-        let shot = ChangeoverShot::close_up(&man, ChangeoverShot::PORTRAIT_MS as f32, &[]);
+        let shot = close_up(&man, ChangeoverShot::PORTRAIT_MS as f32, &[]);
         let to_camera = (shot.stand - man.translation).with_y(0.0).normalize();
         assert!(
             to_camera.dot(facing(bearing)) < -0.99,
@@ -792,7 +1012,7 @@ mod tests {
         assert_eq!(shot.aim, man.translation.with_y(ChangeoverShot::CHEST));
         // Further back and higher, which is what puts the pitch he is about to
         // run onto in the same frame as him.
-        let face = ChangeoverShot::close_up(&man, 0.0, &[]);
+        let face = close_up(&man, 0.0, &[]);
         assert!(
             shot.stand.distance(man.translation) > face.stand.distance(man.translation),
             "the shot on his back is no further off than the one on his face"
@@ -809,7 +1029,7 @@ mod tests {
         let mut nearest = f32::MAX;
         for step in 0..=200 {
             let into = ChangeoverShot::PORTRAIT_MS as f32 * step as f32 / 200.0;
-            let at = ChangeoverShot::close_up(&man, into, &[]).stand;
+            let at = close_up(&man, into, &[]).stand;
             let reach = (at - man.translation).with_y(0.0).length();
             nearest = nearest.min(reach);
             if let Some(previous) = previous {
@@ -831,7 +1051,7 @@ mod tests {
         // body every frame; do that to a man running at eight metres a second
         // and the camera goes with him.
         let man = standing(Vec3::new(2.0, 0.0, -35.0), 0.1);
-        let planted = ChangeoverShot::close_up(&man, ChangeoverShot::PORTRAIT_MS as f32, &[]);
+        let planted = close_up(&man, ChangeoverShot::PORTRAIT_MS as f32, &[]);
         let plant = (planted.stand, planted.lens);
 
         let mut away = man.translation;
@@ -865,7 +1085,7 @@ mod tests {
                 let beside = man.translation + Vec3::new(angle.sin(), 0.0, angle.cos()) * reach;
                 for frame in 0..=200 {
                     let into = ChangeoverShot::PORTRAIT_MS as f32 * frame as f32 / 200.0;
-                    let at = ChangeoverShot::close_up(&man, into, &[beside]).stand;
+                    let at = close_up(&man, into, &[beside]).stand;
                     assert!(
                         !across_the_shot(at, man.translation, beside),
                         "a man at {reach} m on bearing {step}/24 is across the shot from {at:?}"
@@ -903,7 +1123,7 @@ mod tests {
                 let man = standing(boots, step as f32 / 16.0 * TAU);
                 for frame in 0..=100 {
                     let into = ChangeoverShot::PORTRAIT_MS as f32 * frame as f32 / 100.0;
-                    let at = ChangeoverShot::close_up(&man, into, &[]).stand;
+                    let at = close_up(&man, into, &[]).stand;
                     assert!(
                         at.x >= ChangeoverShot::ALONG.0 - 1e-3
                             && at.x <= ChangeoverShot::ALONG.1 + 1e-3
@@ -919,7 +1139,7 @@ mod tests {
         // stands: `OUT` metres beyond the line, however far out the gate the
         // engine put him on happens to be.
         let man = at_the_gate(1.0);
-        let rest = ChangeoverShot::close_up(&man, ChangeoverShot::PORTRAIT_MS as f32, &[]).stand;
+        let rest = close_up(&man, ChangeoverShot::PORTRAIT_MS as f32, &[]).stand;
         assert!(
             (rest.z + Field::HALF_WIDTH + ChangeoverShot::OUT).abs() < 1e-3,
             "the shot on his back came to rest at {rest:?}"
@@ -931,7 +1151,7 @@ mod tests {
         // smaller than a man stood in the middle of the pitch would be.
         let middle = standing(Vec3::ZERO, 0.0);
         let size = |man: &Transform| {
-            let shot = ChangeoverShot::close_up(man, ChangeoverShot::PORTRAIT_MS as f32, &[]);
+            let shot = close_up(man, ChangeoverShot::PORTRAIT_MS as f32, &[]);
             in_frame(&shot, man.translation)
         };
         assert!(
@@ -966,8 +1186,8 @@ mod tests {
         );
         // …and the subject stays the same size in frame, because the lens
         // opens by exactly what the distance gave up.
-        let blocked = ChangeoverShot::close_up(&man, 0.0, &[blocker]);
-        let open = ChangeoverShot::close_up(&man, 0.0, &[]);
+        let blocked = close_up(&man, 0.0, &[blocker]);
+        let open = close_up(&man, 0.0, &[]);
         assert!(
             (in_frame(&blocked, man.translation) - in_frame(&open, man.translation)).abs() < 0.01,
             "he changed size when the camera came forward"
@@ -998,16 +1218,16 @@ mod tests {
         // widening at `WIDEST` rather than going to a fisheye, so the shot
         // crops in instead.
         let back = ChangeoverShot::PORTRAIT_MS as f32;
-        let driven = ChangeoverShot::close_up(&man, back, &[behind * 4.0]);
+        let driven = close_up(&man, back, &[behind * 4.0]);
         assert_eq!(driven.lens, ChangeoverShot::WIDEST);
         assert!(
-            ChangeoverShot::close_up(&man, back, &[]).lens > driven.lens,
+            close_up(&man, back, &[]).lens > driven.lens,
             "a shot with room is no tighter than one without"
         );
     }
 
     #[test]
-    fn a_stoppage_is_one_shot_and_works_through_its_men_in_turn() {
+    fn a_stoppage_is_one_shot_over_all_of_its_men() {
         let mut changes = Vec::new();
         ChangeoverShot::stage(&mut changes, 60_000.0, 14_000.0, 7, 3);
         ChangeoverShot::stage(&mut changes, 60_400.0, 15_000.0, 9, 4);
@@ -1071,25 +1291,284 @@ mod tests {
 
     #[test]
     fn the_close_ups_fit_inside_the_hold_the_engine_gives_them() {
-        // `SubstitutionBreak::PORTRAIT_MS` stands the man still for exactly
-        // this long, and `SubstitutionBreak::RUN_MS` holds the men after him
-        // for the rest of the beat. Neither number can be reached from this
-        // crate, so both are restated and asserted.
+        // `SubstitutionBreak::PORTRAIT_MS` stands the men still for exactly
+        // this long, `SubstitutionBreak::PAN_MS` is what each of them past the
+        // first adds to it, and `SubstitutionBreak::RUN_MS` is what the whole
+        // row gets once it lets go. None of the three can be reached from this
+        // crate, so all of them are restated and asserted.
         //
-        // ⚠ **And `BEAT_MS` is now the whole length of the window** — the
-        // engine stops on its beats rather than waiting for either walker to
-        // arrive (`SubstitutionBreak::beats_ms`), so a shot sized off these
-        // figures is a shot sized off the footage that exists.
+        // ⚠ **And the sum is the whole length of the window** — the engine
+        // stops on its beats rather than waiting for any walker to arrive
+        // (`SubstitutionBreak::beats_ms`), so a shot sized off these figures is
+        // a shot sized off the footage that exists.
         assert_eq!(
             ChangeoverShot::PORTRAIT_MS,
             3_400.0,
-            "the engine holds him for 3400"
+            "the engine holds one man for 3400"
+        );
+        assert_eq!(
+            ChangeoverShot::PAN_MS,
+            900.0,
+            "the engine holds the row 900 longer for every man past the first"
         );
         assert_eq!(
             ChangeoverShot::RUN_MS,
             2_000.0,
-            "the engine holds the next man for 2000"
+            "the engine gives the run 2000"
         );
-        assert_eq!(ChangeoverShot::BEAT_MS, 5_400.0);
+        // A single change is the 5.4 s it always was; a triple is 7.2 rather
+        // than the 16.2 three beats of their own used to cost.
+        assert_eq!(ChangeoverShot::portrait_ms(1), 3_400.0);
+        assert_eq!(ChangeoverShot::portrait_ms(3), 5_200.0);
+        assert_eq!(ChangeoverShot::ASSUMED_MS, 5_400.0);
+        assert_eq!(
+            ChangeoverShot::portrait_ms(3) + ChangeoverShot::RUN_MS,
+            7_200.0
+        );
+        // The pan is the front half of it and the swing is charged after,
+        // whoever is in the row.
+        assert_eq!(ChangeoverShot::pan_ms(1), ChangeoverShot::FACE_MS as f32);
+        for men in 1..=6 {
+            assert_eq!(
+                ChangeoverShot::portrait_ms(men) as f32,
+                ChangeoverShot::pan_ms(men)
+                    + ChangeoverShot::TURN_MS as f32
+                    + ChangeoverShot::BACK_MS as f32,
+                "the beat for {men} men is not its own parts"
+            );
+        }
+    }
+
+    /// A row of substitutes waiting at the gate: `men` of them, the 1.75 m
+    /// apart `Bench::GATE_PITCH` spaces them, all square to the line and
+    /// facing the pitch. Restated here because this crate cannot reach the
+    /// engine's copy — same reason [`at_the_gate`] restates the 0.75 m.
+    fn the_row(men: usize) -> Vec<Vec3> {
+        (0..men)
+            .map(|man| at_the_gate(man as f32 * 1.75).translation)
+            .collect()
+    }
+
+    /// How much ground the frame covers either side of the aim at `distance`,
+    /// in metres. The lens is a VERTICAL angle — `TvCamera::FOV` over the
+    /// magnification — and the frame is sixteen by nine.
+    fn frame_half(lens: f32, distance: f32) -> f32 {
+        (TvCamera::FOV / lens * 0.5).tan() * distance * 16.0 / 9.0
+    }
+
+    #[test]
+    fn the_pan_stands_between_them_and_sweeps_the_row() {
+        // ⚠ **The whole point of the 2026-09-04 change**: a change with three
+        // men in it is one move over the three of them, not three close-ups.
+        let row = the_row(3);
+        let middle = row[1];
+        let shot = ChangeoverShot::pan(&row, Vec3::Z, 3, 0.0, &[]);
+
+        // Between them: equidistant from the two ends, which a mean of the
+        // bodies would not be if the sides had sent on different numbers.
+        let ends = (
+            (shot.stand - row[0]).with_y(0.0).length(),
+            (shot.stand - row[2]).with_y(0.0).length(),
+        );
+        assert!(
+            (ends.0 - ends.1).abs() < 1e-3,
+            "the rig is {:.2} m from one end and {:.2} from the other",
+            ends.0,
+            ends.1
+        );
+        // And in front of them, on the pitch they are about to run onto.
+        assert!(
+            shot.stand.z > middle.z,
+            "the rig is behind the row at the open: {:?}",
+            shot.stand
+        );
+
+        // It opens on the man at one end of the row and finishes on the man at
+        // the other, without ever doubling back.
+        let pan = ChangeoverShot::pan_ms(3);
+        let mut previous = f32::MIN;
+        let mut nearest = [f32::MAX; 3];
+        for step in 0..=200 {
+            let into = pan * step as f32 / 200.0;
+            let frame = ChangeoverShot::pan(&row, Vec3::Z, 3, into, &[]);
+            assert!(
+                frame.aim.x >= previous - 1e-4,
+                "the pan doubled back at {into} ms"
+            );
+            previous = frame.aim.x;
+            for (man, near) in row.iter().zip(nearest.iter_mut()) {
+                *near = near.min((frame.aim - man.with_y(ChangeoverShot::FACE_AT)).length());
+            }
+        }
+        assert!(
+            (ChangeoverShot::pan(&row, Vec3::Z, 3, 0.0, &[]).aim.x - row[0].x).abs() < 1e-3,
+            "it did not open on the man at the end of the row"
+        );
+        assert!(
+            (previous - row[2].x).abs() < 1e-3,
+            "it did not finish on the man at the other end"
+        );
+        // **And it passes every one of them**, which is what the beat replaced
+        // three separate close-ups with.
+        for (man, near) in nearest.iter().enumerate() {
+            assert!(
+                *near < 0.05,
+                "the pan came no closer than {near:.2} m to man {man}"
+            );
+        }
+
+        // ⚠ **The rig itself does not travel during the pan** — a camera that
+        // slid along the row would be a dolly; what a touchline camera does
+        // with a line of men is turn.
+        let held = ChangeoverShot::pan(&row, Vec3::Z, 3, pan, &[]).stand;
+        assert!(
+            held.distance(shot.stand) < 1e-3,
+            "the rig moved {:.2} m across the pan",
+            held.distance(shot.stand)
+        );
+    }
+
+    #[test]
+    fn and_comes_to_rest_behind_the_whole_row_with_all_of_them_in_frame() {
+        // The names are printed across the backs of the shirts and nowhere
+        // else, and the shot has to hold every one of them: this is the frame
+        // the men then run out of, together.
+        for men in 2..=6 {
+            let row = the_row(men);
+            let back = ChangeoverShot::portrait_ms(men) as f32;
+            let shot = ChangeoverShot::pan(&row, Vec3::Z, men, back, &[]);
+            let middle = ChangeoverShot::between(&row);
+
+            let behind = (shot.stand - middle).with_y(0.0).normalize();
+            assert!(
+                behind.dot(Vec3::Z) < -0.99,
+                "the camera is not behind the row of {men}: {behind:?}"
+            );
+            assert!(
+                shot.aim.distance(middle.with_y(ChangeoverShot::CHEST)) < 1e-4,
+                "the shot on their backs is aimed at {:?}, not the middle of \
+                 the row",
+                shot.aim
+            );
+
+            // Every man of the row is inside the frame, with a shoulder to
+            // spare. This is what `ROW_FIT` is for — and why a triple change
+            // is not widened at all: it already fits.
+            let room = frame_half(shot.lens, (shot.stand - middle).with_y(0.0).length());
+            for man in &row {
+                let off = (man.x - middle.x).abs();
+                assert!(
+                    off + ChangeoverShot::SHOULDER <= room + 1e-3,
+                    "a man {off:.2} m along a row of {men} is outside a frame \
+                     {room:.2} m wide"
+                );
+            }
+        }
+
+        // Up to a triple change the lens is exactly where a single close-up
+        // would have put it — the row fits, so nothing is given away.
+        let one = ChangeoverShot::pan(
+            &the_row(1),
+            Vec3::Z,
+            1,
+            ChangeoverShot::portrait_ms(1) as f32,
+            &[],
+        );
+        for men in 2..=3 {
+            let shot = ChangeoverShot::pan(
+                &the_row(men),
+                Vec3::Z,
+                men,
+                ChangeoverShot::portrait_ms(men) as f32,
+                &[],
+            );
+            assert!(
+                (shot.lens - one.lens).abs() < 0.02,
+                "a row of {men} opened the lens to {} against {}",
+                shot.lens,
+                one.lens
+            );
+        }
+        // Past that it opens, because there is no other way to hold them.
+        let six = ChangeoverShot::pan(
+            &the_row(6),
+            Vec3::Z,
+            6,
+            ChangeoverShot::portrait_ms(6) as f32,
+            &[],
+        );
+        assert!(six.lens < one.lens);
+        assert!(
+            six.lens > ChangeoverShot::WIDEST,
+            "the fullest change a stoppage can hold is asking for a fisheye"
+        );
+    }
+
+    #[test]
+    fn the_pan_never_whips() {
+        // ⚠ **The same bound the swing is held to**, and the reason `PAN_MS`
+        // is 900 rather than something tidier: the aim covers nearly ten
+        // metres of ground across a full six-man row, eased, so the middle of
+        // it runs half as fast again as the mean.
+        for men in 1..=6 {
+            let row = the_row(men);
+            let beat = ChangeoverShot::portrait_ms(men) as f32;
+            // Sampled at a frame of the replay rather than at a round number
+            // of steps: 15 ms is a shade under the 60 fps the bound is for.
+            let steps = (beat / 15.0).ceil() as usize;
+            let mut previous: Option<(Vec3, Vec3)> = None;
+            for step in 0..=steps {
+                let into = beat * step as f32 / steps as f32;
+                let shot = ChangeoverShot::pan(&row, Vec3::Z, men, into, &[]);
+                if let Some((stand, aim)) = previous {
+                    assert!(
+                        shot.stand.distance(stand) < 0.5,
+                        "the rig jumped {} m in one step of a {men}-man beat",
+                        shot.stand.distance(stand)
+                    );
+                    assert!(
+                        shot.aim.distance(aim) < 0.5,
+                        "the aim jumped {} m in one step of a {men}-man beat",
+                        shot.aim.distance(aim)
+                    );
+                }
+                previous = Some((shot.stand, shot.aim));
+            }
+        }
+    }
+
+    #[test]
+    fn one_man_is_the_close_up_it_always_was() {
+        // A single change is much the commonest and nothing about it moved
+        // when the row arrived: no spread means no pan, the rig stands at
+        // `FACE_OFF` rather than half a spacing further off, and the lens is
+        // not opened for a row of one.
+        let man = at_the_gate(3.0);
+        let open = close_up(&man, 0.0, &[]);
+        assert!(
+            (open
+                .stand
+                .distance(man.translation.with_y(ChangeoverShot::FACE_OFF.1))
+                - ChangeoverShot::FACE_OFF.0)
+                .abs()
+                < 1e-3,
+            "the close-up no longer opens at FACE_OFF: {:?}",
+            open.stand
+        );
+        assert_eq!(open.lens, ChangeoverShot::FACE_LENS, "a row of one widened");
+
+        // And nothing sweeps: the aim is on him for the whole of the face
+        // beat, where a row's would be travelling from one end of it to the
+        // other.
+        for step in 0..=20 {
+            let into = ChangeoverShot::pan_ms(1) * step as f32 / 20.0;
+            let drift = close_up(&man, into, &[])
+                .aim
+                .distance(man.translation.with_y(ChangeoverShot::FACE_AT));
+            assert!(
+                drift < 1e-4,
+                "the shot on one man panned {drift} m {into} ms in"
+            );
+        }
     }
 }

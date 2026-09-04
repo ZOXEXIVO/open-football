@@ -1,7 +1,7 @@
 use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperBallClaim,
-    KeeperCarrierThreat, KeeperDebug, KeeperDelivery, KeeperFeetDecision, KeeperOneOnOne,
-    KeeperRestPosition, KeeperSmother, KeeperSweepLimit,
+    KeeperCarrierThreat, KeeperDebug, KeeperDelivery, KeeperFeetDecision, KeeperGoalKick,
+    KeeperOneOnOne, KeeperRestPosition, KeeperSetPieceStance, KeeperSmother, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -97,7 +97,7 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         if ctx.player.has_ball(ctx) {
             if ctx.ball().is_goal_kick_restart() {
                 return Some(StateChangeResult::with_goalkeeper_state(
-                    if Self::goes_long_from_goal_kick(ctx) {
+                    if KeeperGoalKick::decided_long(ctx) {
                         GoalkeeperState::Kicking
                     } else {
                         GoalkeeperState::Distributing
@@ -278,11 +278,15 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         // a ball rolling into the channel and `ComingOut` then owned him
         // for as long as it kept rolling. Measured, his mean distance from
         // goal while in that state was 19.1 m and the furthest was 62.5 m.
+        // …and never for a DEAD ball he is setting for — a penalty lies
+        // eleven metres from him, unowned, inside his ground, and this
+        // door sent him out to stand beside it. See [`KeeperSetPieceStance`].
         if !ctx.ball().is_owned()
             && !own_dead_delivery
             && ball_on_own_side
             && ball_distance < 40.0 * (1.0 + command_of_area * 0.3)
             && KeeperSweepLimit::covers(ctx, ctx.tick_context.positions.ball.position, &prof)
+            && KeeperSetPieceStance::pending(ctx).is_none()
         {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ComingOut,
@@ -347,6 +351,15 @@ impl StateProcessingHandler for GoalkeeperStandingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // A dead ball at his goal: to his mark, and stand on it. Ahead of
+        // the rest model because that model's tolerances open with the
+        // ball's distance, and a corner is thirty-four metres away — read
+        // through them he was "set" anywhere within three metres of the
+        // line and never went to it. See [`KeeperSetPieceStance`].
+        if let Some(to_mark) = KeeperSetPieceStance::steer(ctx) {
+            return Some(to_mark);
+        }
+
         let optimal_position = self.calculate_optimal_position(ctx);
 
         // A keeper is not always repositioning. Standing still, set, is a
@@ -398,44 +411,6 @@ impl StateProcessingHandler for GoalkeeperStandingState {
 }
 
 impl GoalkeeperStandingState {
-    /// Goal kick: go long, or play short to a defender?
-    ///
-    /// Continuous score, no threshold flip. Going long is driven by the
-    /// keeper's kicking leg, by how high the opposition have pushed
-    /// (nothing else is on when they squeeze the box), and by how direct
-    /// the manager wants the side to be. Playing short is driven by
-    /// having a genuinely free defender to give it to and the composure
-    /// to do it under pressure — the modern build-out, available only to
-    /// keepers who can actually pass.
-    fn goes_long_from_goal_kick(ctx: &StateProcessingContext) -> bool {
-        let gk = &ctx.player.skills.goalkeeping;
-        let kick_skill = (gk.kicking / 20.0).clamp(0.0, 1.0);
-        let short_skill = ((gk.passing + gk.first_touch) / 40.0).clamp(0.0, 1.0);
-        let composure = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
-
-        // Opposition players who have committed into our build-out zone.
-        let squeezing = ctx.players().opponents().nearby(200.0).count() as f32;
-        let press = ((squeezing - 1.0) / 3.0).clamp(0.0, 1.0);
-
-        // A defender we could actually give it to: close, and not marked.
-        let free_short = ctx
-            .players()
-            .teammates()
-            .nearby(120.0)
-            .filter(|t| ctx.tick_context.grid.opponents(t.id, 18.0).next().is_none())
-            .count();
-        let short_available = (free_short as f32 / 2.0).min(1.0);
-
-        // Patient sides build out; direct sides launch it.
-        let patience = ctx.team().build_up_patience().clamp(0.0, 1.0);
-
-        let long = 0.40 + kick_skill * 0.50 + press * 0.75 - patience * 0.35;
-        let short =
-            0.20 + short_available * 0.55 + short_skill * 0.45 + composure * 0.15 - press * 0.55;
-
-        long >= short
-    }
-
     fn is_opponent_in_danger_zone(&self, ctx: &StateProcessingContext) -> bool {
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let opponent_distance = ctx
@@ -455,6 +430,12 @@ impl GoalkeeperStandingState {
         ctx: &StateProcessingContext,
         opponent: &MatchPlayerLite,
     ) -> bool {
+        // Not off his line for a dead ball, whoever is standing over it.
+        // See [`KeeperSetPieceStance`].
+        if KeeperSetPieceStance::pending(ctx).is_some() {
+            return false;
+        }
+
         let ball_position = ctx.tick_context.positions.ball.position;
         let keeper_position = ctx.player.position;
         let opponent_position = opponent.position;

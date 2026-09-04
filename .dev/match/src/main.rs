@@ -9113,6 +9113,18 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 per(13),
                 per(14)
             );
+            // The four movements added in Sept 2026 so that a keeper is
+            // SEEN doing his job: the hop at the strike, the fingertip
+            // over the bar, the penalty faced from his line, and the
+            // goal kick off a run-up. Each is a count of the thing
+            // itself, at the tick he commits to it.
+            println!(
+                "  split-steps at the strike {:.2}   tipped over the bar {:.2}   penalties faced from the line {:.2}   goal kicks off a run-up {:.2}",
+                per(16),
+                per(17),
+                per(18),
+                per(19)
+            );
             println!(
                 "  dives launched IN FLIGHT {:.2} of {:.2} total ({:.0}%)",
                 per(15),

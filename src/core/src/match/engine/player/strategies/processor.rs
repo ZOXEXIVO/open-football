@@ -1146,6 +1146,9 @@ pub struct StateProcessingResult {
     /// …and the goalkeeper's much shorter one. See
     /// [`StateChangeResult::start_keeper_cooldown`].
     pub start_keeper_cooldown: bool,
+    /// The side a goalkeeper has committed a dive to. See
+    /// [`StateChangeResult::dive_aim`].
+    pub dive_aim: Option<f32>,
     /// Tagged reason to attach to the next Shoot event fired by this
     /// player. Matches the pass-reason pattern. Written to
     /// `player.pending_shot_reason` by `state.rs` so the Shooting state
@@ -1192,6 +1195,7 @@ impl StateProcessingResult {
             events: EventCollection::new(),
             start_tackle_cooldown: false,
             start_keeper_cooldown: false,
+            dive_aim: None,
             shot_reason: None,
             shape_recall_pull: 0.0,
             effort_floor: 0.0,
@@ -1222,6 +1226,7 @@ impl StateProcessingResult {
     pub fn merge_state_change(&mut self, change: StateChangeResult) {
         self.start_tackle_cooldown = change.start_tackle_cooldown;
         self.start_keeper_cooldown = change.start_keeper_cooldown;
+        self.dive_aim = change.dive_aim;
         self.shot_reason = change.shot_reason;
         if change.state.is_some() {
             self.state = change.state;
@@ -1252,6 +1257,17 @@ pub struct StateChangeResult {
     /// watching the next man through for half a minute.
     /// See `MatchPlayer::start_keeper_cooldown`.
     pub start_keeper_cooldown: bool,
+    /// **Where a goalkeeper has committed a dive to**, as a `y` on the
+    /// goal line, carried with the transition into `Diving`.
+    ///
+    /// A penalty is a guess made at the strike, and the guess has to be
+    /// rolled once and then kept: `Diving` re-aims every tick, so a side
+    /// re-rolled per tick is a keeper changing his mind in mid-air. It
+    /// rides the result for the same reason the cooldown does — the state
+    /// that decides it holds `ctx.player` immutably — and
+    /// `PlayerMatchState::process` writes it onto `MatchPlayer::dive_aim`
+    /// as he leaves his feet. See `KeeperPenaltyStance`.
+    pub dive_aim: Option<f32>,
     /// Tag the NEXT Shoot event fired by this player with this reason.
     /// Set by transitions to the Shooting state so the resulting
     /// Shoot event carries the decision-path context. Mirrors how
@@ -1273,6 +1289,7 @@ impl StateChangeResult {
             events: EventCollection::new(),
             start_tackle_cooldown: false,
             start_keeper_cooldown: false,
+            dive_aim: None,
             shot_reason: None,
         }
     }

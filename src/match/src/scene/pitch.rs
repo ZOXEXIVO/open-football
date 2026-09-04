@@ -329,6 +329,250 @@ impl LineMesh {
     }
 }
 
+/// **How well this ground is kept**, and everything that follows from it.
+///
+/// The stands answer to the fixture — see [`Stature`] — and the pitch inside
+/// them used to answer to nobody: one calibrated green, one mow, one wear
+/// field, laid identically at a cup final and at an under-18s game on a
+/// training pitch. A ground whose concrete says village and whose grass says
+/// Wembley is a ground that reads as a stadium kit with the wrong lawn in it,
+/// and it is the surface that gives it away, because the surface is most of
+/// the picture.
+///
+/// So one number off the same fixture ([`Stature::keeping`]) grades the whole
+/// playing surface, and the top of the ladder is EXACTLY the pitch that was
+/// calibrated: everything here is written as a distance travelled from
+/// [`Pitch::MOWN`] and its pair, so at a great ground every constant below
+/// falls out of the arithmetic and leaves the picture untouched. That is
+/// pinned by `a_great_ground_is_the_pitch_that_was_calibrated`, and it is the
+/// only reason a graded pitch is safe to add to a colour that took an evening
+/// and five rejected stops to place.
+///
+/// **Four things go wrong at once at a poor ground, and they are four
+/// different things** — which is the point, because any one of them alone
+/// reads as a rendering bug rather than as a worse pitch:
+///
+/// - **The green.** Thin, unfed grass with the dry stuff showing through it is
+///   paler, yellower and much less saturated than a fed sward. See
+///   [`Self::sward`].
+/// - **The mow.** Stripes are a cylinder mower with a roller behind it. A
+///   pitch cut with a rotary mower has none, and that absence is the single
+///   most recognisable thing in here. See [`Self::mow`].
+/// - **The wear.** A great ground's goalmouth is sanded, seeded and watered
+///   between matches and is still green in April; a park pitch's is bare
+///   earth. See [`Self::worn`].
+/// - **The sward itself.** Patchy cover, moss and the places it never took.
+///   See [`Self::rough`].
+///
+/// Everything else — the surround, the tile, the mip chain, the relief — comes
+/// along for free, because all of it is already a tint on the one sheet and
+/// the sheet is drawn in whatever green this hands it.
+#[derive(Resource, Clone, Copy)]
+pub struct Upkeep {
+    /// 0 at a park pitch, 1 at a great ground.
+    kept: f32,
+}
+
+impl Upkeep {
+    /// **The other end of the pitch's colour ladder**: the same grass, unfed,
+    /// thin and dry, with the ground showing through it.
+    ///
+    /// [`Pitch::MOWN`] is where this arrives at a great ground and carries the
+    /// whole argument for that colour; this is the far end of the same walk,
+    /// and it is placed the same way — by what it RENDERS as, not by what it
+    /// reads as in the source. The scene is tonemapped over a flat ambient
+    /// fill, so the response of a rendered channel to its albedo is close to a
+    /// power law: `out = 1.27 · albedo^0.84` on the two bright channels and a
+    /// little under that on blue, which is where the key light's own 0.92
+    /// goes. Fitted on the one pair that is measured — `MOWN` against the
+    /// rgb(52, 124, 62) it renders — and it predicts blue on that same pair to
+    /// within four units out of 255, which is as much as the model is worth.
+    ///
+    /// Inverted through it, this pair aims the bottom of the ladder at
+    /// rgb(96, 126, 78) — slightly BRIGHTER rather than darker, which is the
+    /// part that is easy to get backwards. Dead and dying grass does not go
+    /// dark; it loses its blue and gains red, which is desaturation with a
+    /// yellow lean, and it is the same axis [`Sward::WORN`] runs a goalmouth
+    /// along and [`Textures::turf`] runs a drying leaf along. Three scales,
+    /// one direction.
+    ///
+    /// **Then measured on rendered frames**, which is the only place a viewer
+    /// colour may be judged — the whole ladder shot through the loop in
+    /// `match_viewer_screenshot_loop`, sampling the turf across the broadcast
+    /// frame:
+    ///
+    /// | ground | rendered | hue | saturation |
+    /// |---|---|---|---|
+    /// | a great one (`kept` 1.00) | rgb(48, 118, 60) | 130° | 0.59 |
+    /// | an ordinary club (0.54) | rgb(73, 126, 72) | 119° | 0.43 |
+    /// | a park pitch (0.00) | rgb(96, 127, 79) | 99° | 0.38 |
+    ///
+    /// The extrapolation held: both graded rungs landed within two units of
+    /// what the power law said they would, which is inside the noise of
+    /// sampling a pitch at all. (The great ground reads a few units under the
+    /// rgb(52, 124, 62) on `MOWN`'s note because this is a mean over the whole
+    /// visible surface rather than that note's four patches — the code path at
+    /// `kept` 1.00 is provably the old one, and the test named above is what
+    /// says so.)
+    const TIRED: Color = Color::srgb(0.234, 0.324, 0.197);
+
+    /// How much harder a neglected pitch wears, and how much rougher its sward
+    /// is, against a great ground's.
+    ///
+    /// Two constants rather than one because they are two different failures.
+    /// **Wear is traffic**: the same match is played on both pitches, and what
+    /// differs is whether anybody repairs the goalmouth afterwards, so this
+    /// multiplies a field whose SHAPE is already right. **Roughness is
+    /// husbandry**: drainage, feed and the patches that never took, which is
+    /// not about where the game was played at all.
+    ///
+    /// The roughness is the more delicate of the two, and it is set against
+    /// the mow — the one contrast on this surface that is known to read
+    /// correctly. A great ground's stripe is 29% in the LINEAR space the
+    /// shader multiplies in (the famous 16% is that same ratio written in
+    /// sRGB), and its sward wanders 5.5% at the very worst point on the pitch,
+    /// which is 38% of the stripe and is why `the_sward_never_shouts_over_the_mow`
+    /// passes with room. At `MOTTLE` a park pitch wanders 16%, or **about
+    /// three fifths of what a stripe is worth** — plainly uneven ground, still
+    /// short of the contrast the eye has been taught to read as a deliberate
+    /// band. Past a whole stripe's worth it stops reading as ground at all and
+    /// starts reading as camouflage, which is a different and much worse
+    /// picture than the one this is for; the same test holds that ceiling.
+    const WORN: f32 = 2.4;
+    const MOTTLE: f32 = 3.0;
+
+    /// What the perimeter keeps of its floodlighting at the bottom of the
+    /// ladder.
+    ///
+    /// The boards and the lit strip along their tops are a floodlit ground's;
+    /// a village one has painted hoardings and whatever the sky is doing. Not
+    /// nought — they are still boards, and a strip of pure black round the
+    /// edge of the play would be a heavier mark on the picture than the lit
+    /// one it replaced.
+    const UNLIT: f32 = 0.30;
+
+    /// Reads the fixture, through the same [`Stature`] the stands are built
+    /// off.
+    pub fn of(stature: Stature) -> Self {
+        Upkeep {
+            kept: stature.keeping(),
+        }
+    }
+
+    /// A ground anywhere on the ladder, for the tests: `1.0` is the pitch that
+    /// was calibrated and `0.0` is the park pitch at the other end of it.
+    #[cfg(test)]
+    pub(crate) const fn at(kept: f32) -> Upkeep {
+        Upkeep { kept }
+    }
+
+    /// **The green the whole surface is drawn in** — the sheet, the stripes,
+    /// the surround and the worn patches are all tints on it.
+    ///
+    /// Interpolated in the space both endpoints were WRITTEN in, which is the
+    /// sRGB one. Neither was placed by arithmetic — each is a rendered picture
+    /// somebody looked at — so the honest thing between them is the straight
+    /// line joining the two numbers that were actually judged, and the power
+    /// law in [`Self::TIRED`] then makes the walk between them close to even
+    /// on screen as well.
+    fn sward(&self) -> Color {
+        let great = Srgba::from(Pitch::MOWN);
+        let tired = Srgba::from(Self::TIRED);
+        Color::srgb(
+            tired.red + (great.red - tired.red) * self.kept,
+            tired.green + (great.green - tired.green) * self.kept,
+            tired.blue + (great.blue - tired.blue) * self.kept,
+        )
+    }
+
+    /// **The stripe**, as the multiplier the band mown the other way puts on
+    /// [`Self::sward`], channel by channel, in the linear space the shader
+    /// works in.
+    ///
+    /// Two things are kept apart in here and they are easy to run together.
+    ///
+    /// **The RATIO never changes.** 0.796 / 0.845 / 0.920 in sRGB is what leaf
+    /// bent away from the lens does against leaf bent toward it — a fact about
+    /// grass and light, not about this ground — so it is read off the
+    /// calibrated pair and applied to whatever green the upkeep asked for,
+    /// exactly as `Pitch::MOWN`'s note says it must be. It is never
+    /// re-derived and never typed in twice.
+    ///
+    /// **Whether there IS a stripe does change.** It takes a cylinder mower
+    /// with a roller behind it to lay one, and a rotary mower over a park
+    /// pitch lays none — so the ratio is faded toward unity, which is a pitch
+    /// with no mow visible in it at all.
+    ///
+    /// Faded by the SQUARE ROOT of the upkeep, so it survives nearly all the
+    /// way down and then goes. That is the right shape and not a fudge: the
+    /// stripe is the cheapest thing a groundsman does — the mower is going up
+    /// and down the pitch either way — so it is nearly the last thing to go,
+    /// and every professional ground in the world has one. It reaches nought
+    /// only where `keeping` does, which is the training ground and the
+    /// non-league club.
+    fn mow(&self) -> Vec3 {
+        let great = Srgba::from(Pitch::MOWN);
+        let against = Srgba::from(Pitch::AGAINST);
+        let ratio = Vec3::new(
+            against.red / great.red,
+            against.green / great.green,
+            against.blue / great.blue,
+        );
+
+        let sward = Srgba::from(self.sward());
+        let turned = LinearRgba::from(Color::srgb(
+            sward.red * ratio.x,
+            sward.green * ratio.y,
+            sward.blue * ratio.z,
+        ));
+        let sward = LinearRgba::from(Color::Srgba(sward));
+        let full = Vec3::new(
+            turned.red / sward.red,
+            turned.green / sward.green,
+            turned.blue / sward.blue,
+        );
+
+        Vec3::ONE + (full - Vec3::ONE) * self.kept.sqrt()
+    }
+
+    /// How hard the ground wears where it is played on, against a great
+    /// ground's — see [`Self::WORN`].
+    fn worn(&self) -> f32 {
+        1.0 + (Self::WORN - 1.0) * (1.0 - self.kept)
+    }
+
+    /// How uneven the sward is, against a great ground's — see
+    /// [`Self::MOTTLE`].
+    fn rough(&self) -> f32 {
+        1.0 + (Self::MOTTLE - 1.0) * (1.0 - self.kept)
+    }
+
+    /// **The paint**, which is the one thing on a poor pitch that is not a
+    /// different colour so much as a worse one.
+    ///
+    /// A great ground is re-marked before every match with a wheeled
+    /// transfer marker over a surface flat enough to take it. A park pitch is
+    /// marked over a sward that is half moss, by somebody who did it a
+    /// fortnight ago — so the line is not white, it is the grey-green of paint
+    /// that has been rained on and grown through. It keeps its width: a
+    /// thinner line would be a different pitch rather than a worse one, and
+    /// the markings are load-bearing for reading the play.
+    fn paint(&self) -> Color {
+        const FRESH: Vec3 = Vec3::new(0.93, 0.95, 0.93);
+        const WEATHERED: Vec3 = Vec3::new(0.74, 0.75, 0.71);
+        let paint = WEATHERED + (FRESH - WEATHERED) * self.kept;
+        Color::srgb(paint.x, paint.y, paint.z)
+    }
+
+    /// How much of the perimeter's floodlighting this ground has — see
+    /// [`Self::UNLIT`]. Multiplies the emissive on the boards and on the lit
+    /// strip above them, and nothing else: the structure is the same
+    /// structure, it is simply not lit.
+    fn lit(&self) -> f32 {
+        Self::UNLIT + (1.0 - Self::UNLIT) * self.kept
+    }
+}
+
 /// The playing surface as one mesh, with the state of the grass written into
 /// its vertices.
 ///
@@ -374,6 +618,9 @@ struct Sward {
     /// before the pass that takes the average back out.
     ground: Vec<Vec3>,
     indices: Vec<u32>,
+    /// How well this one is looked after. Scales both halves of the field
+    /// above; see [`Upkeep`].
+    upkeep: Upkeep,
 }
 
 impl Sward {
@@ -399,13 +646,20 @@ impl Sward {
     /// multiplier on a pitch whose colour has been calibrated against
     /// broadcast footage, and the mud-bath version of it reads as a different
     /// green rather than as the same green worn.
+    ///
+    /// Short **at a great ground**, which is the one this was written for and
+    /// the one where it is right: a goalmouth that is sanded, seeded and
+    /// watered between matches does not go bare. [`Upkeep::worn`] carries the
+    /// field past 1.0 further down the ladder, where nobody repairs it and the
+    /// February version is exactly what it looks like.
     const WORN: Vec3 = Vec3::new(0.22, 0.10, -0.06);
 
     /// The playing surface, mown in [`Pitch::STRIPES`] bands.
     ///
-    /// `turned` is the second stripe as a fraction of the first, and `tile` is
-    /// how much ground one repeat of the blade sheet covers.
-    fn mow(turned: Vec3, tile: f32) -> Mesh {
+    /// `tile` is how much ground one repeat of the blade sheet covers; the
+    /// second stripe as a fraction of the first is [`Upkeep::mow`]'s to say,
+    /// and at a poor enough ground it is no fraction at all.
+    fn mow(upkeep: Upkeep, tile: f32) -> Mesh {
         let mut sward = Sward {
             positions: Vec::new(),
             normals: Vec::new(),
@@ -414,7 +668,9 @@ impl Sward {
             tints: Vec::new(),
             ground: Vec::new(),
             indices: Vec::new(),
+            upkeep,
         };
+        let turned = upkeep.mow();
         let stripe = Field::LENGTH / Pitch::STRIPES as f32;
         for index in 0..Pitch::STRIPES {
             let from = -Field::HALF_LENGTH + stripe * index as f32;
@@ -439,7 +695,7 @@ impl Sward {
     /// Coarser than the playing surface by a factor of eight: there is nothing
     /// out here at the scale of a penalty spot to resolve, and this quad is
     /// eleven times the area of the pitch.
-    fn rough(size: Vec2, tile: f32) -> Mesh {
+    fn rough(upkeep: Upkeep, size: Vec2, tile: f32) -> Mesh {
         let mut sward = Sward {
             positions: Vec::new(),
             normals: Vec::new(),
@@ -448,6 +704,7 @@ impl Sward {
             tints: Vec::new(),
             ground: Vec::new(),
             indices: Vec::new(),
+            upkeep,
         };
         sward.grid(
             Vec2::new(-size.x * 0.5, -size.y * 0.5),
@@ -478,6 +735,9 @@ impl Sward {
         let down = (span.x / cell).ceil().max(1.0) as usize;
         let across = (span.y / cell).ceil().max(1.0) as usize;
         let base = self.positions.len() as u32;
+        // Hoisted rather than asked per vertex: the pair is the same for the
+        // whole ground, and this loop runs a hundred thousand times.
+        let (worn, rough) = (self.upkeep.worn(), self.upkeep.rough());
 
         for row in 0..=down {
             let x = from.x + span.x * (row as f32 / down as f32);
@@ -498,7 +758,8 @@ impl Sward {
                 // sheet held nothing bigger than a leaf.
                 self.uvs.push([x / tile, z / tile]);
                 self.tints.push(tint);
-                self.ground.push(Self::ground(Vec2::new(x, z), played));
+                self.ground
+                    .push(Self::ground(Vec2::new(x, z), played, worn, rough));
             }
         }
 
@@ -521,19 +782,36 @@ impl Sward {
     /// What the grass is doing at one point, as a multiplier on the mown
     /// shade — before normalisation, so this is free to have any average it
     /// likes and [`Self::build`] takes it back out.
-    fn ground(point: Vec2, played: bool) -> Vec3 {
+    ///
+    /// `bare` and `patchy` are how much harder this ground wears and how much
+    /// rougher its sward is than a great one's — [`Upkeep::worn`] and
+    /// [`Upkeep::rough`], both 1.0 at the top of the ladder, where every term
+    /// below is exactly what it was before there was a ladder.
+    ///
+    /// ⚠ Note what does NOT scale with them: the pitch's own colour. That is
+    /// [`Upkeep::sward`]'s, it reaches the shader through the sheet, and the
+    /// normalisation in [`Self::build`] exists precisely so that nothing in
+    /// here can move it. Wear says WHERE the grass is different; how green the
+    /// grass is in the first place is decided somewhere else and stays
+    /// decided — which is what keeps a graded pitch from being a second,
+    /// silent way to repaint a calibrated one.
+    fn ground(point: Vec2, played: bool, bare: f32, patchy: f32) -> Vec3 {
         // `played` rather than trusting the wear field to be zero out here:
         // the surround runs UNDER the pitch, so its grid samples the
         // goalmouths through it. Nothing of that is ever seen — it is a
         // centimetre below opaque turf — but it would land in the average
         // this is normalised against, and quietly grade the ground outside
         // the touchlines by what happens inside them.
-        let worn = if played { Self::wear(point) } else { 0.0 };
+        let worn = if played {
+            Self::wear(point) * bare
+        } else {
+            0.0
+        };
         Vec3::new(
             1.0 + Self::WORN.x * worn,
             1.0 + Self::WORN.y * worn,
             1.0 + Self::WORN.z * worn,
-        ) * (1.0 + Self::unevenness(point))
+        ) * (1.0 + Self::unevenness(point) * patchy)
     }
 
     /// How hard the grass here has been used, nought to one.
@@ -853,6 +1131,14 @@ impl Pitch {
     /// shift, not a result.
     ///
     ///   mown  #1D5126    against  #174523   (16% darker, a shade greyer)
+    ///
+    /// **This pair is now the TOP of a ladder rather than the whole of it.**
+    /// A great ground gets exactly what is written here and every other ground
+    /// gets a walk away from it — see [`Upkeep`], which owns the far end and
+    /// the four things that go wrong on the way to it. Nothing about the
+    /// calibration changes: `Upkeep::at(1.0)` reproduces this pair and this
+    /// ratio to the bit, which is what
+    /// `a_great_ground_is_the_pitch_that_was_calibrated` is for.
     pub(crate) const MOWN: Color = Color::srgb(0.113, 0.318, 0.150);
     const AGAINST: Color = Color::srgb(0.090, 0.269, 0.138);
 
@@ -892,13 +1178,28 @@ impl Pitch {
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
         mut images: ResMut<Assets<Image>>,
+        config: Res<ViewerConfig>,
     ) {
-        let grass = Textures::turf(&mut images, Self::MOWN);
-        Self::spawn_playing_surface(&mut commands, &mut meshes, &mut materials, &grass);
+        // **The fixture is read on the FIRST course, not the last.** The
+        // stands are built on the fifth and read it there, which was fine
+        // while the ground was the only thing that answered to the venue —
+        // but the grass answers to it now, and the grass is course one. Read
+        // here and handed down as a resource, so the whole scene is graded
+        // off one reading of one document and no two courses can disagree
+        // about what kind of ground this is.
+        let upkeep = Upkeep::of(Stature::of(&config.venue));
+
+        // The one green in the scene, and every other surface is a tint on
+        // it: the stripes, the worn patches, the ground beyond the touchlines.
+        // So grading the pitch is grading THIS, and nothing downstream has to
+        // know that a ladder exists.
+        let grass = Textures::turf(&mut images, upkeep.sward());
+        Self::spawn_playing_surface(&mut commands, &mut meshes, &mut materials, &grass, upkeep);
         // Kept for the surround, which is laid on the next frame off the same
         // sheet — generating it twice would cost a second 1024-square texture
         // and its mip chain for a picture nobody could tell apart.
         commands.insert_resource(grass);
+        commands.insert_resource(upkeep);
 
         // A stadium is lit from four corners at once, so almost nothing on the
         // pitch falls into true shadow. One directional light standing in for
@@ -936,19 +1237,8 @@ impl Pitch {
         meshes: &mut Assets<Mesh>,
         materials: &mut Assets<StandardMaterial>,
         grass: &Turf,
+        upkeep: Upkeep,
     ) {
-        // The second stripe, as a fraction of the first channel by channel, in
-        // the LINEAR space the shader multiplies in. Derived from the pair
-        // rather than written down, so the 16% is the 16% and cannot be typed
-        // in twice.
-        let mown = LinearRgba::from(Self::MOWN);
-        let against = LinearRgba::from(Self::AGAINST);
-        let turned = Vec3::new(
-            against.red / mown.red,
-            against.green / mown.green,
-            against.blue / mown.blue,
-        );
-
         // One material for the whole playing surface. Both mow shades, the
         // wear and the unevenness are vertex colours on [`Sward`] — which is
         // what a second material could never have carried, since the thing
@@ -988,7 +1278,7 @@ impl Pitch {
             ..default()
         });
         commands.spawn((
-            Mesh3d(Self::stock(meshes, Sward::mow(turned, Self::TURF_TILE))),
+            Mesh3d(Self::stock(meshes, Sward::mow(upkeep, Self::TURF_TILE))),
             MeshMaterial3d(playing_surface),
         ));
     }
@@ -1005,6 +1295,7 @@ impl Pitch {
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
         grass: Res<Turf>,
+        upkeep: Res<Upkeep>,
     ) {
         // Same grass at the same scale, so the pitch does not stop at a change
         // of texture as well as a change of light.
@@ -1054,7 +1345,7 @@ impl Pitch {
         commands.spawn((
             Mesh3d(Self::stock(
                 &mut meshes,
-                Sward::rough(SURROUND, Self::TURF_TILE),
+                Sward::rough(*upkeep, SURROUND, Self::TURF_TILE),
             )),
             MeshMaterial3d(surround),
             Transform::from_xyz(0.0, -0.01, 0.0),
@@ -1066,8 +1357,9 @@ impl Pitch {
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
+        upkeep: Res<Upkeep>,
     ) {
-        Self::spawn_markings(&mut commands, &mut meshes, &mut materials);
+        Self::spawn_markings(&mut commands, &mut meshes, &mut materials, *upkeep);
     }
 
     /// Both goals, frame and netting — the fourth course. The netting is not
@@ -1096,6 +1388,7 @@ impl Pitch {
         mut images: ResMut<Assets<Image>>,
         config: Res<ViewerConfig>,
         quality: Res<Quality>,
+        upkeep: Res<Upkeep>,
     ) {
         Self::spawn_ground(
             &mut commands,
@@ -1104,6 +1397,7 @@ impl Pitch {
             &mut images,
             &config,
             Throng::of(quality.footprint(), config.crowd.as_deref()),
+            *upkeep,
         );
     }
 
@@ -1111,6 +1405,7 @@ impl Pitch {
         commands: &mut Commands,
         meshes: &mut Assets<Mesh>,
         materials: &mut Assets<StandardMaterial>,
+        upkeep: Upkeep,
     ) {
         let mut lines = LineMesh::new(Self::LINE_HEIGHT, Self::LINE_WIDTH);
 
@@ -1162,7 +1457,7 @@ impl Pitch {
         }
 
         let paint = materials.add(StandardMaterial {
-            base_color: Color::srgb(0.93, 0.95, 0.93),
+            base_color: upkeep.paint(),
             perceptual_roughness: 0.9,
             cull_mode: None,
             ..default()
@@ -1215,6 +1510,7 @@ impl Pitch {
     /// All four sides are built, including the one the broadcast gantry hangs
     /// over: a rig that can be walked round the ground would otherwise find a
     /// hole in it. [`Bank`] takes the one in the way back out again.
+    #[allow(clippy::too_many_arguments)]
     fn spawn_ground(
         commands: &mut Commands,
         meshes: &mut Assets<Mesh>,
@@ -1222,6 +1518,7 @@ impl Pitch {
         images: &mut Assets<Image>,
         venue: &ViewerConfig,
         throng: Option<Throng>,
+        upkeep: Upkeep,
     ) {
         let stature = Stature::of(&venue.venue);
 
@@ -1248,9 +1545,15 @@ impl Pitch {
         // Now that the stands behind it are pale, the walkway has to be paler
         // still or it stops reading as lit — at 0.22 it would be the darkest
         // thing on a light structure, which is the opposite of a lit strip.
+        //
+        // And it is lit by FLOODLIGHTS, which is the one thing about the
+        // perimeter that a small ground does not have. So the glow — and only
+        // the glow — runs down the same ladder the grass does: the same
+        // concrete, the same boards, no lights on them. See [`Upkeep::lit`].
+        let lit = upkeep.lit();
         let trim = materials.add(StandardMaterial {
             base_color: Color::srgb(0.86, 0.90, 0.96),
-            emissive: LinearRgba::rgb(0.16, 0.19, 0.24),
+            emissive: LinearRgba::rgb(0.16 * lit, 0.19 * lit, 0.24 * lit),
             perceptual_roughness: 0.4,
             ..default()
         });
@@ -1364,7 +1667,11 @@ impl Pitch {
                     // touchline at the very edge of the play, and anything
                     // here that out-glows the one crisp line in the background
                     // is competing with the ball for the eye.
-                    emissive: LinearRgba::rgb(0.20, 0.24, 0.30),
+                    //
+                    // …and dimmed with the lit trim above it at a ground that
+                    // has no floodlights to light it — a village club's boards
+                    // are painted, not backlit.
+                    emissive: LinearRgba::rgb(0.20 * lit, 0.24 * lit, 0.30 * lit),
                     emissive_texture: Some(advert.clone()),
                     uv_transform: Affine2::from_scale(Vec2::new(panels, 1.0)),
                     perceptual_roughness: 0.55,
@@ -1655,6 +1962,30 @@ mod tests {
         )
     }
 
+    /// A rendered colour's hue in degrees and saturation 0..1, from an sRGB
+    /// albedo. Both are read off the CONSTANT here rather than off a frame,
+    /// which is fine for the two things the ladder tests ask of them — that
+    /// the walk goes the right way and that it goes there evenly. Where it
+    /// actually lands on screen is a question for a rendered frame and the
+    /// note on [`Upkeep::TIRED`] says so.
+    fn hue_and_saturation(colour: Color) -> (f32, f32) {
+        let rgb = Srgba::from(colour);
+        let (red, green, blue) = (rgb.red, rgb.green, rgb.blue);
+        let high = red.max(green).max(blue);
+        let low = red.min(green).min(blue);
+        let span = high - low;
+        let hue = if span <= f32::EPSILON {
+            0.0
+        } else if high == red {
+            60.0 * (((green - blue) / span) % 6.0)
+        } else if high == green {
+            60.0 * ((blue - red) / span + 2.0)
+        } else {
+            60.0 * ((red - green) / span + 4.0)
+        };
+        (hue, if high <= 0.0 { 0.0 } else { span / high })
+    }
+
     /// The contract the whole field rests on, and the same one
     /// [`Textures::turf`] holds for the sheet: wear and unevenness say where
     /// the grass is different, NOT what colour the grass is.
@@ -1666,31 +1997,176 @@ mod tests {
     /// like a pitch.
     #[test]
     fn wearing_the_grass_does_not_repaint_it() {
-        let turned = turned();
-        let mesh = Sward::mow(turned, Pitch::TURF_TILE);
-        let colours = colours(&mesh);
+        // Both ends of the ladder, because the poor one is where this could
+        // now go wrong: it wears two and a half times as hard and its sward is
+        // twice as rough, and if either leaked into the average then the way
+        // to a browner pitch would be to neglect it TWICE — once through the
+        // colour, which is deliberate, and once by the back door, which is
+        // exactly what this forbids.
+        for kept in [1.0, 0.5, 0.0] {
+            let upkeep = Upkeep::at(kept);
+            let turned = upkeep.mow();
+            let mesh = Sward::mow(upkeep, Pitch::TURF_TILE);
+            let colours = colours(&mesh);
 
-        let mut worn = Vec3::ZERO;
-        for colour in &colours {
-            worn += *colour;
+            let mut worn = Vec3::ZERO;
+            for colour in &colours {
+                worn += *colour;
+            }
+            worn /= colours.len() as f32;
+
+            // What the same mow comes to with a perfectly even sward under it:
+            // every vertex is either the sheet as drawn or the sheet turned,
+            // and the bands are equal in area, so the average is decided by
+            // the stripe count alone.
+            let bands = Pitch::STRIPES as f32;
+            let against = (Pitch::STRIPES / 2) as f32;
+            let flat = (Vec3::ONE * (bands - against) + turned * against) / bands;
+
+            for channel in 0..3 {
+                assert!(
+                    (worn[channel] - flat[channel]).abs() < 0.004,
+                    "at {kept} kept, channel {channel} averaged {} against a \
+                     flat sward's {}",
+                    worn[channel],
+                    flat[channel]
+                );
+            }
         }
-        worn /= colours.len() as f32;
+    }
 
-        // What the same mow comes to with a perfectly even sward under it:
-        // every vertex is either the sheet as drawn or the sheet turned, and
-        // the bands are equal in area, so the average is decided by the
-        // stripe count alone.
-        let bands = Pitch::STRIPES as f32;
-        let against = (Pitch::STRIPES / 2) as f32;
-        let flat = (Vec3::ONE * (bands - against) + turned * against) / bands;
+    /// **The pitch that took an evening and five rejected greens to place is
+    /// still exactly that pitch.**
+    ///
+    /// Everything [`Upkeep`] does is written as a distance travelled from
+    /// `Pitch::MOWN` and its pair, so a great ground has to come out bit for
+    /// bit where it came out before the ladder existed. This is the test that
+    /// says so, and it is the whole licence for grading a calibrated colour at
+    /// all: get it wrong and the top of the game's grounds quietly drift off a
+    /// number that was set by eye against rendered frames and cannot be
+    /// recovered from the source.
+    #[test]
+    fn a_great_ground_is_the_pitch_that_was_calibrated() {
+        let great = Upkeep::at(1.0);
 
+        let sward = Srgba::from(great.sward());
+        let mown = Srgba::from(Pitch::MOWN);
+        assert_eq!(
+            (sward.red, sward.green, sward.blue),
+            (mown.red, mown.green, mown.blue),
+            "a great ground is drawn in a green that is not Pitch::MOWN"
+        );
+
+        // …and the stripe is the one derived from the calibrated pair, to the
+        // precision two routes through sRGB can agree to.
+        let mow = great.mow();
+        let turned = turned();
         for channel in 0..3 {
             assert!(
-                (worn[channel] - flat[channel]).abs() < 0.004,
-                "channel {channel} averaged {} against a flat sward's {}",
-                worn[channel],
-                flat[channel]
+                (mow[channel] - turned[channel]).abs() < 1e-5,
+                "channel {channel} mows at {} against the calibrated {}",
+                mow[channel],
+                turned[channel]
             );
+        }
+
+        assert_eq!(great.worn(), 1.0, "a great ground wears no harder");
+        assert_eq!(great.rough(), 1.0, "a great ground is no rougher");
+        assert_eq!(great.lit(), 1.0, "a great ground keeps its floodlights");
+    }
+
+    /// …and the other end of the same ladder is a visibly worse pitch, in
+    /// every one of the four ways it is supposed to be worse.
+    ///
+    /// Four assertions rather than one because any single one of them alone
+    /// reads as a bug rather than as a poor ground: a duller green with crisp
+    /// stripes still on it is a colour mistake, and full stripes over bare
+    /// earth is a texture mistake. It is the four together that read as a
+    /// pitch nobody looks after.
+    #[test]
+    fn a_park_pitch_is_a_poorer_pitch() {
+        let (great, park) = (Upkeep::at(1.0), Upkeep::at(0.0));
+
+        // 1. The green. Paler, yellower and much less saturated — and NOT
+        //    darker, which is the way it would be easy to take it and the way
+        //    dying grass does not go.
+        let (top_hue, top_saturation) = hue_and_saturation(great.sward());
+        let (low_hue, low_saturation) = hue_and_saturation(park.sward());
+        assert!(
+            low_saturation < top_saturation * 0.75,
+            "a park pitch is barely less saturated: {low_saturation} against {top_saturation}"
+        );
+        assert!(
+            low_hue < top_hue - 15.0,
+            "a park pitch has not turned toward yellow: {low_hue}° against {top_hue}°"
+        );
+        let value = |colour: Color| Srgba::from(colour).green;
+        assert!(
+            value(park.sward()) >= value(great.sward()),
+            "a park pitch has been made darker rather than drier"
+        );
+
+        // 2. The mow. Gone entirely — a rotary mower leaves no stripe, and a
+        //    multiplier of one is a band you cannot see.
+        let mow = park.mow();
+        for channel in 0..3 {
+            assert!(
+                (mow[channel] - 1.0).abs() < 1e-5,
+                "a park pitch is still striped on channel {channel}: {}",
+                mow[channel]
+            );
+        }
+
+        // 3. The wear, and 4. the sward. Both harder than a great ground's.
+        assert!(
+            park.worn() > great.worn() * 2.0,
+            "a park pitch's goalmouth wears no harder: {}",
+            park.worn()
+        );
+        assert!(
+            park.rough() > great.rough() * 1.5,
+            "a park pitch's sward is no rougher: {}",
+            park.rough()
+        );
+
+        // And the paint has stopped being white.
+        assert!(
+            Srgba::from(park.paint()).red < Srgba::from(great.paint()).red - 0.1,
+            "a park pitch is marked in the same fresh white"
+        );
+    }
+
+    /// The ladder is a ladder: every rung between the two ends is between the
+    /// two ends, and the walk never doubles back.
+    ///
+    /// Worth pinning because the green is interpolated in sRGB and the mow is
+    /// derived through two conversions on top of that — plenty of room for a
+    /// mid-table club to come out greener than a great one, and nothing on
+    /// screen would say so except that ground looking odd once.
+    #[test]
+    fn the_ladder_runs_one_way() {
+        let mut previous: Option<(f32, f32, f32)> = None;
+        for step in 0..=10 {
+            let upkeep = Upkeep::at(step as f32 / 10.0);
+            let (_, saturation) = hue_and_saturation(upkeep.sward());
+            let stripe = 1.0 - upkeep.mow().y;
+            let here = (saturation, stripe, upkeep.worn());
+
+            if let Some(before) = previous {
+                assert!(
+                    here.0 >= before.0 - 1e-6,
+                    "green went backwards at step {step}: {here:?} after {before:?}"
+                );
+                assert!(
+                    here.1 >= before.1 - 1e-6,
+                    "the mow went backwards at step {step}: {here:?} after {before:?}"
+                );
+                assert!(
+                    here.2 <= before.2 + 1e-6,
+                    "the wear went backwards at step {step}: {here:?} after {before:?}"
+                );
+            }
+            previous = Some(here);
         }
     }
 
@@ -1714,9 +2190,17 @@ mod tests {
         assert!(corner < 0.05, "nothing happens in the corner: {corner}");
     }
 
-    /// The mow has to stay the loudest thing on the surface. Unevenness that
-    /// approached the stripe's own contrast would stop reading as ground and
-    /// start reading as a second, wrong set of stripes.
+    /// **At a ground that is mown, the mow is the loudest thing on the
+    /// surface.** Unevenness that approached the stripe's own contrast would
+    /// stop reading as ground and start reading as a second, wrong set of
+    /// stripes.
+    ///
+    /// Stated at a GREAT ground, which is where it is a claim about anything:
+    /// further down the ladder there is progressively less mow to shout over
+    /// and eventually none at all, and the patchiness left behind is then the
+    /// whole picture — which is the point of it and not a violation of this.
+    /// What that end owes instead is a ceiling of its own, which is the second
+    /// half below.
     #[test]
     fn the_sward_never_shouts_over_the_mow() {
         let stripe = 1.0 - turned().y;
@@ -1733,8 +2217,25 @@ mod tests {
             x += 0.5;
         }
         assert!(
-            worst < stripe * 0.5,
+            worst * Upkeep::at(1.0).rough() < stripe * 0.5,
             "unevenness reached {worst} against a mow of {stripe}"
+        );
+
+        // …and a park pitch, which has no mow left, is held between two bars
+        // instead. It has to be plainly rougher than a kept one — half a
+        // stripe's worth at least, or the whole bottom of the ladder is a
+        // colour change with nothing under it — and it must never reach a
+        // whole stripe, which is where the eye stops reading ground and starts
+        // reading camouflage.
+        let patchy = worst * Upkeep::at(0.0).rough();
+        assert!(
+            patchy < stripe,
+            "a park pitch is blotchier than a great one is striped: \
+             {patchy} against {stripe}"
+        );
+        assert!(
+            patchy > stripe * 0.5,
+            "a park pitch is barely rougher than a kept one: {patchy} against {stripe}"
         );
     }
 }

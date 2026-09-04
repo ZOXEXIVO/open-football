@@ -3209,6 +3209,32 @@ pub struct Gait {
     /// 0..1: he did not catch it. Fists rather than gloves, and the arms
     /// snap through the ball instead of closing on it.
     pub parry: f32,
+    /// 0..1: he is on his SPLIT-STEP — off both feet by a few centimetres
+    /// as the shot is struck, knees loading, gloves still up.
+    ///
+    /// The engine hops a keeper four to six centimetres on the tick he
+    /// first sees a strike (`KeeperSplitStep`), and the recording carries
+    /// it on the same height axis as the dive. Read as a dive it was the
+    /// worst frame in the rig: the extension opened, both arms went out,
+    /// the run cycle died and a man went full length over a two-inch
+    /// bounce. A split-step is the opposite of a commitment — it is what a
+    /// keeper does BEFORE he decides — so nothing the dive drives may read
+    /// it. The lift itself comes off the recorded height through the
+    /// carriage exactly as the dive's does; this is only what the limbs do
+    /// while he is up there. See `PlayerActor::track_flight` for how the
+    /// two are told apart.
+    pub hop: f32,
+    /// 0..1: the ABSORB as he comes down off it — a quick extra crouch
+    /// past the set that gives back over a fifth of a second.
+    ///
+    /// The landing is the whole point of a split-step: a body that has
+    /// just come down is loaded to push off in any direction, and that is
+    /// what makes the hop read as a keeper reacting rather than a man
+    /// bouncing. Its own channel rather than the tail of `hop`, because
+    /// the hop is a claim about a man in the air and the crouch is a claim
+    /// about one on the ground with his weight in his knees — and the two
+    /// cost the figure height in opposite directions.
+    pub land: f32,
     /// 1 for the two goalkeepers, 0 for the other twenty.
     ///
     /// Most of what is keeper-only in this rig is already gated by a signal
@@ -3278,6 +3304,8 @@ impl Gait {
             save: 0.0,
             save_aim: Vec2::ZERO,
             parry: 0.0,
+            hop: 0.0,
+            land: 0.0,
             keeper: 0.0,
         }
     }
@@ -3754,6 +3782,38 @@ impl Joint {
     const TOES_RATE: f32 = 4.5;
     const TOES_KNEE: f32 = 0.30;
     const TOES_HIP: f32 = -0.16;
+    /// **The split-step**, in the air and on the way down. See [`Gait::hop`]
+    /// and [`Gait::land`].
+    ///
+    /// Up there both legs do the same thing — it is a two-footed hop, the
+    /// one jump in football taken square — and what they do is fold a
+    /// little under him, about a third of what an outfielder tucks going up
+    /// for a header, with the toes dropping because there is nothing under
+    /// them. Written as an ADDITION to the set angles rather than as an
+    /// absolute pose, because he hops out of the set and lands back in it:
+    /// the knee goes 0.55 → 0.90 and the thigh comes forward another five
+    /// degrees, which is a man gathered rather than a man tucked.
+    const HOP_HIP: f32 = -0.08;
+    const HOP_KNEE: f32 = 0.35;
+    /// …and the toes point, as a share of [`Self::ANKLE_PLANTAR`].
+    const HOP_TOES: f32 = 0.55;
+    /// **The landing crouch**, as a multiple of the set's own hip and knee
+    /// angles — 40% deeper than the stance he left, for a fifth of a
+    /// second. A keeper does not land on straight legs; the knees take the
+    /// drop and hold it while his weight settles, which is the loaded
+    /// posture every dive comes out of.
+    ///
+    /// Sits on the same pair of angles the set uses so the two poses are
+    /// one shape at two depths, and the hand-over between them is a
+    /// deepening rather than a change.
+    const LAND_CROUCH: f32 = 1.40;
+    /// …and the height that costs, in metres, paid for at the hips exactly
+    /// as [`Self::SET_DROP`] is. Worked from the same two-link leg: at
+    /// `SET_HIP · 1.4` and `SET_KNEE · 1.4` the thigh and the shin each sit
+    /// a few degrees further off vertical than in the set, and between them
+    /// they hand back about three centimetres on top of the set's three
+    /// and a half. Pinned by `the_landing_keeps_his_boots_on_the_grass`.
+    const LAND_DROP: f32 = 0.032;
     /// And he leans the way he is going, which is the whole reason a
     /// side-step reads as urgent rather than as a man sliding.
     const SHUFFLE_LEAN: f32 = 0.12;
@@ -4254,6 +4314,10 @@ impl Joint {
                     + Vec3::Y
                         * (bob + breathe
                             - Self::SET_DROP * Self::crouched(gait)
+                            // The landing off a split-step: a deeper
+                            // version of the same crouch, and the same
+                            // bookkeeping. See [`Self::LAND_DROP`].
+                            - Self::LAND_DROP * gait.land
                             - Self::CARRY_DROP * gait.carrying
                             - Self::SLUMP_DROP * gait.despair
                             - Self::DOUBLED_DROP * gait.doubled_over
@@ -5170,12 +5234,21 @@ impl Joint {
                     ),
                     Self::crouched(gait),
                 );
+                // Coming down off the split-step: the set, deeper, while his
+                // weight settles into his knees. Under the save, because a
+                // ball arriving on the landing still gets his whole body
+                // to it. See [`Self::LAND_CROUCH`].
+                let landing = Self::held(
+                    ready,
+                    Quat::from_rotation_x(Self::SET_HIP * Self::LAND_CROUCH),
+                    gait.land,
+                );
                 // ⚠ [`Joint::rooted`] and NOT `gait.save`, on the argument
                 // `crouched` makes one layer down: this is a slerp onto a
                 // fixed angle, and the engine steps him to nearly every
                 // ball he saves on his feet.
                 let ready = Self::held(
-                    ready,
+                    landing,
                     Quat::from_rotation_x(
                         Self::SET_HIP
                             + Self::SAVE_HIP * Self::stooping(gait)
@@ -5185,7 +5258,16 @@ impl Joint {
                     ),
                     Self::rooted(gait),
                 );
-                let leaping = Self::held(ready, Quat::from_rotation_x(Self::JUMP_HIP), gait.jump);
+                // …and gathered a little under him while he is up on the
+                // hop — both legs alike, since it is taken off both feet.
+                // See [`Self::HOP_HIP`].
+                let hopping = Self::held(
+                    ready,
+                    Quat::from_rotation_x(Self::SET_HIP + Self::HOP_HIP),
+                    gait.hop,
+                );
+                let leaping =
+                    Self::held(hopping, Quat::from_rotation_x(Self::JUMP_HIP), gait.jump);
                 // In flight the legs trail — the near one straight behind
                 // him because it is the one he pushed off, the far one
                 // swinging up over it.
@@ -5265,12 +5347,19 @@ impl Joint {
                     ),
                     Self::crouched(gait),
                 );
+                // The landing off a split-step, paid for in height by
+                // [`Self::LAND_DROP`] — same shape as the set, deeper.
+                let landing = Self::held(
+                    ready,
+                    Quat::from_rotation_x(Self::SET_KNEE * Self::LAND_CROUCH),
+                    gait.land,
+                );
                 // Down under himself to a ball at his boots. Its own layer
                 // above the set rather than a term inside the run cycle,
                 // because a keeper making a save is nearly always set and the
                 // set would slerp it away — see the note at [`Limb::Hip`].
                 let saving = Self::held(
-                    ready,
+                    landing,
                     Quat::from_rotation_x(
                         Self::SET_KNEE
                             + Self::SAVE_KNEE * Self::stooping(gait)
@@ -5279,7 +5368,14 @@ impl Joint {
                     // The legs' share of it — see the note at the hip.
                     Self::rooted(gait),
                 );
-                let leaping = Self::held(saving, Quat::from_rotation_x(Self::JUMP_KNEE), gait.jump);
+                // Folded a little under him on the hop. See [`Self::HOP_KNEE`].
+                let hopping = Self::held(
+                    saving,
+                    Quat::from_rotation_x(Self::SET_KNEE + Self::HOP_KNEE),
+                    gait.hop,
+                );
+                let leaping =
+                    Self::held(hopping, Quat::from_rotation_x(Self::JUMP_KNEE), gait.jump);
                 let diving = Self::held(
                     leaping,
                     Quat::from_rotation_x(Self::DIVE_KNEE + Self::DIVE_SCISSOR_KNEE * trailing),
@@ -5367,10 +5463,18 @@ impl Joint {
                             // a keeper making this save is standing still.
                             + Self::ANKLE_PLANTAR * Self::SAVE_RISE_TOE * Self::reaching(gait),
                 );
+                // Up on the split-step the toes drop, both feet alike —
+                // there is nothing under them for the fifth of a second he
+                // is up. See [`Self::HOP_TOES`].
+                let hopping = Self::held(
+                    rolling,
+                    Quat::from_rotation_x(Self::ANKLE_PLANTAR * Self::HOP_TOES),
+                    gait.hop,
+                );
                 // Off his feet there is nothing to push against and the
                 // toes fall into a point.
                 let flying = Self::held(
-                    rolling,
+                    hopping,
                     Quat::from_rotation_x(Self::DIVE_ANKLE),
                     gait.dive.max(gait.jump),
                 );
@@ -6208,7 +6312,12 @@ impl Joint {
         // clock and the stride runs on ground covered, so a keeper doing
         // both at once has two step rhythms in the same pair of legs — which
         // is not twice as alive, it is incoherent.
-        let alive = Self::crouched(gait) * (1.0 - gait.save);
+        //
+        // …nor on the split-step, either half of it. In the air both feet
+        // are off the grass together, and on the landing both are planted
+        // under a crouch; one boot picking up through either is a third
+        // rhythm on top of the two above.
+        let alive = Self::crouched(gait) * (1.0 - gait.save) * (1.0 - gait.hop) * (1.0 - gait.land);
         if alive <= 1e-3 {
             return 0.0;
         }
@@ -8444,6 +8553,79 @@ mod tests {
         );
     }
 
+    /// **A split-step is the set position, off the ground** — not a dive.
+    ///
+    /// The engine hops a keeper a few centimetres on the tick a shot is
+    /// struck, on the same height axis as the dive, and read as a dive it
+    /// threw both arms out and killed the run cycle over a two-inch bounce.
+    /// What a keeper actually does up there is nothing with his arms — the
+    /// gloves stay exactly where the set put them — and a little with his
+    /// legs, which gather under him. Asserted as positions: the glove is
+    /// where the set has it, and the boot has come up under him because a
+    /// folded leg is a shorter one.
+    #[test]
+    fn a_split_step_keeps_his_gloves_up_and_gathers_his_legs() {
+        let mut set = still();
+        set.set = 1.0;
+        let mut hopping = set;
+        hopping.hop = 1.0;
+        for side in [-1.0, 1.0] {
+            let (held, up) = (glove(side, set), glove(side, hopping));
+            assert!(
+                (held - up).length() < 0.03,
+                "the hop moved his glove {:.3} m out of the set",
+                (held - up).length()
+            );
+        }
+        let (flat, tucked) = (boot(1.0, set).y, boot(1.0, hopping).y);
+        assert!(
+            tucked > flat + 0.03,
+            "his legs do not gather under him on the hop ({flat:.3} → {tucked:.3})"
+        );
+        assert!(
+            (boot(1.0, hopping).y - boot(-1.0, hopping).y).abs() < 0.01,
+            "a two-footed hop with the feet at different heights"
+        );
+    }
+
+    /// **…and the landing is a deeper crouch with both boots on the grass.**
+    ///
+    /// The absorb bends the knees past the set, and a bent leg is a shorter
+    /// one — so unless the hips come down by exactly what the legs give up,
+    /// the boots hang in the air or go through the pitch. Swept across the
+    /// whole ramp rather than tested at the end, because the drop is paid
+    /// linearly against a slerp and the two only have to agree to a
+    /// centimetre. Same bookkeeping [`Joint::SET_DROP`] does for the set.
+    #[test]
+    fn the_landing_keeps_his_boots_on_the_grass() {
+        let mut set = still();
+        set.set = 1.0;
+        let crown_set = crown(set).y;
+        for tenth in 0..=10 {
+            let mut gait = set;
+            gait.land = tenth as f32 / 10.0;
+            for side in [-1.0, 1.0] {
+                // Against the SET's own boot rather than a man standing
+                // straight: the landing is a deepening of that stance, and
+                // what it must not do is move the sole the set planted.
+                let sole = boot(side, gait).y - boot(side, set).y;
+                assert!(
+                    sole.abs() < 0.012,
+                    "landing at {:.1} a boot is {:.1} cm off where the set planted it",
+                    gait.land,
+                    sole * 100.0
+                );
+            }
+        }
+        let mut landed = set;
+        landed.land = 1.0;
+        assert!(
+            crown(landed).y < crown_set - 0.02,
+            "the landing is no deeper than the set ({:.3} against {crown_set:.3})",
+            crown(landed).y
+        );
+    }
+
     /// The extension is a ramp and not a switch: a keeper halfway through a
     /// flight is halfway out of it. This is the whole difference between a
     /// dive and a photograph of one.
@@ -10140,10 +10322,18 @@ mod tests {
         urging.idle = 0.9;
         let mut pointing = still();
         pointing.pointing = 1.0;
-        let poses: [(f32, Gait); 11] = [
+        // The split-step, up and coming down — the two frames either side
+        // of every save. See [`Gait::hop`].
+        let mut hopping = set;
+        hopping.hop = 1.0;
+        let mut landing = set;
+        landing.land = 1.0;
+        let poses: [(f32, Gait); 13] = [
             (PI, set),
             (PI / 2.0, set),
             (PI, alive),
+            (PI / 2.0, hopping),
+            (PI / 2.0, landing),
             (PI, saving(Vec2::new(-0.85, -0.75), 0.0)),
             (PI, saving(Vec2::new(0.1, 0.15), 0.0)),
             (PI, saving(Vec2::new(0.9, 0.85), 0.0)),

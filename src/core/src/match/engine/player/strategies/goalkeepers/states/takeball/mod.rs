@@ -1,7 +1,7 @@
 use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperDelivery, KeeperFeetDecision, KeeperSmother,
-    KeeperSweepLimit,
+    ActivityIntensity, GoalkeeperCondition, KeeperDelivery, KeeperFeetDecision, KeeperGoalKick,
+    KeeperSmother, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::common::states::LooseBallChase;
@@ -26,6 +26,21 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         // over a ball he could simply have picked up. See
         // [`KeeperFeetDecision`].
         if ctx.player.has_ball(ctx) {
+            // A GOAL KICK is a dead ball from the floor: the hands are out
+            // of it, and the only choice is the one made when he placed it
+            // — long off the run-up, or short from standing. This used to
+            // fall through to `KeeperFeetDecision`, which under press
+            // chose `Gather`, and a keeper picked his own goal kick up.
+            // See `KeeperGoalKick`.
+            if ctx.ball().is_goal_kick_restart() {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    if KeeperGoalKick::decided_long(ctx) {
+                        GoalkeeperState::Kicking
+                    } else {
+                        GoalkeeperState::Distributing
+                    },
+                ));
+            }
             return Some(StateChangeResult::with_goalkeeper_state(
                 KeeperFeetDecision::state_for(ctx),
             ));
@@ -196,6 +211,29 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         // ahead of the ball on 10% of samples against the outfield's
         // 34%. `KeeperSweepLimit` still has the last word on how far out
         // he may go; this only decides where he is going.
+        //
+        // **The goal kick's run-up.** While the restart holds a mark for
+        // him he walks to it and stands on it — the ball is placed and is
+        // going nowhere. Once the mark is gone he is running in, and the
+        // chase steering below is exactly the run. See `KeeperGoalKick`.
+        if ctx.tick_context.ball.restart_taker == Some(ctx.player.id) {
+            if let Some(mark) = ctx.tick_context.ball.restart_mark {
+                if ctx.tick_context.ball.restart_set
+                    || (ctx.player.position - mark).magnitude() < KeeperGoalKick::MARK_REACH * 0.5
+                {
+                    return Some(Vector3::zeros());
+                }
+                return Some(
+                    SteeringBehavior::Arrive {
+                        target: mark,
+                        slowing_distance: 6.0,
+                    }
+                    .calculate(ctx.player)
+                    .velocity
+                        * KeeperGoalKick::BACKING_PACE,
+                );
+            }
+        }
         let target = LooseBallChase::meeting_point(
             ctx,
             ctx.tick_context.positions.ball.position,

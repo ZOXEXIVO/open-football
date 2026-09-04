@@ -13,8 +13,9 @@ use crate::PlayerFieldPositionGroup;
 use crate::r#match::PassOriginRestart;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::runoff::ExitAxis;
-use crate::r#match::engine::ball::ball::{AwaitedRestart, Ball, RunOff};
+use crate::r#match::engine::ball::ball::{AwaitedRestart, Ball, GoalKickRunUp, RunOff, RunUpPhase};
 use crate::r#match::engine::corner_shape::CornerShape;
+use crate::r#match::goalkeepers::states::common::KeeperGoalKick;
 use crate::r#match::engine::set_pieces::ThrowAppetite;
 use crate::r#match::events::EventCollection;
 use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
@@ -291,6 +292,7 @@ impl Ball {
                 self.spin = Vector3::zeros();
             }
             self.awaiting_restart = None;
+            self.goal_kick_run_up = None;
             return;
         };
 
@@ -478,6 +480,110 @@ impl Ball {
             }
         }
 
+        // **The goal kick's run-up.** He has reached the ball; if he is
+        // going long he places it, walks back to his mark, stands there
+        // and runs in — and the restart holds for the whole of it, the
+        // same way the corner above holds for the box. Each leg resets
+        // the clock like the corner does: the walk back is the restart
+        // working, not the taker taking too long. See `KeeperGoalKick`.
+        if await_state.origin == PassOriginRestart::GoalKick
+            && await_state.take_from.is_none()
+            && KeeperGoalKick::armed()
+        {
+            let now = context.current_tick();
+            match self.goal_kick_run_up {
+                None if arrived && KeeperGoalKick::is_keeper(taker) => {
+                    let patience = context
+                        .tactical_for_team(taker.team_id)
+                        .build_up_patience;
+                    if KeeperGoalKick::goes_long_at_spot(taker, await_state.spot, players, patience)
+                    {
+                        #[cfg(feature = "match-logs")]
+                        crate::mid_run_diag::KeeperActionDiag::note(19);
+                        self.goal_kick_run_up = Some(GoalKickRunUp {
+                            mark: KeeperGoalKick::mark(
+                                await_state.spot,
+                                taker.side,
+                                self.field_height,
+                            ),
+                            phase: RunUpPhase::Backing,
+                            since: now,
+                        });
+                        // PLACED. A ball he fetched from the run-off rode
+                        // on him for the carry; from here it lies on the
+                        // spot while he walks away from it, or the walk
+                        // back would take the ball with him.
+                        await_state.carrying = false;
+                        self.position.x = await_state.spot.x;
+                        self.position.y = await_state.spot.y;
+                        await_state.awarded_tick = now;
+                        self.awaiting_restart = Some(await_state);
+                        return;
+                    }
+                    // Short: rolled to a defender from where he stands,
+                    // which is the restart resolving below.
+                }
+                Some(run_up) => match run_up.phase {
+                    RunUpPhase::Backing => {
+                        let on_mark = (taker.position - run_up.mark).magnitude()
+                            <= KeeperGoalKick::MARK_REACH;
+                        let overdue = now.saturating_sub(run_up.since)
+                            > KeeperGoalKick::BACKING_CEILING;
+                        if on_mark || overdue {
+                            self.goal_kick_run_up = Some(GoalKickRunUp {
+                                phase: RunUpPhase::Set,
+                                since: now,
+                                ..run_up
+                            });
+                        }
+                        await_state.awarded_tick = now;
+                        self.awaiting_restart = Some(await_state);
+                        return;
+                    }
+                    RunUpPhase::Set => {
+                        if now.saturating_sub(run_up.since) < KeeperGoalKick::SCAN_TICKS {
+                            await_state.awarded_tick = now;
+                            self.awaiting_restart = Some(await_state);
+                            return;
+                        }
+                        // Go. The patience is re-sized to the run itself
+                        // and he is sent at the ball again — `run_for_ball`
+                        // is a no-op for a man already in `TakeBall`, but
+                        // anything that pulled him out of it on the mark
+                        // gets him back.
+                        self.goal_kick_run_up = Some(GoalKickRunUp {
+                            phase: RunUpPhase::Running,
+                            since: now,
+                            ..run_up
+                        });
+                        await_state.awarded_tick = now;
+                        await_state.patience_ticks = AwaitedRestart::patience_for(range);
+                        self.awaiting_restart = Some(await_state);
+                        events.add_ball_event(BallEvent::TakeMe(await_state.taker_id));
+                        return;
+                    }
+                    // Running in: the ordinary arrival test below hands him
+                    // the ball as he reaches it — but AT the ball. `REACH`
+                    // is a metre and a half, written for a man walking up
+                    // to a dead ball; a keeper running in at pace who is
+                    // handed it a metre and a half short strikes a ball his
+                    // boot never got to. Measured on a recording: the kick
+                    // left with him 1.7 m away.
+                    RunUpPhase::Running => {
+                        if range > KeeperGoalKick::STRIKE_REACH {
+                            if now.saturating_sub(run_up.since) < KeeperGoalKick::RUN_IN_CEILING {
+                                await_state.awarded_tick = now;
+                                self.awaiting_restart = Some(await_state);
+                                return;
+                            }
+                            // Overdue: the ordinary arrival below takes it.
+                        }
+                    }
+                },
+                None => {}
+            }
+        }
+
         if !arrived && waited < await_state.patience_ticks {
             // Keep sending him. `run_for_ball` is a no-op for a player who
             // is already chasing, so this cannot restart his chase clock;
@@ -510,6 +616,8 @@ impl Ball {
                     RestartCensus::note_corner_leg_timeout(range);
                 }
             }
+            // A run-up that never finished is not a run-up.
+            self.goal_kick_run_up = None;
             self.pending_set_piece_teleport = Some((await_state.taker_id, final_spot));
             await_state.spot = final_spot;
             self.position.x = final_spot.x;
@@ -548,6 +656,10 @@ impl Ball {
         RestartCensus::note_restart_taken(waited, arrived);
 
         self.awaiting_restart = None;
+        // A goal kick reached off a run-up is kicked long — recorded for
+        // the keeper's state machine, which reads it on this same tick.
+        self.goal_kick_long = self.goal_kick_run_up.is_some();
+        self.goal_kick_run_up = None;
         // Play restarts HERE. The stall detector measures how long the
         // ball has sat in one place, and it was paused rather than reset
         // for the whole wait — so without this the ticks the taker spent

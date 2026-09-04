@@ -11,6 +11,14 @@
 //! share: [`pitch`](crate::scene::pitch) pours its concrete off exactly the
 //! description the crowd is seated on, so a spectator cannot end up standing
 //! in mid-air or buried in the row in front of him.
+//!
+//! There is a third question of the same shape, and it is answered here for
+//! the same reason: **how well the grass is looked after**. A club that can
+//! fill twenty thousand seats employs groundstaff, and one whose whole crowd
+//! stands on five steps of concrete does not — so a ground built off the
+//! fixture and a pitch painted off a constant would put a cup-final surface
+//! inside a village terrace. [`Stature::keeping`] is that number;
+//! [`Upkeep`](crate::scene::pitch::Upkeep) is what the pitch does with it.
 
 use crate::app::bill::{Held, MemoryBill};
 use crate::app::config::VenueInfo;
@@ -40,6 +48,10 @@ pub struct Stature {
     /// an away end is how many people follow that club, not how many its own
     /// ground holds.
     following: f32,
+    /// How well the grass inside all that concrete is looked after, 0..1. See
+    /// [`Self::keeping`], and [`Upkeep`](crate::scene::pitch::Upkeep), which
+    /// is what turns it into a pitch.
+    keeping: f32,
 }
 
 impl Stature {
@@ -91,6 +103,23 @@ impl Stature {
     /// curve — a small club's ground is small however the arithmetic
     /// elsewhere came out.
     const HUMBLE_REPUTATION: u16 = 4_000;
+
+    /// World reputation at which a club keeps a great pitch whatever its
+    /// ground holds — the floor under [`Self::keeping`].
+    ///
+    /// Eight thousand is the bottom of `Elite` on the simulator's scale, and
+    /// this exists because the gate is the wrong question for grass. **A
+    /// stand is capital and a pitch is a wage**: the seats are what the club
+    /// could once afford to build, the surface is what it can afford to look
+    /// after this week, and the two come apart in both directions. A club
+    /// playing its under-18s at the training ground has no stand at all and
+    /// still has a groundsman; a famous old club in a small ground has a
+    /// better pitch than its terracing suggests.
+    ///
+    /// So it is read as a FLOOR rather than as a second curve — a rich club's
+    /// pitch is never worse than its money, and a poor club with a big ground
+    /// still gets the pitch the ground earns it.
+    const KEPT_REPUTATION: u16 = 8_000;
 
     /// What a ground is taken to be drawing when nobody ever counted.
     ///
@@ -162,6 +191,11 @@ impl Stature {
     ///
     /// Run together, as they were at first, a club would grow and shrink its
     /// own stadium depending on the opposition.
+    ///
+    /// - **And the grass is neither.** It is not built once and it does not
+    ///   answer to who turned up: it is looked after week by week out of the
+    ///   club's own money, which is why [`Self::keeping`] comes off the stand
+    ///   through a curve of its own and off the club's reputation as a floor.
     pub fn of(venue: &VenueInfo) -> Self {
         // Zero is "nobody counted", not "nobody came". A document written
         // before the venue crossed the wire has to keep building the stadium
@@ -206,6 +240,12 @@ impl Stature {
                 .sqrt()
         };
 
+        // What the club can afford to spend on the grass, as against what it
+        // once managed to build round it. See `KEPT_REPUTATION`.
+        let means = ((venue.reputation.saturating_sub(Self::HUMBLE_REPUTATION) as f32)
+            / (Self::KEPT_REPUTATION - Self::HUMBLE_REPUTATION) as f32)
+            .clamp(0.0, 1.0);
+
         Stature {
             standing,
             // The reputations a travelling support runs between: below the
@@ -217,7 +257,26 @@ impl Stature {
             } else {
                 (today / capacity.max(1.0)).clamp(Self::SPARSEST, Self::FULLEST)
             },
+            // **The shortfall SQUARED, not the height.** A pitch is the
+            // cheapest thing on this list and the first thing anybody sees, so
+            // it is the last thing a club lets go: a ground halfway up the
+            // ladder has half the concrete of a great one and very nearly all
+            // of its grass. Read straight off `standing` — which is a square
+            // root, and so already generous at the bottom — every second club
+            // in the world would play on a park pitch, and the whole ladder
+            // would be spent before it reached the grounds this is for.
+            keeping: (1.0 - (1.0 - standing) * (1.0 - standing)).max(means),
         }
+    }
+
+    /// **How well the pitch is looked after**, 0 at a park pitch and 1 at a
+    /// great ground.
+    ///
+    /// The same fixture the stands are built off, eased and floored — see the
+    /// two notes in [`Self::of`]. What it does to the grass belongs to the
+    /// pitch and is [`Upkeep`](crate::scene::pitch::Upkeep)'s to say.
+    pub fn keeping(&self) -> f32 {
+        self.keeping
     }
 
     /// How many steps a bank that would have `most` of them at a great ground
@@ -1652,6 +1711,70 @@ mod tests {
                 "a {gate} gate got {rows} rows, wanted {low}..={high}"
             );
         }
+    }
+
+    /// **The grass is the last thing a club lets go.**
+    ///
+    /// A pitch is a wage and a stand is capital, so the two ladders cannot be
+    /// the same ladder: a ground with half the concrete of a great one has
+    /// very nearly all of its grass, and the ordinary professional club that
+    /// makes up most of the world has a green striped pitch inside a modest
+    /// bowl. Read straight off the height instead — which is where this
+    /// started — and every second fixture in the game is played on a park
+    /// pitch.
+    #[test]
+    fn the_grass_is_the_last_thing_a_club_lets_go() {
+        // (gate, reputation, the band `keeping` should land in)
+        for (gate, reputation, low, high) in [
+            (620u32, 2_100u16, 0.00f32, 0.05f32),  // a non-league club
+            (1_500, 4_200, 0.15, 0.45),            // p25
+            (4_000, 4_800, 0.45, 0.70),            // p50 — a proper pitch
+            (14_000, 6_500, 0.80, 0.95),           // p75 — Lokomotiv's
+            (50_000, 9_500, 0.99, 1.00),           // the top of the game
+        ] {
+            let stature = Stature::of(&venue(gate * 2, gate, reputation, false));
+            let keeping = stature.keeping();
+            assert!(
+                (low..=high).contains(&keeping),
+                "a {gate} gate at {reputation} keeps {keeping}, wanted {low}..={high}"
+            );
+            // …and never worse than the concrete, which is the whole claim.
+            assert!(
+                keeping >= stature.standing - 1e-6,
+                "a {gate} gate's grass ({keeping}) is behind its stand ({})",
+                stature.standing
+            );
+        }
+    }
+
+    /// **An academy pitch belongs to the club, not to the terrace round it.**
+    ///
+    /// A youth fixture is played at the training ground and gets the smallest
+    /// bank there is whoever the parent club are — but Manchester United's
+    /// training pitches are not a park, and a fourth-tier club's are. The gate
+    /// cannot tell those apart (there isn't one), so the reputation is read as
+    /// a floor and it is the only thing standing between an elite academy and
+    /// a village surface.
+    #[test]
+    fn an_academy_pitch_belongs_to_the_club_that_owns_it() {
+        let elite = Stature::of(&venue(60_000, 50_000, 9_400, true));
+        let modest = Stature::of(&venue(6_000, 3_000, 4_600, true));
+
+        assert_eq!(
+            elite.rows(34),
+            Stature::FEWEST_ROWS,
+            "a youth fixture is still five steps of concrete"
+        );
+        assert!(
+            elite.keeping() > 0.95,
+            "an elite academy plays on a park pitch: {}",
+            elite.keeping()
+        );
+        assert!(
+            modest.keeping() < 0.30,
+            "every academy in the world is immaculate: {}",
+            modest.keeping()
+        );
     }
 
     /// Between the two it has to actually vary, and it is the GATE that has to

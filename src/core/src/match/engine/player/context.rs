@@ -3,6 +3,7 @@ use crate::r#match::player::strategies::players::ops::defender_skill::DefenderSk
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
 use crate::r#match::player::strategies::players::ops::midfielder_skill::MidfielderSkillProfile;
 use crate::r#match::position_players::PlayerFieldMetadata;
+use crate::r#match::engine::ball::ball::RunUpPhase;
 use crate::r#match::{
     MatchField, MatchObjectsPositions, MatchPlayerCollection, MatchPlayerLite, PassOriginRestart,
     PlayerSide, ShotTarget, Space, SpatialGrid,
@@ -882,6 +883,17 @@ pub struct BallMetadata {
     /// walks him to the flag, and this is what tells `CornerHold` to obey
     /// it instead of standing him down as the chaser.
     pub restart_carrier: Option<u32>,
+
+    /// Where the goal-kick taker stands to take his run from, while the
+    /// restart is holding for him to get there and set himself — `None`
+    /// once he is running in, and for every other restart. Read by the
+    /// keeper's `TakeBall`. See `GoalKickRunUp` and `KeeperGoalKick`.
+    pub restart_mark: Option<Vector3<f32>>,
+    /// …and whether he is on it, standing still, looking up.
+    pub restart_set: bool,
+    /// The goal kick in his possession was placed for a LONG kick. See
+    /// `KeeperGoalKick::decided_long`.
+    pub goal_kick_long: bool,
 }
 
 impl BallMetadata {
@@ -933,6 +945,12 @@ impl BallMetadata {
             .awaiting_restart
             .filter(|r| r.carrying)
             .map(|r| r.taker_id);
+        let run_up = field.ball.goal_kick_run_up;
+        self.restart_mark = run_up
+            .filter(|r| r.phase != RunUpPhase::Running)
+            .map(|r| r.mark);
+        self.restart_set = run_up.is_some_and(|r| r.phase == RunUpPhase::Set);
+        self.goal_kick_long = field.ball.goal_kick_long;
         self.deliberate_kick_by = if field.ball.last_touch_was_deliberate_kick {
             field
                 .ball
@@ -973,6 +991,9 @@ impl From<&MatchField> for BallMetadata {
             aerial_contest_winner: None,
             restart_taker: None,
             restart_carrier: None,
+            restart_mark: None,
+            restart_set: false,
+            goal_kick_long: false,
         };
         meta.update(field);
         meta

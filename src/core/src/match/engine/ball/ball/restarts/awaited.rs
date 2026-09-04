@@ -186,6 +186,35 @@ pub struct AwaitedRestart {
     pub settled_tick: Option<u64>,
 }
 
+/// Where the goalkeeper is in the run-up to a long goal kick.
+///
+/// The ball's own record of the ceremony — its own field on [`Ball`]
+/// rather than a member of [`AwaitedRestart`], because it only ever
+/// applies to one restart and is cleared with the dead-ball metadata. The
+/// keeper reads it through `BallMetadata::restart_mark` and steers to the
+/// mark; the ball advances the phases off where he is. See
+/// `KeeperGoalKick` for the model and the numbers.
+///
+/// [`Ball`]: crate::r#match::engine::ball::ball::Ball
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GoalKickRunUp {
+    /// Where he takes his run from.
+    pub mark: Vector3<f32>,
+    pub phase: RunUpPhase,
+    /// The tick the current phase began.
+    pub since: u64,
+}
+
+/// The three legs of a goal kick taken off a run-up: he has placed the
+/// ball and is walking back to his mark; he is standing on it, looking
+/// up; he is running in to strike it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunUpPhase {
+    Backing,
+    Set,
+    Running,
+}
+
 impl AwaitedRestart {
     /// How far inside the line a restart is taken from, in game units.
     /// 6 u = 75 cm.

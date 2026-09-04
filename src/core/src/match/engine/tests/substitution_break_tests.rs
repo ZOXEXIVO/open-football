@@ -1,7 +1,7 @@
-//! A substitution, end to end: the board going up at a dead ball, each man
-//! coming on standing still for his own close-up before he moves, the twenty
-//! standing still while he does it, and the roster that changed before any of
-//! it started.
+//! A substitution, end to end: the board going up at a dead ball, the men
+//! coming on standing still for the close-up before any of them moves, the
+//! twenty standing still while they do it, and the roster that changed before
+//! any of it started.
 //!
 //! Everything asserted here is about POSITION OVER TIME, because everything
 //! that was wrong before was. The roster half of a substitution has always
@@ -11,10 +11,12 @@
 //!
 //! The properties worth guarding, in order:
 //!
-//! 1. **The change is worked through one man at a time.** Nobody in a pair
-//!    moves until the picture has finished with the man coming on — and the
-//!    NEXT pair does not move until he has had his run as well. See
-//!    [`SubstitutionBreak::BEAT_MS`].
+//! 1. **The whole change is one shot, and nobody moves until it is over.**
+//!    The camera stands off the middle of the row the substitutes are waiting
+//!    in and pans across them, so every man of the change is released on the
+//!    same tick — the end of a close-up that grew by
+//!    [`SubstitutionBreak::PAN_MS`] for each of them. See
+//!    [`SubstitutionBreak::portrait_ms`].
 //! 2. **Neither walker teleports.** The window closes on its own beats and
 //!    hands both men over wherever they have got to, so there is nothing left
 //!    for a tidy-up to close and nothing is landed — which is exactly the
@@ -261,32 +263,26 @@ fn a_substitution_stops_the_match_and_walks_both_men() {
         .find(|c| c.player_out_id == out_id)
         .expect("the injured man's change is in the window");
     let in_id = change.player_in_id;
-    // One beat per man coming on, not one beat: a manager who is already
-    // stopping the game for an injury sends on whoever else was going on, and
-    // the window holds them all. Counting the staged changes rather than
-    // assuming one is what makes this an assertion about the geometry instead
-    // of about how many men happened to cross the line.
+    // One shot for the whole change, a little longer for every man past the
+    // first: a manager who is already stopping the game for an injury sends on
+    // whoever else was going on, and the window holds them all. Counting the
+    // staged changes rather than assuming one is what makes this an assertion
+    // about the geometry instead of about how many men happened to cross the
+    // line.
+    //
+    // ⚠ Which of them this one is no longer matters, and that is the point of
+    // the 2026-09-04 change: the pan takes in the row, so every pair is let go
+    // on the same tick however the pass order happened to stage them.
     let staged = context
         .substitution_break
         .as_ref()
         .expect("the window is open")
         .changes()
-        .len() as u64;
-    // …and which of them this one is, because that is what says when his pair
-    // is let go. Read rather than assumed: whether a discretionary change is
-    // staged ahead of the forced one is the pass order's business.
-    let beat = context
-        .substitution_break
-        .as_ref()
-        .expect("the window is open")
-        .changes()
-        .iter()
-        .position(|c| c.player_out_id == out_id)
-        .expect("the injured man's change is in the window") as u64;
+        .len();
     assert_eq!(
         context.dead_ball_until_ms,
-        opened_at + SubstitutionBreak::BEAT_MS * staged,
-        "play must stop for exactly the beat the picture spends on each man \
+        opened_at + SubstitutionBreak::window_ms(staged),
+        "play must stop for exactly the shot the picture spends on the men \
          coming on, and for nothing else"
     );
 
@@ -350,8 +346,8 @@ fn a_substitution_stops_the_match_and_walks_both_men() {
     );
     assert_eq!(
         steps_on as u64 * TICK_MS,
-        beat * SubstitutionBreak::BEAT_MS + SubstitutionBreak::PORTRAIT_MS,
-        "the pair moved somewhere other than the end of his close-up"
+        SubstitutionBreak::portrait_ms(staged),
+        "the pair moved somewhere other than the end of the close-up"
     );
 
     // Neither of them jumped. The bounds are the two speeds plus a whisker
@@ -408,7 +404,7 @@ fn a_substitution_stops_the_match_and_walks_both_men() {
     let spent = context.total_match_time - opened_at;
     assert_eq!(
         spent,
-        SubstitutionBreak::BEAT_MS * staged,
+        SubstitutionBreak::window_ms(staged),
         "the window ran for {spent} ms instead of its own beats — it is \
          waiting for somebody again"
     );
@@ -473,13 +469,14 @@ fn the_two_men_cross_at_the_halfway_line() {
 }
 
 #[test]
-fn nobody_moves_while_the_picture_is_on_the_man_coming_on() {
+fn nobody_moves_while_the_picture_is_on_the_men_coming_on() {
     // ⚠ **A man cannot be shown standing at the fourth official's shoulder and
-    // be running onto the pitch at the same time.** The replay opens each
-    // man's beat on his face, comes round him to the name across his
-    // shoulders and only then lets him go; without the hold he is away at `ON`
-    // (8.25 m/s) on the very first tick and the shot is a close-up of the
-    // grass he was standing on.
+    // be running onto the pitch at the same time.** The replay opens the
+    // change on the faces of the men coming on, pans along the row and comes
+    // round behind them to the names across their shoulders, and only then
+    // lets them go; without the hold they are away at `ON` (8.25 m/s) on the
+    // very first tick and the shot is a close-up of the grass they were
+    // standing on.
     let (mut field, mut context) = kickoff();
     let out_id = injure_the_furthest_man(&mut field);
     let today = context.today;
@@ -494,10 +491,12 @@ fn nobody_moves_while_the_picture_is_on_the_man_coming_on() {
         .touchline
         .unwrap()
         .at;
-    let change = *context
+    let window = context
         .substitution_break
         .as_ref()
-        .expect("a substitution must open a window")
+        .expect("a substitution must open a window");
+    let staged = window.changes().len();
+    let change = *window
         .changes()
         .iter()
         .find(|c| c.player_out_id == out_id)
@@ -507,10 +506,11 @@ fn nobody_moves_while_the_picture_is_on_the_man_coming_on() {
         .expect("the substitute is one of the eleven already")
         .position;
 
-    // Right up to the last tick of the beat, neither of them has moved a
-    // millimetre. The tick the beat expires ON is the tick he is released, so
-    // the loop stops one short of it.
-    while context.total_match_time + TICK_MS < opened_at + SubstitutionBreak::PORTRAIT_MS {
+    // Right up to the last tick of the close-up, neither of them has moved a
+    // millimetre. The tick it expires ON is the tick they are released, so the
+    // loop stops one short of it — and it is the close-up the whole window
+    // got, pan and all, not a single man's share of one.
+    while context.total_match_time + TICK_MS < opened_at + SubstitutionBreak::portrait_ms(staged) {
         context.total_match_time += TICK_MS;
         advance_substitution_break(&mut field, &mut context);
         let at = field
@@ -553,12 +553,15 @@ fn nobody_moves_while_the_picture_is_on_the_man_coming_on() {
 }
 
 #[test]
-fn a_double_change_is_two_arrivals_and_not_one_scramble() {
-    // ⚠ **The hold is per MAN, not per window.** Release everybody the moment
-    // the last close-up is over and a double change is one shot of two men
-    // setting off together — which is the thing the beats exist to stop. Man
-    // two stands at the gate through man one's close-up AND through his run,
-    // and only then goes.
+fn a_double_change_is_one_pan_and_the_men_go_together() {
+    // ⚠ **The hold is per WINDOW, not per man**, and that is the 2026-09-04
+    // reversal (maintainer: *"if several players are coming on, the camera
+    // doesn't need to show each player's entrance — position the camera
+    // between the players entering the field and have the camera pan over the
+    // group"*). The old build gave every man a beat of his own and held the
+    // rest of the row at the gate through it, which cost a triple change 16.2
+    // s of match clock; one pan across the row costs 7.2 and everybody in it
+    // sets off on the same tick.
     let (mut field, mut context) = kickoff();
     injure_the_furthest_man(&mut field);
     injure(&mut field, PlayerPositionType::MidfielderRight, 700.0);
@@ -576,8 +579,9 @@ fn a_double_change_is_two_arrivals_and_not_one_scramble() {
         "the fixture no longer stages a double change, so this test cannot \
          tell a stagger from a hold"
     );
-    // The order the window holds them in IS the order the picture works
-    // through them, so the release times are read off the index.
+    // The order the window holds them in no longer decides anything about
+    // when they move — the pan takes in all of them — so all it is read for
+    // here is where each man was standing before he set off.
     let order: Vec<(u32, Vector3<f32>)> = window
         .changes()
         .iter()
@@ -592,25 +596,25 @@ fn a_double_change_is_two_arrivals_and_not_one_scramble() {
 
     let tracks = play_out_the_window(&mut field, &mut context);
 
-    for (beat, (in_id, waited_at)) in order.iter().enumerate() {
+    for (man, (in_id, waited_at)) in order.iter().enumerate() {
         let set_off = tracks[in_id]
             .iter()
             .position(|at| at != waited_at)
             .expect("a substitute never moved") as u64;
         assert_eq!(
             set_off * TICK_MS,
-            beat as u64 * SubstitutionBreak::BEAT_MS + SubstitutionBreak::PORTRAIT_MS,
-            "man {beat} of the change set off {} ms in",
+            SubstitutionBreak::portrait_ms(order.len()),
+            "man {man} of the change set off {} ms in, on his own",
             set_off * TICK_MS
         );
     }
 
-    // And the window outlasted the picture: it cannot close while there are
-    // beats left to play, however little ground anybody had to cover.
+    // And the window outlasted the picture: it cannot close while the pan is
+    // still running, however little ground anybody had to cover.
     let spent = context.total_match_time - opened_at;
     assert!(
-        spent >= order.len() as u64 * SubstitutionBreak::BEAT_MS,
-        "the window closed after {spent} ms with beats still to come"
+        spent >= SubstitutionBreak::window_ms(order.len()),
+        "the window closed after {spent} ms with the shot still on"
     );
 }
 

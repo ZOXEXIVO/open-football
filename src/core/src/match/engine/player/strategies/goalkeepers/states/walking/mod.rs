@@ -1,6 +1,6 @@
 use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperDelivery, KeeperOneOnOne, KeeperRestPosition,
-    KeeperSmother, KeeperSweepLimit,
+    KeeperSetPieceStance, KeeperSmother, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -171,8 +171,13 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
             }
         }
 
-        // Use decision-making skill for coming out
-        if !his_own && self.should_come_out_advanced(ctx) && ball_distance < 60.0 {
+        // Use decision-making skill for coming out — never for a dead
+        // ball he is setting for. See [`KeeperSetPieceStance`].
+        if !his_own
+            && self.should_come_out_advanced(ctx)
+            && ball_distance < 60.0
+            && KeeperSetPieceStance::pending(ctx).is_none()
+        {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ComingOut,
             ));
@@ -208,6 +213,12 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
         // measured **0% still** in this state, a keeper pacing aimlessly
         // around his box. Same pattern removed from the outfield walking
         // states. He stands set instead.
+        //
+        // …and a dead ball at his goal has a mark of its own, read ahead
+        // of the rest model for the reason `Standing::velocity` gives.
+        if let Some(to_mark) = KeeperSetPieceStance::steer(ctx) {
+            return Some(to_mark);
+        }
         let optimal_position = self.calculate_intelligent_position(ctx);
         if KeeperRestPosition::is_set_with(
             ctx.player.position,

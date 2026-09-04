@@ -90,6 +90,24 @@ pub struct MatchPlayer {
     /// shows a keeper leaving the ground. Making those distance helpers
     /// genuinely 2-D-plus-height is the real fix, and a much larger one.
     pub height: f32,
+    /// The apex, in metres, of the split-step he is on — zero on the
+    /// ground and through any real leap.
+    ///
+    /// A goalkeeper's split-step is a hop of a few centimetres timed to the
+    /// strike, and it is the one thing that separates a keeper who is
+    /// *about to* save from one standing there: he lands as the ball
+    /// leaves the foot and pushes off from the landing. It rides the same
+    /// vertical axis as the leap, so the recording carries it for free,
+    /// but it has to be told apart from a dive — a dive can push off FROM
+    /// it (see [`MatchPlayer::leap`]), and the physics must not read a man
+    /// on a split-step as a man already thrown at the ball. See
+    /// [`MatchPlayer::hop`] and `KeeperSplitStep`.
+    pub hop_apex: f32,
+    /// The `y`, on the goal line, a goalkeeper has committed his dive to
+    /// — `Some` only while he is in `Diving` and only when the dive was a
+    /// GUESS rather than a read. See `KeeperPenaltyStance` and
+    /// `KeeperShotDive::aim_y`.
+    pub dive_aim: Option<f32>,
     pub side: Option<PlayerSide>,
     /// Where the REPLAY draws him while he is off the pitch — his place in
     /// the row in front of the dugout, and, during a substitution, the line
@@ -514,6 +532,8 @@ impl MatchPlayer {
             velocity: Vector3::zeros(),
             vertical_speed: 0.0,
             height: 0.0,
+            hop_apex: 0.0,
+            dive_aim: None,
             tactical_position: TacticalPositions::new(position, None),
             side: None,
             touchline: None,
@@ -591,6 +611,8 @@ impl MatchPlayer {
             velocity: Vector3::zeros(),
             vertical_speed: 0.0,
             height: 0.0,
+            hop_apex: 0.0,
+            dive_aim: None,
             tactical_position: TacticalPositions::new(tactical_position, side),
             side,
             touchline: None,
@@ -1278,10 +1300,35 @@ impl MatchPlayer {
     /// Ignored in mid-air. Nobody jumps twice off the same ground, and a
     /// state re-entered while the player is still up would otherwise hold him
     /// there indefinitely.
+    ///
+    /// …with one exception: a keeper on a split-step ([`Self::hop`]) may
+    /// leave it for a dive. The split-step exists to be pushed off from —
+    /// he lands and goes in one movement — and the hop is over inside the
+    /// reaction time the dive has to wait out anyway, so refusing the dive
+    /// here would silently delete the leap from every save that follows a
+    /// hop: `Diving` fires its take-off once, on entry, and never again.
     #[inline]
     pub fn leap(&mut self, apex_metres: f32) {
-        if apex_metres > 0.0 && self.height <= 0.0 {
+        if apex_metres > 0.0 && (self.height <= 0.0 || self.hop_apex > 0.0) {
             self.vertical_speed = Ball::launch_speed_for_apex(apex_metres);
+            self.hop_apex = 0.0;
+        }
+    }
+
+    /// The split-step: a hop of `apex_metres` off both feet, from the
+    /// ground only.
+    ///
+    /// Distinct from [`Self::leap`] in what it MEANS rather than in what it
+    /// does to the height — a man on a split-step has not committed to
+    /// anything, which is why a dive may still push off from it and why the
+    /// physics reads him as on his feet (see [`Self::is_launched`]). Never
+    /// from mid-air, and never on top of a leap: a keeper already up there
+    /// is doing something else.
+    #[inline]
+    pub fn hop(&mut self, apex_metres: f32) {
+        if apex_metres > 0.0 && self.height <= 0.0 && self.vertical_speed == 0.0 {
+            self.vertical_speed = Ball::launch_speed_for_apex(apex_metres);
+            self.hop_apex = apex_metres;
         }
     }
 
@@ -1289,6 +1336,22 @@ impl MatchPlayer {
     #[inline]
     pub fn is_airborne(&self) -> bool {
         self.height > 0.0
+    }
+
+    /// True while he is on a split-step — off the ground, but not thrown
+    /// at anything. See [`Self::hop`].
+    #[inline]
+    pub fn is_hopping(&self) -> bool {
+        self.hop_apex > 0.0
+    }
+
+    /// Off the ground AND committed — a dive or a leap, as opposed to the
+    /// hop. The predicate the physics wants when it asks "had he thrown
+    /// himself at it?": a keeper hit by the ball on his split-step was
+    /// standing there, whatever his height says.
+    #[inline]
+    pub fn is_launched(&self) -> bool {
+        self.is_airborne() && !self.is_hopping()
     }
 
     /// Where this player should be RECORDED: his pitch coordinate carrying
@@ -1379,6 +1442,12 @@ impl MatchPlayer {
             let (height, rise) = Self::fall(self.height, self.vertical_speed);
             self.height = height;
             self.vertical_speed = rise;
+            // Landed: whatever hop he was on is over. The leap clears it
+            // itself on take-off, so this is only ever the split-step
+            // coming down on its own.
+            if height <= 0.0 && rise == 0.0 {
+                self.hop_apex = 0.0;
+            }
         }
 
         // Last-resort salvage: if position is already corrupt from an
@@ -1888,6 +1957,61 @@ mod tests {
         // keeper hangs up there for as long as it keeps firing.
         keeper.leap(0.75);
         assert_eq!(keeper.vertical_speed, climbing);
+    }
+
+    #[test]
+    fn a_split_step_is_a_hop_he_can_dive_out_of() {
+        let mut keeper = build_player(PlayerPositionType::Goalkeeper);
+        keeper.hop(0.05);
+        assert!(keeper.is_hopping(), "the hop did not take");
+        keeper.move_to();
+        assert!(keeper.is_airborne() && !keeper.is_launched());
+
+        // A second hop on top of the first is refused — he is up already.
+        let rising = keeper.vertical_speed;
+        keeper.hop(0.05);
+        assert_eq!(keeper.vertical_speed, rising);
+
+        // …but the dive is not: he pushes off from the split-step, and from
+        // then on he is a launched keeper, not a hopping one.
+        keeper.leap(0.50);
+        assert!(!keeper.is_hopping());
+        assert!(keeper.is_launched());
+        let mut peak = 0.0_f32;
+        let mut ticks = 0u32;
+        while keeper.is_airborne() {
+            keeper.move_to();
+            peak = peak.max(keeper.height);
+            ticks += 1;
+            assert!(ticks < 1000, "a dive that never lands");
+        }
+        assert!(peak > 0.45, "the dive out of the hop peaked at {peak} m");
+        assert_eq!(keeper.hop_apex, 0.0);
+    }
+
+    #[test]
+    fn a_split_step_lands_and_clears_itself() {
+        let mut keeper = build_player(PlayerPositionType::Goalkeeper);
+        keeper.hop(0.05);
+        let mut peak = 0.0_f32;
+        let mut ticks = 0u32;
+        loop {
+            keeper.move_to();
+            ticks += 1;
+            peak = peak.max(keeper.height);
+            if !keeper.is_airborne() {
+                break;
+            }
+            assert!(ticks < 200, "a hop that never lands");
+        }
+        // Five centimetres, and about a fifth of a second off the ground —
+        // a split-step, not a jump. The stepwise integration undershoots
+        // the closed-form apex by about half a tick of climb, which on a
+        // ten-tick climb is a tenth of it (4% on the 0.75 m leap above).
+        assert!((peak - 0.05).abs() < 0.05 * 0.15, "peaked at {peak} m");
+        assert!((15..=25).contains(&ticks), "{ticks} ticks in the air");
+        assert!(!keeper.is_hopping(), "still on a hop after landing");
+        assert_eq!(keeper.vertical_speed, 0.0);
     }
 
     #[test]

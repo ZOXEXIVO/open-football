@@ -10,8 +10,9 @@
 
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{
-    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperDelivery, KeeperSetPosition,
-    KeeperShotDive, KeeperShotReaction, KeeperShotSave, KeeperSmother, KeeperSweepLimit,
+    ActivityIntensity, GoalkeeperCondition, KeeperBallClaim, KeeperDelivery, KeeperPenaltyStance,
+    KeeperSetPosition, KeeperShotDive, KeeperShotReaction, KeeperShotSave, KeeperSmother,
+    KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
@@ -108,6 +109,14 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
         // anything else in football. See [`KeeperSmother`].
         if let Some(attempt) = KeeperSmother::assess(ctx) {
             return Some(KeeperSmother::commit(ctx, &attempt));
+        }
+
+        // A penalty is a guess made at the strike, not a read. See
+        // [`KeeperPenaltyStance`] — `PreparingForSave` asks the same
+        // question, so it is answered in whichever of the two he is in
+        // when it is struck.
+        if let Some(guess) = KeeperPenaltyStance::commit(ctx) {
+            return Some(guess);
         }
 
         // He cannot get to this one on his feet. LEAVE THEM â now, while

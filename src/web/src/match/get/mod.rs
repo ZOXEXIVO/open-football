@@ -249,9 +249,10 @@ struct ChanceEventJson {
 #[derive(Serialize)]
 struct SubstitutionEventJson {
     player_in_id: u32,
-    /// And the man he replaced. The replay opens the change by looking at the
-    /// back of him, standing where he was, so the crowd can read who is coming
-    /// off — see `ChangeoverShot::PORTRAIT_MS`.
+    /// And the man he replaced. **Nothing is ever pointed at him** — the shot
+    /// is on the men coming ON — but the replay still needs to know who he is,
+    /// because he is one of the two bodies moving while the change is played
+    /// out and the camera must not give way to him. See `ChangeoverShot::pan`.
     player_out_id: u32,
     time: u64,
     /// How long the match stopped for while it was made. The replay holds its

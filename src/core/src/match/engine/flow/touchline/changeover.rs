@@ -77,8 +77,10 @@ pub struct SubstitutionBreak {
 }
 
 impl SubstitutionBreak {
-    /// **How long a man coming on stands still while the camera looks at
-    /// him**, in ms of match clock — his close-up, before he moves a step.
+    /// **How long the men coming on stand still while the camera looks at
+    /// them**, in ms of match clock — the close-up, before anybody moves a
+    /// step. This is the figure for ONE man; see [`Self::PAN_MS`] for what a
+    /// second and a third add to it.
     ///
     /// ⚠ **The picture cannot show a man standing at the fourth official's
     /// shoulder who is already running onto the pitch.** The replay opens
@@ -90,9 +92,9 @@ impl SubstitutionBreak {
     /// was standing on.
     ///
     /// A second and a half on his face, the swing round him, and a second on
-    /// his back: 3.4 s a man. It stops the whole window rather than his own
-    /// leg of it, because everybody else on the pitch is already standing
-    /// still and one man moving is the only thing in frame that would.
+    /// his back: 3.4 s. It stops the whole window rather than one man's leg of
+    /// it, because everybody else on the pitch is already standing still and
+    /// one man moving is the only thing in frame that would.
     ///
     /// ⚠ **The viewer's `ChangeoverShot::PORTRAIT_MS` is this same figure and
     /// the two have to agree** — this crate cannot depend on that one, so if
@@ -103,34 +105,53 @@ impl SubstitutionBreak {
     /// It is charged to [`Self::resume_at_ms`] rather than taken out of it, so
     /// a change with three men in it still gets the full walking allowance —
     /// and it is match clock, like the rest of the window. Two to four
-    /// stoppages a match at six to eighteen seconds apiece, which is the same
-    /// order as the 45-75 s a goal celebration already spends.
+    /// stoppages a match at five to eight seconds apiece, which is a fraction
+    /// of the 45-75 s a goal celebration already spends.
     pub const PORTRAIT_MS: u64 = 3_400;
 
-    /// **And how long he then has the picture to himself while he runs on**,
-    /// in ms of match clock.
+    /// **And what every man past the first adds to that close-up**, in ms of
+    /// match clock.
     ///
-    /// The camera has come round behind him and it stays exactly where it is:
-    /// he runs away from it onto the field with his name across his shoulders
-    /// and the whole ground laid out in front of him. Two seconds at
-    /// [`Self::ON`] is sixteen metres, which reads as a man arriving.
+    /// ⚠ **A change with several men in it is ONE shot, not one shot each**
+    /// (maintainer, 2026-09-04: *"if several players are coming on, the camera
+    /// doesn't need to show each player's entrance — position the camera
+    /// between the players entering the field and have the camera pan over the
+    /// group"*). They are waiting in a row a couple of metres apart at the
+    /// fourth official's shoulder ([`Bench::GATE_PITCH`](super::Bench)), so the
+    /// rig stands off the middle of that row and pans along it: what an extra
+    /// man costs the match is the ground the pan has to cover to reach him,
+    /// not a beat of his own.
     ///
-    /// ⚠ **This is what makes a multiple change sequential.** The men are no
-    /// longer released together the moment the last close-up is over — man two
-    /// is still held while man one runs, so a triple change is three complete
-    /// arrivals instead of one portrait each and then a scramble. The viewer's
-    /// `ChangeoverShot::RUN_MS` is the same figure, and the pairing rule is
-    /// [`Self::PORTRAIT_MS`]'s.
+    /// Nine tenths of a second a head, against the 5.4 s a whole beat used to
+    /// be. A triple change is 3.4 + 1.8 + 2.0 = **7.2 s** where the
+    /// one-at-a-time build charged 16.2, and the six men both sides can send
+    /// on at one stoppage cost 9.9 s rather than 32.4.
+    ///
+    /// ⚠ **`ChangeoverShot::PAN_MS` is this same figure**, on
+    /// [`Self::PORTRAIT_MS`]'s terms: hold for less than the pan and the men
+    /// set off in the middle of it, hold for more and the shot is on a row of
+    /// men who left.
+    pub const PAN_MS: u64 = 900;
+
+    /// **And how long they then have the picture while they run on**, in ms of
+    /// match clock.
+    ///
+    /// The camera has come round behind them and it stays exactly where it is:
+    /// they run away from it onto the field with their names across their
+    /// shoulders and the whole ground laid out in front of them. Two seconds
+    /// at [`Self::ON`] is sixteen metres, which reads as a man arriving.
+    ///
+    /// ⚠ **They go together**, which is the 2026-09-04 reversal: the beats
+    /// used to be per MAN, so man two stood at the gate through man one's
+    /// close-up AND through his run. Now one pan covers the row and one whistle
+    /// releases it — see [`Self::released_at`]. The viewer's
+    /// `ChangeoverShot::RUN_MS` is the same figure.
     ///
     /// ⚠⚠ **And since 2026-08-26 it is also the END of the window**, not just
-    /// a beat inside it — see [`Self::advance`]. Two seconds of him running is
-    /// what the change is worth; where he and the man he replaced have got to
-    /// when it expires is the match's business, not the window's.
+    /// a beat inside it — see [`Self::advance`]. Two seconds of them running is
+    /// what the change is worth; where they and the men they replaced have got
+    /// to when it expires is the match's business, not the window's.
     pub const RUN_MS: u64 = 2_000;
-
-    /// One man's whole turn in front of the camera: his close-up and then his
-    /// run. The next man's close-up starts here.
-    pub const BEAT_MS: u64 = Self::PORTRAIT_MS + Self::RUN_MS;
 
     /// Movement speeds, in game units per tick — one unit is 12.5 cm and one
     /// tick is 10 ms, so 0.08 u/tick is 1 m/s and these are real speeds
@@ -185,8 +206,32 @@ impl SubstitutionBreak {
         self.resume_at_ms
     }
 
-    /// **How long the window lasts, in ms of match clock: one
-    /// [`Self::BEAT_MS`] for every man coming on, and not a tick more.**
+    /// **How long the men of a change stand still before ANY of them moves**,
+    /// in ms of match clock: the close-up, plus the ground the pan has to
+    /// cover to take in everybody past the first.
+    ///
+    /// One figure for the whole window, because there is one shot: see
+    /// [`Self::PAN_MS`].
+    pub const fn portrait_ms(men: usize) -> u64 {
+        Self::PORTRAIT_MS + Self::PAN_MS * men.saturating_sub(1) as u64
+    }
+
+    /// **And how long the whole window lasts** — the close-up and then the
+    /// run, whoever is in it. Nothing else: see [`Self::beats_ms`].
+    ///
+    /// An empty window is one that is already over, which is what
+    /// [`Self::open`] leaves behind until a change is staged into it.
+    pub const fn window_ms(men: usize) -> u64 {
+        if men == 0 {
+            0
+        } else {
+            Self::portrait_ms(men) + Self::RUN_MS
+        }
+    }
+
+    /// **How long the window lasts, in ms of match clock: one close-up and one
+    /// run for the whole change, and not a tick more** — see
+    /// [`Self::window_ms`].
     ///
     /// ⚠ **It used to wait for the walking, and that is the 2026-08-26
     /// change** (maintainer: *"on subs — do not wait until replaced player run
@@ -199,7 +244,7 @@ impl SubstitutionBreak {
     /// that had already left the frame.
     ///
     /// So the window is a fixed, known length now — a single change costs 5.4
-    /// s of match clock, a triple 16.2 — and where either walker has got to
+    /// s of match clock, a triple 7.2 — and where either walker has got to
     /// when it expires is the match's business rather than the window's:
     ///
     /// - the man coming ON is one of the eleven and keeps running to his slot
@@ -213,18 +258,22 @@ impl SubstitutionBreak {
     /// walk had left when the ceiling expired; against a window that stops
     /// two seconds into his run, the same write is a twenty-metre teleport.
     fn beats_ms(&self) -> u64 {
-        self.changes.len() as u64 * Self::BEAT_MS
+        Self::window_ms(self.changes.len())
     }
 
-    /// The match clock the `index`-th man of the window is let go at: the end
-    /// of his own close-up, and not a tick before.
+    /// The match clock the window's men are let go at: the end of the
+    /// close-up, and not a tick before.
     ///
-    /// His counterpart leaves on the same tick. The exchange is what a
-    /// substitution is, and both of them standing still until the camera has
-    /// finished with the man coming on is what keeps the close-up a picture of
-    /// somebody standing rather than of somebody halfway out of frame.
-    fn released_at(&self, index: usize) -> u64 {
-        self.opened_at_ms + index as u64 * Self::BEAT_MS + Self::PORTRAIT_MS
+    /// **All of them, on the same tick.** The camera does not work through
+    /// them one at a time any more — it stands off the middle of the row they
+    /// are waiting in and pans across it, so there is no man whose turn has
+    /// not come yet, and a substitute left standing at the gate after the shot
+    /// has moved on is exactly what one release avoids. Their counterparts
+    /// leave with them: the exchange is what a substitution is, and everybody
+    /// standing still until the camera has finished is what keeps the pan a
+    /// picture of men waiting rather than of men halfway out of frame.
+    fn released_at(&self) -> u64 {
+        self.opened_at_ms + Self::portrait_ms(self.changes.len())
     }
 
     /// The changes being played out. Both sides can change at once — that is
@@ -259,9 +308,9 @@ impl SubstitutionBreak {
             meet,
             slot,
         });
-        // Every man added to the window buys another [`Self::BEAT_MS`] of the
-        // camera's time, and the beats ARE the window — see
-        // [`Self::beats_ms`].
+        // Every man added to the window buys another [`Self::PAN_MS`] of the
+        // camera's time — the ground the pan has to cover to reach him — and
+        // the beats ARE the window; see [`Self::beats_ms`].
         //
         // Recomputed here rather than in `open` because the window is opened
         // empty: the caller stages the pair straight afterwards and re-arms
@@ -282,20 +331,20 @@ impl SubstitutionBreak {
         if now >= self.resume_at_ms {
             return false;
         }
-        for (index, change) in self.changes.iter().enumerate() {
-            // ⚠ **Neither man of a pair moves while the picture is on the one
-            // coming on.** The replay opens his beat with his face, comes
-            // round him to the name across his shoulders, and only then lets
-            // him go — see [`Self::PORTRAIT_MS`]. He cannot be shown standing
-            // at the fourth official's shoulder and be running onto the pitch
-            // at the same time.
-            //
-            // ⚠ **And it is per MAN, not per window.** Man two is still held
-            // while man one runs on, which is what makes a triple change three
-            // arrivals rather than one shot of three men setting off together.
-            if now < self.released_at(index) {
-                continue;
-            }
+        // ⚠ **Nobody moves while the picture is on the men coming on.** The
+        // replay opens the change on their faces, pans along the row and comes
+        // round behind them to the names across their shoulders, and only then
+        // lets them go — see [`Self::PORTRAIT_MS`]. A man cannot be shown
+        // standing at the fourth official's shoulder and be running onto the
+        // pitch at the same time.
+        //
+        // ⚠ **And it is per WINDOW, not per man**, which is the 2026-09-04
+        // reversal: one shot takes in the whole row, so there is no beat left
+        // to stagger them behind — see [`Self::released_at`].
+        if now < self.released_at() {
+            return true;
+        }
+        for change in &self.changes {
             // The two of them go at once and cross at the gate, which is what
             // an exchange looks like. Neither of them is waited FOR: both of
             // these report whether they have arrived and neither answer is

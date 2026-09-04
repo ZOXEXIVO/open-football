@@ -201,7 +201,7 @@ impl StateProcessingHandler for GoalkeeperDivingState {
                 ctx.player.position.x,
                 target.struck_from,
                 ctx.ball().direction_to_own_goal().x,
-                target.goal_line_y,
+                KeeperShotDive::aim_y(ctx, target),
             );
             let step = ctx.player.skills.goalkeeper_max_speed(
                 ctx.player.player_attributes.condition,
@@ -262,11 +262,12 @@ impl GoalkeeperDivingState {
             .as_ref()
             .filter(|t| Some(t.defending_side) == ctx.player.side)
         {
+            // …or the side he GUESSED, at a penalty. See `KeeperShotDive::aim_y`.
             let crossing = KeeperShotDive::crossing_at(
                 ctx.player.position.x,
                 target.struck_from,
                 ctx.ball().direction_to_own_goal().x,
-                target.goal_line_y,
+                KeeperShotDive::aim_y(ctx, target),
             );
             if let Some(across) = (crossing - ctx.player.position).try_normalize(1e-3) {
                 return across;

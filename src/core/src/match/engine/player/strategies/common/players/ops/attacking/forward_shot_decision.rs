@@ -2086,8 +2086,16 @@ pub mod mid_run_diag {
     /// 15 dives launched while the shot was still in FLIGHT (as opposed
     /// to the ones the physics save hands him after it has already
     /// stopped the ball — the difference between a keeper diving into
-    /// the corner and a keeper falling over next to a stopped ball).
-    pub static GK_ACTIONS: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
+    /// the corner and a keeper falling over next to a stopped ball),
+    /// 16 split-steps (the hop at the strike — `KeeperSplitStep`),
+    /// 17 shots tipped OVER THE BAR for a corner, 18 penalties faced from
+    /// the line with a committed dive (`KeeperPenaltyStance`), 19 goal
+    /// kicks taken off a run-up (`KeeperGoalKick`).
+    ///
+    /// ⚠ Sized to match `KeeperActionDiag::snapshot`; a slot past the end
+    /// is silently dropped by `note`, which is how 16-19 read zero for a
+    /// while without anything failing.
+    pub static GK_ACTIONS: [AtomicU64; 20] = [const { AtomicU64::new(0) }; 20];
 
     /// **How the keeper puts the ball back into play.**
     ///
@@ -5904,6 +5912,21 @@ pub fn evaluate_forward_shot_decision(
     // different question.
     if let Some(decision) = FreeKickResolver::decide(ctx, distance, tag) {
         return decision;
+    }
+    // **A penalty is struck.** There is no other thing to do with one, and
+    // the open-play gates below do not know that: they weighed a man
+    // standing over a dead ball eleven metres out against the same
+    // appetite, cover and clarity terms as any other carrier, and three
+    // penalties in four were passed or carried away — measured, four
+    // awarded in forty matches and one struck as a penalty. Every keeper
+    // number about a penalty (`KeeperPenaltyStance`) was invisible behind
+    // it.
+    if ctx.tick_context.ball.pass_origin_restart == PassOriginRestart::Penalty
+        && ctx.ball().owner_id() == Some(ctx.player.id)
+    {
+        return ShotDecision::Shoot {
+            reason: "PENALTY_KICK",
+        };
     }
 
     let skills = &ctx.player.skills;

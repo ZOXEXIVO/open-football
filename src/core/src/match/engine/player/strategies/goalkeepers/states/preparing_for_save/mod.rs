@@ -1,7 +1,7 @@
 use crate::r#match::goalkeepers::states::common::{
     ActivityIntensity, GoalkeeperCondition, KeeperAerialClaim, KeeperBallClaim, KeeperDebug,
-    KeeperOneOnOne, KeeperRestPosition, KeeperSetPosition, KeeperShotDive, KeeperShotReaction,
-    KeeperSmother, KeeperSweepLimit,
+    KeeperOneOnOne, KeeperPenaltyStance, KeeperRestPosition, KeeperSetPieceStance,
+    KeeperSetPosition, KeeperShotDive, KeeperShotReaction, KeeperSmother, KeeperSweepLimit,
 };
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::players::ops::goalkeeper_skill::GoalkeeperSkillProfile;
@@ -49,6 +49,14 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         // still and wait to be dribbled round. See [`KeeperSmother`].
         if let Some(attempt) = KeeperSmother::assess(ctx) {
             return Some(KeeperSmother::commit(ctx, &attempt));
+        }
+
+        // A penalty: he goes at the strike, to the side he has guessed,
+        // and there is nothing to read. Above the ordinary launch because
+        // that one waits out a reaction the penalty does not have time
+        // for. See [`KeeperPenaltyStance`].
+        if let Some(guess) = KeeperPenaltyStance::commit(ctx) {
+            return Some(guess);
         }
 
         // A shot he cannot get to on his feet — leave them, now, so the
@@ -249,6 +257,14 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
                 .velocity
                     * speed_boost,
             ));
+        }
+
+        // **A dead ball at his goal.** He is set for it on his mark — on
+        // the line at a penalty, a metre off it at a corner — and nothing
+        // below (the duel, the angle-narrowing point) applies to a ball
+        // that is not moving. See [`KeeperSetPieceStance`].
+        if let Some(to_mark) = KeeperSetPieceStance::steer(ctx) {
+            return Some(to_mark);
         }
 
         // **A man is running at him with the ball.** Then the point to

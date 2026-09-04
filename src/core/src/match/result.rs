@@ -220,10 +220,10 @@ pub const SUBSTITUTION_CLIP_PRE_ROLL_MS: u64 = 2_000;
 /// ⚠ **The recorder cannot know at the mark how many men the window will turn
 /// out to hold**, so this is sized for the long one and is longer than an
 /// ordinary change needs. One thing decides the length now — how many men are
-/// in the change, each of whom gets a [`SubstitutionBreak::BEAT_MS`] of
-/// camera. A side may change three at one stoppage, which is 16.2 s, and a
-/// clip cut to the five and a half an ordinary change costs would stop
-/// halfway through it.
+/// in the change, each of whom adds a [`SubstitutionBreak::PAN_MS`] to the one
+/// shot that takes in all of them. Both sides may send on three at one
+/// stoppage, which is 9.9 s against the five and a half an ordinary change
+/// costs, and a clip cut to the ordinary one would stop halfway through it.
 ///
 /// What the extra seconds hold on an ordinary change is not padding either:
 /// the window closes two seconds into the last man's run, so they are the
@@ -231,7 +231,7 @@ pub const SUBSTITUTION_CLIP_PRE_ROLL_MS: u64 = 2_000;
 /// into position through the middle of it, which is the part of a substitution
 /// a clip that stopped at the window would never show.
 ///
-/// [`SubstitutionBreak::BEAT_MS`]: super::SubstitutionBreak::BEAT_MS
+/// [`SubstitutionBreak::PAN_MS`]: super::SubstitutionBreak::PAN_MS
 pub const SUBSTITUTION_CLIP_POST_ROLL_MS: u64 = 24_000;
 
 /// Rounding applied to a recorded coordinate, once on the way into the buffer
@@ -713,7 +713,19 @@ impl ResultMatchPositionData {
             return true;
         };
         let since_last = timestamp.saturating_sub(last.timestamp);
+        // **A body off the ground is sampled at full rate.** The weighted
+        // tolerance is 3.75 cm of height, and a goalkeeper's split-step
+        // peaks at four to six: recorded through the tolerance alone a hop
+        // produced ONE sample near its apex and one at the landing, and the
+        // viewer drew the straight line between them — a keeper floating
+        // up over half a second, measured as a 450 ms "hang" for a 200 ms
+        // hop. Any change of height at all, while either end of the step
+        // is airborne, is a sample. It costs a keeper's ~40 airborne
+        // episodes a match at 30 ms, a few hundred samples.
+        let leaves_the_ground = (position.z > Quantize::GROUNDED || last.position.z > Quantize::GROUNDED)
+            && (position.z - last.position.z).abs() >= Quantize::GROUNDED;
         Quantize::separation_sq(position, last.position) >= DEDUP_TOLERANCE_SQ
+            || leaves_the_ground
             || since_last >= HEARTBEAT_INTERVAL_MS
     }
 
@@ -744,6 +756,9 @@ impl ResultMatchPositionData {
 
         if self.capturing(timestamp) {
             let kept = self.players.entry(player_id).or_default();
+            if let Some(anchor) = Self::take_off_anchor(kept.last(), timestamp, position) {
+                kept.push(anchor);
+            }
             if Self::worth_recording(kept.last(), timestamp, position) {
                 kept.push(ResultPositionDataItem::new(timestamp, position));
             }
@@ -754,10 +769,53 @@ impl ResultMatchPositionData {
         let last = pending
             .back()
             .or_else(|| self.players.get(&player_id).and_then(|kept| kept.last()));
+        if let Some(anchor) = Self::take_off_anchor(last, timestamp, position) {
+            pending.push_back(anchor);
+        }
+        let last = pending
+            .back()
+            .or_else(|| self.players.get(&player_id).and_then(|kept| kept.last()));
         if Self::worth_recording(last, timestamp, position) {
             pending.push_back(ResultPositionDataItem::new(timestamp, position));
         }
         Self::expire(pending, timestamp);
+    }
+
+    /// The sample cadence, in milliseconds — `POSITION_RECORD_INTERVAL_MS`
+    /// in the engine's tick loop, restated here because the anchor below
+    /// has to be one cadence step before the sample that needs it.
+    const TAKE_OFF_ANCHOR_MS: u64 = 30;
+
+    /// **The last grounded sample before a take-off, written retroactively.**
+    ///
+    /// A keeper standing still is deduplicated: his last sample can be up
+    /// to a heartbeat (750 ms) old when he leaves the ground. The viewer
+    /// interpolates between samples, so the first airborne one — dense
+    /// from there on, see [`Self::worth_recording`] — was joined to a
+    /// grounded sample most of a second earlier, and a 200 ms split-step
+    /// was drawn as a slow float up over half a second. Measured off a
+    /// recording: airborne samples every 30 ms, and the one before them
+    /// 510-720 ms back.
+    ///
+    /// He was on the ground at his last recorded position until at most
+    /// one cadence step ago (the dedup only ever skipped samples inside
+    /// its own tolerance), so a sample saying exactly that, one step
+    /// before the first airborne one, is true to within the tolerance and
+    /// gives the interpolation the corner it needs.
+    fn take_off_anchor(
+        last: Option<&ResultPositionDataItem>,
+        timestamp: u64,
+        position: Vector3<f32>,
+    ) -> Option<ResultPositionDataItem> {
+        let last = last?;
+        let taking_off = last.position.z <= Quantize::GROUNDED && position.z > Quantize::GROUNDED;
+        if !taking_off || timestamp.saturating_sub(last.timestamp) <= Self::TAKE_OFF_ANCHOR_MS {
+            return None;
+        }
+        Some(ResultPositionDataItem::new(
+            timestamp - Self::TAKE_OFF_ANCHOR_MS,
+            Vector3::new(last.position.x, last.position.y, 0.0),
+        ))
     }
 
     /// Add ball position with quantization and tolerance-based dedup.
@@ -1479,6 +1537,41 @@ mod height_recording_tests {
     }
 
     #[test]
+    fn a_keeper_leaving_the_ground_is_sampled_at_full_rate_from_a_fresh_anchor() {
+        // A keeper stands still for most of a second and then split-steps:
+        // five centimetres, two hundred milliseconds. The dedup's weighted
+        // tolerance is 3.75 cm of height, so read through it alone the hop
+        // was one sample near its apex and one at the landing, joined by
+        // the viewer to a grounded sample 600 ms earlier — a slow float.
+        let mut data = ResultMatchPositionData::new();
+        let still = Vector3::new(33.0, 277.0, 0.0);
+        for step in 0..20u64 {
+            data.add_player_positions(7, step * 30, still);
+        }
+        // Take-off at 600 ms: a 5 cm hop, sampled every 30 ms.
+        let hop = [0.02f32, 0.04, 0.05, 0.05, 0.04, 0.02, 0.0];
+        for (i, z) in hop.iter().enumerate() {
+            data.add_player_positions(7, 600 + i as u64 * 30, Vector3::new(33.0, 277.0, *z));
+        }
+        let samples = data.players.get(&7).expect("player 7 was recorded");
+        let airborne: Vec<&ResultPositionDataItem> =
+            samples.iter().filter(|s| s.position.z > 0.0).collect();
+        // Five, not six: the second of the two identical apex samples is
+        // deduplicated, and the line between two equal heights is flat
+        // whether or not it is written down.
+        assert_eq!(airborne.len(), 5, "every airborne sample is kept: {samples:?}");
+        // …and the sample before the first airborne one is a grounded
+        // anchor one cadence step earlier, not the dedup's stale sample.
+        let first_up = samples.iter().position(|s| s.position.z > 0.0).unwrap();
+        let anchor = &samples[first_up - 1];
+        assert_eq!(anchor.timestamp, 570, "anchor written one step before take-off");
+        assert_eq!(anchor.position.z, 0.0);
+        // The landing is kept too, so the hop ends where it ended.
+        assert_eq!(samples.last().unwrap().position.z, 0.0);
+        assert_eq!(samples.last().unwrap().timestamp, 780);
+    }
+
+    #[test]
     fn a_ball_sitting_still_is_still_deduplicated() {
         // The other half of the contract. Weighting the height axis by eight
         // must not turn float noise on a dead ball into a sample per tick —
@@ -1877,14 +1970,15 @@ mod chance_clip_tests {
             )
         );
         // What decides how long a window runs is now one thing and one thing
-        // only: the beats the camera spends on each man coming on. The clip
-        // has to outlast a three-man change and leave something over for the
-        // restart behind it, or a marker leads to footage that stops halfway
-        // through the change it marks.
+        // only: the close-up the camera spends on the men coming on, and the
+        // pan across them. The clip has to outlast the fullest window either
+        // side can ask for — three changes each, six men in one shot — and
+        // leave something over for the restart behind it, or a marker leads to
+        // footage that stops halfway through the change it marks.
         use crate::r#match::SubstitutionBreak;
         assert!(
-            SUBSTITUTION_CLIP_POST_ROLL_MS >= 3 * SubstitutionBreak::BEAT_MS + 7_500,
-            "the clip stops before the third man of a triple change is on"
+            SUBSTITUTION_CLIP_POST_ROLL_MS >= SubstitutionBreak::window_ms(6) + 7_500,
+            "the clip stops before the last man of a six-man change is on"
         );
     }
 
