@@ -834,6 +834,7 @@ impl PipelineProcessor {
                                 is_loan,
                                 true,
                                 date,
+                                    None,
                             ),
                             Some(TransferPlausibilityVerdict::HardReject(_))
                         )
@@ -1955,7 +1956,7 @@ impl PipelineProcessor {
                 let summary = player_lookup.find_summary(country, rec.player_id, date);
                 if let Some(summary) = &summary {
                     let plausibility = TransferPlausibilityBuilder::evaluate_summary(
-                        &buyer_ctx, summary, false, true, date,
+                        &buyer_ctx, summary, false, true, date, None,
                     );
                     if let Some(TransferPlausibilityVerdict::HardReject(_)) = plausibility {
                         continue;

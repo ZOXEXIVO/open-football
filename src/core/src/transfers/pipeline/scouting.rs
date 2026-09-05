@@ -26,7 +26,8 @@ use crate::transfers::pipeline::{
 };
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::{
-    ClubMarketKnowledge, MarketAffinity, MarketAffinityInputs, MarketMap, MoveKind,
+    ClubMarketKnowledge, ClubMarketLedger, MarketAffinity, MarketAffinityInputs, MarketMap,
+    MoveKind,
 };
 use crate::utils::IntegerUtils;
 use crate::{
@@ -78,6 +79,109 @@ struct MatchScoutingObservationResult {
 /// Per-club staged output of the parallel scouting scan (pass 1 of
 /// `process_scouting`). Merged in club order and applied by pass 2, so
 /// the apply order and dedup semantics match the old serial scan.
+/// One club's memo of how far its market reaches, per `(passport, league
+/// he plays in)`.
+///
+/// The answer depends on exactly that pair and on nothing else about the
+/// player, and a scouting pass scores thousands of candidates against a few
+/// hundred pairs — computing it per candidate is the difference between a
+/// run that finishes and one that does not (memory
+/// `transfer_geography_implementation_2026_09`).
+///
+/// Interior mutability because the pass reads it from a `Fn` filter closure
+/// that is used twice by value: a `&mut` capture would make the closure
+/// `FnMut` and non-`Copy`, and the domestic and foreign sweeps both need it.
+/// There is no reentrancy — every borrow is taken and dropped inside
+/// [`Self::reach`].
+struct MarketReachCache {
+    entries: std::cell::RefCell<HashMap<(u32, u32), f32>>,
+}
+
+impl MarketReachCache {
+    /// Floor under the knowledge term. A club may LOOK at a market it does
+    /// not work — what it cannot do is see that market as clearly as one it
+    /// has people in.
+    const KNOWLEDGE_FLOOR: f32 = 0.4;
+
+    fn new() -> Self {
+        MarketReachCache {
+            entries: std::cell::RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// How well this club is placed to look at ONE foreign player: the
+    /// corridor into his market times what the club knows of it, 0..1.
+    ///
+    /// Keyed on `(nationality, country he plays in)`. Keying on the country
+    /// he plays in ALONE — the first cut — collides two different players: a
+    /// Brazilian at Porto and a Portuguese at Porto share one entry, and
+    /// whichever was scored first decides the reach for both.
+    /// `FreeAgentMarketVisibility::build` already keys on the pair; this is
+    /// the same key.
+    fn reach(
+        &self,
+        market_map: &MarketMap,
+        buyer_country_id: u32,
+        club: &Club,
+        player: &PlayerSummary,
+        date: NaiveDate,
+        best_scout_country_level: &dyn Fn(u32) -> u8,
+    ) -> f32 {
+        self.reach_for_pair(
+            market_map,
+            buyer_country_id,
+            &club.market_ledger,
+            (player.nationality_country_id, player.country_id),
+            date,
+            best_scout_country_level,
+        )
+    }
+
+    /// The same read, addressed by the pair directly. Separated so the key
+    /// is a thing a test can hold: the defect this cache carried was that
+    /// the key was the LEAGUE alone, and no test could see that without
+    /// building two whole player summaries.
+    fn reach_for_pair(
+        &self,
+        market_map: &MarketMap,
+        buyer_country_id: u32,
+        ledger: &ClubMarketLedger,
+        key: (u32, u32),
+        date: NaiveDate,
+        best_scout_country_level: &dyn Fn(u32) -> u8,
+    ) -> f32 {
+        if market_map.is_silent() {
+            return 1.0;
+        }
+        if let Some(cached) = self.entries.borrow().get(&key) {
+            return *cached;
+        }
+        let affinity = MarketAffinity::affinity(
+            market_map,
+            MarketAffinityInputs {
+                buyer_country_id,
+                nationality_country_id: key.0,
+                current_country_id: key.1,
+                kind: MoveKind::Talent,
+                // Discovery is the club's own scouting reach; owner money
+                // buys a name, it does not find one.
+                benefactor: 0.0,
+            },
+        );
+        let knowledge = ClubMarketKnowledge::knowledge(
+            market_map,
+            buyer_country_id,
+            ledger,
+            best_scout_country_level(key.1).max(best_scout_country_level(key.0)),
+            key.1,
+            date,
+        );
+        let reach = (affinity * knowledge.max(Self::KNOWLEDGE_FLOOR)).clamp(0.0, 1.0);
+        self.entries.borrow_mut().insert(key, reach);
+        reach
+    }
+}
+
 struct ClubScoutingStaged {
     observations: Vec<ScoutingObservationResult>,
     reports: Vec<ScoutingReportResult>,
@@ -1116,53 +1220,6 @@ impl PipelineProcessor {
         ordered
     }
 
-    /// How well this club is placed to look at ONE foreign player: the
-    /// corridor into his market times what the club knows of it, 0..1.
-    ///
-    /// Memoised on the source country, because a scouting pass scores
-    /// thousands of candidates and the answer depends only on where the man
-    /// is from and where he plays.
-    #[allow(clippy::too_many_arguments)]
-    fn market_reach_for(
-        market_map: &MarketMap,
-        buyer_country_id: u32,
-        club: &Club,
-        player: &PlayerSummary,
-        date: NaiveDate,
-        cache: &mut HashMap<u32, f32>,
-        best_scout_country_level: &dyn Fn(u32) -> u8,
-    ) -> f32 {
-        if market_map.is_empty() {
-            return 1.0;
-        }
-        // Keyed on where he PLAYS: that is the market the club would be
-        // shopping in, and the nationality term rides inside the affinity.
-        if let Some(cached) = cache.get(&player.country_id) {
-            return *cached;
-        }
-        let affinity = MarketAffinity::affinity(
-            market_map,
-            MarketAffinityInputs {
-                buyer_country_id,
-                nationality_country_id: player.nationality_country_id,
-                current_country_id: player.country_id,
-                kind: MoveKind::Talent,
-            },
-        );
-        let knowledge = ClubMarketKnowledge::knowledge(
-            market_map,
-            buyer_country_id,
-            &club.market_ledger,
-            best_scout_country_level(player.country_id)
-                .max(best_scout_country_level(player.nationality_country_id)),
-            player.country_id,
-            date,
-        );
-        let reach = (affinity * knowledge.max(0.4)).clamp(0.0, 1.0);
-        cache.insert(player.country_id, reach);
-        reach
-    }
-
     pub fn process_scouting(
         country: &mut Country,
         foreign_players: &[&PlayerSummary],
@@ -1373,9 +1430,10 @@ impl PipelineProcessor {
             // Norway were equally visible to everyone above the reputation
             // line and the whole planet was uniform above ~0.77.
             //
-            // Cached per source country, because the candidate lists run to
-            // thousands and the answer only depends on where a man is from.
-            let mut market_reach_cache: HashMap<u32, f32> = HashMap::new();
+            // Cached per (passport, league he plays in), because the
+            // candidate lists run to thousands and the answer depends on
+            // exactly that pair.
+            let market_reach_cache = MarketReachCache::new();
             // The department's best coverage of each market, folded once per
             // club. Asking "who is our best man on Colombia?" per candidate
             // walks every staff member's list every time; a scout knows a
@@ -1481,6 +1539,18 @@ impl PipelineProcessor {
                     // and step-down holes left open by the simpler
                     // scouting-config gate above. Unsolicited (we're
                     // scouting, not responding to a listing).
+                    //
+                    // Deliberately WITHOUT the market reach. The reach term
+                    // caps a move at `CanScoutQuietly`, and
+                    // `evaluate_summary` collapses every stage below
+                    // `CanStartNegotiation` into a hard reject — so handing
+                    // it in here would turn "the club may watch him, and
+                    // that is all" into "the club never sees him", which is
+                    // the opposite of what the stage means. Football is
+                    // watched globally. The geography enters this pass as
+                    // the graded data-department preference below, and as a
+                    // GATE only at the public-interest step, where the
+                    // question is whether the club will say so out loud.
                     if let Some(TransferPlausibilityVerdict::HardReject(_)) =
                         TransferPlausibilityBuilder::evaluate_summary(
                             &buyer_plausibility_ctx,
@@ -1488,6 +1558,7 @@ impl PipelineProcessor {
                             false,
                             true,
                             date,
+                            None,
                         )
                     {
                         return false;
@@ -1583,13 +1654,12 @@ impl PipelineProcessor {
                             // country nobody here has ever signed from,
                             // never to a wall: a scout may watch anyone.
                             let market_bonus = if p.country_id != country_id {
-                                (Self::market_reach_for(
+                                (market_reach_cache.reach(
                                     market_map,
                                     country_id,
                                     club,
                                     p,
                                     date,
-                                    &mut market_reach_cache,
                                     &best_scout_country_level,
                                 ) - 0.35)
                                     * 24.0
@@ -1845,6 +1915,14 @@ impl PipelineProcessor {
                             false,
                             true,
                             date,
+                            Some(market_reach_cache.reach(
+                                market_map,
+                                country_id,
+                                club,
+                                target,
+                                date,
+                                &best_scout_country_level,
+                            )),
                         );
                         let public_interest_ok = buyable
                             && assessment
@@ -2236,5 +2314,158 @@ mod scout_reach_tests {
         assert!(reach.contains(&ScoutingRegion::SouthAmerica));
         assert!(reach.contains(&ScoutingRegion::WestAfrica));
         assert!(reach.contains(&ScoutingRegion::NorthAfrica));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::transfers::market_map::{
+        CorridorWeight, CountryTransferProfile, MarketCountryFacts,
+    };
+
+    /// A miniature world: Portugal imports Brazilians heavily and Spaniards
+    /// hardly at all, and Spain is the club doing the looking.
+    struct ReachFixtures;
+
+    impl ReachFixtures {
+        const BR: u32 = 1;
+        const PT: u32 = 2;
+        const ES: u32 = 3;
+
+        fn day() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 8, 1).unwrap()
+        }
+
+        fn facts(id: u32, code: &str, continent: u32, top: u16) -> MarketCountryFacts {
+            MarketCountryFacts {
+                id,
+                code: code.to_string(),
+                continent_id: continent,
+                region: ScoutingRegion::from_country(continent, code),
+                reputation: top,
+                top_flight_reputation: top,
+                median_top_flight_wage: 500_000,
+            }
+        }
+
+        fn weight(country_id: u32, weight: f32) -> CorridorWeight {
+            CorridorWeight {
+                country_id,
+                weight,
+                money: false,
+            }
+        }
+
+        fn world() -> MarketMap {
+            let mut facts = HashMap::new();
+            for f in [
+                Self::facts(Self::BR, "br", 3, 7800),
+                Self::facts(Self::PT, "pt", 1, 7500),
+                Self::facts(Self::ES, "es", 1, 9200),
+            ] {
+                facts.insert(f.id, f);
+            }
+            let mut profiles = HashMap::new();
+            // Spain's clubs buy Brazilians; they do not import Portuguese
+            // nationals at anything like the same rate.
+            profiles.insert(
+                Self::ES,
+                CountryTransferProfile {
+                    import: vec![Self::weight(Self::BR, 1.0), Self::weight(Self::PT, 0.05)],
+                    ..Default::default()
+                },
+            );
+            profiles.insert(
+                Self::BR,
+                CountryTransferProfile {
+                    export: vec![Self::weight(Self::ES, 1.0), Self::weight(Self::PT, 1.0)],
+                    ..Default::default()
+                },
+            );
+            profiles.insert(
+                Self::PT,
+                CountryTransferProfile {
+                    import: vec![Self::weight(Self::BR, 1.0)],
+                    export: vec![Self::weight(Self::ES, 0.05)],
+                    ..Default::default()
+                },
+            );
+            MarketMap::new(profiles, facts)
+        }
+    }
+
+    /// The defect the pair key exists for: a Brazilian at Porto and a
+    /// Portuguese at Porto are two different market questions, and keying
+    /// the memo on the LEAGUE alone let whichever was scored first decide
+    /// the reach for both.
+    #[test]
+    fn two_passports_at_one_club_are_two_different_markets() {
+        let map = ReachFixtures::world();
+        let ledger = ClubMarketLedger::default();
+        let cache = MarketReachCache::new();
+        let no_scouts = |_: u32| -> u8 { 0 };
+
+        let brazilian = cache.reach_for_pair(
+            &map,
+            ReachFixtures::ES,
+            &ledger,
+            (ReachFixtures::BR, ReachFixtures::PT),
+            ReachFixtures::day(),
+            &no_scouts,
+        );
+        let portuguese = cache.reach_for_pair(
+            &map,
+            ReachFixtures::ES,
+            &ledger,
+            (ReachFixtures::PT, ReachFixtures::PT),
+            ReachFixtures::day(),
+            &no_scouts,
+        );
+        assert!(
+            brazilian > portuguese * 1.5,
+            "a Brazilian at Porto ({brazilian}) must read differently from a \
+             Portuguese at Porto ({portuguese})"
+        );
+
+        // And the order they are asked in must not change either answer.
+        let fresh = MarketReachCache::new();
+        let portuguese_first = fresh.reach_for_pair(
+            &map,
+            ReachFixtures::ES,
+            &ledger,
+            (ReachFixtures::PT, ReachFixtures::PT),
+            ReachFixtures::day(),
+            &no_scouts,
+        );
+        let brazilian_second = fresh.reach_for_pair(
+            &map,
+            ReachFixtures::ES,
+            &ledger,
+            (ReachFixtures::BR, ReachFixtures::PT),
+            ReachFixtures::day(),
+            &no_scouts,
+        );
+        assert_eq!(portuguese_first, portuguese);
+        assert_eq!(brazilian_second, brazilian);
+    }
+
+    #[test]
+    fn a_world_with_no_geography_reads_every_market_as_open() {
+        let cache = MarketReachCache::new();
+        let ledger = ClubMarketLedger::default();
+        assert_eq!(
+            cache.reach_for_pair(
+                &MarketMap::default(),
+                ReachFixtures::ES,
+                &ledger,
+                (ReachFixtures::BR, ReachFixtures::PT),
+                ReachFixtures::day(),
+                &|_| 0,
+            ),
+            1.0
+        );
     }
 }

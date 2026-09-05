@@ -17,11 +17,13 @@ use crate::league::{LeagueTable, MatchStorage};
 use crate::shared::SimulatorDataIndexes;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::TransferPool;
+use std::sync::Arc;
+
 use crate::transfers::market_map::{
     CountryTransferProfile, MarketCountryFacts, MarketMap, RegionPrestigeTable,
 };
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
-use crate::transfers::scout_market::seed_staff_id_sequence;
+use crate::transfers::scout_market::StaffIdSequence;
 use crate::utils::IntegerUtils;
 use crate::utils::random::engine as rng_engine;
 use crate::{Person, Player, Staff};
@@ -74,7 +76,14 @@ pub struct SimulatorData {
     /// transfer-window boundary so the money axis tracks a world whose wages
     /// have moved. Never per candidate: 224 × 224 pairs answered from sparse
     /// lists is nothing, and answering them inside a scouting loop is not.
-    pub market_map: MarketMap,
+    ///
+    /// Behind an `Arc` because `initiate_foreign_negotiations` needs an
+    /// OWNED handle: the geography gate reads the map for every candidate
+    /// and the resolve pass beside it needs `&mut data`, so a shared borrow
+    /// cannot span the two. Cloning the whole map to bridge that — a few
+    /// hundred kilobytes of sparse lists, once per country per tick — was
+    /// the largest single cost the geography added to the world sim.
+    pub market_map: Arc<MarketMap>,
 
     /// Global match result storage — all match types (league, cup, national team) write here
     pub match_store: MatchStorage,
@@ -211,7 +220,7 @@ impl SimulatorData {
             watchlist: Vec::new(),
             global_competitions,
             country_info,
-            market_map: MarketMap::default(),
+            market_map: Arc::new(MarketMap::default()),
             match_store: MatchStorage::new(),
             daily_world_player_pool: None,
             daily_global_free_agents: None,
@@ -266,7 +275,7 @@ impl SimulatorData {
             .map(|info| (info.id, info.transfer_profile.clone()))
             .collect();
 
-        self.market_map = MarketMap::new(profiles, facts);
+        self.market_map = Arc::new(MarketMap::new(profiles, facts));
         // Region prestige is read from two dozen gates that sit inside
         // per-country borrows and cannot reach here, so the world's answer
         // is published for them. See `RegionPrestigeTable`.
@@ -511,7 +520,7 @@ impl SimulatorData {
         for staff in &self.free_agent_staff {
             max_staff_id = max_staff_id.max(staff.id);
         }
-        seed_staff_id_sequence(max_staff_id);
+        StaffIdSequence::seed(max_staff_id);
     }
 
     /// Remove a country from the nationality lookup map.

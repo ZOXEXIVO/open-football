@@ -856,6 +856,25 @@ impl PipelineProcessor {
                     plan.brief = Some(brief);
                     plan.last_plan_date = Some(date);
                 }
+                // The asset-ledger flip. Not a listing — nothing here adds
+                // `Lst` — but it is the moment the club would start
+                // answering calls about him, and the seller-side funnel had
+                // no record of it at all: a player could go from untouchable
+                // to quietly marketed with the trace showing nothing between
+                // the signing and the sale.
+                for entry in &eval.sell_list {
+                    if TransferTrace::is(entry.player_id) && entry.is_marketed() {
+                        TransferTrace::line(
+                            entry.player_id,
+                            "list",
+                            format!(
+                                "pass=asset_ledger reason={:?} score={:.2} asking={:.0} \
+                                 marketed=true",
+                                entry.motive, entry.score, entry.asking,
+                            ),
+                        );
+                    }
+                }
                 plan.sell_list = eval.sell_list;
                 plan.last_ledger_date = Some(date);
 

@@ -350,6 +350,33 @@ pub struct EmergencyBuyerContext {
     /// free agent, the sooner he could cross to the poorest league on
     /// another continent. See [`crate::transfers::MarketMap::import_capacity`].
     pub import_capacity: f32,
+    /// The buying country's own id, so the registration gate can tell a
+    /// domestic passport from a foreign one by the same key the corridor
+    /// cards use. `country_code` answers the same question for the region
+    /// gates and stays as it is.
+    pub country_id: u32,
+    /// Registered-foreigner slots left in the buyer's main squad, `None`
+    /// where the league runs no quota. An emergency is not a licence to
+    /// sign a player the club cannot register: the registration pass would
+    /// omit him, the omission reads as a man getting no football, and the
+    /// surplus machinery lists him — the exact churn the buy-side quota
+    /// check exists to stop, reached through the one door that was not
+    /// asking.
+    pub foreign_slots_free: Option<i32>,
+}
+
+impl EmergencyBuyerContext {
+    /// Would signing a player with this passport leave the squad
+    /// unregistrable? Mirrors
+    /// [`crate::transfers::pipeline::squad_fit::ForeignSlotCount::would_block`]
+    /// — a club with one slot left may spend it, a club with none may not,
+    /// and a domestic signing is always free.
+    pub fn would_block_registration(&self, candidate_country_id: u32) -> bool {
+        if candidate_country_id == 0 || candidate_country_id == self.country_id {
+            return false;
+        }
+        matches!(self.foreign_slots_free, Some(free) if free <= 0)
+    }
 }
 
 /// Pure scoring helper for the emergency free-agent pass. Two-phase
@@ -764,6 +791,8 @@ mod tests {
                 urgent,
                 strictness: EmergencyStrictness::Standard,
                 import_capacity: 1.0,
+                country_id: 1,
+                foreign_slots_free: None,
             }
         }
 

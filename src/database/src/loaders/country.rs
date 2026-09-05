@@ -304,6 +304,7 @@ mod tests {
                     nationality_country_id: id(nationality),
                     current_country_id: id(playing_in),
                     kind: MoveKind::Talent,
+                    benefactor: 0.0,
                 },
             )
         };

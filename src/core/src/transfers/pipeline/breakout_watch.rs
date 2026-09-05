@@ -713,6 +713,7 @@ impl PipelineProcessor {
                             false,
                             true,
                             date,
+                                None,
                         ),
                         Some(TransferPlausibilityVerdict::HardReject(_))
                     ) {

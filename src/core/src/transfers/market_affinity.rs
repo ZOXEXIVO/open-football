@@ -17,6 +17,7 @@
 //! signing the same Russian lives in the callers' existing `ClubOpinion`
 //! machinery, not here.
 
+use crate::club::board::ownership::ClubBenefactor;
 use crate::transfers::market_map::{AFFINITY_FLOOR, MarketMap};
 
 /// What kind of move is being priced. A wage-led landing answers to the
@@ -45,6 +46,21 @@ pub struct MarketAffinityInputs {
     /// recorded last league.
     pub current_country_id: u32,
     pub kind: MoveKind,
+    /// The BUYER's owner funding, 0..1 —
+    /// [`crate::club::board::ownership::ClubOwnership::benefactor`].
+    ///
+    /// The money corridor used to be a card property only: unless a country
+    /// card marked the pair `kind: "money"`, no caller ever passed
+    /// [`MoveKind::Money`], so a state-backed club buying out of a
+    /// nationality its country's card does not name was priced as an
+    /// ordinary talent move and could fall to the reach floor. Owner money
+    /// is already a number on the buying club; reading it here makes the
+    /// exception continuous rather than a data flag — a 0.3 benefactor gets
+    /// 60 % of the relief a fully state-backed one gets.
+    ///
+    /// `0.0` for every caller that does not know (a country-grain read, a
+    /// fixture): the term is a FLOOR, so not knowing costs nothing.
+    pub benefactor: f32,
 }
 
 /// The read API over [`MarketMap`]. A unit struct rather than free functions
@@ -110,8 +126,21 @@ impl MarketAffinity {
         // Money reaches where corridors do not. The floor, not a bonus: a
         // corridor that is already stronger than the buyer's import capacity
         // keeps its own value.
-        if inputs.kind == MoveKind::Money || nationality.money {
-            geo = geo.max(map.import_capacity(inputs.buyer_country_id));
+        //
+        // Two things can declare a move wage-led — the CARD (a country pair
+        // marked `kind: "money"`, the Gulf and MLS corridors) and the BUYER
+        // (an owner writing the cheques). The card is a step; the buyer is a
+        // dial, so it enters as a share of the same capacity floor and a
+        // half-funded club gets half the relief. Both are capped by the
+        // destination's own capacity to buy names, which is why this does
+        // not open Yaoundé to anybody however rich its owner is.
+        let owner_share = if inputs.kind == MoveKind::Money || nationality.money {
+            1.0
+        } else {
+            (inputs.benefactor.clamp(0.0, 1.0) / ClubBenefactor::STATE_BACKED_BAR).clamp(0.0, 1.0)
+        };
+        if owner_share > 0.0 {
+            geo = geo.max(owner_share * map.import_capacity(inputs.buyer_country_id));
         }
 
         geo.clamp(AFFINITY_FLOOR, 1.0)
@@ -134,12 +163,19 @@ impl MarketAffinity {
         if nationality_country_id != 0 && nationality_country_id == buyer_country_id {
             return 1.0;
         }
+        // A man who speaks the place fluently already has his one strong
+        // reason; the maximum below cannot beat 1.0, so reading the corridor
+        // first is work with no consequence.
+        let language = language_affinity.clamp(0.0, 1.0);
+        if language >= 1.0 {
+            return 1.0;
+        }
         let corridor = map.corridor(nationality_country_id, buyer_country_id);
         let export = corridor.data_export.unwrap_or(corridor.derived.export);
         let diaspora = map.diaspora_link(nationality_country_id, buyer_country_id);
         export
             .max(diaspora)
-            .max(language_affinity.clamp(0.0, 1.0))
+            .max(language)
             .clamp(AFFINITY_FLOOR, 1.0)
     }
 
@@ -316,6 +352,7 @@ mod tests {
                 nationality_country_id: nationality,
                 current_country_id: current,
                 kind: MoveKind::Talent,
+                benefactor: 0.0,
             },
         )
     }
@@ -369,6 +406,7 @@ mod tests {
                 nationality_country_id: CM,
                 current_country_id: CM,
                 kind: MoveKind::Money,
+                benefactor: 0.0,
             },
         );
         assert!(
@@ -376,6 +414,65 @@ mod tests {
             "the Gulf buys names from anywhere: {wage_led} vs {talent}"
         );
         assert!(wage_led >= map.import_capacity(SA) - 0.001);
+    }
+
+    #[test]
+    fn owner_money_reaches_where_the_card_does_not_and_scales_with_the_owner() {
+        let map = world();
+        // A Cameroonian to Saudi Arabia with no `Money` kind and no money
+        // mark reachable from the CM side. Before the benefactor was read
+        // here, no caller ever passed `MoveKind::Money`, so a state-backed
+        // club buying out of a nationality its card does not name was
+        // priced as an ordinary talent move.
+        let with_owner = |benefactor: f32| {
+            MarketAffinity::affinity(
+                &map,
+                MarketAffinityInputs {
+                    buyer_country_id: SA,
+                    nationality_country_id: CM,
+                    current_country_id: CM,
+                    kind: MoveKind::Talent,
+                    benefactor,
+                },
+            )
+        };
+        let none = with_owner(0.0);
+        let half = with_owner(0.25);
+        let full = with_owner(ClubBenefactor::STATE_BACKED_BAR);
+        assert!(half > none, "an owner opens a door: {half} vs {none}");
+        assert!(full > half, "and a bigger one opens it wider: {full}");
+        // Fully state-backed reads the same as the card's own money mark.
+        assert!((full - map.import_capacity(SA)).abs() < 0.001);
+        // Past the bar it saturates rather than compounding.
+        assert!((with_owner(1.0) - full).abs() < 0.001);
+    }
+
+    #[test]
+    fn owner_money_cannot_open_a_destination_with_no_capacity() {
+        let map = world();
+        // The floor is the DESTINATION's capacity to buy names. However
+        // rich a Cameroonian club's owner, Yaoundé does not become a market
+        // that signs Russians.
+        let wage_led = MarketAffinity::affinity(
+            &map,
+            MarketAffinityInputs {
+                buyer_country_id: CM,
+                nationality_country_id: RU,
+                current_country_id: RU,
+                kind: MoveKind::Talent,
+                benefactor: 1.0,
+            },
+        );
+        assert!(wage_led < 0.15, "was {wage_led}");
+    }
+
+    #[test]
+    fn a_fluent_speaker_reads_a_place_as_familiar_without_the_corridor() {
+        let map = world();
+        // The short-circuit: nothing the corridor could say beats 1.0, so
+        // fluency answers on its own.
+        assert_eq!(MarketAffinity::player_affinity(&map, RU, CM, 1.0), 1.0);
+        assert!(MarketAffinity::player_affinity(&map, RU, CM, 0.0) < 0.15);
     }
 
     #[test]
@@ -388,6 +485,7 @@ mod tests {
                 nationality_country_id: RU,
                 current_country_id: RU,
                 kind: MoveKind::Money,
+                benefactor: 0.0,
             },
         );
         assert!(

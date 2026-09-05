@@ -2,7 +2,7 @@ pub(crate) mod config;
 pub(crate) mod execution;
 pub mod free_agent_audit;
 mod free_agent_depth;
-pub(crate) mod free_agent_market_calc;
+pub mod free_agent_market_calc;
 mod free_agents;
 mod listings;
 mod negotiations;

@@ -409,7 +409,7 @@ impl OfferViewBuilder {
             // language he already has. A world with no geography loaded
             // reads every destination as familiar, which is what the model
             // did before the country cards existed.
-            place_familiarity: if market_map.is_empty() {
+            place_familiarity: if market_map.is_silent() {
                 1.0
             } else {
                 MarketAffinity::player_affinity(

@@ -169,6 +169,12 @@ impl TransferTrace {
 /// * `OF_OWNER_MONEY_OFF` — [`crate::club::board::ownership::ClubBenefactor::subsidy_per_year`]
 ///   returns 0, which zeroes the wage subsidy, the tier envelopes and the
 ///   owner's fee headroom together.
+/// * `OF_GEOGRAPHY_OFF` — every consumer of the country cards behaves as it
+///   did before the transfer geography existed. This is the baseline arm the
+///   geography campaign is measured against: comparing the geography build
+///   against a pre-geography COMMIT compares two worlds, because the tree
+///   also carries match-engine work, and the match engine is what the
+///   real-engine harness spends its time in.
 pub struct MarketSwitches;
 
 impl MarketSwitches {
@@ -202,5 +208,17 @@ impl MarketSwitches {
     pub fn owner_money_off() -> bool {
         static OFF: OnceLock<bool> = OnceLock::new();
         *OFF.get_or_init(|| Self::read("OF_OWNER_MONEY_OFF"))
+    }
+
+    /// The whole transfer GEOGRAPHY: corridor affinity on the buy side, the
+    /// free-agent visibility layer, the scouting market-reach prefilter and
+    /// the loan market's source-country weighting.
+    ///
+    /// Every one of those four already has an `is_empty()` branch that
+    /// behaves pre-geography for a world with no cards loaded, so the arm is
+    /// one `||` at each site rather than a second code path to maintain.
+    pub fn geography_off() -> bool {
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::read("OF_GEOGRAPHY_OFF"))
     }
 }

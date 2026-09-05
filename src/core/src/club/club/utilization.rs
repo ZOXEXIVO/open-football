@@ -1,6 +1,7 @@
 use super::Club;
 use super::WageReliefSale;
 use crate::club::player::statistics::StuckCareerScan;
+use crate::transfers::pipeline::TransferTrace;
 use crate::club::staff::goalkeeping::{KeeperAdvice, KeeperRoomPlan};
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext, SquadEvidenceContext};
@@ -569,6 +570,12 @@ impl Club {
                 reason.clone(),
                 "dec_decided_board".to_string(),
             );
+            // The board's own listing pass — including the wage-relief sale,
+            // which arrives here tagged `dec_reason_wage_relief`. Every other
+            // listing entry point reports itself to the funnel trace; without
+            // this one, a marquee signing listed for money looked to the
+            // trace like a player nobody had listed at all.
+            TransferTrace::list(player, date, "board_utilization", reason);
 
             debug!(
                 "Board transfer-listed: {} (age {}, CA={}) from {}, asking {}",

@@ -29,6 +29,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::club::player::personality::Language;
 use crate::transfers::ScoutingRegion;
+use crate::transfers::pipeline::trace::MarketSwitches;
 
 /// Never zero. A world must be able to open a corridor that has never
 /// existed — a scout is hired, a signing works, and twenty years later the
@@ -154,10 +155,26 @@ impl CorridorPrior {
     /// the same for everyone — two clubs in the same country derive the
     /// same number for the same source market.
     ///
-    /// Only the ladder term is asymmetric, and it is the term that makes the
-    /// asymmetry real: nationals move UP the ladder (export), and clubs buy
-    /// at or BELOW their own level (import). Everything else about a pair —
-    /// language, region, continent — is shared by both directions.
+    /// The ladder is the only asymmetric term, and both halves of the pair
+    /// sit on the SAME side of it. `import` in `derive(from, to)` means
+    /// "`to`'s clubs buy out of `from`", and clubs buy at or below their own
+    /// level — so when `to` is the stronger country the import prior is
+    /// HIGH, not low. Nationals move up the ladder, so the export prior is
+    /// high in exactly the same case.
+    ///
+    /// The first cut put the two terms on opposite sides, which read as a
+    /// directional model and behaved as a symmetric one: every consumer
+    /// blends the pair with a geometric mean, and `gm(base + k·(0.5 − t),
+    /// base + k·(0.5 + t))` is identical for `t` and `−t`. The one term that
+    /// carried the direction cancelled itself, and a data hole priced
+    /// England → Brazil exactly as it priced Brazil → England.
+    ///
+    /// A down-ladder pair now derives weak on both terms, which is right: a
+    /// non-national does not move from England to Brazil, and Brazilian
+    /// clubs do not buy Englishmen. The reverse late-career flow that IS
+    /// real — Europe to the Gulf, MLS, Turkey — is the MONEY corridor, and
+    /// it answers to [`MarketMap::import_capacity`] and the cards, never to
+    /// this fallback.
     pub fn derive(from: &MarketCountryFacts, to: &MarketCountryFacts) -> CorridorPrior {
         let shared_language = {
             let from_mask = Language::country_language_mask(&from.code);
@@ -188,11 +205,13 @@ impl CorridorPrior {
             Self::CROSS_CONTINENT
         };
 
+        // 1 when the destination is far stronger, 0 when far weaker.
+        let tilt = 0.5 + 0.5 * ladder;
+        let prior = ((base + Self::LADDER * tilt) * scale).clamp(AFFINITY_FLOOR, 1.0);
+
         CorridorPrior {
-            import: ((base + Self::LADDER * (0.5 - 0.5 * ladder)) * scale)
-                .clamp(AFFINITY_FLOOR, 1.0),
-            export: ((base + Self::LADDER * (0.5 + 0.5 * ladder)) * scale)
-                .clamp(AFFINITY_FLOOR, 1.0),
+            import: prior,
+            export: prior,
         }
     }
 
@@ -267,6 +286,18 @@ impl MarketMap {
         self.facts.is_empty()
     }
 
+    /// True when no path should read the geography at all — either the world
+    /// carries no cards (a fixture, a database built before they existed) or
+    /// the census baseline arm has disarmed them.
+    ///
+    /// A missing PAIR derives; a missing WORLD fails OPEN. Every gate that
+    /// would consult a corridor checks this and behaves exactly as it did
+    /// before the country cards existed, which is what lets one binary
+    /// produce both arms of the A/B the campaign is judged on.
+    pub fn is_silent(&self) -> bool {
+        self.is_empty() || MarketSwitches::geography_off()
+    }
+
     pub fn profile(&self, country_id: u32) -> &CountryTransferProfile {
         self.profiles.get(&country_id).unwrap_or(&self.empty)
     }
@@ -315,6 +346,32 @@ impl MarketMap {
             derived,
             money,
         }
+    }
+
+    /// The world's heaviest exporting nationalities, strongest first.
+    ///
+    /// Summed across every card's export list rather than read off any one
+    /// of them, so it answers "who does the planet buy from?" — Brazil,
+    /// Argentina, France, Nigeria, Serbia — rather than "who does this
+    /// country buy from?", which is the question the priors already answer.
+    ///
+    /// Read by the scout desk's exploration draw. It is a MENU, never a
+    /// route: nothing here decides where a player goes.
+    pub fn top_exporters(&self, limit: usize) -> Vec<u32> {
+        let mut totals: HashMap<u32, f32> = HashMap::new();
+        for profile in self.profiles.values() {
+            for corridor in &profile.import {
+                *totals.entry(corridor.country_id).or_insert(0.0) += corridor.weight;
+            }
+        }
+        let mut ranked: Vec<(u32, f32)> = totals.into_iter().collect();
+        ranked.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        ranked.truncate(limit);
+        ranked.into_iter().map(|(id, _)| id).collect()
     }
 
     /// Diaspora of `nationality` living in `host`, plus half the reverse —
@@ -474,22 +531,39 @@ mod tests {
         }
     }
 
+    /// Geometric mean of a prior's two terms — what every consumer of the
+    /// fallback actually reads (`MarketAffinity::blend_corridor`).
+    fn gm(prior: CorridorPrior) -> f32 {
+        (prior.import * prior.export).sqrt()
+    }
+
     #[test]
-    fn derived_prior_is_directional_on_the_ladder() {
+    fn derived_prior_is_directional_where_it_is_read() {
         let brazil = facts(1, "br", 3, 8000, 7800);
         let england = facts(2, "gb", 1, 9500, 9500);
-        let up = CorridorPrior::derive(&brazil, &england);
-        let down = CorridorPrior::derive(&england, &brazil);
-        // A Brazilian going to England is a step UP: his export prior beats
-        // England's prior for buying from him? No — both are real. What must
-        // hold is that the ladder tilts each direction the right way.
+        let up = gm(CorridorPrior::derive(&brazil, &england));
+        let down = gm(CorridorPrior::derive(&england, &brazil));
+        // The predecessor tilted import and export opposite ways, so this
+        // ratio was exactly 1.0 and the "directional" fallback priced a
+        // Brazilian reaching England the same as an Englishman reaching
+        // Brazil.
         assert!(
-            up.export > up.import,
-            "nationals move up the ladder: {up:?}"
+            up > 2.0 * down,
+            "up-ladder {up} must dwarf down-ladder {down}"
         );
+    }
+
+    #[test]
+    fn a_down_ladder_cross_continent_pair_sits_on_the_floor() {
+        // Russia → Cameroon: down the ladder, across an ocean, no shared
+        // language, no region corridor. Nothing about it is a corridor.
+        let russia = facts(1, "ru", 1, 6500, 6500);
+        let cameroon = facts(2, "cm", 0, 4000, 2000);
+        let prior = CorridorPrior::derive(&russia, &cameroon);
         assert!(
-            down.import > down.export,
-            "clubs buy at or below their own level: {down:?}"
+            (prior.import - AFFINITY_FLOOR).abs() < 0.01
+                && (prior.export - AFFINITY_FLOOR).abs() < 0.01,
+            "Russia → Cameroon must derive at the floor: {prior:?}"
         );
     }
 
@@ -584,8 +658,22 @@ mod tests {
         );
     }
 
+    /// The prestige table is a process-global atomic array, and cargo runs
+    /// tests in parallel: any test that publishes to it is visible to every
+    /// other test that reads a region's prestige, in this crate and in every
+    /// module that calls `ScoutingRegion::league_prestige()`.
+    ///
+    /// Every test that touches the table takes this lock, so the published
+    /// window is never open while another such test is running. Memory
+    /// `core_suite_rng_flakiness` already records one class of
+    /// order-dependent failure in this suite; this is not a second.
+    static PRESTIGE_TABLE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn published_prestige_wins_over_the_authored_constant() {
+        let _guard = PRESTIGE_TABLE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         RegionPrestigeTable::clear();
         assert_eq!(
             RegionPrestigeTable::get(ScoutingRegion::EastAsia),
@@ -599,5 +687,60 @@ mod tests {
         RegionPrestigeTable::publish(table);
         assert_eq!(RegionPrestigeTable::get(ScoutingRegion::EastAsia), 0.62);
         RegionPrestigeTable::clear();
+    }
+
+    #[test]
+    fn clearing_the_table_restores_every_authored_constant() {
+        let _guard = PRESTIGE_TABLE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        RegionPrestigeTable::clear();
+        for region in ScoutingRegion::all() {
+            assert_eq!(
+                RegionPrestigeTable::get(*region),
+                region.authored_league_prestige(),
+                "{region:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_world_exporters_menu_ranks_by_total_import_weight() {
+        let mut facts_map = HashMap::new();
+        for f in [
+            facts(1, "br", 3, 8000, 7800),
+            facts(2, "ru", 1, 6500, 6500),
+            facts(3, "tr", 1, 6700, 7000),
+            facts(4, "pt", 1, 8000, 7500),
+        ] {
+            facts_map.insert(f.id, f);
+        }
+        let mut profiles = HashMap::new();
+        // Three countries import Brazilians; one imports Russians.
+        for (id, imports) in [
+            (2u32, vec![(1u32, 1.0f32)]),
+            (3, vec![(1, 1.0), (2, 0.3)]),
+            (4, vec![(1, 1.0)]),
+        ] {
+            profiles.insert(
+                id,
+                CountryTransferProfile {
+                    import: imports
+                        .into_iter()
+                        .map(|(country_id, weight)| CorridorWeight {
+                            country_id,
+                            weight,
+                            money: false,
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
+            );
+        }
+        let map = MarketMap::new(profiles, facts_map);
+        let top = map.top_exporters(2);
+        assert_eq!(top.first(), Some(&1), "Brazil is the world's exporter");
+        assert_eq!(top.len(), 2);
+        assert!(map.top_exporters(20).len() <= 2, "only two are named at all");
     }
 }

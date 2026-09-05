@@ -2869,14 +2869,17 @@ impl SellerFeeFloor {
     /// fee, because nothing in the seller's arithmetic remembered what he
     /// had cost. A club that has just spent eighteen million does not accept
     /// six for the same player five months later; it holds, or it loans him.
+    /// Anchored on the TRANSFER, not the contract. `contract.started` is
+    /// re-stamped by every renewal (`accept_contract.rs`, `contract.rs`), so
+    /// reading it here re-armed a full-fee floor on a player bought three
+    /// years ago the day he signed an extension — and left it armed for two
+    /// more years. `last_transfer_date` is written by the same completion
+    /// that sets `sold_from`, so the fee and the clock come from one event.
     fn sunk_cost_floor(player: &Player, date: NaiveDate, distress: SellerDistress) -> f64 {
         if matches!(distress, SellerDistress::Strong) {
             return 0.0;
         }
-        let Some(contract) = player.contract.as_ref() else {
-            return 0.0;
-        };
-        let Some(started) = contract.started else {
+        let Some(acquired) = player.last_transfer_date() else {
             return 0.0;
         };
         // `sold_from` carries `(selling club, fee)` for the move that brought
@@ -2886,7 +2889,7 @@ impl SellerFeeFloor {
         if paid <= 0.0 {
             return 0.0;
         }
-        let years = (date - started).num_days().max(0) as f64 / 365.0;
+        let years = (date - acquired).num_days().max(0) as f64 / 365.0;
         if years >= Self::SUNK_COST_YEARS {
             return 0.0;
         }
@@ -4629,5 +4632,120 @@ mod seller_windfall_tests {
         assert_eq!(unknown.ratio, 0.0);
         assert_eq!(unknown.reservation_ease(), 0.0);
         assert_eq!(SellerWindfall::none().reservation_ease(), 0.0);
+    }
+}
+
+#[cfg(test)]
+mod sunk_cost_floor_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, Player, PlayerAttributes, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills,
+    };
+
+    /// A player bought for a fee, with the contract clock and the TRANSFER
+    /// clock set independently — which is the whole point: they are two
+    /// different dates and the floor must read the second one.
+    struct SunkCostFixtures;
+
+    impl SunkCostFixtures {
+        const PAID: f64 = 18_000_000.0;
+
+        fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+            NaiveDate::from_ymd_opt(y, m, day).unwrap()
+        }
+
+        fn bought(contract_started: NaiveDate, last_transfer: NaiveDate) -> Player {
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = 140;
+            let mut player = PlayerBuilder::new()
+                .id(1)
+                .full_name(FullName::new("Marquee".to_string(), "Signing".to_string()))
+                .birth_date(Self::d(1998, 1, 1))
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Striker,
+                        level: 18,
+                    }],
+                })
+                .player_attributes(attrs)
+                .build()
+                .unwrap();
+            player.sold_from = Some((99, Self::PAID));
+            player.last_transfer_date = Some(last_transfer);
+            player.install_permanent_contract(contract_started, 6000, 6000, Some(2_000_000));
+            if let Some(contract) = player.contract.as_mut() {
+                contract.started = Some(contract_started);
+            }
+            player
+        }
+    }
+
+    /// The Galatasaray → Gaziantep shape: bought in the summer, on the
+    /// market in January. The fee has to still be a floor.
+    #[test]
+    fn a_fee_paid_five_months_ago_still_floors_the_sale() {
+        let bought_on = SunkCostFixtures::d(2026, 7, 1);
+        let player = SunkCostFixtures::bought(bought_on, bought_on);
+        let floor = SellerFeeFloor::sunk_cost_floor(
+            &player,
+            SunkCostFixtures::d(2026, 12, 1),
+            SellerDistress::None,
+        );
+        assert!(
+            floor > SunkCostFixtures::PAID * 0.85,
+            "five months after an 18M purchase the floor read {floor}"
+        );
+    }
+
+    /// The defect: `contract.started` is re-stamped by every renewal, so a
+    /// player bought three years ago re-armed a full-fee floor the day he
+    /// signed an extension — and kept it armed for two more years.
+    #[test]
+    fn a_renewal_does_not_reinstate_the_floor_on_an_old_purchase() {
+        let bought_on = SunkCostFixtures::d(2023, 7, 1);
+        let renewed_on = SunkCostFixtures::d(2026, 7, 1);
+        let player = SunkCostFixtures::bought(renewed_on, bought_on);
+        let floor = SellerFeeFloor::sunk_cost_floor(
+            &player,
+            SunkCostFixtures::d(2026, 8, 1),
+            SellerDistress::None,
+        );
+        assert_eq!(
+            floor, 0.0,
+            "a three-year-old fee is a sunk cost the club has written off"
+        );
+    }
+
+    /// A fire sale lifts it, and a player who arrived for nothing never had
+    /// one.
+    #[test]
+    fn distress_and_a_free_arrival_both_leave_no_floor() {
+        let bought_on = SunkCostFixtures::d(2026, 7, 1);
+        let player = SunkCostFixtures::bought(bought_on, bought_on);
+        assert_eq!(
+            SellerFeeFloor::sunk_cost_floor(
+                &player,
+                SunkCostFixtures::d(2026, 12, 1),
+                SellerDistress::Strong,
+            ),
+            0.0
+        );
+
+        let mut free_arrival = SunkCostFixtures::bought(bought_on, bought_on);
+        free_arrival.sold_from = None;
+        assert_eq!(
+            SellerFeeFloor::sunk_cost_floor(
+                &free_arrival,
+                SunkCostFixtures::d(2026, 12, 1),
+                SellerDistress::None,
+            ),
+            0.0
+        );
     }
 }

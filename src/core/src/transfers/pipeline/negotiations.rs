@@ -2,6 +2,8 @@ use chrono::NaiveDate;
 use log::debug;
 use rayon::prelude::*;
 use rustc_hash::FxHashSet;
+use std::collections::hash_map::Entry;
+use std::sync::Arc;
 use std::collections::{HashMap, HashSet};
 
 use crate::SimulatorData;
@@ -26,6 +28,7 @@ use crate::transfers::pipeline::plausibility::{
     TransferPlausibilityEvaluator, TransferPlausibilityVerdict,
 };
 use crate::transfers::pipeline::processor::PipelineProcessor;
+use crate::transfers::pipeline::squad_fit::{ForeignSlotCount, SquadRegistrationLimits};
 use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::pipeline::upgrade_math::{TargetBelief, UpgradeMath};
 use crate::transfers::pipeline::wage_power::BuyerLevelWage;
@@ -153,6 +156,44 @@ struct PlausibilityReject {
     club_id: u32,
     player_id: u32,
     shortlist_request_id: u32,
+}
+
+/// Foreigner-quota room for the buying clubs of ONE country, counted at
+/// most once per club per pass.
+///
+/// `initiate_foreign_negotiations` walks a candidate list that can name the
+/// same buyer many times, and the count is a full main-squad scan — cheap
+/// once, wasteful per candidate.
+#[derive(Default)]
+struct ForeignRegistrationGuard {
+    by_club: HashMap<u32, ForeignSlotCount>,
+}
+
+impl ForeignRegistrationGuard {
+    /// Would this club be unable to register a player with this passport?
+    fn would_block(
+        &mut self,
+        buying_country: &Country,
+        buying_club_id: u32,
+        candidate_country_id: u32,
+    ) -> bool {
+        let slots = match self.by_club.entry(buying_club_id) {
+            Entry::Occupied(entry) => *entry.get(),
+            Entry::Vacant(entry) => {
+                let Some(club) = buying_country
+                    .clubs
+                    .iter()
+                    .find(|c| c.id == buying_club_id)
+                else {
+                    return false;
+                };
+                let limits =
+                    SquadRegistrationLimits::new(buying_country.id, &buying_country.regulations);
+                *entry.insert(limits.count(club))
+            }
+        };
+        slots.would_block(candidate_country_id)
+    }
 }
 
 impl PipelineProcessor {
@@ -2131,7 +2172,9 @@ impl PipelineProcessor {
         // `&mut data` and a shared borrow cannot span it. Sits AFTER the
         // empty-candidates early return, so it costs nothing on the ticks
         // (most of them) where no club is looking abroad.
-        let market_map = data.market_map.clone();
+        let market_map = Arc::clone(&data.market_map);
+        // Foreigner-quota room per buying club, counted lazily and once.
+        let mut foreign_registration = ForeignRegistrationGuard::default();
 
         for cand in candidates {
             // Resolve the player's current foreign club via the O(1)
@@ -2327,6 +2370,34 @@ impl PipelineProcessor {
                     request.map(|r| &r.reason),
                     Some(TransferNeedReason::DevelopmentSigning)
                 );
+
+            // ── Registration gate ────────────────────────────────────────
+            // Counted per (club, group) and memoised for this pass: this is
+            // the one buy path that reached `from_global` with no squad-fit
+            // snapshot at all, so a club at its foreigner quota could open
+            // talks for a foreigner it could never register. Its candidates
+            // are normally gated upstream by the shortlist, but a
+            // `KnownPlayerMemory` or staff-recommendation candidate arrives
+            // without one.
+            //
+            // Read as a gate, not a preference: the registration rule is
+            // TRUTH about the buyer, and truth is what gates read.
+            if foreign_registration.would_block(
+                buy_country,
+                cand.buying_club_id,
+                player.country_id,
+            ) {
+                debug!(
+                    "Foreign negotiation suppressed: club {} has no registration slot for {} ({})",
+                    cand.buying_club_id, cand.player_id, player_name
+                );
+                foreign_rejected.push(PlausibilityReject {
+                    club_id: cand.buying_club_id,
+                    player_id: cand.player_id,
+                    shortlist_request_id: cand.shortlist_request_id,
+                });
+                continue;
+            }
 
             // ── Final foreign plausibility gate ──────────────────────────
             // Mirror the domestic gate in `initiate_negotiations`: before

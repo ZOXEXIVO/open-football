@@ -1490,6 +1490,7 @@ impl TransferPlausibilityBuilder {
         is_loan: bool,
         is_unsolicited: bool,
         date: NaiveDate,
+        market_reach: Option<f32>,
     ) -> Option<TransferPlausibilityInputs> {
         let seller = &target.seller_ctx;
         let player_ca = target.skill_ability;
@@ -1557,13 +1558,22 @@ impl TransferPlausibilityBuilder {
             buyer_total_wages: buyer_ctx.buyer_total_wages,
             expected_annual_wage,
             player_stage_inclination: seller.big_stage_inclination,
-            // The pool builder has no world map to read: it is called from
-            // inside per-country borrows that cannot reach `SimulatorData`.
-            // Neutral here on purpose — the geography gate lives where the
-            // approach is actually made (`from_global`, with both countries
-            // and the map in hand) and on the discovery side, where the
-            // scouting pool weights candidates by the same affinity.
-            market_affinity: 1.0,
+            // The pool builder cannot read the world map itself: it is
+            // called from inside per-country borrows that cannot reach
+            // `SimulatorData`. What it CAN do is take the number from a
+            // caller that already computed it — the scouting pass memoises
+            // exactly this per (passport, league) — so a club cannot show
+            // PUBLIC interest in a market it does not work.
+            //
+            // `None` stays neutral, and neutral is right for the callers
+            // that have no map in hand: a missing world fails OPEN here
+            // exactly as it does everywhere else in the geography.
+            //
+            // Folded onto the affinity term with knowledge left at 1.0
+            // because the value handed in is already the PRODUCT of the two
+            // (`ScoutingProcessor::market_reach_for`); splitting it back
+            // apart would invent a decomposition the caller never had.
+            market_affinity: market_reach.unwrap_or(1.0).clamp(0.0, 1.0),
             buyer_market_knowledge: 1.0,
             seller_marketed: seller.is_marketed,
         })
@@ -1579,8 +1589,9 @@ impl TransferPlausibilityBuilder {
         is_loan: bool,
         is_unsolicited: bool,
         date: NaiveDate,
+        market_reach: Option<f32>,
     ) -> Option<TransferPlausibilityVerdict> {
-        Self::from_summary(buyer_ctx, target, is_loan, is_unsolicited, date)
+        Self::from_summary(buyer_ctx, target, is_loan, is_unsolicited, date, market_reach)
             .map(|i| TransferPlausibilityEvaluator::evaluate(&i))
     }
 
@@ -1594,8 +1605,9 @@ impl TransferPlausibilityBuilder {
         is_loan: bool,
         is_unsolicited: bool,
         date: NaiveDate,
+        market_reach: Option<f32>,
     ) -> Option<TransferMoveAssessment> {
-        Self::from_summary(buyer_ctx, target, is_loan, is_unsolicited, date)
+        Self::from_summary(buyer_ctx, target, is_loan, is_unsolicited, date, market_reach)
             .map(|i| TransferMovePlausibility::assess(&i))
     }
 
@@ -1703,7 +1715,7 @@ impl TransferPlausibilityBuilder {
         // go, and does this club work that market? A world with no geography
         // loaded (a fixture, a database predating the country cards) reads
         // both as neutral, so the gate is silent rather than closed.
-        let (market_affinity, buyer_market_knowledge) = if market_map.is_empty() {
+        let (market_affinity, buyer_market_knowledge) = if market_map.is_silent() {
             (1.0, 1.0)
         } else {
             let affinity = MarketAffinity::affinity(
@@ -1712,28 +1724,37 @@ impl TransferPlausibilityBuilder {
                     buyer_country_id: buying_country.id,
                     nationality_country_id: player.country_id,
                     current_country_id: selling_country.id,
+                    // Nothing here declares a move wage-led: the buyer's
+                    // owner funding does, continuously, inside the affinity.
+                    // A caller that hard-coded `Money` would make every
+                    // approach by a rich club a Gulf landing.
                     kind: MoveKind::Talent,
+                    benefactor: buying_club.board.ownership.benefactor,
                 },
             );
-            let best_scout_level = buying_club
+            // Invert the walk. Asking every staff member "what is your level
+            // on Colombia?" scans the whole department per question; a scout
+            // knows a handful of countries, so one pass over the department
+            // collecting the two countries we care about answers both.
+            //
+            // The MAX over the selling country and the nationality is the
+            // right reading and stays: a club with a Brazil man can see a
+            // Brazilian at Porto, and a club with a Portugal man can see the
+            // same player through the league he plays in.
+            let mut best_scout_level = 0u8;
+            for staff in buying_club
                 .teams
                 .teams
                 .iter()
                 .flat_map(|team| team.staffs.staffs.iter())
-                .map(|staff| {
-                    staff
-                        .staff_attributes
-                        .knowledge
-                        .country_level(selling_country.id)
-                        .max(
-                            staff
-                                .staff_attributes
-                                .knowledge
-                                .country_level(player.country_id),
-                        )
-                })
-                .max()
-                .unwrap_or(0);
+            {
+                for known in &staff.staff_attributes.knowledge.known_countries {
+                    if known.country_id == selling_country.id || known.country_id == player.country_id
+                    {
+                        best_scout_level = best_scout_level.max(known.level);
+                    }
+                }
+            }
             let knowledge = ClubMarketKnowledge::knowledge(
                 market_map,
                 buying_country.id,

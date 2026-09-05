@@ -264,7 +264,7 @@ impl PipelineProcessor {
                         }
                         let plausibility = summary.as_ref().and_then(|p| {
                             TransferPlausibilityBuilder::evaluate_summary(
-                                &buyer_ctx, p, false, true, date,
+                                &buyer_ctx, p, false, true, date, None,
                             )
                         });
                         if let Some(TransferPlausibilityVerdict::HardReject(_)) = plausibility {
@@ -483,7 +483,7 @@ impl PipelineProcessor {
                                     // entries, soft-dampen the rest.
                                     let plausibility =
                                         TransferPlausibilityBuilder::evaluate_summary(
-                                            &buyer_ctx, &p, false, false, date,
+                                            &buyer_ctx, &p, false, false, date, None,
                                         );
                                     if let Some(TransferPlausibilityVerdict::HardReject(_)) =
                                         plausibility

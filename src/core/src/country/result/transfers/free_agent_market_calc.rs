@@ -269,13 +269,32 @@ impl FreeAgentMarketCalculator {
     /// A fresh free agent is only looked at by markets that know him; a man
     /// a year out of football is looked at by anyone, which is what
     /// `LastChance` means.
+    ///
+    /// Calibrated against two anchors, both worked from the SHIPPED cards
+    /// rather than from taste:
+    ///
+    ///   * a released Brazilian to Turkey — Turkey's number-one import
+    ///     market, Brazil's card naming Turkey back — must be visible on
+    ///     day one. He reads `affinity ≈ 0.52 × reach 0.5 × time 1.0 ≈ 0.26`,
+    ///     which the first cut's Fresh bar of 0.35 REFUSED. It refused the
+    ///     strongest free-agent corridor in the data, and with it every
+    ///     other cross-border free signing for a stage or two — the most
+    ///     likely reason the first 120-day run showed no free moves at all.
+    ///   * Russia → Cameroon, off every card, across an ocean, into a league
+    ///     with no capacity to import a name, reads
+    ///     `≈ 0.045 × 0.15 × 2.0 ≈ 0.014` at full time-widening and must
+    ///     stay under the LOOSEST bar, not merely the tightest.
+    ///
+    /// The band between those two is where the calibration lives; `0.22`
+    /// clears the first with a little room and `0.04` sits three times
+    /// above the second, so neither anchor is balanced on a rounding error.
     pub fn visibility_bar(stage: MarketStage) -> f32 {
         match stage {
-            MarketStage::Fresh => 0.35,
-            MarketStage::Open => 0.26,
-            MarketStage::Flexible => 0.18,
-            MarketStage::Desperate => 0.12,
-            MarketStage::LastChance => 0.08,
+            MarketStage::Fresh => 0.22,
+            MarketStage::Open => 0.16,
+            MarketStage::Flexible => 0.11,
+            MarketStage::Desperate => 0.07,
+            MarketStage::LastChance => 0.04,
         }
     }
 
@@ -809,6 +828,67 @@ impl FreeAgentMarketCalculator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two anchors the visibility bars are calibrated against, worked
+    /// from the shipped Turkey and Brazil cards rather than from taste.
+    ///
+    /// These are the numbers § B5 of `docs/transfer_geography_polish_prompt.md`
+    /// argues about, and they belong in a test rather than in a comment:
+    /// moving any of the four terms in `visibility` or any of the five bars
+    /// has to answer to both of them.
+    #[test]
+    fn the_strongest_free_corridor_is_visible_on_day_one() {
+        // A released Brazilian to Turkey. Turkey's card names Brazil as its
+        // number-one import market (weight 1.0); Brazil's card names Turkey
+        // back at 8/30. Geometric mean ≈ 0.52; reach 0.5 from the import
+        // side; day 0, so no time widening and (as an ordinary journeyman)
+        // no name term.
+        let visible = FreeAgentMarketCalculator::visibility(0.52, 0.5, 0, 0.0, 0.58);
+        assert!(
+            visible >= FreeAgentMarketCalculator::visibility_bar(MarketStage::Fresh),
+            "Brazil → Turkey reads {visible} against a Fresh bar of {} — the strongest \
+             free-agent corridor in the shipped data must not be refused on day one",
+            FreeAgentMarketCalculator::visibility_bar(MarketStage::Fresh),
+        );
+    }
+
+    #[test]
+    fn a_pair_no_card_names_stays_invisible_at_every_stage() {
+        // Russia → Cameroon: off every card, across an ocean, no shared
+        // language, into a league with no capacity to import a name.
+        // Derived affinity at the floor, reach at its own floor, and a full
+        // year of time widening — the most generous reading there is.
+        let visible = FreeAgentMarketCalculator::visibility(0.045, 0.15, 365, 0.0, 0.06);
+        let loosest = FreeAgentMarketCalculator::visibility_bar(MarketStage::LastChance);
+        assert!(
+            visible < loosest,
+            "Russia → Cameroon reads {visible} against the LastChance bar {loosest}"
+        );
+    }
+
+    #[test]
+    fn the_visibility_bars_only_ever_loosen() {
+        let ladder = [
+            MarketStage::Fresh,
+            MarketStage::Open,
+            MarketStage::Flexible,
+            MarketStage::Desperate,
+            MarketStage::LastChance,
+        ];
+        for pair in ladder.windows(2) {
+            let (tighter, looser) = (
+                FreeAgentMarketCalculator::visibility_bar(pair[0]),
+                FreeAgentMarketCalculator::visibility_bar(pair[1]),
+            );
+            assert!(
+                looser < tighter,
+                "{:?} ({looser}) must sit below {:?} ({tighter})",
+                pair[1],
+                pair[0]
+            );
+        }
+        assert!(FreeAgentMarketCalculator::visibility_bar(MarketStage::LastChance) > 0.0);
+    }
 
     #[test]
     fn rep_drop_widens_with_pressure_and_age() {

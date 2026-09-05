@@ -60,6 +60,17 @@ pub enum FreeAgentBlockReason {
     MarketUnfamiliar,
     /// Buying club has no roster room left.
     ClubAtSquadCapacity,
+    /// The buying league runs a foreigner quota and the club has no
+    /// registration slot left for one.
+    ///
+    /// The paid buy paths counted their slots before bidding; the
+    /// free-agent door did not, so a Turkish club at fourteen foreigners
+    /// could still sign a fifteenth out of the pool. The registration
+    /// pass then omitted him, the omission read as a player getting no
+    /// football, and the surplus machinery listed him — the same
+    /// step-up-then-dumped shape, reached through the one door that was
+    /// not checking.
+    NoRegistrationSlot,
     /// The country's per-day free-agent signing cap was already
     /// consumed before this candidate could be tried.
     PerDaySigningCapReached,
@@ -89,6 +100,9 @@ impl FreeAgentBlockReason {
             FreeAgentBlockReason::RegionPrestigeGap => 8,
             FreeAgentBlockReason::MarketUnfamiliar => 9,
             FreeAgentBlockReason::ClubAtSquadCapacity => 10,
+            // Beside the squad-capacity rung: both are "the club physically
+            // cannot take him", and both sit past every judgement gate.
+            FreeAgentBlockReason::NoRegistrationSlot => 10,
             FreeAgentBlockReason::PerDaySigningCapReached => 11,
             FreeAgentBlockReason::DailyChanceRollFailed => 12,
             FreeAgentBlockReason::WageReservationMismatch => 13,
@@ -112,6 +126,7 @@ impl FreeAgentBlockReason {
             FreeAgentBlockReason::RegionPrestigeGap => "region_prestige_gap",
             FreeAgentBlockReason::MarketUnfamiliar => "market_unfamiliar",
             FreeAgentBlockReason::ClubAtSquadCapacity => "club_at_squad_capacity",
+            FreeAgentBlockReason::NoRegistrationSlot => "no_registration_slot",
             FreeAgentBlockReason::PerDaySigningCapReached => "per_day_signing_cap_reached",
             FreeAgentBlockReason::DailyChanceRollFailed => "daily_chance_roll_failed",
             FreeAgentBlockReason::WageReservationMismatch => "wage_reservation_mismatch",
@@ -272,6 +287,28 @@ impl MarketStage {
         }
     }
 
+    /// This stage moved `steps` further down the ladder, saturating at
+    /// `LastChance`.
+    ///
+    /// The ladder is an ordering of how hard a market is still looking at a
+    /// man, so "one stage looser" is the natural unit for a gate that wants
+    /// to relax by a known amount — an urgent buyer reads a Fresh free agent
+    /// the way an ordinary one reads a man who has been available a month.
+    /// It never runs OFF the end: `LastChance` is the loosest thing the
+    /// market has, and a gate that wants no bar at all should not be
+    /// consulting the ladder.
+    pub fn loosened(self, steps: u8) -> Self {
+        const LADDER: [MarketStage; 5] = [
+            MarketStage::Fresh,
+            MarketStage::Open,
+            MarketStage::Flexible,
+            MarketStage::Desperate,
+            MarketStage::LastChance,
+        ];
+        let here = LADDER.iter().position(|s| *s == self).unwrap_or(0);
+        LADDER[(here + steps as usize).min(LADDER.len() - 1)]
+    }
+
     /// Short stable label for debug output / UI rendering.
     pub fn label(self) -> &'static str {
         match self {
@@ -330,6 +367,7 @@ impl FreeAgentStatusCategory {
             // anyone like him. That reads to the player as silence, which
             // is what low interest is.
             | Some(FreeAgentBlockReason::MarketUnfamiliar)
+            | Some(FreeAgentBlockReason::NoRegistrationSlot)
             | Some(FreeAgentBlockReason::PerDaySigningCapReached) => Self::LowInterest,
             Some(FreeAgentBlockReason::DailyChanceRollFailed) => Self::InterestBuilding,
             Some(FreeAgentBlockReason::AlreadySignedOrStaged) => Self::InterestBuilding,
@@ -884,6 +922,18 @@ mod tests {
         assert_eq!(MarketStage::from_days_free(180), MarketStage::Desperate);
         assert_eq!(MarketStage::from_days_free(364), MarketStage::Desperate);
         assert_eq!(MarketStage::from_days_free(365), MarketStage::LastChance);
+    }
+
+    #[test]
+    fn loosening_a_stage_walks_down_the_ladder_and_stops_at_the_end() {
+        assert_eq!(MarketStage::Fresh.loosened(0), MarketStage::Fresh);
+        assert_eq!(MarketStage::Fresh.loosened(1), MarketStage::Open);
+        assert_eq!(MarketStage::Fresh.loosened(2), MarketStage::Flexible);
+        assert_eq!(MarketStage::Desperate.loosened(1), MarketStage::LastChance);
+        // Never off the end: LastChance is the loosest reading the market
+        // has, and the emergency relief must not be able to remove the bar.
+        assert_eq!(MarketStage::Desperate.loosened(9), MarketStage::LastChance);
+        assert_eq!(MarketStage::LastChance.loosened(3), MarketStage::LastChance);
     }
 
     #[test]

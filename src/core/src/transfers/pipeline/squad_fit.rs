@@ -22,6 +22,60 @@ impl SquadRegistrationLimits {
             foreign_player_limit: regulations.foreign_player_limit,
         }
     }
+
+    /// This club's quota position, counted once.
+    pub fn count(&self, club: &Club) -> ForeignSlotCount {
+        ForeignSlotCount {
+            free: self.foreign_player_limit.map(|limit| {
+                let foreigners = club
+                    .teams
+                    .iter()
+                    .find(|t| t.team_type == TeamType::Main)
+                    .map(|team| {
+                        team.players
+                            .iter()
+                            .filter(|p| p.country_id != self.club_country_id)
+                            .count()
+                    })
+                    .unwrap_or(0);
+                limit as i32 - foreigners as i32
+            }),
+            club_country_id: self.club_country_id,
+        }
+    }
+}
+
+/// How much room a club has left under its league's foreigner quota.
+///
+/// Split out of [`SquadFitSnapshot`] because the quota is a SQUAD fact and
+/// the fit snapshot is a per-position-group one: the free-agent paths ask
+/// the registration question without ever building a fit snapshot, and
+/// building four of them per club per tick to answer it would be waste.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ForeignSlotCount {
+    /// Registered-foreigner slots still free in the main squad, or `None`
+    /// where the country runs no quota.
+    free: Option<i32>,
+    club_country_id: u32,
+}
+
+impl ForeignSlotCount {
+    /// Slots left, or `None` where there is no quota. Diagnostics and the
+    /// snapshot builder; gates should ask [`Self::would_block`].
+    pub fn free(&self) -> Option<i32> {
+        self.free
+    }
+
+    /// Would signing a player with this passport leave the squad
+    /// unregistrable? True only when the club is ALREADY at or over its
+    /// quota and the candidate would take another slot — a club with one
+    /// slot left may spend it, and a domestic signing is always free.
+    pub fn would_block(&self, candidate_country_id: u32) -> bool {
+        if candidate_country_id == 0 || candidate_country_id == self.club_country_id {
+            return false;
+        }
+        matches!(self.free, Some(free) if free <= 0)
+    }
 }
 
 /// Buy-side mirror of the club's own surplus machinery.
@@ -154,17 +208,7 @@ impl SquadFitSnapshot {
         // Foreigner slots left in the squad that would have to REGISTER
         // him. Counts the main roster only: that is the list the quota
         // applies to, and it is the list a signing lands on.
-        let foreign_slots_free = registration.foreign_player_limit.map(|limit| {
-            let foreigners = main
-                .map(|team| {
-                    team.players
-                        .iter()
-                        .filter(|p| p.country_id != registration.club_country_id)
-                        .count()
-                })
-                .unwrap_or(0);
-            limit as i32 - foreigners as i32
-        });
+        let foreign_slots_free = registration.count(club).free();
 
         SquadFitSnapshot {
             squad_avg_ability,
@@ -330,5 +374,33 @@ mod tests {
     fn disabled_snapshot_never_fires() {
         let fit = SquadFitSnapshot::disabled();
         assert!(!fit.would_be_surplus(1, 1, 35));
+    }
+
+    /// The quota rule, on the value the free-agent doors read.
+    #[test]
+    fn a_full_foreigner_quota_blocks_only_foreigners() {
+        let full = ForeignSlotCount {
+            free: Some(0),
+            club_country_id: 7,
+        };
+        assert!(full.would_block(9), "a foreigner needs a slot");
+        assert!(!full.would_block(7), "a domestic signing is always free");
+        assert!(!full.would_block(0), "an unknown passport never blocks");
+    }
+
+    #[test]
+    fn a_league_with_no_quota_never_blocks_and_one_slot_may_be_spent() {
+        let unlimited = ForeignSlotCount::default();
+        assert!(!unlimited.would_block(9));
+        let one_left = ForeignSlotCount {
+            free: Some(1),
+            club_country_id: 7,
+        };
+        assert!(!one_left.would_block(9), "a club with a slot may use it");
+        let over = ForeignSlotCount {
+            free: Some(-2),
+            club_country_id: 7,
+        };
+        assert!(over.would_block(9), "and one already over may not");
     }
 }

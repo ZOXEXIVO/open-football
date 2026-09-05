@@ -15,6 +15,7 @@
 use super::CountryResult;
 use crate::club::HappinessEventType;
 use crate::simulator::SimulatorData;
+use crate::transfers::pipeline::TransferTrace;
 use crate::{
     Player, PlayerStatusType, RegulationEventContext, RegulationOutcomeKind, RegulationSlotKind,
 };
@@ -80,6 +81,18 @@ impl CountryResult {
                 if !player.statuses.has(PlayerStatusType::Unr) {
                     player.statuses.add(date, PlayerStatusType::Unr);
                 }
+                // The pass the seller-side funnel suspects most. An omitted
+                // registration is not a listing, but it is the FIRST link in
+                // the chain that produces one: he plays no football, the
+                // surplus machinery reads that as a player nobody picks, and
+                // four months later a marquee signing is on the market. The
+                // trace has to be able to show that first link.
+                TransferTrace::exit(
+                    player,
+                    date,
+                    "registration_foreign_limit",
+                    "omitted_from_squad",
+                );
                 let ctx = RegulationEventContext::new(
                     RegulationOutcomeKind::Omitted,
                     RegulationSlotKind::NonEuQuota,

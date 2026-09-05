@@ -290,10 +290,33 @@ impl DatabaseGenerator {
             .map(|l| l.reputation)
             .unwrap_or(team_reputation);
 
-        let foreign_players: &[ForeignPlayerEntry] = league_id
+        // Who the unmodelled squad places are filled with.
+        //
+        // Two sources, and the LEAGUE list wins where it exists: a
+        // league-level list is a legitimate refinement (the Championship is
+        // not the Premier League), and a country card cannot say that. Where
+        // a league carries none, the COUNTRY CARD answers — nationality by
+        // its `import` weights, foreign probability from its `foreign_share`
+        // — rather than the filler being 100 % domestic by default.
+        //
+        // The two were authored independently, and the divergence is the
+        // whole of the "foreign share drifts from the card" finding: the
+        // census reported the card as wrong for 18 of 68 top divisions when
+        // what was wrong was that the generated world had never read it.
+        let league_foreign: &[ForeignPlayerEntry] = league_id
             .and_then(|lid| data.leagues.iter().find(|l| l.id == lid))
             .map(|l| l.foreign_players.as_slice())
             .unwrap_or(&[]);
+        let card_foreign: Vec<ForeignPlayerEntry> = if league_foreign.is_empty() {
+            CountryCardFiller::entries(data, country_id)
+        } else {
+            Vec::new()
+        };
+        let foreign_players: &[ForeignPlayerEntry] = if league_foreign.is_empty() {
+            &card_foreign
+        } else {
+            league_foreign
+        };
 
         let total_foreign_weight: i32 = foreign_players.iter().map(|fp| fp.weight as i32).sum();
 
@@ -404,5 +427,131 @@ impl DatabaseGenerator {
         }
 
         players
+    }
+}
+
+/// Turns a country's shipped transfer card into the same
+/// `(nationality, weight)` list the league-level `foreign_players` override
+/// uses, so the filler has ONE shape to read whichever source answers.
+///
+/// The card is canonical for a league that carries no list of its own. Its
+/// `import` weights say who this country's clubs sign, and its
+/// `foreign_share` says how many of a squad they are — which is exactly the
+/// two numbers the filler needs, and exactly the two the generated world
+/// was ignoring.
+struct CountryCardFiller;
+
+impl CountryCardFiller {
+    /// Corridors deep enough into the tail to be worth a squad place. The
+    /// card's tail is where the derived fallback is meant to take over, and
+    /// a country's twentieth-ranked source market does not staff a squad.
+    const MAX_SOURCES: usize = 12;
+
+    /// The filler list for one country, or empty when it has no card. Empty
+    /// means the pre-card behaviour — a wholly domestic filler — which is
+    /// what a country the data does not describe should get.
+    fn entries(data: &DatabaseEntity, country_id: u32) -> Vec<ForeignPlayerEntry> {
+        let Some(country) = data.countries.iter().find(|c| c.id == country_id) else {
+            return Vec::new();
+        };
+        let Some(card) = country.transfers.as_ref() else {
+            return Vec::new();
+        };
+        let foreign_percent = (card.foreign_share.clamp(0.0, 1.0) * 100.0).round() as i32;
+        if foreign_percent <= 0 || card.import.is_empty() {
+            return Vec::new();
+        }
+        // Codes → ids, keeping the card's own order (the compiler emits it
+        // sorted by weight, heaviest first).
+        let mut sources: Vec<(u32, f32)> = card
+            .import
+            .iter()
+            .filter_map(|row| {
+                let code = row.country.trim().to_ascii_lowercase();
+                let id = data
+                    .countries
+                    .iter()
+                    .find(|c| c.code.trim().to_ascii_lowercase() == code)?
+                    .id;
+                (row.weight > 0.0 && id != country_id).then_some((id, row.weight))
+            })
+            .collect();
+        sources.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        sources.truncate(Self::MAX_SOURCES);
+        Self::allocate(&sources, foreign_percent)
+    }
+
+    /// Split a country's foreign percentage across its source markets in
+    /// proportion to their corridor weights.
+    ///
+    /// The filler rolls `0..100` against the SUM of these weights, so they
+    /// have to add up to the country's foreign share and not to 100 — which
+    /// is the whole contract this function has to keep.
+    fn allocate(sources: &[(u32, f32)], foreign_percent: i32) -> Vec<ForeignPlayerEntry> {
+        let total: f32 = sources.iter().map(|(_, weight)| *weight).sum();
+        if total <= 0.0 || foreign_percent <= 0 {
+            return Vec::new();
+        }
+        let mut entries: Vec<ForeignPlayerEntry> = Vec::with_capacity(sources.len());
+        let mut allocated = 0i32;
+        for (index, (id, weight)) in sources.iter().enumerate() {
+            let share = if index + 1 == sources.len() {
+                // The remainder goes to the last source so rounding never
+                // loses (or invents) a point of the country's foreign share.
+                foreign_percent - allocated
+            } else {
+                ((weight / total) * foreign_percent as f32).round() as i32
+            };
+            if share <= 0 {
+                continue;
+            }
+            allocated += share;
+            entries.push(ForeignPlayerEntry {
+                country_id: *id,
+                weight: share.clamp(0, 100) as u16,
+            });
+        }
+        entries
+    }
+}
+
+#[cfg(test)]
+mod country_card_filler_tests {
+    use super::*;
+
+    /// The contract the filler roll depends on: the emitted weights sum to
+    /// the country's foreign share, because the roll is `0..100` against
+    /// their total.
+    #[test]
+    fn the_weights_sum_to_the_countrys_foreign_share() {
+        for foreign_percent in [5, 33, 46, 58, 62] {
+            let sources = [(1u32, 1.0f32), (2, 0.6), (3, 0.35), (4, 0.2), (5, 0.05)];
+            let entries = CountryCardFiller::allocate(&sources, foreign_percent);
+            let total: i32 = entries.iter().map(|e| e.weight as i32).sum();
+            assert_eq!(
+                total, foreign_percent,
+                "a {foreign_percent}% foreign share allocated to {total}%"
+            );
+        }
+    }
+
+    #[test]
+    fn the_heaviest_corridor_gets_the_most_places() {
+        let sources = [(1u32, 1.0f32), (2, 0.25)];
+        let entries = CountryCardFiller::allocate(&sources, 40);
+        assert_eq!(entries.len(), 2);
+        assert!(
+            entries[0].weight > entries[1].weight,
+            "{:?}",
+            entries.iter().map(|e| e.weight).collect::<Vec<_>>()
+        );
+        assert_eq!(entries[0].country_id, 1);
+    }
+
+    #[test]
+    fn a_country_with_no_foreigners_or_no_corridors_fills_domestically() {
+        assert!(CountryCardFiller::allocate(&[(1, 1.0)], 0).is_empty());
+        assert!(CountryCardFiller::allocate(&[], 40).is_empty());
+        assert!(CountryCardFiller::allocate(&[(1, 0.0)], 40).is_empty());
     }
 }

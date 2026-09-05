@@ -35,6 +35,13 @@
 //!                                 compatriot sweep.
 //!   * `OF_OWNER_MONEY_OFF`      — every owner cheque is zero: wage
 //!                                 subsidy, tier envelopes, fee headroom.
+//!   * `OF_GEOGRAPHY_OFF`        — the whole transfer GEOGRAPHY: corridor
+//!                                 affinity on the buy side, the free-agent
+//!                                 visibility layer, the scouting reach
+//!                                 prefilter, the loan market's source
+//!                                 weighting and the player's own place
+//!                                 familiarity. The baseline arm for the
+//!                                 corridor census.
 //!
 //! `OF_TRACE_PLAYER=<id>` prints one funnel line per stage for that
 //! player, to stderr.
@@ -61,7 +68,10 @@ use core::country::result::transfers::free_agent_audit::FreeAgentMarketAuditor;
 use core::transfers::pipeline::appraisal::TermsRefusalCause;
 use core::transfers::pipeline::planning::BriefTier;
 use core::transfers::pipeline::{LoanDestinationPreference, LoanOutReason};
+use core::club::player::transfer::MarketStage;
+use core::country::result::transfers::free_agent_market_calc::FreeAgentMarketCalculator;
 use core::transfers::{ClubMarketKnowledge, ScoutingRegion};
+use core::transfers::{MarketAffinity, MarketAffinityInputs, MoveKind as GeographyMoveKind};
 use core::transfers::{
     TransferListingOrigin, TransferListingStatus, TransferListingType, TransferType,
 };
@@ -3691,8 +3701,11 @@ impl CorridorCensus {
 
         println!("\n== corridor census (day {day}) ==");
         Self::print_matrix(data, &moves, &countries);
+        Self::print_kind_matrix(data, &moves, &countries);
         Self::print_returning_flow(&moves, &countries);
         Self::print_implausible(data, &moves, &countries);
+        Self::print_import_capacity(data, &countries);
+        Self::print_free_agent_visibility(data, data.date.date());
         Self::print_foreign_share(data, &clubs, &countries);
         Self::print_step_up_then_dumped(data);
         Self::print_knowledge(data);
@@ -3771,12 +3784,27 @@ impl CorridorCensus {
                     if !seen.insert((t.player_id, t.transfer_date, t.to_club_id)) {
                         continue;
                     }
-                    let (Some((from_country, _)), Some((to_country, _))) =
-                        (clubs.get(&t.from_club_id), clubs.get(&t.to_club_id))
-                    else {
+                    let Some((to_country, _)) = clubs.get(&t.to_club_id) else {
                         continue;
                     };
-                    if from_country == to_country {
+                    // The ORIGIN first, the club index only as a fallback.
+                    //
+                    // A free signing is written with `from_club_id: 0` —
+                    // the pool has no club — so resolving the origin through
+                    // the club index alone dropped every `TransferType::Free`
+                    // row on the floor. That is the whole free-agent half of
+                    // the geography, and it is why the first run of this
+                    // census reported "cross-continent FREE signings: 0 of 0"
+                    // and "Europe → South America: 0 moves": most such moves
+                    // are free, and none of them could be seen.
+                    let from_country = match t.origin_country_id {
+                        0 => match clubs.get(&t.from_club_id) {
+                            Some((country, _)) => *country,
+                            None => continue,
+                        },
+                        origin => origin,
+                    };
+                    if from_country == *to_country {
                         continue;
                     }
                     let Some(nat) = nationality.get(&t.player_id) else {
@@ -3784,7 +3812,7 @@ impl CorridorCensus {
                     };
                     out.push(CorridorMove {
                         nationality: *nat,
-                        from_country: *from_country,
+                        from_country,
                         to_country: *to_country,
                         kind: match t.transfer_type {
                             TransferType::Permanent => MoveGeographyKind::Permanent,
@@ -3889,6 +3917,336 @@ impl CorridorCensus {
             Self::TOP_EXPORTERS,
             Self::share(overlap_hits, overlap_total),
             Self::CARD_TOP_N,
+        );
+        println!(
+            "  corridor_overlap against the WHOLE card: {:.2}   \
+             (separates the top-{} window from genuine off-corridor movement)",
+            Self::share(full_hits, overlap_total),
+            Self::CARD_TOP_N,
+        );
+    }
+
+    /// Permanent / loan / FREE, per exporting nationality, with each kind's
+    /// own corridor overlap.
+    ///
+    /// In real football the free-agent corridor is TIGHTER than the transfer
+    /// one — a released player signs where he is known, because nobody is
+    /// paying a fee to find out about him — so `free` overlapping BELOW
+    /// `permanent` is a finding, not noise. Before the origin fix this table
+    /// could not exist at all: every free row was dropped by the collector.
+    fn print_kind_matrix(
+        data: &SimulatorData,
+        moves: &[CorridorMove],
+        countries: &HashMap<u32, CensusCountry>,
+    ) {
+        #[derive(Default, Clone, Copy)]
+        struct KindCounts {
+            total: [usize; 3],
+            on_card: [usize; 3],
+        }
+        const KIND_LABELS: [&str; 3] = ["perm", "loan", "free"];
+        let index = |kind: MoveGeographyKind| match kind {
+            MoveGeographyKind::Permanent => 0,
+            MoveGeographyKind::Loan => 1,
+            MoveGeographyKind::Free => 2,
+        };
+
+        let mut by_nationality: HashMap<u32, KindCounts> = HashMap::new();
+        let mut world = KindCounts::default();
+        for m in moves {
+            let slot = index(m.kind);
+            let card: Vec<u32> = data
+                .market_map
+                .profile(m.nationality)
+                .export
+                .iter()
+                .map(|c| c.country_id)
+                .collect();
+            let on_card = card.contains(&m.to_country) || m.to_country == m.nationality;
+            let entry = by_nationality.entry(m.nationality).or_default();
+            entry.total[slot] += 1;
+            world.total[slot] += 1;
+            if on_card {
+                entry.on_card[slot] += 1;
+                world.on_card[slot] += 1;
+            }
+        }
+
+        let mut ranked: Vec<(u32, usize)> = by_nationality
+            .iter()
+            .map(|(nat, counts)| (*nat, counts.total.iter().sum()))
+            .collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        ranked.truncate(Self::TOP_EXPORTERS);
+
+        println!("\n-- corridors by MOVE KIND (overlap against the whole export card) --");
+        println!("  nat    perm  ov     loan  ov     free  ov");
+        for (nat, _) in &ranked {
+            let counts = by_nationality[nat];
+            println!(
+                "  {:>3}  {:>6} {:>5.2}  {:>6} {:>5.2}  {:>6} {:>5.2}",
+                Self::code(countries, *nat),
+                counts.total[0],
+                Self::share(counts.on_card[0], counts.total[0]),
+                counts.total[1],
+                Self::share(counts.on_card[1], counts.total[1]),
+                counts.total[2],
+                Self::share(counts.on_card[2], counts.total[2]),
+            );
+        }
+        let world_line: Vec<String> = (0..3)
+            .map(|slot| {
+                format!(
+                    "{}={} ({:.2})",
+                    KIND_LABELS[slot],
+                    world.total[slot],
+                    Self::share(world.on_card[slot], world.total[slot]),
+                )
+            })
+            .collect();
+        println!(
+            "  WORLD cross-border moves: {}   [free overlap should sit AT OR ABOVE permanent]",
+            world_line.join("  "),
+        );
+    }
+
+    /// How readily each country's clubs sign names from outside their own
+    /// corridors, and what the two axes behind it read.
+    ///
+    /// Everything that keys on `import_capacity` — the free-agent reach
+    /// floor, the cross-continent gate's standing relief, the money floor —
+    /// is only as sound as this number. If the shipped Gulf wages are
+    /// modest, the Gulf reads mid rather than high and every one of those is
+    /// quietly weaker than designed, with nothing in any other table saying
+    /// so.
+    fn print_import_capacity(data: &SimulatorData, countries: &HashMap<u32, CensusCountry>) {
+        let mut rows: Vec<(u32, f32, f32, u32)> = Vec::new();
+        for (id, _) in countries.iter() {
+            let capacity = data.market_map.import_capacity(*id);
+            if capacity <= 0.0 {
+                continue;
+            }
+            let profile = data.market_map.profile(*id);
+            let wage = data
+                .market_map
+                .facts(*id)
+                .map(|f| f.median_top_flight_wage)
+                .unwrap_or(0);
+            rows.push((*id, capacity, profile.foreign_share, wage));
+        }
+        if rows.is_empty() {
+            println!("\n-- import_capacity: no country cards loaded --");
+            return;
+        }
+        rows.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        println!(
+            "\n-- import_capacity (n={}): 0.5 x foreign-share axis + 0.5 x wage axis --",
+            rows.len()
+        );
+        println!("  rank  cc   capacity  foreign_share  median_top_flight_wage");
+        let show = |label: &str, row: &(u32, f32, f32, u32)| {
+            println!(
+                "  {label:>4}  {:>3}  {:>8.3}  {:>13.2}  {:>22}",
+                Self::code(countries, row.0),
+                row.1,
+                row.2,
+                row.3,
+            );
+        };
+        for (rank, row) in rows.iter().take(15).enumerate() {
+            show(&format!("{}", rank + 1), row);
+        }
+        println!("  ...");
+        let tail_start = rows.len().saturating_sub(5);
+        for (offset, row) in rows.iter().skip(tail_start).enumerate() {
+            show(&format!("{}", tail_start + offset + 1), row);
+        }
+        // The countries the money corridor is ABOUT, named explicitly.
+        // Everything that keys on capacity — the standing relief, the
+        // name term, the money floor — was designed around the Gulf and
+        // MLS reading HIGH, and a top-15 list cannot say whether they do.
+        println!("  -- money-corridor references --");
+        for code in ["sa", "ae", "qa", "us", "cn", "jp", "tr", "ru", "br", "cm"] {
+            let Some((rank, row)) = rows
+                .iter()
+                .enumerate()
+                .find(|(_, row)| Self::code(countries, row.0) == code)
+            else {
+                continue;
+            };
+            show(&format!("{}", rank + 1), row);
+        }
+    }
+
+    /// The free-agent visibility layer, read directly off the live pool.
+    ///
+    /// The calibration instrument for the market bars. For every pool
+    /// player it asks how many countries can see him at his CURRENT stage,
+    /// and splits the answer by whether the world's cards name his
+    /// nationality as an import market anywhere at all.
+    ///
+    /// An ON-card nationality with nobody able to see him is the failure the
+    /// first cut of the bars produced (a released Brazilian read 0.26
+    /// against a Fresh bar of 0.35 — the strongest free corridor in the data
+    /// refused). An OFF-card nationality visible to half the planet is the
+    /// opposite failure. Both are here, on one line each.
+    ///
+    /// Note what this does NOT claim: `last_block` records one reason from
+    /// one buyer with the buyer discarded, so the block histogram below is
+    /// split by the PLAYER's card standing, not by the pair. It answers
+    /// "does market_unfamiliar concentrate on the men no card describes?",
+    /// which is the § B5 question.
+    fn print_free_agent_visibility(data: &SimulatorData, date: NaiveDate) {
+        // Which nationalities the world's cards name as import markets.
+        let mut on_card: HashSet<u32> = HashSet::new();
+        for country_id in data.country_info.keys() {
+            for corridor in &data.market_map.profile(*country_id).import {
+                on_card.insert(corridor.country_id);
+            }
+        }
+        // Buying countries, sampled by the ones that actually run a league.
+        let buyers: Vec<u32> = data
+            .country_info
+            .keys()
+            .copied()
+            .filter(|id| {
+                data.market_map
+                    .facts(*id)
+                    .map(|f| f.top_flight_reputation > 0)
+                    .unwrap_or(false)
+            })
+            .collect();
+        if buyers.is_empty() || data.free_agents.is_empty() {
+            println!("\n-- free-agent visibility: no pool or no leagues --");
+            return;
+        }
+
+        // [on_card][stage] -> (players, sum of countries that can see him)
+        let mut cells = [[(0usize, 0usize); 5]; 2];
+        let mut blocks: [HashMap<&'static str, usize>; 2] = [HashMap::new(), HashMap::new()];
+        for player in &data.free_agents {
+            // A shipped pool player carries no market state until the first
+            // release sweep stamps one, so reading only the players who have
+            // one made this table EMPTY on day 0 — which is the day the
+            // calibration most wants to read. A man with no state has been
+            // available for no modelled time and is known where he is from.
+            let state = player.free_agent_state();
+            let days_free = state
+                .map(|s| (date - s.free_since).num_days().max(0))
+                .unwrap_or(0);
+            let stage = MarketStage::from_days_free(days_free);
+            let bar = FreeAgentMarketCalculator::visibility_bar(stage);
+            let nationality = player.country_id;
+            let last_country = state
+                .and_then(|s| s.last_country_id)
+                .unwrap_or(nationality);
+            let side = usize::from(on_card.contains(&nationality));
+            let name_reach = FreeAgentMarketCalculator::name_reach(
+                player.reference_reputation(
+                    data.country_info
+                        .get(&nationality)
+                        .map(|info| info.reputation)
+                        .unwrap_or(0),
+                ),
+            );
+            let visible = buyers
+                .iter()
+                .filter(|buyer| **buyer != nationality && **buyer != last_country)
+                .filter(|buyer| {
+                    let capacity = data.market_map.import_capacity(**buyer);
+                    let profile = data.market_map.profile(**buyer);
+                    let affinity = MarketAffinity::affinity(
+                        &data.market_map,
+                        MarketAffinityInputs {
+                            buyer_country_id: **buyer,
+                            nationality_country_id: nationality,
+                            current_country_id: last_country,
+                            kind: GeographyMoveKind::Talent,
+                            benefactor: 0.0,
+                        },
+                    )
+                    .max(
+                        0.5 * data
+                            .market_map
+                            .profile(nationality)
+                            .export_weight(**buyer)
+                            .unwrap_or(0.0),
+                    );
+                    let reach = (0.5 * profile.import_weight(nationality).unwrap_or(0.0))
+                        .max(0.5 * profile.import_weight(last_country).unwrap_or(0.0))
+                        .max(0.6 * capacity)
+                        .max(0.15);
+                    FreeAgentMarketCalculator::visibility(
+                        affinity, reach, days_free, name_reach, capacity,
+                    ) >= bar
+                })
+                .count();
+            let stage_index = match stage {
+                MarketStage::Fresh => 0,
+                MarketStage::Open => 1,
+                MarketStage::Flexible => 2,
+                MarketStage::Desperate => 3,
+                MarketStage::LastChance => 4,
+            };
+            cells[side][stage_index].0 += 1;
+            cells[side][stage_index].1 += visible;
+            if let Some((_, reason)) = state.and_then(|s| s.last_block) {
+                *blocks[side].entry(reason.label()).or_insert(0) += 1;
+            }
+        }
+
+        const STAGE_LABELS: [&str; 5] = ["Fresh", "Open", "Flexible", "Desperate", "LastChance"];
+        println!(
+            "\n-- free-agent visibility: foreign markets that can see each pool player, \
+             by stage (n countries={}) --",
+            buyers.len()
+        );
+        for side in [1usize, 0] {
+            let label = if side == 1 {
+                "nationality ON some card "
+            } else {
+                "nationality on NO card  "
+            };
+            let cells_text: Vec<String> = (0..5)
+                .map(|stage| {
+                    let (players, seen) = cells[side][stage];
+                    format!(
+                        "{}: n={} mean={:.1}",
+                        STAGE_LABELS[stage],
+                        players,
+                        Self::share(seen, players),
+                    )
+                })
+                .collect();
+            println!("  {label} {}", cells_text.join("  "));
+        }
+        println!("  [target: ON-card visible at Fresh; OFF-card near zero at every stage]");
+
+        println!("\n-- free-agent block reasons (last recorded per pool player) --");
+        for side in [1usize, 0] {
+            let label = if side == 1 {
+                "nationality ON some card "
+            } else {
+                "nationality on NO card  "
+            };
+            let total: usize = blocks[side].values().sum();
+            let mut ranked: Vec<(&&str, &usize)> = blocks[side].iter().collect();
+            ranked.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+            let listed: Vec<String> = ranked
+                .iter()
+                .take(6)
+                .map(|(reason, count)| {
+                    format!("{reason}={count} ({:.0}%)", Self::share(**count, total) * 100.0)
+                })
+                .collect();
+            println!("  {label} n={total}  {}", listed.join("  "));
+        }
+        println!(
+            "  [target: market_unfamiliar DOMINATES the off-card row and is rare on the on-card one]"
         );
     }
 

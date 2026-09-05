@@ -2117,28 +2117,35 @@ impl PipelineProcessor {
         let club_region_prestige = club_region.league_prestige();
 
         // How plausible each source market is for THIS country, memoised on
-        // the country a man plays in. The borrowing side of the market has
-        // the same geography as the buying side: a Turkish club takes loans
-        // from the leagues Turkish clubs deal with, not from wherever a
-        // loanable body happens to be listed.
-        let mut visibility_cache: HashMap<u32, f32> = HashMap::new();
+        // the PAIR `(passport, league he plays in)`. The borrowing side of
+        // the market has the same geography as the buying side: a Turkish
+        // club takes loans from the leagues Turkish clubs deal with, not
+        // from wherever a loanable body happens to be listed.
+        //
+        // Keyed on the league alone (the first cut) a Brazilian at Porto and
+        // a Portuguese at Porto shared one entry, and the first of the two
+        // scored decided the geography for both.
+        let mut visibility_cache: HashMap<(u32, u32), f32> = HashMap::new();
         let mut market_visibility = |p: &PlayerSummary| -> f32 {
-            if market_map.is_empty() {
+            if market_map.is_silent() {
                 return 1.0;
             }
-            if let Some(cached) = visibility_cache.get(&p.country_id) {
+            let key = (p.nationality_country_id, p.country_id);
+            if let Some(cached) = visibility_cache.get(&key) {
                 return *cached;
             }
             let affinity = MarketAffinity::affinity(
                 market_map,
                 MarketAffinityInputs {
                     buyer_country_id: country_id,
-                    nationality_country_id: p.nationality_country_id,
-                    current_country_id: p.country_id,
+                    nationality_country_id: key.0,
+                    current_country_id: key.1,
                     kind: MoveKind::Talent,
+                    // Scanned per country, one answer for the league.
+                    benefactor: 0.0,
                 },
             );
-            visibility_cache.insert(p.country_id, affinity);
+            visibility_cache.insert(key, affinity);
             affinity
         };
 
@@ -2576,6 +2583,7 @@ impl PipelineProcessor {
                                     true,
                                     true,
                                     date,
+                                        None,
                                 ),
                                 Some(TransferPlausibilityVerdict::HardReject(_))
                             )
@@ -2707,6 +2715,7 @@ impl PipelineProcessor {
                                     true,
                                     true,
                                     date,
+                                        None,
                                 ),
                                 Some(TransferPlausibilityVerdict::HardReject(_))
                             )
@@ -3409,7 +3418,7 @@ impl ForeignLoanStance {
         // to the stricter unsolicited bar and withheld the
         // seller-advertised read from his own importance.
         let is_unsolicited = !target.is_loan_listed;
-        TransferPlausibilityBuilder::from_summary(buyer_ctx, target, true, is_unsolicited, date)
+        TransferPlausibilityBuilder::from_summary(buyer_ctx, target, true, is_unsolicited, date, None)
             .map(|inputs| {
                 (
                     TransferPlausibilityEvaluator::player_importance(&inputs),

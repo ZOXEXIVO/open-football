@@ -101,6 +101,14 @@ impl ScoutingRegion {
             }
             // South Asia
             "in" | "pk" | "bd" | "lk" | "np" | "mv" | "bt" | "af" => ScoutingRegion::SouthAsia,
+            // Central Asia. Grouped with Kazakhstan (classified from the
+            // European side, since the AFC members that sit in the Russian
+            // orbit are one football region however the continent tables
+            // split them). Left to the fallback these four read as SOUTHEAST
+            // Asia, whose corridor table names South America at 15/25 — and
+            // the census duly found Uruguayans moving to Uzbekistan on a
+            // corridor the model had invented for them.
+            "uz" | "kg" | "tj" | "tm" | "kz" => ScoutingRegion::MiddleEastEurope,
             // Southeast Asia
             _ => ScoutingRegion::SoutheastAsia,
         }
@@ -333,5 +341,60 @@ impl ScoutingRegion {
             ScoutingRegion::SouthAsia,
             ScoutingRegion::Oceania,
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Continent ids as the world data numbers them.
+    const AFRICA: u32 = 0;
+    const EUROPE: u32 = 1;
+    const ASIA: u32 = 4;
+
+    #[test]
+    fn central_asia_shares_a_region_with_kazakhstan() {
+        // Uzbekistan sat in the fallback arm — SoutheastAsia — whose
+        // corridor table names South America at 15/25, so the derived
+        // fallback handed Uruguay → Uzbekistan a corridor term it should
+        // never have had.
+        let kazakhstan = ScoutingRegion::from_country(EUROPE, "kz");
+        for code in ["uz", "kg", "tj", "tm"] {
+            assert_eq!(
+                ScoutingRegion::from_country(ASIA, code),
+                kazakhstan,
+                "{code} must sit with Kazakhstan, not in South-East Asia"
+            );
+        }
+        // And kz itself resolves the same way from either continent table,
+        // since the data disagrees about which continent it belongs to.
+        assert_eq!(ScoutingRegion::from_country(ASIA, "kz"), kazakhstan);
+        assert_eq!(kazakhstan, ScoutingRegion::MiddleEastEurope);
+    }
+
+    #[test]
+    fn the_south_east_asian_fallback_still_catches_south_east_asia() {
+        for code in ["th", "vn", "id", "my", "ph", "sg"] {
+            assert_eq!(
+                ScoutingRegion::from_country(ASIA, code),
+                ScoutingRegion::SoutheastAsia,
+                "{code}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_region_indexes_inside_the_table() {
+        for (position, region) in ScoutingRegion::all().iter().enumerate() {
+            assert_eq!(region.index(), position, "{region:?}");
+        }
+        assert_eq!(ScoutingRegion::all().len(), ScoutingRegion::COUNT);
+    }
+
+    #[test]
+    fn a_country_belongs_to_the_region_it_classifies_into() {
+        assert!(ScoutingRegion::WestAfrica.contains_country(AFRICA, "ng"));
+        assert!(!ScoutingRegion::WestAfrica.contains_country(AFRICA, "ma"));
     }
 }
