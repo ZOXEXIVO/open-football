@@ -2578,7 +2578,16 @@ impl EmergencyRealismGates {
         visibility: &FreeAgentMarketVisibility,
     ) -> Result<(), FreeAgentBlockReason> {
         if !Self::passes_quality(candidate, buyer, group) {
-            return Err(if candidate.ability < 60 {
+            // Which SIDE of the band he fell off, read off the band itself
+            // rather than guessed from a threshold — the diagnosis layer
+            // shows this to the player, and "too good for everyone" and
+            // "not good enough for anyone" are opposite answers.
+            let floor = FreeAgentMarketCalculator::min_acceptable_ca(
+                buyer.club_reputation_score,
+                group,
+                candidate.career_pressure,
+            );
+            return Err(if candidate.ability < floor {
                 FreeAgentBlockReason::BelowMinimumAbility
             } else {
                 FreeAgentBlockReason::AboveMaximumAbility

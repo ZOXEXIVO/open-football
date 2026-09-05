@@ -4518,11 +4518,24 @@ impl CorridorCensus {
                             ) >= ClubMarketKnowledge::WORKING_KNOWLEDGE
                         })
                         .count();
-                    // A market the club did business in within the last year that
-                    // was NOT part of its day-0 squad: a corridor this save
-                    // opened for itself.
+                    // A market this save OPENED for itself: not on the day-0
+                    // squad, worked inside the last year, and worked hard
+                    // enough that the club can actually recruit there.
+                    //
+                    // The `WORKING_KNOWLEDGE` clause is the whole of it. One
+                    // signing from a nationality the club had nobody from
+                    // writes a ledger row, and reading the row alone counted
+                    // that as an opened corridor — which, with 26,000 free
+                    // moves in 120 days across 1,414 clubs, is almost every
+                    // club almost every window. A corridor is a market the
+                    // club can WORK: `knowledge` needs volume (one signing
+                    // reads ~0.2 against a 0.3 bar), which is the same bar
+                    // the band above this line is counted against.
                     if club.market_ledger.entries().iter().any(|entry| {
-                        !entry.bootstrapped && (today - entry.last_signing).num_days() <= 365
+                        !entry.bootstrapped
+                            && (today - entry.last_signing).num_days() <= 365
+                            && club.market_ledger.knowledge(entry.country_id, today)
+                                >= ClubMarketKnowledge::WORKING_KNOWLEDGE
                     }) {
                         opened += 1;
                     }
