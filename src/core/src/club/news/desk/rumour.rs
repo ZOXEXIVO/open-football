@@ -22,6 +22,9 @@ impl RumourDesk {
     /// happening, so it has to expire, or the paper reports the asking
     /// again every time it looks at him.
     const REQUEST_IS_NEWS_FOR_DAYS: i64 = 21;
+    /// How long after arriving a signing's second thoughts about the
+    /// size of the club are still a story about the signing.
+    const STEPPING_STONE_DAYS: i64 = 120;
 
     pub fn file_player(out: &mut Vec<NewsStory>, player: &Player, date: NaiveDate) {
         Self::file_player_over(out, player, date, RecentEvents::FORTNIGHT);
@@ -170,6 +173,24 @@ impl RumourDesk {
             return;
         }
 
+        // A signing who has already worked out that this club is
+        // smaller than the one he thought he was joining. Only news
+        // while he is still a signing: the same mood re-fires for as
+        // long as the gap exists, and a year in it is his problem
+        // rather than the paper's.
+        if feed.happened(HappinessEventType::AmbitionShock)
+            && player
+                .last_transfer_date()
+                .is_some_and(|joined| (date - joined).num_days() <= Self::STEPPING_STONE_DAYS)
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::SteppingStoneTalk, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+            return;
+        }
+
         // Interest from elsewhere, cashed in here. The most cynical
         // thing in football, done constantly, and never once printed.
         if feed.happened(HappinessEventType::UsedInterestForContractLeverage) {
@@ -252,6 +273,31 @@ impl RumourDesk {
         if let Some(club) = feed.suitor(HappinessEventType::DreamMoveCollapsed) {
             out.push(
                 NewsStory::new(NewsStoryKind::MoveCollapsed, date)
+                    .about(player.id)
+                    .against(club)
+                    .weighted(importance),
+            );
+            return;
+        }
+
+        // The two rungs where the saga stops being speculation. He has
+        // settled his own terms with the club that wants him — the last
+        // thing about a transfer that is still about the player — or
+        // the clubs agreed and he did not. Both outrank a rejected bid:
+        // a bid is the other club's story, and these two are his.
+        if let Some(club) = feed.suitor(HappinessEventType::AgreedPersonalTerms) {
+            out.push(
+                NewsStory::new(NewsStoryKind::PersonalTermsAgreed, date)
+                    .about(player.id)
+                    .against(club)
+                    .weighted(importance),
+            );
+            return;
+        }
+
+        if let Some(club) = feed.suitor(HappinessEventType::RejectedMoveOnPersonalTerms) {
+            out.push(
+                NewsStory::new(NewsStoryKind::TurnsDownMove, date)
                     .about(player.id)
                     .against(club)
                     .weighted(importance),
@@ -708,5 +754,36 @@ mod tests {
             out[0].a, 9,
             "November from March is nine months on the clock"
         );
+    }
+
+    /// The saga's two new endings. Terms he agreed outrank a bid his
+    /// club refused — the bid is the other club's story and the terms
+    /// are his — and a move he turned down is reported as his decision.
+    #[test]
+    fn a_player_settling_his_own_terms_outranks_a_bid_his_club_refused() {
+        let kinds = Mill::kinds(&[
+            HappinessEventType::TransferBidRejected,
+            HappinessEventType::AgreedPersonalTerms,
+        ]);
+
+        assert!(kinds.contains(&NewsStoryKind::PersonalTermsAgreed));
+        assert!(!kinds.contains(&NewsStoryKind::BidRejected));
+
+        let kinds = Mill::kinds(&[HappinessEventType::RejectedMoveOnPersonalTerms]);
+        assert_eq!(kinds, vec![NewsStoryKind::TurnsDownMove]);
+    }
+
+    /// Both new rungs name the club at the other end, so neither is
+    /// printed about a beat the feed could not attribute.
+    #[test]
+    fn the_new_rungs_need_a_club_behind_them() {
+        let player = Mill::anonymous_player(&[
+            HappinessEventType::AgreedPersonalTerms,
+            HappinessEventType::RejectedMoveOnPersonalTerms,
+        ]);
+        let kinds = Mill::kinds_of(&player);
+
+        assert!(!kinds.contains(&NewsStoryKind::PersonalTermsAgreed));
+        assert!(!kinds.contains(&NewsStoryKind::TurnsDownMove));
     }
 }

@@ -1,5 +1,5 @@
 use super::facts::{PlayerStanding, RecentEvents, SquadPulse};
-use crate::club::news::types::{NewsStory, NewsStoryKind};
+use crate::club::news::types::{IssueResult, NewsStory, NewsStoryKind};
 use crate::{HappinessEventType, Player};
 use chrono::NaiveDate;
 
@@ -148,6 +148,18 @@ impl DugoutDesk {
             return;
         }
 
+        // Minutes promised. Written down here because the player has
+        // written it down too, and the paper will be reading the two
+        // notes against each other in a month.
+        if feed.happened(HappinessEventType::ManagerPlayingTimePromise) {
+            out.push(
+                NewsStory::new(NewsStoryKind::PromisedHisChance, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+            return;
+        }
+
         if feed
             .any_of(&[
                 HappinessEventType::ManagerPraise,
@@ -163,6 +175,44 @@ impl DugoutDesk {
                     .weighted(importance / 2),
             );
         }
+    }
+
+    /// The manager's own verdict on the week's last match.
+    ///
+    /// A local paper quotes the man in the dugout after every game; it
+    /// is the one voice on the page that is not the correspondent's,
+    /// and until now the page had none. One line, on the latest result,
+    /// and only when there is a man in the seat to quote — a vacant
+    /// dugout has nobody to say anything.
+    pub fn file_verdict(
+        out: &mut Vec<NewsStory>,
+        results: &[IssueResult],
+        staff_id: u32,
+        date: NaiveDate,
+    ) {
+        if staff_id == 0 {
+            return;
+        }
+        let Some(latest) = results.last() else {
+            return;
+        };
+
+        let kind = if latest.is_win() {
+            NewsStoryKind::ManagerOnWin
+        } else if latest.is_draw() {
+            NewsStoryKind::ManagerOnDraw
+        } else {
+            NewsStoryKind::ManagerOnDefeat
+        };
+
+        // The scoreline rides in the figures so the quote can mention
+        // it; no opponent, because on this desk the slot would resolve
+        // as a club rather than as the side that was actually played.
+        out.push(
+            NewsStory::new(kind, date)
+                .by_staff(staff_id)
+                .with_numbers(latest.goals_for as i32, latest.goals_against as i32),
+        );
     }
 
     /// The squad-wide beats, once the walk has seen everybody.

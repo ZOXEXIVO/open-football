@@ -28,23 +28,28 @@ pub mod fans;
 pub mod loan;
 pub mod market;
 pub mod pitch;
+pub mod preview;
 pub mod rumour;
 pub mod squad;
+pub mod targets;
 
 pub use board::BoardroomDesk;
 pub use dugout::DugoutDesk;
 pub use facts::{
-    Absorbing, CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, ContinentalNight,
-    CupTie, KeeperMatchFacts, LoanWatchEntry, ManagerPursuit, MatchDramaFacts, MatchStarFacts,
-    OutfieldMatchFacts, PlayerStanding, PlayoffTie, RecentEvents, SquadPulse, StandingSnapshot,
-    TransferMotive, TransferMove, TransferMoveKind, WeeklyMatchFacts,
+    Absorbing, CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTargetsWeek, ClubTransferWeek,
+    ContinentalNight, CupTie, KeeperMatchFacts, LoanWatchEntry, ManagerPursuit, MatchDramaFacts,
+    MatchStarFacts, NextFixture, OutfieldMatchFacts, PlayerStanding, PlayoffTie, PursuitStage,
+    RecentEvents, SquadPulse, StandingSnapshot, TargetPursuit, TransferMotive, TransferMove,
+    TransferMoveKind, WeeklyMatchFacts, WindowWeek,
 };
 pub use fans::{FansDesk, TownMood};
 pub use loan::LoanDesk;
 pub use market::MarketDesk;
 pub use pitch::{MatchDesk, TableDesk};
+pub use preview::PreviewDesk;
 pub use rumour::RumourDesk;
 pub use squad::SquadDesk;
+pub use targets::TargetsDesk;
 
 #[cfg(test)]
 mod tests {
@@ -237,6 +242,8 @@ mod tests {
             reply_minutes: 2,
             red_card: true,
             won: true,
+            equaliser_minute: 0,
+            equaliser_ours: false,
         };
 
         let kinds = file(everything, 4, 3);
@@ -432,32 +439,83 @@ mod tests {
         use crate::LoanSpellVerdict as How;
 
         assert_eq!(
-            SquadDesk::homecoming_kind(How::Standout),
+            SquadDesk::homecoming_kind(How::Standout, false),
             NewsStoryKind::LoanReturnTriumph
         );
         assert_eq!(
-            SquadDesk::homecoming_kind(How::Successful),
+            SquadDesk::homecoming_kind(How::Successful, false),
             NewsStoryKind::LoanReturnTriumph
         );
         assert_eq!(
-            SquadDesk::homecoming_kind(How::Peripheral),
+            SquadDesk::homecoming_kind(How::Peripheral, false),
             NewsStoryKind::LoanReturnWasted
         );
         assert_eq!(
-            SquadDesk::homecoming_kind(How::Struggled),
+            SquadDesk::homecoming_kind(How::Struggled, false),
             NewsStoryKind::LoanReturnWasted
         );
 
         // A spell too short to read is not a verdict, and inventing one
         // from a small sample is exactly what the record refuses to do.
         assert_eq!(
-            SquadDesk::homecoming_kind(How::Inconclusive),
+            SquadDesk::homecoming_kind(How::Inconclusive, false),
             NewsStoryKind::LoanReturn
         );
         assert_eq!(
-            SquadDesk::homecoming_kind(How::Steady),
+            SquadDesk::homecoming_kind(How::Steady, false),
             NewsStoryKind::LoanReturn
         );
+    }
+
+    /// The same homecoming, for the one position none of that copy
+    /// describes.
+    ///
+    /// Every phrasing of the outfield pieces is built on what he
+    /// produced away from home, and a goalkeeper produces none of it —
+    /// so a keeper who spent a season keeping clean sheets came home to
+    /// "{n} appearances and 0 goals", which is a fact about the
+    /// position and about nothing else. The verdict is unchanged: it is
+    /// read off minutes and marks, and both mean the same thing in
+    /// either job.
+    #[test]
+    fn a_goalkeeper_comes_home_to_his_own_half_of_the_catalogue() {
+        use crate::LoanSpellVerdict as How;
+
+        assert_eq!(
+            SquadDesk::homecoming_kind(How::Standout, true),
+            NewsStoryKind::KeeperLoanReturnTriumph
+        );
+        assert_eq!(
+            SquadDesk::homecoming_kind(How::Struggled, true),
+            NewsStoryKind::KeeperLoanReturnWasted
+        );
+        assert_eq!(
+            SquadDesk::homecoming_kind(How::Steady, true),
+            NewsStoryKind::KeeperLoanReturn
+        );
+
+        // None of them may reach the copy written around a goal tally.
+        for verdict in [
+            How::Standout,
+            How::Successful,
+            How::Steady,
+            How::Peripheral,
+            How::Struggled,
+            How::Inconclusive,
+        ] {
+            let kind = SquadDesk::homecoming_kind(verdict, true);
+            assert!(
+                !matches!(
+                    kind,
+                    NewsStoryKind::LoanReturn
+                        | NewsStoryKind::LoanReturnTriumph
+                        | NewsStoryKind::LoanReturnWasted
+                ),
+                "{:?} sent a goalkeeper to the outfield copy: {:?}",
+                verdict,
+                kind
+            );
+        }
     }
 
     /// A European night is reported as one.
@@ -549,7 +607,7 @@ mod tests {
     #[test]
     fn the_table_is_not_a_story_in_august() {
         let mut out = Vec::new();
-        TableDesk::file(&mut out, Some(Fixture::table(1, 20, 4, 38)), Fixture::day());
+        TableDesk::file(&mut out, Some(Fixture::table(1, 20, 4, 38)), 1, Fixture::day());
 
         assert!(
             out.is_empty(),
@@ -563,6 +621,7 @@ mod tests {
         TableDesk::file(
             &mut leaders,
             Some(Fixture::table(2, 20, 24, 38)),
+            1,
             Fixture::day(),
         );
         assert_eq!(Fixture::kinds(&leaders), vec![NewsStoryKind::TitleCharge]);
@@ -571,6 +630,7 @@ mod tests {
         TableDesk::file(
             &mut strugglers,
             Some(Fixture::table(19, 20, 24, 38)),
+            1,
             Fixture::day(),
         );
         assert_eq!(
@@ -582,6 +642,7 @@ mod tests {
         TableDesk::file(
             &mut mid,
             Some(Fixture::table(10, 20, 24, 38)),
+            1,
             Fixture::day(),
         );
         assert!(mid.is_empty(), "mid-table is not news");
@@ -1465,6 +1526,220 @@ mod tests {
         assert!(
             out[1].priority > out[0].priority,
             "the expensive signing must outrank the cheap one on the page"
+        );
+    }
+
+    /// First is its own story. "Among the leaders" was the copy for
+    /// first, second and third alike, and a side that went top read
+    /// exactly like one that was third.
+    #[test]
+    fn first_place_is_told_as_first() {
+        let mut out = Vec::new();
+        TableDesk::file(&mut out, Some(Fixture::table(1, 20, 24, 38)), 1, Fixture::day());
+        assert_eq!(Fixture::kinds(&out), vec![NewsStoryKind::TopOfTheTable]);
+
+        let mut second = Vec::new();
+        TableDesk::file(
+            &mut second,
+            Some(Fixture::table(2, 20, 24, 38)),
+            1,
+            Fixture::day(),
+        );
+        assert_eq!(Fixture::kinds(&second), vec![NewsStoryKind::TitleCharge]);
+    }
+
+    /// The middle of the table used to be no story at all, so a club
+    /// finishing eighth every year had a paper that never once said
+    /// where it was. The race for Europe is a story from halfway, and
+    /// a safe, going-nowhere season is one from the last third.
+    #[test]
+    fn the_middle_of_the_table_gets_its_own_pieces() {
+        let mut europe = Vec::new();
+        TableDesk::file(
+            &mut europe,
+            Some(Fixture::table(5, 20, 24, 38)),
+            1,
+            Fixture::day(),
+        );
+        assert_eq!(Fixture::kinds(&europe), vec![NewsStoryKind::EuropeRace]);
+
+        let mut early = Vec::new();
+        TableDesk::file(
+            &mut early,
+            Some(Fixture::table(5, 20, 14, 38)),
+            1,
+            Fixture::day(),
+        );
+        assert!(early.is_empty(), "fifth in the autumn is not a race yet");
+
+        let mut drift = Vec::new();
+        TableDesk::file(
+            &mut drift,
+            Some(Fixture::table(10, 20, 30, 38)),
+            1,
+            Fixture::day(),
+        );
+        assert_eq!(Fixture::kinds(&drift), vec![NewsStoryKind::MidTableDrift]);
+    }
+
+    /// Halfway and the final whistle are filed on the week the
+    /// programme crosses the line and on no other — the table sits
+    /// past the line for a week afterwards, and must not re-fire.
+    #[test]
+    fn the_season_checkpoints_fire_only_on_the_week_they_are_crossed() {
+        let mut halfway = Vec::new();
+        TableDesk::file(
+            &mut halfway,
+            Some(Fixture::table(8, 20, 19, 38)),
+            1,
+            Fixture::day(),
+        );
+        assert!(Fixture::kinds(&halfway).contains(&NewsStoryKind::HalfwayReport));
+
+        let mut sat_there = Vec::new();
+        TableDesk::file(
+            &mut sat_there,
+            Some(Fixture::table(8, 20, 19, 38)),
+            0,
+            Fixture::day(),
+        );
+        assert!(
+            !Fixture::kinds(&sat_there).contains(&NewsStoryKind::HalfwayReport),
+            "a week with no league game crossed nothing"
+        );
+
+        let mut last_day = Vec::new();
+        TableDesk::file(
+            &mut last_day,
+            Some(Fixture::table(8, 20, 38, 38)),
+            1,
+            Fixture::day(),
+        );
+        assert!(Fixture::kinds(&last_day).contains(&NewsStoryKind::FinalStanding));
+        assert!(
+            !Fixture::kinds(&last_day).contains(&NewsStoryKind::HalfwayReport),
+            "the last round is not also halfway"
+        );
+    }
+
+    /// The run pieces only ever printed while a run was alive, so the
+    /// defeat that ended nine straight wins was reported as an ordinary
+    /// defeat. Now the ending is the story, and so is the first win
+    /// after a long wait.
+    #[test]
+    fn a_run_that_ends_is_a_story_on_the_day_it_ends() {
+        use crate::MatchHistoryItem;
+        use crate::r#match::TeamScore;
+
+        const OPPONENT: u32 = 40;
+        let when = Fixture::day().and_hms_opt(15, 0, 0).unwrap();
+        let item = |scored: u8, conceded: u8| {
+            MatchHistoryItem::new(
+                when,
+                OPPONENT,
+                (
+                    TeamScore::new_with_score(Fixture::OUR_SIDE, scored),
+                    TeamScore::new_with_score(OPPONENT, conceded),
+                ),
+            )
+        };
+
+        // Five wins, then the defeat being reported.
+        let mut team = Fixture::team(Fixture::OUR_SIDE);
+        for _ in 0..5 {
+            team.match_history.add(item(2, 0));
+        }
+        team.match_history.add(item(0, 1));
+        let mut out = Vec::new();
+        MatchDesk::file(
+            &mut out,
+            &[Fixture::played(OPPONENT, 0, 1)],
+            &FxHashSet::default(),
+            &WeeklyMatchFacts::empty(),
+            &team,
+        );
+        let ended = out
+            .iter()
+            .find(|story| story.kind == NewsStoryKind::RunEnded)
+            .expect("the end of a five-match winning run is a story");
+        assert_eq!(ended.a, 5);
+        assert_eq!(ended.other_id, OPPONENT);
+
+        // Six without a win, then the win being reported.
+        let mut team = Fixture::team(Fixture::OUR_SIDE);
+        for _ in 0..6 {
+            team.match_history.add(item(0, 0));
+        }
+        team.match_history.add(item(1, 0));
+        let mut out = Vec::new();
+        MatchDesk::file(
+            &mut out,
+            &[Fixture::played(OPPONENT, 1, 0)],
+            &FxHashSet::default(),
+            &WeeklyMatchFacts::empty(),
+            &team,
+        );
+        let relief = out
+            .iter()
+            .find(|story| story.kind == NewsStoryKind::FirstWinInAges)
+            .expect("a first win in seven is a story");
+        assert_eq!(relief.a, 6);
+
+        // Two wins then a defeat is an ordinary Saturday.
+        let mut team = Fixture::team(Fixture::OUR_SIDE);
+        team.match_history.add(item(2, 0));
+        team.match_history.add(item(2, 0));
+        team.match_history.add(item(0, 1));
+        let mut out = Vec::new();
+        MatchDesk::file(
+            &mut out,
+            &[Fixture::played(OPPONENT, 0, 1)],
+            &FxHashSet::default(),
+            &WeeklyMatchFacts::empty(),
+            &team,
+        );
+        assert!(!Fixture::kinds(&out).contains(&NewsStoryKind::RunEnded));
+    }
+
+    /// The same late minute is a point rescued or two points lost
+    /// depending on whose goal it was, and a goal on the hour is
+    /// neither.
+    #[test]
+    fn a_late_equaliser_is_told_from_the_side_that_scored_it() {
+        use super::facts::MatchDramaFacts;
+
+        const OPPONENT: u32 = 40;
+        let file = |minute: u16, ours: bool| {
+            let mut facts = WeeklyMatchFacts::empty();
+            facts.drama.insert(
+                (Fixture::OUR_SIDE, OPPONENT),
+                MatchDramaFacts {
+                    team_goals: 1,
+                    total_goals: 2,
+                    equaliser_minute: minute,
+                    equaliser_ours: ours,
+                    ..Default::default()
+                },
+            );
+            let mut out = Vec::new();
+            MatchDesk::file(
+                &mut out,
+                &[Fixture::played(OPPONENT, 1, 1)],
+                &FxHashSet::default(),
+                &facts,
+                &Fixture::team(Fixture::OUR_SIDE),
+            );
+            Fixture::kinds(&out)
+        };
+
+        assert!(file(88, true).contains(&NewsStoryKind::PointRescued));
+        assert!(file(88, false).contains(&NewsStoryKind::LateEqualiserConceded));
+        let hour = file(60, true);
+        assert!(
+            !hour.contains(&NewsStoryKind::PointRescued)
+                && !hour.contains(&NewsStoryKind::LateEqualiserConceded),
+            "an equaliser on the hour is not late: {:?}",
+            hour
         );
     }
 }

@@ -267,6 +267,19 @@ pub struct LoanSpellRecord {
     /// he never played, which is not the same as having played badly.
     pub average_rating: Option<f32>,
     pub days: u16,
+    /// The other half of the record — and, for a goalkeeper, the whole
+    /// of it. Goals and assists describe an outfielder's season; a
+    /// keeper's is shut-outs and the ones that went past him.
+    pub clean_sheets: u16,
+    pub conceded: u16,
+    /// He spent the spell in goal.
+    ///
+    /// Carried on the record rather than looked up later, because
+    /// everything that reads a finished spell reads it through this
+    /// struct and never sees the player: by the time the report is
+    /// rendered he is back at the parent club, and by the time the
+    /// paper is set he is a row in an event feed.
+    pub is_goalkeeper: bool,
 }
 
 impl LoanSpellRecord {
@@ -290,7 +303,25 @@ impl LoanSpellRecord {
             // to report, so report none.
             average_rating: (appearances > 0 && rating > 0.0).then_some(rating),
             days,
+            clean_sheets: 0,
+            conceded: 0,
+            is_goalkeeper: false,
         }
+    }
+
+    /// Mark the spell as a goalkeeper's, and attach the two columns it
+    /// is actually read on.
+    ///
+    /// A keeper comes home from the best season of his life with no
+    /// goals and no assists, which is what every reader of this record
+    /// used to be told about him. Nothing about the verdict changes —
+    /// it is rated on minutes and marks, both of which mean the same
+    /// thing in either job — only what the club gets to print.
+    pub fn in_goal(mut self, clean_sheets: u16, conceded: u16) -> Self {
+        self.is_goalkeeper = true;
+        self.clean_sheets = clean_sheets;
+        self.conceded = conceded;
+        self
     }
 }
 

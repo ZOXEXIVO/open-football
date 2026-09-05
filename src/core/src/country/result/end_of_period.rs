@@ -1398,6 +1398,20 @@ impl CountryResult {
             loan_rating,
             loan_spell_days,
         );
+        // A goalkeeper's spell cannot be read off the goals column: he
+        // comes home with none of them however well he kept, and every
+        // report of a keeper's loan said exactly that about him. The
+        // shut-outs and the goals that went past him are his record,
+        // and they are frozen with the rest of the borrowing season a
+        // few lines below this.
+        let spell = if matches!(
+            player.position().position_group(),
+            PlayerFieldPositionGroup::Goalkeeper
+        ) {
+            spell.in_goal(player.statistics.clean_sheets, player.statistics.conceded)
+        } else {
+            spell
+        };
 
         // What he said while he was away, read before the slate is
         // wiped. A player who spent the spell asking for a chance at his

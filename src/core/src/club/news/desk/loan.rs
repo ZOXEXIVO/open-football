@@ -18,6 +18,10 @@ impl LoanDesk {
     const MIN_APPEARANCES_FOR_FORM: i32 = 3;
     /// Goals at a borrowing club start to matter from here.
     const GOALS_WORTH_A_LINE: i32 = 3;
+    /// The same bar in the other job. A goalkeeper keeps roughly one
+    /// clean sheet in three, so this is a comparable stretch of a
+    /// season kept well rather than a fortnight of good luck.
+    const SHUTOUTS_WORTH_A_LINE: i32 = 4;
     /// The same line, when one of them landed in the last fortnight. A
     /// live run is worth printing earlier than a cold one — but every
     /// phrasing of this story is about repetition ("the goals keep
@@ -119,13 +123,24 @@ impl LoanDesk {
         }
 
         // Thriving, and the parent club's bench is not where he wants to
-        // be in the summer.
+        // be in the summer. The figure behind the quote is what his
+        // position is measured in — a borrowed goalkeeper arguing for
+        // his stay with nought goals to his name was the paper agreeing
+        // with the club that does not want him.
         if entry.wants_permanent && entry.is_first_choice() {
+            let (kind, produced) = if entry.is_goalkeeper {
+                (
+                    NewsStoryKind::KeeperLoanWantsPermanent,
+                    entry.clean_sheets,
+                )
+            } else {
+                (NewsStoryKind::LoanWantsPermanent, entry.goals)
+            };
             out.push(
-                NewsStory::new(NewsStoryKind::LoanWantsPermanent, date)
+                NewsStory::new(kind, date)
                     .about(entry.player_id)
                     .against(entry.loan_club_id)
-                    .with_numbers(entry.appearances(), entry.goals)
+                    .with_numbers(entry.appearances(), produced)
                     .weighted(if entry.permanent_option { 40 } else { 0 }),
             );
             return true;
@@ -174,11 +189,28 @@ impl LoanDesk {
         // one loan story that reaches the front half of the paper, and
         // it runs whether or not he has also given an interview.
         //
-        // Both bars read the tally, never the recent-goal flag alone:
-        // the headline the reader gets may be the one phrasing that
-        // names no figure ("keeps scoring at Danubio"), so a story filed
-        // on nothing does not even print the 0 that would give it away.
-        if entry.goals >= Self::GOALS_WORTH_A_LINE
+        // A goalkeeper's equivalent is the run of games nobody scored
+        // in, and it is a genuinely different line rather than the same
+        // one with a different noun: the outfield copy is about a man
+        // producing, and a keeper is read on what did not happen.
+        //
+        // Both goal bars read the tally, never the recent-goal flag
+        // alone: the headline the reader gets may be the one phrasing
+        // that names no figure ("keeps scoring at Danubio"), so a story
+        // filed on nothing does not even print the 0 that would give it
+        // away.
+        if entry.is_goalkeeper {
+            if entry.clean_sheets >= Self::SHUTOUTS_WORTH_A_LINE {
+                out.push(
+                    NewsStory::new(NewsStoryKind::KeeperLoanWatchShutouts, date)
+                        .about(entry.player_id)
+                        .against(entry.loan_club_id)
+                        .with_numbers(entry.clean_sheets, entry.appearances())
+                        .weighted(entry.clean_sheets * 12),
+                );
+                return;
+            }
+        } else if entry.goals >= Self::GOALS_WORTH_A_LINE
             || (entry.scored_recently && entry.goals >= Self::GOALS_WORTH_A_LINE_ON_A_RUN)
         {
             out.push(
@@ -263,6 +295,9 @@ mod tests {
                 goals,
                 assists: 0,
                 rating_x100: 690,
+                is_goalkeeper: false,
+                clean_sheets: 0,
+                conceded: 0,
                 days_left: 120,
                 days_elapsed: 98,
                 recall_available: false,

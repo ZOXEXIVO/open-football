@@ -93,6 +93,17 @@ impl SquadDesk {
 
                 if senior {
                     pulse.seniors = pulse.seniors.saturating_add(1);
+                    // The two squad-wide tallies the walk was already
+                    // passing: who is on the treatment table, and who
+                    // has gone off with his country.
+                    if player.player_attributes.is_injured
+                        && player.player_attributes.injury_days_remaining >= 7
+                    {
+                        pulse.injured = pulse.injured.saturating_add(1);
+                    }
+                    if feed.happened(HappinessEventType::NationalTeamCallup) {
+                        pulse.called_up = pulse.called_up.saturating_add(1);
+                    }
 
                     // The ratings page. Senior sides only: a reserve
                     // fixture has no correspondent marking it, and a
@@ -131,7 +142,37 @@ impl SquadDesk {
             }
         }
 
+        Self::file_squad_state(out, &pulse, date);
+
         pulse
+    }
+
+    /// Injuries this many, and this share of the senior squad, before
+    /// the treatment room is the story rather than any one man in it.
+    const INJURY_CRISIS_FLOOR: u16 = 4;
+    const INJURY_CRISIS_SHARE: u16 = 5;
+    /// Call-ups this many before the training ground goes quiet.
+    const EXODUS_FLOOR: u16 = 4;
+
+    /// The stories that are only true of a squad, never of a player.
+    fn file_squad_state(out: &mut Vec<NewsStory>, pulse: &SquadPulse, date: NaiveDate) {
+        if pulse.injured >= Self::INJURY_CRISIS_FLOOR
+            && pulse.injured.saturating_mul(Self::INJURY_CRISIS_SHARE) >= pulse.seniors
+        {
+            out.push(
+                NewsStory::new(NewsStoryKind::InjuryCrisis, date)
+                    .with_numbers(pulse.injured as i32, 0)
+                    .weighted((pulse.injured as i32 - Self::INJURY_CRISIS_FLOOR as i32) * 20),
+            );
+        }
+
+        if pulse.called_up >= Self::EXODUS_FLOOR {
+            out.push(
+                NewsStory::new(NewsStoryKind::InternationalExodus, date)
+                    .with_numbers(pulse.called_up as i32, 0)
+                    .weighted((pulse.called_up as i32 - Self::EXODUS_FLOOR as i32) * 15),
+            );
+        }
     }
 
     /// A dressing room that has come together reads this well on the
@@ -422,16 +463,30 @@ impl SquadDesk {
     /// seconds later — and the page printed the same "he is back" for a
     /// player who started every week and one who never got off the
     /// bench. Those are opposite outcomes for the club that sent him.
-    pub(super) fn homecoming_kind(verdict: crate::LoanSpellVerdict) -> NewsStoryKind {
+    /// `in_goal` picks the goalkeeper's half of the catalogue. Every
+    /// phrasing of the outfield pieces is written around what he
+    /// produced — "{n} appearances and {m} goals away from home" — and
+    /// a goalkeeper produces none of it however well he played, so the
+    /// column that reported his season reported the position instead:
+    /// nought goals, every time, for every keeper who ever went out on
+    /// loan. His versions count the same games and the shut-outs in
+    /// them.
+    pub(super) fn homecoming_kind(
+        verdict: crate::LoanSpellVerdict,
+        in_goal: bool,
+    ) -> NewsStoryKind {
         use crate::LoanSpellVerdict as How;
 
-        match verdict {
-            How::Standout | How::Successful => NewsStoryKind::LoanReturnTriumph,
-            How::Peripheral | How::Struggled => NewsStoryKind::LoanReturnWasted,
+        match (verdict, in_goal) {
+            (How::Standout | How::Successful, false) => NewsStoryKind::LoanReturnTriumph,
+            (How::Standout | How::Successful, true) => NewsStoryKind::KeeperLoanReturnTriumph,
+            (How::Peripheral | How::Struggled, false) => NewsStoryKind::LoanReturnWasted,
+            (How::Peripheral | How::Struggled, true) => NewsStoryKind::KeeperLoanReturnWasted,
             // A steady spell, or one too short to read, is the plain
             // homecoming. Inventing a verdict from a small sample is
             // exactly what the record refuses to do.
-            How::Steady | How::Inconclusive => NewsStoryKind::LoanReturn,
+            (How::Steady | How::Inconclusive, false) => NewsStoryKind::LoanReturn,
+            (How::Steady | How::Inconclusive, true) => NewsStoryKind::KeeperLoanReturn,
         }
     }
 
@@ -605,6 +660,23 @@ impl SquadDesk {
         if feed.happened(HappinessEventType::PlayingForNewContract) {
             out.push(
                 NewsStory::new(NewsStoryKind::PlayingForContract, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+        }
+
+        // Up or down the pecking order. The squad-status pass records
+        // the move and its direction as the sign of the mood it left:
+        // promotions land soft, demotions sting, and the paper prints
+        // whichever it was without pretending the other.
+        if let Some(event) = feed.find(HappinessEventType::SquadStatusChange) {
+            let kind = if event.magnitude >= 0.0 {
+                NewsStoryKind::PeckingOrderUp
+            } else {
+                NewsStoryKind::PeckingOrderDown
+            };
+            out.push(
+                NewsStory::new(kind, date)
                     .about(player.id)
                     .weighted(importance / 2),
             );
@@ -1517,11 +1589,22 @@ impl SquadDesk {
                 HappinessEventType::UnsettledAfterLoanReturn => 10,
                 _ => 0,
             };
+            // The second figure is the one the position is judged on:
+            // goals for a footballer, games nobody scored in for the
+            // man who kept goal.
+            let produced = if spell.is_goalkeeper {
+                spell.clean_sheets
+            } else {
+                spell.goals
+            };
             out.push(
-                NewsStory::new(Self::homecoming_kind(spell.verdict), date)
-                    .about(player.id)
-                    .with_numbers(spell.appearances as i32, spell.goals as i32)
-                    .weighted(weight),
+                NewsStory::new(
+                    Self::homecoming_kind(spell.verdict, spell.is_goalkeeper),
+                    date,
+                )
+                .about(player.id)
+                .with_numbers(spell.appearances as i32, produced as i32)
+                .weighted(weight),
             );
         }
     }
@@ -1889,6 +1972,28 @@ impl SquadDesk {
         }
 
         // Sick of the bench, and no longer hiding it.
+        // Not dropped — there is nowhere in this shape to put him. A
+        // different complaint from the bench, and one the manager
+        // answers by changing the formation or by selling him.
+        if feed.happened(HappinessEventType::RoleMismatch) {
+            out.push(
+                NewsStory::new(NewsStoryKind::NoRoleInTheShape, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+            return;
+        }
+
+        // The signing who arrived to find a queue for the shirt.
+        if feed.happened(HappinessEventType::RolePathBlockedAtEliteClub) {
+            out.push(
+                NewsStory::new(NewsStoryKind::StuckInTheQueue, date)
+                    .about(player.id)
+                    .weighted(importance / 2),
+            );
+            return;
+        }
+
         if feed
             .any_of(&[
                 HappinessEventType::LackOfPlayingTime,
@@ -1930,6 +2035,18 @@ impl SquadDesk {
         // The training ground. The quietest column in the paper and the
         // one that most often runs the week before somebody's run in the
         // side starts or ends.
+        // The room has a star in it and knows it: the badge he used to
+        // wear walks in ahead of him. Positive, and worth a line on a
+        // quiet week — the aura only holds while his form does.
+        if feed.happened(HappinessEventType::AdmiredForBigClubSpell) {
+            out.push(
+                NewsStory::new(NewsStoryKind::BigClubAura, date)
+                    .about(player.id)
+                    .weighted(importance / 3),
+            );
+            return;
+        }
+
         if feed
             .any_of(&[
                 HappinessEventType::PoorTraining,

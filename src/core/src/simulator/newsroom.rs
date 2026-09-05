@@ -1,11 +1,16 @@
 use crate::club::board::manager_market::ApproachState;
 use crate::club::news::RecentEvents;
 use crate::club::news::{
-    Absorbing, BoardroomDesk, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek, ContinentalNight,
-    CupTie, DugoutDesk, FansDesk, IssueResult, KeeperMatchFacts, LoanDesk, LoanWatchEntry,
-    ManagerPursuit, MarketDesk, MatchDesk, MatchDramaFacts, MatchStarFacts, NewsEditor, NewsStory,
-    NewspaperIssue, OutfieldMatchFacts, PlayoffTie, PressMood, ResultCompetition, SquadDesk,
-    StandingSnapshot, TableDesk, TownMood, WeeklyMatchFacts,
+    Absorbing, BoardroomDesk, ClubDugoutWatch, ClubLoanWatch, ClubTargetsWeek, ClubTransferWeek,
+    ContinentalNight, CupTie, DugoutDesk, FansDesk, IssueResult, KeeperMatchFacts, LoanDesk,
+    LoanWatchEntry, ManagerPursuit, MarketDesk, MatchDesk, MatchDramaFacts, MatchStarFacts,
+    NewsEditor, NewsStory, NewspaperIssue, NextFixture, OutfieldMatchFacts, PlayoffTie, PressMood,
+    PreviewDesk, PursuitStage, ResultCompetition, SquadDesk, StandingSnapshot, TableDesk,
+    TargetPursuit, TargetsDesk, TownMood, WeeklyMatchFacts, WindowWeek,
+};
+use crate::league::League;
+use crate::transfers::{
+    NegotiationPhase, NegotiationRejectionReason, NegotiationStatus, TransferCalendar,
 };
 use crate::continent::competitions::{
     CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
@@ -364,6 +369,17 @@ impl WeeklyMatchFacts {
 
         let won = goals_for > goals_against;
 
+        // A match that ended level had its last goal level it, by
+        // definition — so the equaliser is the last entry in the feed,
+        // and whose it was is the whole of the story.
+        let (equaliser_minute, equaliser_ours) = match feed.last() {
+            Some((time, scored_for_home)) if goals_for == goals_against && total_goals > 0 => (
+                ((time / 60_000) as u16).max(1),
+                *scored_for_home == mine_is_home,
+            ),
+            _ => (0, false),
+        };
+
         MatchDramaFacts {
             team_goals: goals_for,
             total_goals,
@@ -378,6 +394,8 @@ impl WeeklyMatchFacts {
             reply_minutes,
             red_card,
             won,
+            equaliser_minute,
+            equaliser_ours,
         }
     }
 
@@ -750,11 +768,27 @@ impl WeeklyMatchFacts {
 /// The week's completed transfer business, bucketed by club. Both sides
 /// of a deal are recorded, so a club hears about its own departures even
 /// though the player has already left the roster.
+#[derive(Default)]
 struct WeeklyMarket {
     by_club: FxHashMap<u32, ClubTransferWeek>,
+    /// Every club's live pursuits, read from the buyer's side of the
+    /// negotiation table — bids in, fees agreed, medicals booked and
+    /// the deals that fell over. Keyed by buying club.
+    targets: FxHashMap<u32, ClubTargetsWeek>,
+    /// Countries whose registration window opened or shut this week.
+    windows: FxHashMap<u32, WindowWeek>,
+    /// Arrivals and departures per club since the shut window opened —
+    /// only tallied on the weeks a window actually shut.
+    window_tally: FxHashMap<u32, (u8, u8)>,
 }
 
 impl WeeklyMarket {
+    /// A rejection is news for this long after the phase it died in
+    /// began. The negotiation map keeps settled rows for a month, so
+    /// without a freshness gate a first edition would report every
+    /// dead deal of the last thirty days as this week's.
+    const REJECTION_IS_NEWS_FOR_DAYS: i64 = 14;
+
     /// How far past the week the backwards scan of the transfer log
     /// keeps reading before it gives up. Bounds the work while leaving
     /// room for rows filed out of date order — see [`Self::gather`].
@@ -763,9 +797,226 @@ impl WeeklyMarket {
     fn from_world(data: &SimulatorData, week_start: NaiveDate, week_end: NaiveDate) -> Self {
         let mut market = WeeklyMarket {
             by_club: Self::gather(data, week_start, week_end),
+            targets: Self::gather_targets(data, week_start, week_end),
+            windows: Self::gather_windows(data, week_start, week_end),
+            window_tally: FxHashMap::default(),
         };
+        market.tally_windows(data, week_end);
         market.enrich_arrivals(data, week_end);
         market
+    }
+
+    /// The club's own business, before it is done.
+    ///
+    /// Every negotiation in the world is a row in some country's market
+    /// — cross-border deals live under the buying country — so the walk
+    /// covers every market and buckets by buyer. Only the stage a paper
+    /// would print is kept: a bid is news the week it went in, a fee or
+    /// a medical is news while it stands, and an ending is news for a
+    /// fortnight after the phase it happened in began.
+    fn gather_targets(
+        data: &SimulatorData,
+        week_start: NaiveDate,
+        week_end: NaiveDate,
+    ) -> FxHashMap<u32, ClubTargetsWeek> {
+        let mut by_buyer: FxHashMap<u32, ClubTargetsWeek> = FxHashMap::default();
+        let ending_floor = week_start - Duration::days(Self::REJECTION_IS_NEWS_FOR_DAYS);
+
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for negotiation in country.transfer_market.negotiations.values() {
+                    let stage = match negotiation.status {
+                        NegotiationStatus::Pending | NegotiationStatus::Countered => {
+                            match negotiation.phase {
+                                NegotiationPhase::InitialApproach { .. }
+                                | NegotiationPhase::ClubNegotiation { .. } => {
+                                    let lodged = negotiation.created_date;
+                                    if lodged < week_start || lodged >= week_end {
+                                        continue;
+                                    }
+                                    PursuitStage::BidLodged
+                                }
+                                NegotiationPhase::PersonalTerms { .. } => PursuitStage::FeeAgreed,
+                                NegotiationPhase::MedicalAndFinalization { .. } => {
+                                    PursuitStage::MedicalBooked
+                                }
+                            }
+                        }
+                        NegotiationStatus::Rejected => {
+                            if Self::phase_started(&negotiation.phase) < ending_floor {
+                                continue;
+                            }
+                            match negotiation.rejection_reason {
+                                Some(NegotiationRejectionReason::AskingPriceTooHigh) => {
+                                    PursuitStage::PricedOut
+                                }
+                                Some(
+                                    NegotiationRejectionReason::SellerRefusedToNegotiate
+                                    | NegotiationRejectionReason::PlayerTooImportant
+                                    | NegotiationRejectionReason::ReputationGapTooLarge,
+                                ) => PursuitStage::NotForSale,
+                                Some(
+                                    NegotiationRejectionReason::PlayerRejectedPersonalTerms
+                                    | NegotiationRejectionReason::SalaryDemandsUnmet,
+                                ) => PursuitStage::PlayerSaidNo,
+                                Some(NegotiationRejectionReason::MedicalFailed) => {
+                                    PursuitStage::MedicalFailed
+                                }
+                                Some(NegotiationRejectionReason::WindowClosed) => {
+                                    PursuitStage::WindowShut
+                                }
+                                // A route the simulation itself refuses
+                                // is not a deal that fell over, and a
+                                // rejection with no reason recorded is
+                                // not one the paper can explain.
+                                Some(NegotiationRejectionReason::CountryPairRouteBlocked)
+                                | None => continue,
+                            }
+                        }
+                        // Talks that timed out without anybody saying
+                        // no. Nothing happened, and the paper says so
+                        // by saying nothing.
+                        NegotiationStatus::Accepted | NegotiationStatus::Expired => continue,
+                    };
+
+                    by_buyer
+                        .entry(negotiation.buying_club_id)
+                        .or_default()
+                        .pursuits
+                        .push(TargetPursuit {
+                            player_id: negotiation.player_id,
+                            selling_club_id: negotiation.selling_club_id,
+                            fee: if negotiation.is_loan {
+                                0
+                            } else {
+                                negotiation.current_offer.base_fee.amount.max(0.0) as i64
+                            },
+                            is_loan: negotiation.is_loan,
+                            stage,
+                        });
+                }
+            }
+        }
+
+        // The negotiation map is a hash map; the page is not allowed to
+        // depend on its iteration order.
+        for week in by_buyer.values_mut() {
+            week.pursuits
+                .sort_by_key(|pursuit| (pursuit.player_id, pursuit.selling_club_id));
+        }
+
+        by_buyer
+    }
+
+    /// When the phase a negotiation is in began — the nearest thing a
+    /// resolved row has to a date of resolution.
+    fn phase_started(phase: &NegotiationPhase) -> NaiveDate {
+        match phase {
+            NegotiationPhase::InitialApproach { started }
+            | NegotiationPhase::ClubNegotiation { started, .. }
+            | NegotiationPhase::PersonalTerms { started, .. }
+            | NegotiationPhase::MedicalAndFinalization { started } => *started,
+        }
+    }
+
+    /// Which countries saw a registration window open or shut inside
+    /// the week. Read off the same calendar the market itself runs on.
+    fn gather_windows(
+        data: &SimulatorData,
+        week_start: NaiveDate,
+        week_end: NaiveDate,
+    ) -> FxHashMap<u32, WindowWeek> {
+        let mut windows: FxHashMap<u32, WindowWeek> = FxHashMap::default();
+        let inside = |day: NaiveDate| day >= week_start && day < week_end;
+
+        for continent in &data.continents {
+            for country in &continent.countries {
+                let calendar = TransferCalendar::for_country(&country.code, week_end);
+                for (opens, shuts) in [calendar.summer_window, calendar.winter_window] {
+                    if opens > shuts {
+                        continue;
+                    }
+                    let opened = inside(opens);
+                    let closed = inside(shuts);
+                    if opened || closed {
+                        let entry = windows.entry(country.id).or_default();
+                        entry.opened |= opened;
+                        entry.closed |= closed;
+                    }
+                }
+            }
+        }
+
+        windows
+    }
+
+    /// Arrivals and departures per club over the window that has just
+    /// shut. Walks every market, because a cross-border departure is
+    /// filed under the buyer's country; bounded by the earliest window
+    /// start among the countries that shut one this week, and skipped
+    /// entirely on the fifty weeks a year when none did.
+    fn tally_windows(&mut self, data: &SimulatorData, week_end: NaiveDate) {
+        let mut floor: Option<NaiveDate> = None;
+        for continent in &data.continents {
+            for country in &continent.countries {
+                if !self.windows.get(&country.id).is_some_and(|week| week.closed) {
+                    continue;
+                }
+                let calendar = TransferCalendar::for_country(&country.code, week_end);
+                for (opens, shuts) in [calendar.summer_window, calendar.winter_window] {
+                    if shuts < week_end && opens <= shuts {
+                        floor = Some(floor.map_or(opens, |day: NaiveDate| day.min(opens)));
+                    }
+                }
+            }
+        }
+        let Some(floor) = floor else {
+            return;
+        };
+
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for transfer in country
+                    .transfer_market
+                    .transfer_history
+                    .iter()
+                    .rev()
+                    .take_while(|transfer| transfer.transfer_date >= floor)
+                {
+                    if transfer.transfer_date >= week_end {
+                        continue;
+                    }
+                    if transfer.to_club_id != 0 {
+                        let entry = self.window_tally.entry(transfer.to_club_id).or_default();
+                        entry.0 = entry.0.saturating_add(1);
+                    }
+                    if transfer.from_club_id != 0 {
+                        let entry = self.window_tally.entry(transfer.from_club_id).or_default();
+                        entry.1 = entry.1.saturating_add(1);
+                    }
+                }
+            }
+        }
+    }
+
+    fn for_targets(&self, club_id: u32) -> Option<&ClubTargetsWeek> {
+        self.targets.get(&club_id)
+    }
+
+    /// What the calendar did this week for one club: whether its
+    /// country's window moved, and — if it shut — the club's own count.
+    fn window_for(&self, country_id: u32, club_id: u32) -> Option<WindowWeek> {
+        let week = *self.windows.get(&country_id)?;
+        let (arrivals, departures) = self
+            .window_tally
+            .get(&club_id)
+            .copied()
+            .unwrap_or_default();
+        Some(WindowWeek {
+            arrivals: if week.closed { arrivals } else { 0 },
+            departures: if week.closed { departures } else { 0 },
+            ..week
+        })
     }
 
     fn gather(
@@ -926,6 +1177,12 @@ impl WeeklyLoanWatch {
             sub_appearances: stats.played_subs as i32,
             goals: stats.goals as i32,
             assists: stats.assists as i32,
+            is_goalkeeper: matches!(
+                player.position().position_group(),
+                PlayerFieldPositionGroup::Goalkeeper
+            ),
+            clean_sheets: stats.clean_sheets as i32,
+            conceded: stats.conceded as i32,
             rating_x100: (rating * 100.0) as i32,
             days_left: (loan.expiration - today).num_days() as i32,
             days_elapsed: loan
@@ -1054,9 +1311,17 @@ impl ClubPressRun {
             .map(|team| Self::results(team, facts, week_start, week_end))
             .collect();
 
+        let fixtures: Vec<Option<NextFixture>> = papers
+            .iter()
+            .map(|team| Self::next_fixture(team, country, week_end))
+            .collect();
+
         // Resolving rivals means walking the country's club list, so it
-        // only happens on the weeks one of the sides actually played.
-        let rivals = if week.iter().any(|results| !results.is_empty()) {
+        // only happens on the weeks one of the sides played or is about
+        // to — a derby is recognised from the opponent alone, both ways.
+        let rivals = if week.iter().any(|results| !results.is_empty())
+            || fixtures.iter().any(Option::is_some)
+        {
             Self::rival_team_ids(club, country)
         } else {
             FxHashSet::default()
@@ -1074,7 +1339,8 @@ impl ClubPressRun {
         papers
             .iter()
             .zip(week)
-            .filter_map(|(team, results)| {
+            .zip(fixtures)
+            .filter_map(|((team, results), fixture)| {
                 let is_flagship = team.id == flagship.id;
 
                 let edition = TeamPressRun {
@@ -1102,6 +1368,19 @@ impl ClubPressRun {
                     // record alongside the rest of the boardroom.
                     dugout: if is_flagship {
                         dugout.for_club(club.id)
+                    } else {
+                        None
+                    },
+                    fixture,
+                    // The club's own pursuits and the calendar are the
+                    // page of record's, like the rest of the boardroom.
+                    targets: if is_flagship {
+                        market.for_targets(club.id)
+                    } else {
+                        None
+                    },
+                    window: if is_flagship {
+                        market.window_for(country.id, club.id)
                     } else {
                         None
                     },
@@ -1177,6 +1456,104 @@ impl ClubPressRun {
             .collect()
     }
 
+    /// How far ahead the preview desk looks. Eight days: the whole of
+    /// next week, and a Monday fixture on the far side of it.
+    const PREVIEW_HORIZON_DAYS: i64 = 8;
+
+    /// The side's next fixture, read off every competition schedule in
+    /// the country: the nearest unplayed match inside the horizon. A
+    /// cup tie in midweek beats the league game after it because it is
+    /// played first, and the cup schedule is a separate league object,
+    /// so every schedule is asked.
+    fn next_fixture(team: &Team, country: &Country, week_end: NaiveDate) -> Option<NextFixture> {
+        let horizon = week_end + Duration::days(Self::PREVIEW_HORIZON_DAYS);
+        let mut nearest: Option<(chrono::NaiveDateTime, u32, bool, bool)> = None;
+
+        for league in &country.leagues.leagues {
+            if league.friendly {
+                continue;
+            }
+            for item in league.schedule.get_matches_for_team(team.id) {
+                if item.result.is_some() {
+                    continue;
+                }
+                let day = item.date.date();
+                if day < week_end || day >= horizon {
+                    continue;
+                }
+                if nearest.is_none_or(|(when, ..)| item.date < when) {
+                    let is_home = item.home_team_id == team.id;
+                    let opponent = if is_home {
+                        item.away_team_id
+                    } else {
+                        item.home_team_id
+                    };
+                    nearest = Some((item.date, opponent, is_home, league.is_cup));
+                }
+            }
+        }
+
+        let (_, opponent_team_id, is_home, is_cup) = nearest?;
+        if opponent_team_id == 0 {
+            return None;
+        }
+
+        // Where they sit in OUR table — nothing when they are not in it.
+        let opponent_position = team
+            .league_id
+            .and_then(|league_id| {
+                country
+                    .leagues
+                    .leagues
+                    .iter()
+                    .find(|league| league.id == league_id && !league.friendly)
+            })
+            .and_then(|league| {
+                league
+                    .table
+                    .get()
+                    .iter()
+                    .position(|row| row.team_id == opponent_team_id)
+            })
+            .map(|index| (index + 1).min(u8::MAX as usize) as u8)
+            .unwrap_or(0);
+
+        // One of ours who used to be one of theirs: the most important
+        // such man on the roster, by the paper's own measure.
+        let old_boy_player_id = Self::team_slug(country, opponent_team_id)
+            .and_then(|slug| {
+                team.players
+                    .iter()
+                    .filter(|player| !player.is_retired())
+                    .filter(|player| {
+                        player
+                            .statistics_history
+                            .career_team_slugs()
+                            .contains(&slug)
+                    })
+                    .max_by_key(|player| (crate::club::news::PlayerStanding::importance(player), player.id))
+                    .map(|player| player.id)
+            })
+            .unwrap_or(0);
+
+        Some(NextFixture {
+            opponent_team_id,
+            is_home,
+            is_cup,
+            opponent_position,
+            old_boy_player_id,
+        })
+    }
+
+    fn team_slug(country: &Country, team_id: u32) -> Option<&str> {
+        country
+            .clubs
+            .iter()
+            .flat_map(|club| club.teams.iter())
+            .find(|team| team.id == team_id)
+            .map(|team| team.slug.as_str())
+    }
+
     /// Rival clubs resolved down to the team ids a match report actually
     /// carries, so a derby is recognised from the opponent alone.
     fn rival_team_ids(club: &Club, country: &Country) -> FxHashSet<u32> {
@@ -1214,8 +1591,20 @@ impl ClubPressRun {
             played: row.played,
             // A round-robin double programme: every side plays each of
             // the others home and away.
-            total_rounds: (rows.len().saturating_sub(1) * 2).min(u8::MAX as usize) as u8,
+            total_rounds: Self::total_rounds(league, rows.len()),
         })
+    }
+
+    /// How long the programme is. The schedule knows exactly; a league
+    /// whose schedule has not been drawn yet is assumed to be the usual
+    /// double round-robin.
+    fn total_rounds(league: &League, teams: usize) -> u8 {
+        let rounds = if league.schedule.tours.is_empty() {
+            teams.saturating_sub(1) * 2
+        } else {
+            league.schedule.tours.len()
+        };
+        rounds.min(u8::MAX as usize) as u8
     }
 
     /// The most valuable player currently on the books — the yardstick
@@ -1249,6 +1638,13 @@ struct TeamPressRun<'a> {
     peak_value: i64,
     loans: Option<&'a ClubLoanWatch>,
     dugout: Option<&'a ClubDugoutWatch>,
+    /// This side's next fixture, when the schedules hold one inside
+    /// the preview horizon.
+    fixture: Option<NextFixture>,
+    /// The club's own pursuits in the market. Page of record only.
+    targets: Option<&'a ClubTargetsWeek>,
+    /// What the registration window did this week. Page of record only.
+    window: Option<WindowWeek>,
     /// First day of the window the edition covers — the cut-off the
     /// club's own diary is read back to.
     week_start: NaiveDate,
@@ -1273,8 +1669,35 @@ impl TeamPressRun<'_> {
                 self.facts,
                 self.team,
             );
+            // The man in the dugout, on the week's last match. A vacant
+            // seat resolves to a stub with no id, and the desk stays
+            // quiet rather than quote nobody.
+            DugoutDesk::file_verdict(
+                &mut candidates,
+                &self.results,
+                self.team.staffs.head_coach().id,
+                date,
+            );
         }
-        TableDesk::file(&mut candidates, self.standing, date);
+        let league_games_this_week = self
+            .results
+            .iter()
+            .filter(|result| result.competition == ResultCompetition::League)
+            .count()
+            .min(u8::MAX as usize) as u8;
+        TableDesk::file(
+            &mut candidates,
+            self.standing,
+            league_games_this_week,
+            date,
+        );
+        PreviewDesk::file(
+            &mut candidates,
+            self.fixture,
+            self.standing,
+            self.rivals,
+            date,
+        );
 
         // One walk over this paper's players feeds the squad, dugout,
         // terraces, market-verdict and rumour desks, and comes back with
@@ -1290,6 +1713,9 @@ impl TeamPressRun<'_> {
 
         if let Some(transfers) = self.transfers {
             MarketDesk::file(&mut candidates, transfers, self.peak_value, date);
+        }
+        if let Some(targets) = self.targets {
+            TargetsDesk::file(&mut candidates, targets, date);
         }
         if let Some(watch) = self.loans {
             LoanDesk::file(&mut candidates, watch, date);
@@ -1317,6 +1743,7 @@ impl TeamPressRun<'_> {
                 self.club,
                 &pulse,
                 self.dugout,
+                self.window,
                 self.week_start,
                 date,
             );
@@ -1733,9 +2160,7 @@ mod tests {
             &country.clubs[0],
             &country,
             &WeeklyMatchFacts::empty(),
-            &WeeklyMarket {
-                by_club: FxHashMap::default(),
-            },
+            &WeeklyMarket::default(),
             &WeeklyLoanWatch {
                 by_parent: FxHashMap::default(),
             },

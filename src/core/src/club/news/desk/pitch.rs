@@ -231,6 +231,16 @@ impl MatchDesk {
             (NewsStoryKind::StoppageTimeDrama, drama.winner_minute as i32)
         } else if drama.winner_minute >= MatchDramaFacts::LATE_MINUTE {
             (NewsStoryKind::LateWinner, drama.winner_minute as i32)
+        } else if drama.equaliser_minute >= MatchDramaFacts::LATE_MINUTE {
+            // Level at the end, and only just. The same minute is a
+            // point rescued or two points lost depending on whose goal
+            // it was, and a town tells the two very differently.
+            let kind = if drama.equaliser_ours {
+                NewsStoryKind::PointRescued
+            } else {
+                NewsStoryKind::LateEqualiserConceded
+            };
+            (kind, drama.equaliser_minute as i32)
         } else if drama.won && drama.red_card {
             (NewsStoryKind::TenManWin, 10)
         } else if drama.total_goals >= 6 {
@@ -264,6 +274,8 @@ impl MatchDesk {
         let Some(latest) = results.last() else {
             return;
         };
+
+        Self::file_run_endings(out, latest, team);
 
         let mut wins = 0u8;
         let mut unbeaten = 0u8;
@@ -331,6 +343,94 @@ impl MatchDesk {
 
         Self::file_scoring_runs(out, team, latest.date);
         Self::file_ground_runs(out, team, latest.date);
+    }
+
+    /// A winning run this long, ended, is a story on the day it ends.
+    const RUN_ENDED_WINS: u8 = 4;
+    /// …and an unbeaten one this long.
+    const RUN_ENDED_UNBEATEN: u8 = 8;
+    /// A win after this many without one is a relief the whole town
+    /// felt, and the paper says so.
+    const FIRST_WIN_AFTER: u8 = 5;
+
+    /// The result that ended a run, and the win that ended a wait.
+    ///
+    /// The run pieces above only ever print while a run is alive, so a
+    /// side that won nine in a row and then lost had the loss reported
+    /// as an ordinary defeat — when the thing every supporter said on
+    /// the way home was "that's the run gone". Read off the match log
+    /// with this week's last result taken off the end of it.
+    fn file_run_endings(out: &mut Vec<NewsStory>, latest: &IssueResult, team: &Team) {
+        let mut wins_before = 0u8;
+        let mut unbeaten_before = 0u8;
+        let mut winless_before = 0u8;
+        let mut counting_wins = true;
+        let mut counting_unbeaten = true;
+        let mut counting_winless = true;
+
+        // The newest entry is the result being reported; the run is
+        // whatever stood before it.
+        for item in team.match_history.items().iter().rev().skip(1) {
+            let scored = item.score.0.get();
+            let conceded = item.score.1.get();
+            let won = scored > conceded;
+            let lost = scored < conceded;
+
+            if counting_wins {
+                if won {
+                    wins_before = wins_before.saturating_add(1);
+                } else {
+                    counting_wins = false;
+                }
+            }
+            if counting_unbeaten {
+                if lost {
+                    counting_unbeaten = false;
+                } else {
+                    unbeaten_before = unbeaten_before.saturating_add(1);
+                }
+            }
+            if counting_winless {
+                if won {
+                    counting_winless = false;
+                } else {
+                    winless_before = winless_before.saturating_add(1);
+                }
+            }
+            if !counting_wins && !counting_unbeaten && !counting_winless {
+                break;
+            }
+        }
+
+        if latest.is_win() {
+            if winless_before >= Self::FIRST_WIN_AFTER {
+                out.push(
+                    NewsStory::new(NewsStoryKind::FirstWinInAges, latest.date)
+                        .against(latest.opponent_team_id)
+                        .at_home(latest.is_home)
+                        .with_numbers(winless_before as i32, 0)
+                        .weighted((winless_before as i32 - Self::FIRST_WIN_AFTER as i32) * 20),
+                );
+            }
+            return;
+        }
+
+        // A draw ends a winning run; only a defeat ends an unbeaten one.
+        let ended = if wins_before >= Self::RUN_ENDED_WINS {
+            wins_before
+        } else if latest.is_defeat() && unbeaten_before >= Self::RUN_ENDED_UNBEATEN {
+            unbeaten_before
+        } else {
+            return;
+        };
+
+        out.push(
+            NewsStory::new(NewsStoryKind::RunEnded, latest.date)
+                .against(latest.opponent_team_id)
+                .at_home(latest.is_home)
+                .with_numbers(ended as i32, 0)
+                .weighted((ended as i32 - Self::RUN_ENDED_WINS as i32) * 15),
+        );
     }
 
     /// The two runs a phone-in argues about separately. A side in a bad
@@ -439,37 +539,126 @@ impl TableDesk {
     /// Below this share of the season the table is noise, and no serious
     /// paper leads on it.
     const MIN_PROGRESS: f32 = 0.30;
+    /// The places that matter at the top, the places that matter at the
+    /// bottom, and the band between them a supporter calls Europe.
+    const TITLE_PLACES: u8 = 3;
+    const DROP_PLACES: u8 = 3;
+    const EUROPE_PLACES: u8 = 6;
+    /// The race for Europe is only a race once half the season is gone,
+    /// and a side is only drifting once most of it is.
+    const EUROPE_MIN_PROGRESS: f32 = 0.50;
+    const DRIFT_MIN_PROGRESS: f32 = 0.70;
 
-    pub fn file(out: &mut Vec<NewsStory>, standing: Option<StandingSnapshot>, date: NaiveDate) {
+    /// The table, read every week; and the two checkpoints — halfway
+    /// and the final whistle of the season — that only exist on the
+    /// week the programme crosses them. `league_games_this_week` is
+    /// what tells a crossing from a table that has been sitting past
+    /// the line since last Monday.
+    pub fn file(
+        out: &mut Vec<NewsStory>,
+        standing: Option<StandingSnapshot>,
+        league_games_this_week: u8,
+        date: NaiveDate,
+    ) {
         let Some(standing) = standing else {
             return;
         };
-        if standing.teams == 0 || standing.progress() < Self::MIN_PROGRESS {
+        if standing.teams == 0 {
+            return;
+        }
+
+        Self::file_checkpoints(out, &standing, league_games_this_week, date);
+
+        if standing.progress() < Self::MIN_PROGRESS {
             return;
         }
 
         let position = standing.position as i32;
         let points = standing.points as i32;
+        let progress = standing.progress();
 
-        if standing.position <= 3 {
+        // First is its own story. "Among the leaders" is what a paper
+        // writes about second and third; about first it writes first.
+        if standing.position == 1 {
+            out.push(
+                NewsStory::new(NewsStoryKind::TopOfTheTable, date)
+                    .with_numbers(position, points)
+                    .weighted((progress * 60.0) as i32),
+            );
+            return;
+        }
+
+        if standing.position <= Self::TITLE_PLACES {
             out.push(
                 NewsStory::new(NewsStoryKind::TitleCharge, date)
                     .with_numbers(position, points)
-                    // Leading the table is a bigger story than third.
+                    // Second is a bigger story than third.
                     .weighted((4 - position) * 30),
             );
             return;
         }
 
-        let drop_edge = standing.teams.saturating_sub(3);
+        let drop_edge = standing.teams.saturating_sub(Self::DROP_PLACES);
         if standing.position > drop_edge {
             out.push(
                 NewsStory::new(NewsStoryKind::RelegationFight, date)
                     .with_numbers(position, points)
                     // Deeper in the mire, and later in the season, hurts more.
-                    .weighted(
-                        (position - drop_edge as i32) * 20 + (standing.progress() * 60.0) as i32,
-                    ),
+                    .weighted((position - drop_edge as i32) * 20 + (progress * 60.0) as i32),
+            );
+            return;
+        }
+
+        // The middle of the table, which used to be no story at all —
+        // so a club finishing eighth every year had a paper that never
+        // once mentioned where it was.
+        if standing.position <= Self::EUROPE_PLACES {
+            if progress >= Self::EUROPE_MIN_PROGRESS {
+                out.push(
+                    NewsStory::new(NewsStoryKind::EuropeRace, date)
+                        .with_numbers(position, points)
+                        .weighted((Self::EUROPE_PLACES as i32 - position) * 10),
+                );
+            }
+            return;
+        }
+
+        // Safe, out of Europe, nothing on the season but the fixtures
+        // left in it. Needs a real gap to the drop, or it is a fight.
+        if progress >= Self::DRIFT_MIN_PROGRESS && standing.position < drop_edge {
+            out.push(
+                NewsStory::new(NewsStoryKind::MidTableDrift, date).with_numbers(position, points),
+            );
+        }
+    }
+
+    /// Halfway, and the end. Filed on the week the programme crosses
+    /// the line and on no other, so neither can lead two Mondays
+    /// running however long the table sits there.
+    fn file_checkpoints(
+        out: &mut Vec<NewsStory>,
+        standing: &StandingSnapshot,
+        league_games_this_week: u8,
+        date: NaiveDate,
+    ) {
+        if league_games_this_week == 0 || standing.total_rounds == 0 {
+            return;
+        }
+
+        let position = standing.position as i32;
+        let points = standing.points as i32;
+        let before = standing.played.saturating_sub(league_games_this_week);
+        let halfway = standing.total_rounds.div_ceil(2);
+
+        if standing.played >= halfway && before < halfway {
+            out.push(
+                NewsStory::new(NewsStoryKind::HalfwayReport, date).with_numbers(position, points),
+            );
+        }
+
+        if standing.played >= standing.total_rounds && before < standing.total_rounds {
+            out.push(
+                NewsStory::new(NewsStoryKind::FinalStanding, date).with_numbers(position, points),
             );
         }
     }

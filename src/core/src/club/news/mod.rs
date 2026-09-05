@@ -28,11 +28,13 @@ pub mod types;
 
 pub use affairs::{ClauseWindfallKind, ClubAffair, ClubAffairEntry, ClubAffairLog};
 pub use desk::{
-    Absorbing, BoardroomDesk, CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTransferWeek,
-    ContinentalNight, CupTie, DugoutDesk, FansDesk, KeeperMatchFacts, LoanDesk, LoanWatchEntry,
-    ManagerPursuit, MarketDesk, MatchDesk, MatchDramaFacts, MatchStarFacts, OutfieldMatchFacts,
-    PlayerStanding, PlayoffTie, RecentEvents, RumourDesk, SquadDesk, SquadPulse, StandingSnapshot,
-    TableDesk, TownMood, TransferMotive, TransferMove, TransferMoveKind, WeeklyMatchFacts,
+    Absorbing, BoardroomDesk, CareerRecord, ClubDugoutWatch, ClubLoanWatch, ClubTargetsWeek,
+    ClubTransferWeek, ContinentalNight, CupTie, DugoutDesk, FansDesk, KeeperMatchFacts, LoanDesk,
+    LoanWatchEntry, ManagerPursuit, MarketDesk, MatchDesk, MatchDramaFacts, MatchStarFacts,
+    NextFixture, OutfieldMatchFacts, PlayerStanding, PlayoffTie, PreviewDesk, PursuitStage,
+    RecentEvents, RumourDesk, SquadDesk, SquadPulse, StandingSnapshot, TableDesk, TargetPursuit,
+    TargetsDesk, TownMood, TransferMotive, TransferMove, TransferMoveKind, WeeklyMatchFacts,
+    WindowWeek,
 };
 pub use editor::NewsEditor;
 pub use types::{

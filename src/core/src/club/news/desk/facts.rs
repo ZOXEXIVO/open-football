@@ -272,6 +272,12 @@ pub struct MatchDramaFacts {
     pub red_card: bool,
     /// It won.
     pub won: bool,
+    /// The minute of the goal that left the match level, when it ended
+    /// level and there was one. Zero when it did not end level, or when
+    /// nobody scored — a goalless draw has no equaliser.
+    pub equaliser_minute: u16,
+    /// That goal was ours. Meaningless when `equaliser_minute` is zero.
+    pub equaliser_ours: bool,
 }
 
 impl MatchDramaFacts {
@@ -744,6 +750,13 @@ pub struct LoanWatchEntry {
     pub sub_appearances: i32,
     pub goals: i32,
     pub assists: i32,
+    /// He is the borrowing club's goalkeeper. The column reads a
+    /// different pair of columns for him: a keeper's loan is going well
+    /// or badly on shut-outs, and his goal tally is a fact about the
+    /// position rather than about the spell.
+    pub is_goalkeeper: bool,
+    pub clean_sheets: i32,
+    pub conceded: i32,
     /// Season average rating × 100, sample-regressed.
     pub rating_x100: i32,
     /// Days until the agreement runs out. Negative once it has.
@@ -1120,6 +1133,10 @@ pub struct SquadPulse {
     pub fan_praise: u16,
     pub fan_criticism: u16,
     pub media_criticism: u16,
+    /// Senior players on the treatment table for a week or more.
+    pub injured: u16,
+    /// Senior players called up by their countries this week.
+    pub called_up: u16,
 }
 
 impl SquadPulse {
@@ -1157,4 +1174,75 @@ impl PlayerStanding {
 
         role + (player.player_attributes.world_reputation as i32 / 250)
     }
+}
+
+/// Next week's fixture for one side, read off the competition schedules.
+///
+/// Built by the press run because the schedule is league state: a
+/// side's own match log knows what it has played and nothing about what
+/// it is about to.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NextFixture {
+    pub opponent_team_id: u32,
+    pub is_home: bool,
+    /// A knockout tie rather than a league round.
+    pub is_cup: bool,
+    /// Where the opponent sits in this side's own table. Zero when they
+    /// are not in it — a cup opponent from another division.
+    pub opponent_position: u8,
+    /// One of the paper's own players who used to wear the opponent's
+    /// shirt. Zero when nobody did.
+    pub old_boy_player_id: u32,
+}
+
+/// How far one of the club's own pursuits has got, read from the
+/// buyer's side of the negotiation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PursuitStage {
+    /// An offer went in this week and the other club has yet to answer.
+    BidLodged,
+    /// The clubs have agreed; the player is weighing his own terms.
+    FeeAgreed,
+    /// Terms settled, medical booked.
+    MedicalBooked,
+    /// The asking price was more than the board would pay.
+    PricedOut,
+    /// The other club would not sell at all.
+    NotForSale,
+    /// The player turned the move down.
+    PlayerSaidNo,
+    /// The medical ended it.
+    MedicalFailed,
+    /// The window shut with the deal still open.
+    WindowShut,
+}
+
+/// One of the club's own targets and where the chase has got to.
+#[derive(Debug, Clone, Copy)]
+pub struct TargetPursuit {
+    pub player_id: u32,
+    pub selling_club_id: u32,
+    /// The club's own offer on the table, or the last one it made.
+    /// Zero for a loan, which has no fee to quote.
+    pub fee: i64,
+    pub is_loan: bool,
+    pub stage: PursuitStage,
+}
+
+/// Every pursuit one club had live, or saw end, this week.
+#[derive(Debug, Default, Clone)]
+pub struct ClubTargetsWeek {
+    pub pursuits: Vec<TargetPursuit>,
+}
+
+/// What the transfer calendar did this week, for one club.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WindowWeek {
+    /// A registration window opened inside the week.
+    pub opened: bool,
+    /// …or shut inside it.
+    pub closed: bool,
+    /// The window's business, counted only when it shut this week.
+    pub arrivals: u8,
+    pub departures: u8,
 }

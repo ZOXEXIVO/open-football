@@ -1195,7 +1195,9 @@ impl StoryComposer {
             return (String::new(), String::new());
         }
 
-        if story.kind.desk() == NewsDesk::Match {
+        // The preview desk names next week's opponent, which is a team
+        // off the schedule exactly as a report's is off the match log.
+        if matches!(story.kind.desk(), NewsDesk::Match | NewsDesk::Preview) {
             return data
                 .team_data(story.other_id)
                 .map(|team| (team.name.clone(), team.slug.clone()))
@@ -2285,6 +2287,9 @@ mod render_tests {
                 ),
                 ("newspaper_cup_tie", "Cup"),
                 ("news_desk_loan", "Loan watch"),
+                ("news_desk_targets", "Transfer targets"),
+                ("news_desk_preview", "Looking ahead"),
+                ("news_desk_dugout", "The dugout"),
                 ("news_desk_fans", "The terraces"),
                 ("news_desk_verdicts", "Player ratings"),
             ])

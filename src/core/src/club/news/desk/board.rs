@@ -1,4 +1,4 @@
-use super::facts::{ClubDugoutWatch, SquadPulse};
+use super::facts::{ClubDugoutWatch, SquadPulse, WindowWeek};
 use crate::Club;
 use crate::club::DistressLevel;
 use crate::club::board::decision::BoardFacility;
@@ -123,16 +123,36 @@ impl BoardroomDesk {
         club: &Club,
         pulse: &SquadPulse,
         dugout: Option<&ClubDugoutWatch>,
+        window: Option<WindowWeek>,
         week_start: NaiveDate,
         date: NaiveDate,
     ) {
         let settled = Self::file_affairs(out, &club.affairs, week_start, date);
+        Self::file_window(out, window, date);
         Self::file_hunt(out, club, settled, date);
         Self::file_pursuits(out, dugout, settled, date);
         Self::file_confidence(out, club, settled, date);
         Self::file_silverware(out, pulse, date);
         Self::file_academy(out, club, date);
         Self::file_accounts(out, ClubAccounts::read(club, date), date);
+    }
+
+    /// The calendar. A window opening is a month of possibility and a
+    /// window shutting is an audit: what came in, what went out, and the
+    /// squad the club is stuck with until it opens again. Both are dated
+    /// facts the press run reads off the country's transfer calendar.
+    fn file_window(out: &mut Vec<NewsStory>, window: Option<WindowWeek>, date: NaiveDate) {
+        let Some(window) = window else {
+            return;
+        };
+        if window.closed {
+            out.push(
+                NewsStory::new(NewsStoryKind::WindowShuts, date)
+                    .with_numbers(i32::from(window.arrivals), i32::from(window.departures)),
+            );
+        } else if window.opened {
+            out.push(NewsStory::new(NewsStoryKind::WindowOpens, date));
+        }
     }
 
     /// The week's entries from the club's own diary, each one a dated

@@ -193,7 +193,7 @@ impl MarketDesk {
 
     /// Money talks, but with diminishing returns: the jump from one to
     /// ten million is far bigger news than ninety to a hundred.
-    fn fee_weight(fee: i64) -> i32 {
+    pub(super) fn fee_weight(fee: i64) -> i32 {
         if fee <= 0 {
             return 0;
         }
