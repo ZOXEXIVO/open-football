@@ -840,6 +840,8 @@
   "loan_spell_goals": "{goals} 球",
   "loan_spell_assists": "{assists} 次助攻",
   "loan_spell_goals_assists": "{goals} 球，{assists} 次助攻",
+  "loan_spell_clean_sheets": "{clean_sheets} 场零封",
+  "loan_spell_conceded": "失球 {conceded}",
   "loan_spell_rating": "平均评分 {rating}",
   "event_agreed_personal_terms": "与另一家俱乐部谈妥了个人条款",
   "event_rejected_move_on_personal_terms": "因个人条款拒绝了转会",

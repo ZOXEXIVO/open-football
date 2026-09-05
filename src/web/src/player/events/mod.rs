@@ -2900,22 +2900,37 @@ impl LoanRender {
             );
         }
 
-        // Goals and assists are worth a line only when there are some.
-        // The two are joined by the copy, not by a comma here, so a
-        // locale can order them the way its grammar wants.
-        let contribution_key = match (spell.goals, spell.assists) {
-            (0, 0) => None,
-            (_, 0) => Some("loan_spell_goals"),
-            (0, _) => Some("loan_spell_assists"),
-            _ => Some("loan_spell_goals_assists"),
-        };
-        if let Some(key) = contribution_key {
-            if let Some(template) = translated(events_i18n, key) {
-                parts.push(
-                    template
-                        .replace("{goals}", &spell.goals.to_string())
-                        .replace("{assists}", &spell.assists.to_string()),
-                );
+        // What he did in them, which is a different column depending
+        // on the job. A goalkeeper's spell has no contribution line at
+        // all — nought goals and nought assists is what every keeper who
+        // ever went out on loan came home with — so his record is read
+        // where it was actually kept: the games nobody scored in, and
+        // the goals that went past him.
+        if spell.is_goalkeeper {
+            if let Some(template) = translated(events_i18n, "loan_spell_clean_sheets") {
+                parts.push(template.replace("{clean_sheets}", &spell.clean_sheets.to_string()));
+            }
+            if let Some(template) = translated(events_i18n, "loan_spell_conceded") {
+                parts.push(template.replace("{conceded}", &spell.conceded.to_string()));
+            }
+        } else {
+            // Goals and assists are worth a line only when there are
+            // some. The two are joined by the copy, not by a comma here,
+            // so a locale can order them the way its grammar wants.
+            let contribution_key = match (spell.goals, spell.assists) {
+                (0, 0) => None,
+                (_, 0) => Some("loan_spell_goals"),
+                (0, _) => Some("loan_spell_assists"),
+                _ => Some("loan_spell_goals_assists"),
+            };
+            if let Some(key) = contribution_key {
+                if let Some(template) = translated(events_i18n, key) {
+                    parts.push(
+                        template
+                            .replace("{goals}", &spell.goals.to_string())
+                            .replace("{assists}", &spell.assists.to_string()),
+                    );
+                }
             }
         }
 

@@ -840,6 +840,8 @@
   "loan_spell_goals": "{goals}ゴール",
   "loan_spell_assists": "{assists}アシスト",
   "loan_spell_goals_assists": "{goals}ゴール、{assists}アシスト",
+  "loan_spell_clean_sheets": "無失点{clean_sheets}試合",
+  "loan_spell_conceded": "失点{conceded}",
   "loan_spell_rating": "平均評価{rating}",
   "event_agreed_personal_terms": "他クラブと個人条件で合意した",
   "event_rejected_move_on_personal_terms": "個人条件で移籍を断った",

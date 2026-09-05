@@ -3777,6 +3777,79 @@ mod tests {
         );
     }
 
+    /// The same record, for the one position it did not describe.
+    ///
+    /// Goals and assists are the whole of what a returning player used
+    /// to bring home, and a goalkeeper brings home none of either — so
+    /// every keeper's loan, however well he kept, was reported as a
+    /// season of nought goals. The columns his job is actually kept in
+    /// are frozen with the rest of the borrowing season, so they have to
+    /// be read here or not at all.
+    #[test]
+    fn a_returning_goalkeeper_brings_home_the_record_he_was_judged_on() {
+        let mut data = recall_world(None);
+        {
+            let country = data.continents[0].countries.get_mut(0).unwrap();
+            let borrower = country.clubs.iter_mut().find(|c| c.id == 200).unwrap();
+            let loanee = borrower.teams.teams[0]
+                .players
+                .players
+                .iter_mut()
+                .find(|p| p.id == 55)
+                .unwrap();
+            loanee.positions = PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Goalkeeper,
+                    level: 20,
+                }],
+            };
+            loanee.statistics.played = 30;
+            loanee.statistics.played_subs = 0;
+            loanee.statistics.goals = 0;
+            loanee.statistics.assists = 0;
+            loanee.statistics.clean_sheets = 11;
+            loanee.statistics.conceded = 27;
+            loanee.statistics.rating_points = 7.20 * 30.0;
+            loanee.statistics.rating_weight = 30.0;
+            let loan = loanee.contract_loan.as_mut().unwrap();
+            loan.started = Some(d(2025, 8, 1));
+            loan.expiration = d(2026, 6, 1);
+        }
+
+        CountryResult::process_loan_returns(&mut data, 1, d(2026, 6, 1));
+
+        let country = data.country(1).unwrap();
+        let parent = country.clubs.iter().find(|c| c.id == 100).unwrap();
+        let returnee = parent.teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 55)
+            .expect("the keeper must be home");
+        let spell = returnee
+            .happiness
+            .recent_events
+            .iter()
+            .find(|e| e.event_type == HappinessEventType::LoanSpellReviewed)
+            .and_then(|e| e.context.as_ref())
+            .and_then(|c| c.loan_context.as_ref())
+            .and_then(|l| l.spell)
+            .expect("a finished spell files a report");
+
+        assert!(spell.is_goalkeeper, "the report must know he kept goal");
+        assert_eq!(spell.clean_sheets, 11);
+        assert_eq!(spell.conceded, 27);
+        assert_eq!(spell.appearances, 30);
+        // The verdict is read off minutes and marks, which mean the
+        // same thing in either job — a keeper's spell is not judged more
+        // harshly for the empty goals column.
+        assert!(
+            spell.verdict.is_positive(),
+            "a season of 11 shut-outs read as {:?}",
+            spell.verdict
+        );
+    }
+
     /// A spell nobody would write home about still gets written up. The
     /// verdict is what changes, not whether there is one — a return that
     /// produced no mood event used to leave no trace at all.

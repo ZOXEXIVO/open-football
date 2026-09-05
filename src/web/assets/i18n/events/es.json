@@ -840,6 +840,8 @@
   "loan_spell_goals": "{goals} goles",
   "loan_spell_assists": "{assists} asistencias",
   "loan_spell_goals_assists": "{goals} goles, {assists} asistencias",
+  "loan_spell_clean_sheets": "{clean_sheets} porterías a cero",
+  "loan_spell_conceded": "{conceded} goles encajados",
   "loan_spell_rating": "media de {rating}",
   "event_agreed_personal_terms": "Acordó las condiciones personales con otro club",
   "event_rejected_move_on_personal_terms": "Rechazó un traspaso por las condiciones personales",

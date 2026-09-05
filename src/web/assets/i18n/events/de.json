@@ -840,6 +840,8 @@
   "loan_spell_goals": "{goals} Tore",
   "loan_spell_assists": "{assists} Vorlagen",
   "loan_spell_goals_assists": "{goals} Tore, {assists} Vorlagen",
+  "loan_spell_clean_sheets": "{clean_sheets} Spiele ohne Gegentor",
+  "loan_spell_conceded": "{conceded} Gegentore",
   "loan_spell_rating": "Notenschnitt {rating}",
   "event_agreed_personal_terms": "Persönliche Bedingungen mit einem anderen Klub vereinbart",
   "event_rejected_move_on_personal_terms": "Wechsel an den persönlichen Bedingungen abgelehnt",

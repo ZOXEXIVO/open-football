@@ -840,6 +840,8 @@
   "loan_spell_goals": "голов: {goals}",
   "loan_spell_assists": "передач: {assists}",
   "loan_spell_goals_assists": "голов: {goals}, передач: {assists}",
+  "loan_spell_clean_sheets": "сухих матчей: {clean_sheets}",
+  "loan_spell_conceded": "пропущено: {conceded}",
   "loan_spell_rating": "средняя оценка {rating}",
   "event_agreed_personal_terms": "Согласовал личные условия с другим клубом",
   "event_rejected_move_on_personal_terms": "Отказался от перехода из-за личных условий",

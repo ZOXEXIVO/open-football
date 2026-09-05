@@ -313,6 +313,16 @@ mod tests {
             }
         }
 
+        /// The same spell, kept by a goalkeeper: no goals, ever, and
+        /// a record that lives in the shut-out column instead.
+        fn keeper(starts: i32, subs: i32, clean_sheets: i32) -> LoanWatchEntry {
+            let mut entry = Self::entry(starts, subs, 0);
+            entry.is_goalkeeper = true;
+            entry.clean_sheets = clean_sheets;
+            entry.conceded = (starts + subs - clean_sheets).max(0);
+            entry
+        }
+
         fn file(entry: LoanWatchEntry) -> Vec<NewsStory> {
             let mut out = Vec::new();
             LoanDesk::file(
@@ -431,6 +441,66 @@ mod tests {
         assert!(
             Spell::kinds(&Spell::file(twice)).contains(&NewsStoryKind::LoanWatchGoals),
             "a live run of two is what the early bar is for"
+        );
+    }
+
+    /// A goalkeeper's loan is read in the one column he has.
+    ///
+    /// The line that says a loanee is producing is filed off the goal
+    /// tally, which is nought for every goalkeeper who has ever gone out
+    /// on loan — so the best season a borrowed keeper can have reached
+    /// this desk as "he is playing every week" and nothing more. Shut-outs
+    /// are the same story told in his own units.
+    #[test]
+    fn a_borrowed_goalkeeper_is_read_on_shut_outs_rather_than_goals() {
+        let stories = Spell::file(Spell::keeper(14, 0, 6));
+        let kinds = Spell::kinds(&stories);
+
+        assert!(
+            kinds.contains(&NewsStoryKind::KeeperLoanWatchShutouts),
+            "six clean sheets on loan is the keeper's version of a scoring run: {:?}",
+            kinds
+        );
+        assert!(
+            !kinds.contains(&NewsStoryKind::LoanWatchGoals),
+            "a goalkeeper must never reach the copy written around a goal tally"
+        );
+
+        let shutouts = stories
+            .iter()
+            .find(|story| story.kind == NewsStoryKind::KeeperLoanWatchShutouts)
+            .expect("filed above");
+        assert_eq!(shutouts.a, 6, "the headline figure is the shut-outs");
+        assert_eq!(shutouts.b, 14, "and the second is the games they came in");
+
+        // A keeper conceding most weeks is playing, and that is all the
+        // column may say about him.
+        let quiet = Spell::kinds(&Spell::file(Spell::keeper(14, 0, 2)));
+        assert!(!quiet.contains(&NewsStoryKind::KeeperLoanWatchShutouts));
+        assert!(quiet.contains(&NewsStoryKind::LoanWatchStarter));
+    }
+
+    /// The interview, in the same two units.
+    ///
+    /// "{n} appearances and {m} goals on loan" under a quote about being
+    /// wanted is an argument against the man making it when the man is a
+    /// goalkeeper. His version counts the games nobody scored in.
+    #[test]
+    fn a_goalkeeper_argues_for_his_stay_in_clean_sheets() {
+        let mut entry = Spell::keeper(16, 0, 7);
+        entry.wants_permanent = true;
+
+        let stories = Spell::file(entry);
+        let quote = stories
+            .iter()
+            .find(|story| story.kind == NewsStoryKind::KeeperLoanWantsPermanent)
+            .unwrap_or_else(|| panic!("no keeper quote filed: {:?}", Spell::kinds(&stories)));
+
+        assert_eq!(quote.a, 16);
+        assert_eq!(quote.b, 7, "the figure behind the quote is his shut-outs");
+        assert!(
+            !Spell::kinds(&stories).contains(&NewsStoryKind::LoanWantsPermanent),
+            "the outfield version quotes a goal tally he cannot have"
         );
     }
 

@@ -840,6 +840,8 @@
   "loan_spell_goals": "{goals} gol",
   "loan_spell_assists": "{assists} asist",
   "loan_spell_goals_assists": "{goals} gol, {assists} asist",
+  "loan_spell_clean_sheets": "gol yemediği maç: {clean_sheets}",
+  "loan_spell_conceded": "yediği gol: {conceded}",
   "loan_spell_rating": "ortalama puan {rating}",
   "event_agreed_personal_terms": "Başka bir kulüple kişisel şartlarda anlaştı",
   "event_rejected_move_on_personal_terms": "Kişisel şartlar yüzünden transferi reddetti",

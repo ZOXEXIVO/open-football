@@ -840,6 +840,8 @@
   "loan_spell_goals": "{goals} goals",
   "loan_spell_assists": "{assists} assists",
   "loan_spell_goals_assists": "{goals} goals, {assists} assists",
+  "loan_spell_clean_sheets": "{clean_sheets} clean sheets",
+  "loan_spell_conceded": "{conceded} conceded",
   "loan_spell_rating": "{rating} average rating",
   "event_agreed_personal_terms": "Agreed personal terms with another club",
   "event_rejected_move_on_personal_terms": "Turned down a move on personal terms",

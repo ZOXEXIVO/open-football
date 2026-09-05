@@ -4170,7 +4170,7 @@ mod tests {
 
         // Kinds whose `a` is a goal / clean-sheet / run-length tally —
         // figures that stand still unless something actually happened.
-        const OCCASIONAL: [NewsStoryKind; 14] = [
+        const OCCASIONAL: [NewsStoryKind; 15] = [
             NewsStoryKind::KeeperShutoutMilestone,
             NewsStoryKind::WinningRun,
             NewsStoryKind::UnbeatenRun,

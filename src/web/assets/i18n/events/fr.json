@@ -840,6 +840,8 @@
   "loan_spell_goals": "{goals} buts",
   "loan_spell_assists": "{assists} passes décisives",
   "loan_spell_goals_assists": "{goals} buts, {assists} passes décisives",
+  "loan_spell_clean_sheets": "{clean_sheets} matchs sans encaisser",
+  "loan_spell_conceded": "{conceded} buts encaissés",
   "loan_spell_rating": "note moyenne {rating}",
   "event_agreed_personal_terms": "A trouvé un accord personnel avec un autre club",
   "event_rejected_move_on_personal_terms": "A refusé un transfert sur les conditions personnelles",
