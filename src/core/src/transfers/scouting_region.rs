@@ -232,10 +232,49 @@ impl ScoutingRegion {
         }
     }
 
-    /// Relative league prestige for each region.
-    /// Used by players when evaluating cross-region transfers —
-    /// players resist moves to less prestigious regions.
+    /// Number of regions. Lets callers index a fixed-size table by
+    /// [`Self::index`] instead of hashing.
+    pub const COUNT: usize = 15;
+
+    /// Position of this region in [`Self::all`] — the index every
+    /// region-keyed table in the project uses.
+    pub fn index(&self) -> usize {
+        match self {
+            ScoutingRegion::WesternEurope => 0,
+            ScoutingRegion::EasternEurope => 1,
+            ScoutingRegion::Scandinavia => 2,
+            ScoutingRegion::MiddleEastEurope => 3,
+            ScoutingRegion::SouthAmerica => 4,
+            ScoutingRegion::WestAfrica => 5,
+            ScoutingRegion::NorthAfrica => 6,
+            ScoutingRegion::EastSouthAfrica => 7,
+            ScoutingRegion::NorthAmerica => 8,
+            ScoutingRegion::CentralAmericaCaribbean => 9,
+            ScoutingRegion::EastAsia => 10,
+            ScoutingRegion::SoutheastAsia => 11,
+            ScoutingRegion::MiddleEast => 12,
+            ScoutingRegion::SouthAsia => 13,
+            ScoutingRegion::Oceania => 14,
+        }
+    }
+
+    /// Relative league prestige for each region — the number every
+    /// cross-region step-down gate prices a move against.
+    ///
+    /// Answered by the loaded world (the strongest top division in each
+    /// region) whenever one has been published, and by
+    /// [`Self::authored_league_prestige`] before that. The authored table is
+    /// a 2024 opinion that contradicts the data it summarises — it ranked
+    /// Turkey below Russia while the Süper Lig ships above the RPL — so the
+    /// world's own answer is the one that should be read wherever there is
+    /// one. See [`crate::transfers::RegionPrestigeTable`].
     pub fn league_prestige(&self) -> f32 {
+        crate::transfers::RegionPrestigeTable::get(*self)
+    }
+
+    /// The shipped fallback for a region with no loaded league. Hand
+    /// authored; kept only as the floor under the data.
+    pub fn authored_league_prestige(&self) -> f32 {
         match self {
             ScoutingRegion::WesternEurope => 1.0,
             ScoutingRegion::EasternEurope => 0.50,

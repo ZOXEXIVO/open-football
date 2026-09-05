@@ -13,6 +13,7 @@ use crate::club::{BoardResult, ClubFinanceResult};
 use crate::handlers::ProcessContractHandler;
 use crate::league::result::{DeferredContractInteraction, LeagueProcessAccess};
 use crate::shared::{Currency, CurrencyValue};
+use crate::transfers::pipeline::TransferTrace;
 use crate::transfers::{CompletedTransfer, TransferListing, TransferListingType};
 use crate::utils::{DateUtils, FormattingUtils};
 use crate::{
@@ -745,6 +746,20 @@ impl ClubResult {
                 return;
             }
 
+            // A signing still inside its evaluation window is not squad
+            // surplus, whatever the wage conversation says — the club
+            // committed to him and the same patience clock the rebalance
+            // and the positional trim honour applies here.
+            //
+            // Only the squad-shape branch. A failed RENEWAL is a fact about
+            // an expiring contract rather than an opinion about the squad,
+            // and a man who has just arrived cannot be in one anyway.
+            if matches!(trigger, UnresolvedSalaryTrigger::NotNeededWantsRaise)
+                && player.signing_protection_active(date)
+            {
+                return;
+            }
+
             let ability = player.player_attributes.current_ability as i16;
             let age = DateUtils::age(player.birth_date, date);
             let loyalty = player.attributes.loyalty;
@@ -866,6 +881,12 @@ impl ClubResult {
                     match decision {
                         UnresolvedSalaryDecision::FreeTransfer => {
                             let release_reason = trigger.release_reason();
+                            TransferTrace::exit(
+                                player,
+                                date,
+                                "unresolved_salary",
+                                release_reason.history_reason(),
+                            );
                             player.statuses.add(date, PlayerStatusType::Frt);
                             player.contract = None;
                             // Stamp the explicit exit so the free-agent
@@ -880,6 +901,12 @@ impl ClubResult {
                             );
                         }
                         UnresolvedSalaryDecision::TransferList => {
+                            TransferTrace::list(
+                                player,
+                                date,
+                                "unresolved_salary",
+                                trigger.list_reason(),
+                            );
                             player.statuses.add(date, PlayerStatusType::Lst);
                             if let Some(ref mut contract) = player.contract {
                                 contract.is_transfer_listed = true;

@@ -57,6 +57,14 @@ pub enum TransferPlausibilityReason {
     /// active rule today is Russia ↔ Ukraine from 2022-02-24 onwards;
     /// the simulation refuses these moves at every stage.
     CountryPairBlocked,
+    /// The buying club does not work this market: no corridor between the
+    /// two countries, no scout who knows it, nothing in its own transfer
+    /// ledger. It can watch him; it has no route to him.
+    ///
+    /// Not a wall — a triggered clause, a transfer request, or months of
+    /// unsold resignation all open it, because each of those is the
+    /// player's side reaching OUT rather than the club reaching in.
+    MarketOutsideBuyersReach,
 }
 
 // ============================================================
@@ -396,6 +404,16 @@ pub struct TransferPlausibilityInputs {
     /// one signal that decides whether a bid happens was invisible at the
     /// moment it mattered.
     pub player_stage_inclination: f32,
+    /// Corridor plausibility of the destination for this player, 0.02..1 —
+    /// [`crate::transfers::MarketAffinity`]. His nationality's corridor into
+    /// the buying country, where he currently plays, and his diaspora, in
+    /// one number. `1.0` for a domestic move and for a man going home.
+    pub market_affinity: f32,
+    /// How well the buying club knows the market he is being bought FROM,
+    /// 0..1 — its scouts, its own transfer ledger, and its country's priors.
+    /// `1.0` for a domestic move. See
+    /// [`crate::transfers::ClubMarketKnowledge`].
+    pub buyer_market_knowledge: f32,
     /// The selling club's own asset ledger has this player on its sell list
     /// — it would answer a call about him at the right price. See
     /// [`super::asset_ledger::AssetLedger`].
@@ -613,6 +631,16 @@ mod thresholds {
     /// tier so it blocks what it was written for (a two-tier collapse) and
     /// leaves ordinary downward mobility to the soft penalties.
     pub const DOMESTIC_STEP_DOWN_DROP: f32 = 0.19;
+    /// Below this product of corridor affinity and the buyer's knowledge
+    /// of the source market, a club is not a plausible suitor — it may
+    /// watch, and that is all.
+    ///
+    /// Deliberately low. The point is to close the moves nobody in
+    /// football makes (a Cameroonian club signing a Russian), not to
+    /// confine every club to its own corridor: an affinity of 0.05 with a
+    /// club that knows the market at all still clears it, and the world
+    /// must stay able to open a corridor that has never existed.
+    pub const MARKET_REACH_FLOOR: f32 = 0.05;
     pub const LOAN_IMPORTANCE_BLOCK: f32 = 0.65;
     pub const LOAN_REP_GAP_BLOCK: f32 = 0.10;
     /// Reputation gap at which a loan stops being a step down and becomes a
@@ -1009,6 +1037,40 @@ impl TransferMovePlausibility {
         // a merely-important / big-drop mismatch can be an internal name but
         // not public interest.
 
+        // ── Market geography ──────────────────────────────────────────
+        //
+        // Does this club shop in this market at all? Two clubs of identical
+        // size in the same league answer differently, because one has a
+        // scout there and a decade of signings and the other has neither.
+        // Below the floor the club may still WATCH him — football is
+        // watched globally — but it does not put him on a list, show public
+        // interest, or open talks.
+        //
+        // Three ways past it, each a real one:
+        //   * a `Forced` route (a triggered release clause) — the move is
+        //     already agreed in principle and geography is moot;
+        //   * the player asked to leave, which is the agent's business and
+        //     the agent's business is precisely to reach markets his client
+        //     is not known in;
+        //   * he has been listed long enough to be resigned to it — after
+        //     months unsold the agent shops him everywhere.
+        //
+        // Never applied to a domestic move: `market_affinity` and
+        // `buyer_market_knowledge` are both 1.0 there by construction, so
+        // the product can't fall below the floor.
+        let market_reach = inputs.market_affinity * inputs.buyer_market_knowledge.max(0.5);
+        let agent_is_shopping_him =
+            inputs.is_transfer_requested || (inputs.is_listed && inputs.listing_resignation >= 0.5);
+        if market_reach < thresholds::MARKET_REACH_FLOOR
+            && !matches!(strength, AvailabilityStrength::Forced)
+            && !agent_is_shopping_him
+        {
+            return make(
+                TransferMoveStage::CanScoutQuietly,
+                Some(TransferPlausibilityReason::MarketOutsideBuyersReach),
+            );
+        }
+
         // Important first-team type at a much stronger club, approached cold.
         // A merely-big drop is opened by a Real signal (`level_gate_open ==
         // hard_gate_open`); a *huge* drop only by a Forced clause.
@@ -1339,6 +1401,9 @@ impl TransferMovePlausibility {
 use crate::Player;
 use crate::club::player::calculators::WageCalculator;
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
+use crate::transfers::{
+    ClubMarketKnowledge, MarketAffinity, MarketAffinityInputs, MarketMap, MoveKind,
+};
 use crate::{Club, Country, Person, PlayerStatusType, TeamType};
 use chrono::NaiveDate;
 
@@ -1492,6 +1557,14 @@ impl TransferPlausibilityBuilder {
             buyer_total_wages: buyer_ctx.buyer_total_wages,
             expected_annual_wage,
             player_stage_inclination: seller.big_stage_inclination,
+            // The pool builder has no world map to read: it is called from
+            // inside per-country borrows that cannot reach `SimulatorData`.
+            // Neutral here on purpose — the geography gate lives where the
+            // approach is actually made (`from_global`, with both countries
+            // and the map in hand) and on the discovery side, where the
+            // scouting pool weights candidates by the same affinity.
+            market_affinity: 1.0,
+            buyer_market_knowledge: 1.0,
             seller_marketed: seller.is_marketed,
         })
     }
@@ -1553,6 +1626,7 @@ impl TransferPlausibilityBuilder {
         is_loan: bool,
         is_unsolicited: bool,
         date: NaiveDate,
+        market_map: &MarketMap,
     ) -> TransferPlausibilityInputs {
         let buyer_ctx = BuyerPlausibilityContext::build(buying_country, buying_club);
 
@@ -1625,6 +1699,60 @@ impl TransferPlausibilityBuilder {
             date,
         );
 
+        // Where the move sits on the map: is this a place people like him
+        // go, and does this club work that market? A world with no geography
+        // loaded (a fixture, a database predating the country cards) reads
+        // both as neutral, so the gate is silent rather than closed.
+        let (market_affinity, buyer_market_knowledge) = if market_map.is_empty() {
+            (1.0, 1.0)
+        } else {
+            let affinity = MarketAffinity::affinity(
+                market_map,
+                MarketAffinityInputs {
+                    buyer_country_id: buying_country.id,
+                    nationality_country_id: player.country_id,
+                    current_country_id: selling_country.id,
+                    kind: MoveKind::Talent,
+                },
+            );
+            let best_scout_level = buying_club
+                .teams
+                .teams
+                .iter()
+                .flat_map(|team| team.staffs.staffs.iter())
+                .map(|staff| {
+                    staff
+                        .staff_attributes
+                        .knowledge
+                        .country_level(selling_country.id)
+                        .max(
+                            staff
+                                .staff_attributes
+                                .knowledge
+                                .country_level(player.country_id),
+                        )
+                })
+                .max()
+                .unwrap_or(0);
+            let knowledge = ClubMarketKnowledge::knowledge(
+                market_map,
+                buying_country.id,
+                &buying_club.market_ledger,
+                best_scout_level,
+                selling_country.id,
+                date,
+            )
+            .max(ClubMarketKnowledge::knowledge(
+                market_map,
+                buying_country.id,
+                &buying_club.market_ledger,
+                best_scout_level,
+                player.country_id,
+                date,
+            ));
+            (affinity, knowledge)
+        };
+
         TransferPlausibilityInputs {
             buyer_rep: buyer_ctx.buyer_rep,
             seller_rep,
@@ -1668,6 +1796,8 @@ impl TransferPlausibilityBuilder {
             buyer_total_wages: buyer_ctx.buyer_total_wages,
             expected_annual_wage,
             player_stage_inclination: player.big_stage_inclination,
+            market_affinity,
+            buyer_market_knowledge,
             seller_marketed: selling_club.transfer_plan.is_marketed(player.id),
         }
     }
@@ -1698,6 +1828,10 @@ impl TransferPlausibilityBuilder {
             is_loan,
             is_unsolicited,
             date,
+            // A domestic move has no geography to price: both the corridor
+            // and the buyer's knowledge of the market are 1.0 by
+            // construction, which is exactly what an empty map yields.
+            &MarketMap::default(),
         )
     }
 }
@@ -1750,6 +1884,8 @@ mod tests {
             expected_annual_wage: 1_000_000,
             player_stage_inclination: 0.0,
             seller_marketed: false,
+            market_affinity: 1.0,
+            buyer_market_knowledge: 1.0,
         }
     }
 
@@ -1799,6 +1935,8 @@ mod tests {
             expected_annual_wage: 800_000,
             player_stage_inclination: 0.0,
             seller_marketed: false,
+            market_affinity: 1.0,
+            buyer_market_knowledge: 1.0,
         }
     }
 
@@ -2951,6 +3089,8 @@ mod tests {
             expected_annual_wage: 400_000,
             player_stage_inclination: 0.0,
             seller_marketed: false,
+            market_affinity: 1.0,
+            buyer_market_knowledge: 1.0,
         }
     }
 
@@ -3182,6 +3322,8 @@ mod agent_channel_tests {
                 expected_annual_wage: 9_000_000,
                 player_stage_inclination: 0.35,
                 seller_marketed: false,
+                market_affinity: 1.0,
+                buyer_market_knowledge: 1.0,
             }
         }
     }
@@ -3228,6 +3370,8 @@ mod agent_channel_tests {
             player_age: 31,
             player_stage_inclination: 0.0,
             seller_marketed: false,
+            market_affinity: 1.0,
+            buyer_market_knowledge: 1.0,
             ..AgentFixtures::contented_standout()
         };
         assert!(!inputs.is_agent_circulated());

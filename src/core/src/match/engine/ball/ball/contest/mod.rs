@@ -23,6 +23,8 @@
 //! * [`possession`] — the bookkeeping that outlives the contest: how the
 //!   carrier came by the ball ([`PossessionSource`]), the pass chain the
 //!   assist resolver walks, and the giveaway / shot / carry metadata.
+//! * [`reach`] — the one question every one of them asks first: can this
+//!   man get to the ball at all, on all three axes.
 
 pub mod block;
 pub mod body;
@@ -30,7 +32,9 @@ pub mod contact;
 pub mod interception;
 pub mod ownership;
 pub mod possession;
+pub mod reach;
 pub mod save;
 
 pub use contact::ContactInPlace;
 pub use possession::{PassChainEntry, PossessionSource};
+pub use reach::PlayerReach;

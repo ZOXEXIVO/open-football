@@ -174,6 +174,7 @@ impl StaffGenerator {
                 tactical_knowledge: IntegerUtils::random(attr_min, attr_max) as u8,
                 known_regions: Vec::new(), // populated after creation based on scout nationality/assignment
                 region_familiarity: Vec::new(),
+                known_countries: Vec::new(),
             },
             data_analysis: StaffDataAnalysis {
                 judging_player_data: IntegerUtils::random(attr_min, attr_max) as u8,

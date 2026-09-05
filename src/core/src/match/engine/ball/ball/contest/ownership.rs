@@ -4,7 +4,7 @@
 
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
-use crate::r#match::engine::ball::ball::{AerialReach, AwaitedRestart, Ball};
+use crate::r#match::engine::ball::ball::{AerialReach, AwaitedRestart, Ball, PlayerReach};
 use crate::r#match::engine::psychology::Psychology;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::EventCollection;
@@ -14,6 +14,9 @@ use crate::r#match::{MatchContext, MatchPlayer, PassOriginRestart};
 use nalgebra::Vector3;
 use std::env::var;
 use std::sync::OnceLock;
+
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::strike_diag::{GrantPath, StrikeCensus};
 
 /// Where the ball actually is when a pass is booked as received, and
 /// how often the delivery is then thrown away.
@@ -896,6 +899,21 @@ impl Ball {
                 const RECEIVER_CLAIM_DISTANCE_SQ: f32 =
                     crate::r#match::engine::ball::ball::CONTROL_DISTANCE
                         * crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
+                // **The receiver's own ceiling for taking a pass out
+                // of the air**, and one of the three copies of this
+                // number the engine used to carry.
+                //
+                // The replay viewer copied it too
+                // (`Soundtrack::OVERHEAD`), which is how the picture
+                // came to be refusing balls the engine was granting.
+                // Kept at 2.8 rather than folded into
+                // [`PlayerReach::under_ceiling`] because it is a
+                // calibrated reception radius and not a physical
+                // reach: it sits deliberately UNDER the best
+                // leaper's 3.1 m, so a pass nobody could control is
+                // not booked as one that was. The general rule is
+                // `PlayerReach`; this is the same question asked
+                // more tightly, and the two must stay consistent.
                 const RECEIVER_MAX_HEIGHT: f32 = 2.8;
 
                 if dist_sq < RECEIVER_CLAIM_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT {
@@ -933,6 +951,8 @@ impl Ball {
                         }
                     }
                     self.current_owner = Some(target_id);
+                    #[cfg(feature = "match-logs")]
+                    StrikeCensus::note_grant(GrantPath::RECEIVER, self.position.z);
                     self.pass_target_player_id = None;
                     self.ownership_duration = 0;
                     self.flags.in_flight_state = 0;
@@ -995,6 +1015,8 @@ impl Ball {
                                 // Ball moving toward passer
                                 let passer_team = prev_player.team_id;
                                 self.current_owner = Some(prev_id);
+                                #[cfg(feature = "match-logs")]
+                                StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
                                 self.pass_target_player_id = None;
                                 self.ownership_duration = 0;
                                 self.flags.in_flight_state = 0;
@@ -1119,6 +1141,8 @@ impl Ball {
             // Process the claim after iteration to avoid borrow checker issues
             if let Some(player_id) = claiming_player_id {
                 self.current_owner = Some(player_id);
+                #[cfg(feature = "match-logs")]
+                StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
                 self.pass_target_player_id = None;
                 self.take_ball_notified_players.clear();
                 self.notification_timeout = 0;
@@ -1221,6 +1245,8 @@ impl Ball {
                 {
                     // Grant ownership
                     self.current_owner = Some(nearest_player.id);
+                    #[cfg(feature = "match-logs")]
+                    StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
                     self.previous_owner = None;
                     self.pass_target_player_id = None;
                     self.ownership_duration = 0;
@@ -1229,10 +1255,15 @@ impl Ball {
                     self.notification_timeout = 0;
                     self.claim_cooldown = 15; // Prevent immediate re-claiming by another player
 
-                    if self.position.z > 0.1 && self.position.z < DEADLOCK_HEIGHT_THRESHOLD {
-                        self.position.z = 0.0;
-                        self.velocity.z = 0.0;
-                    }
+                    // The height is not written down here any more. A ball
+                    // up to `DEADLOCK_HEIGHT_THRESHOLD` (1.5 m) snapped to
+                    // the grass inside one 10 ms tick is a teleport on the
+                    // axis a replay shows most plainly, and it is the same
+                    // move the string-pull made. The grant is now enough on
+                    // its own: an owned ball above the deck settles to his
+                    // feet under gravity — see
+                    // [`Ball::settling_out_of_the_air`] — which for 1.5 m
+                    // is a bit over half a second and draws as a fall.
 
                     self.unowned_stopped_ticks = 0;
                     events.add_ball_event(BallEvent::Claimed(nearest_player.id));
@@ -1416,16 +1447,25 @@ impl Ball {
         const BALL_DISTANCE_THRESHOLD: f32 = 5.0;
         const BALL_DISTANCE_THRESHOLD_SQUARED: f32 =
             BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD;
-        const PLAYER_HEIGHT: f32 = 1.8; // Average player height in meters
-        #[allow(dead_code)]
-        const PLAYER_REACH_HEIGHT: f32 = PLAYER_HEIGHT + 0.5; // Player can reach ~2.3m when standing
-        // 3.5m includes a proper jump header reach — real elite leapers
-        // win aerials closer to 3m, and a chest/thigh trap works all
-        // the way up to about shoulder height on the way down. The
-        // tighter 2.8 was missing any ball descending through 2.8-3.5,
-        // which with the bouncy 0.6 coefficient was most of the window.
-        const PLAYER_JUMP_REACH: f32 = PLAYER_HEIGHT + 1.7;
-        const MAX_BALL_HEIGHT: f32 = PLAYER_JUMP_REACH + 0.5; // Absolute max reachable height
+        // **The vertical reach belongs to the PLAYER, not to this scan.**
+        //
+        // This used to be a pair of hand-rolled literals — a flat 3.5 m
+        // jump reach for everybody and a 4.0 m "absolute max" half a
+        // metre above it — and they were two of the five different
+        // ceilings the engine carried for one question. They are now
+        // [`AerialReach`]: `HIGHEST` (3.1 m) is the whole-pitch early-out,
+        // the ceiling of the best leaper there could be, and the per-man
+        // test inside the loop below is his own `ceiling(jumping)`,
+        // 2.5-3.1 m. The best header of the ball in the division and the
+        // worst no longer have identical aerial range on the path that
+        // decides most of the possession in a match.
+        //
+        // The receiver claim's 2.8 m and the replay viewer's
+        // `Soundtrack::OVERHEAD` 2.8 were both copied off the old 2.8
+        // that preceded the 3.5; all of them are this same question, and
+        // [`PlayerReach`](crate::r#match::engine::ball::ball::PlayerReach)
+        // is where it now gets one answer.
+        const MAX_BALL_HEIGHT: f32 = AerialReach::HIGHEST;
 
         // CRITICAL: Early validation - if current owner is too far AND ball is moving, clear ownership
         // This catches cases where ball flies away from owner but ownership wasn't properly cleared
@@ -1552,6 +1592,21 @@ impl Ball {
                 const RECEIVER_PRIORITY_DISTANCE_SQ: f32 =
                     crate::r#match::engine::ball::ball::CONTROL_DISTANCE
                         * crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
+                // **The receiver's own ceiling for taking a pass out
+                // of the air**, and one of the three copies of this
+                // number the engine used to carry.
+                //
+                // The replay viewer copied it too
+                // (`Soundtrack::OVERHEAD`), which is how the picture
+                // came to be refusing balls the engine was granting.
+                // Kept at 2.8 rather than folded into
+                // [`PlayerReach::under_ceiling`] because it is a
+                // calibrated reception radius and not a physical
+                // reach: it sits deliberately UNDER the best
+                // leaper's 3.1 m, so a pass nobody could control is
+                // not booked as one that was. The general rule is
+                // `PlayerReach`; this is the same question asked
+                // more tightly, and the two must stay consistent.
                 const RECEIVER_MAX_HEIGHT: f32 = 2.8;
 
                 if dist_sq < RECEIVER_PRIORITY_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT
@@ -1579,6 +1634,8 @@ impl Ball {
                     }
                     self.previous_owner = self.current_owner;
                     self.current_owner = Some(target_id);
+                    #[cfg(feature = "match-logs")]
+                    StrikeCensus::note_grant(GrantPath::RECEIVER, self.position.z);
                     self.pass_target_player_id = None;
                     self.ownership_duration = 0;
                     self.claim_cooldown = 15;
@@ -1594,9 +1651,8 @@ impl Ball {
             }
         }
 
-        // Velocity thresholds (squared for comparison without sqrt)
+        // Velocity threshold (squared for comparison without sqrt)
         const MAX_CLAIMABLE_VELOCITY_SQ: f32 = 10.0 * 10.0;
-        const SLOW_BALL_VELOCITY_SQ: f32 = 4.0 * 4.0;
 
         let ball_speed_sq = self.velocity.norm_squared();
 
@@ -1605,7 +1661,6 @@ impl Ball {
         let mut nearby_ids: [u32; MAX_NEARBY] = [0; MAX_NEARBY];
         let mut nearby_count: usize = 0;
 
-        let ball_height_reachable = self.position.z <= PLAYER_JUMP_REACH;
         // The man who just released the ball doesn't get it straight back
         // while it is still sitting on top of him — see
         // `blocked_recollect_player`. This is the generic half of the
@@ -1626,21 +1681,17 @@ impl Ball {
                 continue;
             }
 
-            if ball_speed_sq <= SLOW_BALL_VELOCITY_SQ {
-                if !ball_height_reachable {
-                    continue;
-                }
-            } else if ball_speed_sq > MAX_CLAIMABLE_VELOCITY_SQ {
-                if dist_sq > 1.0 {
-                    continue;
-                }
-                if !ball_height_reachable {
-                    continue;
-                }
-            } else {
-                if !ball_height_reachable {
-                    continue;
-                }
+            // HIS ceiling, not a flat one. All three speed branches below
+            // asked the same height question against the same 3.5 m
+            // literal, so it factors out to one test — the only thing
+            // that changed is whose reach it is measured against.
+            if !PlayerReach::under_ceiling(self, player) {
+                continue;
+            }
+
+            // A ball flying past at speed has to be practically on him.
+            if ball_speed_sq > MAX_CLAIMABLE_VELOCITY_SQ && dist_sq > 1.0 {
+                continue;
             }
 
             if nearby_count < MAX_NEARBY {
@@ -1789,6 +1840,8 @@ impl Ball {
                 // Ownership change approved - reset duration and set cooldown
                 self.previous_owner = self.current_owner;
                 self.current_owner = Some(player.id);
+                #[cfg(feature = "match-logs")]
+                StrikeCensus::note_grant(GrantPath::SCAN, self.position.z);
                 self.pass_target_player_id = None;
                 self.ownership_duration = 0;
 
@@ -1807,9 +1860,9 @@ impl Ball {
 
                 // A ball taken above standing reach is taken in the air.
                 //
-                // The height gate above (`ball_height_reachable`) has
-                // always allowed claims all the way to `PLAYER_JUMP_REACH`
-                // — a jumping player's ceiling — while nothing anywhere
+                // The height gate above has always allowed claims all the
+                // way to a jumping player's ceiling
+                // ([`PlayerReach::under_ceiling`]) while nothing anywhere
                 // made the player jump. So the commonest aerial moment in
                 // the match, a lofted ball dropping onto somebody's head,
                 // was resolved by a man standing still with the ball

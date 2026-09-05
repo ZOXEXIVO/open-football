@@ -90,6 +90,16 @@ pub struct OfferView {
     /// [`crate::club::player::language::LanguageProfile::affinity_for`] the
     /// buyer's country language mask, 0..1.
     pub language_affinity: f32,
+    /// HIS map of the destination, 0..1 — the strongest of: his
+    /// nationality's export corridor into the buying country, a diaspora of
+    /// his living there, and the language. `1.0` for home and for a place
+    /// his compatriots go in numbers. See
+    /// [`crate::transfers::MarketAffinity::player_affinity`].
+    ///
+    /// Distinct from the buyer-side affinity on the plausibility inputs:
+    /// that one asks whether this CLUB shops in his market, this one asks
+    /// whether HE has ever heard of the place.
+    pub place_familiarity: f32,
     /// A club he grew up wanting to play for.
     pub is_favourite_club: bool,
     /// How close the window is to shutting, 0..1.
@@ -118,6 +128,7 @@ impl OfferView {
             prestige_drop: 0.0,
             crosses_continent: false,
             language_affinity: 1.0,
+            place_familiarity: 1.0,
             is_favourite_club: false,
             deadline_urgency: 0.0,
             release_clause_triggered: false,
@@ -583,6 +594,12 @@ pub struct AppraisalConfig {
     pub place_prestige: f32,
     pub place_continent: f32,
     pub place_language: f32,
+    /// A place his compatriots do not go, whose language he does not have,
+    /// and where no diaspora of his lives. Small on purpose: the prestige
+    /// term is still the main axis of the place cost, and this is the
+    /// difference between "abroad" and "somewhere nobody like me has ever
+    /// played" — real, and not enough on its own to refuse a good move.
+    pub place_unfamiliar: f32,
     /// A natural settler pays 60 % of the place cost; a man who cannot
     /// settle pays all of it.
     pub place_adaptability_floor: f32,
@@ -659,6 +676,7 @@ impl Default for AppraisalConfig {
             place_prestige: 0.45,
             place_continent: 0.15,
             place_language: 0.12,
+            place_unfamiliar: 0.10,
             place_adaptability_floor: 0.60,
             place_family_span: 0.3,
 
@@ -826,6 +844,11 @@ impl PlayerOfferAppraisal {
                 + cfg.place_continent * if offer.crosses_continent { 1.0 } else { 0.0 }
                 + if changes_country {
                     cfg.place_language * (1.0 - offer.language_affinity.clamp(0.0, 1.0))
+                        // Somewhere nobody like him has played. A Brazilian
+                        // knows what Portugal is; he has no picture of
+                        // Kazakhstan at all, and the difference costs
+                        // something on top of the language he lacks in both.
+                        + cfg.place_unfamiliar * (1.0 - offer.place_familiarity.clamp(0.0, 1.0))
                 } else {
                     0.0
                 };

@@ -41,7 +41,7 @@ use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::recommendations::{
     BuyerContext, ListedTargetVerdict, ListedTargetView, evaluate_listed_target,
 };
-use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
+use crate::transfers::pipeline::squad_fit::{SquadFitSnapshot, SquadRegistrationLimits};
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::{Club, Country, Person, PlayerFieldPositionGroup, PlayerStatusType};
 
@@ -92,6 +92,7 @@ impl BuyerScan {
         date: NaiveDate,
     ) -> Option<BuyerScan> {
         let team = club.teams.teams.first()?;
+        let registration = SquadRegistrationLimits::new(country.id, &country.regulations);
         let rep_score = team.reputation.overall_score();
         let world_rep = team.reputation.world as i16;
         let league_rep = team
@@ -157,7 +158,7 @@ impl BuyerScan {
             PlayerFieldPositionGroup::Forward,
         ]
         .into_iter()
-        .map(|g| (g, SquadFitSnapshot::build(club, g, date)))
+        .map(|g| (g, SquadFitSnapshot::build(club, g, date, registration)))
         .collect();
 
         Some(BuyerScan {
@@ -351,6 +352,7 @@ impl PipelineProcessor {
 
                     let view = ListedTargetView {
                         ability,
+                        nationality_country_id: player.country_id,
                         estimated_potential,
                         age: player_age,
                         estimated_value: value,

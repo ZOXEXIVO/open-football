@@ -423,6 +423,7 @@ mod tests {
             },
             skin_colors: SkinColorsEntity::default(),
             domestic_cup: cup,
+            transfers: None,
         }
     }
 

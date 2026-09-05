@@ -429,6 +429,7 @@ mod tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
+    use crate::transfers::MarketMap;
     use crate::transfers::pipeline::{TransferNeedPriority, TransferNeedReason, TransferRequest};
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
@@ -651,6 +652,7 @@ mod tests {
             today,
             &mut summary,
             &[],
+            &MarketMap::default(),
             &config,
             &mut domestic,
             &mut offered,
@@ -738,6 +740,7 @@ mod tests {
                 today,
                 &mut summary,
                 &[],
+                &MarketMap::default(),
                 &config,
                 &mut domestic,
                 &mut offered,

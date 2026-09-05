@@ -6,7 +6,8 @@ use crate::r#match::engine::ball::ball::contest::save::SaveModel;
 use crate::r#match::engine::ball::ball::diagnostics::block_diag::BlockDiag;
 use crate::r#match::engine::ball::ball::motion::SpinModel;
 use crate::r#match::engine::ball::ball::{
-    Ball, DeadBall, GRAVITY_PER_TICK, GROUND_FRICTION, PossessionSource,
+    Ball, DeadBall, FlightProtection, GRAVITY_PER_TICK, GROUND_FRICTION, PlayerReach,
+    PossessionSource,
 };
 use crate::r#match::engine::flow::context::PendingAdvantage;
 use crate::r#match::engine::flow::rng::MatchRng;
@@ -36,7 +37,6 @@ use crate::r#match::player::strategies::players::ops::goalkeeper_skill::{
     GoalkeeperSkillInputs, GoalkeeperSkillProfile,
 };
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
-#[cfg(feature = "match-logs")]
 use crate::r#match::player::strategies::players::ops::xg::ShotType;
 use crate::r#match::player::strategies::players::skills::SkillCurve;
 use crate::r#match::{
@@ -721,7 +721,15 @@ pub enum PlayerEvent {
     TacklingBall(u32),
     BallOwnerChange(u32),
     PassTo(PassingEventContext),
-    ClearBall(Vector3<f32>),
+    /// `(clearer_id, velocity)` — hoof it away, head it on, punch it clear.
+    ///
+    /// ⚠ **It used to carry no player id and check nothing**, which made
+    /// it the one strike handler with no reach at all: a velocity written
+    /// onto the ball by whoever happened to be in a clearing state, from
+    /// wherever the ball happened to be. The id is what lets it be
+    /// refused out of reach exactly as `PassTo` is — see
+    /// [`PlayerReach::can_strike`](crate::r#match::engine::ball::ball::PlayerReach).
+    ClearBall(u32, Vector3<f32>),
     RushOut(u32),
     Shoot(ShootingEventContext),
     MovePlayer(u32, Vector3<f32>),
@@ -1030,6 +1038,50 @@ impl FoulResolver {
     }
 }
 
+/// Which handler is about to write a velocity onto the ball.
+///
+/// All four share one reach rule — see
+/// [`PlayerEventDispatcher::strike_in_reach`] — and this is what lets
+/// the census, the console line and the guard itself name the same
+/// thing. `PassTo` had a reach of its own (horizontal only), `Shoot` had
+/// none at all, `MoveBall` borrowed the possession test and `ClearBall`
+/// did not even carry a player id.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StrikeKind {
+    Pass,
+    Shot,
+    Clearance,
+    /// A dribbling touch — `MoveBall` sets a velocity as well as taking
+    /// possession, so it is a strike as much as a grant.
+    Carry,
+}
+
+impl StrikeKind {
+    /// What the replay console says when one of these is refused, and
+    /// the only place those words are written. See
+    /// [`PlayerEventDispatcher::dispatch`], which prints them.
+    pub fn refusal(self) -> &'static str {
+        match self {
+            StrikeKind::Pass => "the passer could not reach the ball",
+            StrikeKind::Shot => "the shooter could not reach the ball",
+            StrikeKind::Clearance => "the clearer could not reach the ball",
+            StrikeKind::Carry => "he could not reach the ball to carry it",
+        }
+    }
+
+    /// Row in [`strike_diag::Handler`](crate::r#match::engine::ball::ball::strike_diag::Handler).
+    #[cfg(feature = "match-logs")]
+    fn census_slot(self) -> usize {
+        use crate::r#match::engine::ball::ball::strike_diag::Handler;
+        match self {
+            StrikeKind::Pass => Handler::PASS,
+            StrikeKind::Shot => Handler::SHOOT,
+            StrikeKind::Clearance => Handler::CLEAR,
+            StrikeKind::Carry => Handler::MOVE,
+        }
+    }
+}
+
 pub struct PlayerEventDispatcher;
 
 impl PlayerEventDispatcher {
@@ -1041,6 +1093,20 @@ impl PlayerEventDispatcher {
     /// see any of it — the whole-tick census books one `dispatch` row, and
     /// this is what splits that row by handler. See
     /// [`teleport`](crate::r#match::engine::ball::ball::teleport).
+    ///
+    /// # The console line is written HERE, after the handler has run
+    ///
+    /// `events/dispatcher.rs` used to record every `PlayerEvent` at
+    /// EMISSION — before any handler's reach check — and the replay
+    /// viewer's console (`recording/playback.rs`, `EventLog`) printed it
+    /// as `Player: PassTo(...)`. A refused pass therefore still showed up
+    /// as a pass, which is exactly the wrong thing for a defect reported
+    /// as *"I see a ball pass event when the ball is flying"*: the
+    /// console was corroborating an event that never happened.
+    ///
+    /// So the line is written from here, where the outcome is known. A
+    /// pass in the console is a pass that was struck; a refusal says so
+    /// and says why.
     pub fn dispatch(
         event: PlayerEvent,
         field: &mut MatchField,
@@ -1049,7 +1115,23 @@ impl PlayerEventDispatcher {
     ) -> Vec<Event> {
         #[cfg(feature = "match-logs")]
         let census = (event.census_slot(), field.ball.position);
-        let out = Self::dispatch_one(event, field, context, match_data);
+        // `TakeBall` was never logged — it sets no ball state at all and
+        // fires every tick for every chaser.
+        let described = (context.logging_enabled && !matches!(event, PlayerEvent::TakeBall(_)))
+            .then(|| format!("{:?}", event));
+        let mut refusal: Option<&'static str> = None;
+        let out = Self::dispatch_one(event, field, context, match_data, &mut refusal);
+        if let Some(line) = described {
+            let when = context.total_match_time;
+            match_data.add_match_event(
+                when,
+                "player",
+                match refusal {
+                    Some(why) => format!("REFUSED {line} — {why}"),
+                    None => line,
+                },
+            );
+        }
         #[cfg(feature = "match-logs")]
         {
             use crate::r#match::engine::ball::ball::teleport::TeleportCensus;
@@ -1062,11 +1144,80 @@ impl PlayerEventDispatcher {
         out
     }
 
+    /// **The one reach guard every strike goes through.**
+    ///
+    /// XY within `KICKABLE_DISTANCE`, and the ball no higher than what he
+    /// is striking it with: a boot reaches [`AerialReach::VOLLEY`]; a
+    /// state that has declared itself aerial reaches his jumping ceiling.
+    /// See [`PlayerReach::can_strike`] and
+    /// [`PlayerState::strikes_in_the_air`].
+    ///
+    /// A refusal is not a deadlock. Nothing here starts a timer and
+    /// nothing schedules a retry: the state asks again next tick, and the
+    /// ball is half a metre lower because gravity has had it for 10 ms.
+    /// The half second a controlled ball takes to come off the chest and
+    /// reach the feet falls out of the physics rather than being written
+    /// down anywhere. `strike_diag` counts every refusal against the
+    /// ticks the same player then took to strike for real, which is the
+    /// proof rather than the claim.
+    ///
+    /// `kind` and `tick` are read by the census alone, so both are unused
+    /// with `match-logs` off — the guard itself is the same rule either
+    /// way, which is the point of taking them here rather than counting
+    /// at four call sites.
+    #[cfg_attr(not(feature = "match-logs"), allow(unused_variables))]
+    fn strike_in_reach(
+        kind: StrikeKind,
+        striker_id: u32,
+        declared_aerial: bool,
+        field: &MatchField,
+        tick: u64,
+    ) -> bool {
+        let Some(player) = field.players.iter().find(|p| p.id == striker_id) else {
+            return false;
+        };
+        // Three ways a strike declares itself aerial, and the strike's own
+        // word comes first: a `Shoot` carries `ShotType::Header`, which
+        // says so outright and needs no inference. Otherwise it is the man
+        // — the state he is in, the heading state he left on this very
+        // tick, or both feet off the ground
+        // ([`MatchPlayer::is_striking_in_the_air`]) — or the winner of a
+        // decided aerial contest, whose heading state is applied on the
+        // tick the delivery arrives and so may not be up yet.
+        let aerial = declared_aerial
+            || player.is_striking_in_the_air()
+            || field.ball.pending_aerial_strike == Some(striker_id);
+        if PlayerReach::can_strike(&field.ball, player, aerial) {
+            #[cfg(feature = "match-logs")]
+            {
+                use crate::r#match::engine::ball::ball::strike_diag::StrikeCensus;
+                let keeper = player.tactical_position.current_position.is_goalkeeper();
+                StrikeCensus::note_strike(
+                    kind.census_slot(),
+                    field.ball.position.z,
+                    aerial,
+                    keeper,
+                );
+                StrikeCensus::note_restrike(striker_id, tick);
+            }
+            return true;
+        }
+        #[cfg(feature = "match-logs")]
+        {
+            use crate::r#match::engine::ball::ball::ownership::reception_diag;
+            use crate::r#match::engine::ball::ball::strike_diag::StrikeCensus;
+            reception_diag::OUT_OF_REACH.fetch_add(1, Ordering::Relaxed);
+            StrikeCensus::note_refusal(kind.census_slot(), striker_id, tick);
+        }
+        false
+    }
+
     fn dispatch_one(
         event: PlayerEvent,
         field: &mut MatchField,
         context: &mut MatchContext,
         match_data: &mut ResultMatchPositionData,
+        refusal: &mut Option<&'static str>,
     ) -> Vec<Event> {
         let remaining_events = Vec::new();
 
@@ -1098,7 +1249,7 @@ impl PlayerEventDispatcher {
                 event,
                 PlayerEvent::PassTo(_)
                     | PlayerEvent::Shoot(_)
-                    | PlayerEvent::ClearBall(_)
+                    | PlayerEvent::ClearBall(_, _)
                     | PlayerEvent::MoveBall(_, _)
                     | PlayerEvent::ClaimBall(_)
                     | PlayerEvent::GainBall(_)
@@ -1113,6 +1264,7 @@ impl PlayerEventDispatcher {
                     | PlayerEvent::RequestBallReceive(_)
             );
             if touches_the_ball {
+                *refusal = Some("the ball is in the net");
                 return remaining_events;
             }
         }
@@ -1138,7 +1290,7 @@ impl PlayerEventDispatcher {
                 event,
                 PlayerEvent::PassTo(_)
                     | PlayerEvent::Shoot(_)
-                    | PlayerEvent::ClearBall(_)
+                    | PlayerEvent::ClearBall(_, _)
                     | PlayerEvent::MoveBall(_, _)
                     | PlayerEvent::ClaimBall(_)
                     | PlayerEvent::GainBall(_)
@@ -1164,6 +1316,7 @@ impl PlayerEventDispatcher {
                     crate::mid_run_diag::RestartCensus::note_dead_ball_event(from_goalkeeper);
                 }
                 if DeadBall::armed() {
+                    *refusal = Some("the ball is dead, waiting for its restart");
                     return remaining_events;
                 }
             }
@@ -1187,29 +1340,24 @@ impl PlayerEventDispatcher {
                 Self::handle_ball_owner_change_event(player_id, field);
             }
             PlayerEvent::PassTo(pass_event_model) => {
-                // You can only kick a ball you can reach. Without this a
+                // You can only kick a ball you can reach — across the
+                // grass, and up the vertical axis. Without the first, a
                 // player in a passing state rewrote the ball's velocity
-                // from anywhere on the pitch — see `KICKABLE_DISTANCE`.
-                // Ownership isn't required: a first-time pass off a ball
-                // arriving at your feet is legal, and the ball snaps to
-                // its owner anyway, so reach covers both.
-                {
-                    let ball_pos = field.ball.position;
-                    let in_reach = field
-                        .get_player(pass_event_model.from_player_id)
-                        .map(|p| {
-                            let d = p.position - ball_pos;
-                            d.x * d.x + d.y * d.y
-                                <= crate::r#match::engine::ball::ball::KICKABLE_DISTANCE
-                                    * crate::r#match::engine::ball::ball::KICKABLE_DISTANCE
-                        })
-                        .unwrap_or(false);
-                    if !in_reach {
-                        #[cfg(feature = "match-logs")]
-                        crate::r#match::engine::ball::ball::ownership::reception_diag::OUT_OF_REACH
-                            .fetch_add(1, Ordering::Relaxed);
-                        return remaining_events;
-                    }
+                // from anywhere on the pitch (see `KICKABLE_DISTANCE`);
+                // without the second, a Running-state midfielder passed
+                // it off the top of his own head. Ownership isn't
+                // required: a first-time pass off a ball arriving at your
+                // feet is legal, and the ball settles to its owner
+                // anyway, so reach covers both.
+                if !Self::strike_in_reach(
+                    StrikeKind::Pass,
+                    pass_event_model.from_player_id,
+                    false,
+                    field,
+                    context.current_tick(),
+                ) {
+                    *refusal = Some(StrikeKind::Pass.refusal());
+                    return remaining_events;
                 }
                 // Build (but don't yet fire) the offside snapshot. The
                 // resolver fires only when the receiver becomes active —
@@ -1325,12 +1473,44 @@ impl PlayerEventDispatcher {
                 Self::handle_claim_ball_event(player_id, field, context);
             }
             PlayerEvent::MoveBall(player_id, ball_velocity) => {
+                // A dribbling touch writes a velocity onto the ball, so
+                // it answers to the strike rule as well as to the
+                // possession one: nobody dribbles a ball at head height.
+                if !Self::strike_in_reach(
+                    StrikeKind::Carry,
+                    player_id,
+                    false,
+                    field,
+                    context.current_tick(),
+                ) {
+                    *refusal = Some(StrikeKind::Carry.refusal());
+                    return remaining_events;
+                }
                 Self::handle_move_ball_event(player_id, ball_velocity, field);
             }
             PlayerEvent::GainBall(player_id) => {
                 Self::handle_gain_ball_event(player_id, field, context);
             }
             PlayerEvent::Shoot(shoot_event_model) => {
+                // **The guard this handler never had.** `PassTo` has
+                // carried a reach check for a long time and `Shoot` had
+                // none at all — any player in a shooting state rewrote
+                // the ball's velocity from wherever he stood, at whatever
+                // height the ball was, including out of the air over his
+                // own head. Everything below this line credits a shot, so
+                // it has to come first.
+                if !Self::strike_in_reach(
+                    StrikeKind::Shot,
+                    shoot_event_model.from_player_id,
+                    // The shot says what it is: a header is a header
+                    // whatever state the emitter has already moved on to.
+                    shoot_event_model.shot_type == ShotType::Header,
+                    field,
+                    context.current_tick(),
+                ) {
+                    *refusal = Some(StrikeKind::Shot.refusal());
+                    return remaining_events;
+                }
                 // Capture field dimensions up-front so the log block
                 // below (which runs under &Player borrow) doesn't try
                 // to re-borrow field.size. Feature-gated so the capture
@@ -1543,8 +1723,23 @@ impl PlayerEventDispatcher {
             PlayerEvent::TakeBall(player_id) => {
                 Self::handle_take_ball_event(player_id, field);
             }
-            PlayerEvent::ClearBall(velocity) => {
-                Self::handle_clear_ball_event(velocity, field, context);
+            PlayerEvent::ClearBall(clearer_id, velocity) => {
+                // Refused from out of reach exactly as `PassTo` is. This
+                // is the handler that used to carry no player id and
+                // check nothing at all, and it is how a defender in a
+                // tackling state hooked a clearance out of a ball 6.6 m
+                // over his head.
+                if !Self::strike_in_reach(
+                    StrikeKind::Clearance,
+                    clearer_id,
+                    false,
+                    field,
+                    context.current_tick(),
+                ) {
+                    *refusal = Some(StrikeKind::Clearance.refusal());
+                    return remaining_events;
+                }
+                Self::handle_clear_ball_event(clearer_id, velocity, field, context);
             }
             PlayerEvent::RequestBallReceive(player_id) => {
                 Self::handle_request_ball_receive(player_id, field, context);
@@ -3062,26 +3257,12 @@ impl PlayerEventDispatcher {
         // `Ball::process_ownership`), so an oversized one is not a
         // harmless over-estimate: it freezes the ball in place while the
         // designated chaser jogs alongside it unable to touch it.
-        let flight_protection = {
-            const MARGIN: f32 = 1.35;
-            let vh = (final_velocity.x * final_velocity.x + final_velocity.y * final_velocity.y)
-                .sqrt()
-                .max(0.01);
-            // Airborne leg: a ball launched at `vz` is back on the deck
-            // after `2·vz/g` ticks.
-            let air_ticks = 2.0 * final_velocity.z.max(0.0) / GRAVITY_PER_TICK;
-            // Rolling leg: whatever distance the arc did not cover.
-            let rolling_distance = (actual_horizontal_distance - vh * air_ticks).max(0.0);
-            let decay_fraction = rolling_distance * GROUND_FRICTION / vh;
-            let roll_ticks = if decay_fraction >= 0.95 {
-                // Struck barely hard enough to arrive — hold it open.
-                400.0
-            } else {
-                (1.0 - decay_fraction).ln() / (1.0 - GROUND_FRICTION).ln()
-            };
-            (((air_ticks + roll_ticks) * MARGIN) as usize).clamp(60, 400)
-        };
-        field.ball.flags.in_flight_state = flight_protection;
+        // Lives in [`FlightProtection`] now, so the clearance, the punt
+        // and the punch can be sized off the same physics instead of off
+        // a flat 40-tick literal that expired two and a half seconds
+        // before the ball came down.
+        field.ball.flags.in_flight_state =
+            FlightProtection::for_pass(final_velocity, actual_horizontal_distance);
     }
 
     fn calculate_horizontal_distance(ball_pass_vector: &Vector3<f32>) -> f32 {
@@ -3745,12 +3926,25 @@ impl PlayerEventDispatcher {
     /// May `player_id` be handed the ball right now?
     ///
     /// The backstop behind every ownership grant that does NOT snap the
-    /// ball to the player (`secure_ball_for` does, so it is exempt).
-    /// `Ball::move_to` has always refused to track a ball to an owner
-    /// beyond `MAX_OWNER_TRACK_DISTANCE` — the problem was that it refused
-    /// a tick late, after the handler had zeroed the velocity, leaving a
-    /// dead ball sitting in mid-pitch. Asking before anything is mutated
-    /// gives the same answer while the ball is still flying.
+    /// ball to the player (`secure_ball_for` does, so it is exempt from
+    /// the HORIZONTAL half — not from the vertical one, which it makes
+    /// itself). `Ball::move_to` has always refused to track a ball to an
+    /// owner beyond `MAX_OWNER_TRACK_DISTANCE` — the problem was that it
+    /// refused a tick late, after the handler had zeroed the velocity,
+    /// leaving a dead ball sitting in mid-pitch. Asking before anything
+    /// is mutated gives the same answer while the ball is still flying.
+    ///
+    /// # …and on the vertical axis too
+    ///
+    /// This is the only reach test on the event path, and it used to
+    /// measure the XY plane alone: `ClaimBall`, `GainBall`,
+    /// `TacklingBall`, `MoveBall` and `BallOwnerChange` could all be
+    /// granted a ball directly overhead however high it was. Decoded off
+    /// one recording, `ClaimBall(207)` at 6.6 m and `ClaimBall(206)` at
+    /// 5.9 m, from a tackling state whose own gate only asked whether the
+    /// ball was in flight. Height is now
+    /// [`PlayerReach`](crate::r#match::engine::ball::ball::PlayerReach)'s
+    /// answer, and it is the player's own.
     ///
     /// Not a substitute for the states getting their own reach right: this
     /// is the net under them, and `reception_diag::GRANT_OUT_OF_REACH` is
@@ -3774,7 +3968,12 @@ impl PlayerEventDispatcher {
         let Some(player) = field.players.iter().find(|p| p.id == player_id) else {
             return false;
         };
-        if field.ball.within_possession_reach(player.position) {
+        if field.ball.within_possession_reach(player) {
+            #[cfg(feature = "match-logs")]
+            crate::r#match::engine::ball::ball::strike_diag::StrikeCensus::note_grant(
+                crate::r#match::engine::ball::ball::strike_diag::GrantPath::EVENT,
+                field.ball.position.z,
+            );
             return true;
         }
         #[cfg(feature = "match-logs")]
@@ -3787,6 +3986,27 @@ impl PlayerEventDispatcher {
     // residual velocity from carrying it into the winner's own goal
     // after a tackle/interception/block.
     fn secure_ball_for(player_id: u32, field: &mut MatchField) {
+        // **Nobody wins a tackle on a ball over his head.**
+        //
+        // This is the chokepoint for `GainBall`, `TacklingBall` and
+        // `BallOwnerChange`, and it is deliberately exempt from
+        // `can_take_possession`'s HORIZONTAL cap: beyond
+        // `MAX_OWNER_TRACK_DISTANCE` it writes the ball to the winner's
+        // feet rather than refusing, because refusing there changes the
+        // calibrated tackle and interception rates (see
+        // `reception_diag::SECURE_OUT_OF_REACH`, which is how that stays
+        // visible). The VERTICAL axis is not that kind of question. It is
+        // not a rate, it is whether the action is physically possible,
+        // and it applies on every path — see
+        // [`PlayerReach::under_ceiling`].
+        if let Some(player) = field.players.iter().find(|p| p.id == player_id) {
+            if !PlayerReach::under_ceiling(&field.ball, player) {
+                #[cfg(feature = "match-logs")]
+                crate::r#match::engine::ball::ball::ownership::reception_diag::GRANT_OUT_OF_REACH
+                    .fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
         // You cannot take the ball out of a goalkeeper's gloves.
         //
         // `held_in_hands` was enforced on the ownership layer — the claim
@@ -3863,6 +4083,11 @@ impl PlayerEventDispatcher {
         let team_id = field.get_player(player_id).map(|p| p.team_id);
         let tick = field.ball.current_tick_cached;
         field.ball.settle_throw_in(player_id, team_id, tick);
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::ball::ball::strike_diag::StrikeCensus::note_grant(
+            crate::r#match::engine::ball::ball::strike_diag::GrantPath::EVENT,
+            field.ball.position.z,
+        );
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
         field.ball.pass_target_player_id = None;
@@ -5842,7 +6067,8 @@ impl PlayerEventDispatcher {
         match event {
             PlayerEvent::PassTo(pass) => Some(pass.from_player_id),
             PlayerEvent::Shoot(shot) => Some(shot.from_player_id),
-            PlayerEvent::BallCollision(id)
+            PlayerEvent::ClearBall(id, _)
+            | PlayerEvent::BallCollision(id)
             | PlayerEvent::TacklingBall(id)
             | PlayerEvent::BallOwnerChange(id)
             | PlayerEvent::MoveBall(id, _)
@@ -5876,16 +6102,23 @@ impl PlayerEventDispatcher {
         // Copy ball position to avoid borrow conflict
         let ball_pos = field.ball.position;
 
-        let player = match field.get_player(player_id) {
-            Some(p) => p,
-            None => return,
+        // Height off HIS reach rather than off yet another 2.8 literal —
+        // this was the fourth copy of that number. The 3.5u radius is a
+        // reception distance and stays a reception distance.
+        let Some((distance, in_reach)) =
+            field.players.iter().find(|p| p.id == player_id).map(|p| {
+                let dx = p.position.x - ball_pos.x;
+                let dy = p.position.y - ball_pos.y;
+                (
+                    (dx * dx + dy * dy).sqrt(),
+                    PlayerReach::under_ceiling(&field.ball, p),
+                )
+            })
+        else {
+            return;
         };
 
-        let dx = player.position.x - ball_pos.x;
-        let dy = player.position.y - ball_pos.y;
-        let distance = (dx * dx + dy * dy).sqrt();
-
-        if distance < 3.5 && ball_pos.z <= 2.8 {
+        if distance < 3.5 && in_reach {
             // Taking control settles the live pass window — see
             // `resolve_pending_pass_on_control`.
             Self::resolve_pending_pass_on_control(player_id, field, context);
@@ -6535,7 +6768,26 @@ impl PlayerEventDispatcher {
         Some(clearer_id)
     }
 
+    /// Hoof it away, head it on, punch it clear.
+    ///
+    /// `clearer_id` is who struck it, and it is used for exactly one
+    /// thing: the reach guard in `dispatch`, which is the whole reason
+    /// [`PlayerEvent::ClearBall`] now carries an id at all. Everything
+    /// BELOW — the clearance credit, the zone, the own-goal safety, the
+    /// release that arms Law 12 — deliberately still reads
+    /// `current_owner`, exactly as it always did.
+    ///
+    /// That looks inconsistent and is not. Most of this event's emitters
+    /// do not own the ball when they strike it: a midfielder's knock-down
+    /// and a forward's flick-on are headers off a ball hanging in the
+    /// air, and a keeper's punch is a ball that is nobody's. Reading the
+    /// id into those lines would hand every one of them a `clearances`
+    /// credit they have never had — and `clearances` is a rating input
+    /// (`RatingMath::sat(clearances, 6.0)`), so it would move ratings as
+    /// a side effect of a reach fix. Whether a flick-on is a clearance is
+    /// a real question; it is not this one.
     fn handle_clear_ball_event(
+        _clearer_id: u32,
         velocity: Vector3<f32>,
         field: &mut MatchField,
         context: &MatchContext,
@@ -6695,8 +6947,18 @@ impl PlayerEventDispatcher {
             field.ball.clear_pass_history();
         }
 
-        // Set in-flight state to prevent immediate reclaim after clearance
-        field.ball.flags.in_flight_state = 40;
+        // **The flight protection has to cover the flight.**
+        //
+        // This was a flat `40` — 0.4 s — for a clearance that hangs for
+        // the better part of three seconds. `can_intercept_ball` and the
+        // tackling states ask `!is_in_flight()` and nothing else, so for
+        // the remaining 2.5 s of the arc they were cleared to go for a
+        // ball 6 m over their heads. Sized off the arc now, exactly as
+        // the pass path is; see [`FlightProtection::for_launch`] for why
+        // a clearance's window is the flight and a pass's is the flight
+        // plus the roll.
+        field.ball.flags.in_flight_state =
+            FlightProtection::for_launch(capped_velocity, field.ball.position.z);
     }
 
     /// Award a free-kick or penalty restart to the victim's team after a

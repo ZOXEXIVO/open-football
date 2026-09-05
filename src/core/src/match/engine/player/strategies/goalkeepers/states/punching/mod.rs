@@ -172,7 +172,7 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
             // Generate a punch event
             state_change
                 .events
-                .add_player_event(PlayerEvent::ClearBall(punch_velocity));
+                .add_player_event(PlayerEvent::ClearBall(ctx.player.id, punch_velocity));
 
             Some(state_change)
         } else {

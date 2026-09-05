@@ -16,6 +16,9 @@
 //! * [`knock_diag`] — the keeper knock-chain census: every loose contact
 //!   off a goalkeeper, linked into chains, because the reported defect is
 //!   never the first touch.
+//! * [`strike_diag`] — the VERTICAL axis of a grant and of a strike:
+//!   who is given a ball at what height, who kicks one at what height,
+//!   and what a refused strike costs before it is struck for real.
 
 #[cfg(feature = "match-logs")]
 pub mod assist_diag;
@@ -27,5 +30,7 @@ pub mod flight_diag;
 pub mod frame_trace;
 #[cfg(feature = "match-logs")]
 pub mod knock_diag;
+#[cfg(feature = "match-logs")]
+pub mod strike_diag;
 #[cfg(feature = "match-logs")]
 pub mod teleport;

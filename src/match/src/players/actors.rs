@@ -841,7 +841,29 @@ impl Actors {
     /// it — which leaves a header, and nothing else that happens often enough
     /// to draw. Under it sits the whole of the volley range, including the
     /// chest-high ones, and those really are kicks.
+    ///
+    /// The engine now carries the same number as `AerialReach::VOLLEY` and
+    /// refuses to let a boot play a ball above it, so the picture and the
+    /// physics are asking one question with one answer.
     const HEADED: f32 = 1.45;
+    /// And the top of it: no player is drawn playing a ball higher than this,
+    /// in metres.
+    ///
+    /// The engine's own claim ceiling — a man is 1.8 m to the head, reaches
+    /// 2.2 m flat-footed and 2.5-3.1 m at the top of a jump, and the engine
+    /// stops granting him the ball at his own ceiling. Above that the ball is
+    /// nobody's until it comes down, which is a statement about the PICTURE
+    /// as much as about possession: a man drawn swinging at a ball six metres
+    /// over his head is the reported artefact, and this is the line that stops
+    /// it being drawn even if a recording ever contains one again.
+    ///
+    /// `pub(crate)` because the soundtrack asks the same question about the
+    /// same ball — see
+    /// [`Soundtrack::owner`](crate::sound::matchday::Soundtrack), which used
+    /// to carry its own copy of this number. Two copies of "how high can a
+    /// footballer reach" is how the picture and the sound come to disagree
+    /// about who just kicked something.
+    pub(crate) const OVERHEAD: f32 = 2.8;
     /// How close to a touchline a DEAD ball has to be struck from to be a
     /// throw-in, in metres, and how slowly it has to have been travelling
     /// first.
@@ -1940,12 +1962,23 @@ impl Actors {
 
         ball_state.on_pitch = ball_position.is_some();
         ball_state.nearest = nearest;
-        // Only if somebody is actually close enough to have hit it. A ball
-        // that speeds up with nobody near it is a deflection, a restart or the
-        // engine putting it back on the centre spot, and none of those is a
-        // man swinging a leg.
+        // Only if somebody is actually close enough to have hit it — across
+        // the grass AND up the vertical axis. A ball that speeds up with
+        // nobody near it is a deflection, a restart or the engine putting it
+        // back on the centre spot, and none of those is a man swinging a leg.
+        //
+        // ⚠ **The height test is new, and it is defensive.** The reach was a
+        // distance across the grass with nothing said about how high the ball
+        // was, so a ball leaving at pace from six metres up was attributed to
+        // whoever happened to be standing underneath it and drawn as his
+        // swing. The engine no longer produces one — nobody is granted or
+        // strikes a ball above his own reach — but the rig should not be
+        // capable of drawing it whatever it is handed. See
+        // [`Actors::OVERHEAD`].
         ball_state.impact = match (coming, striker) {
-            (Some(contact), Some((by, range))) if range < Self::STRIKE_REACH => {
+            (Some(contact), Some((by, range)))
+                if range < Self::STRIKE_REACH && contact.at.y <= Self::OVERHEAD =>
+            {
                 Some(Impact { by, contact })
             }
             _ => None,
@@ -2127,6 +2160,7 @@ impl Actors {
             if leaving > Self::TOUCHED
                 && leaving < Self::TELEPORT
                 && leaving > before * Self::IMPACT_RATIO
+                && !Self::only_falling(velocity)
             {
                 // `here` is where the ball sat at the start of the step that
                 // showed the jump, which is where the boot met it.
@@ -2143,6 +2177,37 @@ impl Actors {
             before = (here - previous).length() / (Self::PROBE as f32 / 1000.0);
         }
         None
+    }
+
+    /// **A ball that is only going DOWN has not been hit.**
+    ///
+    /// Nobody kicks a ball straight into the floor at ten metres a second
+    /// from a standing start, and no header does it either — a downward
+    /// header is nodded across and forwards, and carries real pace along the
+    /// grass with it.
+    ///
+    /// The shape this pins is the one a recording actually contained: an
+    /// engine that owned a ball two metres up used to lower it at a constant
+    /// 10 m/s with no gravity in it, and because it also snapped the ball
+    /// sideways onto the man the 3-D speed jumped past
+    /// [`Actors::IMPACT_RATIO`] — so the rig read a kick, drew a swing and
+    /// the soundtrack played a strike. Seventy-seven of them a match, and
+    /// this is the phantom in the report.
+    ///
+    /// The engine no longer does it. This is the rig refusing to draw it
+    /// again: measured off the recorded pull, a fall with **no lateral
+    /// travel worth the name**. Both bounds are deliberately loose against
+    /// real football — a genuine volley or downward header keeps well over
+    /// [`Self::FALLING_ACROSS`] of ground speed, and gravity alone never
+    /// produces a 1.6× jump for the detector to find in the first place.
+    const FALLING_FAST: f32 = 6.0;
+    /// …and how little it can be travelling across the grass while it does.
+    const FALLING_ACROSS: f32 = 3.0;
+
+    #[inline]
+    fn only_falling(velocity: Vec3) -> bool {
+        velocity.y < -Self::FALLING_FAST
+            && Vec2::new(velocity.x, velocity.z).length() < Self::FALLING_ACROSS
     }
 
     /// **How long a step this player takes at this pace, and how far his hips
@@ -2412,6 +2477,17 @@ impl Actors {
     /// [`Soundtrack::brushed`](crate::sound::matchday::Soundtrack). A boot
     /// sound over a picture of a man heading it is exactly the kind of
     /// disagreement two copies of this rule would produce.
+    ///
+    /// # …and it has no ceiling, deliberately
+    ///
+    /// [`Actors::OVERHEAD`] belongs to the caller that ATTRIBUTES the
+    /// contact, not here. `animate` applies it: no contact above a
+    /// footballer's reach is given to anybody, so no swing is ever drawn up
+    /// there. This function is also asked about a ball that has already LEFT
+    /// a man — the soundtrack's fallback reads the ball where it is now, and
+    /// a header climbing away is three metres up a tenth of a second after
+    /// the forehead it came off. Refusing `Strike::Head` on the ball's
+    /// current height would play that one as a boot.
     pub(crate) fn strike_kind(at: Vec3, before: f32) -> Strike {
         let dead = before < Self::DEAD_BALL;
         let touchline = Field::HALF_WIDTH - at.z.abs() < Self::TOUCHLINE_REACH;
@@ -9017,6 +9093,76 @@ mod churn {
         println!(
             "  widest base drawn: {:.2} m at {:.1} m/s, {:.0} deg off his facing",
             widest.0, widest.1, widest.2
+        );
+    }
+}
+
+/// **A ball above everybody's reach is nobody's, and a ball that is only
+/// falling has not been hit.**
+///
+/// The two halves of the rig's defence against the mid-air strike the engine
+/// used to produce (`docs/match_midair_strike_prompt.md`). Both are pure
+/// geometry over the ball's own track, so they need no recording — which is
+/// the point: the engine no longer emits the shape, and these are what stop
+/// the picture drawing it if anything ever emits it again.
+#[cfg(test)]
+mod midair {
+    use super::*;
+
+    /// A downward pull is not a kick. The recorded shape was `vz` pinned at
+    /// −10 m/s with almost no travel across the grass; the rig read the
+    /// 3-D speed jump as a strike, drew a swing and played a boot sound.
+    #[test]
+    fn a_ball_only_falling_is_not_a_strike() {
+        // The pull, as it was measured off the recording.
+        assert!(Actors::only_falling(Vec3::new(0.4, -10.0, 0.2)));
+        // …and the same fall with a hint of drift is still a fall.
+        assert!(Actors::only_falling(Vec3::new(1.5, -8.0, 1.5)));
+    }
+
+    /// …and everything a footballer actually does to a ball still is one.
+    #[test]
+    fn a_real_strike_is_never_mistaken_for_a_fall() {
+        // A downward header: nodded down and FORWARDS, which is what makes
+        // it a header rather than a drop.
+        assert!(!Actors::only_falling(Vec3::new(9.0, -7.0, 2.0)));
+        // A driven pass along the deck.
+        assert!(!Actors::only_falling(Vec3::new(22.0, 0.5, -4.0)));
+        // A ball lifted over somebody.
+        assert!(!Actors::only_falling(Vec3::new(6.0, 9.0, 1.0)));
+        // A ball dropping slowly out of a lob — under the speed bound, so
+        // the rig is not asked to judge it at all.
+        assert!(!Actors::only_falling(Vec3::new(0.1, -4.0, 0.1)));
+    }
+
+    /// The three bands the rig draws a contact in, and the one it refuses.
+    #[test]
+    fn the_strike_kind_still_reads_a_header_off_a_ball_that_has_left_him() {
+        let boot = Vec3::new(0.0, Actors::HEADED - 0.2, 0.0);
+        let header = Vec3::new(0.0, Actors::HEADED + 0.2, 0.0);
+        let climbing = Vec3::new(0.0, Actors::OVERHEAD + 0.5, 0.0);
+        // `before` well above DEAD_BALL so nothing is read as a throw-in.
+        let moving = 8.0;
+        assert!(matches!(Actors::strike_kind(boot, moving), Strike::Boot));
+        assert!(matches!(Actors::strike_kind(header, moving), Strike::Head));
+        // The ceiling belongs to the caller that attributes the contact —
+        // `animate` — not to the geometry. A header CLIMBING AWAY is above
+        // everybody's reach a tenth of a second after the forehead it came
+        // off, and the soundtrack's fallback reads it there.
+        assert!(
+            matches!(Actors::strike_kind(climbing, moving), Strike::Head),
+            "a header on its way up is still a header"
+        );
+    }
+
+    /// The engine's ceiling and the rig's are the same number, and the
+    /// soundtrack reads the rig's rather than keeping a third copy.
+    #[test]
+    fn the_ceiling_is_one_number() {
+        assert_eq!(Actors::OVERHEAD, 2.8);
+        assert!(
+            Actors::HEADED < Actors::OVERHEAD,
+            "a header happens in a band between the boot and the ceiling"
         );
     }
 }

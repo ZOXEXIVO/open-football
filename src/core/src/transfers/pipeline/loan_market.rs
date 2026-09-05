@@ -24,13 +24,14 @@ use crate::transfers::pipeline::plausibility::{
 };
 use crate::transfers::pipeline::playing_time::LoanPromise;
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
-use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
+use crate::transfers::pipeline::squad_fit::{SquadFitSnapshot, SquadRegistrationLimits};
 use crate::transfers::pipeline::trace::MarketSwitches;
 use crate::transfers::pipeline::{
     AvailabilityBroadcast, LoanDestinationPreference, LoanOutStatus, TransferRequestStatus,
 };
 use crate::transfers::reason::TransferReason;
 use crate::transfers::window::PlayerValuationCalculator;
+use crate::transfers::{MarketAffinity, MarketAffinityInputs, MarketMap, MoveKind};
 use crate::utils::FormattingUtils;
 use crate::{
     Club, ClubPhilosophy, Country, HappinessEventCause, HappinessEventContext, HappinessEventScope,
@@ -43,6 +44,12 @@ use std::collections::{HashMap, HashSet};
 // than this are signed cheap permanent (or as free agents) rather than
 // loaned, so loan targeting above it is noise regardless of whether the
 // move is request-driven or opportunistic.
+/// Corridor affinity a foreign loan target must clear for a club to even
+/// consider him. Low, and deliberately below the permanent-move floor: a
+/// loan is a cheaper, more speculative piece of business than a purchase,
+/// and clubs take flyers on loanees from markets they would not buy in.
+const FOREIGN_LOAN_VISIBILITY_FLOOR: f32 = 0.04;
+
 const MAX_LOAN_TARGET_AGE: u8 = 34;
 
 /// The three fields [`PipelineProcessor::loan_option_fee`] needs, so the
@@ -1678,6 +1685,9 @@ impl PipelineProcessor {
             parent_tier: ReputationLevel,
             group: PlayerFieldPositionGroup,
             ability: u8,
+            /// His passport. A responding club at its foreigner quota has no
+            /// registration slot for him, loan or purchase alike.
+            nationality_country_id: u32,
             /// Age and observable ceiling, carried so a responding club can
             /// run its own squad-fit maths on the candidate. The ceiling is
             /// the staff-free potential proxy — never the hidden PA.
@@ -1733,6 +1743,7 @@ impl PipelineProcessor {
                 parent_tier: parent_team.reputation.level(),
                 group: player.position().position_group(),
                 ability: player.player_attributes.current_ability,
+                nationality_country_id: player.country_id,
                 age: player.age(date),
                 observable_ceiling: PotentialEstimator::observable_ceiling(player, date),
                 asking: listing.asking_price.amount,
@@ -1848,10 +1859,13 @@ impl PipelineProcessor {
             sellable.iter().map(|s| s.group).collect();
         let mut fit_by_club_group: HashMap<(u32, PlayerFieldPositionGroup), SquadFitSnapshot> =
             HashMap::new();
+        let registration = SquadRegistrationLimits::new(country.id, &country.regulations);
         for club in &country.clubs {
             for &group in &broadcast_groups {
-                fit_by_club_group
-                    .insert((club.id, group), SquadFitSnapshot::build(club, group, date));
+                fit_by_club_group.insert(
+                    (club.id, group),
+                    SquadFitSnapshot::build(club, group, date, registration),
+                );
             }
         }
         for s in &sellable {
@@ -1959,7 +1973,13 @@ impl PipelineProcessor {
                 // say "surplus" then signing him only books the churn.
                 if fit_by_club_group
                     .get(&(club.id, s.group))
-                    .is_some_and(|fit| fit.would_be_surplus(s.ability, s.observable_ceiling, s.age))
+                    .is_some_and(|fit| {
+                        fit.would_be_surplus(s.ability, s.observable_ceiling, s.age)
+                        // A loanee occupies a registration slot exactly like
+                        // a signing. A club at its foreigner quota has no
+                        // room for one, whoever holds the registration.
+                        || fit.would_be_unregistrable(s.nationality_country_id)
+                    })
                 {
                     continue;
                 }
@@ -2082,6 +2102,7 @@ impl PipelineProcessor {
         country: &mut Country,
         foreign_players: &[&PlayerSummary],
         date: NaiveDate,
+        market_map: &MarketMap,
     ) {
         if foreign_players.is_empty() {
             return;
@@ -2094,6 +2115,32 @@ impl PipelineProcessor {
         let country_id = country.id;
         let club_region = ScoutingRegion::from_country(country.continent_id, &country.code);
         let club_region_prestige = club_region.league_prestige();
+
+        // How plausible each source market is for THIS country, memoised on
+        // the country a man plays in. The borrowing side of the market has
+        // the same geography as the buying side: a Turkish club takes loans
+        // from the leagues Turkish clubs deal with, not from wherever a
+        // loanable body happens to be listed.
+        let mut visibility_cache: HashMap<u32, f32> = HashMap::new();
+        let mut market_visibility = |p: &PlayerSummary| -> f32 {
+            if market_map.is_empty() {
+                return 1.0;
+            }
+            if let Some(cached) = visibility_cache.get(&p.country_id) {
+                return *cached;
+            }
+            let affinity = MarketAffinity::affinity(
+                market_map,
+                MarketAffinityInputs {
+                    buyer_country_id: country_id,
+                    nationality_country_id: p.nationality_country_id,
+                    current_country_id: p.country_id,
+                    kind: MoveKind::Talent,
+                },
+            );
+            visibility_cache.insert(p.country_id, affinity);
+            affinity
+        };
 
         // Collect loan-listed foreign players
         // Only consider players from countries with equal or lower reputation,
@@ -2149,7 +2196,7 @@ impl PipelineProcessor {
                 // a development youngster drops abroad for guaranteed minutes
                 // (an Italian U18 → Romania). See `foreign_loan_region_ok`.
                 // `p.region` is precomputed at pool-build time.
-                HomeLoanGates::region_ok(
+                if !HomeLoanGates::region_ok(
                     Self::foreign_loan_region_ok(
                         p.region.league_prestige(),
                         club_region_prestige,
@@ -2159,7 +2206,15 @@ impl PipelineProcessor {
                     club_region_prestige,
                     is_home_country,
                     is_home_region,
-                )
+                ) {
+                    return false;
+                }
+                // Corridor visibility. A borrowing club looks in the
+                // markets its league works, the same as a buying one — the
+                // loan market is not a separate geography. Home is exempt
+                // by construction (affinity 1.0), which is what keeps the
+                // loan-home pathway untouched.
+                market_visibility(p) >= FOREIGN_LOAN_VISIBILITY_FLOOR
             })
             .collect();
 

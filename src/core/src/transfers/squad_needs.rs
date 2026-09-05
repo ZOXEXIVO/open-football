@@ -291,12 +291,13 @@ pub struct EmergencyCandidateView {
     /// local club. Used both by the score (slight preference for the
     /// in-country option on ties) and by callers tracking pool state.
     pub is_global_pool: bool,
-    /// Language fit with the buying country, 0.0..=1.0 (see
-    /// [`crate::club::player::language::LanguageProfile::affinity_for`]).
-    /// Derived from nationality at the call site — a graded preference
-    /// for foreign candidates who could communicate in the dressing
-    /// room; domestic candidates are covered by the locality bonus.
-    pub language_affinity: f32,
+    /// Market affinity between this candidate and the buying country,
+    /// 0.0..=1.0 — see [`crate::transfers::MarketAffinity`]. His corridor,
+    /// his last league, his diaspora and his language folded into one
+    /// number. Replaced a bare language score, which said nothing about
+    /// whether anyone in this market signs players like him; domestic
+    /// candidates are covered by the locality bonus.
+    pub market_affinity: f32,
 }
 
 /// Scoring inputs that describe the buying club's emergency context.
@@ -343,6 +344,12 @@ pub struct EmergencyBuyerContext {
     /// slot can apply the realism filters at full strength while the
     /// GK slot relaxes them.
     pub strictness: EmergencyStrictness,
+    /// The buying country's capacity to import names, 0..1 — money plus an
+    /// established habit of importing. Conditions the standing relief on the
+    /// cross-continent gate, which without it ran backwards: the better the
+    /// free agent, the sooner he could cross to the poorest league on
+    /// another continent. See [`crate::transfers::MarketMap::import_capacity`].
+    pub import_capacity: f32,
 }
 
 /// Pure scoring helper for the emergency free-agent pass. Two-phase
@@ -512,18 +519,18 @@ impl EmergencySquadFillStrategy {
         // weight them up slightly to bias selection toward acceptors.
         let pressure_score = candidate.career_pressure.clamp(0.0, 1.0) * 10.0;
 
-        // Language — layered on top of locality: among foreign options
-        // the one who speaks the buying country's language (or a
-        // football bridge language, English/Spanish) integrates faster
-        // and is the more realistic pickup. Domestic candidates already
-        // communicate; the domestic bonus covers them.
-        let language_score = if candidate.same_country_nationality {
+        // Market affinity — layered on top of locality: among foreign
+        // options, the one this market actually signs people like. His
+        // corridor, where he last played, his diaspora and his language,
+        // in one number. Domestic candidates are covered by the domestic
+        // bonus, so the term only separates the foreign field.
+        let affinity_score = if candidate.same_country_nationality {
             0.0
         } else {
-            candidate.language_affinity.clamp(0.0, 1.0) * 6.0
+            candidate.market_affinity.clamp(0.0, 1.0) * 6.0
         };
 
-        Some(ability_score + age_score + domestic_score + pressure_score + language_score)
+        Some(ability_score + age_score + domestic_score + pressure_score + affinity_score)
     }
 
     /// Soft CA ceiling for urgent clubs based on country reputation.
@@ -756,6 +763,7 @@ mod tests {
                 negotiator_skill: 50,
                 urgent,
                 strictness: EmergencyStrictness::Standard,
+                import_capacity: 1.0,
             }
         }
 
@@ -775,7 +783,7 @@ mod tests {
                 career_pressure: pressure,
                 region_prestige: if same_country { 1.0 } else { 0.5 },
                 is_global_pool: true,
-                language_affinity: 0.0,
+                market_affinity: 0.0,
             }
         }
     }
@@ -930,7 +938,7 @@ mod tests {
             ..ScoringFixtures::cand(95, 27, false, 3000, 0.3)
         };
         let speaker = EmergencyCandidateView {
-            language_affinity: 1.0,
+            market_affinity: 1.0,
             ..silent
         };
         let s_silent = EmergencySquadFillStrategy::score(&silent, &b).unwrap();
@@ -942,7 +950,7 @@ mod tests {
 
         let domestic = ScoringFixtures::cand(95, 27, true, 3000, 0.3);
         let domestic_marked = EmergencyCandidateView {
-            language_affinity: 1.0,
+            market_affinity: 1.0,
             ..domestic
         };
         let s_dom = EmergencySquadFillStrategy::score(&domestic, &b).unwrap();

@@ -5,6 +5,8 @@ use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::engine::ball::ball::contest::contact::ContactInPlace;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::strike_diag::{GrantPath, StrikeCensus};
 use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
@@ -463,6 +465,8 @@ impl Ball {
             // Clean block — defender gets the ball at his feet.
             self.velocity = Vector3::zeros();
             self.current_owner = Some(blocker_id);
+            #[cfg(feature = "match-logs")]
+            StrikeCensus::note_grant(GrantPath::CONTEST, self.position.z);
             self.flags.in_flight_state = 0;
             self.claim_cooldown = 25;
             events.add_ball_event(BallEvent::Intercepted(

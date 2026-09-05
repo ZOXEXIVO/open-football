@@ -1731,7 +1731,7 @@ impl KeeperSmother {
             ),
             SmotherOutcome::Blocked(away) => StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::Diving,
-                Event::PlayerEvent(PlayerEvent::ClearBall(away)),
+                Event::PlayerEvent(PlayerEvent::ClearBall(ctx.player.id, away)),
             ),
             SmotherOutcome::Fouled(severity) => StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::Diving,

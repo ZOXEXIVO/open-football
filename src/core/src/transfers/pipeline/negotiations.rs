@@ -2122,6 +2122,16 @@ impl PipelineProcessor {
         // unavailable after the write pass so the shortlist advances instead
         // of re-picking an impossible target (mirrors the domestic gate).
         let mut foreign_rejected: Vec<PlausibilityReject> = Vec::new();
+        // The world map, taken once outside the loop: the geography gate
+        // below reads it for every candidate, and this pass is the ONE place
+        // in the cross-border flow that holds both clubs, both countries and
+        // the map at the same time.
+        //
+        // Cloned rather than borrowed because the resolve pass below needs
+        // `&mut data` and a shared borrow cannot span it. Sits AFTER the
+        // empty-candidates early return, so it costs nothing on the ticks
+        // (most of them) where no club is looking abroad.
+        let market_map = data.market_map.clone();
 
         for cand in candidates {
             // Resolve the player's current foreign club via the O(1)
@@ -2337,6 +2347,7 @@ impl PipelineProcessor {
                 is_loan,
                 true, // unsolicited — the buyer is reaching out abroad
                 date,
+                &market_map,
             );
             let assessment = TransferMovePlausibility::assess(&plausibility_inputs);
             if TransferTrace::is(cand.player_id) {

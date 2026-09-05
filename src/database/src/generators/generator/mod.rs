@@ -2,11 +2,15 @@ mod clubs;
 mod countries;
 mod leagues;
 mod players;
-mod staffs;
+pub(super) mod staffs;
+
+use std::collections::HashMap;
 
 use crate::DatabaseEntity;
 use crate::generators::PlayerGenerator;
-use crate::generators::convert::{convert_national_competition, uefa_u21_championship_config};
+use crate::generators::convert::{
+    convert_country_transfers, convert_national_competition, uefa_u21_championship_config,
+};
 use crate::generators::world_start::WorldStart;
 use chrono::NaiveDateTime;
 use core::competitions::GlobalCompetitions;
@@ -35,6 +39,16 @@ impl DatabaseGenerator {
         }
 
         let current_date = NaiveDateTime::new(WorldStart::date(), NaiveTime::default());
+
+        // Country code → id, built once. The transfer cards name each other
+        // by code (that is what the data tree's directories are), and every
+        // corridor list has to be resolved into ids before the simulator can
+        // read it.
+        let country_id_by_code: HashMap<String, u32> = data
+            .countries
+            .iter()
+            .map(|c| (c.code.to_ascii_lowercase(), c.id))
+            .collect();
 
         // Convert all national competition entities to runtime configs.
         // The compiled database predates the `team_level` field, so the
@@ -102,8 +116,14 @@ impl DatabaseGenerator {
                 country.name.clone(),
                 country.continent_id,
                 country.reputation,
+                convert_country_transfers(country.transfers.as_ref(), &country_id_by_code),
             );
         }
+        // The market map was built from the participating countries alone;
+        // rebuild it now that all 224 nationalities carry their card, so a
+        // Senegalese export corridor exists even though Senegal runs no
+        // league in this save.
+        simulator_data.rebuild_market_map();
 
         // Hydrate clubless players from `data/{cc}/free_agents/` directly
         // into `SimulatorData.free_agents` — same pool the runtime uses for

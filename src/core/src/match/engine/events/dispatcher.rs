@@ -245,17 +245,19 @@ impl EventDispatcher {
                     }
                 }
                 Event::PlayerEvent(player_event) => {
-                    if context.logging_enabled {
-                        match &player_event {
-                            PlayerEvent::TakeBall(_) => {}
-                            _ => match_data.add_match_event(
-                                context.total_match_time,
-                                "player",
-                                format!("{:?}", player_event),
-                            ),
-                        }
-                    }
-
+                    // ⚠ **The console line is NOT written here.**
+                    //
+                    // It used to be — at EMISSION, before any handler had
+                    // looked at the event — so a pass the engine went on
+                    // to refuse still printed in the replay viewer's
+                    // console as `Player: PassTo(...)`. For a defect
+                    // reported as "I see a ball pass event when the ball
+                    // is flying", the console was corroborating an event
+                    // that never happened.
+                    //
+                    // `PlayerEventDispatcher::dispatch` writes it instead,
+                    // after the handler has run and with the outcome. A
+                    // pass in the console is now a pass that was struck.
                     let player_remaining_events =
                         PlayerEventDispatcher::dispatch(player_event, field, context, match_data);
 

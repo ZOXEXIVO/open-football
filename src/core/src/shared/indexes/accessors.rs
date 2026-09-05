@@ -1354,6 +1354,7 @@ impl SimulatorData {
                                     false,
                                     true,
                                     date,
+                                    &self.market_map,
                                 );
                                 TransferMovePlausibility::assess(&inputs)
                                     .reaches(TransferMoveStage::CanShowPublicInterest)

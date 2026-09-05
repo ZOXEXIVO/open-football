@@ -1811,6 +1811,7 @@ mod group_need_tests {
 
         // Mikhailov-class candidate: 14M, CA 130, listed, age 25.
         let mikhailov_class = ListedTargetView {
+            nationality_country_id: 0,
             ability: 130,
             estimated_potential: 138,
             age: 25,
@@ -1863,6 +1864,8 @@ mod group_need_tests {
         // though the position group itself is weak.
         let mut surplus_buyer = buyer(false, true);
         surplus_buyer.fit = SquadFitSnapshot {
+            foreign_slots_free: None,
+            club_country_id: 0,
             squad_avg_ability: 155,
             quality_gap: 20,
             group_size: 0,
@@ -1880,6 +1883,8 @@ mod group_need_tests {
         // candidate (130) → he'd be demoted by the weekly rebalance.
         let mut full_group_buyer = buyer(false, true);
         full_group_buyer.fit = SquadFitSnapshot {
+            foreign_slots_free: None,
+            club_country_id: 0,
             squad_avg_ability: 0,
             quality_gap: 0,
             group_size: 6,
@@ -1919,6 +1924,7 @@ mod group_need_tests {
 
         // Asking 5M when budget allows ~700k → UnaffordableFee
         let pricey = ListedTargetView {
+            nationality_country_id: 0,
             ability: 95,
             estimated_potential: 100,
             age: 26,
@@ -1973,6 +1979,7 @@ mod group_need_tests {
         };
 
         let in_tier_listed = ListedTargetView {
+            nationality_country_id: 0,
             ability: 90,
             estimated_potential: 95,
             age: 27,
@@ -2026,6 +2033,7 @@ mod group_need_tests {
         };
 
         let world_class = ListedTargetView {
+            nationality_country_id: 0,
             ability: 175,
             estimated_potential: 180,
             age: 28,
@@ -2085,6 +2093,7 @@ mod group_need_tests {
         };
 
         let modest_listed = ListedTargetView {
+            nationality_country_id: 0,
             ability: 128,
             estimated_potential: 130,
             age: 26,
@@ -2141,6 +2150,7 @@ mod group_need_tests {
         };
 
         let happy_player = ListedTargetView {
+            nationality_country_id: 0,
             ability: 130,
             estimated_potential: 135,
             age: 25,
@@ -2227,6 +2237,7 @@ mod group_need_tests {
         };
 
         let mut player = ListedTargetView {
+            nationality_country_id: 0,
             ability: 130,
             estimated_potential: 138,
             age: 25,
@@ -2299,6 +2310,7 @@ mod group_need_tests {
         };
 
         let mut player = ListedTargetView {
+            nationality_country_id: 0,
             ability: 128,
             estimated_potential: 132,
             age: 27,
@@ -2390,6 +2402,7 @@ mod breakout_sweep_tests {
         /// upside, comfortably affordable, in a smaller club.
         fn loan_listed_breakout_striker() -> ListedTargetView {
             ListedTargetView {
+                nationality_country_id: 0,
                 ability: 130,
                 estimated_potential: 142,
                 age: 22,

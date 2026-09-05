@@ -15,6 +15,7 @@ use crate::league::result::{
 use crate::r#match::Match;
 use crate::r#match::MatchResult;
 use crate::transfers::market::TransferMarket;
+use crate::transfers::market_map::CountryTransferProfile;
 use crate::transfers::pipeline::PipelineProcessor;
 use crate::{Club, ClubResult, Player, PlayerResult};
 use chrono::{Datelike, NaiveDate};
@@ -124,6 +125,13 @@ pub struct Country {
     pub international_competitions: Vec<InternationalCompetition>,
     pub media_coverage: MediaCoverage,
     pub regulations: CountryRegulations,
+
+    /// The country's transfer-market card: who its clubs import from, where
+    /// its nationals go, where its diaspora lives, and how foreign its top
+    /// division runs. Shipped data, normalised at load. Empty for a country
+    /// the data does not name, in which case every pair it takes part in
+    /// falls to [`crate::transfers::CorridorPrior::derive`].
+    pub transfer_profile: CountryTransferProfile,
 
     pub retired_players: Vec<Player>,
 
@@ -810,6 +818,7 @@ impl Country {
             current_date,
             world.world_pool,
             world.global_free_agents,
+            world.market_map,
         );
 
         // Stash the processed matches and any deferred global ops on

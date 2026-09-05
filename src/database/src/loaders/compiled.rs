@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 use super::club::{ClubEntity, HistoryClubEntity};
 use super::continent::ContinentEntity;
-use super::country::CountryEntity;
+use super::country::{CountryEntity, CountryTransferProfileEntity};
 use super::domestic_cup::DomesticCupEntity;
 use super::league::LeagueEntity;
 use super::names::NamesByCountryEntity;
@@ -30,6 +30,11 @@ pub struct CompiledDatabase {
     pub version: String,
     pub continents: Vec<ContinentEntity>,
     pub countries: Vec<CountryEntity>,
+    /// Transfer-market priors, keyed by country code. Optional — a database
+    /// built before the country cards existed parses to an empty list, and
+    /// every pair then falls to `CorridorPrior::derive`.
+    #[serde(default)]
+    pub country_transfers: Vec<CountryTransferProfileEntity>,
     pub national_competitions: Vec<NationalCompetitionEntity>,
     /// Named domestic cups, keyed by country slug. Optional — older
     /// databases predate the field and parse to an empty list.

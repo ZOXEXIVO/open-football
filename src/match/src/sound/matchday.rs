@@ -176,7 +176,13 @@ impl Soundtrack {
     /// same question asked where possession is actually decided. Anything
     /// higher is in flight, and a ball in flight belongs to nobody until it
     /// comes down.
-    const OVERHEAD: f32 = 2.8;
+    ///
+    /// ⚠ **It is now read from the rig rather than copied into this file.**
+    /// The `2.8` used to be written out here as well, and the rig's own
+    /// impact attribution had no ceiling at all — so the sound was refusing
+    /// balls the picture was still drawing a man swinging at. See
+    /// [`Actors::OVERHEAD`].
+    const OVERHEAD: f32 = Actors::OVERHEAD;
 
     /// How far apart in match time two contacts have to be to be two
     /// contacts.

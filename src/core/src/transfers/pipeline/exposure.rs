@@ -251,6 +251,11 @@ impl MarketDiscoveryDiagnosis {
             // excess on arrival — from the market's viewpoint that is the
             // same story as "no squad need at this club".
             ListedRejectReason::WouldBeSurplus => AvailabilityBlockReason::NoAffordableSquadNeed,
+            // The buyer is out of foreigner slots. From the market's point
+            // of view that is the same story: this club has no room for him.
+            ListedRejectReason::WouldBeUnregistrable => {
+                AvailabilityBlockReason::NoAffordableSquadNeed
+            }
         }
     }
 
@@ -276,6 +281,12 @@ impl MarketDiscoveryDiagnosis {
             }
             TransferPlausibilityReason::NoSportingUpside => {
                 AvailabilityBlockReason::NoAffordableSquadNeed
+            }
+            // Nobody at this club works the market he plays in. From the
+            // seller's side that is indistinguishable from no plausible
+            // buyer, which is what it is.
+            TransferPlausibilityReason::MarketOutsideBuyersReach => {
+                AvailabilityBlockReason::NoPlausibleBuyer
             }
         }
     }

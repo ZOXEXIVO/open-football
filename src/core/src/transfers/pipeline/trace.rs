@@ -24,12 +24,26 @@
 //!   * `approach`  — the seller's engagement roll and its inputs
 //!   * `fee`       — the club-fee round: reservation, ratio, windfall
 //!   * `seller`    — seller-side economics (asset class, importance, income)
+//!   * `list`      — the SELLER side putting him on the market: which pass
+//!                   listed him, for what reason, and whether his signing
+//!                   protection was live at the time
+//!   * `exit`      — a release, a terminated contract, or a squad removal
+//!
+//! `list` and `exit` are the seller-side half the funnel used to have no
+//! record of at all. A move that never happens leaves no evidence; so does a
+//! sale that should never have happened, and the only way to answer "why was
+//! this player listed four months after he was bought?" was to re-derive the
+//! listing passes by hand.
 //!
 //! Per memory `feedback_keep_match_debug_data`, this is kept after the
 //! campaign that motivated it, not deleted.
 
 use std::env;
 use std::sync::OnceLock;
+
+use chrono::NaiveDate;
+
+use crate::{Player, PlayerSquadStatus, PlayerStatusType};
 
 /// Funnel tracer for one player id. Zero-cost when disarmed.
 pub struct TransferTrace;
@@ -58,6 +72,79 @@ impl TransferTrace {
     /// grepped per stage and pasted as a table.
     pub fn line(player_id: u32, stage: &str, detail: impl AsRef<str>) {
         eprintln!("[of-trace {player_id}] {stage:<9} | {}", detail.as_ref());
+    }
+
+    /// Seller side: a pass has decided to put this player on the market.
+    ///
+    /// Every listing entry point calls this with the same four facts, which
+    /// together answer the question the buy-side trace cannot: WHICH pass
+    /// listed him, for what stated reason, whether the signing-patience
+    /// clock was still running when it did, and how long he had actually
+    /// been at the club. A marquee signing listed in January shows up here
+    /// as one line naming the pass responsible.
+    pub fn list(player: &Player, date: NaiveDate, pass: &str, reason: &str) {
+        if !Self::is(player.id) {
+            return;
+        }
+        Self::line(
+            player.id,
+            "list",
+            format!(
+                "pass={pass} reason={reason} protected={} status={:?} days_at_club={} \
+                 statuses=[{}]",
+                player.signing_protection_active(date),
+                player
+                    .contract
+                    .as_ref()
+                    .map(|c| c.squad_status.clone())
+                    .unwrap_or(PlayerSquadStatus::NotYetSet),
+                player
+                    .contract
+                    .as_ref()
+                    .and_then(|c| c.started)
+                    .map(|started| (date - started).num_days())
+                    .unwrap_or(-1),
+                Self::status_tags(player),
+            ),
+        );
+    }
+
+    /// Seller side: the player is leaving without a transfer — released,
+    /// terminated, or swept out of the squad.
+    pub fn exit(player: &Player, date: NaiveDate, pass: &str, reason: &str) {
+        if !Self::is(player.id) {
+            return;
+        }
+        Self::line(
+            player.id,
+            "exit",
+            format!(
+                "pass={pass} reason={reason} protected={} days_at_club={} statuses=[{}]",
+                player.signing_protection_active(date),
+                player
+                    .contract
+                    .as_ref()
+                    .and_then(|c| c.started)
+                    .map(|started| (date - started).num_days())
+                    .unwrap_or(-1),
+                Self::status_tags(player),
+            ),
+        );
+    }
+
+    fn status_tags(player: &Player) -> String {
+        [
+            (PlayerStatusType::Lst, "Lst"),
+            (PlayerStatusType::Loa, "Loa"),
+            (PlayerStatusType::Req, "Req"),
+            (PlayerStatusType::Unh, "Unh"),
+            (PlayerStatusType::Frt, "Frt"),
+        ]
+        .into_iter()
+        .filter(|(status, _)| player.statuses.has(*status))
+        .map(|(_, tag)| tag)
+        .collect::<Vec<_>>()
+        .join(",")
     }
 }
 

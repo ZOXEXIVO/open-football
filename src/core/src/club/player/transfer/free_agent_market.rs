@@ -50,6 +50,14 @@ pub enum FreeAgentBlockReason {
     CrossContinentPressureTooLow,
     /// Player's home region too prestigious for the buyer's region.
     RegionPrestigeGap,
+    /// The buying market has never seen players like him: no corridor
+    /// from his nationality or his last league, no diaspora, no agent
+    /// reach, and not enough time on the market to widen any of it.
+    ///
+    /// This is the gate that separates a Russian free agent from a
+    /// Brazilian club — not prestige, not reputation, but the fact that
+    /// nobody in Brazil has ever heard of anyone like him.
+    MarketUnfamiliar,
     /// Buying club has no roster room left.
     ClubAtSquadCapacity,
     /// The country's per-day free-agent signing cap was already
@@ -79,11 +87,12 @@ impl FreeAgentBlockReason {
             FreeAgentBlockReason::CountryReputationGap => 6,
             FreeAgentBlockReason::CrossContinentPressureTooLow => 7,
             FreeAgentBlockReason::RegionPrestigeGap => 8,
-            FreeAgentBlockReason::ClubAtSquadCapacity => 9,
-            FreeAgentBlockReason::PerDaySigningCapReached => 10,
-            FreeAgentBlockReason::DailyChanceRollFailed => 11,
-            FreeAgentBlockReason::WageReservationMismatch => 12,
-            FreeAgentBlockReason::AcceptanceRollFailed => 13,
+            FreeAgentBlockReason::MarketUnfamiliar => 9,
+            FreeAgentBlockReason::ClubAtSquadCapacity => 10,
+            FreeAgentBlockReason::PerDaySigningCapReached => 11,
+            FreeAgentBlockReason::DailyChanceRollFailed => 12,
+            FreeAgentBlockReason::WageReservationMismatch => 13,
+            FreeAgentBlockReason::AcceptanceRollFailed => 14,
         }
     }
 
@@ -101,6 +110,7 @@ impl FreeAgentBlockReason {
                 "cross_continent_pressure_too_low"
             }
             FreeAgentBlockReason::RegionPrestigeGap => "region_prestige_gap",
+            FreeAgentBlockReason::MarketUnfamiliar => "market_unfamiliar",
             FreeAgentBlockReason::ClubAtSquadCapacity => "club_at_squad_capacity",
             FreeAgentBlockReason::PerDaySigningCapReached => "per_day_signing_cap_reached",
             FreeAgentBlockReason::DailyChanceRollFailed => "daily_chance_roll_failed",
@@ -316,6 +326,10 @@ impl FreeAgentStatusCategory {
             Some(FreeAgentBlockReason::AcceptanceRollFailed) => Self::OffersRefused,
             Some(FreeAgentBlockReason::BelowMinimumAbility)
             | Some(FreeAgentBlockReason::ClubAtSquadCapacity)
+            // Nobody in the markets that would take him has heard of
+            // anyone like him. That reads to the player as silence, which
+            // is what low interest is.
+            | Some(FreeAgentBlockReason::MarketUnfamiliar)
             | Some(FreeAgentBlockReason::PerDaySigningCapReached) => Self::LowInterest,
             Some(FreeAgentBlockReason::DailyChanceRollFailed) => Self::InterestBuilding,
             Some(FreeAgentBlockReason::AlreadySignedOrStaged) => Self::InterestBuilding,

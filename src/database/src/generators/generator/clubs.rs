@@ -5,6 +5,7 @@ use chrono::{Datelike, Utc};
 use core::club::academy::ClubAcademy;
 use core::context::NaiveTime;
 use core::shared::Location;
+use core::transfers::market_knowledge::ClubMarketLedger;
 use core::transfers::pipeline::ClubTransferPlan;
 use core::{
     Club, ClubAffairLog, ClubBoard, ClubColors, ClubFacilities, ClubFinances, ClubPhilosophy,
@@ -17,17 +18,19 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use super::DatabaseGenerator;
+use super::staffs::ScoutMarketSeed;
 
 impl DatabaseGenerator {
     pub(super) fn generate_clubs(
-        country_id: u32,
-        continent_id: u32,
-        country_code: &str,
+        scout_seed: &ScoutMarketSeed<'_>,
         country_reputation: u16,
         data: &DatabaseEntity,
         player_generator: &PlayerGenerator,
         staff_generator: &StaffGenerator,
     ) -> Vec<Club> {
+        let country_id = scout_seed.country_id;
+        let continent_id = scout_seed.continent_id;
+        let country_code = scout_seed.country_code;
         let odb = data.players_odb.as_ref();
         let now_year = Utc::now().date_naive().year();
 
@@ -153,9 +156,7 @@ impl DatabaseGenerator {
 
                             let staffs = StaffCollection::new(Self::generate_staffs(
                                 staff_generator,
-                                country_id,
-                                continent_id,
-                                country_code,
+                                scout_seed,
                                 team_rep,
                                 &team_type,
                             ));
@@ -237,6 +238,10 @@ impl DatabaseGenerator {
                     facilities,
                     rivals: club.rivals.clone(),
                     teams,
+                    // Bootstrapped from the squad's own foreign
+                    // nationalities once the world is assembled — see
+                    // `SimulatorData::bootstrap_market_ledgers`.
+                    market_ledger: ClubMarketLedger::default(),
                     // A new world has no history behind it; the diary
                     // starts on the first thing that happens to the club.
                     affairs: ClubAffairLog::new(),

@@ -3,6 +3,8 @@
 
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::contest::contact::ContactInPlace;
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::strike_diag::{GrantPath, StrikeCensus};
 use crate::r#match::engine::ball::ball::{AerialReach, Ball};
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::events::PlayerEvent;
@@ -354,6 +356,8 @@ impl Ball {
                 // threshold, so it can't cross the goal line unowned.
                 let _ = interceptor_id; // no teleport, keep position as-is
                 self.current_owner = Some(interceptor_id);
+                #[cfg(feature = "match-logs")]
+                StrikeCensus::note_grant(GrantPath::CONTEST, self.position.z);
                 self.pass_target_player_id = None;
                 self.flags.in_flight_state = 0;
                 self.claim_cooldown = 15;

@@ -432,7 +432,10 @@ impl MidfielderPassingState {
             z_velocity,
         );
 
-        Some(Event::PlayerEvent(PlayerEvent::ClearBall(ball_velocity)))
+        Some(Event::PlayerEvent(PlayerEvent::ClearBall(
+            ctx.player.id,
+            ball_velocity,
+        )))
     }
 
     /// Check if should adjust position

@@ -19,6 +19,7 @@ use crate::club::status::ClubStatus;
 use crate::club::{ClubFinances, ClubResult, StaffPosition};
 use crate::context::GlobalContext;
 use crate::shared::{Currency, CurrencyValue, Location};
+use crate::transfers::market_knowledge::ClubMarketLedger;
 use crate::transfers::pipeline::ClubTransferPlan;
 use crate::utils::DateUtils;
 use crate::{ReputationLevel, TeamCollection, TeamType};
@@ -101,6 +102,13 @@ pub struct Club {
     pub facilities: ClubFacilities,
 
     pub rivals: Vec<u32>,
+
+    /// Which foreign markets this club has actually done business in, and
+    /// when. Half of what the club KNOWS of a market (the other half being
+    /// its scouts) and the half that survives a scout leaving — see
+    /// [`ClubMarketKnowledge`]. Bootstrapped at world load from the squad's
+    /// own foreign nationalities, so the shipped world is its own evidence.
+    pub market_ledger: ClubMarketLedger,
 
     /// The club's own diary: dated boardroom and dugout happenings the
     /// press cannot recompute from state. Written where each thing
@@ -295,6 +303,7 @@ impl Club {
             philosophy,
             facilities,
             rivals: Vec::new(),
+            market_ledger: ClubMarketLedger::default(),
             affairs: ClubAffairLog::new(),
         }
     }

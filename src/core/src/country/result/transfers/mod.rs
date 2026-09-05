@@ -17,6 +17,7 @@ use crate::simulator::SimulatorData;
 use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
+use crate::transfers::{MarketMap, ScoutMarketDesk};
 use crate::{Country, PlayerStatusType};
 use chrono::NaiveDate;
 use config::TransferConfig;
@@ -152,6 +153,7 @@ impl CountryResult {
         current_date: NaiveDate,
         world_pool: &[PlayerSummary],
         global_free_agents: &[GlobalFreeAgentSummary],
+        market_map: &MarketMap,
     ) -> DeferredTransferOps {
         let country_id = country.id;
         let mut summary = TransferActivitySummary::new();
@@ -195,7 +197,8 @@ impl CountryResult {
         // outcomes: pool signings whose medical just cleared (executed
         // against `data.free_agents` in Phase C) and rejected-offer
         // counters for pool players who declined personal terms.
-        let outcomes = Self::resolve_pending_negotiations(country, current_date, &mut summary);
+        let outcomes =
+            Self::resolve_pending_negotiations(country, current_date, market_map, &mut summary);
         ops.deferred_transfers = outcomes.deferred;
         ops.global_signings = outcomes.free_agent_signings;
         ops.global_rejected_ids = outcomes.free_agent_rejected_ids;
@@ -240,6 +243,7 @@ impl CountryResult {
             current_date,
             &mut summary,
             global_free_agents,
+            market_map,
             &config,
             &mut ops.domestic_signed_ids,
             &mut ops.global_offered_ids,
@@ -277,11 +281,16 @@ impl CountryResult {
         // Weekly, all year — a scout does not stop watching football in
         // October, and this is what makes the first day of the window start
         // from a written agenda instead of a cold pool.
+        // Once a year, pre-season: the recruitment department reviews which
+        // markets it wants covered and hires the person who covers one it
+        // does not. The only channel by which a corridor the shipped data
+        // never named can appear in a save — see [`ScoutMarketDesk`].
+        ScoutMarketDesk::run(country, market_map, current_date);
         PipelineProcessor::refresh_watchlists(country, world_pool, current_date);
         PipelineProcessor::assign_scouts(country, current_date);
         PipelineProcessor::assign_scouts_to_matches(country, current_date);
         PipelineProcessor::process_match_scouting(country, current_date);
-        PipelineProcessor::process_scouting(country, &foreign_players, current_date);
+        PipelineProcessor::process_scouting(country, &foreign_players, current_date, market_map);
         PipelineProcessor::run_recruitment_meetings(country, current_date);
 
         if window_open {
@@ -311,7 +320,12 @@ impl CountryResult {
             // below, no listing lingers for seasons.
             PipelineProcessor::broadcast_listed_transfers(country, current_date);
             PipelineProcessor::scan_loan_market(country, current_date);
-            PipelineProcessor::scan_foreign_loan_market(country, &foreign_players, current_date);
+            PipelineProcessor::scan_foreign_loan_market(
+                country,
+                &foreign_players,
+                current_date,
+                market_map,
+            );
         }
 
         // Escape valve for stranded listings: a player still unsold a full

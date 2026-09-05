@@ -209,14 +209,24 @@ impl FootballSimulator {
             .collect();
         let global_fa_snapshot: Vec<GlobalFreeAgentSummary> =
             snapshot_global_free_agents(data, pool_date);
+        // At the window boundaries the wage world has moved enough that the
+        // money axis of `import_capacity` is stale — the Gulf got richer, a
+        // league collapsed. The corridor cards are shipped data and never
+        // change; only the facts around them do, so this is the whole of
+        // the refresh and it runs twice a year.
+        if SimulatorData::is_nationality_reseed_day(pool_date) {
+            data.rebuild_market_map();
+        }
         let world_country_info = &data.country_info;
         let world_indexes = data.indexes.as_ref();
+        let world_market_map = &data.market_map;
         let world = WorldSnapshot {
             date: world_date,
             country_info: world_country_info,
             indexes: world_indexes,
             world_pool: &world_pool,
             global_free_agents: &global_fa_snapshot,
+            market_map: world_market_map,
         };
         let world_matchday: WorldMatchdayResult<'_> = {
             // A1: parallel build. Each `Continent::simulate` returns a

@@ -32,15 +32,15 @@ pub mod tick;
 // be one constant or the taker is pinned short of the ball he is fetching.
 pub use boundary::{Perimeter, RunOff, frame, net, runoff};
 pub use contest::{
-    ContactInPlace, PassChainEntry, PossessionSource, block, contact, interception, ownership,
-    possession, save,
+    ContactInPlace, PassChainEntry, PlayerReach, PossessionSource, block, contact, interception,
+    ownership, possession, reach, save,
 };
 // `pub` for `SpinModel` — the strike sites (shot / cross) solve the
 // rotation they need from the same Magnus coefficient the physics
 // integrates, so the two can never drift apart.
 pub use flight::{
-    AIR_DRAG_PER_TICK, AerialDelivery, AerialOutcome, AerialReach, BallRoll, GRAVITY_PER_TICK,
-    GROUND_FRICTION, aerial, ballistics, motion, roll,
+    AIR_DRAG_PER_TICK, AerialDelivery, AerialOutcome, AerialReach, BallRoll, FlightProtection,
+    GRAVITY_PER_TICK, GROUND_FRICTION, aerial, ballistics, motion, roll,
 };
 // `pub` for `dead_ball_diag` — the stall attribution counters are read by
 // the dev harness, same as `ownership::reception_diag`.
@@ -53,13 +53,15 @@ pub use restarts::{
 // the resolvers and the player layer that run after it, which is where
 // the set pieces live.
 #[cfg(feature = "match-logs")]
-pub use diagnostics::{assist_diag, block_diag, flight_diag, frame_trace, knock_diag, teleport};
+pub use diagnostics::{
+    assist_diag, block_diag, flight_diag, frame_trace, knock_diag, strike_diag, teleport,
+};
 
-use crate::r#match::PlayerSide;
 use crate::r#match::engine::ball::ball::net::BallInNet;
 use crate::r#match::engine::corner_shape::{CornerShapeHold, CornerStation};
 use crate::r#match::engine::set_pieces::CornerRoutine;
 use crate::r#match::player::strategies::passing::CrossType;
+use crate::r#match::{MatchPlayer, PlayerSide};
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::{CrossDiag, PassWeightCensus};
 use nalgebra::Vector3;
@@ -727,6 +729,18 @@ impl BallFlags {
 }
 
 impl Ball {
+    /// How far above its carry height the ball has to be to still be IN
+    /// THE AIR, in metres.
+    ///
+    /// The same 0.1 m `update_velocity` uses to decide a ball is airborne
+    /// rather than rolling, and deliberately so: below it the ball is at
+    /// the point its owner keeps it at, the owner tracking in
+    /// [`Ball::move_to`] owns it, and the last centimetre of settling is
+    /// a bounded arm movement rather than a fall. Above it nothing but
+    /// gravity may move it downward — see
+    /// [`Ball::settling_out_of_the_air`].
+    pub const DECK: f32 = 0.1;
+
     pub fn with_coord(field_width: f32, field_height: f32) -> Self {
         let x = field_width / 2.0;
         let y = field_height / 2.0;
@@ -937,12 +951,17 @@ impl Ball {
     /// ball flies on untouched, which is the same outcome minus the
     /// wreckage.
     ///
-    /// Measured in the XY plane, exactly as `move_to` measures it: a ball
-    /// directly overhead is within reach whatever its height.
-    pub fn within_possession_reach(&self, player_position: Vector3<f32>) -> bool {
-        let dx = player_position.x - self.position.x;
-        let dy = player_position.y - self.position.y;
-        dx * dx + dy * dy <= MAX_OWNER_TRACK_DISTANCE * MAX_OWNER_TRACK_DISTANCE
+    /// # …and on all three axes
+    ///
+    /// This used to measure the XY plane alone and say so: *"a ball
+    /// directly overhead is within reach whatever its height."* It is
+    /// the only reach test on the whole event path, so that sentence was
+    /// the engine's rule for `ClaimBall`, `GainBall`, `TacklingBall`,
+    /// `MoveBall` and `BallOwnerChange` — and it granted balls six
+    /// metres up. The height half now comes from the player, because
+    /// that is whose property it is: see [`PlayerReach`].
+    pub fn within_possession_reach(&self, player: &MatchPlayer) -> bool {
+        PlayerReach::can_possess(self, player)
     }
 
     /// Take the ball into `keeper_id`'s gloves.

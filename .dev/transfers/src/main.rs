@@ -58,10 +58,10 @@ use core::club::player::statistics::StuckCareerScan;
 use core::club::player::transfer::{BigStagePull, BigStagePullContext};
 use core::club::team::squad::{SquadAssetClass, SquadAssetContext};
 use core::country::result::transfers::free_agent_audit::FreeAgentMarketAuditor;
-use core::transfers::ScoutingRegion;
 use core::transfers::pipeline::appraisal::TermsRefusalCause;
 use core::transfers::pipeline::planning::BriefTier;
 use core::transfers::pipeline::{LoanDestinationPreference, LoanOutReason};
+use core::transfers::{ClubMarketKnowledge, ScoutingRegion};
 use core::transfers::{
     TransferListingOrigin, TransferListingStatus, TransferListingType, TransferType,
 };
@@ -3339,12 +3339,14 @@ impl SimHarness {
             {
                 let mut report = MarketCensus::collect(&self.data);
                 ReportPrinter::print(&mut report, &self.data, day);
+                CorridorCensus::report(&self.data, day);
                 self.player_side.sample_idle_trail();
                 PlayerSidePrinter::print(&self.player_side);
             }
         }
         let mut report = MarketCensus::collect(&self.data);
         ReportPrinter::print(&mut report, &self.data, days);
+        CorridorCensus::report(&self.data, days);
         self.player_side.sample_idle_trail();
         PlayerSidePrinter::print(&self.player_side);
         eprintln!(
@@ -3444,6 +3446,7 @@ fn main() {
     // its starting point rather than against zero.
     let mut initial = MarketCensus::collect(&harness.data);
     ReportPrinter::print(&mut initial, &harness.data, 0);
+    CorridorCensus::report(&harness.data, 0);
 
     harness.run(days, every);
 }
@@ -3622,5 +3625,595 @@ mod census_tests {
         assert_eq!(CensusFacts::stage_direction(7_000, 6_000), "up");
         assert_eq!(CensusFacts::stage_direction(6_000, 7_000), "down");
         assert_eq!(CensusFacts::stage_direction(6_000, 5_800), "same");
+    }
+}
+
+// ---------------------------------------------------------------------
+// Corridor census — the transfer GEOGRAPHY
+// ---------------------------------------------------------------------
+
+/// Where players actually moved, measured against where the country cards
+/// say they should.
+///
+/// The two cases this exists for cannot be seen in any of the censuses
+/// above: a Russian free agent landing at a Brazilian club and a marquee
+/// signing dumped a division down five months later are both ordinary rows
+/// in the move census. They are only visible as GEOGRAPHY — a corridor that
+/// does not exist in football, and a cohort of signings that unwind.
+///
+/// Everything here is cohort-level. "Batrakov stays at Galatasaray" is not
+/// a test (memory `feedback_balance_system_not_cases`).
+struct CorridorCensus;
+
+/// One cross-border move, reduced to its geography.
+struct CorridorMove {
+    nationality: u32,
+    from_country: u32,
+    to_country: u32,
+    kind: MoveGeographyKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MoveGeographyKind {
+    Permanent,
+    Loan,
+    Free,
+}
+
+/// Facts about one country the census reads repeatedly.
+struct CensusCountry {
+    code: String,
+    continent_id: u32,
+    region: ScoutingRegion,
+}
+
+impl CorridorCensus {
+    /// Nationalities reported individually, by cross-border move volume.
+    const TOP_EXPORTERS: usize = 25;
+    /// Destinations listed per nationality.
+    const TOP_DESTINATIONS: usize = 6;
+    /// Card entries an actual move has to land inside to count toward
+    /// `corridor_overlap`.
+    const CARD_TOP_N: usize = 8;
+    /// Import capacity below which a league is not one that signs names
+    /// from another continent.
+    const LOW_CAPACITY: f32 = 0.2;
+    /// Reputation step up that makes a signing a "step up", and the step
+    /// down that makes the exit a dump.
+    const STEP_UP: i32 = 1500;
+    const DUMP_DOWN: i32 = 2000;
+
+    fn report(data: &SimulatorData, day: u32) {
+        let countries = Self::country_index(data);
+        let clubs = Self::club_index(data);
+        let nationality = Self::nationality_index(data);
+        let moves = Self::collect_moves(data, &clubs, &nationality);
+
+        println!("\n== corridor census (day {day}) ==");
+        Self::print_matrix(data, &moves, &countries);
+        Self::print_returning_flow(&moves, &countries);
+        Self::print_implausible(data, &moves, &countries);
+        Self::print_foreign_share(data, &clubs, &countries);
+        Self::print_step_up_then_dumped(data);
+        Self::print_knowledge(data);
+    }
+
+    fn country_index(data: &SimulatorData) -> HashMap<u32, CensusCountry> {
+        data.country_info
+            .values()
+            .map(|info| {
+                (
+                    info.id,
+                    CensusCountry {
+                        code: info.code.clone(),
+                        continent_id: info.continent_id,
+                        region: ScoutingRegion::from_country(info.continent_id, &info.code),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// club (and team) id -> (country id, plays in the top division).
+    fn club_index(data: &SimulatorData) -> HashMap<u32, (u32, bool)> {
+        let mut out = HashMap::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                let top_league = country.leagues.leagues.iter().max_by_key(|l| l.reputation);
+                for club in &country.clubs {
+                    let in_top = match (club.teams.main().and_then(|t| t.league_id), top_league) {
+                        (Some(id), Some(league)) => id == league.id,
+                        _ => false,
+                    };
+                    out.insert(club.id, (country.id, in_top));
+                    for team in &club.teams.teams {
+                        out.entry(team.id).or_insert((country.id, false));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn nationality_index(data: &SimulatorData) -> HashMap<u32, u32> {
+        let mut out = HashMap::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for team in &club.teams.teams {
+                        for player in &team.players.players {
+                            out.insert(player.id, player.country_id);
+                        }
+                    }
+                }
+                for player in &country.retired_players {
+                    out.insert(player.id, player.country_id);
+                }
+            }
+        }
+        for player in &data.free_agents {
+            out.insert(player.id, player.country_id);
+        }
+        out
+    }
+
+    /// Every completed CROSS-BORDER move in the world's history, once.
+    fn collect_moves(
+        data: &SimulatorData,
+        clubs: &HashMap<u32, (u32, bool)>,
+        nationality: &HashMap<u32, u32>,
+    ) -> Vec<CorridorMove> {
+        let mut seen: HashSet<(u32, NaiveDate, u32)> = HashSet::new();
+        let mut out = Vec::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for t in &country.transfer_market.transfer_history {
+                    if !seen.insert((t.player_id, t.transfer_date, t.to_club_id)) {
+                        continue;
+                    }
+                    let (Some((from_country, _)), Some((to_country, _))) =
+                        (clubs.get(&t.from_club_id), clubs.get(&t.to_club_id))
+                    else {
+                        continue;
+                    };
+                    if from_country == to_country {
+                        continue;
+                    }
+                    let Some(nat) = nationality.get(&t.player_id) else {
+                        continue;
+                    };
+                    out.push(CorridorMove {
+                        nationality: *nat,
+                        from_country: *from_country,
+                        to_country: *to_country,
+                        kind: match t.transfer_type {
+                            TransferType::Permanent => MoveGeographyKind::Permanent,
+                            TransferType::Loan(_) => MoveGeographyKind::Loan,
+                            TransferType::Free => MoveGeographyKind::Free,
+                        },
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// Top destinations per exporting nationality, and how much of each
+    /// nationality's traffic lands inside its card's own top-8 export list.
+    fn print_matrix(
+        data: &SimulatorData,
+        moves: &[CorridorMove],
+        countries: &HashMap<u32, CensusCountry>,
+    ) {
+        let mut by_nationality: HashMap<u32, HashMap<u32, usize>> = HashMap::new();
+        for m in moves {
+            *by_nationality
+                .entry(m.nationality)
+                .or_default()
+                .entry(m.to_country)
+                .or_insert(0) += 1;
+        }
+        let mut ranked: Vec<(u32, usize)> = by_nationality
+            .iter()
+            .map(|(nat, dests)| (*nat, dests.values().sum()))
+            .collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        ranked.truncate(Self::TOP_EXPORTERS);
+
+        println!(
+            "\n-- corridors: top {} exporting nationalities --",
+            Self::TOP_EXPORTERS
+        );
+        let mut overlap_hits = 0usize;
+        let mut full_hits = 0usize;
+        let mut overlap_total = 0usize;
+        for (nat, volume) in &ranked {
+            // The card's own head. Already normalised and sorted by weight
+            // at load, so the first N entries are the top N corridors.
+            let full_card: Vec<u32> = data
+                .market_map
+                .profile(*nat)
+                .export
+                .iter()
+                .map(|c| c.country_id)
+                .collect();
+            let card: Vec<u32> = full_card.iter().copied().take(Self::CARD_TOP_N).collect();
+
+            let dests = &by_nationality[nat];
+            let mut top: Vec<(&u32, &usize)> = dests.iter().collect();
+            top.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+            let listed: Vec<String> = top
+                .iter()
+                .take(Self::TOP_DESTINATIONS)
+                .map(|(id, count)| {
+                    let marker = if card.contains(id) || **id == *nat { "" } else { "*" };
+                    format!("{}{marker}:{count}", Self::code(countries, **id))
+                })
+                .collect();
+
+            // Going HOME is always a plausible move — it is the one case
+            // `MarketAffinity` returns 1.0 for unconditionally — so a
+            // national returning to his own country is a corridor hit, not
+            // a miss. Counting it as a miss (the first cut of this metric
+            // did) charges the model for the single most defensible move
+            // in football.
+            let inside: usize = dests
+                .iter()
+                .filter(|(id, _)| card.contains(id) || **id == *nat)
+                .map(|(_, count)| *count)
+                .sum();
+            // The same reading against the WHOLE card, so the top-8 window
+            // can be told apart from genuine off-corridor movement: a
+            // nationality whose card names a destination at rank nine
+            // scores a miss on the tight metric and a hit on this one.
+            let inside_full: usize = dests
+                .iter()
+                .filter(|(id, _)| full_card.contains(id) || **id == *nat)
+                .map(|(_, count)| *count)
+                .sum();
+            full_hits += inside_full;
+            overlap_hits += inside;
+            overlap_total += volume;
+
+            println!(
+                "  {:>3} {:>4} moves  overlap {:>5.1}%  [{}]",
+                Self::code(countries, *nat),
+                volume,
+                Self::share(inside, *volume) * 100.0,
+                listed.join(" "),
+            );
+        }
+        println!(
+            "  corridor_overlap (all top-{} exporters): {:.2}   [target >= 0.70]   \
+             (* = destination outside the nationality card's top-{})",
+            Self::TOP_EXPORTERS,
+            Self::share(overlap_hits, overlap_total),
+            Self::CARD_TOP_N,
+        );
+    }
+
+    /// Europe to South America should be ~entirely nationals going home.
+    fn print_returning_flow(moves: &[CorridorMove], countries: &HashMap<u32, CensusCountry>) {
+        const EUROPE: u32 = 1;
+        const SOUTH_AMERICA: u32 = 3;
+        let mut total = 0usize;
+        let mut returning = 0usize;
+        for m in moves {
+            let (Some(from), Some(to)) =
+                (countries.get(&m.from_country), countries.get(&m.to_country))
+            else {
+                continue;
+            };
+            if from.continent_id != EUROPE || to.continent_id != SOUTH_AMERICA {
+                continue;
+            }
+            total += 1;
+            if m.nationality == m.to_country {
+                returning += 1;
+            }
+        }
+        println!(
+            "\n-- Europe -> South America: {total} moves, {:.2} are nationals returning \
+             [target >= 0.90]",
+            Self::share(returning, total),
+        );
+    }
+
+    /// The two moves nobody in football makes.
+    fn print_implausible(
+        data: &SimulatorData,
+        moves: &[CorridorMove],
+        countries: &HashMap<u32, CensusCountry>,
+    ) {
+        let mut free_total = 0usize;
+        let mut free_into_poor = 0usize;
+        let mut cis_to_africa = 0usize;
+        for m in moves {
+            let (Some(from), Some(to)) =
+                (countries.get(&m.from_country), countries.get(&m.to_country))
+            else {
+                continue;
+            };
+            if m.kind == MoveGeographyKind::Free {
+                free_total += 1;
+                if from.continent_id != to.continent_id
+                    && data.market_map.import_capacity(m.to_country) < Self::LOW_CAPACITY
+                {
+                    free_into_poor += 1;
+                }
+            }
+            let cis_national = countries
+                .get(&m.nationality)
+                .map(|nat| {
+                    matches!(
+                        nat.region,
+                        ScoutingRegion::EasternEurope | ScoutingRegion::MiddleEastEurope
+                    )
+                })
+                .unwrap_or(false);
+            let sub_saharan = matches!(
+                to.region,
+                ScoutingRegion::WestAfrica | ScoutingRegion::EastSouthAfrica
+            );
+            if cis_national && sub_saharan {
+                cis_to_africa += 1;
+            }
+        }
+        println!(
+            "-- cross-continent FREE signings into import_capacity < {:.1}: {free_into_poor} \
+             of {free_total} ({:.2}%)  [target < 1%]",
+            Self::LOW_CAPACITY,
+            Self::share(free_into_poor, free_total) * 100.0,
+        );
+        println!(
+            "-- E.Europe / CIS nationals moving to sub-Saharan Africa (any kind): \
+             {cis_to_africa}  [target ~ 0]"
+        );
+    }
+
+    /// Does each top division carry roughly the foreign share its card
+    /// claims?
+    fn print_foreign_share(
+        data: &SimulatorData,
+        clubs: &HashMap<u32, (u32, bool)>,
+        countries: &HashMap<u32, CensusCountry>,
+    ) {
+        let mut rows: Vec<(u32, f32, f32)> = Vec::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                let mut foreign = 0usize;
+                let mut total = 0usize;
+                for club in &country.clubs {
+                    if !clubs.get(&club.id).map(|(_, top)| *top).unwrap_or(false) {
+                        continue;
+                    }
+                    let Some(team) = club.teams.main() else {
+                        continue;
+                    };
+                    for player in &team.players.players {
+                        total += 1;
+                        if player.country_id != country.id {
+                            foreign += 1;
+                        }
+                    }
+                }
+                if total == 0 {
+                    continue;
+                }
+                let actual = foreign as f32 / total as f32;
+                let card = data.market_map.profile(country.id).foreign_share;
+                if card <= 0.0 {
+                    continue;
+                }
+                rows.push((country.id, actual, card));
+            }
+        }
+        rows.sort_by(|a, b| {
+            (b.1 - b.2)
+                .abs()
+                .partial_cmp(&(a.1 - a.2).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let within: usize = rows
+            .iter()
+            .filter(|(_, a, c)| (a - c).abs() <= 0.10)
+            .count();
+        println!(
+            "\n-- top-division foreign share vs card: {within}/{} within +/-10 pts \
+             (worst offenders first)",
+            rows.len()
+        );
+        for (country_id, actual, card) in rows.iter().take(8) {
+            println!(
+                "  {:>3} actual {:.2} card {:.2} ({:+.2})",
+                Self::code(countries, *country_id),
+                actual,
+                card,
+                actual - card,
+            );
+        }
+    }
+
+    /// Signings that went badly wrong: bought at a big step UP, sold at a
+    /// big step DOWN inside a year. The Galatasaray to Gaziantep shape.
+    fn print_step_up_then_dumped(data: &SimulatorData) {
+        let mut reputations: HashMap<u32, i32> = HashMap::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    let rep = club
+                        .teams
+                        .main()
+                        .map(|t| t.reputation.world as i32)
+                        .unwrap_or(0);
+                    reputations.insert(club.id, rep);
+                }
+            }
+        }
+
+        // One ordered move list per player.
+        let mut seen: HashSet<(u32, NaiveDate, u32)> = HashSet::new();
+        let mut by_player: HashMap<u32, Vec<(NaiveDate, u32, u32, bool)>> = HashMap::new();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for t in &country.transfer_market.transfer_history {
+                    if !seen.insert((t.player_id, t.transfer_date, t.to_club_id)) {
+                        continue;
+                    }
+                    let permanent = matches!(t.transfer_type, TransferType::Permanent);
+                    by_player.entry(t.player_id).or_default().push((
+                        t.transfer_date,
+                        t.from_club_id,
+                        t.to_club_id,
+                        permanent,
+                    ));
+                }
+            }
+        }
+
+        let mut step_ups = 0usize;
+        let mut dumped = 0usize;
+        let mut days: Vec<i64> = Vec::new();
+        for history in by_player.values_mut() {
+            history.sort_by_key(|(date, _, _, _)| *date);
+            for i in 0..history.len() {
+                let (in_date, from, to, permanent) = history[i];
+                if !permanent {
+                    continue;
+                }
+                let (Some(from_rep), Some(to_rep)) = (reputations.get(&from), reputations.get(&to))
+                else {
+                    continue;
+                };
+                if to_rep - from_rep < Self::STEP_UP {
+                    continue;
+                }
+                step_ups += 1;
+                // Did the same club sell him down again within a year?
+                for (out_date, out_from, out_to, out_permanent) in history.iter().skip(i + 1) {
+                    if !*out_permanent || *out_from != to {
+                        continue;
+                    }
+                    let elapsed = (*out_date - in_date).num_days();
+                    if elapsed > 365 {
+                        break;
+                    }
+                    if let Some(next_rep) = reputations.get(out_to) {
+                        if to_rep - next_rep >= Self::DUMP_DOWN {
+                            dumped += 1;
+                            days.push(elapsed);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        days.sort_unstable();
+        let median = days.get(days.len() / 2).copied().unwrap_or(0);
+        println!(
+            "\n-- step-up-then-dumped: {dumped} of {step_ups} step-up signings ({:.2}%), \
+             median {median} days  [target < 3%]",
+            Self::share(dumped, step_ups) * 100.0,
+        );
+    }
+
+    /// How many markets each club can actually work, and how many worked a
+    /// market this year they had barely touched before.
+    fn print_knowledge(data: &SimulatorData) {
+        let today = data.date.date();
+        let mut bands: Vec<(&'static str, Vec<usize>)> = vec![
+            ("elite  (>=7000)", Vec::new()),
+            ("strong (5000.. )", Vec::new()),
+            ("mid    (3000.. )", Vec::new()),
+            ("small  (<3000)  ", Vec::new()),
+        ];
+        let mut opened = 0usize;
+        let mut clubs_total = 0usize;
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    clubs_total += 1;
+                    let rep = club.teams.main().map(|t| t.reputation.world).unwrap_or(0);
+                    // Invert the walk: a scout knows a handful of countries, so
+                    // one pass over the department beats 224 scans of it.
+                    let mut coverage: HashMap<u32, u8> = HashMap::new();
+                    for staff in club.teams.iter().flat_map(|t| t.staffs.iter()) {
+                        for known in &staff.staff_attributes.knowledge.known_countries {
+                            let slot = coverage.entry(known.country_id).or_insert(0);
+                            *slot = (*slot).max(known.level);
+                        }
+                    }
+                    let best_scout =
+                        |source: u32| -> u8 { coverage.get(&source).copied().unwrap_or(0) };
+                    let known = data
+                        .country_info
+                        .keys()
+                        .filter(|source| **source != country.id)
+                        .filter(|source| {
+                            ClubMarketKnowledge::knowledge(
+                                &data.market_map,
+                                country.id,
+                                &club.market_ledger,
+                                best_scout(**source),
+                                **source,
+                                today,
+                            ) >= ClubMarketKnowledge::WORKING_KNOWLEDGE
+                        })
+                        .count();
+                    // A market the club did business in within the last year that
+                    // was NOT part of its day-0 squad: a corridor this save
+                    // opened for itself.
+                    if club.market_ledger.entries().iter().any(|entry| {
+                        !entry.bootstrapped && (today - entry.last_signing).num_days() <= 365
+                    }) {
+                        opened += 1;
+                    }
+                    let slot = if rep >= 7000 {
+                        0
+                    } else if rep >= 5000 {
+                        1
+                    } else if rep >= 3000 {
+                        2
+                    } else {
+                        3
+                    };
+                    bands[slot].1.push(known);
+                }
+            }
+        }
+        println!("\n-- knowledge census: markets a club can work (knowledge >= 0.3) --");
+        for (label, mut counts) in bands {
+            if counts.is_empty() {
+                continue;
+            }
+            counts.sort_unstable();
+            let median = counts[counts.len() / 2];
+            let mean = counts.iter().sum::<usize>() as f64 / counts.len() as f64;
+            println!(
+                "  {label}  n={:<5} median {median:<3} mean {mean:.1}  max {}",
+                counts.len(),
+                counts.last().copied().unwrap_or(0),
+            );
+        }
+        println!(
+            "  clubs that worked a NEW source market in the last year: {opened} of {clubs_total} \
+             ({:.1}%)  [target 3-8%]",
+            Self::share(opened, clubs_total) * 100.0,
+        );
+    }
+
+    fn code(countries: &HashMap<u32, CensusCountry>, country_id: u32) -> String {
+        countries
+            .get(&country_id)
+            .map(|c| c.code.clone())
+            .unwrap_or_else(|| format!("#{country_id}"))
+    }
+
+    fn share(part: usize, whole: usize) -> f64 {
+        if whole == 0 {
+            0.0
+        } else {
+            part as f64 / whole as f64
+        }
     }
 }

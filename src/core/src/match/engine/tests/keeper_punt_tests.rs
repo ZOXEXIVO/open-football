@@ -136,7 +136,7 @@ fn a_keeper_with_the_ball_in_his_hands_kicks_it_into_the_opposition_half() {
     assert!(
         events
             .iter()
-            .any(|e| matches!(e, Event::PlayerEvent(PlayerEvent::ClearBall(_)))),
+            .any(|e| matches!(e, Event::PlayerEvent(PlayerEvent::ClearBall(_, _)))),
         "a punt is a ball launched into space, not a pass at a named man"
     );
 

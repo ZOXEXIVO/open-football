@@ -3,9 +3,11 @@
 
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
-use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::knock_diag::{KnockEnd, KnockSource};
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::strike_diag::{GrantPath, StrikeCensus};
+use crate::r#match::engine::ball::ball::{Ball, GRAVITY_PER_TICK};
 use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::player::events::players::save_accounting_stats;
@@ -1666,6 +1668,8 @@ impl Ball {
             self.velocity = Vector3::zeros();
             self.spin = Vector3::zeros();
             self.current_owner = Some(keeper_id);
+            #[cfg(feature = "match-logs")]
+            StrikeCensus::note_grant(GrantPath::CONTEST, self.position.z);
             self.flags.in_flight_state = 0;
             self.claim_cooldown = 200;
             // Read off the KEEPER, not the contact point, and the two are

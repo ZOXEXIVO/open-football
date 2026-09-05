@@ -1338,6 +1338,47 @@ impl MatchPlayer {
         self.height > 0.0
     }
 
+    /// **Is he playing the ball IN THE AIR on this tick?**
+    ///
+    /// What lifts a strike's reach off the boot and onto his jumping
+    /// ceiling — see
+    /// [`PlayerReach::can_strike`](crate::r#match::engine::ball::ball::PlayerReach)
+    /// and [`PlayerState::strikes_in_the_air`].
+    ///
+    /// # Why it is not simply `self.state`
+    ///
+    /// The tick order is: every player is processed (and his transition
+    /// applied), THEN the events they emitted are dispatched — see
+    /// `tick/driver.rs`. Every heading state emits its strike and leaves
+    /// in the SAME `StateChangeResult`
+    /// (`with_forward_state_and_event(Running, Shoot(Header))`), so by the
+    /// time the header reaches `PlayerEventDispatcher` the man is already
+    /// in `Running`. Asking `self.state` alone therefore refuses every
+    /// header in the match: measured over 400 matches, open-play header
+    /// shots went **635 → 0** the first time this was written that way.
+    ///
+    /// So three readings of one question:
+    ///
+    ///  * the state he is IN — a keeper's punch, an `AttackingCorner`;
+    ///  * the state he came out of ON THIS TICK — the heading states,
+    ///    bounded by `in_state_time` so a Running player does not carry an
+    ///    aerial licence around for the rest of the half. The bound is
+    ///    `<= 1` and not `== 0` because two different passes increment the
+    ///    counter (`PlayerMatchState::process` and `MatchPlayer::update`)
+    ///    and their order relative to the dispatch is not this rule's to
+    ///    depend on;
+    ///  * both feet off the ground — whatever he is nominally doing, a man
+    ///    in the air is playing it in the air.
+    #[inline]
+    pub fn is_striking_in_the_air(&self) -> bool {
+        self.state.strikes_in_the_air()
+            || (self.in_state_time <= 1
+                && self
+                    .previous_state
+                    .is_some_and(|state| state.strikes_in_the_air()))
+            || self.is_airborne()
+    }
+
     /// True while he is on a split-step — off the ground, but not thrown
     /// at anything. See [`Self::hop`].
     #[inline]

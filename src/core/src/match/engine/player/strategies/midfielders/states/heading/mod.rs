@@ -177,7 +177,10 @@ impl StateProcessingHandler for MidfielderHeadingState {
         // the second-ball mechanic the state exists for.
         Some(StateChangeResult::with_midfielder_state_and_event(
             MidfielderState::Running,
-            Event::PlayerEvent(PlayerEvent::ClearBall(self.knock_down_velocity(ctx))),
+            Event::PlayerEvent(PlayerEvent::ClearBall(
+                ctx.player.id,
+                self.knock_down_velocity(ctx),
+            )),
         ))
     }
 

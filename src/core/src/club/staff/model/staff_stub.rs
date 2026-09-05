@@ -70,6 +70,7 @@ impl StaffStub {
                     tactical_knowledge: 1,
                     known_regions: Vec::new(),
                     region_familiarity: Vec::new(),
+                    known_countries: Vec::new(),
                 },
                 data_analysis: StaffDataAnalysis {
                     judging_player_data: 1,

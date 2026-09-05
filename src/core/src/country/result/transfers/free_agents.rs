@@ -11,7 +11,6 @@ use super::free_agent_market_calc::{
 };
 use super::types::{TransferActivitySummary, can_club_accept_player, find_player_in_country};
 use crate::club::player::contract::RENEWAL_OFFERED_LABEL;
-use crate::club::player::language::LanguageProfile;
 use crate::club::player::mailbox::handlers::contract_proposal::ProcessContractHandler;
 use crate::club::player::transfer::{FreeAgentBlockReason, MarketStage};
 use crate::club::staff::perception::PotentialEstimator;
@@ -31,6 +30,7 @@ use crate::transfers::squad_needs::{
     EmergencySlotStrictness, EmergencySquadFillStrategy, EmergencyStrictness, FirstTeamSquadNeeds,
 };
 use crate::transfers::{CompletedTransfer, TransferType};
+use crate::transfers::{MarketAffinity, MarketAffinityInputs, MarketMap, MoveKind};
 use crate::utils::FormattingUtils;
 use crate::utils::IntegerUtils;
 use crate::{
@@ -76,6 +76,8 @@ pub struct GlobalFreeAgentSummary {
     /// region-prestige gate (same pattern as `scan_foreign_loan_market`).
     pub nationality_continent_id: u32,
     pub nationality_country_code: String,
+    /// Nationality as an id — what the corridor cards are keyed by.
+    pub nationality_country_id: u32,
     /// Career-pressure score in [0,1] computed at snapshot time. Read
     /// here rather than from the player at the call site because the
     /// matcher loop is in a per-country borrow that can't see the
@@ -102,6 +104,14 @@ pub struct GlobalFreeAgentSummary {
     /// the matcher can lift a structurally-signable player's daily
     /// chance without re-reading the pool inside the country borrow.
     pub failed_approach_streak: u8,
+    /// The country he last played in, `0` when he has never been under
+    /// contract anywhere the world models.
+    ///
+    /// Where a man PLAYED is half his geography — a Brazilian released by
+    /// Porto is a Portugal-market free agent and a Brazilian released by
+    /// Flamengo is not — and the free-agent funnel read only his passport
+    /// before this, which is why it could not tell the two apart.
+    pub last_country_id: u32,
 }
 
 /// A free-agent signing decided by `handle_free_agents` for a player who
@@ -229,6 +239,158 @@ pub(super) struct FreeAgentCandidate {
     /// any state updates land in `global_*_ids` and are applied
     /// outside the borrow.
     pub is_global_pool: bool,
+    /// Nationality as an id — what the corridor cards are keyed by.
+    pub nationality_country_id: u32,
+    /// The country he last played in; `0` when he never held a modelled
+    /// contract. Half his geography: a Brazilian released by Porto is a
+    /// Portugal-market free agent, and one released by Flamengo is not.
+    pub last_country_id: u32,
+}
+
+/// How visible each free agent is to ONE buying market, computed once per
+/// country per tick.
+///
+/// Visibility is a property of the (market, player) pair, not of the club:
+/// whether Turkish football has heard of a released Russian does not depend
+/// on which Turkish club is asking. So it is built once at the top of
+/// [`CountryResult::handle_free_agents`] and read by every gate below —
+/// which also keeps the corridor arithmetic out of a loop that runs
+/// clubs × requests × candidates.
+pub(super) struct FreeAgentMarketVisibility {
+    by_player: HashMap<u32, MarketView>,
+    import_capacity: f32,
+}
+
+/// One candidate as one market sees him.
+#[derive(Debug, Clone, Copy)]
+struct MarketView {
+    /// Corridor plausibility of the place for this player, 0..1.
+    affinity: f32,
+    /// Whether anyone here is looking at him at all, 0..~2 — affinity
+    /// narrowed by the market's familiarity and widened by his time on the
+    /// market and by his name where names are bought.
+    visibility: f32,
+}
+
+impl FreeAgentMarketVisibility {
+    /// Floor under the market's familiarity with any source country. An
+    /// agent can always get a CV in front of somebody; what he cannot do is
+    /// make a league that has never signed anyone like his client treat him
+    /// as a normal target.
+    const REACH_FLOOR: f32 = 0.15;
+    /// A league that buys names knows about names. Scales the destination's
+    /// import capacity into the familiarity term so the Gulf and MLS are
+    /// reachable without a corridor and Cameroon is not.
+    const CAPACITY_REACH: f32 = 0.6;
+
+    pub(super) fn build(
+        buyer_country_id: u32,
+        map: &MarketMap,
+        candidates: &[FreeAgentCandidate],
+    ) -> Self {
+        // No map at all — a fixture, or a database built before the country
+        // cards existed. A missing PAIR fails to the derived prior; a missing
+        // WORLD fails open, because a market with no geography loaded must
+        // behave exactly as it did before geography existed rather than
+        // quietly refusing every foreign signing.
+        if map.is_empty() {
+            return FreeAgentMarketVisibility {
+                by_player: HashMap::new(),
+                import_capacity: 1.0,
+            };
+        }
+        let import_capacity = map.import_capacity(buyer_country_id);
+        let profile = map.profile(buyer_country_id);
+        // The geography of a candidate depends only on WHERE he is from and
+        // WHERE he last played, and the pool is thousands of players sharing
+        // a few hundred such pairs. Computing it per player per country per
+        // tick is the difference between a run that finishes and one that
+        // does not — it is four linear scans of a forty-entry corridor list,
+        // times the whole free-agent pool, times every country, every day.
+        let mut geography: HashMap<(u32, u32), (f32, f32)> = HashMap::new();
+        let mut by_player = HashMap::with_capacity(candidates.len());
+        for candidate in candidates {
+            let key = (candidate.nationality_country_id, candidate.last_country_id);
+            let (affinity, reach) = *geography.entry(key).or_insert_with(|| {
+                let affinity = MarketAffinity::affinity(
+                    map,
+                    MarketAffinityInputs {
+                        buyer_country_id,
+                        nationality_country_id: key.0,
+                        current_country_id: key.1,
+                        kind: MoveKind::Talent,
+                    },
+                );
+                let is_local = key.0 == buyer_country_id || key.1 == buyer_country_id;
+                let reach = if is_local {
+                    1.0
+                } else {
+                    let from_nationality = 0.5 * profile.import_weight(key.0).unwrap_or(0.0);
+                    let from_last_league = 0.5 * profile.import_weight(key.1).unwrap_or(0.0);
+                    from_nationality
+                        .max(from_last_league)
+                        .max(Self::CAPACITY_REACH * import_capacity)
+                        .max(Self::REACH_FLOOR)
+                };
+                (affinity, reach)
+            });
+            let visibility = FreeAgentMarketCalculator::visibility(
+                affinity,
+                reach,
+                candidate.days_free,
+                FreeAgentMarketCalculator::name_reach(candidate.reference_reputation),
+                import_capacity,
+            );
+            by_player.insert(
+                candidate.player_id,
+                MarketView {
+                    affinity,
+                    visibility,
+                },
+            );
+        }
+        FreeAgentMarketVisibility {
+            by_player,
+            import_capacity,
+        }
+    }
+
+    /// Visibility of one candidate. `1.0` for anyone this build never saw —
+    /// a caller working from a candidate list the visibility was not built
+    /// from must not be silently blocked by a missing entry.
+    pub(super) fn of(&self, player_id: u32) -> f32 {
+        self.by_player
+            .get(&player_id)
+            .map(|view| view.visibility)
+            .unwrap_or(1.0)
+    }
+
+    /// Corridor plausibility of this market for one candidate, 0..1. Read
+    /// by rankings that want the geography without the time and name terms.
+    pub(super) fn affinity_of(&self, player_id: u32) -> f32 {
+        self.by_player
+            .get(&player_id)
+            .map(|view| view.affinity)
+            .unwrap_or(1.0)
+    }
+
+    /// The buying country's capacity to import names, 0..1. Conditions the
+    /// cross-continent gate's standing relief.
+    pub(super) fn import_capacity(&self) -> f32 {
+        self.import_capacity
+    }
+
+    /// Does this candidate clear the bar for how long he has been available?
+    pub(super) fn is_visible(&self, candidate: &FreeAgentCandidate) -> bool {
+        // A club can always see the players in its own league. The gate is
+        // about markets hearing of each other, and a domestic expiring
+        // contract is not a market question.
+        if !candidate.is_global_pool {
+            return true;
+        }
+        let stage = MarketStage::from_days_free(candidate.days_free);
+        self.of(candidate.player_id) >= FreeAgentMarketCalculator::visibility_bar(stage)
+    }
 }
 
 /// One signing decided by the country-local matcher. Drained at the
@@ -268,6 +430,7 @@ impl CountryResult {
         date: NaiveDate,
         summary: &mut TransferActivitySummary,
         global_pool: &[GlobalFreeAgentSummary],
+        market_map: &MarketMap,
         config: &TransferConfig,
         domestic_signed_ids: &mut Vec<u32>,
         global_offered_ids: &mut Vec<u32>,
@@ -355,6 +518,11 @@ impl CountryResult {
                             // mildly toward local journeymen.
                             nationality_country_code: country.code.clone(),
                             nationality_continent_id: country.continent_id,
+                            // Treated as domestic for the same reason: the
+                            // true passport is not reachable from inside
+                            // this borrow, and the affinity of a man
+                            // already playing here is 1.0 either way.
+                            nationality_country_id: country.id,
                             // Expiring contracts haven't entered the
                             // market yet — pressure is zero, the player
                             // is just transitioning. The new gates fall
@@ -375,6 +543,9 @@ impl CountryResult {
                             // open market yet — no accumulated pity.
                             failed_approach_streak: 0,
                             is_global_pool: false,
+                            // An expiring domestic contract is, by
+                            // construction, a man playing right here.
+                            last_country_id: country.id,
                         });
                     }
                 }
@@ -415,6 +586,7 @@ impl CountryResult {
                 ),
                 nationality_country_code: fa.nationality_country_code.clone(),
                 nationality_continent_id: fa.nationality_continent_id,
+                nationality_country_id: fa.nationality_country_id,
                 career_pressure: fa.career_pressure,
                 days_free: fa.days_free,
                 reference_reputation: fa.reference_reputation,
@@ -426,6 +598,7 @@ impl CountryResult {
                 professionalism_norm: fa.professionalism_norm,
                 failed_approach_streak: fa.failed_approach_streak,
                 is_global_pool: true,
+                last_country_id: fa.last_country_id,
             });
         }
 
@@ -461,6 +634,13 @@ impl CountryResult {
             return Vec::new();
         }
 
+        // How visible each candidate is to THIS market — the corridor from
+        // his passport and his last league, the market's own familiarity
+        // with both, how long he has been available, and whether this is a
+        // league that buys names. Computed once here because the answer is a
+        // property of the market, not of the club doing the asking.
+        let visibility = FreeAgentMarketVisibility::build(country.id, market_map, &candidates);
+
         // Pass 2: Match candidates to clubs with needs, using probability-based signing
         let mut signings: Vec<FreeAgentSigning> = Vec::new();
 
@@ -490,6 +670,7 @@ impl CountryResult {
             country,
             &candidates,
             config,
+            &visibility,
             &mut signings,
             global_offered_ids,
             global_rejected_ids,
@@ -502,7 +683,6 @@ impl CountryResult {
         let max_signings_per_day = config.max_free_agent_signings_for(date);
         let ability_slack = config.free_agent_ability_slack;
         let buyer_country_reputation = country.reputation;
-        let buyer_country_code = country.code.clone();
         let buyer_continent_id = country.continent_id;
         // Mirrors `scan_foreign_loan_market`: same region the country sits
         // in, used as the prestige anchor for cross-region gating.
@@ -611,9 +791,9 @@ impl CountryResult {
                     league_reputation: buyer_league_reputation,
                     negotiator_skill: buyer_negotiator_skill,
                     country_reputation: buyer_country_reputation,
-                    country_code: &buyer_country_code,
                     continent_id: buyer_continent_id,
                     region_prestige: buyer_region_prestige,
+                    visibility: &visibility,
                 };
                 let nominal_floor = request.min_ability.saturating_sub(ability_slack);
 
@@ -940,6 +1120,7 @@ impl CountryResult {
             &candidates,
             config,
             date,
+            &visibility,
             &staged_depth_ids,
             &mut signings,
             global_offered_ids,
@@ -1405,6 +1586,7 @@ impl CountryResult {
         country: &Country,
         candidates: &[FreeAgentCandidate],
         config: &TransferConfig,
+        visibility: &FreeAgentMarketVisibility,
         signings: &mut Vec<FreeAgentSigning>,
         global_offered_ids: &mut Vec<u32>,
         global_rejected_ids: &mut Vec<u32>,
@@ -1554,6 +1736,7 @@ impl CountryResult {
                     negotiator_skill: buyer_negotiator_skill,
                     urgent,
                     strictness,
+                    import_capacity: visibility.import_capacity(),
                 };
 
                 let pick = EmergencyCandidatePicker::pick(
@@ -1563,6 +1746,7 @@ impl CountryResult {
                     slot,
                     &buyer_ctx,
                     club.id,
+                    visibility,
                 );
                 let Some(best) = pick else {
                     // No viable candidate for this slot this tick —
@@ -1706,6 +1890,7 @@ impl CountryResult {
         candidates: &[FreeAgentCandidate],
         config: &TransferConfig,
         date: NaiveDate,
+        visibility: &FreeAgentMarketVisibility,
         staged_ids: &HashSet<u32>,
         signings: &mut Vec<FreeAgentSigning>,
         global_offered_ids: &mut Vec<u32>,
@@ -1742,6 +1927,7 @@ impl CountryResult {
                 opportunistic_gate: true,
                 peak_chance_bonus,
             },
+            visibility,
             staged_ids,
             signings,
             global_offered_ids,
@@ -1763,6 +1949,7 @@ impl CountryResult {
                 opportunistic_gate: false,
                 peak_chance_bonus,
             },
+            visibility,
             staged_ids,
             signings,
             global_offered_ids,
@@ -1778,11 +1965,48 @@ impl CountryResult {
     /// and whether the opportunistic squad-fit gate fires before an
     /// offer is made.
     #[allow(clippy::too_many_arguments)]
+    /// Pick which of the clubs whose quality band fits actually signs him.
+    ///
+    /// The soft tier hands in a one-element list (it stops at the first fit
+    /// by design — it is the local outlet, and a local club taking a punt is
+    /// the first club with room). The hard tier hands in every fitting club,
+    /// and the choice is weighted by how badly each one needs the position.
+    /// That is what replaces "the first lowest-tier club on the list", which
+    /// is the line that produced the random team that urgently needs a
+    /// player: it always picked the smallest club in the country, whatever
+    /// its actual shape.
+    fn sample_clearing_buyer<'a>(
+        fitting: &[(&'a MarketClearingBuyer, u8, u8)],
+        group: PlayerFieldPositionGroup,
+    ) -> Option<(&'a MarketClearingBuyer, u8, u8)> {
+        if fitting.len() <= 1 {
+            return fitting.first().copied();
+        }
+        let weights: Vec<f32> = fitting
+            .iter()
+            .map(|(buyer, _, _)| buyer.position_depth_need(group).max(0.05))
+            .collect();
+        let total: f32 = weights.iter().sum();
+        if total <= 0.0 {
+            return fitting.first().copied();
+        }
+        let roll = IntegerUtils::random(0, 10_000) as f32 / 10_000.0 * total;
+        let mut acc = 0.0;
+        for (entry, weight) in fitting.iter().zip(weights.iter()) {
+            acc += *weight;
+            if roll < acc {
+                return Some(*entry);
+            }
+        }
+        fitting.last().copied()
+    }
+
     fn run_market_clearing_tier(
         country: &Country,
         candidates: &[FreeAgentCandidate],
         buyers: &[MarketClearingBuyer],
         tier: MarketClearingTier,
+        visibility: &FreeAgentMarketVisibility,
         staged_ids: &HashSet<u32>,
         signings: &mut Vec<FreeAgentSigning>,
         global_offered_ids: &mut Vec<u32>,
@@ -1893,6 +2117,7 @@ impl CountryResult {
                 candidate.career_pressure,
                 cross_floor,
                 candidate.reference_reputation,
+                visibility.import_capacity(),
             ) {
                 recorder.record(
                     candidate.player_id,
@@ -1909,10 +2134,23 @@ impl CountryResult {
                 recorder.record(candidate.player_id, FreeAgentBlockReason::RegionPrestigeGap);
                 continue;
             }
+            // The clearing tiers are the backstop, not a bypass: a market
+            // that has never seen anyone like him does not sign him just
+            // because his contract ran out somewhere else.
+            if !visibility.is_visible(candidate) {
+                recorder.record(candidate.player_id, FreeAgentBlockReason::MarketUnfamiliar);
+                continue;
+            }
 
-            // First (lowest-tier) buyer whose quality band fits.
+            // Which buyer takes him. The soft tier keeps the lowest-tier
+            // first-fit — it IS the local outlet, and a local club taking a
+            // punt is exactly the first club with room. The hard tier picks
+            // among the clubs whose band fits by visibility-weighted
+            // sampling, so "the random team that urgently needs a player"
+            // stops being the mechanism: a fitting club that knows his
+            // market gets him ahead of one that does not.
             let mut too_good_everywhere = true;
-            let mut chosen: Option<(&MarketClearingBuyer, u8, u8)> = None;
+            let mut fitting: Vec<(&MarketClearingBuyer, u8, u8)> = Vec::new();
             for buyer in buyers {
                 let min_ca = FreeAgentMarketCalculator::min_acceptable_ca(
                     buyer.club_score,
@@ -1928,10 +2166,13 @@ impl CountryResult {
                     too_good_everywhere = false;
                 }
                 if candidate.ability >= min_ca && candidate.ability <= max_ca {
-                    chosen = Some((buyer, min_ca, max_ca));
-                    break;
+                    fitting.push((buyer, min_ca, max_ca));
+                    if tier.locality_restricted {
+                        break;
+                    }
                 }
             }
+            let chosen = Self::sample_clearing_buyer(&fitting, candidate.position_group);
             let Some((buyer, min_ca, max_ca)) = chosen else {
                 recorder.record(
                     candidate.player_id,
@@ -2301,6 +2542,7 @@ impl EmergencyRealismGates {
                 candidate.career_pressure,
                 min_pressure,
                 candidate.reference_reputation,
+                buyer.import_capacity,
             )
         {
             return false;
@@ -2337,6 +2579,7 @@ impl EmergencyCandidatePicker {
         slot: EmergencyGroupSlot,
         buyer_ctx: &EmergencyBuyerContext,
         buying_club_id: u32,
+        visibility: &FreeAgentMarketVisibility,
     ) -> Option<&'a FreeAgentCandidate> {
         let mut scored: Vec<(&FreeAgentCandidate, f32)> = candidates
             .iter()
@@ -2357,10 +2600,7 @@ impl EmergencyCandidatePicker {
                     career_pressure: c.career_pressure,
                     region_prestige: c.nationality_region.league_prestige(),
                     is_global_pool: c.is_global_pool,
-                    language_affinity: LanguageProfile::nationality_affinity(
-                        &c.nationality_country_code,
-                        &buyer_ctx.country_code,
-                    ),
+                    market_affinity: visibility.affinity_of(c.player_id),
                 };
                 EmergencySquadFillStrategy::score(&view, buyer_ctx).and_then(|score| {
                     if score < EmergencySquadFillStrategy::MIN_ACCEPTABLE_SCORE {
@@ -2654,9 +2894,11 @@ struct RequestBuyerContext<'a> {
     league_reputation: u16,
     negotiator_skill: u8,
     country_reputation: u16,
-    country_code: &'a str,
     continent_id: u32,
     region_prestige: f32,
+    /// Per-candidate visibility of this market, built once for the whole
+    /// country — see [`FreeAgentMarketVisibility`].
+    visibility: &'a FreeAgentMarketVisibility,
 }
 
 /// Hard-filter classifier for the request-driven matcher. The same
@@ -2720,6 +2962,7 @@ impl RequestCandidateGates {
             candidate.career_pressure,
             0.85,
             candidate.reference_reputation,
+            buyer.visibility.import_capacity(),
         ) {
             return Err(FreeAgentBlockReason::CrossContinentPressureTooLow);
         }
@@ -2732,6 +2975,13 @@ impl RequestCandidateGates {
         );
         if candidate.nationality_region.league_prestige() > buyer.region_prestige + region_drop {
             return Err(FreeAgentBlockReason::RegionPrestigeGap);
+        }
+        // Does this market have any reason to be looking at him at all? The
+        // three gates above ask whether the move is a plausible STEP; this
+        // one asks whether the two sides have ever heard of each other.
+        // Widens with time on the market, along the corridors.
+        if !buyer.visibility.is_visible(candidate) {
+            return Err(FreeAgentBlockReason::MarketUnfamiliar);
         }
         Ok(())
     }
@@ -2762,10 +3012,6 @@ impl RequestCandidateOrdering {
         );
         let quality_fit =
             FreeAgentMarketCalculator::quality_fit_score(candidate.ability, min_ca, max_ca);
-        let domestic = candidate
-            .nationality_country_code
-            .eq_ignore_ascii_case(buyer.country_code);
-        let same_continent = candidate.nationality_continent_id == buyer.continent_id;
         let rep_mismatch = candidate.reference_reputation as i32 - buyer.country_reputation as i32;
         let pricing = FreeAgentOfferPricing::compute(
             candidate,
@@ -2779,8 +3025,7 @@ impl RequestCandidateOrdering {
             FreeAgentMarketCalculator::wage_score(pricing.offer_wage, pricing.reservation_wage);
         let base = FreeAgentMarketCalculator::candidate_priority_score(
             quality_fit,
-            domestic,
-            same_continent,
+            buyer.visibility.of(candidate.player_id),
             rep_mismatch,
             candidate.career_pressure,
             wage_affordability,
@@ -2790,12 +3035,12 @@ impl RequestCandidateOrdering {
         // players only — an in-country expiring contract (days_free 0)
         // isn't a "newly released into the market" signal. Ordering
         // only; it never relaxes the acceptance / realism gates.
-        let visibility = if candidate.is_global_pool {
+        let fresh_release = if candidate.is_global_pool {
             FreeAgentMarketCalculator::recent_release_visibility_boost(candidate.days_free)
         } else {
             0.0
         };
-        base + visibility
+        base + fresh_release
     }
 
     /// Descending on priority; raw quality as the tiebreak so equal-
@@ -3034,7 +3279,13 @@ pub(crate) fn snapshot_global_free_agents(
             }
 
             let career_pressure = player.career_pressure(date);
-            let (last_salary, last_country_reputation, last_league_reputation, days_free) = player
+            let (
+                last_salary,
+                last_country_reputation,
+                last_league_reputation,
+                days_free,
+                last_country_id,
+            ) = player
                 .free_agent_state()
                 .map(|s| {
                     (
@@ -3042,6 +3293,11 @@ pub(crate) fn snapshot_global_free_agents(
                         s.last_country_reputation,
                         s.last_league_reputation,
                         (date - s.free_since).num_days().max(0),
+                        // A database free agent who never held a modelled
+                        // contract has no last league; his own country is
+                        // the only market he is known in, which is the
+                        // truth about him rather than a fallback.
+                        s.last_country_id.unwrap_or(player.country_id),
                     )
                 })
                 .unwrap_or((
@@ -3049,6 +3305,7 @@ pub(crate) fn snapshot_global_free_agents(
                     nationality_rep,
                     ((nationality_rep as f32) * 0.75) as u16,
                     0,
+                    player.country_id,
                 ));
             // Time on the market erodes the old-league prestige the
             // country/region gates key on — see
@@ -3076,6 +3333,7 @@ pub(crate) fn snapshot_global_free_agents(
                 nationality_country_reputation: nationality_rep,
                 nationality_continent_id,
                 nationality_country_code,
+                nationality_country_id: player.country_id,
                 career_pressure,
                 days_free,
                 reference_reputation,
@@ -3086,6 +3344,7 @@ pub(crate) fn snapshot_global_free_agents(
                 current_reputation: player.player_attributes.current_reputation,
                 professionalism_norm: (player.attributes.professionalism / 20.0).clamp(0.0, 1.0),
                 failed_approach_streak,
+                last_country_id,
             }
         })
         .collect()
@@ -3455,6 +3714,8 @@ mod emergency_fill_tests {
                 professionalism_norm: 0.5,
                 failed_approach_streak: 0,
                 is_global_pool: true,
+                nationality_country_id: 0,
+                last_country_id: 0,
             }
         }
 
@@ -3526,6 +3787,7 @@ mod emergency_fill_tests {
                 country,
                 candidates,
                 config,
+                &FreeAgentMarketVisibility::build(0, &MarketMap::default(), &[]),
                 signings,
                 &mut offered,
                 &mut rejected,
@@ -4235,6 +4497,7 @@ mod emergency_fill_tests {
             &country,
             &candidates,
             &TransferConfig::default(),
+            &FreeAgentMarketVisibility::build(0, &MarketMap::default(), &[]),
             &mut signings,
             &mut offered,
             &mut rejected,
@@ -4299,6 +4562,7 @@ mod emergency_fill_tests {
             &country,
             &candidates,
             &TransferConfig::default(),
+            &FreeAgentMarketVisibility::build(0, &MarketMap::default(), &[]),
             &mut signings,
             &mut offered,
             &mut rejected,
@@ -4462,6 +4726,7 @@ mod emergency_fill_tests {
                 negotiator_skill: 50,
                 urgent,
                 strictness,
+                import_capacity: 1.0,
             }
         }
 
@@ -4506,6 +4771,8 @@ mod emergency_fill_tests {
                 professionalism_norm: 0.5,
                 failed_approach_streak: 0,
                 is_global_pool: true,
+                nationality_country_id: 0,
+                last_country_id: 0,
             }
         }
     }
@@ -4609,6 +4876,7 @@ mod emergency_fill_tests {
             negotiator_skill: 50,
             urgent: true,
             strictness: EmergencyStrictness::Flexible,
+            import_capacity: 1.0,
         };
         let russian_gk = CrossRegionFixtures::candidate(
             60,
@@ -4644,6 +4912,7 @@ mod emergency_fill_tests {
             negotiator_skill: 50,
             urgent: true,
             strictness: EmergencyStrictness::Flexible,
+            import_capacity: 1.0,
         };
         let russian_gk = CrossRegionFixtures::candidate(
             61,
@@ -4700,8 +4969,15 @@ mod emergency_fill_tests {
             missing: 1,
             reason: "emergency_squad_fill_depth",
         };
-        let pick =
-            EmergencyCandidatePicker::pick(&candidates, &signings, &rejected, slot, &buyer, 999);
+        let pick = EmergencyCandidatePicker::pick(
+            &candidates,
+            &signings,
+            &rejected,
+            slot,
+            &buyer,
+            999,
+            &FreeAgentMarketVisibility::build(0, &MarketMap::default(), &[]),
+        );
         let picked = pick.expect("at least one candidate must clear all gates");
         assert_eq!(
             picked.player_id, 10,
@@ -4735,8 +5011,15 @@ mod emergency_fill_tests {
             missing: 1,
             reason: "emergency_squad_fill_depth",
         };
-        let pick =
-            EmergencyCandidatePicker::pick(&candidates, &signings, &rejected, slot, &buyer, 999);
+        let pick = EmergencyCandidatePicker::pick(
+            &candidates,
+            &signings,
+            &rejected,
+            slot,
+            &buyer,
+            999,
+            &FreeAgentMarketVisibility::build(0, &MarketMap::default(), &[]),
+        );
         assert!(
             pick.is_none(),
             "depth slot must skip rather than fall back to an unrealistic cross-region pick"
@@ -4946,6 +5229,7 @@ mod emergency_fill_tests {
                 nationality_country_reputation: reference_reputation,
                 nationality_continent_id: if same_country { 1 } else { 3 },
                 nationality_country_code: code.to_string(),
+                nationality_country_id: if same_country { 1 } else { 2 },
                 career_pressure,
                 days_free: 0,
                 reference_reputation,
@@ -4956,6 +5240,7 @@ mod emergency_fill_tests {
                 current_reputation: 1500,
                 professionalism_norm: 0.5,
                 failed_approach_streak: 0,
+                last_country_id: if same_country { 1 } else { 2 },
             }
         }
 
@@ -4982,6 +5267,7 @@ mod emergency_fill_tests {
                     date,
                     &mut summary,
                     pool,
+                    &MarketMap::default(),
                     &config,
                     &mut domestic,
                     &mut offered,
@@ -5084,6 +5370,7 @@ mod emergency_fill_tests {
             &country,
             &candidates,
             &TransferConfig::default(),
+            &FreeAgentMarketVisibility::build(0, &MarketMap::default(), &[]),
             &mut signings,
             &mut offered,
             &mut rejected,
@@ -5325,8 +5612,12 @@ mod emergency_fill_tests {
 
             crate::utils::random::engine::RandomEngine::set_seed(42 + attempt);
             let mut summary = TransferActivitySummary::new();
-            let outcomes =
-                CountryResult::resolve_pending_negotiations(&mut country, date, &mut summary);
+            let outcomes = CountryResult::resolve_pending_negotiations(
+                &mut country,
+                date,
+                &MarketMap::default(),
+                &mut summary,
+            );
 
             // 1% medical collapse — the RNG artifact, not the behaviour
             // under test. Re-roll the scenario with the next seed.
@@ -5443,6 +5734,7 @@ mod emergency_fill_tests {
                 date,
                 &mut summary,
                 &pool,
+                &MarketMap::default(),
                 &config,
                 &mut domestic,
                 &mut offered,
@@ -5628,6 +5920,7 @@ mod emergency_fill_tests {
                 candidates,
                 config,
                 date,
+                &FreeAgentMarketVisibility::build(0, &MarketMap::default(), &[]),
                 &HashSet::new(),
                 &mut signings,
                 &mut offered,
@@ -5728,6 +6021,7 @@ mod emergency_fill_tests {
                 date,
                 &mut summary,
                 &pool,
+                &MarketMap::default(),
                 &config,
                 &mut domestic,
                 &mut offered,
@@ -6193,6 +6487,7 @@ mod expiry_renewal_tests {
                 date,
                 &mut summary,
                 &[],
+                &MarketMap::default(),
                 &config,
                 &mut domestic_signed_ids,
                 &mut global_offered_ids,

@@ -13,7 +13,7 @@ use crate::transfers::pipeline::plausibility::{
     BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
 };
 use crate::transfers::pipeline::processor::PipelineProcessor;
-use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
+use crate::transfers::pipeline::squad_fit::{SquadFitSnapshot, SquadRegistrationLimits};
 use crate::transfers::pipeline::{
     DetailedScoutingReport, PlayerSummary, ReportRiskFlag, ScoutingAssignment,
     ScoutingRecommendation, ShortlistCandidate, ShortlistCandidateStatus, TransferRequest,
@@ -225,6 +225,7 @@ impl PipelineProcessor {
                     club,
                     assignment.target_position.position_group(),
                     date,
+                    SquadRegistrationLimits::new(country.id, &country.regulations),
                 );
 
                 let mut candidates: Vec<ShortlistCandidate> = reports
@@ -249,6 +250,16 @@ impl PipelineProcessor {
                             r.assessed_potential,
                             candidate_age,
                         ) {
+                            return None;
+                        }
+                        // A club does not shortlist a player it could not
+                        // register. Counting the slot AFTER the signing is
+                        // what produced a champion dumping a marquee
+                        // foreigner in January.
+                        if summary
+                            .as_ref()
+                            .is_some_and(|p| fit.would_be_unregistrable(p.nationality_country_id))
+                        {
                             return None;
                         }
                         let plausibility = summary.as_ref().and_then(|p| {
@@ -411,8 +422,12 @@ impl PipelineProcessor {
                     continue;
                 }
 
-                let market_fit =
-                    SquadFitSnapshot::build(club, request.position.position_group(), date);
+                let market_fit = SquadFitSnapshot::build(
+                    club,
+                    request.position.position_group(),
+                    date,
+                    SquadRegistrationLimits::new(country.id, &country.regulations),
+                );
                 let mut market_candidates: Vec<ShortlistCandidate> = country
                     .transfer_market
                     .get_available_listings()
@@ -445,6 +460,11 @@ impl PipelineProcessor {
                                     est_potential,
                                     p.age,
                                 ) {
+                                    return None;
+                                }
+                                if market_fit
+                                    .would_be_unregistrable(p.nationality_country_id)
+                                {
                                     return None;
                                 }
                                 // The request's age band is part of the

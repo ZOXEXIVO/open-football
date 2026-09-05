@@ -4826,6 +4826,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
     core::assist_diag::reset();
     core::reception_diag::reset();
     core::flight_diag::FlightDiag::reset();
+    core::strike_diag::StrikeCensus::reset();
     core::teleport::TeleportCensus::reset();
     core::teleport::PlayerTeleportCensus::reset();
     BlockDiag::reset();
@@ -7226,6 +7227,93 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         "   <-- an endline resolver is declining balls again"
                     },
                 );
+                // ── THE MID-AIR CENSUS ───────────────────────────────
+                //
+                // The vertical axis of a grant and of a strike, which
+                // nothing else in this harness can see: `reception_diag`
+                // measures the horizontal half and the teleport census
+                // measures relocations. Added alongside both — see
+                // `strike_diag`.
+                {
+                    use core::strike_diag::{Band, GrantPath, Handler};
+                    let (
+                        strikes,
+                        head_band,
+                        grants,
+                        controls,
+                        control_mm,
+                        controls_lost,
+                        refused,
+                        restruck,
+                        restrike_ticks,
+                    ) = core::strike_diag::StrikeCensus::snapshot();
+                    let per = |v: u64| v as f64 / n_matches as f64;
+                    println!("  MID-AIR CENSUS — strikes by ball height at the handler");
+                    for (h, name) in Handler::NAMES.iter().enumerate() {
+                        let row: Vec<String> = (0..Band::COUNT)
+                            .map(|b| {
+                                format!("{} {:.1}", Band::NAMES[b], per(strikes[h * Band::COUNT + b]))
+                            })
+                            .collect();
+                        println!("    {:<10} {}", name, row.join(", "));
+                    }
+                    println!(
+                        "    outfield strikes ABOVE the boot ({:.2} m): {:.1}/match from a heading state, \
+                         {:.1}/match from a state that decided nothing   (the second MUST fall to ~0)",
+                        1.45,
+                        per(head_band[1]),
+                        per(head_band[0]),
+                    );
+                    println!("  grants by path and ball height");
+                    for (p, name) in GrantPath::NAMES.iter().enumerate() {
+                        let row: Vec<String> = (0..Band::COUNT)
+                            .map(|b| {
+                                format!("{} {:.1}", Band::NAMES[b], per(grants[p * Band::COUNT + b]))
+                            })
+                            .collect();
+                        println!("    {:<10} {}", name, row.join(", "));
+                    }
+                    let n_controls: u64 = controls.iter().sum();
+                    println!(
+                        "  balls taken OUT OF THE AIR: {:.1}/match, mean height {:.2} m, \
+                         {:.1}/match dropped to nobody (the failed-first-touch shape)",
+                        per(n_controls),
+                        if n_controls > 0 {
+                            control_mm as f64 / 1000.0 / n_controls as f64
+                        } else {
+                            0.0
+                        },
+                        per(controls_lost),
+                    );
+                    let bands: Vec<String> = (0..Band::COUNT)
+                        .map(|b| format!("{} {:.1}", Band::NAMES[b], per(controls[b])))
+                        .collect();
+                    println!("    at: {}", bands.join(", "));
+                    println!(
+                        "  strikes REFUSED out of reach, and how long the same man took to \
+                         strike for real   (refusals count TICKS of asking, not episodes: a \
+                         state re-emits every tick while the ball is coming down, so \
+                         refused/re-struck is roughly how many ticks each deferral lasted)"
+                    );
+                    for (h, name) in Handler::NAMES.iter().enumerate() {
+                        println!(
+                            "    {:<10} refused {:.1}/match, re-struck {:.1}/match after {:.0} ticks{}",
+                            name,
+                            per(refused[h]),
+                            per(restruck[h]),
+                            if restruck[h] > 0 {
+                                restrike_ticks[h] as f64 / restruck[h] as f64
+                            } else {
+                                0.0
+                            },
+                            if refused[h] > 0 && restruck[h] * 3 < refused[h] {
+                                "   <-- a state may be stuck asking"
+                            } else {
+                                ""
+                            },
+                        );
+                    }
+                }
                 // Who the ball dies on. A stalled ball is nearly always a
                 // state with no way to act on possession — see
                 // `dead_ball_diag`. Ticks here are FULL ticks (~20 ms).

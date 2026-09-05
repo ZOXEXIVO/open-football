@@ -25,6 +25,9 @@ use crate::transfers::pipeline::{
     TransferNeedPriority, TransferRequest, TransferRequestStatus,
 };
 use crate::transfers::window::PlayerValuationCalculator;
+use crate::transfers::{
+    ClubMarketKnowledge, MarketAffinity, MarketAffinityInputs, MarketMap, MoveKind,
+};
 use crate::utils::IntegerUtils;
 use crate::{
     Club, ClubPhilosophy, Country, Person, PlayerFieldPositionGroup, PlayerSquadStatus,
@@ -79,7 +82,11 @@ struct ClubScoutingStaged {
     observations: Vec<ScoutingObservationResult>,
     reports: Vec<ScoutingReportResult>,
     staff_events: Vec<(u32, u32, StaffEventType)>,
-    familiarity_events: Vec<(u32, u32, ScoutingRegion)>,
+    /// `(club, scout, region, source country)` — a day spent watching a
+    /// foreign player. Both axes accrue: the coarse region the older gates
+    /// read, and the COUNTRY, which is the unit knowledge is actually
+    /// measured in.
+    familiarity_events: Vec<(u32, u32, ScoutingRegion, u32)>,
     rejected_events: Vec<(u32, u32)>,
     /// `(scouting_club_id, player_id)` — the club identity travels with
     /// the target so the apply pass can emit the ScoutWatched beat with
@@ -1109,10 +1116,58 @@ impl PipelineProcessor {
         ordered
     }
 
+    /// How well this club is placed to look at ONE foreign player: the
+    /// corridor into his market times what the club knows of it, 0..1.
+    ///
+    /// Memoised on the source country, because a scouting pass scores
+    /// thousands of candidates and the answer depends only on where the man
+    /// is from and where he plays.
+    #[allow(clippy::too_many_arguments)]
+    fn market_reach_for(
+        market_map: &MarketMap,
+        buyer_country_id: u32,
+        club: &Club,
+        player: &PlayerSummary,
+        date: NaiveDate,
+        cache: &mut HashMap<u32, f32>,
+        best_scout_country_level: &dyn Fn(u32) -> u8,
+    ) -> f32 {
+        if market_map.is_empty() {
+            return 1.0;
+        }
+        // Keyed on where he PLAYS: that is the market the club would be
+        // shopping in, and the nationality term rides inside the affinity.
+        if let Some(cached) = cache.get(&player.country_id) {
+            return *cached;
+        }
+        let affinity = MarketAffinity::affinity(
+            market_map,
+            MarketAffinityInputs {
+                buyer_country_id,
+                nationality_country_id: player.nationality_country_id,
+                current_country_id: player.country_id,
+                kind: MoveKind::Talent,
+            },
+        );
+        let knowledge = ClubMarketKnowledge::knowledge(
+            market_map,
+            buyer_country_id,
+            &club.market_ledger,
+            best_scout_country_level(player.country_id)
+                .max(best_scout_country_level(player.nationality_country_id)),
+            player.country_id,
+            date,
+        );
+        let reach = (affinity * knowledge.max(0.4)).clamp(0.0, 1.0);
+        cache.insert(player.country_id, reach);
+        reach
+    }
+
     pub fn process_scouting(
         country: &mut Country,
         foreign_players: &[&PlayerSummary],
         date: NaiveDate,
+        market_map: &MarketMap,
     ) {
         let country_reputation = country.reputation;
         // Single source of truth for observation/error/recommendation/risk-flag tuning.
@@ -1202,6 +1257,7 @@ impl PipelineProcessor {
                     &performance_lookup,
                     &config,
                     date,
+                    market_map,
                 )
             })
             .collect();
@@ -1209,7 +1265,7 @@ impl PipelineProcessor {
         let mut observations: Vec<ScoutingObservationResult> = Vec::new();
         let mut reports: Vec<ScoutingReportResult> = Vec::new();
         let mut staff_events: Vec<(u32, u32, StaffEventType)> = Vec::new();
-        let mut familiarity_events: Vec<(u32, u32, ScoutingRegion)> = Vec::new();
+        let mut familiarity_events: Vec<(u32, u32, ScoutingRegion, u32)> = Vec::new();
         let mut rejected_events: Vec<(u32, u32)> = Vec::new(); // (club_id, player_id)
         let mut wanted_targets: Vec<(u32, u32)> = Vec::new();
         let mut monitoring_updates: Vec<MonitoringUpdate> = Vec::new();
@@ -1255,6 +1311,7 @@ impl PipelineProcessor {
         performance_lookup: &LeaguePerformanceLookup,
         config: &ScoutingConfig,
         date: NaiveDate,
+        market_map: &MarketMap,
     ) -> ClubScoutingStaged {
         let country_id = country.id;
         // The buying country's language(s) — the data pre-filter nudges the
@@ -1264,7 +1321,7 @@ impl PipelineProcessor {
         let mut observations: Vec<ScoutingObservationResult> = Vec::new();
         let mut reports: Vec<ScoutingReportResult> = Vec::new();
         let mut staff_events: Vec<(u32, u32, StaffEventType)> = Vec::new();
-        let mut familiarity_events: Vec<(u32, u32, ScoutingRegion)> = Vec::new();
+        let mut familiarity_events: Vec<(u32, u32, ScoutingRegion, u32)> = Vec::new();
         let mut rejected_events: Vec<(u32, u32)> = Vec::new();
         let mut wanted_targets: Vec<(u32, u32)> = Vec::new();
         let mut monitoring_updates: Vec<MonitoringUpdate> = Vec::new();
@@ -1304,6 +1361,39 @@ impl PipelineProcessor {
                 Self::reputation_scout_regions(home_region, club_overall_score)
                     .into_iter()
                     .collect();
+
+            // Which markets this club actually works, by COUNTRY. The
+            // region reach above is the NETWORK'S BUDGET — how far it can
+            // look at all; this is what it looks AT inside that budget.
+            //
+            // Two clubs of identical size in the same league answer
+            // differently: one has a Brazil scout and eight Brazilians on
+            // the books, the other has neither. Before this they were
+            // interchangeable once a region was in reach, so Nigeria and
+            // Norway were equally visible to everyone above the reputation
+            // line and the whole planet was uniform above ~0.77.
+            //
+            // Cached per source country, because the candidate lists run to
+            // thousands and the answer only depends on where a man is from.
+            let mut market_reach_cache: HashMap<u32, f32> = HashMap::new();
+            // The department's best coverage of each market, folded once per
+            // club. Asking "who is our best man on Colombia?" per candidate
+            // walks every staff member's list every time; a scout knows a
+            // handful of countries, so inverting the walk turns a scan per
+            // question into one pass per club.
+            let scout_coverage: HashMap<u32, u8> = {
+                let mut coverage: HashMap<u32, u8> = HashMap::new();
+                for staff in club.teams.iter().flat_map(|t| t.staffs.iter()) {
+                    for known in &staff.staff_attributes.knowledge.known_countries {
+                        let slot = coverage.entry(known.country_id).or_insert(0);
+                        *slot = (*slot).max(known.level);
+                    }
+                }
+                coverage
+            };
+            let best_scout_country_level = |source_country: u32| -> u8 {
+                scout_coverage.get(&source_country).copied().unwrap_or(0)
+            };
 
             for assignment in &plan.scouting_assignments {
                 if assignment.completed {
@@ -1484,7 +1574,29 @@ impl PipelineProcessor {
                             } else {
                                 0.0
                             };
-                            (*p, score + jitter + language_bonus)
+                            // Geography — a graded preference, like the
+                            // language term beside it, and for the same
+                            // reason: the club's data department surfaces
+                            // players from markets the club works, because
+                            // those are the markets it has data on and
+                            // people in. Falls to a small penalty for a
+                            // country nobody here has ever signed from,
+                            // never to a wall: a scout may watch anyone.
+                            let market_bonus = if p.country_id != country_id {
+                                (Self::market_reach_for(
+                                    market_map,
+                                    country_id,
+                                    club,
+                                    p,
+                                    date,
+                                    &mut market_reach_cache,
+                                    &best_scout_country_level,
+                                ) - 0.35)
+                                    * 24.0
+                            } else {
+                                0.0
+                            };
+                            (*p, score + jitter + language_bonus + market_bonus)
                         })
                         .collect();
                     scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
@@ -1647,7 +1759,12 @@ impl PipelineProcessor {
 
                     if let Some(scout_id) = assignment.scout_staff_id {
                         if target.country_id != country_id {
-                            familiarity_events.push((club.id, scout_id, target_region));
+                            familiarity_events.push((
+                                club.id,
+                                scout_id,
+                                target_region,
+                                target.country_id,
+                            ));
                         }
                     }
 
@@ -1790,7 +1907,7 @@ impl PipelineProcessor {
         observations: Vec<ScoutingObservationResult>,
         reports: Vec<ScoutingReportResult>,
         staff_events: Vec<(u32, u32, StaffEventType)>,
-        familiarity_events: Vec<(u32, u32, ScoutingRegion)>,
+        familiarity_events: Vec<(u32, u32, ScoutingRegion, u32)>,
         rejected_events: Vec<(u32, u32)>,
         wanted_targets: Vec<(u32, u32)>,
         monitoring_updates: Vec<MonitoringUpdate>,
@@ -1900,12 +2017,19 @@ impl PipelineProcessor {
             }
         }
 
-        // Accrue per-region familiarity for scouts who observed foreign players
-        for (club_id, staff_id, region) in familiarity_events {
+        // A day spent watching a foreign player accrues on BOTH axes: the
+        // region the older gates read, and the country, which is where a
+        // scout actually builds knowledge. Watching Colombians for two
+        // seasons makes a man who knows Colombia, not South America.
+        for (club_id, staff_id, region, source_country) in familiarity_events {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
                 for team in &mut club.teams.teams {
                     if let Some(staff) = team.staffs.find_mut(staff_id) {
                         staff.staff_attributes.knowledge.accrue_region_day(region);
+                        staff
+                            .staff_attributes
+                            .knowledge
+                            .accrue_country_day(source_country);
                         break;
                     }
                 }

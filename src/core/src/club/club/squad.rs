@@ -7,7 +7,7 @@ use crate::club::player::calculators::{
 use crate::club::staff::perception::{AbilityEstimator, CoachProfile, DevelopmentFormEvidence};
 use crate::club::team::squad::SquadAssetContext;
 use crate::transfers::pipeline::{
-    LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
+    LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus, TransferTrace,
 };
 use crate::{
     ContractType, Person, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerStatusType,
@@ -285,6 +285,7 @@ impl Club {
                         })
                         .unwrap_or(false);
                     if newly_flagged {
+                        TransferTrace::list(p, date, "rebalance_squads", "surplus_squad");
                         p.decision_history.add(
                             date,
                             "dec_transfer_listed".to_string(),
@@ -817,6 +818,12 @@ impl Club {
                             if let Some(contract) = player.contract.as_mut() {
                                 contract.is_transfer_listed = true;
                             }
+                            TransferTrace::list(
+                                player,
+                                date,
+                                "trim_positional_surplus",
+                                "surplus_squad",
+                            );
                             player.decision_history.add(
                                 date,
                                 "dec_transfer_listed".to_string(),

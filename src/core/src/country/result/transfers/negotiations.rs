@@ -11,6 +11,7 @@ use crate::club::player::events::transfer_social::{
 };
 use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection, SquadEvidenceContext};
 use crate::country::result::CountryResult;
+use crate::transfers::MarketMap;
 use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferListingStatus;
 use crate::transfers::TransferListingType;
@@ -188,6 +189,7 @@ impl CountryResult {
     pub(crate) fn resolve_pending_negotiations(
         country: &mut Country,
         date: NaiveDate,
+        market_map: &MarketMap,
         summary: &mut TransferActivitySummary,
     ) -> NegotiationOutcomes {
         let mut outcomes = NegotiationOutcomes {
@@ -306,6 +308,7 @@ impl CountryResult {
                         &neg_data,
                         round,
                         date,
+                        market_map,
                         &mut outcomes,
                     );
                 }
@@ -1491,6 +1494,7 @@ impl CountryResult {
         neg_data: &NegotiationData,
         round: u8,
         date: NaiveDate,
+        market_map: &MarketMap,
         outcomes: &mut NegotiationOutcomes,
     ) {
         let cfg = AppraisalConfig::default();
@@ -1558,6 +1562,7 @@ impl CountryResult {
             &stance,
             sporting_drop,
             date,
+            market_map,
         );
 
         // ε — his private disposition on THIS negotiation, drawn once and
@@ -1820,6 +1825,7 @@ impl CountryResult {
         stance: &PlayerStance,
         staged_drop: Option<f32>,
         date: NaiveDate,
+        market_map: &MarketMap,
     ) -> OfferView {
         let kind = if neg_data.is_loan {
             OfferKind::Loan
@@ -1860,6 +1866,7 @@ impl CountryResult {
                 .as_ref()
                 .and_then(|t| t.squad_status_promise),
             sporting_drop,
+            market_map,
         );
 
         // End-of-window pressure: players prefer a signed deal over an
@@ -2832,14 +2839,58 @@ impl SellerFeeFloor {
             _ => NegotiationRejectionReason::AskingPriceTooHigh,
         };
 
+        // Sunk cost. A club does not book a loss on a man it paid a large
+        // fee for months ago — it loans him out, or it waits. The paid fee
+        // holds as a floor for two years and decays 15 % a year over that
+        // span, and severe distress (six months left, a fire sale) lifts it,
+        // because a club with no leverage takes what it can get.
+        let sunk_cost_floor = Self::sunk_cost_floor(player, date, distress);
+
         Some(SellerFloorVerdict {
-            min_fee: market_value * fraction,
+            min_fee: (market_value * fraction).max(sunk_cost_floor),
             market_value,
             fraction,
             asset_class,
             distress,
             reason,
         })
+    }
+
+    /// Years over which a paid fee stops anchoring the asking price.
+    const SUNK_COST_YEARS: f64 = 2.0;
+    /// Share of the paid fee written off per year inside that window.
+    const SUNK_COST_DECAY_PER_YEAR: f64 = 0.15;
+
+    /// The floor a recently-paid fee puts under a sale, or `0.0` when there
+    /// isn't one.
+    ///
+    /// This is the Galatasaray → Gaziantep shape in one line: a marquee
+    /// signing bought in the summer, sold in January for a fraction of the
+    /// fee, because nothing in the seller's arithmetic remembered what he
+    /// had cost. A club that has just spent eighteen million does not accept
+    /// six for the same player five months later; it holds, or it loans him.
+    fn sunk_cost_floor(player: &Player, date: NaiveDate, distress: SellerDistress) -> f64 {
+        if matches!(distress, SellerDistress::Strong) {
+            return 0.0;
+        }
+        let Some(contract) = player.contract.as_ref() else {
+            return 0.0;
+        };
+        let Some(started) = contract.started else {
+            return 0.0;
+        };
+        // `sold_from` carries `(selling club, fee)` for the move that brought
+        // him HERE — see `Player::on_transfer_completed`. That fee is the
+        // number the current owner actually spent.
+        let paid = player.sold_from.map(|(_, fee)| fee).unwrap_or(0.0);
+        if paid <= 0.0 {
+            return 0.0;
+        }
+        let years = (date - started).num_days().max(0) as f64 / 365.0;
+        if years >= Self::SUNK_COST_YEARS {
+            return 0.0;
+        }
+        paid * (1.0 - Self::SUNK_COST_DECAY_PER_YEAR * years)
     }
 
     /// Days a genuine permanent listing persists before the floor fully eases

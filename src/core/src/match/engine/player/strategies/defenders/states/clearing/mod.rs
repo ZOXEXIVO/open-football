@@ -128,7 +128,7 @@ impl StateProcessingHandler for DefenderClearingState {
         // Add the clear ball event with the calculated velocity
         state
             .events
-            .add_player_event(PlayerEvent::ClearBall(ball_velocity));
+            .add_player_event(PlayerEvent::ClearBall(ctx.player.id, ball_velocity));
 
         // Return the updated state with the clearing event
         Some(state)

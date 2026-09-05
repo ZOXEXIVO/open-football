@@ -33,11 +33,40 @@ impl AerialReach {
     /// should not be getting the ball.
     pub const STANDING: f32 = 2.2;
 
+    /// **The highest ball a BOOT can strike**, in metres — the volley
+    /// ceiling.
+    ///
+    /// Below [`Self::HEAD`] because that is what a footballer's leg
+    /// does: a shin volley, a knee, a hooked clearance off the thigh all
+    /// happen under this, and above it the contact is a head or a
+    /// shoulder — which is a DECISION a heading state takes, not
+    /// something a Running state does by accident.
+    ///
+    /// It is the same 1.45 m the replay viewer draws a boot below
+    /// (`Actors::HEADED`), and it lives beside [`Self::HEAD`] and
+    /// [`Self::STANDING`] so the two cannot drift: the picture and the
+    /// engine have to agree about what a header is, or a man is drawn
+    /// hooking his boot up past his own ear. Measured off one recorded
+    /// match before this number reached the strike handlers, the engine
+    /// struck 18 passes and 5 clearances a match out of the head band
+    /// with nobody heading anything.
+    pub const VOLLEY: f32 = 1.45;
+
     /// Ball height a poor leaper reaches at the top of a jump.
     const JUMP_MIN: f32 = 2.5;
     /// Ball height an elite leaper reaches at the top of a jump. Real
     /// aerial specialists head the ball around 2.9-3.0 m.
     const JUMP_MAX: f32 = 3.1;
+
+    /// The highest ball ANYBODY on the pitch can play — the ceiling of
+    /// the best leaper there could be.
+    ///
+    /// The whole-pitch early-out: above this the ball is nobody's,
+    /// whoever is standing under it. `check_ball_ownership` used to
+    /// carry a hand-rolled `MAX_BALL_HEIGHT` of 4.0 m for the same
+    /// question, most of a metre above the tallest jump this model
+    /// admits.
+    pub const HIGHEST: f32 = Self::JUMP_MAX;
 
     /// The highest ball this player can play, given his `jumping`
     /// attribute on the raw 1-20 scale.

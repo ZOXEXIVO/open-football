@@ -731,6 +731,7 @@ impl PipelineProcessor {
 
                     let view = ListedTargetView {
                         ability: s.skill_ability,
+                        nationality_country_id: s.nationality_country_id,
                         estimated_potential: c.estimated_potential,
                         age: s.age,
                         estimated_value: s.estimated_value,

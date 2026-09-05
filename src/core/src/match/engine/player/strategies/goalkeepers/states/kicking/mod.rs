@@ -58,7 +58,7 @@ impl StateProcessingHandler for GoalkeeperKickingState {
                 );
                 return Some(StateChangeResult::with_goalkeeper_state_and_event(
                     GoalkeeperState::ReturningToGoal,
-                    Event::PlayerEvent(PlayerEvent::ClearBall(plan.velocity)),
+                    Event::PlayerEvent(PlayerEvent::ClearBall(ctx.player.id, plan.velocity)),
                 ));
             }
         }

@@ -8,17 +8,17 @@ use crate::club::news::{
     PreviewDesk, PursuitStage, ResultCompetition, SquadDesk, StandingSnapshot, TableDesk,
     TargetPursuit, TargetsDesk, TownMood, WeeklyMatchFacts, WindowWeek,
 };
-use crate::league::League;
-use crate::transfers::{
-    NegotiationPhase, NegotiationRejectionReason, NegotiationStatus, TransferCalendar,
-};
 use crate::continent::competitions::{
     CHAMPIONS_LEAGUE_ID, CONFERENCE_LEAGUE_ID, COPA_LIBERTADORES_ID, EUROPA_LEAGUE_ID,
 };
+use crate::league::League;
 use crate::league::PlayoffRoundLabel;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{FieldSquad, MatchResult, SubstitutionReason};
 use crate::simulator::SimulatorData;
+use crate::transfers::{
+    NegotiationPhase, NegotiationRejectionReason, NegotiationStatus, TransferCalendar,
+};
 use crate::{
     Club, Country, HappinessEventType, Person, Player, PlayerFieldPositionGroup, Team, TeamType,
 };
@@ -959,7 +959,11 @@ impl WeeklyMarket {
         let mut floor: Option<NaiveDate> = None;
         for continent in &data.continents {
             for country in &continent.countries {
-                if !self.windows.get(&country.id).is_some_and(|week| week.closed) {
+                if !self
+                    .windows
+                    .get(&country.id)
+                    .is_some_and(|week| week.closed)
+                {
                     continue;
                 }
                 let calendar = TransferCalendar::for_country(&country.code, week_end);
@@ -1007,11 +1011,7 @@ impl WeeklyMarket {
     /// country's window moved, and — if it shut — the club's own count.
     fn window_for(&self, country_id: u32, club_id: u32) -> Option<WindowWeek> {
         let week = *self.windows.get(&country_id)?;
-        let (arrivals, departures) = self
-            .window_tally
-            .get(&club_id)
-            .copied()
-            .unwrap_or_default();
+        let (arrivals, departures) = self.window_tally.get(&club_id).copied().unwrap_or_default();
         Some(WindowWeek {
             arrivals: if week.closed { arrivals } else { 0 },
             departures: if week.closed { departures } else { 0 },
@@ -1531,7 +1531,12 @@ impl ClubPressRun {
                             .career_team_slugs()
                             .contains(&slug)
                     })
-                    .max_by_key(|player| (crate::club::news::PlayerStanding::importance(player), player.id))
+                    .max_by_key(|player| {
+                        (
+                            crate::club::news::PlayerStanding::importance(player),
+                            player.id,
+                        )
+                    })
                     .map(|player| player.id)
             })
             .unwrap_or(0);
@@ -1685,12 +1690,7 @@ impl TeamPressRun<'_> {
             .filter(|result| result.competition == ResultCompetition::League)
             .count()
             .min(u8::MAX as usize) as u8;
-        TableDesk::file(
-            &mut candidates,
-            self.standing,
-            league_games_this_week,
-            date,
-        );
+        TableDesk::file(&mut candidates, self.standing, league_games_this_week, date);
         PreviewDesk::file(
             &mut candidates,
             self.fixture,

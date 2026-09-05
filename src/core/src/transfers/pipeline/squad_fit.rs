@@ -1,4 +1,28 @@
+use crate::country::CountryRegulations;
 use crate::{Club, Person, PlayerFieldPositionGroup, TeamType};
+
+/// The registration rules a buying club is bound by, in the shape the buy
+/// side needs them: what the league allows and whose passport is domestic.
+///
+/// Carried as its own small struct rather than a `&Country` because the
+/// snapshot is built inside per-club loops that already hold the country by
+/// shared reference and would otherwise have to re-borrow it per group.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct SquadRegistrationLimits {
+    pub club_country_id: u32,
+    /// Registered foreigners the league permits, `None` where it runs no
+    /// quota. Mirrors [`CountryRegulations::foreign_player_limit`].
+    pub foreign_player_limit: Option<u8>,
+}
+
+impl SquadRegistrationLimits {
+    pub fn new(club_country_id: u32, regulations: &CountryRegulations) -> Self {
+        SquadRegistrationLimits {
+            club_country_id,
+            foreign_player_limit: regulations.foreign_player_limit,
+        }
+    }
+}
 
 /// Buy-side mirror of the club's own surplus machinery.
 ///
@@ -41,6 +65,19 @@ pub(crate) struct SquadFitSnapshot {
     /// loop of re-buying a teenage keeper every window while the last
     /// three sit in a league-less U20.
     pub prospect_desk_full: bool,
+    /// Registered-foreigner slots still free in the main squad, or `None`
+    /// where the country runs no quota.
+    ///
+    /// Real clubs count their foreigner slots BEFORE they bid. The
+    /// simulation did not: it bought the fifteenth foreigner into a
+    /// fourteen-slot league, the registration pass omitted him, and the
+    /// surplus machinery then listed a marquee signing four months after he
+    /// arrived. The fix is not to loosen the registration rule — it is to
+    /// not make the signing.
+    pub foreign_slots_free: Option<i32>,
+    /// The buying club's own country. A candidate carrying this passport
+    /// never consumes a foreign slot.
+    pub club_country_id: u32,
 }
 
 impl SquadFitSnapshot {
@@ -61,7 +98,12 @@ impl SquadFitSnapshot {
         }
     }
 
-    pub fn build(club: &Club, group: PlayerFieldPositionGroup, date: chrono::NaiveDate) -> Self {
+    pub fn build(
+        club: &Club,
+        group: PlayerFieldPositionGroup,
+        date: chrono::NaiveDate,
+        registration: SquadRegistrationLimits,
+    ) -> Self {
         let main = club.teams.iter().find(|t| t.team_type == TeamType::Main);
         let (squad_avg_ability, quality_gap) = match main {
             Some(team) => (
@@ -109,6 +151,21 @@ impl SquadFitSnapshot {
             .count();
         let prospect_desk_full = prospect_stock >= Self::prospect_stock_allowance(group);
 
+        // Foreigner slots left in the squad that would have to REGISTER
+        // him. Counts the main roster only: that is the list the quota
+        // applies to, and it is the list a signing lands on.
+        let foreign_slots_free = registration.foreign_player_limit.map(|limit| {
+            let foreigners = main
+                .map(|team| {
+                    team.players
+                        .iter()
+                        .filter(|p| p.country_id != registration.club_country_id)
+                        .count()
+                })
+                .unwrap_or(0);
+            limit as i32 - foreigners as i32
+        });
+
         SquadFitSnapshot {
             squad_avg_ability,
             quality_gap,
@@ -116,6 +173,8 @@ impl SquadFitSnapshot {
             group_cap,
             group_cap_bar,
             prospect_desk_full,
+            foreign_slots_free,
+            club_country_id: registration.club_country_id,
         }
     }
 
@@ -129,6 +188,8 @@ impl SquadFitSnapshot {
             group_cap: usize::MAX,
             group_cap_bar: 0,
             prospect_desk_full: false,
+            foreign_slots_free: None,
+            club_country_id: 0,
         }
     }
 
@@ -161,6 +222,26 @@ impl SquadFitSnapshot {
 
         well_below_avg || outside_depth_cap
     }
+
+    /// Would signing this player leave the squad unregistrable?
+    ///
+    /// True only when the club is ALREADY at or over its foreigner quota
+    /// and the candidate would take another slot. A club with one slot left
+    /// may spend it; a club with none may not, and a domestic signing is
+    /// always free.
+    ///
+    /// This is the buy-side half of a rule the engine already enforced at
+    /// registration. Enforcing it only there produced the shape a football
+    /// person cannot believe: a champion signs a marquee foreigner it
+    /// cannot register, the registration pass omits him, the omission reads
+    /// as a player getting no football, and the surplus machinery lists him
+    /// in January.
+    pub fn would_be_unregistrable(&self, candidate_country_id: u32) -> bool {
+        if candidate_country_id == 0 || candidate_country_id == self.club_country_id {
+            return false;
+        }
+        matches!(self.foreign_slots_free, Some(free) if free <= 0)
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +256,8 @@ mod tests {
             group_cap: cap,
             group_cap_bar: bar,
             prospect_desk_full: false,
+            foreign_slots_free: None,
+            club_country_id: 0,
         }
     }
 

@@ -129,6 +129,44 @@ impl PlayerState {
         )
     }
 
+    /// **This state plays the ball IN THE AIR.**
+    ///
+    /// The one thing that lifts a strike's reach off the boot and onto
+    /// the player's jumping ceiling — see
+    /// [`PlayerReach::can_strike`](crate::r#match::engine::ball::ball::PlayerReach).
+    ///
+    /// Real football, in one line: a ball above the boot is either
+    /// brought down and then kicked, or played first time with the head
+    /// — and the second of those is a DECISION somebody takes, not
+    /// something a Running state does by accident. Measured before this
+    /// existed, the engine played 18 passes and 5 clearances a match off
+    /// the top of somebody's head from states that had decided nothing of
+    /// the kind, and struck 210 passes a match from between the knee and
+    /// the head against a real few-percent volley share.
+    ///
+    /// The heading states are the outfield half. The keeper's is his
+    /// aerial work — the punch, the standing leap at a cross, the dive,
+    /// the claim — every one of which already carries its own leap bar
+    /// (`KeeperAerialClaim::leap_ceiling`), so this only agrees with what
+    /// those states have already decided. `AttackingCorner` is here
+    /// because it owns its own header: the corner contest's winners are
+    /// usually in it, and `apply_pending_aerial_strike` deliberately does
+    /// not override it.
+    pub fn strikes_in_the_air(&self) -> bool {
+        matches!(
+            self,
+            PlayerState::Defender(DefenderState::Heading | DefenderState::AttackingCorner)
+                | PlayerState::Midfielder(MidfielderState::Heading)
+                | PlayerState::Forward(ForwardState::Heading)
+                | PlayerState::Goalkeeper(
+                    GoalkeeperState::Punching
+                        | GoalkeeperState::Jumping
+                        | GoalkeeperState::Diving
+                        | GoalkeeperState::Catching
+                )
+        )
+    }
+
     pub fn is_committed_action(&self) -> bool {
         match self {
             // An injured player is on the floor — they chase nothing.

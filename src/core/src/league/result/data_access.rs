@@ -33,6 +33,7 @@ use crate::league::LeagueCollection;
 use crate::shared::indexes::SimulatorDataIndexes;
 use crate::simulator::CountryInfo;
 use crate::simulator::SimulatorData;
+use crate::transfers::MarketMap;
 use crate::transfers::TransferListing;
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use crate::{Club, Country, Player, Team};
@@ -737,6 +738,11 @@ pub struct WorldSnapshot<'a> {
     /// Phase A; `apply_deferred_transfer_ops` mutates `data.free_agents`
     /// in Phase C.
     pub global_free_agents: &'a [GlobalFreeAgentSummary],
+    /// The world's transfer geography — every country's corridor card and
+    /// the facts behind the derived fallback. Read constantly by the
+    /// per-country market pass and never written, so it rides the same
+    /// shared-borrow channel as the player pool.
+    pub market_map: &'a MarketMap,
 }
 
 /// Cross-country / global mutations that the parallel Phase-A pass

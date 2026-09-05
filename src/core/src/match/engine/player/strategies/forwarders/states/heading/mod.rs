@@ -94,7 +94,10 @@ impl StateProcessingHandler for ForwardHeadingState {
             } else {
                 Some(StateChangeResult::with_forward_state_and_event(
                     ForwardState::Running,
-                    Event::PlayerEvent(PlayerEvent::ClearBall(self.glanced_contact(ctx))),
+                    Event::PlayerEvent(PlayerEvent::ClearBall(
+                        ctx.player.id,
+                        self.glanced_contact(ctx),
+                    )),
                 ))
             };
         }
@@ -162,7 +165,10 @@ impl StateProcessingHandler for ForwardHeadingState {
                 // tap-in queue.
                 Some(StateChangeResult::with_forward_state_and_event(
                     ForwardState::Running,
-                    Event::PlayerEvent(PlayerEvent::ClearBall(self.glanced_contact(ctx))),
+                    Event::PlayerEvent(PlayerEvent::ClearBall(
+                        ctx.player.id,
+                        self.glanced_contact(ctx),
+                    )),
                 ))
             };
         }

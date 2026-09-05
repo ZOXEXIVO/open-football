@@ -148,6 +148,9 @@ impl GoalkeeperClearingState {
         #[cfg(feature = "match-logs")]
         crate::mid_run_diag::KeeperReleaseDiag::note_clearance((target - keeper_pos).norm());
 
-        Some(Event::PlayerEvent(PlayerEvent::ClearBall(ball_velocity)))
+        Some(Event::PlayerEvent(PlayerEvent::ClearBall(
+            ctx.player.id,
+            ball_velocity,
+        )))
     }
 }

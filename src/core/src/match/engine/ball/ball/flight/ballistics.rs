@@ -1,5 +1,5 @@
-use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::engine::ball::ball::flight::motion::SpinModel;
+use crate::r#match::engine::ball::ball::{AerialReach, Ball};
 use nalgebra::Vector3;
 
 /// Per-tick rolling-friction decay for a ball on the ground: each tick
@@ -93,6 +93,121 @@ pub(in crate::r#match::engine::ball::ball) const AIR_DRAG_FLOOR: f32 = 0.1;
 /// [`GRAVITY_PER_TICK`] and [`GROUND_FRICTION`] are: a projection of the
 /// flight and the flight itself must not be able to drift apart.
 pub(in crate::r#match::engine::ball::ball) const BOUNCE_COEFFICIENT: f32 = 0.3;
+
+/// **How long the ball is IN FLIGHT** — `Ball::flags.in_flight_state`,
+/// in ticks.
+///
+/// The window during which the ball belongs to its flight rather than to
+/// whoever is standing nearest: `handle_claim_ball_event` refuses every
+/// claim but the intended receiver's while it runs, and the tackling
+/// states' `can_intercept_ball` asks `!is_in_flight()` before going for
+/// the ball at all.
+///
+/// # Why it has to come from the physics
+///
+/// The pass path has computed it from the arc for a while
+/// ([`Self::for_pass`]). Every other launch site wrote a flat literal —
+/// `handle_clear_ball_event` used **40 ticks, 0.4 s**, for clearances
+/// that hang for the better part of three seconds. So a defender whose
+/// state only asks "is it in flight" was cleared to go for a ball that
+/// was still 6 m up, two and a half seconds before it came down, which
+/// is the second half of the mid-air claim: the reach rule
+/// ([`PlayerReach`](crate::r#match::engine::ball::ball::PlayerReach))
+/// makes the grant impossible, and this stops the state asking.
+///
+/// Two shapes, because a pass and a hoof are protecting different
+/// things. A pass is protecting a RECEIVER, so its window has to cover
+/// the roll to his feet as well as the arc. A clearance, a punch and a
+/// hooked header have no receiver — nobody is entitled to them — so what
+/// they protect is the part of the flight that is out of everybody's
+/// reach.
+pub struct FlightProtection;
+
+impl FlightProtection {
+    /// Absorbs the receiver's last stride.
+    const MARGIN: f32 = 1.35;
+    /// Never shorter than the old flat pass window…
+    const MIN_TICKS: usize = 60;
+    /// …and never longer than four seconds, whatever the arithmetic says.
+    const MAX_TICKS: usize = 400;
+    /// The flat window a clearance used to get, kept as the floor: a
+    /// hoof struck along the deck still gets its 0.4 s of separation
+    /// before anybody may claim it back.
+    const MIN_LAUNCH_TICKS: usize = 40;
+
+    /// A pass, aimed at a man: the airborne leg plus the roll to him.
+    ///
+    /// `velocity` is the DELIVERED velocity, in the ball's own mixed
+    /// units, and `horizontal_distance` the ground the pass has to cover
+    /// in game units.
+    pub fn for_pass(velocity: Vector3<f32>, horizontal_distance: f32) -> usize {
+        let vh = (velocity.x * velocity.x + velocity.y * velocity.y)
+            .sqrt()
+            .max(0.01);
+        let air_ticks = Self::air_ticks(velocity);
+        // Rolling leg: whatever distance the arc did not cover.
+        let rolling_distance = (horizontal_distance - vh * air_ticks).max(0.0);
+        let decay_fraction = rolling_distance * GROUND_FRICTION / vh;
+        let roll_ticks = if decay_fraction >= 0.95 {
+            // Struck barely hard enough to arrive — hold it open.
+            400.0
+        } else {
+            (1.0 - decay_fraction).ln() / (1.0 - GROUND_FRICTION).ln()
+        };
+        (((air_ticks + roll_ticks) * Self::MARGIN) as usize).clamp(Self::MIN_TICKS, Self::MAX_TICKS)
+    }
+
+    /// A launch with no aim point — a clearance, a punt, a punch, a
+    /// header hooked behind.
+    ///
+    /// The window runs from the strike until the ball comes back down
+    /// through [`AerialReach::HIGHEST`], the ceiling of the best leaper
+    /// there could be. That is the model in one line: *a ball above a
+    /// man's reach is nobody's until it comes down*, and "comes down"
+    /// means back inside somebody's reach — not "lands".
+    ///
+    /// # Why it ends there and not at the landing
+    ///
+    /// The window is an EXCLUSION as well as a protection (see
+    /// `Ball::process_ownership`): while it runs, `check_ball_ownership`
+    /// does not execute and `try_intercept` does. Carrying it all the way
+    /// to the turf would hand the last 0.3 s of every clearance — the
+    /// part where the ball is descending back through head height — to
+    /// the interception roll instead of to the claim scan, and
+    /// interceptions are a calibrated number this has no business
+    /// moving. Ending it at the ceiling leaves both of those exactly
+    /// where they were: `try_intercept` no-ops above 3.1 m anyway
+    /// (`AerialReach::ceiling(20.0)`), and the scan gets the descent it
+    /// always got.
+    ///
+    /// What changes is the only thing that was wrong — what
+    /// `is_in_flight()` tells the STATES. A defensive header hangs for
+    /// 2.9 s and this used to be a flat 40 ticks, so for 2.5 s of it the
+    /// tackling states were told the ball was there to be won.
+    ///
+    /// A ball that never leaves anybody's reach (a driven clearance
+    /// along the deck) keeps the old flat window: there is nothing to
+    /// protect, only the brief separation that stops the clearer
+    /// re-collecting his own hoof.
+    pub fn for_launch(velocity: Vector3<f32>, launch_height: f32) -> usize {
+        // A ball already on its way down has no apex left to reach.
+        let apex = launch_height.max(0.0) + Ball::apex_for_launch(velocity.z.max(0.0));
+        if apex <= AerialReach::HIGHEST {
+            return Self::MIN_LAUNCH_TICKS;
+        }
+        // Up to the apex…
+        let rise = velocity.z.max(0.0) / GRAVITY_PER_TICK;
+        // …and back down to the highest reach on the pitch.
+        let fall = (2.0 * (apex - AerialReach::HIGHEST) / GRAVITY_PER_TICK).sqrt();
+        ((rise + fall) as usize).clamp(Self::MIN_LAUNCH_TICKS, Self::MAX_TICKS)
+    }
+
+    /// Ticks a ball launched at `velocity.z` spends off the deck.
+    #[inline]
+    fn air_ticks(velocity: Vector3<f32>) -> f32 {
+        Ball::hang_ticks(velocity.z)
+    }
+}
 
 impl Ball {
     /// Vertical launch speed (m/tick) that peaks at `apex` metres.

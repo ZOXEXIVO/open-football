@@ -2,6 +2,7 @@ use crate::context::{HomeLeagueTable, TournamentClocks};
 use crate::country::national::{NationalTeam, NationalTeamLevel};
 use crate::league::{DomesticCup, LeagueCollection, LeaguePlayoff};
 use crate::transfers::market::TransferMarket;
+use crate::transfers::market_map::CountryTransferProfile;
 use crate::{
     Club, Country, CountryEconomicFactors, CountryGeneratorData, CountryRegulations,
     CountrySettings, InternationalCompetition, MediaCoverage,
@@ -30,6 +31,7 @@ pub struct CountryBuilder {
     international_competitions: Option<Vec<InternationalCompetition>>,
     media_coverage: Option<MediaCoverage>,
     regulations: Option<CountryRegulations>,
+    transfer_profile: Option<CountryTransferProfile>,
 }
 
 impl CountryBuilder {
@@ -140,6 +142,11 @@ impl CountryBuilder {
         self
     }
 
+    pub fn transfer_profile(mut self, profile: CountryTransferProfile) -> Self {
+        self.transfer_profile = Some(profile);
+        self
+    }
+
     pub fn regulations(mut self, regulations: CountryRegulations) -> Self {
         self.regulations = Some(regulations);
         self
@@ -189,6 +196,7 @@ impl CountryBuilder {
             international_competitions: self.international_competitions.unwrap_or_default(),
             media_coverage: self.media_coverage.unwrap_or_else(MediaCoverage::new),
             regulations: self.regulations.unwrap_or_else(CountryRegulations::new),
+            transfer_profile: self.transfer_profile.unwrap_or_default(),
             retired_players: Vec::new(),
             last_snapshotted_season_year: None,
             months_to_tournament: u8::MAX,

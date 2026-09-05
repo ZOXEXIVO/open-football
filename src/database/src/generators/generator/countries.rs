@@ -1,7 +1,11 @@
+use std::collections::HashMap;
+
 use crate::DatabaseEntity;
+use crate::generators::convert::convert_country_transfers;
 use crate::generators::{PlayerGenerator, StaffGenerator};
 use crate::loaders::ContinentEntity;
 use core::league::LeagueCollection;
+use core::transfers::ScoutingRegion;
 use core::{
     Country, CountryGeneratorData, CountryPricing, CountryRegulations, CountrySettings,
     SkinColorDistribution,
@@ -9,6 +13,7 @@ use core::{
 use rayon::prelude::*;
 
 use super::DatabaseGenerator;
+use super::staffs::{ScoutMarketPrior, ScoutMarketSeed};
 
 impl DatabaseGenerator {
     pub(super) fn generate_countries(
@@ -21,6 +26,15 @@ impl DatabaseGenerator {
             .iter()
             .filter(|c| data.clubs.iter().any(|cl| cl.country_id == c.id))
             .map(|c| c.id)
+            .collect();
+
+        // Country code → id for the transfer cards, which name each other by
+        // code. Built once per continent rather than per country: the lists
+        // are read for every country in the walk below.
+        let country_id_by_code: HashMap<String, u32> = data
+            .countries
+            .iter()
+            .map(|c| (c.code.to_ascii_lowercase(), c.id))
             .collect();
 
         // Each country is fully independent: its own name pools, its own
@@ -53,10 +67,39 @@ impl DatabaseGenerator {
                 let staff_generator =
                     StaffGenerator::with_people_names(&generator_data.people_names);
 
+                let transfer_profile =
+                    convert_country_transfers(country.transfers.as_ref(), &country_id_by_code);
+
+                // The markets this country's scouting departments start in.
+                // Read straight off the country's own import card, so a
+                // Turkish club's scouts begin knowing Brazil and Nigeria
+                // rather than "South America" and "West Africa" — the
+                // strictest day-0 condition available, and the one that
+                // makes the shipped world its own evidence.
+                let scout_priors: Vec<ScoutMarketPrior> = transfer_profile
+                    .import
+                    .iter()
+                    .filter_map(|corridor| {
+                        let source = data
+                            .countries
+                            .iter()
+                            .find(|c| c.id == corridor.country_id)?;
+                        Some(ScoutMarketPrior {
+                            country_id: corridor.country_id,
+                            weight: corridor.weight,
+                            region: ScoutingRegion::from_country(source.continent_id, &source.code),
+                        })
+                    })
+                    .collect();
+                let scout_seed = ScoutMarketSeed {
+                    country_id: country.id,
+                    continent_id: continent.id,
+                    country_code: &country.code,
+                    import_priors: &scout_priors,
+                };
+
                 let mut clubs = Self::generate_clubs(
-                    country.id,
-                    continent.id,
-                    &country.code,
+                    &scout_seed,
                     country.reputation,
                     data,
                     &player_generator,
@@ -105,6 +148,11 @@ impl DatabaseGenerator {
                     // them the way this model can read. `None` everywhere
                     // else, so nothing is invented.
                     .regulations(CountryRegulations::for_country_code(&country.code))
+                    // The country's transfer-market card: shipped priors,
+                    // resolved from codes into ids and normalised. Empty
+                    // when the data does not name this country, in which
+                    // case every pair it is part of derives instead.
+                    .transfer_profile(transfer_profile)
                     .generator_data(generator_data)
                     .build()
                     .expect("Failed to build Country")

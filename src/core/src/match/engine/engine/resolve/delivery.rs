@@ -13,7 +13,7 @@
 use crate::r#match::engine::ball::ball::Ball;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::teleport as tc;
-use crate::r#match::engine::ball::ball::{AerialDelivery, AerialOutcome};
+use crate::r#match::engine::ball::ball::{AerialDelivery, AerialOutcome, FlightProtection};
 use crate::r#match::engine::engine::*;
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
@@ -160,14 +160,26 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 // The ball is already standing on the target — there is no
                 // arc to solve and nothing to fly. Apply the outcome now;
                 // the "relocation" is under a unit.
-                b.velocity = match outcome {
-                    AerialOutcome::Header { drift } => drift,
+                // A `Header` outcome is a HOLD in the heading band, over
+                // in a tick — its own guard (`aerial_contest_winner`) is
+                // what protects it. A `HookedBehind` is a real 5 m arc,
+                // and the window has to cover it or the states are sent
+                // at a ball still climbing. See
+                // [`FlightProtection::for_launch`].
+                b.flags.in_flight_state = match outcome {
+                    AerialOutcome::Header { drift } => {
+                        b.velocity = drift;
+                        1
+                    }
                     AerialOutcome::HookedBehind {
                         attacked_goal,
                         field_height,
-                    } => Ball::hook_behind_velocity(b.position, attacked_goal, field_height),
+                    } => {
+                        b.velocity =
+                            Ball::hook_behind_velocity(b.position, attacked_goal, field_height);
+                        FlightProtection::for_launch(b.velocity, b.position.z)
+                    }
                 };
-                b.flags.in_flight_state = 1;
                 // There is no delivery to carry the heading transition, so
                 // it is stashed straight away — the arrival is now.
                 if force_heading {
@@ -199,7 +211,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // flies the delivery to him first.
         b.velocity = velocity;
         b.current_owner = None;
-        b.flags.in_flight_state = 1;
+        // A hooked header goes up 5 m and hangs. `1` said it was
+        // back in play on the next tick, so the states asking
+        // `!is_in_flight()` were sent at a ball still climbing —
+        // see [`FlightProtection::for_launch`].
+        b.flags.in_flight_state = FlightProtection::for_launch(velocity, b.position.z);
         b.pass_target_player_id = None;
         b.clear_pending_pass_metadata();
     }

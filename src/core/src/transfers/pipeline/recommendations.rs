@@ -17,7 +17,7 @@ use crate::transfers::pipeline::plausibility::{
     TransferPlausibilityVerdict,
 };
 use crate::transfers::pipeline::processor::PipelineProcessor;
-use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
+use crate::transfers::pipeline::squad_fit::{SquadFitSnapshot, SquadRegistrationLimits};
 use crate::transfers::pipeline::{
     RecommendationSource, RecommendationType, ShortlistCandidate, ShortlistCandidateStatus,
     StaffRecommendation, TransferNeedPriority, TransferNeedReason, TransferRequest,
@@ -41,6 +41,9 @@ use std::cmp::Ordering;
 #[derive(Debug, Clone, Copy)]
 pub(in crate::transfers::pipeline) struct ListedTargetView {
     pub ability: u8,
+    /// The target's passport. Read only by the registration gate — a club
+    /// at its foreigner quota cannot sign one more.
+    pub nationality_country_id: u32,
     pub estimated_potential: u8,
     pub age: u8,
     pub estimated_value: f64,
@@ -194,6 +197,10 @@ pub(in crate::transfers::pipeline) enum ListedRejectReason {
     /// The buyer's own surplus maths (squad-average gap / depth cap)
     /// would list this player weeks after he arrived — don't buy him.
     WouldBeSurplus,
+    /// The buyer is already at its league's registered-foreigner quota:
+    /// signing him would leave a squad it cannot register. Real clubs count
+    /// their slots before they bid.
+    WouldBeUnregistrable,
 }
 
 /// Pure evaluator for the listed-star / breakout sweep.
@@ -414,6 +421,17 @@ pub(in crate::transfers::pipeline) fn evaluate_listed_target(
         return Reject(WouldBeSurplus);
     }
 
+    // Registration, on the same terminal footing. A club does not bid for a
+    // player it cannot register — and the sim must not either, because the
+    // registration pass would omit him and the surplus maths would then list
+    // a signing the club had just paid for.
+    if ctx
+        .fit
+        .would_be_unregistrable(target.nationality_country_id)
+    {
+        return Reject(WouldBeUnregistrable);
+    }
+
     // ── Soft scoring ──
     let mut score = 0.0_f32;
     score += (upgrade as f32).clamp(0.0, 30.0);
@@ -536,6 +554,9 @@ impl PipelineProcessor {
         struct PlayerSnapshot {
             id: u32,
             club_id: u32,
+            /// His passport. Read by the registration gate — a club at its
+            /// league's foreigner quota cannot sign one more.
+            country_id: u32,
             position: PlayerPositionType,
             position_group: PlayerFieldPositionGroup,
             /// Every group he can play in, not just the one his primary label
@@ -680,6 +701,7 @@ impl PipelineProcessor {
                             all_snapshots.push(PlayerSnapshot {
                                 id: player.id,
                                 club_id: club.id,
+                                country_id: player.country_id,
                                 position: player.position(),
                                 position_group: player.position().position_group(),
                                 coverage: PositionCoverage::of(&player.positions),
@@ -1128,6 +1150,8 @@ impl PipelineProcessor {
                         .map(|s| s.staff_attributes.knowledge.judging_player_ability)
                         .unwrap_or_else(|| resolved.best_scout_judging_ability());
 
+                    let registration =
+                        SquadRegistrationLimits::new(country.id, &country.regulations);
                     // Per-group squad-fit projection at the buying club —
                     // cached so the filter doesn't re-scan the squad N times.
                     let buyer_fit_by_group: HashMap<PlayerFieldPositionGroup, SquadFitSnapshot> = [
@@ -1137,7 +1161,7 @@ impl PipelineProcessor {
                         PlayerFieldPositionGroup::Forward,
                     ]
                     .into_iter()
-                    .map(|g| (g, SquadFitSnapshot::build(club, g, date)))
+                    .map(|g| (g, SquadFitSnapshot::build(club, g, date, registration)))
                     .collect();
                     // Per-group best CA at the buying club — cached so the
                     // filter doesn't re-scan the squad N times.
@@ -1217,6 +1241,7 @@ impl PipelineProcessor {
 
                             let view = ListedTargetView {
                                 ability: p.ability,
+                                nationality_country_id: p.country_id,
                                 estimated_potential: p.estimated_potential,
                                 age: p.age,
                                 estimated_value: p.estimated_value,

@@ -224,6 +224,7 @@ impl FreeAgentMarketAuditor {
                     career_pressure,
                     0.85,
                     reference_reputation,
+                    data.market_map.import_capacity(country.id),
                 ) {
                     continue;
                 }

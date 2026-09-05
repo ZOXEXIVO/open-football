@@ -468,12 +468,118 @@ impl Ball {
     ///
     /// `CARRY_RATE` is 0.10 m/tick — 10 m/s, as fast as a man can snatch a
     /// ball into his chest and no faster. A keeper's gather off the deck
-    /// therefore takes about a tenth of a second and a claim out of the air
-    /// about a fifth, which is what each of them takes.
+    /// therefore takes about a tenth of a second, which is what it takes.
+    ///
+    /// ⚠ **It is no longer how a ball comes DOWN to anybody.** A constant
+    /// 10 m/s with no gravity, applied from any height, is what a replay
+    /// showed as a ball stopping dead in the sky over a man and dropping
+    /// onto him in a straight line: 77 of those a match, 22 of them
+    /// starting above head height and the worst from 6.68 m. Nothing
+    /// pulls a ball down faster than gravity, so a ball above its
+    /// owner's carry height is not carried at all — it is CONTROLLED,
+    /// and it falls. See [`Ball::settling_out_of_the_air`].
+    ///
+    /// What is left here is the movement that is real, and only that: a
+    /// keeper's hands, and the last few centimetres of an outfielder's
+    /// ball settling onto the grass at his feet. A ball in the GLOVES is
+    /// held — it goes where his hands go, up off the deck into his chest
+    /// or down into it from a catch at full stretch, and both of those
+    /// are a man moving a ball he has hold of. An outfielder's ball only
+    /// reaches here inside [`Ball::DECK`] of the turf, because everything
+    /// above that is [`Ball::settling_out_of_the_air`]'s.
     #[inline]
     fn carry_toward(&mut self, carry: f32) {
         const CARRY_RATE: f32 = 0.10;
         self.position.z += (carry - self.position.z).clamp(-CARRY_RATE, CARRY_RATE);
+    }
+
+    /// **The ball is owned and still in the air.**
+    ///
+    /// This is the whole test behind the control path: above
+    /// [`Ball::DECK`] the ball belongs to gravity, at it to the owner
+    /// tracking in [`Ball::move_to`].
+    ///
+    /// A ball in a keeper's GLOVES is excluded, and that is not an
+    /// exception to the model — it is the model. Nothing may pull a ball
+    /// nobody is holding; a ball he has both hands on is a ball he is
+    /// holding, and it moves where his hands move, up or down, at the
+    /// bounded [`carry_toward`](Self::carry_toward) rate. That is what
+    /// `carry_height` exists for.
+    #[inline]
+    pub(crate) fn settling_out_of_the_air(&self) -> bool {
+        !self.held_in_hands && self.position.z > Self::DECK
+    }
+
+    /// **The touch.** Kill the flight at the body.
+    ///
+    /// A ball granted above the deck has been taken out of the air off a
+    /// chest, a thigh or a head. The flight stops where the contact was
+    /// — it is not dragged sideways to anybody, and it is not lowered on
+    /// a string — and from there it drops to his feet under gravity, half
+    /// a second from chest height. Only then can it be kicked, which is
+    /// what [`PlayerReach::can_strike`](crate::r#match::engine::ball::ball::PlayerReach)
+    /// enforces at the other end.
+    ///
+    /// Idempotent, and that is what makes the control stateless: gravity
+    /// has no horizontal component, so once the horizontal is zero it
+    /// stays zero and this does nothing on every subsequent tick of the
+    /// fall. The engine needs no "is he controlling it" flag to clear.
+    #[inline]
+    fn take_control_of_the_flight(&mut self) {
+        if self.velocity.x == 0.0 && self.velocity.y == 0.0 && self.velocity.z <= 0.0 {
+            return;
+        }
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::ball::ball::strike_diag::StrikeCensus::note_control(
+            self.position.z,
+        );
+        self.velocity.x = 0.0;
+        self.velocity.y = 0.0;
+        // He has stopped it, not headed it on: it does not climb again.
+        self.velocity.z = self.velocity.z.min(0.0);
+        self.spin = Vector3::zeros();
+    }
+
+    /// …and the landing. The ball has reached his feet: is he still
+    /// under it?
+    ///
+    /// If he is not, it is a loose ball — the same shape as a failed
+    /// first touch, which is exactly what a bad first touch is. Nothing
+    /// is moved and nobody is punished; the ball simply stops being his
+    /// and the ordinary claim scan decides who comes up with it.
+    ///
+    /// ⚠ **The threshold is [`Ball::DECK`], not zero, and it has to be.**
+    /// It is the same number [`Self::settling_out_of_the_air`] hands the
+    /// ball back to the owner tracking at, and when the two disagreed
+    /// there was a band between them where neither ran: a fall that ended
+    /// at 0.09 m left the control without ever being asked whether he was
+    /// under it, and the tracking then found an owner two metres away and
+    /// disowned him as too far. Measured at **7.8 `OWNER_TOO_FAR` a
+    /// match against a baseline of 1.5** — the exact stranded-ball
+    /// failure `CONTROL_DISTANCE` exists to prevent, reintroduced through
+    /// a tenth of a metre.
+    fn finish_control(&mut self, owner_position: Vector3<f32>) {
+        if self.position.z > Self::DECK {
+            return;
+        }
+        let dx = owner_position.x - self.position.x;
+        let dy = owner_position.y - self.position.y;
+        if dx * dx + dy * dy
+            <= crate::r#match::engine::ball::ball::CONTROL_DISTANCE
+                * crate::r#match::engine::ball::ball::CONTROL_DISTANCE
+        {
+            return;
+        }
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::ball::ball::strike_diag::StrikeCensus::note_control_lost();
+        self.previous_owner = self.current_owner;
+        self.current_owner = None;
+        self.ownership_duration = 0;
+        // The same brief separation window `apply_failed_first_touch`
+        // opens, so the ball is not re-claimed in place on the next tick
+        // and the miss is visible.
+        self.flags.in_flight_state = 12;
+        self.claim_cooldown = 0;
     }
 
     /// Put the ball on the grass by giving it a descent, not by writing
@@ -555,6 +661,30 @@ impl Ball {
 
         if let Some(owner_player_id) = self.current_owner {
             let owner_position = tick_context.positions.players.position(owner_player_id);
+
+            // ── THE CONTROL, AND NOT THE PULL ─────────────────────────
+            //
+            // The owner tracking below is for a ball on the deck, or in a
+            // keeper's gloves. A ball that is still in the air is being
+            // CONTROLLED: the flight stops at the body and the ball drops
+            // to his feet under gravity, with nothing dragging it
+            // sideways and nothing lowering it faster than gravity does.
+            // He moves under it or he does not, and if he does not it is
+            // a loose ball — see [`Self::finish_control`].
+            //
+            // What this replaces: `BALL_TRACK_SPEED` at 1.5 u/tick is
+            // 18.75 m/s sideways, applied to a ball two metres up next to
+            // a man. A speed jump of that size next to a player is the
+            // replay rig's own definition of a kick
+            // (`Actors::next_impact`), so every one of them was DRAWN as
+            // a swing and HEARD as a strike. That is the phantom in the
+            // report, and it was 99 of them a match.
+            if self.settling_out_of_the_air() {
+                self.take_control_of_the_flight();
+                self.apply_movement();
+                self.finish_control(owner_position);
+                return;
+            }
 
             let dx = owner_position.x - self.position.x;
             let dy = owner_position.y - self.position.y;
@@ -649,6 +779,15 @@ impl Ball {
 
         if let Some(owner_id) = self.current_owner {
             if let Some(owner) = players.iter().find(|p| p.id == owner_id) {
+                // The control, exactly as `move_to` runs it — a ball
+                // still in the air is nobody's to drag.
+                if self.settling_out_of_the_air() {
+                    self.take_control_of_the_flight();
+                    self.apply_movement();
+                    self.finish_control(owner.position);
+                    return;
+                }
+
                 let dx = owner.position.x - self.position.x;
                 let dy = owner.position.y - self.position.y;
                 let dist_sq = dx * dx + dy * dy;

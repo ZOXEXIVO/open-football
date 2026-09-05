@@ -7,6 +7,7 @@ use crate::club::player::events::{LoanCompletion, TransferCompletion};
 use crate::club::player::language::Language;
 use crate::club::staff::mind::StaffSubMind;
 use crate::simulator::SimulatorData;
+use crate::transfers::MarketLedgerUpdate;
 use crate::transfers::TransferRoutePolicy;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::market::{ClauseTrigger, TransferMarket};
@@ -1030,6 +1031,18 @@ pub(crate) fn execute_transfer_within_country(
             }
         }
         TransferExecution::sign_into_main_team(buying_club, player, date);
+        // The club now has a relationship with this market. Both halves
+        // count and for different reasons: buying FROM a league puts you in
+        // touch with its clubs and agents, and buying a nationality puts
+        // you in touch with the people who represent it. See
+        // [`crate::transfers::ClubMarketLedger`].
+        MarketLedgerUpdate::on_signing(
+            buying_club,
+            club_country_id,
+            club_country_id,
+            arrival_country_id,
+            date,
+        );
 
         SquadReactionPass::arrival_reception(
             buying_club,
@@ -1265,6 +1278,15 @@ fn execute_loan_within_country(
 
         buying_club.finance.pay_loan_fee(loan_fee);
         TransferExecution::sign_into_main_team(buying_club, player, date);
+        // A loan is a signing too — the relationship with the market is
+        // the same one, whoever holds the registration.
+        MarketLedgerUpdate::on_signing(
+            buying_club,
+            club_country_id,
+            club_country_id,
+            arrival_country_id,
+            date,
+        );
         // The borrowing dressing room reacts to a loan arrival like
         // any other signing — this path used to install him silently.
         SquadReactionPass::arrival_reception(
@@ -1612,6 +1634,18 @@ fn execute_transfer_across_countries(
             }
         }
         TransferExecution::sign_into_main_team(buying_club, player, date);
+        // The club now has a relationship with this market. Both halves
+        // count and for different reasons: buying FROM a league puts you in
+        // touch with its clubs and agents, and buying a NATIONALITY puts you
+        // in touch with the people who represent it. See
+        // [`crate::transfers::ClubMarketLedger`].
+        MarketLedgerUpdate::on_signing(
+            buying_club,
+            buying_country_id,
+            selling_country_id,
+            arrival_country_id,
+            date,
+        );
 
         // Compatriot integration pass — same shape as the within-country
         // path, but the player has just stepped off a flight rather than
@@ -1909,6 +1943,15 @@ fn execute_loan_across_countries(
         let buying_club = &mut buying_country.clubs[buying_club_index];
         buying_club.finance.pay_loan_fee(loan_fee);
         TransferExecution::sign_into_main_team(buying_club, player, date);
+        // A loan is a signing too — the relationship with the market is the
+        // same one, whoever holds the registration.
+        MarketLedgerUpdate::on_signing(
+            buying_club,
+            club_country_id,
+            selling_country_id,
+            arrival_country_id,
+            date,
+        );
         // A foreign loanee's new dressing room reacts too — compatriot
         // integration matters MOST on a cross-border loan.
         SquadReactionPass::arrival_reception(

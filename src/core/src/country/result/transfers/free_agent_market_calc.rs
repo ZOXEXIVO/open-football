@@ -231,6 +231,60 @@ impl FreeAgentMarketCalculator {
         ((reference_reputation as f32 - ORDINARY) / (RENOWNED - ORDINARY)).clamp(0.0, 1.0)
     }
 
+    /// How visible this free agent is to this buying market, 0..~2.
+    ///
+    /// An unemployed footballer does not appear on a global list that every
+    /// club on earth reads. He signs where he is KNOWN: his home league, his
+    /// last league, a corridor country of his nationality, or somewhere his
+    /// agent has relationships. Time out of contract widens that map, but it
+    /// widens it ALONG the corridors and toward the leagues that buy names —
+    /// never toward the emptiest squad on the planet.
+    ///
+    /// Four multiplicative terms, each answering a different question:
+    ///   * `affinity` — is this a place people like him go? (the corridor);
+    ///   * `reach` — does anyone here know of him? (the market's own prior
+    ///     familiarity, or an agent who works this market);
+    ///   * `time_widening` — how long has he been available? (1.0 → 2.0 over
+    ///     a year, slowly, because a man out of contract keeps looking);
+    ///   * `name_reach` — does this league buy names, and is he one? (the
+    ///     Gulf/MLS exception, conditioned on the destination's capacity so
+    ///     it opens Riyadh and not Yaoundé).
+    ///
+    /// Multiplicative on purpose: a strong name in a market with no corridor
+    /// is still not a signing there, and a strong corridor for a man nobody
+    /// has heard of is still not a signing either.
+    pub fn visibility(
+        affinity: f32,
+        market_reach: f32,
+        days_free: i64,
+        name_reach: f32,
+        import_capacity: f32,
+    ) -> f32 {
+        let time_widening = 1.0 + (days_free.max(0) as f32 / 365.0).clamp(0.0, 1.0);
+        let name_term = 1.0 + name_reach.clamp(0.0, 1.0) * import_capacity.clamp(0.0, 1.0);
+        affinity.clamp(0.0, 1.0) * market_reach.clamp(0.0, 1.0) * time_widening * name_term
+    }
+
+    /// Visibility a candidate must clear at each stage of the decay model.
+    /// A fresh free agent is only looked at by markets that know him; a man
+    /// a year out of football is looked at by anyone, which is what
+    /// `LastChance` means.
+    pub fn visibility_bar(stage: MarketStage) -> f32 {
+        match stage {
+            MarketStage::Fresh => 0.35,
+            MarketStage::Open => 0.26,
+            MarketStage::Flexible => 0.18,
+            MarketStage::Desperate => 0.12,
+            MarketStage::LastChance => 0.08,
+        }
+    }
+
+    /// How far a man's NAME carries on its own, 0..1 — the same standing
+    /// curve the region gates read, exposed for the visibility model.
+    pub fn name_reach(reference_reputation: u16) -> f32 {
+        Self::standing_reach(reference_reputation)
+    }
+
     /// Hard cross-continent gate. A free agent stepping down across
     /// continent boundaries into a markedly less prestigious region
     /// — Russian → Algerian, Brazilian → Vietnamese — is unrealistic
@@ -242,6 +296,14 @@ impl FreeAgentMarketCalculator {
     /// `0.75` for urgent group fills, and skip the call entirely for
     /// no-keeper desperation slots where any registered player is
     /// preferable to an empty position.
+    ///
+    /// `buyer_import_capacity` conditions the standing relief. The relief
+    /// exists because leagues that recruit across regions chase the best
+    /// names available rather than the most desperate ones — which is true
+    /// of Riyadh, Los Angeles and Tokyo, and false of Yaoundé. Without the
+    /// condition the gate ran backwards for exactly the players it was
+    /// written for: the BETTER the free agent, the sooner he could wash up
+    /// in the poorest league on another continent.
     pub fn cross_continent_blocked(
         same_continent: bool,
         player_region_prestige: f32,
@@ -249,6 +311,7 @@ impl FreeAgentMarketCalculator {
         career_pressure: f32,
         min_pressure_to_cross: f32,
         reference_reputation: u16,
+        buyer_import_capacity: f32,
     ) -> bool {
         if same_continent {
             return false;
@@ -257,13 +320,14 @@ impl FreeAgentMarketCalculator {
         if drop <= 0.10 {
             return false;
         }
-        // Standing lowers the bar rather than raising it. The gate exists
-        // to stop an unremarkable player washing up on another continent
-        // for no reason; a well-regarded free agent is the opposite case —
-        // he is who those leagues go and sign, and they sign him while he
-        // still has options rather than only after a year unemployed.
-        let floor = (min_pressure_to_cross - 0.45 * Self::standing_reach(reference_reputation))
-            .clamp(0.15, 1.0);
+        // Standing lowers the bar rather than raising it, but only where the
+        // destination can actually act on a name — money and an established
+        // habit of importing. A league with neither gets no relief at all,
+        // and the gate holds for its whole reputation range.
+        let relief = 0.45
+            * Self::standing_reach(reference_reputation)
+            * buyer_import_capacity.clamp(0.0, 1.0);
+        let floor = (min_pressure_to_cross - relief).clamp(0.15, 1.0);
         career_pressure < floor
     }
 
@@ -540,21 +604,19 @@ impl FreeAgentMarketCalculator {
     /// 0.20, rep closeness 0.15, wage affordability 0.15. Quality
     /// still matters most, but the four "will this deal actually
     /// happen" signals together dominate it.
+    ///
+    /// `visibility` replaces the flat three-step locality this used to
+    /// read. "Domestic / same continent / other" made a Serb and a Peruvian
+    /// equally local to a Russian buyer, which is the whole problem in
+    /// miniature: distance is not the thing, the corridor is.
     pub fn candidate_priority_score(
         quality_fit: f32,
-        domestic: bool,
-        same_continent: bool,
+        visibility: f32,
         rep_mismatch: i32,
         career_pressure: f32,
         wage_affordability: f32,
     ) -> f32 {
-        let locality = if domestic {
-            1.0
-        } else if same_continent {
-            0.60
-        } else {
-            0.25
-        };
+        let locality = visibility.clamp(0.0, 1.0);
         let rep_closeness = 1.0 - (rep_mismatch.unsigned_abs() as f32 / 5000.0).clamp(0.0, 1.0);
         0.30 * quality_fit.clamp(0.0, 1.0)
             + 0.20 * locality
@@ -772,7 +834,7 @@ mod tests {
         // EasternEurope prestige 0.50 → NorthAfrica prestige 0.25,
         // cross-continent, mid pressure. Must block.
         assert!(FreeAgentMarketCalculator::cross_continent_blocked(
-            false, 0.50, 0.25, 0.4, 0.85, 3000,
+            false, 0.50, 0.25, 0.4, 0.85, 3000, 0.3,
         ));
     }
 
@@ -781,7 +843,7 @@ mod tests {
         // Same step-down but the player is on the verge of retiring
         // — gate unlocks.
         assert!(!FreeAgentMarketCalculator::cross_continent_blocked(
-            false, 0.50, 0.25, 0.90, 0.85, 3000,
+            false, 0.50, 0.25, 0.90, 0.85, 3000, 0.3,
         ));
     }
 
@@ -790,7 +852,7 @@ mod tests {
         // EasternEurope 0.50 → MiddleEastEurope 0.40 is only a 0.10
         // step. Cross-continent but small drop — always allowed.
         assert!(!FreeAgentMarketCalculator::cross_continent_blocked(
-            false, 0.50, 0.40, 0.0, 0.85, 3000,
+            false, 0.50, 0.40, 0.0, 0.85, 3000, 0.3,
         ));
     }
 
@@ -799,7 +861,7 @@ mod tests {
         // Big prestige drop but same continent (e.g. WesternEurope
         // 1.00 → EasternEurope 0.50) — gate stays silent.
         assert!(!FreeAgentMarketCalculator::cross_continent_blocked(
-            true, 1.00, 0.50, 0.0, 0.85, 3000,
+            true, 1.00, 0.50, 0.0, 0.85, 3000, 0.3,
         ));
     }
 
@@ -1087,15 +1149,14 @@ mod tests {
         // real pressure with an affordable wage ask. The journeyman
         // must rank first even with a slightly worse quality fit.
         let unrealistic_star = FreeAgentMarketCalculator::candidate_priority_score(
-            1.0,   // quality fit
-            false, // domestic
-            true,  // same continent
-            1200,  // rep mismatch
-            0.0,   // career pressure
-            0.0,   // wage affordability
+            1.0,  // quality fit
+            0.35, // visibility — a foreign market that barely knows him
+            1200, // rep mismatch
+            0.0,  // career pressure
+            0.0,  // wage affordability
         );
         let signable_local =
-            FreeAgentMarketCalculator::candidate_priority_score(1.0, true, true, 1500, 0.7, 0.8);
+            FreeAgentMarketCalculator::candidate_priority_score(1.0, 1.0, 1500, 0.7, 0.8);
         assert!(
             signable_local > unrealistic_star,
             "local={signable_local} star={unrealistic_star}"

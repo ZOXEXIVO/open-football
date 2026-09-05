@@ -1,4 +1,9 @@
-use crate::loaders::NationalCompetitionEntity;
+use std::collections::HashMap;
+
+use crate::loaders::{
+    CountryCorridorEntity, CountryTransferProfileEntity, NationalCompetitionEntity,
+};
+use core::transfers::{CorridorWeight, CountryTransferProfile, DiasporaShare};
 use core::{
     CompetitionScope, NationalCompetitionConfig, NationalTeamLevel, QualifyingConfig,
     QualifyingPosition, QualifyingZoneConfig, ScheduleConfig, ScheduleDate, TournamentConfig,
@@ -179,5 +184,131 @@ pub fn uefa_u21_championship_config() -> NationalCompetitionConfig {
         qualifying,
         tournament,
         schedule,
+    }
+}
+
+/// Turn one country's shipped transfer card into the runtime profile.
+///
+/// Two things happen here and nowhere else: country CODES become country
+/// IDS (the data files name each other by code; the simulator works in ids),
+/// and each corridor list is normalised by its own maximum so a country's
+/// top corridor reads 1.0 whatever scale it was authored on. An entry naming
+/// a country this database does not carry is dropped — silently, because the
+/// compiler already fails the build on an unknown code and a drop here can
+/// only mean a database older than its cards.
+pub fn convert_country_transfers(
+    entity: Option<&CountryTransferProfileEntity>,
+    country_id_by_code: &HashMap<String, u32>,
+) -> CountryTransferProfile {
+    let Some(entity) = entity else {
+        return CountryTransferProfile::default();
+    };
+
+    let corridors = |rows: &[CountryCorridorEntity]| -> Vec<CorridorWeight> {
+        let max = rows.iter().map(|r| r.weight).fold(0.0_f32, f32::max);
+        if max <= 0.0 {
+            return Vec::new();
+        }
+        rows.iter()
+            .filter_map(|row| {
+                let country_id = *country_id_by_code.get(&row.country.to_ascii_lowercase())?;
+                Some(CorridorWeight {
+                    country_id,
+                    weight: (row.weight / max).clamp(0.0, 1.0),
+                    money: row.is_money(),
+                })
+            })
+            .collect()
+    };
+
+    CountryTransferProfile {
+        import: corridors(&entity.import),
+        export: corridors(&entity.export),
+        diaspora: entity
+            .diaspora
+            .iter()
+            .filter_map(|row| {
+                let country_id = *country_id_by_code.get(&row.country.to_ascii_lowercase())?;
+                Some(DiasporaShare {
+                    country_id,
+                    share: row.share.clamp(0.0, 1.0),
+                })
+            })
+            .collect(),
+        foreign_share: entity.foreign_share.clamp(0.0, 1.0),
+        authored: entity.source == "authored",
+    }
+}
+
+#[cfg(test)]
+mod transfer_profile_tests {
+    use super::*;
+
+    fn codes() -> HashMap<String, u32> {
+        [("br", 1u32), ("tr", 2), ("sa", 3)]
+            .into_iter()
+            .map(|(code, id)| (code.to_string(), id))
+            .collect()
+    }
+
+    #[test]
+    fn weights_normalise_to_the_list_maximum() {
+        let entity = CountryTransferProfileEntity {
+            code: "tr".into(),
+            source: "authored".into(),
+            import: vec![
+                CountryCorridorEntity {
+                    country: "br".into(),
+                    weight: 30.0,
+                    kind: None,
+                },
+                CountryCorridorEntity {
+                    country: "sa".into(),
+                    weight: 6.0,
+                    kind: Some("money".into()),
+                },
+            ],
+            export: Vec::new(),
+            diaspora: Vec::new(),
+            foreign_share: 0.58,
+        };
+        let profile = convert_country_transfers(Some(&entity), &codes());
+        assert_eq!(profile.import_weight(1), Some(1.0));
+        assert_eq!(profile.import_weight(3), Some(0.2));
+        assert!(profile.is_money_corridor(3));
+        assert!(!profile.is_money_corridor(1));
+        assert!(profile.authored);
+    }
+
+    #[test]
+    fn an_absent_card_yields_the_neutral_profile() {
+        let profile = convert_country_transfers(None, &codes());
+        assert!(profile.import.is_empty());
+        assert_eq!(profile.foreign_share, 0.0);
+    }
+
+    #[test]
+    fn entries_naming_an_unknown_country_are_dropped() {
+        let entity = CountryTransferProfileEntity {
+            code: "tr".into(),
+            source: "derived".into(),
+            import: vec![
+                CountryCorridorEntity {
+                    country: "br".into(),
+                    weight: 10.0,
+                    kind: None,
+                },
+                CountryCorridorEntity {
+                    country: "zz".into(),
+                    weight: 8.0,
+                    kind: None,
+                },
+            ],
+            export: Vec::new(),
+            diaspora: Vec::new(),
+            foreign_share: 0.3,
+        };
+        let profile = convert_country_transfers(Some(&entity), &codes());
+        assert_eq!(profile.import.len(), 1);
     }
 }

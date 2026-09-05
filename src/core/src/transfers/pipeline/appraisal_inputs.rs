@@ -26,6 +26,7 @@ use crate::transfers::ScoutingRegion;
 use crate::transfers::market::TransferListingOrigin;
 use crate::transfers::offer::PromisedSquadStatus;
 use crate::transfers::pipeline::PlayerSummary;
+use crate::transfers::{MarketAffinity, MarketMap};
 use crate::{Club, Country, HappinessEventType, Player, PlayerSquadStatus, PlayerStatusType};
 use chrono::NaiveDate;
 
@@ -384,9 +385,13 @@ impl OfferViewBuilder {
         offered_wage: f64,
         promised_status: Option<PromisedSquadStatus>,
         sporting_drop: f32,
+        market_map: &MarketMap,
     ) -> OfferView {
         let buyer_region =
             ScoutingRegion::from_country(buyer_country.continent_id, &buyer_country.code);
+        let language_affinity = stance
+            .language_profile
+            .affinity_for(Language::country_language_mask(&buyer_country.code));
         OfferView {
             kind,
             buyer_club_id,
@@ -398,9 +403,22 @@ impl OfferViewBuilder {
             sporting_drop,
             prestige_drop: stance.seller_region.league_prestige() - buyer_region.league_prestige(),
             crosses_continent: stance.seller_continent_id != buyer_country.continent_id,
-            language_affinity: stance
-                .language_profile
-                .affinity_for(Language::country_language_mask(&buyer_country.code)),
+            language_affinity,
+            // His own map of the place, not the buyer's map of him: where
+            // his compatriots go, where a diaspora of his lives, and the
+            // language he already has. A world with no geography loaded
+            // reads every destination as familiar, which is what the model
+            // did before the country cards existed.
+            place_familiarity: if market_map.is_empty() {
+                1.0
+            } else {
+                MarketAffinity::player_affinity(
+                    market_map,
+                    stance.nationality_country_id,
+                    buyer_country.id,
+                    language_affinity,
+                )
+            },
             is_favourite_club: stance.buyer_is_favourite,
             deadline_urgency: 0.0,
             release_clause_triggered: false,
