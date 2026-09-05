@@ -17,10 +17,14 @@ steps:
         exclude:
           - pull_request
 
+  # Neither this step nor `deploy` runs a daemon of its own — both drive the
+  # HOST daemon over the mounted socket, exactly as `build` does. So neither
+  # needs `docker:dind` (a second image to pull on every build) nor
+  # `privileged: true` (reaching the socket is a permission on the socket, not
+  # a capability).
   - name: clear
-    image: docker:dind
+    image: docker:latest
     depends_on: [ build ]
-    privileged: true
     failure: ignore
     volumes:
       - name: docker_sock
@@ -31,17 +35,52 @@ steps:
     when:
       branch:
         - master
+      event:
+        exclude:
+          - pull_request
 
+  # `failure: ignore` deliberately absent. It used to be set here, which made a
+  # container that never came up report a green build — the only signal that
+  # the new binary was actually live was that the step had not been skipped. A
+  # deploy that cannot start is a failed pipeline.
   - name: deploy
-    image: docker:dind
+    image: docker:latest
     depends_on: [ clear ]
-    privileged: true
-    failure: ignore
     volumes:
       - name: docker_sock
         path: /var/run/docker.sock
     commands:
       - docker run -d -p 0.0.0.0:18000:18000 --restart always -v /data/match_results:/app/match_results --name open-football open-football:1.0.0.$$DRONE_BUILD_NUMBER
+    when:
+      branch:
+        - master
+      event:
+        exclude:
+          - pull_request
+
+  # Every build tags an image that nothing ever removes, and this pipeline is
+  # past its 690th. The base layers are shared, but each build still pins its
+  # own copy of the binary and its own manifest — and a full disk is not a
+  # cosmetic problem here: BuildKit garbage-collects its cache under disk
+  # pressure, and the cache it collects is the cargo registry and the target
+  # dirs both build stages mount. Losing those turns a warm build into a cold
+  # one, which is where twenty-minute builds come from.
+  #
+  # Keeps the newest five, sorted on the build number rather than on `docker
+  # images` order so a re-tag cannot reorder it.
+  #
+  # NOT `docker builder prune`, and NOT `docker system prune`: both delete the
+  # build cache this pipeline is built around.
+  - name: prune
+    image: docker:latest
+    depends_on: [ deploy ]
+    failure: ignore
+    volumes:
+      - name: docker_sock
+        path: /var/run/docker.sock
+    commands:
+      - docker images open-football --format '{{.Tag}}' | sort -t. -k4 -n -r | tail -n +6 | while read tag; do docker rmi "open-football:$${tag}" || true; done
+      - docker image prune -f
     when:
       branch:
         - master
