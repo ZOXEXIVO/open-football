@@ -91,12 +91,140 @@ pub static DEF_STATE_AT_STRIKE: [AtomicU64; 21] = [const { AtomicU64::new(0) }; 
 /// treats as free.
 pub static NEAREST_DEF_AT_STRIKE: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
 
+// ── WHERE THE CONTACT ACTUALLY HAPPENS ──────────────────────────
+//
+// Reported from the viewer, 2026-09-06: *"the ball bounces not off the
+// player, but off an invisible object — it often bounces off something
+// above the player."*
+//
+// A block is the only model in the engine that turns a ball in FLIGHT
+// at an outfield player, and it was the only one that did it without
+// asking where the ball was relative to him. Both channels decide the
+// RATE where the read happens and defer the CONTACT until the ball
+// reaches the man (`ShotTarget::blocked_by`, `Ball::pass_blocked_by`),
+// and that deferral tested `hypot(dx, dy)` and nothing else. The
+// height gate sits at the roll, up to eleven metres earlier — so a
+// shot rolled for at knee height was deflected wherever the ball had
+// climbed to by the time it got to him.
+//
+// Nothing is drawn there. The replay rig attributes a contact to a man
+// only within `Actors::STRIKE_REACH` (1.7 m) and below
+// `Actors::OVERHEAD` (2.8 m); above or beyond that the ball simply
+// turns in mid-air over an idle defender, which is the report.
+//
+// Every resolved block is booked here by where the ball was when it
+// came off him. Index 0 is the shot block, 1 the pass block — see
+// [`BlockDiag::CHANNELS`].
+/// Blocks resolved, per channel.
+pub static CONTACTS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+/// …of which arrived through the deferred `blocked_by` commitment
+/// rather than firing on the tick the roll was won.
+pub static CONTACT_DEFERRED: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+/// Ball height at the contact, metres x100, summed.
+pub static CONTACT_HEIGHT_X100: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+/// Distance across the grass from the blocker, metres x100, summed.
+pub static CONTACT_GAP_X100: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+/// Contacts above the channel's OWN stated ceiling — the number the
+/// roll checked and the contact did not.
+pub static CONTACT_OVER_CEILING: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+/// Contacts the replay rig cannot attribute to anybody: further than
+/// `Actors::STRIKE_REACH` across the grass, or above `Actors::OVERHEAD`.
+/// **This is the reported artefact, counted.**
+pub static CONTACT_UNDRAWABLE: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+/// Height bands, shared by both channels:
+/// `deck (<0.4) | shin-to-volley (<1.45) | head (<2.2) | jump (<2.8) | OVER`.
+pub static CONTACT_HEIGHT_BANDS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+
 /// Diagnostic accessors. Grouped on a struct so the module exposes
 /// no free functions — the statics stay module-level because Rust
 /// has no associated statics.
 pub struct BlockDiag;
 
 impl BlockDiag {
+    /// Labels for the contact census's two channels, in index order.
+    pub const CHANNELS: [&'static str; 2] = ["shot", "pass"];
+    /// …and for [`CONTACT_HEIGHT_BANDS`].
+    pub const HEIGHT_BANDS: [&'static str; 5] = ["deck", "<1.45m", "<2.2m", "<2.8m", "over 2.8m"];
+
+    /// Book one resolved block by where the ball was when it came off
+    /// the blocker.
+    ///
+    /// `channel` indexes [`Self::CHANNELS`]; `ceiling_m` is the
+    /// channel's own stated blocking height, so a contact above it is
+    /// one the roll would have refused.
+    ///
+    /// ⚠ The two distances arrive in the ball's own mixed frame — the
+    /// ground axes are game units and the vertical is metres — because
+    /// that is how the caller holds them. They are converted here, once,
+    /// rather than at each call site.
+    pub fn note_contact(channel: usize, height_m: f32, gap_u: f32, ceiling_m: f32, deferred: bool) {
+        /// 1u = 0.125 m.
+        const M_PER_U: f32 = 0.125;
+        /// The rig's own reach and ceiling — see the module note. Copied
+        /// rather than shared because the viewer is a different crate
+        /// and this is a measurement OF the disagreement.
+        const DRAWN_REACH: f32 = 1.7;
+        const DRAWN_CEILING: f32 = 2.8;
+
+        let height = height_m;
+        let gap = gap_u * M_PER_U;
+        let ceiling = ceiling_m;
+        let c = channel.min(Self::CHANNELS.len() - 1);
+        CONTACTS[c].fetch_add(1, Ordering::Relaxed);
+        if deferred {
+            CONTACT_DEFERRED[c].fetch_add(1, Ordering::Relaxed);
+        }
+        CONTACT_HEIGHT_X100[c].fetch_add((height.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+        CONTACT_GAP_X100[c].fetch_add((gap.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+        if height > ceiling {
+            CONTACT_OVER_CEILING[c].fetch_add(1, Ordering::Relaxed);
+        }
+        if gap > DRAWN_REACH || height > DRAWN_CEILING {
+            CONTACT_UNDRAWABLE[c].fetch_add(1, Ordering::Relaxed);
+        }
+        let band = if height < 0.4 {
+            0
+        } else if height < 1.45 {
+            1
+        } else if height < 2.2 {
+            2
+        } else if height < 2.8 {
+            3
+        } else {
+            4
+        };
+        CONTACT_HEIGHT_BANDS[band].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `(channel, contacts, deferred share, mean height m, mean gap m,
+    ///   over-ceiling share, undrawable share)` — one row per channel
+    /// that saw anything.
+    pub fn contact_snapshot() -> Vec<(&'static str, u64, f32, f32, f32, f32, f32)> {
+        (0..Self::CHANNELS.len())
+            .filter_map(|c| {
+                let n = CONTACTS[c].load(Ordering::Relaxed);
+                if n == 0 {
+                    return None;
+                }
+                let per = |v: &AtomicU64| v.load(Ordering::Relaxed) as f32 / n as f32;
+                Some((
+                    Self::CHANNELS[c],
+                    n,
+                    per(&CONTACT_DEFERRED[c]),
+                    per(&CONTACT_HEIGHT_X100[c]) / 100.0,
+                    per(&CONTACT_GAP_X100[c]) / 100.0,
+                    per(&CONTACT_OVER_CEILING[c]),
+                    per(&CONTACT_UNDRAWABLE[c]),
+                ))
+            })
+            .collect()
+    }
+
+    /// Counts per [`Self::HEIGHT_BANDS`], both channels folded together.
+    pub fn contact_height_snapshot() -> [u64; 5] {
+        std::array::from_fn(|i| CONTACT_HEIGHT_BANDS[i].load(Ordering::Relaxed))
+    }
+
     /// Book one back-line defender's state at a strike.
     pub fn note_defender_state(state_id: usize) {
         if let Some(c) = DEF_STATE_AT_STRIKE.get(state_id) {
@@ -187,6 +315,21 @@ impl BlockDiag {
             c.store(0, Ordering::Relaxed);
         }
         for c in &DEF_STATE_AT_STRIKE {
+            c.store(0, Ordering::Relaxed);
+        }
+        for bank in [
+            &CONTACTS,
+            &CONTACT_DEFERRED,
+            &CONTACT_HEIGHT_X100,
+            &CONTACT_GAP_X100,
+            &CONTACT_OVER_CEILING,
+            &CONTACT_UNDRAWABLE,
+        ] {
+            for c in bank {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+        for c in &CONTACT_HEIGHT_BANDS {
             c.store(0, Ordering::Relaxed);
         }
     }

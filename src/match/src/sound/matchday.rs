@@ -118,7 +118,24 @@ pub struct Soundtrack {
     /// The same for the arriving end, on its own clock — see
     /// [`Soundtrack::gathered`].
     taken: Option<f64>,
-    /// Whether the ball was inside a goal on the previous frame.
+    /// **Whether the ball is in the goal**, latched.
+    ///
+    /// ⚠ **Not [`Netting::inside_a_goal`] read afresh every frame, which is
+    /// what this was.** That volume is the strictest possible reading of "in
+    /// the goal" — it has to be, because nothing else separates a ball
+    /// bagging the side netting from one flashing past the post — while the
+    /// engine settles the ball INTO the mesh, and the mesh bags outward past
+    /// the post by up to a third of a metre. So a ball rolling to rest in a
+    /// goal grazes the boundary: measured over five recorded matches, two
+    /// goals in four left the volume and re-entered it, 7 mm and 40 mm
+    /// outside the post, and each re-entry rang the net again. That is the
+    /// reported *"two net sounds in a row"* — and the same flicker briefly
+    /// re-opens [`Self::possession`] over a dead ball, so the keeper picking
+    /// it out of the net is played as a reception.
+    ///
+    /// A ball goes into a goal once and comes out of it once. So: set on the
+    /// edge of the strict volume, cleared on the edge of the slack one. See
+    /// [`Netting::clear_of_a_goal`].
     netted: bool,
     /// What the ball was doing on the previous frame, so the fallback knows
     /// how hard it was sent.
@@ -243,6 +260,32 @@ impl Soundtrack {
     /// over the tenth of a second he is within reach.
     const KILLED: f32 = 0.7;
 
+    /// **The fastest a ball can be travelling when it reaches a man and
+    /// still be one he could have played**, in metres per second — the
+    /// mirror of [`Self::SENT`], and the gate on [`Self::QUICKENED`] alone.
+    ///
+    /// ⚠ **Without it, a defender standing beside the shooter is played as
+    /// having hit the shot.** Possession here is proximity, and at the moment
+    /// a man strikes the ball the nearest body to it is very often not his
+    /// own hips but the defender in front of him. That defender becomes the
+    /// holder on the frame of the strike — a frame whose measured velocity is
+    /// half of the ball before it and half of the ball after — so he takes a
+    /// `took` of 19 m/s against a `carried` of 38. A pace of 1.99: the
+    /// quickening branch reads it as him having hit the thing, and the
+    /// backstop plays HIS strike at the top of the scale a tenth of a second
+    /// before the netting. **That is the extra noise reported at a goal**,
+    /// and it is the same phantom [`Self::TURNED`] was written to remove,
+    /// arriving down the one branch that never asks about the heading.
+    ///
+    /// Twelve metres a second is a firm driven pass: everything a footballer
+    /// takes and knocks on is under it, and everything above it is a ball
+    /// already flying. A man who really does hit one that reached him at pace
+    /// TURNS it — a first-time shot, a clearance, a block, a save — and
+    /// [`Self::TURNED`] is what speaks for all of those, so nothing real is
+    /// lost here. Measured over five recorded matches, the phantoms this
+    /// removes arrived at 13.5 to 19.2 m/s on a heading within 4°.
+    const RECEIVABLE: f32 = 12.0;
+
     /// How far a contact at the goal line is panned. A broadcast mix is
     /// nearly mono; this is enough to place a kick and not enough to notice
     /// it being placed.
@@ -291,12 +334,18 @@ impl Soundtrack {
             return;
         }
 
+        // FIRST, because the latch it keeps is what tells `possession` the
+        // ball is out of play — see [`Self::netted`]. It used to run last,
+        // and then the two disagreed by a frame at exactly the moment a
+        // goal goes in.
+        if let Some(pan) = soundtrack.netting(&ball) {
+            mixer.net(pan);
+        }
         let sent = soundtrack.sent(&playback, &ball, &mut tracks);
         let changed = soundtrack.possession(playback.time_ms, &ball, &mut tracks);
         for cue in [sent, changed].into_iter().flatten() {
             mixer.touch(cue.meeting, cue.weight, cue.pan, cue.delay);
         }
-        soundtrack.netting(&ball, mixer);
         soundtrack.carried = ball.velocity;
     }
 
@@ -359,7 +408,11 @@ impl Soundtrack {
         // at the top of the scale, one frame behind the netting: the double
         // that gets reported after a goal. Nothing about a ball in the goal is
         // his, so the holder goes with the play.
-        if Netting::inside_a_goal(ball.position) {
+        //
+        // The LATCH rather than the volume, because the volume flickers as
+        // the ball settles into the mesh and every flicker re-opens this for
+        // whoever is standing over the dead ball — see [`Self::netted`].
+        if self.netted {
             self.holder = None;
             return None;
         }
@@ -379,11 +432,25 @@ impl Soundtrack {
                     // all the same. See [`Self::played_it`].
                     || !self.played_it()
                     || Self::keeps_it(tracks, holder, now).unwrap_or(false)
-                    || !self.arm(now)
                 {
                     return None;
                 }
+                // ⚠ **One departure, one answer — even when the answer is
+                // silence.** `spoken` used to be set only where the cue was
+                // returned, so a departure the rearm gate refused was
+                // re-offered on the NEXT frame, and the next, until the
+                // window lapsed — and then played, 120 ms late, as its own
+                // contact. That is how a shot the lookahead had already
+                // spoken for came back as a second strike off whichever
+                // defender the ball had flown past: measured over five
+                // recorded matches, a quarter of everything the backstop
+                // played, including every full-weight one. The ball left him
+                // once; if that instant is inside another contact's window it
+                // is that contact, and there is nothing more to say about it.
                 self.spoken = true;
+                if !self.arm(now) {
+                    return None;
+                }
                 Some(Cue {
                     meeting: Meeting::Struck(Actors::strike_kind(
                         ball.position,
@@ -449,7 +516,12 @@ impl Soundtrack {
             return true;
         }
         let pace = after / before;
-        pace >= Self::QUICKENED || pace <= Self::KILLED || took.angle_to(left).abs() > Self::TURNED
+        // A ball he turned, or one he stopped, is his whatever pace it
+        // arrived at. A ball that merely LEFT FASTER is only his if it
+        // reached him slowly enough to be played — see [`Self::RECEIVABLE`].
+        took.angle_to(left).abs() > Self::TURNED
+            || pace <= Self::KILLED
+            || (pace >= Self::QUICKENED && before <= Self::RECEIVABLE)
     }
 
     /// **Does `id` still have the ball a moment after `when`?**
@@ -469,7 +541,12 @@ impl Soundtrack {
         // beaten, so without this the question answers yes for him and the
         // shot is played as HIM RECEIVING IT, a frame or two ahead of the
         // netting. That is the double heard when a goal goes in.
-        if Netting::inside_a_goal(ball) {
+        //
+        // The SLACK volume, because this one reads a future position off the
+        // track and there is no latch out there to steady it — and the cost
+        // of the strict volume flickering here is the wrong way round: it
+        // would say the beaten keeper keeps the ball, and swallow the shot.
+        if !Netting::clear_of_a_goal(ball) {
             return Some(false);
         }
         let man = Field::to_world(man[0], man[1], man[2]);
@@ -502,13 +579,27 @@ impl Soundtrack {
             .map(|(id, _)| id)
     }
 
-    /// The ball crossing into the netting, on the frame it does.
-    fn netting(&mut self, ball: &BallState, mixer: &Mixer) {
-        let netted = ball.on_pitch && Netting::inside_a_goal(ball.position);
-        if netted && !self.netted {
-            mixer.net(Self::across(ball.position.x));
+    /// The ball crossing into the netting, on the frame it does — and the
+    /// latch that says it is still in there. See [`Self::netted`].
+    ///
+    /// Returns where across the picture to ring the net, on that one frame
+    /// and no other. Returned rather than played on the spot for the reason
+    /// [`Cue`] gives: what decides it is football, and football can be
+    /// checked without a browser to make a noise in.
+    fn netting(&mut self, ball: &BallState) -> Option<f32> {
+        if !self.netted {
+            if ball.on_pitch && Netting::inside_a_goal(ball.position) {
+                self.netted = true;
+                return Some(Self::across(ball.position.x));
+            }
+            return None;
         }
-        self.netted = netted;
+        // A ball the recording has stopped carrying is a clip boundary, and
+        // whatever is on the other side of it is not this goal.
+        if !ball.on_pitch || Netting::clear_of_a_goal(ball.position) {
+            self.netted = false;
+        }
+        None
     }
 
     /// Whether a contact at this match time is a new one, and remembers it if
@@ -573,7 +664,11 @@ impl Soundtrack {
         self.taken = None;
         self.spoken = false;
         self.holder = Self::owner(ball);
-        self.netted = ball.on_pitch && Netting::inside_a_goal(ball.position);
+        // The SLACK volume on a seek: a ball already lying in the netting has
+        // had its rustle, whether or not this playhead is the one that heard
+        // it, and re-arming on a ball a centimetre outside the strict volume
+        // is how a scrub across a goal rings the net a second time.
+        self.netted = ball.on_pitch && !Netting::clear_of_a_goal(ball.position);
         self.carried = ball.velocity;
         self.took = ball.velocity;
     }
@@ -963,6 +1058,88 @@ mod possession {
         );
     }
 
+    /// ⚠ **The other way the same phantom gets in, and the one still heard at
+    /// a goal.** At the instant a shot is struck the nearest body to the ball
+    /// is very often the defender in front of the striker rather than the
+    /// striker's own hips, so the defender becomes the holder — on a frame
+    /// whose measured velocity is half of the ball before the strike and half
+    /// of it after. He is handed a `took` of 19 m/s against a `carried` of 38,
+    /// the quickening branch reads that as him having hit it, and the backstop
+    /// plays his strike at the top of the scale a tenth of a second before the
+    /// netting. See [`Soundtrack::RECEIVABLE`].
+    #[test]
+    fn a_ball_already_flying_did_not_quicken_at_him() {
+        let mut past = recording(
+            run((100.0, 30.0), (112.0, 30.0), 0.0),
+            run((100.2, 30.0), (100.6, 30.0), 0.0),
+        );
+        let away = BallState {
+            position: Vec3::new(0.0, 0.1, 0.0),
+            on_pitch: true,
+            nearest: Some((7, 4.0)),
+            ..default()
+        };
+        let mut soundtrack = Soundtrack {
+            holder: Some(7),
+            // Straddling the strike: the shot is already away.
+            took: Vec3::new(19.2, 0.0, 0.0),
+            carried: Vec3::new(38.3, 0.0, 0.0),
+            ..default()
+        };
+        assert!(
+            soundtrack.possession(0.0, &away, &mut past).is_none(),
+            "a shot accelerating past him was played as his"
+        );
+
+        // A ball he actually ran onto — a gentle roll away, smashed — is his,
+        // and it is the whole reason the quickening branch exists.
+        let mut ran_onto = Soundtrack {
+            holder: Some(7),
+            took: Vec3::new(4.0, 0.0, 0.0),
+            carried: Vec3::new(30.0, 0.0, 0.0),
+            ..default()
+        };
+        assert!(
+            ran_onto.possession(0.0, &away, &mut past).is_some(),
+            "a ball he ran onto and hit is a contact"
+        );
+    }
+
+    /// ⚠ **One departure, one answer — even when the answer is silence.** The
+    /// backstop used to mark a departure as spoken for only where it actually
+    /// played, so one refused by the rearm gate came back on the next frame,
+    /// and the next, until the window lapsed — and was then played as its own
+    /// contact 120 ms late. That is how a shot the lookahead had already
+    /// spoken for returned as a second strike off the man it flew past.
+    #[test]
+    fn a_departure_inside_another_contacts_window_is_never_replayed() {
+        let mut past = recording(
+            run((100.0, 30.0), (112.0, 30.0), 0.0),
+            run((100.2, 30.0), (100.6, 30.0), 0.0),
+        );
+        let away = BallState {
+            position: Vec3::new(0.0, 0.1, 0.0),
+            on_pitch: true,
+            nearest: Some((7, 4.0)),
+            ..default()
+        };
+        let mut soundtrack = Soundtrack {
+            holder: Some(7),
+            // The lookahead armed the strike on the frame it happened.
+            struck: Some(0.0),
+            took: Vec3::new(4.0, 0.0, 0.0),
+            carried: Vec3::new(30.0, 0.0, 0.0),
+            ..default()
+        };
+        // Every frame from the departure until well past the rearm window.
+        for now in [10.0, 40.0, 80.0, 121.0, 200.0, 400.0] {
+            assert!(
+                soundtrack.possession(now, &away, &mut past).is_none(),
+                "the same departure came back at {now} ms"
+            );
+        }
+    }
+
     /// **A ball in the netting is out of play.** The net takes forty metres a
     /// second off it in a tenth of a second — the biggest change in its flight
     /// all match — and the man it flew past on the way in is still the holder,
@@ -987,11 +1164,53 @@ mod possession {
             nearest: Some((7, 3.0)),
             ..default()
         };
+        // In the order `follow_playhead` runs them: the netting pass sets the
+        // latch this reads. See [`Soundtrack::netted`].
+        assert!(soundtrack.netting(&scored).is_some(), "it went in");
         assert!(
             soundtrack.possession(0.0, &scored, &mut tracks).is_none(),
             "the netting stopping the ball was played as a kick"
         );
         assert_eq!(soundtrack.holder, None, "a dead ball is nobody's");
+    }
+
+    /// ⚠ **A ball goes into a goal ONCE.** `Netting::inside_a_goal` is the
+    /// strictest possible reading of the volume — it stops at the post,
+    /// because nothing else separates a ball bagging the side netting from
+    /// one flashing past — while the engine settles the ball INTO the mesh,
+    /// which bags outward past the post. So a goal rolling to rest grazes the
+    /// boundary, and edge-triggering on it rang the net two and three times:
+    /// measured over five recorded matches, two goals in four, 7 mm and
+    /// 40 mm outside the post. The reported *"two net sounds in a row"*.
+    #[test]
+    fn a_goal_rings_the_net_once_however_the_ball_settles() {
+        let inside = |across: f32| BallState {
+            position: Vec3::new(Field::HALF_LENGTH + 0.9, 0.4, across),
+            on_pitch: true,
+            ..default()
+        };
+        let mut soundtrack = Soundtrack::default();
+        assert!(soundtrack.netting(&inside(0.0)).is_some(), "it went in");
+        // Rolling into the side netting: a few centimetres outside the strict
+        // volume, still lying in the mesh.
+        let post = Field::PHYSICS_GOAL_HALF_WIDTH + Field::POST_RADIUS;
+        for graze in [post + 0.01, post + 0.04, post + 0.3, post - 0.05] {
+            assert!(
+                soundtrack.netting(&inside(graze)).is_none(),
+                "the net rang again for a ball {:.2} m outside the post",
+                graze - post
+            );
+        }
+        // …and once it really is out — the restart, on the centre spot — the
+        // next one can ring.
+        let away = BallState {
+            position: Vec3::ZERO,
+            on_pitch: true,
+            ..default()
+        };
+        assert!(soundtrack.netting(&away).is_none(), "nothing to hear yet");
+        assert!(!soundtrack.netted, "the ball is out of the goal");
+        assert!(soundtrack.netting(&inside(0.0)).is_some(), "the next goal");
     }
 
     /// ⚠ **Nobody keeps a ball that has gone in.** The one man reliably next

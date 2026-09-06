@@ -46,11 +46,19 @@ use crate::r#match::result::{
 /// goals at all could tip it either way.
 ///
 /// The loop stops at the first scoring match, so a wider ceiling costs
-/// nothing in the ordinary case (~4 attempts either way) and only spends time
-/// in the tail it exists to survive. Twenty attempts leaves a 0.3% failure
-/// rate at the current rate and stays sane if goals drop further.
+/// nothing in the ordinary case and only spends time in the tail it exists to
+/// survive.
+///
+/// ⚠ **The λ above is an estimate and the fixture's real one is lower.**
+/// Measured 2026-09-06 by playing all forty seeds instead of stopping at the
+/// first goal: **6 of 40 score, 0.175 goals a match** — 1.6 per ninety, not
+/// 2.6, because this fixture is two `squad()` sides over ten minutes with
+/// none of the game-state dynamics a full match has. At 85% goalless a
+/// twenty-deep tail is a **4% event, not 0.3%**, and the suite duly hit one:
+/// the first scoring seed here is the twenty-FIRST. Forty leaves 0.15% and
+/// still exits after ~7 attempts in the ordinary case.
 fn match_with_a_goal() -> MatchResultRaw {
-    for seed in 0..20u64 {
+    for seed in 0..40u64 {
         let mut config = MatchEngineConfig::seeded(0x0F00_0000 + seed);
         config.match_recordings = true;
         let result =
@@ -60,7 +68,7 @@ fn match_with_a_goal() -> MatchResultRaw {
             return result;
         }
     }
-    panic!("twenty matches in a row finished goalless — the engine is not scoring at all");
+    panic!("forty matches in a row finished goalless — the engine is not scoring at all");
 }
 
 /// One test rather than two, because the scope is process-global (like

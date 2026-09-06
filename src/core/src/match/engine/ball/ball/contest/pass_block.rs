@@ -74,7 +74,9 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::contest::interception::InterceptionDuel;
-use crate::r#match::engine::ball::ball::{Ball, CONTROL_DISTANCE, FlightProtection};
+#[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::diagnostics::block_diag::BlockDiag;
+use crate::r#match::engine::ball::ball::{Ball, BlockContact, CONTROL_DISTANCE, FlightProtection};
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
@@ -156,15 +158,13 @@ impl Ball {
         // won it — the same deferral the shot block uses, and for the
         // same reason: the rate is decided where the read happens, the
         // contact happens where the body is.
+        //
+        // ⚠ **And "where the body is" means all three axes.** This tested
+        // the distance across the grass alone, with the height gate left
+        // behind at the roll — so a pass rolled for on the deck was
+        // deflected off a man's head five metres later. See
+        // [`Ball::block_contact_with`].
         if let Some((blocker_id, outcome_roll)) = self.pass_blocked_by {
-            let reached = players
-                .iter()
-                .find(|p| p.id == blocker_id)
-                .map(|p| {
-                    (p.position.x - self.position.x).hypot(p.position.y - self.position.y)
-                        <= Self::PASS_BLOCK_REACH
-                })
-                .unwrap_or(false);
             // A pass that has been claimed, has died, or has turned into
             // a shot in the meantime is no longer the ball he committed
             // to. Drop the commitment rather than deflecting something
@@ -176,9 +176,27 @@ impl Ball {
                 self.pass_blocked_by = None;
                 return;
             }
-            if reached {
-                self.pass_blocked_by = None;
-                self.resolve_pass_block(blocker_id, outcome_roll, context, players, events);
+            match self.block_contact_with(
+                blocker_id,
+                players,
+                Self::PASS_BLOCK_REACH,
+                Self::MAX_PASS_BLOCK_HEIGHT,
+            ) {
+                BlockContact::Coming => {}
+                // Over him or past him — one pass, one roll, and he has
+                // had it.
+                BlockContact::Missed => self.pass_blocked_by = None,
+                BlockContact::AtTheBody => {
+                    self.pass_blocked_by = None;
+                    self.resolve_pass_block(
+                        blocker_id,
+                        outcome_roll,
+                        context,
+                        players,
+                        events,
+                        true,
+                    );
+                }
             }
             return;
         }
@@ -227,7 +245,8 @@ impl Ball {
 
         let dir_x = self.velocity.x / speed;
         let dir_y = self.velocity.y / speed;
-        let delivery = sc::passing_execution(passer, sc::minute_from_ticks(self.current_tick_cached));
+        let delivery =
+            sc::passing_execution(passer, sc::minute_from_ticks(self.current_tick_cached));
         let minute = sc::minute_from_ticks(self.current_tick_cached);
 
         let mut best_blocker: Option<u32> = None;
@@ -313,16 +332,20 @@ impl Ball {
             return;
         }
         let outcome_roll = context.rng.unit_f32();
-        let gap_now = players
-            .iter()
-            .find(|p| p.id == blocker_id)
-            .map(|p| (p.position.x - self.position.x).hypot(p.position.y - self.position.y))
-            .unwrap_or(f32::MAX);
-        if gap_now > Self::PASS_BLOCK_REACH {
-            self.pass_blocked_by = Some((blocker_id, outcome_roll));
-            return;
+        // The ball is already under `MAX_PASS_BLOCK_HEIGHT` on this path,
+        // so only the distance is open; the deferred branch above asks all
+        // three axes on every tick after this one.
+        match self.block_contact_with(
+            blocker_id,
+            players,
+            Self::PASS_BLOCK_REACH,
+            Self::MAX_PASS_BLOCK_HEIGHT,
+        ) {
+            BlockContact::AtTheBody => {
+                self.resolve_pass_block(blocker_id, outcome_roll, context, players, events, false)
+            }
+            _ => self.pass_blocked_by = Some((blocker_id, outcome_roll)),
         }
-        self.resolve_pass_block(blocker_id, outcome_roll, context, players, events);
     }
 
     /// Overall scale on the block chance.
@@ -335,10 +358,23 @@ impl Ball {
     /// the model (who is a candidate, and how the chance falls off across
     /// the corridor) measured right, and only the level was wrong.
     ///
-    /// At 0.40 it produces **18.2 blocked passes a match — 9.1 a team,
+    /// At 0.40 it produced **18.2 blocked passes a match — 9.1 a team,
     /// against a real 9-11** — at a mean per-pass chance of 0.019 over
     /// the ~960 passes a match that reach the roll at all.
-    const BLOCK_GAIN: f32 = 0.40;
+    ///
+    /// ⚠ **Re-titrated 2026-09-06 when the CONTACT moved onto the body.**
+    /// The deferral used to fire on the first tick the ball came within
+    /// two metres of the man who had won the roll, which is the far edge
+    /// of his reach; it now waits for the ball to be level with him
+    /// ([`Ball::block_contact_with`]). That is where a leg actually goes
+    /// in, and it is what the picture needs — but it also means a pass
+    /// received before it ever reaches him is no longer blocked, and the
+    /// channel lost 17% of its volume: 16.5 blocked passes a match against
+    /// the 16.4 the same binary measured on the old geometry (3 x 200
+    /// fixtures at L14 per arm, 3291 vs 2722 contacts). **The rate is the
+    /// calibrated thing and the geometry was the wrong thing**, so the
+    /// gain carries the correction: 0.40 x 16.5/13.6 = 0.485.
+    const BLOCK_GAIN: f32 = 0.485;
 
     /// Turn a won pass-block into a deflection, at the blocker.
     fn resolve_pass_block(
@@ -348,6 +384,7 @@ impl Ball {
         context: &MatchContext,
         players: &[MatchPlayer],
         events: &mut EventCollection,
+        deferred: bool,
     ) {
         let speed = (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y).sqrt();
         if speed < Self::MIN_PASS_SPEED {
@@ -359,6 +396,16 @@ impl Ball {
         let blocker_team = blocker.team_id;
         let blocker_gap =
             (blocker.position.x - self.position.x).hypot(blocker.position.y - self.position.y);
+        #[cfg(feature = "match-logs")]
+        BlockDiag::note_contact(
+            1,
+            self.position.z,
+            blocker_gap,
+            Self::MAX_PASS_BLOCK_HEIGHT,
+            deferred,
+        );
+        #[cfg(not(feature = "match-logs"))]
+        let _ = deferred;
         let tick = self.current_tick_cached;
 
         // ── Did he keep it? ──────────────────────────────────────────
@@ -453,8 +500,11 @@ impl Ball {
                 // way. `record_touch` above already made this HIS touch,
                 // which is what makes it a corner rather than a goal
                 // kick.
-                self.velocity =
-                    Ball::hook_behind_velocity(self.position, own_goal, context.field_size.height as f32);
+                self.velocity = Ball::hook_behind_velocity(
+                    self.position,
+                    own_goal,
+                    context.field_size.height as f32,
+                );
                 self.flags.in_flight_state =
                     FlightProtection::for_launch(self.velocity, self.position.z);
                 self.claim_cooldown = self.claim_cooldown.max(4);

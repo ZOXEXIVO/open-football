@@ -345,6 +345,19 @@ impl Netting {
     const GIVE_BACK: f32 = 8.0 * Field::METERS_PER_UNIT;
     const GIVE_SIDE: f32 = 4.0 * Field::METERS_PER_UNIT;
 
+    /// **How far the ball has to get from the goal before it counts as
+    /// having LEFT one**, in metres — see [`Self::clear_of_a_goal`].
+    ///
+    /// The netting's own travel, because that is exactly the distance
+    /// [`Self::inside_a_goal`] cannot account for. The engine settles a ball
+    /// a give PAST each panel — `GoalNet::contain` writes
+    /// `side_plane + over` outward from the goal's centre line, up to 33 cm
+    /// beyond the post — while the volume above stops at the post itself and
+    /// must, for the reason that test's own note gives. So a ball lying in
+    /// the side netting is a few centimetres OUTSIDE the volume that says it
+    /// is in the goal, and it grazes the boundary as it settles.
+    const RELEASE: f32 = Self::GIVE_SIDE;
+
     pub fn spawn(
         commands: &mut Commands,
         meshes: &mut Assets<Mesh>,
@@ -608,6 +621,34 @@ impl Netting {
             && past_line < Field::NET_DEPTH + Self::GIVE_BACK
             && ball.z.abs() < Field::PHYSICS_GOAL_HALF_WIDTH + Field::POST_RADIUS
             && ball.y < Self::roof_ceiling(past_line)
+    }
+
+    /// **The ball is clear of the goal** — the release for anything that
+    /// happens ONCE on it going in.
+    ///
+    /// ⚠ **[`Self::inside_a_goal`] flickers, and it is allowed to.** It is
+    /// deliberately the strictest reading of "in the goal" — no grace on the
+    /// line and none outside the post, because a ball crossing the byline
+    /// wide is separated from a ball bagging the side netting by nothing
+    /// else. The engine, meanwhile, settles a ball INTO the mesh, and the
+    /// mesh bags outward: measured over five recorded matches, two goals in
+    /// four came back out of the volume and went into it again while the
+    /// ball was rolling to rest in the side netting, 7 mm and 40 mm outside
+    /// the post. Each of those is another entry, and an entry is a rustle —
+    /// which is the reported *"two net sounds in a row"*.
+    ///
+    /// So the going-in is an edge on the strict volume and the coming-out is
+    /// an edge on this one, [`Self::RELEASE`] slacker on every axis. A ball
+    /// goes into a goal once and comes out of it once, and half a metre is
+    /// the netting's own travel — well inside anything that could be a
+    /// second, real entry, since the ball has to be kicked off from the
+    /// centre circle before there can be one.
+    pub(crate) fn clear_of_a_goal(ball: Vec3) -> bool {
+        let past_line = ball.x.abs() - Field::HALF_LENGTH;
+        past_line < -Self::RELEASE
+            || past_line > Field::NET_DEPTH + Self::GIVE_BACK + Self::RELEASE
+            || ball.z.abs() > Field::PHYSICS_GOAL_HALF_WIDTH + Field::POST_RADIUS + Self::RELEASE
+            || ball.y > Self::roof_ceiling(past_line.clamp(0.0, Field::NET_DEPTH)) + Self::RELEASE
     }
 
     /// **How high the roof netting reaches, `past_line` metres behind the
@@ -996,5 +1037,84 @@ mod tests {
             "cord should cover about a quarter of the panel, covers {:.0}%",
             covered * 100.0
         );
+    }
+}
+
+/// The release rule: what "the ball has left the goal" means, and what it
+/// deliberately does not mean. See [`Netting::clear_of_a_goal`].
+#[cfg(test)]
+mod leaving_a_goal {
+    use super::*;
+
+    /// A point inside the near goal, `across` metres off its centre line and
+    /// `up` metres above the grass.
+    fn in_the_goal(across: f32, up: f32) -> Vec3 {
+        Vec3::new(Field::HALF_LENGTH + 0.9, up, across)
+    }
+
+    /// ⚠ **The whole report.** The engine settles a ball INTO the mesh and
+    /// the side panel bags outward past the post, so a goal rolling to rest
+    /// sits a few centimetres outside the volume that says it is in the goal.
+    /// Measured over five recorded matches: 7 mm and 40 mm outside, twice in
+    /// four goals. Anything edge-triggered on `inside_a_goal` alone therefore
+    /// fires again — which is the doubled net sound.
+    #[test]
+    fn a_ball_bagging_the_side_netting_has_not_left_the_goal() {
+        let post = Field::PHYSICS_GOAL_HALF_WIDTH + Field::POST_RADIUS;
+        for graze in [0.007f32, 0.04, 0.33] {
+            let ball = in_the_goal(post + graze, 0.4);
+            assert!(
+                !Netting::inside_a_goal(ball),
+                "the strict volume is supposed to refuse this one"
+            );
+            assert!(
+                !Netting::clear_of_a_goal(ball),
+                "a ball {graze:.3} m into the side netting had left the goal"
+            );
+        }
+    }
+
+    /// The same on the other two axes the netting bags on: a ball pressed
+    /// into the roof net or the back of it is still in the goal.
+    #[test]
+    fn a_ball_in_the_roof_or_the_back_of_the_net_has_not_left_it() {
+        assert!(!Netting::clear_of_a_goal(in_the_goal(0.0, 2.6)));
+        assert!(!Netting::clear_of_a_goal(Vec3::new(
+            Field::HALF_LENGTH + Field::NET_DEPTH + Netting::GIVE_BACK,
+            0.3,
+            0.0,
+        )));
+    }
+
+    /// …and the release has to actually release, or a second goal at the same
+    /// end would be silent. The ball is kicked off from the centre spot, so
+    /// there is a whole pitch between one goal and the next.
+    #[test]
+    fn a_ball_back_in_play_is_clear_of_the_goal() {
+        assert!(Netting::clear_of_a_goal(Vec3::ZERO), "the centre spot");
+        // Out through the mouth: the netting has spat it back into the
+        // goalmouth and the ordinary physics own it again.
+        assert!(Netting::clear_of_a_goal(Vec3::new(
+            Field::HALF_LENGTH - 1.0,
+            0.2,
+            0.0
+        )));
+        // Over the bar and running on behind the goal, which is a miss and
+        // never was in the goal.
+        assert!(Netting::clear_of_a_goal(Vec3::new(
+            Field::HALF_LENGTH + 0.5,
+            3.4,
+            0.0
+        )));
+    }
+
+    /// Both goals, because a rule that reads differently at the two ends is a
+    /// bug that only shows up in one direction of play.
+    #[test]
+    fn the_release_is_the_same_at_both_ends() {
+        for side in [-1.0f32, 1.0] {
+            let ball = Vec3::new(side * (Field::HALF_LENGTH + 0.9), 0.4, 0.0);
+            assert!(!Netting::clear_of_a_goal(ball), "side {side}");
+        }
     }
 }

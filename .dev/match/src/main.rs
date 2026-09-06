@@ -7749,7 +7749,7 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         if armed > 0 {
                             println!(
                                 "      aerial deliveries: {} ({:.2}/match) flown a mean {:.2} s — \
-                                 {:.0}% reached the winner ({:.1}u from him), {:.0}% timed out",
+                                 {:.0}% reached their aim point ({:.1}u from it), {:.0}% timed out",
                                 armed,
                                 armed as f32 / n_matches as f32,
                                 flight / 100.0,
@@ -7757,6 +7757,25 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                                 gap,
                                 lost as f32 * 100.0 / armed as f32,
                             );
+                            // …and WHERE THE MAN WAS. The outcome is a
+                            // header, so a delivery whose winner is not
+                            // under the ball turns it round in mid-air off
+                            // nobody. `out of reach` is that, counted; it
+                            // has to be 0 with the arrival gate on.
+                            let (n, to_winner, height, out, waited) =
+                                core::teleport::TeleportCensus::delivery_reach_snapshot();
+                            if n > 0 {
+                                println!(
+                                    "        at the arrival the winner was {:.1}u ({:.2} m) away \
+                                     with the ball {:.2} m up — OUT OF HIS REACH {:.1}% \
+                                     (target: 0%); {:.0} ticks a delivery spent waiting for him",
+                                    to_winner,
+                                    to_winner * 0.125,
+                                    height,
+                                    out * 100.0,
+                                    waited,
+                                );
+                            }
                         }
                         // ── THE TWENTY-TWO ──────────────────────────────
                         //
@@ -7915,6 +7934,41 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 "    → {} blocks over {} shots = {:.1}% of shots blocked   (real: ~18-22%)",
                 fired, total_shots, per_shot,
             );
+            // WHERE THE CONTACT LANDS. A block is the only thing in the
+            // engine that turns a ball in flight at an outfield player,
+            // and the rate is decided up to eleven metres before the two
+            // meet — so "how many" says nothing about whether the ball
+            // came off a body. `undrawable` is the reported artefact
+            // counted: further than the replay rig's own 1.7 m reach or
+            // above its 2.8 m ceiling, which is a ball turning in mid-air
+            // over a defender who is not drawn doing anything.
+            for (channel, n, deferred, height, gap, over, undrawable) in
+                BlockDiag::contact_snapshot()
+            {
+                println!(
+                    "  block contact ({channel}): {n} — {:.0}% deferred to the body, ball {:.2} m up \
+                     and {:.2} m away on average, above the channel ceiling {:.1}%, \
+                     UNDRAWABLE {:.1}%   (target: 0%)",
+                    deferred * 100.0,
+                    height,
+                    gap,
+                    over * 100.0,
+                    undrawable * 100.0,
+                );
+            }
+            {
+                let bands = BlockDiag::contact_height_snapshot();
+                let total: u64 = bands.iter().sum::<u64>().max(1);
+                let row = BlockDiag::HEIGHT_BANDS
+                    .iter()
+                    .zip(bands.iter())
+                    .map(|(label, n)| {
+                        format!("{label} {:.0}%", *n as f32 / total as f32 * 100.0)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                println!("    height of the ball at the block: {row}");
+            }
             let (opp, behind, beyond, wide, in_win, mean_perp) = BlockDiag::lane_snapshot();
             let opct = |x: u64| {
                 if opp == 0 {

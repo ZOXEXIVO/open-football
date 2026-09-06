@@ -336,10 +336,47 @@ impl TeleportCensus {
         DELIVERIES[3].fetch_add(flight_ticks as u64, Ordering::Relaxed);
     }
 
-    /// It reached the winner, `gap` units from him.
-    pub fn note_delivery_arrived(gap: f32) {
+    /// It reached its aim point, `gap` units from that point.
+    ///
+    /// ⚠ **`gap` is the distance to the TARGET, not to the man**, and the
+    /// two are very different questions — this used to say "it reached the
+    /// winner" and measure the first. The outcome is a HEADER: a velocity
+    /// written onto the ball at heading height, so if the winner is not
+    /// there when it lands the ball reverses in mid-air off nobody, which
+    /// is the reported *"it bounces off something invisible above the
+    /// player"*. `to_winner` and `height` are what say whether that
+    /// happened, and `out_of_reach` counts it.
+    pub fn note_delivery_arrived(gap: f32, to_winner: f32, height: f32, out_of_reach: bool) {
         DELIVERIES[1].fetch_add(1, Ordering::Relaxed);
         DELIVERIES[4].fetch_add((gap.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+        DELIVERIES[5].fetch_add((to_winner.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+        DELIVERIES[6].fetch_add((height.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+        if out_of_reach {
+            DELIVERIES[7].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// The ball is over its aim point and the man who won it is not there
+    /// yet. One per TICK of waiting — the hold keeps the ball in the
+    /// heading band while he closes, and the deadline ends it if he never
+    /// does, so this is the cost of asking rather than a count of anything.
+    pub fn note_delivery_waiting() {
+        DELIVERIES[8].fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `(arrivals, mean gap to the winner in units, mean ball height in
+    /// metres, share of arrivals with the winner out of reach, mean ticks
+    /// spent waiting for him per delivery armed)`.
+    pub fn delivery_reach_snapshot() -> (u64, f32, f32, f32, f32) {
+        let arrived = DELIVERIES[1].load(Ordering::Relaxed).max(1);
+        let armed = DELIVERIES[0].load(Ordering::Relaxed).max(1);
+        (
+            DELIVERIES[1].load(Ordering::Relaxed),
+            DELIVERIES[5].load(Ordering::Relaxed) as f32 / 100.0 / arrived as f32,
+            DELIVERIES[6].load(Ordering::Relaxed) as f32 / 100.0 / arrived as f32,
+            DELIVERIES[7].load(Ordering::Relaxed) as f32 / arrived as f32,
+            DELIVERIES[8].load(Ordering::Relaxed) as f32 / armed as f32,
+        )
     }
 
     /// It did not — the deadline passed, or the winner left the field.
@@ -383,14 +420,16 @@ impl TeleportCensus {
 }
 
 /// What became of the aerial deliveries the contests solved arcs for:
-/// `(armed, arrived, timed out, Σ flight ticks, Σ gap at arrival ×100)`.
+/// `(armed, arrived, timed out, Σ flight ticks, Σ gap to the TARGET at
+/// arrival ×100, Σ gap to the WINNER ×100, Σ ball height ×100, arrivals
+/// out of the winner s reach)`.
 ///
 /// The contest's win rate is measured elsewhere and is unchanged by the
 /// flight; this is the question the flight introduces and nothing else
 /// asks — **does the ball actually get to the man who won it?** A delivery
 /// that times out has moved the artefact rather than removed it: the ball
 /// no longer teleports onto his head, and he never heads it either.
-pub static DELIVERIES: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+pub static DELIVERIES: [AtomicU64; 9] = [const { AtomicU64::new(0) }; 9];
 
 /// Splits the ball's own pass into its three exits.
 ///

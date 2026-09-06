@@ -70,6 +70,41 @@ impl MatchContext {
         *OFF.get_or_init(|| std::env::var("OF_BOX_DEFENCE_OFF").is_ok())
     }
 
+    /// Diagnostic switch: with `OF_BLOCK_CONTACT_FLAT` set, both block
+    /// channels resolve their deferred contact the way they did before
+    /// 2026-09-06 — on the distance across the grass alone, with no
+    /// height asked and no commitment ever released.
+    ///
+    /// The A/B control for [`PlayerReach::block_contact`](crate::r#match::engine::ball::ball::PlayerReach::block_contact).
+    /// It exists because the fix is a geometry change on a channel that
+    /// was itself calibrated three weeks ago: "did the blocks that
+    /// stopped happening cost anything" is a population question about
+    /// goals, shots and pass accuracy, and the only honest way to answer
+    /// it is the same binary run twice. Read once per process. Debug
+    /// infrastructure — do not remove.
+    pub fn block_contact_flat() -> bool {
+        use std::sync::OnceLock;
+        static FLAT: OnceLock<bool> = OnceLock::new();
+        *FLAT.get_or_init(|| std::env::var("OF_BLOCK_CONTACT_FLAT").is_ok())
+    }
+
+    /// Diagnostic switch: with `OF_AERIAL_ARRIVAL_FLAT` set,
+    /// `Ball::tick_aerial_delivery` applies a decided contest's outcome the
+    /// way it did before 2026-09-06 — the moment the ball reaches the SPOT
+    /// it was aimed at, with no question about whether the man who won it
+    /// got there.
+    ///
+    /// The A/B control for the header landing on a body. It moves the
+    /// aerial supply — contests, headers on goal, corners — so "did the
+    /// deliveries this drops cost anything" is a population question, and
+    /// the only honest way to answer it is the same binary run twice. Read
+    /// once per process. Debug infrastructure — do not remove.
+    pub fn aerial_arrival_flat() -> bool {
+        use std::sync::OnceLock;
+        static FLAT: OnceLock<bool> = OnceLock::new();
+        *FLAT.get_or_init(|| std::env::var("OF_AERIAL_ARRIVAL_FLAT").is_ok())
+    }
+
     /// Diagnostic switch: with `OF_HOME_FLAT` set, EVERY home-advantage
     /// channel is neutral — `crowd_arousal` is 1.0 for both sides, the
     /// tactical press/risk/tempo lift is not applied, and the referee's

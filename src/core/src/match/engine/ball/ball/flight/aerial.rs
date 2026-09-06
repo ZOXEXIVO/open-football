@@ -1,5 +1,6 @@
+use crate::r#match::MatchContext;
 use crate::r#match::MatchPlayer;
-use crate::r#match::engine::ball::ball::Ball;
+use crate::r#match::engine::ball::ball::{Ball, PlayerReach};
 use nalgebra::Vector3;
 
 /// How high a footballer can play the ball, and what it costs him to do
@@ -298,11 +299,58 @@ impl Ball {
         if gap > ARRIVAL_RADIUS {
             return;
         }
+        // ⚠ **…AND THE HEADER HAPPENS AT THE MAN.**
+        //
+        // The radius above says the ball got where it was AIMED. The
+        // outcome is a header — a velocity written onto the ball at heading
+        // height — and writing it because the ball reached a SPOT turns the
+        // ball round in mid-air whether or not the winner is under it.
+        // Measured off a recorded match: **a dozen a match**, reversing
+        // 160-180° at 2.75-3.0 m with the nearest man three metres away, in
+        // the band 11-17 m out from goal where a cross is attacked. That is
+        // the reported *"the ball bounces off something invisible above the
+        // player"*, and it is the same defect the block channels carried.
+        //
+        // The note above is right that a radius around the WINNER is not
+        // how a delivery arrives — a cross is aimed at a spot and the man
+        // runs onto it. So both halves are asked: the ball has to reach the
+        // spot, and he has to be able to head it when it does. If he is not
+        // there yet the hold keeps the ball in the heading band for ~40
+        // ticks and this is asked again on the next one; the deadline is
+        // what ends it if he never arrives, exactly as before.
+        //
+        // `PlayerReach::can_strike(.., aerial = true)` and nothing of this
+        // module's own: it is `KICKABLE_DISTANCE` across the grass and the
+        // man's own jumping ceiling up it, which is the engine's single
+        // answer to "may he play this ball", and a second opinion here is
+        // how the two would drift.
+        let winner = players.iter().find(|p| p.id == delivery.winner_id);
+        #[cfg(feature = "match-logs")]
+        let to_winner = winner
+            .map(|p| (p.position.x - self.position.x).hypot(p.position.y - self.position.y))
+            .unwrap_or(f32::MAX);
+        let in_reach = winner.is_some_and(|p| PlayerReach::can_strike(self, p, true));
+        if !in_reach && !MatchContext::aerial_arrival_flat() {
+            // He is not there yet. The hold keeps the ball in the heading
+            // band and this is asked again next tick; the deadline is what
+            // ends it if he never comes.
+            #[cfg(feature = "match-logs")]
+            crate::r#match::engine::ball::ball::teleport::TeleportCensus::note_delivery_waiting();
+            return;
+        }
+        // Booked HERE and not above the gate: the delivery arrives once,
+        // and a census that counts every tick the ball spends over its aim
+        // point waiting for him is counting ticks, not arrivals.
+        #[cfg(feature = "match-logs")]
+        crate::r#match::engine::ball::ball::teleport::TeleportCensus::note_delivery_arrived(
+            gap,
+            to_winner,
+            self.position.z,
+            !in_reach,
+        );
         // Arrived. Apply the outcome on the VELOCITY only — the position
         // is wherever the flight put it, which is the whole difference
         // between this and the write it replaces.
-        #[cfg(feature = "match-logs")]
-        crate::r#match::engine::ball::ball::teleport::TeleportCensus::note_delivery_arrived(gap);
         if delivery.force_heading {
             self.pending_aerial_strike = Some(delivery.winner_id);
         }

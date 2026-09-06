@@ -863,7 +863,32 @@ impl Actors {
     /// to carry its own copy of this number. Two copies of "how high can a
     /// footballer reach" is how the picture and the sound come to disagree
     /// about who just kicked something.
+    ///
+    /// ⚠ **It is the ceiling on OWNING the ball, not on striking one** — see
+    /// [`Self::HEADED_CEILING`], which is higher. The two are a different
+    /// question and the engine has always answered them separately
+    /// (`PlayerReach::can_possess` against `can_strike`); one number cannot
+    /// be right for both, and raising THIS one is what makes a ball climbing
+    /// away off a forehead read as still being his.
     pub(crate) const OVERHEAD: f32 = 2.8;
+
+    /// **The highest ball a man is drawn PLAYING**, in metres.
+    ///
+    /// [`Self::OVERHEAD`] is the ceiling on the ball being HIS — above it a
+    /// ball is in flight and belongs to nobody until it comes down, which is
+    /// what lets the header climbing off his forehead read as having left
+    /// him. Whether he STRUCK one is a different question with a higher
+    /// answer: the engine lets a man head a ball to his own jumping ceiling,
+    /// and the best leaper's is `AerialReach::HIGHEST` — 3.1 m.
+    ///
+    /// ⚠ **The two used to be one number and it was the lower.** Everything
+    /// in the band between them was a header the picture refused to
+    /// attribute to anybody: the ball turned at 2.9 m and the man who had
+    /// just headed it stood under it doing nothing, which is a literal
+    /// reading of the *"the ball bounces off something invisible above the
+    /// player"* report. Measured over two recorded matches, the band holds
+    /// 4-17 contacts a match.
+    const HEADED_CEILING: f32 = 3.1;
     /// How close to a touchline a DEAD ball has to be struck from to be a
     /// throw-in, in metres, and how slowly it has to have been travelling
     /// first.
@@ -1973,11 +1998,15 @@ impl Actors {
         // whoever happened to be standing underneath it and drawn as his
         // swing. The engine no longer produces one — nobody is granted or
         // strikes a ball above his own reach — but the rig should not be
-        // capable of drawing it whatever it is handed. See
-        // [`Actors::OVERHEAD`].
+        // capable of drawing it whatever it is handed.
+        //
+        // [`Actors::HEADED_CEILING`] and not [`Actors::OVERHEAD`]: this asks
+        // whether he STRUCK it, and a man heads a ball to the top of his
+        // jump. Against the lower number a header at 2.9 m was drawn as
+        // nobody touching anything.
         ball_state.impact = match (coming, striker) {
             (Some(contact), Some((by, range)))
-                if range < Self::STRIKE_REACH && contact.at.y <= Self::OVERHEAD =>
+                if range < Self::STRIKE_REACH && contact.at.y <= Self::HEADED_CEILING =>
             {
                 Some(Impact { by, contact })
             }
@@ -9164,5 +9193,21 @@ mod midair {
             Actors::HEADED < Actors::OVERHEAD,
             "a header happens in a band between the boot and the ceiling"
         );
+    }
+
+    /// ⚠ **Owning a ball and striking one are two questions**, and the
+    /// engine answers them separately — `PlayerReach::can_possess` against
+    /// `can_strike`. A ball climbing off a forehead has LEFT him, which is
+    /// what `OVERHEAD` is for; the header that sent it is HIS, which is what
+    /// `HEADED_CEILING` is for, and that is the top of a jump rather than
+    /// the ceiling on a ball being played TO somebody.
+    #[test]
+    fn a_man_strikes_a_ball_higher_than_one_can_be_his() {
+        assert!(
+            Actors::HEADED_CEILING > Actors::OVERHEAD,
+            "a header goes higher than a ball can be somebody's"
+        );
+        // `AerialReach::HIGHEST` in the engine — the best leaper's jump.
+        assert_eq!(Actors::HEADED_CEILING, 3.1);
     }
 }

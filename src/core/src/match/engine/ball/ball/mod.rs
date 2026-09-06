@@ -32,8 +32,8 @@ pub mod tick;
 // be one constant or the taker is pinned short of the ball he is fetching.
 pub use boundary::{Perimeter, RunOff, frame, net, runoff};
 pub use contest::{
-    ContactInPlace, PassChainEntry, PlayerReach, PossessionSource, block, contact, interception,
-    ownership, possession, reach, save,
+    BlockContact, ContactInPlace, PassChainEntry, PlayerReach, PossessionSource, block, contact,
+    interception, ownership, possession, reach, save,
 };
 // `pub` for `SpinModel` — the strike sites (shot / cross) solve the
 // rotation they need from the same Magnus coefficient the physics

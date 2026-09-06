@@ -41,4 +41,4 @@ pub mod save;
 
 pub use contact::ContactInPlace;
 pub use possession::{PassChainEntry, PossessionSource};
-pub use reach::PlayerReach;
+pub use reach::{BlockContact, PlayerReach};

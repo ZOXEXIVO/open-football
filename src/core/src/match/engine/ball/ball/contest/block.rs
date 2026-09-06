@@ -3,10 +3,17 @@
 
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
-use crate::r#match::engine::ball::ball::Ball;
 use crate::r#match::engine::ball::ball::contest::contact::ContactInPlace;
 #[cfg(feature = "match-logs")]
+use crate::r#match::engine::ball::ball::diagnostics::block_diag::{
+    BEHIND_BALL, BEYOND_LOOKAHEAD, BlockDiag, CANDIDATES, FIRED, IN_WINDOW, OPP_SEEN,
+    OUTSIDE_CORRIDOR, PERP_SUM_X100, SHOTS_SEEN, TOO_HIGH,
+};
+#[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::strike_diag::{GrantPath, StrikeCensus};
+use crate::r#match::engine::ball::ball::{
+    AerialReach, Ball, BlockContact, CONTROL_DISTANCE, PlayerReach,
+};
 use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
@@ -19,6 +26,59 @@ use nalgebra::Vector3;
 use std::sync::atomic::Ordering;
 
 impl Ball {
+    /// **How high a defender can get something in the way of a shot**, in
+    /// metres.
+    ///
+    /// [`AerialReach::STANDING`] — the engine's own figure for the highest
+    /// ball a man reaches with both feet on the floor, which is what a block
+    /// is: a raised boot, a shoulder, an arm across the body. Above it he has
+    /// to leave the ground, and a defender jumping AT a shot is heading it,
+    /// which is the aerial contest's business.
+    ///
+    /// It read `> 2.0` once, with a comment calling it chest height — but 1u
+    /// is 0.125 m, so the bar was 25 CENTIMETRES and anything above ankle
+    /// height was unblockable, excluding 23% of all shot-ticks outright.
+    /// Then it was 16.0, which on an axis measured in metres put the ceiling
+    /// above the stands and never rejected anything. It is now the same
+    /// number the rest of the engine uses for the same question, so it cannot
+    /// drift again.
+    pub(crate) const MAX_BLOCK_HEIGHT: f32 = AerialReach::STANDING;
+
+    /// Where a committed blocker stands relative to the ball this tick.
+    ///
+    /// The shared half of both block channels' deferral — see
+    /// [`PlayerReach::block_contact`] for the rule and for what it is
+    /// fixing. A blocker who is no longer on the pitch has missed it.
+    pub(crate) fn block_contact_with(
+        &self,
+        blocker_id: u32,
+        players: &[MatchPlayer],
+        reach: f32,
+        ceiling: f32,
+    ) -> BlockContact {
+        let Some(blocker) = players.iter().find(|p| p.id == blocker_id) else {
+            return BlockContact::Missed;
+        };
+        // A/B control — see `MatchContext::block_contact_flat`. The old
+        // rule, exactly: the distance across the grass and nothing else,
+        // and a commitment that is never given up.
+        if MatchContext::block_contact_flat() {
+            let gap =
+                (blocker.position.x - self.position.x).hypot(blocker.position.y - self.position.y);
+            return if gap <= reach {
+                BlockContact::AtTheBody
+            } else {
+                BlockContact::Coming
+            };
+        }
+        let across = Vector3::new(self.velocity.x, self.velocity.y, 0.0);
+        let Some(direction) = across.try_normalize(1.0e-3) else {
+            // It is not going anywhere. The loose-ball machinery owns it.
+            return BlockContact::Missed;
+        };
+        PlayerReach::block_contact(self, blocker, direction, reach, ceiling)
+    }
+
     /// Shot-block check. Runs only when the ball is a shot in flight
     /// (has a cached goal-line target). A defender whose body is in
     /// the shot's corridor between the current ball position and the
@@ -46,17 +106,31 @@ impl Ball {
         }
         // A block already won, waiting for the ball to arrive at the man who
         // won it — see `ShotTarget::blocked_by`.
+        //
+        // ⚠ **On three axes.** This used to be `hypot(dx, dy) <= BLOCK_REACH`
+        // and nothing else, and the height gate below is at the wrong end of
+        // the flight to cover it: the roll happens up to eleven metres
+        // earlier, so a shot rolled for at knee height was deflected wherever
+        // the ball had climbed to by the time it reached him. See
+        // [`PlayerReach::block_contact`].
         if let Some((blocker_id, outcome_roll)) = shot_target.blocked_by {
-            let reached = players
-                .iter()
-                .find(|p| p.id == blocker_id)
-                .map(|p| {
-                    (p.position.x - self.position.x).hypot(p.position.y - self.position.y)
-                        <= Self::BLOCK_REACH
-                })
-                .unwrap_or(false);
-            if reached {
-                self.resolve_block(blocker_id, outcome_roll, context, players, events);
+            match self.block_contact_with(
+                blocker_id,
+                players,
+                Self::BLOCK_REACH,
+                Self::MAX_BLOCK_HEIGHT,
+            ) {
+                BlockContact::Coming => {}
+                // Over his head or past him. He did not get it, and the
+                // commitment goes with him — the shot has had its one roll.
+                BlockContact::Missed => {
+                    if let Some(t) = self.cached_shot_target.as_mut() {
+                        t.blocked_by = None;
+                    }
+                }
+                BlockContact::AtTheBody => {
+                    self.resolve_block(blocker_id, outcome_roll, context, players, events, true);
+                }
             }
             return;
         }
@@ -65,22 +139,10 @@ impl Ball {
             return;
         }
         #[cfg(feature = "match-logs")]
-        crate::r#match::engine::ball::ball::diagnostics::block_diag::SHOTS_SEEN
-            .fetch_add(1, Ordering::Relaxed);
-        // Ball above defender reach. This read `> 2.0` and the comment
-        // called it "chest height" — but 1u is 0.125 m, so the bar was
-        // 25 CENTIMETRES. Anything above ankle height was unblockable,
-        // which excluded 23% of all shot-ticks outright. A defender
-        // blocks with whatever he can get in the way, up to a raised
-        // boot or a head: 16u is 2 m.
-        // 2.2 m — a defender's raised-arm reach. Was 16.0, which on a
-        // vertical axis measured in metres put the block ceiling above the
-        // stands; it never rejected anything.
-        const MAX_BLOCK_HEIGHT: f32 = 2.2;
-        if self.position.z > MAX_BLOCK_HEIGHT {
+        SHOTS_SEEN.fetch_add(1, Ordering::Relaxed);
+        if self.position.z > Self::MAX_BLOCK_HEIGHT {
             #[cfg(feature = "match-logs")]
-            crate::r#match::engine::ball::ball::diagnostics::block_diag::TOO_HIGH
-                .fetch_add(1, Ordering::Relaxed);
+            TOO_HIGH.fetch_add(1, Ordering::Relaxed);
             return;
         }
 
@@ -149,8 +211,7 @@ impl Ball {
             }
 
             #[cfg(feature = "match-logs")]
-            crate::r#match::engine::ball::ball::diagnostics::block_diag::OPP_SEEN
-                .fetch_add(1, Ordering::Relaxed);
+            OPP_SEEN.fetch_add(1, Ordering::Relaxed);
 
             // Project defender position onto the shot line.
             let dx = player.position.x - self.position.x;
@@ -161,14 +222,12 @@ impl Ball {
             // with the ball (who's already been passed) doesn't count.
             if projection < 1.0 {
                 #[cfg(feature = "match-logs")]
-                crate::r#match::engine::ball::ball::diagnostics::block_diag::BEHIND_BALL
-                    .fetch_add(1, Ordering::Relaxed);
+                BEHIND_BALL.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
             if projection > BLOCK_LOOKAHEAD {
                 #[cfg(feature = "match-logs")]
-                crate::r#match::engine::ball::ball::diagnostics::block_diag::BEYOND_LOOKAHEAD
-                    .fetch_add(1, Ordering::Relaxed);
+                BEYOND_LOOKAHEAD.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
             // Perpendicular distance to the line.
@@ -177,15 +236,12 @@ impl Ball {
             let perp_dist = perp.sqrt();
             #[cfg(feature = "match-logs")]
             {
-                crate::r#match::engine::ball::ball::diagnostics::block_diag::IN_WINDOW
-                    .fetch_add(1, Ordering::Relaxed);
-                crate::r#match::engine::ball::ball::diagnostics::block_diag::PERP_SUM_X100
-                    .fetch_add((perp_dist * 100.0) as u64, Ordering::Relaxed);
+                IN_WINDOW.fetch_add(1, Ordering::Relaxed);
+                PERP_SUM_X100.fetch_add((perp_dist * 100.0) as u64, Ordering::Relaxed);
             }
             if perp_dist > BLOCK_CORRIDOR {
                 #[cfg(feature = "match-logs")]
-                crate::r#match::engine::ball::ball::diagnostics::block_diag::OUTSIDE_CORRIDOR
-                    .fetch_add(1, Ordering::Relaxed);
+                OUTSIDE_CORRIDOR.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
 
@@ -249,8 +305,7 @@ impl Ball {
         // next tick.
         if best_blocker.is_some() {
             #[cfg(feature = "match-logs")]
-            crate::r#match::engine::ball::ball::diagnostics::block_diag::CANDIDATES
-                .fetch_add(1, Ordering::Relaxed);
+            CANDIDATES.fetch_add(1, Ordering::Relaxed);
             if let Some(t) = self.cached_shot_target.as_mut() {
                 t.block_rolled = true;
             }
@@ -260,8 +315,7 @@ impl Ball {
             _ => return,
         };
         #[cfg(feature = "match-logs")]
-        crate::r#match::engine::ball::ball::diagnostics::block_diag::FIRED
-            .fetch_add(1, Ordering::Relaxed);
+        FIRED.fetch_add(1, Ordering::Relaxed);
 
         // The outcome roll is drawn HERE, on the tick the block was won, so
         // the shared RNG stream is untouched by the deferral below.
@@ -274,20 +328,28 @@ impl Ball {
         // turned the ball round in mid-flight with the defender still eleven
         // metres away, which is the "the ball bounced off nothing" report on
         // the same axis as the keeper's. Commit and wait: the rate is
-        // decided here, the contact happens where the body is.
-        let gap_now = players
-            .iter()
-            .find(|p| p.id == blocker_id)
-            .map(|p| (p.position.x - self.position.x).hypot(p.position.y - self.position.y))
-            .unwrap_or(f32::MAX);
-        if gap_now > Self::BLOCK_REACH {
-            if let Some(t) = self.cached_shot_target.as_mut() {
-                t.blocked_by = Some((blocker_id, outcome_roll));
+        // decided here, the contact happens where the body is. The ball is
+        // already under `MAX_BLOCK_HEIGHT` on this path — the gate above
+        // returned otherwise — so the only open question is the distance,
+        // and the tick after this one asks all three axes again.
+        match self.block_contact_with(
+            blocker_id,
+            players,
+            Self::BLOCK_REACH,
+            Self::MAX_BLOCK_HEIGHT,
+        ) {
+            BlockContact::AtTheBody => {
+                self.resolve_block(blocker_id, outcome_roll, context, players, events, false)
             }
-            return;
+            // Still on its way to him, or already past him — either way
+            // the commitment is what carries it, and the deferred branch
+            // at the top of this function is what spends it.
+            _ => {
+                if let Some(t) = self.cached_shot_target.as_mut() {
+                    t.blocked_by = Some((blocker_id, outcome_roll));
+                }
+            }
         }
-
-        self.resolve_block(blocker_id, outcome_roll, context, players, events);
     }
 
     /// How close the blocker has to be for the contact to be his. 16u is
@@ -325,6 +387,7 @@ impl Ball {
         context: &MatchContext,
         players: &[MatchPlayer],
         events: &mut EventCollection,
+        deferred: bool,
     ) {
         let ball_velocity_2d =
             (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y).sqrt();
@@ -360,7 +423,17 @@ impl Ball {
         // `move_to` would drop it again on the next tick as an
         // unreachable owner.
         let blocker_gap = (blocker_pos.x - self.position.x).hypot(blocker_pos.y - self.position.y);
-        let blocker_in_reach = blocker_gap <= crate::r#match::engine::ball::ball::CONTROL_DISTANCE;
+        #[cfg(feature = "match-logs")]
+        BlockDiag::note_contact(
+            0,
+            self.position.z,
+            blocker_gap,
+            Self::MAX_BLOCK_HEIGHT,
+            deferred,
+        );
+        #[cfg(not(feature = "match-logs"))]
+        let _ = deferred;
+        let blocker_in_reach = blocker_gap <= CONTROL_DISTANCE;
         let controlled_block_prob = if blocker_in_reach {
             (0.06 + composure * 0.05 + technique * 0.04 + ball_speed_low_bonus).clamp(0.06, 0.30)
         } else {
