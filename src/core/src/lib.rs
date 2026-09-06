@@ -135,6 +135,7 @@ pub use club::{
     InjuryRecoveryStage,
     InjurySeverity,
     InjuryType,
+    InternationalStatistics,
     Language,
     LeadershipEventContext,
     LeadershipEventKind,

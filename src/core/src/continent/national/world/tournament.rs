@@ -9,17 +9,16 @@
 
 use chrono::NaiveDate;
 use log::info;
-use std::collections::HashMap;
 
 use super::lookups::world_country_name;
 use super::stats::{
-    apply_world_elo, apply_world_international_stats, record_world_country_schedule,
+    InternationalMatchContext, apply_world_elo, apply_world_international_stats,
+    collect_international_appearances, record_world_country_schedule,
 };
 use crate::NationalTeamLevel;
 use crate::competitions::global::GlobalCompetitionFixture;
 use crate::continent::Continent;
 use crate::r#match::{MatchResult, MatchResultRaw};
-use std::collections::HashSet;
 
 /// Apply a single global-tournament match. The caller still owns
 /// recording the result into the [`GlobalCompetitions`] state and
@@ -47,20 +46,20 @@ pub fn apply_global_tournament_result(
         away_country_id
     );
 
-    let player_goals: HashMap<u32, u16> = raw
-        .player_stats
-        .iter()
-        .filter(|(_, stats)| stats.goals > 0)
-        .map(|(&id, stats)| (id, stats.goals))
-        .collect();
-    let appearance_ids: HashSet<u32> = raw.player_stats.keys().copied().collect();
+    let appearances = collect_international_appearances(
+        raw,
+        home_country_id,
+        away_country_id,
+        home_score,
+        away_score,
+    );
 
     apply_world_international_stats(
         continents,
         home_country_id,
         away_country_id,
-        &player_goals,
-        &appearance_ids,
+        &appearances,
+        &InternationalMatchContext::new(date, NationalTeamLevel::Senior, competition_full_name),
     );
     apply_world_elo(
         continents,

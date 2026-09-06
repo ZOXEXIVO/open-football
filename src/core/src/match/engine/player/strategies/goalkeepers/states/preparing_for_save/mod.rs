@@ -237,11 +237,24 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
             let intercept_point = KeeperSetPosition::set_point(
                 goal_pos,
                 // His read of it, which lags the truth and converges on it
-                // — see [`KeeperShotReaction::crossing_y`].
-                KeeperShotReaction::crossing_y(ctx, &prof, goal_pos, target),
+                // — see [`KeeperShotReaction::crossing_y`] — brought into
+                // HIS OWN PLANE, which is where he is adjudicated. The same
+                // projection the dive aims down, so the two cannot disagree
+                // about where the ball is going to be. See
+                // [`KeeperSetPosition::set_point`].
+                KeeperShotDive::crossing_at(
+                    ctx.player.position.x,
+                    target.struck_from,
+                    goal_pos.x,
+                    KeeperShotReaction::crossing_y(ctx, &prof, goal_pos, target),
+                )
+                .y,
                 (ball_position - goal_pos).magnitude(),
                 ctx.context.field_size.width as f32,
                 prof.positioning,
+                // He does not back-pedal at a struck ball — see
+                // [`KeeperSetPosition::set_point`].
+                (ctx.player.position.x - goal_pos.x).abs(),
             );
             // …but only as fast as a set keeper moves. Everything past a
             // side-step has to come out of the dive; see

@@ -35,9 +35,10 @@ use crate::transfers::ScoutingRegion;
 use crate::transfers::pipeline::HomePull;
 use crate::utils::DateUtils;
 use crate::{
-    CompetitionStatistics, IndividualTrainingPlan, Person, PersonAttributes, PlayerDecisionHistory,
-    PlayerHappiness, PlayerPositionType, PlayerPositions, PlayerStatistics,
-    PlayerStatisticsHistory, PlayerStatus, PlayerTrainingHistory, PlayerValueCalculator, Relations,
+    CompetitionStatistics, IndividualTrainingPlan, InternationalStatistics, NationalTeamLevel,
+    Person, PersonAttributes, PlayerDecisionHistory, PlayerHappiness, PlayerPositionType,
+    PlayerPositions, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
+    PlayerTrainingHistory, PlayerValueCalculator, Relations,
 };
 use crate::{
     HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
@@ -228,6 +229,13 @@ pub struct Player {
     /// tagged with the competition slug so the player overview can label
     /// each line with the real competition instead of a single fixed row.
     pub cup_statistics_by_competition: Vec<CompetitionStatistics>,
+    /// National-team appearances, one slice per (season, level,
+    /// competition). Deliberately NOT part of `statistics_history`: a cap
+    /// is earned for a country, not for an employer, so nothing about a
+    /// transfer, a loan or a season-end drain may touch it and the club
+    /// career totals never absorb it. Written by the national-team match
+    /// sweep; see [`InternationalStatistics`].
+    pub international_statistics: Vec<InternationalStatistics>,
     pub statistics_history: PlayerStatisticsHistory,
     pub decision_history: PlayerDecisionHistory,
 
@@ -676,6 +684,37 @@ impl Player {
             });
         &mut self
             .cup_statistics_by_competition
+            .last_mut()
+            .expect("entry just pushed")
+            .statistics
+    }
+
+    /// Mutable handle on one national-team stat slice, creating an empty
+    /// one the first time the player appears in that (season, level,
+    /// competition). The national-team match sweep books caps here.
+    pub fn international_statistics_mut(
+        &mut self,
+        season_start_year: u16,
+        level: NationalTeamLevel,
+        country_id: u32,
+        competition_name: &str,
+    ) -> &mut PlayerStatistics {
+        if let Some(idx) = self.international_statistics.iter().position(|s| {
+            s.season_start_year == season_start_year
+                && s.level == level
+                && s.competition_name == competition_name
+        }) {
+            return &mut self.international_statistics[idx].statistics;
+        }
+        self.international_statistics.push(InternationalStatistics {
+            season_start_year,
+            level,
+            country_id,
+            competition_name: competition_name.to_string(),
+            statistics: PlayerStatistics::default(),
+        });
+        &mut self
+            .international_statistics
             .last_mut()
             .expect("entry just pushed")
             .statistics

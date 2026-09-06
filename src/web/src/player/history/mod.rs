@@ -10,10 +10,12 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
+use core::league::Season;
 use core::utils::FormattingUtils;
 use core::{
-    LiveCupSlice, PlayerLiveStatsInput, PlayerStatCompetitionKind, PlayerStatistics,
-    PlayerStatisticsProjection, PlayerStatusType, SimulatorData,
+    InternationalStatistics, LiveCupSlice, NationalTeamLevel, PlayerLiveStatsInput,
+    PlayerStatCompetitionKind, PlayerStatistics, PlayerStatisticsProjection, PlayerStatusType,
+    SimulatorData,
 };
 use serde::Deserialize;
 
@@ -46,6 +48,14 @@ pub struct PlayerHistoryTemplate {
     pub player_slug: String,
     pub club_id: u32,
     pub items: Vec<PlayerHistorySeasonItem>,
+    /// The SENIOR international record, newest season first. Rendered as
+    /// its own panel with its own totals: a cap is earned for a country,
+    /// not for an employer, so it must never land in the club career
+    /// table or the career total underneath it. Age-group caps (U21) are
+    /// friendly-grade and stay off this page entirely — they show on the
+    /// Overview panel and in the Matches tab.
+    pub international: Vec<PlayerInternationalSeasonItem>,
+    pub international_totals: PlayerHistoryStats,
     /// Every club name the table shows, once each. The Club cells plant a
     /// zero-height copy of the whole set, which is what makes each name box
     /// as wide as the longest name and holds the column's left edge.
@@ -76,6 +86,18 @@ pub struct PlayerHistorySeasonItem {
     pub league_name: String,
     pub league_slug: String,
     pub breakdown: Vec<PlayerHistoryCompetitionStats>,
+}
+
+/// One season of senior international football in one competition — the
+/// granularity the appearances are stored at. Age-group caps never reach
+/// this list; see the filter that builds it.
+pub struct PlayerInternationalSeasonItem {
+    pub season: String,
+    pub country_code: String,
+    pub country_name: String,
+    pub country_slug: String,
+    pub competition_name: String,
+    pub stats: PlayerHistoryStats,
 }
 
 #[derive(Clone)]
@@ -500,6 +522,49 @@ pub async fn player_history_action(
 
     let totals = to_history_stats(&career_totals);
 
+    // The international record, built straight off the player's own
+    // national-team slices — it never passes through the club
+    // projection, which is the whole point: no drain, no spell, no
+    // career-total contamination.
+    //
+    // SENIOR ONLY (user ruling, 2026-09-06). Age-group football is
+    // friendly-grade: a U21 cap is worth showing while the player is
+    // young — it has its own line on the Overview panel and its own row
+    // in the Matches tab — but it is not part of the career record a
+    // reader is looking at here, any more than a youth-league appearance
+    // for the club's U19s is. Career history is the senior game.
+    let mut international_slices: Vec<&InternationalStatistics> = player
+        .international_statistics
+        .iter()
+        .filter(|s| s.level == NationalTeamLevel::Senior && s.statistics.total_games() > 0)
+        .collect();
+    international_slices.sort_by(|a, b| {
+        b.season_start_year
+            .cmp(&a.season_start_year)
+            .then_with(|| a.competition_name.cmp(&b.competition_name))
+    });
+
+    let mut international_career = PlayerStatistics::default();
+    for slice in &international_slices {
+        international_career.merge_from(&slice.statistics);
+    }
+    let international_totals = to_history_stats(&international_career);
+
+    let international: Vec<PlayerInternationalSeasonItem> = international_slices
+        .into_iter()
+        .map(|slice| {
+            let country = simulator_data.country(slice.country_id);
+            PlayerInternationalSeasonItem {
+                season: Season::new(slice.season_start_year).display,
+                country_code: country.map(|c| c.code.to_lowercase()).unwrap_or_default(),
+                country_name: country.map(|c| c.name.clone()).unwrap_or_default(),
+                country_slug: country.map(|c| c.slug.clone()).unwrap_or_default(),
+                competition_name: slice.competition_name.clone(),
+                stats: to_history_stats(&slice.statistics),
+            }
+        })
+        .collect();
+
     if has_no_team {
         let sub_title = if player.is_retired() {
             i18n.t("retired").to_string()
@@ -527,6 +592,8 @@ pub async fn player_history_action(
             player_slug: canonical.clone(),
             club_id: 0,
             items,
+            international,
+            international_totals,
             club_name_sizers,
             totals,
             is_goalkeeper: player.position().is_goalkeeper(),
@@ -582,6 +649,8 @@ pub async fn player_history_action(
             player_slug: canonical,
             club_id: team.club_id,
             items,
+            international,
+            international_totals,
             club_name_sizers,
             totals,
             is_goalkeeper: player.position().is_goalkeeper(),

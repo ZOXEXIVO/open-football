@@ -92,6 +92,72 @@
             </tbody>
         </table>
     </section>
+
+    {# Senior international football gets its own table. It shares the club  #}
+    {# table's columns so the two read alike, but it keeps its own totals: a #}
+    {# cap is earned for a country, and folding it into a club career total  #}
+    {# would claim appearances no club ever gave him. Age-group caps are     #}
+    {# friendly-grade and never reach this list.                             #}
+    {% if !international.is_empty() %}
+    <section class="fm-panel fm-panel--scrollx mt-3">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("international_career") }}</h3>
+        </div>
+        <table class="fm-stats fm-history-table">
+            <thead>
+                <tr>
+                    <th class="sq-season">{{ i18n.t("season") }}</th>
+                    <th class="sq-nat">{{ i18n.t("nat") }}</th>
+                    <th class="sq-league">{{ i18n.t("competition") }}</th>
+                    <th class="sq-stat">{{ i18n.t("apps") }}</th>
+                    {% if is_goalkeeper %}
+                    <th class="sq-stat">{{ i18n.t("con") }}</th>
+                    <th class="sq-stat">{{ i18n.t("cln") }}</th>
+                    {% else %}
+                    <th class="sq-stat">{{ i18n.t("gls") }}</th>
+                    <th class="sq-stat">{{ i18n.t("ast") }}</th>
+                    {% endif %}
+                    <th class="sq-stat">{{ i18n.t("pom") }}</th>
+                    <th class="sq-stat">{{ i18n.t("av_rat") }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in international %}
+                <tr class="fm-history-row">
+                    <td class="sq-season">{{ item.season }}</td>
+                    <td class="sq-nat">{% if !item.country_code.is_empty() %}<a href="/{{ lang }}/countries/{{ item.country_slug }}"><span class="flag flag-{{ item.country_code }}" title="{{ item.country_name }}"></span> {{ item.country_name }}</a>{% endif %}</td>
+                    <td class="sq-league">{{ item.competition_name }}</td>
+                    <td class="sq-stat">{{ item.stats.played }}{% if item.stats.played_subs > 0 %} ({{ item.stats.played_subs }}){% endif %}</td>
+                    {% if is_goalkeeper %}
+                    <td class="sq-stat">{{ item.stats.conceded }}</td>
+                    <td class="sq-stat">{{ item.stats.clean_sheets }}</td>
+                    {% else %}
+                    <td class="sq-stat">{{ item.stats.goals }}</td>
+                    <td class="sq-stat">{{ item.stats.assists }}</td>
+                    {% endif %}
+                    <td class="sq-stat">{{ item.stats.player_of_the_match }}</td>
+                    <td class="sq-stat">{{ item.stats.average_rating }}</td>
+                </tr>
+                {% endfor %}
+                <tr class="fm-totals-row">
+                    <td class="sq-season"></td>
+                    <td class="sq-nat"></td>
+                    <td class="sq-league"></td>
+                    <td class="sq-stat">{{ international_totals.played + international_totals.played_subs }}</td>
+                    {% if is_goalkeeper %}
+                    <td class="sq-stat">{{ international_totals.conceded }}</td>
+                    <td class="sq-stat">{{ international_totals.clean_sheets }}</td>
+                    {% else %}
+                    <td class="sq-stat">{{ international_totals.goals }}</td>
+                    <td class="sq-stat">{{ international_totals.assists }}</td>
+                    {% endif %}
+                    <td class="sq-stat">{{ international_totals.player_of_the_match }}</td>
+                    <td class="sq-stat">{{ international_totals.average_rating }}</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+    {% endif %}
 </div>
 {% endblock %}
 

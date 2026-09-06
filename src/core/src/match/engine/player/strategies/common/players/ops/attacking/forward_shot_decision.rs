@@ -2538,6 +2538,73 @@ pub mod mid_run_diag {
     /// ×100 over the in-window ticks.
     pub static GK_RANGE: [AtomicU64; 96] = [const { AtomicU64::new(0) }; 96];
 
+    /// **The arrival, split by how far off his own line the keeper was
+    /// standing when it reached him.**
+    ///
+    /// `KeeperRangeDiag` bands the same arrivals by where the shot was
+    /// STRUCK from, and that cannot see the case the whole one-on-one
+    /// model creates: the keeper who has come to meet a man twenty metres
+    /// out turns a long shot into a point-blank one *for himself*, because
+    /// `SaveModel::contact` scales his reach by the flight from the strike
+    /// to HIM. Banded by strike distance he is filed under "long range",
+    /// where the population is healthy; banded by his own depth he is a
+    /// separate animal, and this is the row that shows it.
+    ///
+    /// It is the census `SaveModel::FULL_STRETCH_TICKS` is derived
+    /// against — see its note for the table — so it has to survive.
+    ///
+    /// Five depth bands (<2 m, 2-4, 4-7, 7-11, 11 m+) x 8 slots:
+    /// +0 on-frame arrivals, +1 of those beyond his reach — no save roll
+    /// at all — +2 Σ the lateral gap he was scored on, at HIS plane, ×100,
+    /// +3 Σ the reach he had ×100, +4 Σ the gap he would have been scored
+    /// on AT THE GOAL LINE ×100, +5 saves the roll passed, +6 Σ his depth
+    /// ×100, +7 arrivals beyond his reach at his own plane that would have
+    /// been inside it at the goal line.
+    ///
+    /// +4 and +7 are the aim half of the same question: while +4 stays
+    /// ABOVE +2 he is nearer the crossing at his own plane than the one at
+    /// the line, which is where `KeeperSetPosition::set_point` now steers
+    /// him.
+    pub static GK_DEPTH: [AtomicU64; 40] = [const { AtomicU64::new(0) }; 40];
+
+    pub struct KeeperDepthDiag;
+
+    impl KeeperDepthDiag {
+        /// Depth off his own goal line, in game units (8 u = 1 m).
+        pub fn band(depth: f32) -> usize {
+            if depth < 16.0 {
+                0
+            } else if depth < 32.0 {
+                1
+            } else if depth < 56.0 {
+                2
+            } else if depth < 88.0 {
+                3
+            } else {
+                4
+            }
+        }
+
+        pub fn add(band: usize, slot: usize, n: u64) {
+            let i = band * 8 + slot;
+            if i < GK_DEPTH.len() {
+                GK_DEPTH[i].fetch_add(n, Ordering::Relaxed);
+            }
+        }
+
+        pub fn note(band: usize, slot: usize) {
+            Self::add(band, slot, 1);
+        }
+
+        pub fn snapshot() -> [u64; 40] {
+            let mut out = [0u64; 40];
+            for (slot, c) in out.iter_mut().zip(GK_DEPTH.iter()) {
+                *slot = c.load(Ordering::Relaxed);
+            }
+            out
+        }
+    }
+
     /// **Does `ShotTarget::goal_line_z` agree with where the ball actually
     /// crosses the line?**
     ///

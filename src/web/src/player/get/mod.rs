@@ -17,9 +17,9 @@ use core::utils::FormattingUtils;
 // two would otherwise collide.
 use core::PlayerStatistics as SeasonStatistics;
 use core::{
-    DomesticCupOverride, LiveCupSlice, Person, Player, PlayerLiveStatsInput, PlayerPositionType,
-    PlayerSquadStatus, PlayerStatCompetitionKind, PlayerStatisticsProjection, PlayerStatusType,
-    SimulatorData, Team, TeamType,
+    DomesticCupOverride, InternationalStatistics, LiveCupSlice, Person, Player,
+    PlayerLiveStatsInput, PlayerPositionType, PlayerSquadStatus, PlayerStatCompetitionKind,
+    PlayerStatisticsProjection, PlayerStatusType, SimulatorData, Team, TeamType,
 };
 use serde::Deserialize;
 
@@ -899,7 +899,61 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
             competition_name: self.i18n.t("league").to_string(),
             stats: Self::empty_dto(),
         }));
+        // National-team football goes last, after the club lines it sits
+        // outside of. A cap is earned for a country, so it is never
+        // folded into the League row the way a continental club tie is —
+        // it gets its own line or none at all.
+        ordered.extend(self.international_rows(player));
         ordered
+    }
+
+    /// This season's national-team lines — senior above U21, then by
+    /// competition, so a player who turns out at both levels reads in a
+    /// stable order.
+    ///
+    /// A slice with no appearances yet is skipped rather than shown at
+    /// zero: unlike the League row, which tells the reader which
+    /// competition the player is registered for, an empty international
+    /// row says nothing a call-up hasn't already said.
+    fn international_rows(&self, player: &Player) -> Vec<CompetitionStatisticsRow> {
+        let season = InternationalStatistics::season_of(self.data.date.date());
+        let mut slices: Vec<&InternationalStatistics> = player
+            .international_statistics
+            .iter()
+            .filter(|s| s.season_start_year == season && s.statistics.total_games() > 0)
+            .collect();
+        slices.sort_by(|a, b| {
+            a.is_under21()
+                .cmp(&b.is_under21())
+                .then_with(|| a.competition_name.cmp(&b.competition_name))
+        });
+        slices
+            .into_iter()
+            .map(|s| CompetitionStatisticsRow {
+                competition_name: self.international_row_label(s),
+                stats: Self::to_dto(&s.statistics),
+            })
+            .collect()
+    }
+
+    /// Display label for a national-team line: the competition it was
+    /// played in ("UEFA U21 Championship"). A fixture with no competition
+    /// behind it falls back to naming the side itself — "Poland U21" —
+    /// which still tells the reader who he turned out for.
+    fn international_row_label(&self, slice: &InternationalStatistics) -> String {
+        if !slice.competition_name.is_empty() {
+            return slice.competition_name.clone();
+        }
+        let country = self
+            .data
+            .country(slice.country_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| self.i18n.t("national_team").to_string());
+        if slice.is_under21() {
+            format!("{} {}", country, self.i18n.t("u21"))
+        } else {
+            country
+        }
     }
 
     /// Display label for an aggregated League / Friendly row. The

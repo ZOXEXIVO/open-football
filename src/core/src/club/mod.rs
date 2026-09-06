@@ -105,6 +105,7 @@ pub use player::{
     InjuryRecoveryStage,
     InjurySeverity,
     InjuryType,
+    InternationalStatistics,
     Language,
     LeadershipEventContext,
     LeadershipEventKind,

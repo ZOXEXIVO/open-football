@@ -37,7 +37,6 @@ use crate::NationalTeam;
 use crate::NationalTeamLevel;
 use crate::Player;
 use crate::Team;
-use std::collections::HashSet;
 
 // ============================================================
 // Test fixtures
@@ -264,11 +263,17 @@ fn synth_match_result(home_score: u8, away_score: u8, scorer_id: Option<u32>) ->
             },
         );
     }
+    // The scorer starts for the home side — `collect_international_appearances`
+    // reads the side and the starter flag off these squads, so a fixture
+    // that names nobody would book every appearance as an away substitute.
+    let mut left_team_players = FieldSquad::new();
+    left_team_players.main.extend(scorer_id);
+
     MatchResultRaw {
         score: Some(synth_score(home_score, away_score)),
         position_data: ResultMatchPositionData::new(),
         recording_artifacts: None,
-        left_team_players: FieldSquad::new(),
+        left_team_players,
         right_team_players: FieldSquad::new(),
         match_time_ms: 5_400_000,
         additional_time_ms: 0,
@@ -354,11 +359,19 @@ fn world_stats_update_reaches_foreign_based_player() {
         });
     }
 
-    let mut goals = HashMap::new();
-    goals.insert(101_u32, 2_u16);
-    let mut appearances = HashSet::new();
-    appearances.insert(101_u32);
-    apply_world_international_stats(&mut continents, 1, 99, &goals, &appearances);
+    let mut raw = synth_match_result(2, 0, Some(101));
+    raw.player_stats
+        .get_mut(&101)
+        .expect("scorer stat line")
+        .goals = 2;
+    let appearances = collect_international_appearances(&raw, 1, 99, 2, 0);
+    apply_world_international_stats(
+        &mut continents,
+        1,
+        99,
+        &appearances,
+        &InternationalMatchContext::new(d(2026, 6, 20), NationalTeamLevel::Senior, "World Cup"),
+    );
 
     let player_attrs = continents
         .iter()
@@ -376,6 +389,28 @@ fn world_stats_update_reaches_foreign_based_player() {
         player_attrs.world_reputation >= 4000,
         "world reputation must be bumped by an international cap"
     );
+
+    // The cap also leaves a readable stat line, filed under the season
+    // and competition it was earned in.
+    let slice = continents
+        .iter()
+        .flat_map(|c| c.countries.iter())
+        .flat_map(|c| c.clubs.iter())
+        .flat_map(|c| c.teams.teams.iter())
+        .flat_map(|t| t.players.players.iter())
+        .find(|p| p.id == 101)
+        .and_then(|p| p.international_statistics.first().cloned())
+        .expect("the appearance must be recorded on the player");
+    assert_eq!(
+        slice.season_start_year, 2025,
+        "June 2026 is the 2025/26 season"
+    );
+    assert_eq!(slice.level, NationalTeamLevel::Senior);
+    assert_eq!(slice.country_id, 1, "he played for the home side");
+    assert_eq!(slice.competition_name, "World Cup");
+    assert_eq!(slice.statistics.played, 1);
+    assert_eq!(slice.statistics.played_subs, 0);
+    assert_eq!(slice.statistics.goals, 2);
 }
 
 /// World Cup / global tournament processing must update apps/goals,
@@ -723,27 +758,31 @@ fn u21_match_stats_increment_only_u21_caps() {
     let country = make_country(1, 1, "Brazil", vec![club], 8000);
     let mut continents = vec![make_continent(1, vec![country])];
 
-    let mut goals = HashMap::new();
-    goals.insert(301u32, 2u16);
-    let mut appearances = HashSet::new();
-    appearances.insert(301u32);
+    let mut raw = synth_match_result(2, 0, Some(301));
+    raw.player_stats
+        .get_mut(&301)
+        .expect("scorer stat line")
+        .goals = 2;
 
     apply_world_international_stats_for_level(
         &mut continents,
         1,
         99,
-        &goals,
-        &appearances,
-        NationalTeamLevel::Under21,
+        &collect_international_appearances(&raw, 1, 99, 2, 0),
+        &InternationalMatchContext::new(
+            d(2026, 11, 18),
+            NationalTeamLevel::Under21,
+            "UEFA U21 Championship",
+        ),
     );
 
-    let attrs = continents[0].countries[0].clubs[0].teams.teams[0]
+    let player = continents[0].countries[0].clubs[0].teams.teams[0]
         .players
         .players
         .iter()
         .find(|p| p.id == 301)
-        .map(|p| p.player_attributes)
         .unwrap();
+    let attrs = player.player_attributes;
 
     assert_eq!(attrs.under_21_international_apps, 1);
     assert_eq!(attrs.under_21_international_goals, 2);
@@ -755,6 +794,16 @@ fn u21_match_stats_increment_only_u21_caps() {
         attrs.international_goals, 0,
         "U21 match must not bump senior goals"
     );
+
+    let slice = player
+        .international_statistics
+        .first()
+        .expect("the U21 appearance must be recorded on the player");
+    assert_eq!(slice.level, NationalTeamLevel::Under21);
+    assert_eq!(slice.season_start_year, 2026);
+    assert_eq!(slice.competition_name, "UEFA U21 Championship");
+    assert_eq!(slice.statistics.played, 1);
+    assert_eq!(slice.statistics.goals, 2);
 }
 
 /// Releasing U21 statuses clears `IntU21` for U21-selected players but

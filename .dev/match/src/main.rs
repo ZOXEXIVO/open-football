@@ -9427,6 +9427,56 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
         }
     }
 
+    // ── KEEPER BY HIS OWN DEPTH ────────────────────────────────────────
+    // The same arrivals as the range table, banded by how far off his line
+    // he was standing instead of by where the shot came from — the only
+    // row that can see what coming out costs him. `err@line` above
+    // `lateral` means he is nearer the crossing at his own plane than the
+    // one at the goal line, which is where he is now steered.
+    {
+        use core::mid_run_diag::KeeperDepthDiag;
+        let d = KeeperDepthDiag::snapshot();
+        if d.iter().any(|&n| n > 0) {
+            println!();
+            println!("--- KEEPER BY HIS OWN DEPTH (on-frame arrivals at his plane) ---");
+            println!(
+                "  {:<12} {:>8} {:>8} {:>9} {:>9} {:>9} {:>8} {:>8}",
+                "off his line", "arrived", "depth", "lateral", "err@line", "reach", "saved",
+                "beyond"
+            );
+            let bands = ["< 2 m", "2-4 m", "4-7 m", "7-11 m", "11 m +"];
+            for (label, band) in bands.iter().zip(0..5usize) {
+                let s = |i: usize| d[band * 8 + i];
+                let n = s(0);
+                if n == 0 {
+                    continue;
+                }
+                let m = |v: u64| v as f64 / 100.0 / n as f64 * 0.125;
+                println!(
+                    "  {:<12} {:>8} {:>7.1}m {:>8.2}m {:>8.2}m {:>8.2}m {:>7.0}% {:>7.0}%",
+                    label,
+                    n,
+                    m(s(6)),
+                    m(s(2)),
+                    m(s(4)),
+                    m(s(3)),
+                    s(5) as f64 * 100.0 / n as f64,
+                    s(1) as f64 * 100.0 / n as f64,
+                );
+            }
+            let tot = |i: usize| (0..5).map(|b| d[b * 8 + i]).sum::<u64>();
+            println!(
+                "  beyond his reach at his own plane {} of {} arrivals ({:.0}%), of which \
+                 {} ({:.0}%) would have been inside it at the goal line",
+                tot(1),
+                tot(0),
+                tot(1) as f64 * 100.0 / tot(0).max(1) as f64,
+                tot(7),
+                tot(7) as f64 * 100.0 / tot(1).max(1) as f64,
+            );
+        }
+    }
+
     // ── KEEPER BY HIS OWN QUALITY ──────────────────────────────────────
     // Does a better keeper GO FOR more of them, as well as stopping more?
     // Needs `SQUAD_SPREAD` set — without it every keeper in the run is

@@ -12,12 +12,12 @@
 
 use chrono::NaiveDate;
 use log::info;
-use std::collections::{HashMap, HashSet};
 
 use super::lookups::{world_country_name, world_country_reputation};
 use super::squad::NationalSquadBuilder;
 use super::stats::{
-    apply_world_elo, apply_world_international_stats_for_level, record_world_country_schedule,
+    InternationalMatchContext, apply_world_elo, apply_world_international_stats_for_level,
+    collect_international_appearances, record_world_country_schedule,
 };
 use crate::continent::Continent;
 use crate::continent::national::NationalCompetitionFixture;
@@ -342,21 +342,20 @@ impl WorldNationalCompetitions {
             );
         }
 
-        let player_goals: HashMap<u32, u16> = raw
-            .player_stats
-            .iter()
-            .filter(|(_, stats)| stats.goals > 0)
-            .map(|(&id, stats)| (id, stats.goals))
-            .collect();
-        let appearance_ids: HashSet<u32> = raw.player_stats.keys().copied().collect();
+        let appearances = collect_international_appearances(
+            &raw,
+            home_country_id,
+            away_country_id,
+            home_score,
+            away_score,
+        );
 
         apply_world_international_stats_for_level(
             continents,
             home_country_id,
             away_country_id,
-            &player_goals,
-            &appearance_ids,
-            level,
+            &appearances,
+            &InternationalMatchContext::new(date, level, &comp_full_name),
         );
         apply_world_elo(
             continents,

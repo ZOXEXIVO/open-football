@@ -8,19 +8,97 @@
 //! national-team match".
 
 use chrono::NaiveDate;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use super::lookups::world_country_elo;
 use crate::continent::Continent;
 use crate::country::national::{NationalTeamFixture, NationalTeamMatchResult};
-use crate::{HappinessEventType, NationalTeamLevel};
+use crate::r#match::{MatchResultRaw, PlayerMatchEndStats};
+use crate::{HappinessEventType, InternationalStatistics, NationalTeamLevel};
+
+/// One player's line from a national-team match — everything the world
+/// sweep needs to book the appearance, gathered once by
+/// [`collect_international_appearances`] so the sweep itself never has
+/// to look back at the raw result.
+pub struct InternationalAppearance<'a> {
+    pub stats: &'a PlayerMatchEndStats,
+    pub is_starter: bool,
+    pub is_motm: bool,
+    /// Goals his own side conceded — the GK clean-sheet input.
+    pub team_goals_against: u8,
+    /// The country he turned out for, read from the squad that named
+    /// him rather than from his passport.
+    pub country_id: u32,
+}
+
+/// Which national fixture the appearances belong to. Carried alongside
+/// the appearance map so the per-season stat slices can be labelled
+/// with the competition that actually produced them.
+pub struct InternationalMatchContext<'a> {
+    pub season_start_year: u16,
+    pub level: NationalTeamLevel,
+    /// Competition name as configured ("UEFA U21 Championship",
+    /// "FIFA World Cup"). Empty for a fixture with no competition
+    /// behind it; the slice then renders under the generic label.
+    pub competition_name: &'a str,
+}
+
+impl<'a> InternationalMatchContext<'a> {
+    pub fn new(date: NaiveDate, level: NationalTeamLevel, competition_name: &'a str) -> Self {
+        Self {
+            season_start_year: InternationalStatistics::season_of(date),
+            level,
+            competition_name,
+        }
+    }
+}
+
+/// Turn a played national-team match into the per-player appearance map
+/// the world sweep consumes.
+///
+/// The engine writes a stat line only for players it had on the pitch,
+/// so `player_stats` is the appearance set — an unused substitute is
+/// named in a squad and absent here, which is what keeps him from
+/// collecting a phantom cap. Starter-vs-substitute and the side a
+/// player turned out for both come from the match squads.
+pub fn collect_international_appearances<'a>(
+    raw: &'a MatchResultRaw,
+    home_country_id: u32,
+    away_country_id: u32,
+    home_score: u8,
+    away_score: u8,
+) -> HashMap<u32, InternationalAppearance<'a>> {
+    raw.player_stats
+        .iter()
+        .map(|(&player_id, stats)| {
+            let is_home = raw.left_team_players.main.contains(&player_id)
+                || raw.left_team_players.substitutes.contains(&player_id);
+            let squad = if is_home {
+                &raw.left_team_players
+            } else {
+                &raw.right_team_players
+            };
+            let appearance = InternationalAppearance {
+                stats,
+                is_starter: squad.main.contains(&player_id),
+                is_motm: raw.player_of_the_match_id == Some(player_id),
+                team_goals_against: if is_home { away_score } else { home_score },
+                country_id: if is_home {
+                    home_country_id
+                } else {
+                    away_country_id
+                },
+            };
+            (player_id, appearance)
+        })
+        .collect()
+}
 
 /// Update apps/goals/reputation for every player who actually appeared
 /// in the match, no matter which continent their club sits on.
-/// `appearance_ids` is the on-pitch appearance set (starters + subs
-/// used) — squad members who didn't play are skipped here so they
-/// don't get a fake cap or a fake `NationalTeamDebut` event. Caller
-/// derives this from the raw match's `player_stats` keys.
+/// `appearances` is the on-pitch appearance set (starters + subs used)
+/// — squad members who didn't play are absent from it, so they don't
+/// get a fake cap or a fake `NationalTeamDebut` event.
 ///
 /// Country-weighted reputation gains: stronger nations push the
 /// reputation needle further (a goal at a World Cup for Brazil counts
@@ -30,69 +108,56 @@ pub fn apply_world_international_stats(
     continents: &mut [Continent],
     home_country_id: u32,
     away_country_id: u32,
-    player_goals: &HashMap<u32, u16>,
-    appearance_ids: &HashSet<u32>,
+    appearances: &HashMap<u32, InternationalAppearance<'_>>,
+    ctx: &InternationalMatchContext<'_>,
 ) {
     apply_world_international_stats_for_level(
         continents,
         home_country_id,
         away_country_id,
-        player_goals,
-        appearance_ids,
-        NationalTeamLevel::Senior,
+        appearances,
+        ctx,
     );
 }
 
-/// Level-aware caps/goals update. Senior bumps `international_apps` /
-/// `international_goals`, reputation, and fires the first-cap debut event.
-/// U21 bumps only `under_21_international_apps` / `under_21_international_goals`
-/// — it never touches senior caps or fires the senior debut event, so a
+/// Level-aware post-match write. Every appearance books its stat line
+/// into the player's own national-team ledger
+/// ([`Player::international_statistics_mut`](crate::Player::international_statistics_mut))
+/// — the club career ledger is untouched, because a cap is earned for a
+/// country and not for an employer.
+///
+/// On top of that, `ctx.level` decides the caps side: Senior bumps
+/// `international_apps` / `international_goals`, reputation, and fires
+/// the first-cap debut event; U21 bumps only
+/// `under_21_international_apps` / `under_21_international_goals` — it
+/// never touches senior caps or fires the senior debut event, so a
 /// player's senior record is built solely by senior appearances.
 pub fn apply_world_international_stats_for_level(
     continents: &mut [Continent],
     home_country_id: u32,
     away_country_id: u32,
-    player_goals: &HashMap<u32, u16>,
-    appearance_ids: &HashSet<u32>,
-    level: NationalTeamLevel,
+    appearances: &HashMap<u32, InternationalAppearance<'_>>,
+    ctx: &InternationalMatchContext<'_>,
 ) {
-    if level == NationalTeamLevel::Under21 {
-        for continent in continents.iter_mut() {
-            for country in continent.countries.iter_mut() {
-                for club in country.clubs.iter_mut() {
-                    for team in club.teams.iter_mut() {
-                        for player in team.players.iter_mut() {
-                            if !appearance_ids.contains(&player.id) {
-                                continue;
-                            }
-                            player.player_attributes.under_21_international_apps += 1;
-                            if let Some(&goals) = player_goals.get(&player.id) {
-                                player.player_attributes.under_21_international_goals += goals;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        return;
-    }
-
+    let is_senior = ctx.level == NationalTeamLevel::Senior;
     let mut country_weights: HashMap<u32, f32> = HashMap::new();
 
-    for continent in continents.iter() {
-        for country in continent.countries.iter() {
-            if country.id != home_country_id && country.id != away_country_id {
-                continue;
-            }
-            let country_rep = country.reputation as f32;
-            // Country reputation is a 0..10000 scale. Dividing by 500
-            // saturated the clamp for every real footballing nation, so a
-            // San Marino cap was worth exactly as much international fame
-            // as a Brazil cap. Scale across the real range instead, with
-            // an average nation landing near 1.0.
-            let country_weight = (0.4 + 1.6 * (country_rep / 10_000.0)).clamp(0.4, 2.0);
-            for s in &country.national_team.squad {
-                country_weights.insert(s.player_id, country_weight);
+    if is_senior {
+        for continent in continents.iter() {
+            for country in continent.countries.iter() {
+                if country.id != home_country_id && country.id != away_country_id {
+                    continue;
+                }
+                let country_rep = country.reputation as f32;
+                // Country reputation is a 0..10000 scale. Dividing by 500
+                // saturated the clamp for every real footballing nation, so a
+                // San Marino cap was worth exactly as much international fame
+                // as a Brazil cap. Scale across the real range instead, with
+                // an average nation landing near 1.0.
+                let country_weight = (0.4 + 1.6 * (country_rep / 10_000.0)).clamp(0.4, 2.0);
+                for s in &country.national_team.squad {
+                    country_weights.insert(s.player_id, country_weight);
+                }
             }
         }
     }
@@ -102,21 +167,50 @@ pub fn apply_world_international_stats_for_level(
             for club in country.clubs.iter_mut() {
                 for team in club.teams.iter_mut() {
                     for player in team.players.iter_mut() {
-                        if !appearance_ids.contains(&player.id) {
+                        let Some(appearance) = appearances.get(&player.id) else {
+                            continue;
+                        };
+
+                        // The appearance itself, on the record where a
+                        // reader can find it: one slice per (season,
+                        // level, competition), with the same stat line a
+                        // league game leaves behind. The rating is the
+                        // engine's own — no settlement pass runs on an
+                        // international — which is exactly the number the
+                        // match page prints.
+                        let is_goalkeeper = player.position().is_goalkeeper();
+                        player
+                            .international_statistics_mut(
+                                ctx.season_start_year,
+                                ctx.level,
+                                appearance.country_id,
+                                ctx.competition_name,
+                            )
+                            .record_match_line(
+                                appearance.stats,
+                                appearance.stats.match_rating,
+                                appearance.is_starter,
+                                appearance.is_motm,
+                                is_goalkeeper,
+                                appearance.team_goals_against,
+                            );
+
+                        let goals = appearance.stats.goals;
+
+                        if !is_senior {
+                            player.player_attributes.under_21_international_apps += 1;
+                            player.player_attributes.under_21_international_goals += goals;
                             continue;
                         }
+
                         let country_weight =
                             country_weights.get(&player.id).copied().unwrap_or(1.0);
 
                         let was_uncapped = player.player_attributes.international_apps == 0;
                         player.player_attributes.international_apps += 1;
+                        player.player_attributes.international_goals += goals;
 
-                        let mut goal_bonus: f32 = 0.0;
-                        if let Some(&goals) = player_goals.get(&player.id) {
-                            player.player_attributes.international_goals += goals;
-                            goal_bonus = goals.min(3) as f32 * 20.0;
-                        }
-
+                        let goal_bonus = goals.min(3) as f32 * 20.0;
                         let base = 15.0;
                         let raw = base + goal_bonus;
                         let current_delta = (raw * 0.6 * country_weight) as i16;

@@ -13,6 +13,7 @@ use crate::r#match::engine::goal::{GOAL_HEIGHT, GOAL_WIDTH};
 use crate::r#match::engine::player::events::players::save_accounting_stats;
 use crate::r#match::engine::teamplay::standard::MatchStandard;
 use crate::r#match::events::EventCollection;
+use crate::r#match::goalkeepers::states::common::KeeperShotReaction;
 #[cfg(feature = "match-logs")]
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 #[cfg(feature = "match-logs")]
@@ -260,12 +261,57 @@ impl SaveModel {
         Self::CENTRED_BASE - r * r * Self::STRETCH_PENALTY
     }
 
-    /// Ticks a keeper needs, from set, to reach full stretch. ~0.45 s at
-    /// 100 engine ticks a second: the reaction plus the dive. Inside that
-    /// he is still getting there and only part of his reach is available,
-    /// which is why a shot from six yards beats keepers a shot from
-    /// twenty-five does not.
-    const FULL_STRETCH_TICKS: f32 = 45.0;
+    /// Ticks a keeper needs, from set, to reach full stretch. 0.45 s at
+    /// 100 engine ticks a second — the reaction plus the dive — **put
+    /// through the engine's own time base**. Inside that he is still
+    /// getting there and only part of his reach is available, which is why
+    /// a shot from six yards beats keepers a shot from twenty-five does
+    /// not.
+    ///
+    /// # 2026-09-06 — the missing tempo conversion
+    ///
+    /// It was a flat wall-clock 45, and it is the ONLY term that decides
+    /// whether a keeper gets a save roll at all: `ready` scales his reach
+    /// by `flight-from-the-strike-to-him / this`, and `try_save_shot`
+    /// returns without rolling when the gap beats the result. Every other
+    /// keeper duration in the model is stated in this engine's time base
+    /// through [`KeeperShotReaction::SHOT_TEMPO`] — the reaction, the
+    /// settling window, the plant, the foot speeds — because this engine's
+    /// shots fly at 32.9 m/s against football's 23, so a flight that takes
+    /// a real keeper 0.7 s takes this one 0.5. That constant's own note
+    /// says the honest fix is to "state the conversion once and put every
+    /// duration and speed through it"; this one was left out of it, so the
+    /// clock that prices his reach ran 43% slower than the clock that
+    /// prices everything else he does.
+    ///
+    /// What it cost is a keeper who has COME OUT. `ready` is measured on
+    /// the flight to HIM, so meeting a man at the edge of the box turns a
+    /// 20 m shot's 490 ms into 150 ms and prices his hands at the reflex
+    /// floor. Measured over 200 matches at L14, on-frame arrivals split by
+    /// how far off his line he was standing (`KEEPER BY HIS OWN DEPTH`):
+    ///
+    /// | off his line | gap to cover | his reach | no save roll at all |
+    /// |---|---|---|---|
+    /// | 4-7 m  | 1.22 m | 2.61 m | 24% |
+    /// | 7-11 m | 1.45 m | 1.52 m | 37% |
+    /// | 11 m + | 1.30 m | 1.33 m | **52%** |
+    ///
+    /// The gap he has to cover does not grow with depth — his own
+    /// positioning and read error dominate the angle compression coming
+    /// out is supposed to buy him — but his reach halves, and at 11 m+ he
+    /// sits on [`Self::REFLEX_FLOOR`] with 1.33 m of reach against a
+    /// 1.30 m gap. From the stands that is a goalkeeper who comes to meet
+    /// a one-on-one, dives, and is never once adjudicated as able to reach
+    /// it. `KeeperShotDive::should_launch` is a separate and far more
+    /// generous test (`DESPAIR_REACH` is 3.5x his reach), so he goes for
+    /// every one of them: 9.39 dives a keeper a match against a real 2-4.
+    ///
+    /// ⚠ This is a SHAPE change along the flight axis and it moves the
+    /// population save rate with it. The level that comes back belongs on
+    /// [`Self::SKILL_FLOOR`] — see its note — and NOT here or on the
+    /// reflex floor, which carry the flight axis and the close-range band
+    /// respectively.
+    const FULL_STRETCH_TICKS: f32 = 45.0 * KeeperShotReaction::SHOT_TEMPO;
     /// Floor on that: even a point-blank strike can hit a raised hand.
     ///
     /// **This is where the close-range population save rate lives**, and it
@@ -1375,6 +1421,30 @@ impl Ball {
                 );
             }
         }
+        // …and the same arrival split by HIS OWN DEPTH, scored a second
+        // time against the crossing at the goal line. "Beyond his reach"
+        // means one thing for a keeper on his line and the opposite for one
+        // who has come out to meet it — see `KeeperDepthDiag`, which is
+        // what `SaveModel::FULL_STRETCH_TICKS` is derived against.
+        #[cfg(feature = "match-logs")]
+        let depth_band = {
+            use crate::mid_run_diag::KeeperDepthDiag as D;
+            let depth = (keeper.position.x - goal_x).abs();
+            let band = D::band(depth);
+            let err_at_line = (keeper.position.y - frame_y).abs();
+            D::note(band, 0);
+            D::add(band, 2, (lateral_error * 100.0).max(0.0) as u64);
+            D::add(band, 3, (reach * 100.0).max(0.0) as u64);
+            D::add(band, 4, (err_at_line * 100.0) as u64);
+            D::add(band, 6, (depth * 100.0) as u64);
+            if lateral_error > reach {
+                D::note(band, 1);
+                if err_at_line <= reach {
+                    D::note(band, 7);
+                }
+            }
+            band
+        };
         if lateral_error > reach {
             // He was not there to be beaten. Counted separately from the
             // saves he loses on the roll — this is a POSITIONING outcome,
@@ -1469,6 +1539,7 @@ impl Ball {
             .magnitude();
             R::note(R::band(strike), 4);
             Q::note(Q::band(skill), 3);
+            crate::mid_run_diag::KeeperDepthDiag::note(depth_band, 5);
         }
 
         let shot_power_norm = SaveModel::strike_power(ball_speed);
@@ -1956,13 +2027,23 @@ mod tests {
     /// correct — he really does have time to start moving — but it means
     /// the floor no longer owns the whole of the inside-11 m band. Both
     /// halves are asserted below so the boundary cannot drift unnoticed.
+    ///
+    /// ⚠ **…and again on 2026-09-06**, when `FULL_STRETCH_TICKS` was put
+    /// through `KeeperShotReaction::SHOT_TEMPO` like every other keeper
+    /// duration. `REFLEX_FLOOR` is untouched, so the genuinely point-blank
+    /// band is bit-identical — the floor still owns everything under
+    /// 0.38 × 31.5 = **12 ticks (31 u, 3.9 m)** — and the crossover moves
+    /// in from 5.5 m to 3.9 m. That band is the change, and it is the
+    /// intended one: a keeper does have time to move in the extra tenth of
+    /// a second, and pretending otherwise is what priced a keeper who had
+    /// come out at the floor. See the note on the constant.
     #[test]
     fn a_point_blank_strike_is_priced_by_the_reflex_floor_alone() {
-        // Five metres out, keeper on his line: 40 u at 2.6 u/tick is ~15
-        // ticks of flight.
+        // Three metres out, keeper on his line: 24 u at 2.6 u/tick is ~9
+        // ticks of flight, inside the floor's own band.
         let keeper = Vector3::new(0.0, 270.0, 0.0);
         let (_, reach) = SaveModel::wedge(
-            Vector3::new(40.0, 270.0, 0.0),
+            Vector3::new(24.0, 270.0, 0.0),
             2.6,
             keeper,
             26.0,
@@ -1977,12 +2058,12 @@ mod tests {
              carrying the point-blank save rate"
         );
         // …and the crossover is where the constants say it is. A strike
-        // from eight metres gives him enough of the window that the ramp
+        // from six metres gives him enough of the window that the ramp
         // takes over, and it must — a floor that swallowed that band too
         // would mean a keeper gets no credit for the extra tenth of a
         // second, which is the whole reason distance is survivable.
         let (_, ramped) = SaveModel::wedge(
-            Vector3::new(64.0, 270.0, 0.0),
+            Vector3::new(48.0, 270.0, 0.0),
             2.6,
             keeper,
             26.0,

@@ -1,4 +1,7 @@
-use crate::PlayerFieldPositionGroup;
+use crate::league::Season;
+use crate::r#match::PlayerMatchEndStats;
+use crate::{NationalTeamLevel, PlayerFieldPositionGroup};
+use chrono::NaiveDate;
 
 /// Info about a team context for recording history events.
 #[derive(Debug, Clone)]
@@ -106,11 +109,123 @@ pub struct SecondaryTeamStatistics {
     pub statistics: PlayerStatistics,
 }
 
+/// One season's national-team appearances at a single level.
+///
+/// Held on [`Player`](crate::Player) rather than in the career ledger on
+/// purpose: a cap belongs to the player and his country, never to
+/// whichever club employed him that month. No transfer, loan or
+/// season-end drain touches these slices, and the club career totals —
+/// which career-apps wage clauses and favourite-club evaluation iterate
+/// — never see them.
+#[derive(Debug, Clone, Default)]
+pub struct InternationalStatistics {
+    /// `Season::from_date(match_date).start_year`. An international sits
+    /// outside every domestic calendar, so the game's own Aug–Jul season
+    /// is the only label that applies to all of them equally.
+    pub season_start_year: u16,
+    /// Which national side. Kept apart exactly the way
+    /// `international_apps` and `under_21_international_apps` are, so a
+    /// U21 campaign never reads as a senior one.
+    pub level: NationalTeamLevel,
+    /// The country he turned out for.
+    pub country_id: u32,
+    /// Competition the appearances were made in, as configured
+    /// ("UEFA U21 Championship", "FIFA World Cup"). One slice per
+    /// competition, so a qualifying campaign and a finals tournament in
+    /// the same season stay separate lines.
+    pub competition_name: String,
+    pub statistics: PlayerStatistics,
+}
+
+impl InternationalStatistics {
+    /// The season stamp a national-team match played on `date` belongs
+    /// to. One definition, shared by the write site and by every reader
+    /// asking "what has he done for his country this season" — the two
+    /// must never disagree about where the boundary falls.
+    #[inline]
+    pub fn season_of(date: NaiveDate) -> u16 {
+        Season::from_date(date).start_year
+    }
+
+    /// True when this slice was earned for the U21s rather than the
+    /// senior side.
+    #[inline]
+    pub fn is_under21(&self) -> bool {
+        self.level.is_under21()
+    }
+}
+
 impl PlayerStatistics {
     /// Total appearances (started + substitute)
     #[inline]
     pub fn total_games(&self) -> u16 {
         self.played + self.played_subs
+    }
+
+    /// Fold one match's stat line into this bucket: the appearance
+    /// itself, then everything the engine recorded against it.
+    ///
+    /// The single writer for "a player finished a match", shared by the
+    /// club pipeline (`Player::on_match_played`) and the national-team
+    /// one (`apply_world_international_stats_for_level`) so a cap is
+    /// counted the same way a league game is. Everything player-level —
+    /// form, debut probes, morale — stays with the caller; this touches
+    /// one bucket and nothing else.
+    ///
+    /// `effective_rating` is the public, post-settlement rating where a
+    /// pipeline computes one; callers without a settlement pass hand in
+    /// the engine's own `match_rating`, which is the number the match
+    /// page prints, so the average always reconciles against the match
+    /// list beside it.
+    pub fn record_match_line(
+        &mut self,
+        stats: &PlayerMatchEndStats,
+        effective_rating: f32,
+        is_starter: bool,
+        is_motm: bool,
+        is_goalkeeper: bool,
+        team_goals_against: u8,
+    ) {
+        if is_starter {
+            self.played += 1;
+        } else {
+            self.played_subs += 1;
+        }
+
+        self.goals += stats.goals;
+        self.assists += stats.assists;
+        self.shots_on_target += stats.shots_on_target as f32;
+        self.tackling += stats.tackles as f32;
+        self.yellow_cards = self.yellow_cards.saturating_add(stats.yellow_cards as u8);
+        self.red_cards = self.red_cards.saturating_add(stats.red_cards as u8);
+
+        if stats.passes_attempted > 0 {
+            let match_pct =
+                (stats.passes_completed as f32 / stats.passes_attempted as f32 * 100.0) as u8;
+            let games = self.played + self.played_subs;
+            self.passes = if games <= 1 {
+                match_pct
+            } else {
+                let prev = self.passes as f32;
+                ((prev * (games - 1) as f32 + match_pct as f32) / games as f32) as u8
+            };
+        }
+
+        self.record_match_rating(effective_rating, stats.minutes_played, is_starter);
+
+        if is_motm {
+            self.player_of_the_match = self.player_of_the_match.saturating_add(1);
+        }
+
+        // GK conceded / clean-sheet bookkeeping — only for starting GKs.
+        // Subs who came on briefly don't get attributed the full team
+        // conceded.
+        if is_goalkeeper && is_starter {
+            self.conceded += team_goals_against as u16;
+            if team_goals_against == 0 {
+                self.clean_sheets += 1;
+            }
+        }
     }
 
     /// Format any rating value for display (e.g. "6.75"), returns "-" for zero

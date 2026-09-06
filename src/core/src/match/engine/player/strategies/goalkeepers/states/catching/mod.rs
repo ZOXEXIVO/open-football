@@ -238,11 +238,22 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
                 // Where he THINKS it is going, not where it is going. See
                 // [`KeeperShotReaction::crossing_y`] — steering at the true
                 // crossing point from the tick of the strike is a tracking
-                // servo, and a servo never has to dive.
-                KeeperShotReaction::crossing_y(ctx, &prof, goal_pos, target),
+                // servo, and a servo never has to dive. Brought into HIS
+                // OWN PLANE, which is where the catch is adjudicated; see
+                // [`KeeperSetPosition::set_point`].
+                KeeperShotDive::crossing_at(
+                    ctx.player.position.x,
+                    target.struck_from,
+                    goal_pos.x,
+                    KeeperShotReaction::crossing_y(ctx, &prof, goal_pos, target),
+                )
+                .y,
                 (ctx.tick_context.positions.ball.position - goal_pos).magnitude(),
                 ctx.context.field_size.width as f32,
                 prof.positioning,
+                // He does not back-pedal at a struck ball — see
+                // [`KeeperSetPosition::set_point`].
+                (ctx.player.position.x - goal_pos.x).abs(),
             );
             // ...AT A SET KEEPER'S PACE. `speed_boost` on top of the
             // `Active` band is 8-13 m/s sideways, which is how this keeper

@@ -900,13 +900,58 @@ impl KeeperSetPosition {
     const READ_DEPTH: f32 = 26.0;
 
     /// The spot to defend a strike from `shot_distance` away, guarding
-    /// `goal_line_y`. `read` is the keeper's positioning composite.
+    /// `guard_y`. `read` is the keeper's positioning composite.
+    ///
+    /// ⚠ **`guard_y` is the `y` at HIS OWN DEPTH, not at the goal line.**
+    /// This took the crossing at the line, which is the same point for a
+    /// keeper standing on it and a different one for every keeper who is
+    /// not — and both save paths adjudicate him at his own plane
+    /// (`SaveModel::contact`), so a keeper who had come out was steered at
+    /// one point and scored against another. [`KeeperShotDive::crossing_at`]
+    /// is the projection, and its own note says why: aiming at the goal
+    /// line "sends him backwards into his own net whenever he has come out
+    /// to narrow the angle". It was wired into the dive and into
+    /// `KeeperShotReaction::ticks_left` and left out of the two states he
+    /// spends the flight ON HIS FEET in — which is where the error shows:
+    /// measured over 200 matches, lateral error at the arrival was
+    /// **1.88 m** when the ball found him still standing against 1.21 m
+    /// when it found him already diving.
+    ///
+    /// Both callers project his BELIEF ([`KeeperShotReaction::crossing_y`])
+    /// rather than the truth, so this changes where a keeper's read takes
+    /// him and not how good the read is.
+    /// **…and `keeper_depth` is a FLOOR on it, never a target to come back
+    /// to.** He steps out to it; he does not step back.
+    ///
+    /// This depth is a pre-shot idea — where to stand to defend a strike
+    /// from `shot_distance` — and it was being applied to a ball already in
+    /// the air. A keeper who has come to meet a one-on-one is 10-16 m off
+    /// his line, so the moment the shot left the foot he was handed a
+    /// target 2-5 m off it and turned round: `KeeperShotReaction::on_foot`
+    /// caps the whole steering VECTOR at a set keeper's shuffle, so almost
+    /// all of the little he has left went backwards along the goal axis
+    /// instead of across the ball's line. Measured, that is the difference
+    /// between the two ways an arrival can find him — lateral error
+    /// **1.74 m still on his feet against 1.13 m already diving** — and it
+    /// grows with depth, which is the signature: 1.20 m at 4-7 m out,
+    /// 1.51 m at 7-11 m, 1.61 m beyond that.
+    ///
+    /// A keeper set for a shot plants and covers across. Back-pedalling
+    /// into your own goal at a struck ball is a mistake in football and it
+    /// was a mistake here, and he could never complete it anyway — the
+    /// retreat is 6-12 m and a shot's flight is a third of a second.
+    ///
+    /// The floor is the right shape rather than "hold whatever depth you
+    /// have": a keeper ON his line must still step out to `MIN_DEPTH`, or
+    /// the ball the physics save snaps onto him ends up inside his own
+    /// goal frame, which is what this depth was introduced for.
     pub fn set_point(
         own_goal: Vector3<f32>,
-        goal_line_y: f32,
+        guard_y: f32,
         shot_distance: f32,
         field_width: f32,
         read: f32,
+        keeper_depth: f32,
     ) -> Vector3<f32> {
         let opened = (shot_distance / Self::DEPTH_RANGE).clamp(0.0, 1.0);
         // CENTRED on the population, so the average keeper sets exactly
@@ -917,10 +962,11 @@ impl KeeperSetPosition {
             (read.clamp(0.0, 1.0) - GoalkeeperSkillProfile::POPULATION_READ) * Self::READ_DEPTH;
         let depth =
             (Self::MIN_DEPTH + (Self::MAX_DEPTH - Self::MIN_DEPTH) * opened + read_gain * opened)
-                .max(Self::MIN_DEPTH * 0.5);
+                .max(Self::MIN_DEPTH * 0.5)
+                .max(keeper_depth.max(0.0));
         Vector3::new(
             own_goal.x + Self::into_pitch(own_goal, field_width) * depth,
-            goal_line_y,
+            guard_y,
             0.0,
         )
     }
@@ -2097,7 +2143,12 @@ impl KeeperShotReaction {
     /// the conversion once and put every duration and speed through it. If
     /// the shot-speed calibration is ever brought back to real, this goes to
     /// 1.0 and the keeper's numbers are already right.
-    const SHOT_TEMPO: f32 = 23.0 / 32.9;
+    ///
+    /// `pub(crate)` because `SaveModel::FULL_STRETCH_TICKS` — the clock
+    /// that decides whether he is credited with being able to reach the
+    /// ball at all — is a keeper duration like any other and was the one
+    /// left out of this conversion. See its note.
+    pub(crate) const SHOT_TEMPO: f32 = 23.0 / 32.9;
 
     /// Lateral speed from a set stance, in u/tick (1 u = 0.125 m, 1 tick =
     /// 10 ms). 0.19 → 2.4 m/s, 0.32 → 4.0 m/s in wall-clock terms, divided

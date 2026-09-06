@@ -56,7 +56,7 @@ impl Player {
             .find(|e| e.departed_date.is_none())
             .map(|e| e.team_slug.clone())
             .unwrap_or_default();
-        self.record_match_appearance(o, &home_slug);
+        self.record_match_appearance(o);
         self.record_match_stats(o, &home_slug);
         // Cup appearances land in the per-competition buckets; rebuild the
         // rolled-up aggregate before the event pass reads it for
@@ -174,7 +174,12 @@ impl Player {
         self.maybe_emit_big_match_bench(&snapshot);
     }
 
-    fn record_match_appearance(&mut self, o: &MatchOutcome<'_>, home_slug: &str) {
+    /// Player-level bookkeeping that has to happen *before* the stat
+    /// buckets move — the senior-debut probe reads the pre-match
+    /// counters. The bucket itself is written by
+    /// [`Self::record_match_stats`] through
+    /// [`PlayerStatistics::record_match_line`].
+    fn record_match_appearance(&mut self, o: &MatchOutcome<'_>) {
         // Tag the spell with the league_slug of the friendly we just
         // played, so a later `drain_match_stats` can stamp the canonical
         // Friendly ledger entry with the real source — youth-league
@@ -190,12 +195,6 @@ impl Player {
         // official appearance" is still readable from the buckets.
         if !o.is_friendly {
             SeniorDebut::observe(self, o.date);
-        }
-
-        let s = stats_bucket_mut(self, o, home_slug);
-        match o.participation {
-            MatchParticipation::Starter => s.played += 1,
-            MatchParticipation::Substitute => s.played_subs += 1,
         }
 
         // Post-transfer match-opportunity tracking. Only official
@@ -217,59 +216,29 @@ impl Player {
             self.load.update_form(o.effective_rating);
         }
 
-        let s = stats_bucket_mut(self, o, home_slug);
-        s.goals += o.stats.goals;
-        s.assists += o.stats.assists;
-        s.shots_on_target += o.stats.shots_on_target as f32;
-        s.tackling += o.stats.tackles as f32;
-        s.yellow_cards = s.yellow_cards.saturating_add(o.stats.yellow_cards as u8);
-        s.red_cards = s.red_cards.saturating_add(o.stats.red_cards as u8);
-
-        if o.stats.passes_attempted > 0 {
-            let match_pct =
-                (o.stats.passes_completed as f32 / o.stats.passes_attempted as f32 * 100.0) as u8;
-            let games = s.played + s.played_subs;
-            s.passes = if games <= 1 {
-                match_pct
-            } else {
-                let prev = s.passes as f32;
-                ((prev * (games - 1) as f32 + match_pct as f32) / games as f32) as u8
-            };
-        }
-
-        // Minutes-weighted rolling average — a 10-minute cameo no
-        // longer counts the same as a 90-minute start. We feed the
-        // ledger the *effective* (post-settlement, post-personality)
-        // rating so the season average, awards, POTM, scouting
-        // observations, form EMA, and reputation deltas all read the
-        // same number. The raw engine rating stays on `stats` for
-        // diagnostics / calibration but is no longer the public face
-        // of "how the player did" — otherwise a fresh signing could
-        // farm a high season average from raw 8s while every
-        // downstream consumer of `effective_rating` saw the dampened
-        // value, leaving the user staring at two different numbers
-        // for the same match.
+        // Read before the mutable bucket borrow opens.
         let is_starter = matches!(o.participation, MatchParticipation::Starter);
-        s.record_match_rating(
+        let is_goalkeeper = self.position().is_goalkeeper();
+
+        // The rating fed to the bucket is the *effective* (post-
+        // settlement, post-personality) one so the season average,
+        // awards, POTM, scouting observations, form EMA and reputation
+        // deltas all read the same number. The raw engine rating stays
+        // on `o.stats` for diagnostics / calibration but is no longer
+        // the public face of "how the player did" — otherwise a fresh
+        // signing could farm a high season average from raw 8s while
+        // every downstream consumer of `effective_rating` saw the
+        // dampened value, leaving the user staring at two different
+        // numbers for the same match.
+        let s = stats_bucket_mut(self, o, home_slug);
+        s.record_match_line(
+            o.stats,
             o.effective_rating,
-            o.stats.minutes_played as u16,
             is_starter,
+            o.is_motm,
+            is_goalkeeper,
+            o.team_goals_against,
         );
-
-        if o.is_motm {
-            s.player_of_the_match = s.player_of_the_match.saturating_add(1);
-        }
-
-        // GK conceded / clean-sheet bookkeeping — only for starting GKs.
-        // Subs who came on briefly don't get attributed the full team conceded.
-        if self.position().is_goalkeeper() && matches!(o.participation, MatchParticipation::Starter)
-        {
-            let s = stats_bucket_mut(self, o, home_slug);
-            s.conceded += o.team_goals_against as u16;
-            if o.team_goals_against == 0 {
-                s.clean_sheets += 1;
-            }
-        }
     }
 
     /// Lay a match event down in memory alongside the mood event it
