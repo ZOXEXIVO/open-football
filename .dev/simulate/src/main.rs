@@ -25,7 +25,7 @@
 
 use core::PlayerFieldPositionGroup;
 use core::r#match::FieldSquad;
-use core::{FootballSimulator, SimulationResult, SimulatorData};
+use core::{FootballSimulator, PerformanceProfiler, SimulationResult, SimulatorData};
 use database::{DatabaseGenerator, DatabaseLoader};
 use mimalloc::MiMalloc;
 
@@ -36,9 +36,9 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 use env_logger::Env;
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::pin;
-use std::collections::HashMap;
 use std::task::{Context, Poll, Waker};
 use std::time::Instant;
 
@@ -95,7 +95,10 @@ impl LeagueGoalCensus {
                 continue;
             }
             let row = self.rows.entry(m.league_slug.clone()).or_default();
-            let (h, a) = (m.score.home_team.get() as u32, m.score.away_team.get() as u32);
+            let (h, a) = (
+                m.score.home_team.get() as u32,
+                m.score.away_team.get() as u32,
+            );
             let total = h + a;
             row.matches += 1;
             row.goals += total;
@@ -234,6 +237,11 @@ impl SimHarness {
 
         // At least a full round of fixtures before a competition earns a
         // row: one match is a scoreline, not a rate.
+        // Per-phase wall/CPU breakdown of the tick — only when OF_SIM_PROF is
+        // set. `cores` is the column that matters: it is CPU/wall, i.e. how
+        // wide each phase actually ran.
+        PerformanceProfiler::report(&format!("{days}d"));
+
         census.print(MIN_CENSUS_MATCHES);
         world.print();
         youth_before.print(&YouthSquadCensus::take(&self.data));
@@ -279,7 +287,6 @@ fn main() {
 
     harness.bench(days);
 }
-
 
 /// Every counter the census keeps, for one bucket of team-matches.
 ///
@@ -425,7 +432,10 @@ impl MatchStatTotals {
             Self::pct(self.passes_completed, self.passes_attempted)
         );
         println!("  tackles             {:>8.2}", self.per(self.tackles));
-        println!("  interceptions       {:>8.2}", self.per(self.interceptions));
+        println!(
+            "  interceptions       {:>8.2}",
+            self.per(self.interceptions)
+        );
         println!("  fouls               {:>8.2}", self.per(self.fouls));
         println!("  key passes          {:>8.2}", self.per(self.key_passes));
         println!(

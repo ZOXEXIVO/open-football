@@ -1,10 +1,10 @@
 use chrono::NaiveDate;
 use log::debug;
 use rayon::prelude::*;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
-use std::collections::{HashMap, HashSet};
 
 use crate::SimulatorData;
 use crate::club::player::transfer::FreeAgentBlockReason;
@@ -180,10 +180,7 @@ impl ForeignRegistrationGuard {
         let slots = match self.by_club.entry(buying_club_id) {
             Entry::Occupied(entry) => *entry.get(),
             Entry::Vacant(entry) => {
-                let Some(club) = buying_country
-                    .clubs
-                    .iter()
-                    .find(|c| c.id == buying_club_id)
+                let Some(club) = buying_country.clubs.iter().find(|c| c.id == buying_club_id)
                 else {
                     return false;
                 };
@@ -1670,11 +1667,14 @@ impl PipelineProcessor {
         if batch.is_empty() {
             return;
         }
-        let offered: HashSet<u32> = batch.offered_ids.iter().copied().collect();
-        let rejected: HashSet<u32> = batch.rejected_ids.iter().copied().collect();
+        // Membership-only sets probed once per free agent in the world, so
+        // Fx hashing rather than the SipHash default — the same reason the
+        // interest sweep below uses it.
+        let offered: FxHashSet<u32> = batch.offered_ids.iter().copied().collect();
+        let rejected: FxHashSet<u32> = batch.rejected_ids.iter().copied().collect();
         // Merge block reasons to the highest-ranked (closest-to-signing)
         // reason per player across every country that recorded one.
-        let mut merged: HashMap<u32, FreeAgentBlockReason> = HashMap::new();
+        let mut merged: FxHashMap<u32, FreeAgentBlockReason> = FxHashMap::default();
         for (player_id, reason) in &batch.block_reasons {
             merged
                 .entry(*player_id)
@@ -1686,7 +1686,10 @@ impl PipelineProcessor {
                 .or_insert(*reason);
         }
 
-        for player in data.free_agents.iter_mut() {
+        // Every bump is player-local and the three sets are read-only, so
+        // the pool walk fans out. It is the whole free-agent population once
+        // a tick — tens of thousands of players by mid-save.
+        data.free_agents.par_iter_mut().for_each(|player| {
             if offered.contains(&player.id) {
                 player.on_offer_received(current_date);
             }
@@ -1696,7 +1699,7 @@ impl PipelineProcessor {
             if let Some(reason) = merged.get(&player.id) {
                 player.on_market_blocked(current_date, *reason);
             }
-        }
+        });
     }
 
     /// Shared world walk behind the transfer- and release-flavoured
@@ -1726,8 +1729,16 @@ impl PipelineProcessor {
         // already flipped Rejected (and resolved) at completion time, so
         // the Pending/Countered filter naturally selects only the
         // cross-country stragglers.
-        for continent in data.continents.iter_mut() {
-            for country in continent.countries.iter_mut() {
+        // A country's own market is the only thing this touches, so the
+        // world fans out. It matters more than the size of the loop
+        // suggests: the sweep is called once per country that placed
+        // somebody this tick, and a serial walk of every OTHER country
+        // inside each of those calls is the shape that made the Phase-C
+        // drain quadratic in the number of countries doing business.
+        data.continents
+            .par_iter_mut()
+            .flat_map(|continent| continent.countries.par_iter_mut())
+            .for_each(|country| {
                 let losers: Vec<(u32, u32)> = country
                     .transfer_market
                     .negotiations
@@ -1744,8 +1755,7 @@ impl PipelineProcessor {
                 for (club_id, player_id) in losers {
                     Self::on_negotiation_resolved(country, club_id, player_id, false);
                 }
-            }
-        }
+            });
 
         data.continents
             .par_iter_mut()
@@ -2382,11 +2392,8 @@ impl PipelineProcessor {
             //
             // Read as a gate, not a preference: the registration rule is
             // TRUTH about the buyer, and truth is what gates read.
-            if foreign_registration.would_block(
-                buy_country,
-                cand.buying_club_id,
-                player.country_id,
-            ) {
+            if foreign_registration.would_block(buy_country, cand.buying_club_id, player.country_id)
+            {
                 debug!(
                     "Foreign negotiation suppressed: club {} has no registration slot for {} ({})",
                     cand.buying_club_id, cand.player_id, player_name

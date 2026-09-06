@@ -1,9 +1,11 @@
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
+use crate::club::player::events::transfer_social::TransferInterestSignal;
 use crate::club::player::language::{Language, LanguageProfile};
 use crate::club::player::mind::GoalKind;
 use crate::club::player::statistics::StuckCareerScan;
+use crate::simulator::PerformanceProfiler;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::pipeline::breakout::LeaguePerformanceLookup;
 use crate::transfers::pipeline::helpers::ClubGroupRanks;
@@ -977,205 +979,221 @@ impl PipelineProcessor {
         // Constant across every player in this country — derive it once
         // rather than per foreign-scan later.
         let country_region = ScoutingRegion::from_country(country.continent_id, &country.code);
-        let mut players = Vec::new();
 
-        for club in &country.clubs {
-            // Seller market context once per club — flat 0/0 used to
-            // drag every domestic player to the same baseline regardless
-            // of the league/club they actually played for.
-            let (seller_league_rep, seller_club_rep) =
-                PlayerValuationCalculator::seller_context(country, club);
-            let club_world_rep = Self::club_world_reputation(club);
-            // Staged-plausibility seller context, resolved once per club so a
-            // cross-country buyer can assess this player without re-walking
-            // the seller's roster. `overall_score` (not market value) matches
-            // the legacy single-country builder's `seller_rep`.
-            let main_team = club.teams.main();
-            let seller_club_rep_score = main_team
-                .map(|t| t.reputation.overall_score())
-                .unwrap_or(0.3);
-            let seller_league_id = main_team.and_then(|t| t.league_id);
-            let seller_in_debt = club.finance.balance.balance < 0;
-            // Club match count, so a foreign buyer reads the same
-            // "is this season readable yet" signal a domestic one does.
-            let seller_club_matches =
-                crate::club::team::squad::SquadEvidenceContext::current_season_sample(date, club)
+        // Per club, in parallel. Every summary is built from that club's own
+        // roster plus country-constant facts, so the clubs are disjoint, and
+        // the ordered flatten leaves the pool in exactly the sequence the
+        // serial walk produced — the scouting partitions and the data
+        // pre-filter's sort both read that order. This is the country's
+        // domestic pool AND, once per country, its slice of the world pool.
+        country
+            .clubs
+            .par_iter()
+            .map(|club| {
+                let mut players = Vec::new();
+                // Seller market context once per club — flat 0/0 used to
+                // drag every domestic player to the same baseline regardless
+                // of the league/club they actually played for.
+                let (seller_league_rep, seller_club_rep) =
+                    PlayerValuationCalculator::seller_context(country, club);
+                let club_world_rep = Self::club_world_reputation(club);
+                // Staged-plausibility seller context, resolved once per club so a
+                // cross-country buyer can assess this player without re-walking
+                // the seller's roster. `overall_score` (not market value) matches
+                // the legacy single-country builder's `seller_rep`.
+                let main_team = club.teams.main();
+                let seller_club_rep_score = main_team
+                    .map(|t| t.reputation.overall_score())
+                    .unwrap_or(0.3);
+                let seller_league_id = main_team.and_then(|t| t.league_id);
+                let seller_in_debt = club.finance.balance.balance < 0;
+                // Club match count, so a foreign buyer reads the same
+                // "is this season readable yet" signal a domestic one does.
+                let seller_club_matches =
+                    crate::club::team::squad::SquadEvidenceContext::current_season_sample(
+                        date, club,
+                    )
                     .club_matches_proxy();
-            // One sorted-group snapshot per club replaces the per-player
-            // rank/best re-sorts (same values, O(squad·log) once).
-            let group_ranks = ClubGroupRanks::build(club);
-            // Loan-out candidates the parent has already decided WHERE it
-            // would send — the `UnsettledAbroad` read that names a home
-            // country or a home region. That decision is itself a posting
-            // (C5), so a candidate identified this tick reaches the world
-            // in the same pass rather than a window later.
-            let home_preferences: Vec<u32> = club
-                .transfer_plan
-                .loan_out_candidates
-                .iter()
-                .filter(|c| c.preferred_destination != LoanDestinationPreference::Any)
-                .map(|c| c.player_id)
-                .collect();
+                // One sorted-group snapshot per club replaces the per-player
+                // rank/best re-sorts (same values, O(squad·log) once).
+                let group_ranks = ClubGroupRanks::build(club);
+                // Loan-out candidates the parent has already decided WHERE it
+                // would send — the `UnsettledAbroad` read that names a home
+                // country or a home region. That decision is itself a posting
+                // (C5), so a candidate identified this tick reaches the world
+                // in the same pass rather than a window later.
+                let home_preferences: Vec<u32> = club
+                    .transfer_plan
+                    .loan_out_candidates
+                    .iter()
+                    .filter(|c| c.preferred_destination != LoanDestinationPreference::Any)
+                    .map(|c| c.player_id)
+                    .collect();
 
-            for team in &club.teams.teams {
-                for player in &team.players.players {
-                    if player.is_on_loan() {
-                        continue;
-                    }
-                    let value = PlayerValuationCalculator::calculate_value_with_price_level(
-                        player,
-                        date,
-                        price_level,
-                        seller_league_rep,
-                        seller_club_rep,
-                    );
-                    let (contract_months_remaining, salary) = player
-                        .contract
-                        .as_ref()
-                        .map(|c| {
-                            let days = (c.expiration - date).num_days().max(0);
-                            ((days / 30).min(i16::MAX as i64) as i16, c.salary)
-                        })
-                        .unwrap_or((0, 0));
-                    // `ClubGroupRanks` only indexes the FIRST-TEAM roster, so
-                    // everyone below it came back `u8::MAX` and was then read
-                    // as rank 1 — "the seller's second choice in his
-                    // position". That inflated every B / reserve / youth
-                    // player's market importance to near-untouchable, which
-                    // is the opposite of the truth: he is not in the first
-                    // team's depth chart at all. Rank him behind it instead.
-                    let seller_rank = match group_ranks.rank(player.id) {
-                        u8::MAX => group_ranks
-                            .group_size(player.position().position_group())
-                            .saturating_add(1),
-                        r => r,
-                    };
-                    // A B / Second side's own "key player" label is standing
-                    // in that dressing room, not a first-team promise the
-                    // market should price against. Read it through the tier
-                    // that awarded it.
-                    let squad_status = player
-                        .contract
-                        .as_ref()
-                        .map(|c| c.squad_status.as_first_team_designation(team.team_type))
-                        .unwrap_or(PlayerSquadStatus::NotYetSet);
-                    players.push(PlayerSummary {
-                        player_id: player.id,
-                        club_id: club.id,
-                        country_id,
-                        continent_id: country.continent_id,
-                        region: country_region,
-                        country_code: country.code.clone(),
-                        // Where he is FROM, alongside where he plays. The
-                        // loan market could not see the difference, so a
-                        // Brazilian prospect's own league had no way to
-                        // recognise one of its own exports.
-                        nationality_country_id: player.country_id,
-                        nationality_continent_id: player.nationality_continent_id,
-                        nationality_region: player.home_region(),
-                        starter_share: player.happiness.starter_ratio,
-                        tenure_days: StuckCareerScan::club_tenure_days(player, date)
-                            .unwrap_or(i64::from(u16::MAX))
-                            .clamp(0, i64::from(u16::MAX))
-                            as u16,
-                        // Read off the weekly cache, not rebuilt here: the
-                        // mind thinks weekly and `WantsReturnHome` fires on
-                        // a 60-day cooldown, so a per-player-per-day
-                        // `MindSituation` build bought nothing (C10).
-                        return_home_desire: player.home_pull.desire,
-                        // The parent's own posting: a foreigner the club
-                        // has put on the loan market — by badge, by its own
-                        // candidate list, or because the candidate carries
-                        // a destination preference — whose want to go home
-                        // has formed. This is the ONE bit that crosses a
-                        // border (no `&mut` travels, the borrower reads a
-                        // bool) and it is deliberately scoped to LOANS, so
-                        // the home-visibility arm can never become a
-                        // permanent-transfer discovery channel that
-                        // bypasses the springboard reach model (Part VIII,
-                        // "the compatriot loophole").
-                        home_return_wanted: HomeLoanGates::is_posted(
-                            player.home_pull.wanted,
-                            home_preferences.contains(&player.id),
-                        ),
-                        ambition: player.attributes.ambition as u8,
-                        loyalty: player.attributes.loyalty as u8,
-                        adaptability: player.attributes.adaptability as u8,
-                        leave_pressure: player
-                            .mind
-                            .pressure_of(GoalKind::GoOutOnLoan)
-                            .max(player.mind.pressure_of(GoalKind::LeaveThisClub))
-                            .max(player.mind.pressure_of(GoalKind::PlayFirstTeamFootball))
-                            .clamp(0.0, 1.0),
-                        stay_pressure: player
-                            .mind
-                            .pressure_of(GoalKind::StayAtThisClub)
-                            .max(player.mind.pressure_of(GoalKind::BecomeAClubLegend))
-                            .clamp(0.0, 1.0),
-                        player_name: player.full_name.to_string(),
-                        club_name: club.name.clone(),
-                        position: player.position(),
-                        position_group: player.position().position_group(),
-                        coverage: PositionCoverage::of(&player.positions),
-                        age: player.age(date),
-                        estimated_value: value.amount,
-                        is_listed: player.statuses.has(PlayerStatusType::Lst),
-                        is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
-                        skill_ability: player
-                            .skills
-                            .calculate_ability_for_position(player.position()),
-                        // Transfer-market candidate listing: regressed
-                        // value so the candidate sorter / recommendation
-                        // engine isn't fooled by a small-sample season.
-                        average_rating: player
-                            .statistics
-                            .average_rating_realistic(player.position().position_group()),
-                        goals: player.statistics.goals,
-                        assists: player.statistics.assists,
-                        appearances: player.statistics.total_games(),
-                        determination: player.skills.mental.determination,
-                        work_rate: player.skills.mental.work_rate,
-                        composure: player.skills.mental.composure,
-                        anticipation: player.skills.mental.anticipation,
-                        technical_avg: player.skills.technical.average(),
-                        mental_avg: player.skills.mental.average(),
-                        physical_avg: player.skills.physical.average(),
-                        current_reputation: player.player_attributes.current_reputation,
-                        home_reputation: player.player_attributes.home_reputation,
-                        world_reputation: player.player_attributes.world_reputation,
-                        country_reputation,
-                        club_world_reputation: club_world_rep,
-                        club_best_in_group: group_ranks.best(player.position().position_group()),
-                        is_injured: player.player_attributes.is_injured,
-                        contract_months_remaining,
-                        salary,
-                        language_profile: LanguageProfile::from_languages(&player.languages),
-                        international_apps: player.player_attributes.international_apps,
-                        career_record: CareerRecordSnapshot::read(
+                for team in &club.teams.teams {
+                    for player in &team.players.players {
+                        if player.is_on_loan() {
+                            continue;
+                        }
+                        let value = PlayerValuationCalculator::calculate_value_with_price_level(
                             player,
-                            player.position().position_group(),
-                        ),
-                        seller_ctx: SellerPlausibilityContext {
-                            club_reputation_score: seller_club_rep_score,
-                            league_reputation: seller_league_rep,
-                            league_id: seller_league_id,
-                            position_group_rank: seller_rank,
-                            squad_status,
-                            is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
-                            is_unhappy: player.statuses.has(PlayerStatusType::Unh),
-                            in_debt: seller_in_debt,
-                            days_on_market: player.days_available(date).min(i16::MAX as i64) as i16,
-                            market_resignation: player.market_resignation(date),
-                            club_matches_played: seller_club_matches,
-                            big_stage_inclination: player.big_stage_inclination,
-                            is_marketed: club.transfer_plan.is_marketed(player.id),
-                        },
-                    });
+                            date,
+                            price_level,
+                            seller_league_rep,
+                            seller_club_rep,
+                        );
+                        let (contract_months_remaining, salary) = player
+                            .contract
+                            .as_ref()
+                            .map(|c| {
+                                let days = (c.expiration - date).num_days().max(0);
+                                ((days / 30).min(i16::MAX as i64) as i16, c.salary)
+                            })
+                            .unwrap_or((0, 0));
+                        // `ClubGroupRanks` only indexes the FIRST-TEAM roster, so
+                        // everyone below it came back `u8::MAX` and was then read
+                        // as rank 1 — "the seller's second choice in his
+                        // position". That inflated every B / reserve / youth
+                        // player's market importance to near-untouchable, which
+                        // is the opposite of the truth: he is not in the first
+                        // team's depth chart at all. Rank him behind it instead.
+                        let seller_rank = match group_ranks.rank(player.id) {
+                            u8::MAX => group_ranks
+                                .group_size(player.position().position_group())
+                                .saturating_add(1),
+                            r => r,
+                        };
+                        // A B / Second side's own "key player" label is standing
+                        // in that dressing room, not a first-team promise the
+                        // market should price against. Read it through the tier
+                        // that awarded it.
+                        let squad_status = player
+                            .contract
+                            .as_ref()
+                            .map(|c| c.squad_status.as_first_team_designation(team.team_type))
+                            .unwrap_or(PlayerSquadStatus::NotYetSet);
+                        players.push(PlayerSummary {
+                            player_id: player.id,
+                            club_id: club.id,
+                            country_id,
+                            continent_id: country.continent_id,
+                            region: country_region,
+                            country_code: country.code.clone(),
+                            // Where he is FROM, alongside where he plays. The
+                            // loan market could not see the difference, so a
+                            // Brazilian prospect's own league had no way to
+                            // recognise one of its own exports.
+                            nationality_country_id: player.country_id,
+                            nationality_continent_id: player.nationality_continent_id,
+                            nationality_region: player.home_region(),
+                            starter_share: player.happiness.starter_ratio,
+                            tenure_days: StuckCareerScan::club_tenure_days(player, date)
+                                .unwrap_or(i64::from(u16::MAX))
+                                .clamp(0, i64::from(u16::MAX))
+                                as u16,
+                            // Read off the weekly cache, not rebuilt here: the
+                            // mind thinks weekly and `WantsReturnHome` fires on
+                            // a 60-day cooldown, so a per-player-per-day
+                            // `MindSituation` build bought nothing (C10).
+                            return_home_desire: player.home_pull.desire,
+                            // The parent's own posting: a foreigner the club
+                            // has put on the loan market — by badge, by its own
+                            // candidate list, or because the candidate carries
+                            // a destination preference — whose want to go home
+                            // has formed. This is the ONE bit that crosses a
+                            // border (no `&mut` travels, the borrower reads a
+                            // bool) and it is deliberately scoped to LOANS, so
+                            // the home-visibility arm can never become a
+                            // permanent-transfer discovery channel that
+                            // bypasses the springboard reach model (Part VIII,
+                            // "the compatriot loophole").
+                            home_return_wanted: HomeLoanGates::is_posted(
+                                player.home_pull.wanted,
+                                home_preferences.contains(&player.id),
+                            ),
+                            ambition: player.attributes.ambition as u8,
+                            loyalty: player.attributes.loyalty as u8,
+                            adaptability: player.attributes.adaptability as u8,
+                            leave_pressure: player
+                                .mind
+                                .pressure_of(GoalKind::GoOutOnLoan)
+                                .max(player.mind.pressure_of(GoalKind::LeaveThisClub))
+                                .max(player.mind.pressure_of(GoalKind::PlayFirstTeamFootball))
+                                .clamp(0.0, 1.0),
+                            stay_pressure: player
+                                .mind
+                                .pressure_of(GoalKind::StayAtThisClub)
+                                .max(player.mind.pressure_of(GoalKind::BecomeAClubLegend))
+                                .clamp(0.0, 1.0),
+                            player_name: player.full_name.to_string(),
+                            club_name: club.name.clone(),
+                            position: player.position(),
+                            position_group: player.position().position_group(),
+                            coverage: PositionCoverage::of(&player.positions),
+                            age: player.age(date),
+                            estimated_value: value.amount,
+                            is_listed: player.statuses.has(PlayerStatusType::Lst),
+                            is_loan_listed: player.statuses.has(PlayerStatusType::Loa),
+                            skill_ability: player
+                                .skills
+                                .calculate_ability_for_position(player.position()),
+                            // Transfer-market candidate listing: regressed
+                            // value so the candidate sorter / recommendation
+                            // engine isn't fooled by a small-sample season.
+                            average_rating: player
+                                .statistics
+                                .average_rating_realistic(player.position().position_group()),
+                            goals: player.statistics.goals,
+                            assists: player.statistics.assists,
+                            appearances: player.statistics.total_games(),
+                            determination: player.skills.mental.determination,
+                            work_rate: player.skills.mental.work_rate,
+                            composure: player.skills.mental.composure,
+                            anticipation: player.skills.mental.anticipation,
+                            technical_avg: player.skills.technical.average(),
+                            mental_avg: player.skills.mental.average(),
+                            physical_avg: player.skills.physical.average(),
+                            current_reputation: player.player_attributes.current_reputation,
+                            home_reputation: player.player_attributes.home_reputation,
+                            world_reputation: player.player_attributes.world_reputation,
+                            country_reputation,
+                            club_world_reputation: club_world_rep,
+                            club_best_in_group: group_ranks
+                                .best(player.position().position_group()),
+                            is_injured: player.player_attributes.is_injured,
+                            contract_months_remaining,
+                            salary,
+                            language_profile: LanguageProfile::from_languages(&player.languages),
+                            international_apps: player.player_attributes.international_apps,
+                            career_record: CareerRecordSnapshot::read(
+                                player,
+                                player.position().position_group(),
+                            ),
+                            seller_ctx: SellerPlausibilityContext {
+                                club_reputation_score: seller_club_rep_score,
+                                league_reputation: seller_league_rep,
+                                league_id: seller_league_id,
+                                position_group_rank: seller_rank,
+                                squad_status,
+                                is_transfer_requested: player.statuses.has(PlayerStatusType::Req),
+                                is_unhappy: player.statuses.has(PlayerStatusType::Unh),
+                                in_debt: seller_in_debt,
+                                days_on_market: player.days_available(date).min(i16::MAX as i64)
+                                    as i16,
+                                market_resignation: player.market_resignation(date),
+                                club_matches_played: seller_club_matches,
+                                big_stage_inclination: player.big_stage_inclination,
+                                is_marketed: club.transfer_plan.is_marketed(player.id),
+                            },
+                        });
+                    }
                 }
-            }
-        }
-
-        players
+                players
+            })
+            .collect::<Vec<Vec<PlayerSummary>>>()
+            .into_iter()
+            .flatten()
+            .collect()
     }
 
     /// Regions a club's scouting NETWORK can spot talent in, widening
@@ -1231,13 +1249,18 @@ impl PipelineProcessor {
         let config = ScoutingConfig::default();
         // Scoring-chart + recent-award lookup, built once so the data
         // pre-filter can fold each candidate's breakout score into its rank.
-        let performance_lookup = LeaguePerformanceLookup::build(country);
+        let performance_lookup = PerformanceProfiler::stage("scout_performance_lookup", 4, || {
+            LeaguePerformanceLookup::build(country)
+        });
 
         // Reuse collect_player_pool for the domestic pool — the body of this
         // loop used to be a copy-paste of that function, doubling the work
         // that already runs once per country to build the shared foreign
         // pool. Now it runs once.
-        let all_players: Vec<PlayerSummary> = Self::collect_player_pool(&*country, date);
+        let all_players: Vec<PlayerSummary> =
+            PerformanceProfiler::stage("scout_domestic_pool", 4, || {
+                Self::collect_player_pool(&*country, date)
+            });
 
         // Partition both candidate pools by position group ONCE per country.
         // Every assignment scans only its own group's slice — the other
@@ -1258,6 +1281,7 @@ impl PipelineProcessor {
         // walked past him. Same relative order inside each bucket, so the
         // filtered sequences (and the data-prefilter sort that reads them)
         // stay deterministic.
+        let partition = PerformanceProfiler::stage_scope("scout_partition_pools", 4);
         let mut domestic_by_group: [Vec<&PlayerSummary>; PlayerFieldPositionGroup::COUNT] =
             Default::default();
         for p in &all_players {
@@ -1301,6 +1325,9 @@ impl PipelineProcessor {
         // the RNG draws come from the executing worker's thread-seeded
         // stream, the same order-of-execution dependence the world tick
         // already has at country granularity.
+        drop(partition);
+
+        let scan = PerformanceProfiler::stage_scope("scout_club_scan", 4);
         let country_ref: &Country = country;
         let staged_per_club: Vec<ClubScoutingStaged> = country_ref
             .clubs
@@ -1319,41 +1346,26 @@ impl PipelineProcessor {
             })
             .collect();
 
-        let mut observations: Vec<ScoutingObservationResult> = Vec::new();
-        let mut reports: Vec<ScoutingReportResult> = Vec::new();
-        let mut staff_events: Vec<(u32, u32, StaffEventType)> = Vec::new();
-        let mut familiarity_events: Vec<(u32, u32, ScoutingRegion, u32)> = Vec::new();
-        let mut rejected_events: Vec<(u32, u32)> = Vec::new(); // (club_id, player_id)
+        drop(scan);
+
+        let apply = PerformanceProfiler::stage_scope("scout_apply", 4);
+        // The only cross-club effect: the `Wnt` / `Sct` badge lands on the
+        // TARGET, who plays for somebody else. Everything else a club
+        // staged is about that club, so it stays with it for the parallel
+        // apply below. Membership set instead of `Vec::contains` — the
+        // dedup was quadratic in the day's target count.
+        let mut seen_targets: HashSet<(u32, u32)> = HashSet::new();
         let mut wanted_targets: Vec<(u32, u32)> = Vec::new();
-        let mut monitoring_updates: Vec<MonitoringUpdate> = Vec::new();
-        for staged in staged_per_club {
-            observations.extend(staged.observations);
-            reports.extend(staged.reports);
-            staff_events.extend(staged.staff_events);
-            familiarity_events.extend(staged.familiarity_events);
-            rejected_events.extend(staged.rejected_events);
-            // Wnt dedup used to happen across clubs mid-scan; replicate
-            // it at merge time so the applied vec stays duplicate-free.
-            for target in staged.wanted_targets {
-                if !wanted_targets.contains(&target) {
-                    wanted_targets.push(target);
+        for staged in &staged_per_club {
+            for target in &staged.wanted_targets {
+                if seen_targets.insert(*target) {
+                    wanted_targets.push(*target);
                 }
             }
-            monitoring_updates.extend(staged.monitoring_updates);
         }
 
-        Self::apply_scouting_results(
-            country,
-            observations,
-            reports,
-            staff_events,
-            familiarity_events,
-            rejected_events,
-            wanted_targets,
-            monitoring_updates,
-            &config,
-            date,
-        );
+        Self::apply_scouting_results(country, staged_per_club, wanted_targets, &config, date);
+        drop(apply);
     }
 
     /// One club's scouting scan — pass 1 of [`Self::process_scouting`],
@@ -1980,53 +1992,98 @@ impl PipelineProcessor {
     /// Pass 2 of [`Self::process_scouting`] — apply the merged staged
     /// results against the mutable country.
     #[allow(clippy::too_many_arguments)]
+    /// Pass 2 of [`Self::process_scouting`] — commit the staged scan.
+    ///
+    /// Every event a club staged is about that club (its assignments, its
+    /// scouts, its rejection memory), so the commit fans back out across
+    /// `clubs.par_iter_mut()` zipped with the staged results. It used to be
+    /// six flat vectors drained through `country.clubs.iter_mut().find(id)`,
+    /// which is a club scan per event — on a deep pyramid that scan, not the
+    /// scouting itself, was the pass.
+    ///
+    /// The `Wnt` / `Sct` badges are the exception: they land on the target,
+    /// who plays for another club. They used to walk every club, team and
+    /// player in the country PER TARGET (twice — once more inside
+    /// `local_interest_signal`); now the beats are resolved in one parallel
+    /// read pass and stamped in one parallel walk.
     fn apply_scouting_results(
         country: &mut Country,
-        observations: Vec<ScoutingObservationResult>,
-        reports: Vec<ScoutingReportResult>,
-        staff_events: Vec<(u32, u32, StaffEventType)>,
-        familiarity_events: Vec<(u32, u32, ScoutingRegion, u32)>,
-        rejected_events: Vec<(u32, u32)>,
+        staged_per_club: Vec<ClubScoutingStaged>,
         wanted_targets: Vec<(u32, u32)>,
-        monitoring_updates: Vec<MonitoringUpdate>,
         config: &ScoutingConfig,
         date: NaiveDate,
     ) {
-        // Pass 2: Apply observations and reports
-        for obs in observations {
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == obs.club_id) {
-                if let Some(assignment) = club
-                    .transfer_plan
-                    .scouting_assignments
-                    .iter_mut()
-                    .find(|a| a.id == obs.assignment_id)
-                {
-                    if obs.is_new {
-                        assignment.observations.push(PlayerObservation::new(
-                            obs.player_id,
-                            obs.assessed_ability,
-                            obs.assessed_potential,
-                            date,
-                        ));
-                    } else if let Some(existing) = assignment.find_observation_mut(obs.player_id) {
-                        existing.add_observation(
-                            obs.assessed_ability,
-                            obs.assessed_potential,
-                            date,
-                        );
-                    }
-                }
-            }
+        // Resolve the interest beats before the mutable pass — each one
+        // reads the whole country to find the target and his club.
+        let country_ref: &Country = country;
+        let wanted_signals: Vec<(u32, Option<TransferInterestSignal>)> = wanted_targets
+            .par_iter()
+            .map(|(scout_club_id, player_id)| {
+                (
+                    *player_id,
+                    Self::local_interest_signal(
+                        country_ref,
+                        *scout_club_id,
+                        *player_id,
+                        TransferInterestStage::ScoutWatched,
+                        TransferInterestSource::ScoutAttendance,
+                    ),
+                )
+            })
+            .collect();
+        // Grouped by target, in the order the clubs staged them, so a
+        // player watched by several clubs hears from them in the same
+        // sequence the serial loop delivered.
+        let mut signals_by_player: HashMap<u32, Vec<usize>> = HashMap::new();
+        for (index, (player_id, _)) in wanted_signals.iter().enumerate() {
+            signals_by_player.entry(*player_id).or_default().push(index);
         }
 
-        for report in reports {
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == report.club_id) {
-                if !club.transfer_plan.scouting_reports.iter().any(|r| {
-                    r.player_id == report.report.player_id
-                        && r.assignment_id == report.assignment_id
-                }) {
-                    club.transfer_plan.scouting_reports.push(report.report);
+        let rejection_months = config.assignment.rejection_memory_months;
+        country
+            .clubs
+            .par_iter_mut()
+            .zip(staged_per_club.into_par_iter())
+            .for_each(|(club, staged)| {
+                debug_assert!(
+                    staged.observations.iter().all(|o| o.club_id == club.id),
+                    "scouting: staged results must belong to their own club"
+                );
 
+                for obs in staged.observations {
+                    if let Some(assignment) = club
+                        .transfer_plan
+                        .scouting_assignments
+                        .iter_mut()
+                        .find(|a| a.id == obs.assignment_id)
+                    {
+                        if obs.is_new {
+                            assignment.observations.push(PlayerObservation::new(
+                                obs.player_id,
+                                obs.assessed_ability,
+                                obs.assessed_potential,
+                                date,
+                            ));
+                        } else if let Some(existing) =
+                            assignment.find_observation_mut(obs.player_id)
+                        {
+                            existing.add_observation(
+                                obs.assessed_ability,
+                                obs.assessed_potential,
+                                date,
+                            );
+                        }
+                    }
+                }
+
+                for report in staged.reports {
+                    if club.transfer_plan.scouting_reports.iter().any(|r| {
+                        r.player_id == report.report.player_id
+                            && r.assignment_id == report.assignment_id
+                    }) {
+                        continue;
+                    }
+                    club.transfer_plan.scouting_reports.push(report.report);
                     if let Some(assignment) = club
                         .transfer_plan
                         .scouting_assignments
@@ -2039,90 +2096,75 @@ impl PipelineProcessor {
                         }
                     }
                 }
-            }
-        }
 
-        // Apply monitoring updates — pool-context scouting.
-        for update in monitoring_updates {
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == update.club_id) {
-                apply_monitoring_update(&mut club.transfer_plan, update, date);
-            }
-        }
+                // Pool-context scouting.
+                for update in staged.monitoring_updates {
+                    apply_monitoring_update(&mut club.transfer_plan, update, date);
+                }
 
-        // Newly scouted players: stamp the market badges and let the
-        // player hear about it. `Wnt` (wanted) and `Sct` (being watched)
-        // were formerly anonymous; the ScoutWatched beat goes through
-        // the structured interest funnel, whose surfacing gate keeps
-        // everyday scout attendance out of the feed unless the club gap
-        // or an emotional link (former / favourite / rival club) makes
-        // it news to the player.
-        for (scout_club_id, player_id) in &wanted_targets {
-            let signal = Self::local_interest_signal(
-                country,
-                *scout_club_id,
-                *player_id,
-                TransferInterestStage::ScoutWatched,
-                TransferInterestSource::ScoutAttendance,
-            );
-            for club in &mut country.clubs {
+                for (_club_id, staff_id, event_type) in staged.staff_events {
+                    for team in &mut club.teams.teams {
+                        if let Some(staff) = team.staffs.find_mut(staff_id) {
+                            staff.add_event(event_type);
+                            break;
+                        }
+                    }
+                }
+
+                // A day spent watching a foreign player accrues on BOTH
+                // axes: the region the older gates read, and the country,
+                // which is where a scout actually builds knowledge.
+                // Watching Colombians for two seasons makes a man who knows
+                // Colombia, not South America.
+                for (_club_id, staff_id, region, source_country) in staged.familiarity_events {
+                    for team in &mut club.teams.teams {
+                        if let Some(staff) = team.staffs.find_mut(staff_id) {
+                            staff.staff_attributes.knowledge.accrue_region_day(region);
+                            staff
+                                .staff_attributes
+                                .knowledge
+                                .accrue_country_day(source_country);
+                            break;
+                        }
+                    }
+                }
+
+                // Commit rejection memory — a Pass recommendation blocks
+                // re-scouting for the configured window, spanning at least
+                // the current window and (typically) the next one.
+                for (_club_id, player_id) in staged.rejected_events {
+                    club.transfer_plan
+                        .reject_player(player_id, date, rejection_months);
+                }
+            });
+
+        // Newly scouted players: stamp the market badges and let the player
+        // hear about it. `Wnt` (wanted) and `Sct` (being watched) were
+        // formerly anonymous; the ScoutWatched beat goes through the
+        // structured interest funnel, whose surfacing gate keeps everyday
+        // scout attendance out of the feed unless the club gap or an
+        // emotional link (former / favourite / rival club) makes it news.
+        if !signals_by_player.is_empty() {
+            country.clubs.par_iter_mut().for_each(|club| {
                 for team in &mut club.teams.teams {
-                    if let Some(player) =
-                        team.players.players.iter_mut().find(|p| p.id == *player_id)
-                    {
+                    for player in &mut team.players.players {
+                        let Some(indexes) = signals_by_player.get(&player.id) else {
+                            continue;
+                        };
                         if !player.statuses.has(PlayerStatusType::Wnt) {
                             player.statuses.add(date, PlayerStatusType::Wnt);
                         }
                         if !player.statuses.has(PlayerStatusType::Sct) {
                             player.statuses.add(date, PlayerStatusType::Sct);
                         }
-                        if let Some(sig) = signal.as_ref() {
-                            player.on_transfer_interest_signal(sig);
+                        for index in indexes {
+                            if let Some(signal) = wanted_signals[*index].1.as_ref() {
+                                player.on_transfer_interest_signal(signal);
+                            }
                         }
                     }
                 }
-            }
-        }
-
-        // Push staff events for scouts
-        for (club_id, staff_id, event_type) in staff_events {
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
-                for team in &mut club.teams.teams {
-                    if let Some(staff) = team.staffs.find_mut(staff_id) {
-                        staff.add_event(event_type);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // A day spent watching a foreign player accrues on BOTH axes: the
-        // region the older gates read, and the country, which is where a
-        // scout actually builds knowledge. Watching Colombians for two
-        // seasons makes a man who knows Colombia, not South America.
-        for (club_id, staff_id, region, source_country) in familiarity_events {
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
-                for team in &mut club.teams.teams {
-                    if let Some(staff) = team.staffs.find_mut(staff_id) {
-                        staff.staff_attributes.knowledge.accrue_region_day(region);
-                        staff
-                            .staff_attributes
-                            .knowledge
-                            .accrue_country_day(source_country);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Commit rejection memory — a Pass recommendation blocks re-scouting
-        // for the configured window, spanning at least the current window
-        // and (typically) the next one.
-        let rejection_months = config.assignment.rejection_memory_months;
-        for (club_id, player_id) in rejected_events {
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
-                club.transfer_plan
-                    .reject_player(player_id, date, rejection_months);
-            }
+            });
         }
     }
 

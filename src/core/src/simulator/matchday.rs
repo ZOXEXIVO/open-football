@@ -45,7 +45,7 @@ use crate::country::result::transfers::FreeAgentBumpBatch;
 use crate::league::result::WorldSnapshot;
 use crate::r#match::{Match, MatchResult};
 
-use super::{ContinentPanicMetrics, panic_message};
+use super::{ContinentPanicMetrics, PerformanceProfiler, panic_message};
 
 #[derive(Default)]
 pub struct WorldMatchdayResult<'gc> {
@@ -146,6 +146,7 @@ impl<'gc> WorldMatchdayResult<'gc> {
         //    and round-robins it across every connected worker —
         //    no per-continent fan-out, no half-empty batches.
         self.dispatched = global_matches.len();
+        let phase = PerformanceProfiler::phase_scope("A2a_engine_dispatch", 1);
         let global_results: Vec<MatchResult> = if self.dispatched == 0 {
             Vec::new()
         } else {
@@ -155,6 +156,7 @@ impl<'gc> WorldMatchdayResult<'gc> {
             );
             MatchRuntime::engine_pool().play(global_matches)
         };
+        drop(phase);
 
         // 3. Slice results back per continent using the ranges we
         //    captured before the dispatch. `to_vec` copies the slice
@@ -170,6 +172,7 @@ impl<'gc> WorldMatchdayResult<'gc> {
         //    isolated per continent — recorded on the global counter
         //    and substituted with an empty result, same shape as the
         //    simulate-side guard.
+        let phase = PerformanceProfiler::phase_scope("A2b_continent_fanout", 1);
         let results: Vec<ContinentResult> = continents
             .par_iter_mut()
             .zip(build_states.into_par_iter())
@@ -194,6 +197,7 @@ impl<'gc> WorldMatchdayResult<'gc> {
                 }
             })
             .collect();
+        drop(phase);
 
         self.continents = results;
     }

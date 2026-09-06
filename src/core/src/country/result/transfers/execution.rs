@@ -549,11 +549,11 @@ fn speaks_local_language(player: &Player, country_code: &str) -> bool {
 /// When selling_country_id == buying_country_id it's domestic (single country).
 /// When different, the player moves between countries.
 /// Returns true if the player was successfully placed at the buying club.
-pub(crate) fn execute_transfer(
+fn execute_transfer_move(
     data: &mut SimulatorData,
     transfer: &DeferredTransfer,
     date: NaiveDate,
-) -> bool {
+) -> (bool, bool) {
     let player_id = transfer.player_id;
     let selling_country_id = transfer.selling_country_id;
     let selling_club_id = transfer.selling_club_id;
@@ -595,7 +595,7 @@ pub(crate) fn execute_transfer(
             if is_loan { "loan" } else { "transfer" },
             player_id
         );
-        return false;
+        return (false, false);
     }
 
     // Safety: can't loan a player who is already on loan
@@ -606,7 +606,7 @@ pub(crate) fn execute_transfer(
             .unwrap_or(false);
         if already_on_loan {
             debug!("Blocked re-loan: player {} is already on loan", player_id);
-            return false;
+            return (false, false);
         }
     }
 
@@ -641,7 +641,7 @@ pub(crate) fn execute_transfer(
                 date,
                 is_loan
             );
-            return false;
+            return (false, false);
         }
     }
     // Sell-on payouts whose beneficiary lives outside the transacting
@@ -685,25 +685,81 @@ pub(crate) fn execute_transfer(
         for (club_id, amount) in &foreign_sell_on_credits {
             TransferExecution::credit_club_globally(data, *club_id, *amount);
         }
-        PipelineProcessor::cleanup_player_transfer_interest(data, player_id);
-        // Development pathway: a young Development-plan signing at a big
-        // club may go straight onto the loan list for first-team minutes.
-        // Runs AFTER the interest sweep — the sweep completes every open
-        // listing for the player, which would kill the fresh loan listing
-        // the staging creates. Data-level so the hoarding cap also counts
-        // the buyer's cross-country loanees.
-        if !is_loan {
-            DevelopmentLoanPathway::stage_after_purchase_global(
-                data,
-                buying_country_id,
-                buying_club_id,
-                player_id,
-                transfer.personal_terms.as_ref(),
-                date,
-            );
+    }
+    (success, !is_loan)
+}
+
+/// Execute one deferred transfer end to end. The single-move entry point:
+/// it moves the player, sweeps the world for stale interest in him, and
+/// stages the development loan. `execute_transfers` is the batched form the
+/// tick actually uses — same three steps, one sweep for everybody.
+#[allow(dead_code)] // single-move form; the tick uses `execute_transfers`
+pub(crate) fn execute_transfer(
+    data: &mut SimulatorData,
+    transfer: &DeferredTransfer,
+    date: NaiveDate,
+) -> bool {
+    let (success, stage_pathway) = execute_transfer_move(data, transfer, date);
+    if success {
+        PipelineProcessor::cleanup_player_transfer_interest(data, transfer.player_id);
+        if stage_pathway {
+            stage_development_loan(data, transfer, date);
         }
     }
     success
+}
+
+/// Execute a tick's worth of deferred transfers for one country.
+///
+/// Same three steps as [`execute_transfer`] and the same order between
+/// them — move, sweep, stage — but the sweep walks the world ONCE for
+/// everyone who moved instead of once per move, which is what it used to
+/// do. The order matters and is why the phases are separated rather than
+/// interleaved: the sweep completes every open listing for a player it is
+/// given, so a development loan listed before it ran would be cancelled by
+/// it. Returns one flag per input, in order.
+pub(crate) fn execute_transfers(
+    data: &mut SimulatorData,
+    transfers: &[DeferredTransfer],
+    date: NaiveDate,
+) -> Vec<bool> {
+    let mut results = Vec::with_capacity(transfers.len());
+    let mut moved: Vec<u32> = Vec::new();
+    let mut pathways: Vec<usize> = Vec::new();
+    for (index, transfer) in transfers.iter().enumerate() {
+        let (success, stage_pathway) = execute_transfer_move(data, transfer, date);
+        results.push(success);
+        if success {
+            moved.push(transfer.player_id);
+            if stage_pathway {
+                pathways.push(index);
+            }
+        }
+    }
+    PipelineProcessor::cleanup_player_transfer_interest_batch(data, &moved);
+    for index in pathways {
+        stage_development_loan(data, &transfers[index], date);
+    }
+    results
+}
+
+/// Development pathway: a young Development-plan signing at a big club may
+/// go straight onto the loan list for first-team minutes. Data-level so the
+/// hoarding cap also counts the buyer's cross-country loanees.
+fn stage_development_loan(data: &mut SimulatorData, transfer: &DeferredTransfer, date: NaiveDate) {
+    {
+        let player_id = transfer.player_id;
+        let buying_country_id = transfer.buying_country_id;
+        let buying_club_id = transfer.buying_club_id;
+        DevelopmentLoanPathway::stage_after_purchase_global(
+            data,
+            buying_country_id,
+            buying_club_id,
+            player_id,
+            transfer.personal_terms.as_ref(),
+            date,
+        );
+    }
 }
 
 /// Undo the buyer/seller bookkeeping an agreed deal left behind when its

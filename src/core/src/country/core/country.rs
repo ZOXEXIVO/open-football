@@ -6,6 +6,7 @@ use crate::context::{HomeLeagueTable, TournamentClocks};
 use crate::country::CountryResult;
 use crate::country::core::builder::CountryBuilder;
 use crate::country::national::NationalTeam;
+use crate::league::LeagueBuildOutput;
 use crate::league::LeagueCollection;
 use crate::league::LeaguePendingState;
 use crate::league::result::{
@@ -14,6 +15,7 @@ use crate::league::result::{
 };
 use crate::r#match::Match;
 use crate::r#match::MatchResult;
+use crate::simulator::PerformanceProfiler;
 use crate::transfers::market::TransferMarket;
 use crate::transfers::market_map::CountryTransferProfile;
 use crate::transfers::pipeline::PipelineProcessor;
@@ -356,31 +358,53 @@ impl Country {
             self.name, self.reputation
         );
 
-        let teams_ids: Vec<(u32, Option<u32>)> = self
-            .clubs
-            .iter()
-            .flat_map(|c| &c.teams.teams)
-            .map(|c| (c.id, c.league_id))
+        // One pass over every team, bucketed by the division it plays in,
+        // instead of re-filtering the whole country's team list once per
+        // league. On a deep pyramid that inner filter was the league loop's
+        // own O(leagues x teams).
+        let mut teams_by_league: HashMap<u32, Vec<u32>> = HashMap::new();
+        for team in self.clubs.iter().flat_map(|c| &c.teams.teams) {
+            if let Some(league_id) = team.league_id {
+                teams_by_league.entry(league_id).or_default().push(team.id);
+            }
+        }
+
+        // Every division prepares its own matchday: `League::simulate_build`
+        // takes `&mut League` and reads the club list, so the divisions of
+        // one country are disjoint and only `self.clubs` is shared. This
+        // used to be the country's longest strictly serial stretch — squad
+        // selection for a whole matchday, one division after another — and
+        // on a deep pyramid it alone bounded how short the build phase could
+        // get (measured at 133 ms for the fattest country while the rest of
+        // the box idled). `par_iter_mut().map().collect()` keeps the outputs
+        // in league order, so `pending_leagues` stays index-parallel with
+        // `self.leagues.leagues` and the match batch is ordered exactly as
+        // the serial loop left it.
+        let clubs = &self.clubs;
+        let league_outputs: Vec<LeagueBuildOutput> = self
+            .leagues
+            .leagues
+            .par_iter_mut()
+            .map(|league| {
+                let league_team_ids: &[u32] = teams_by_league
+                    .get(&league.id)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
+                let league_ctx = ctx.with_league(
+                    league.id,
+                    league.slug.clone(),
+                    league_team_ids,
+                    league.reputation,
+                );
+                league.simulate_build(clubs, &league_ctx)
+            })
             .collect();
 
         let mut all_matches: Vec<Match> = Vec::new();
         let mut pending_leagues: Vec<Option<LeaguePendingState>> =
-            Vec::with_capacity(self.leagues.leagues.len());
+            Vec::with_capacity(league_outputs.len());
         let mut immediate_results: Vec<LeagueResult> = Vec::new();
-
-        for league in &mut self.leagues.leagues {
-            let league_team_ids: Vec<u32> = teams_ids
-                .iter()
-                .filter(|(_, league_id)| *league_id == Some(league.id))
-                .map(|(id, _)| *id)
-                .collect();
-            let league_ctx = ctx.with_league(
-                league.id,
-                league.slug.clone(),
-                &league_team_ids,
-                league.reputation,
-            );
-            let output = league.simulate_build(&self.clubs, &league_ctx);
+        for output in league_outputs {
             all_matches.extend(output.matches);
             pending_leagues.push(output.pending);
             if let Some(r) = output.immediate {
@@ -493,9 +517,18 @@ impl Country {
         }
 
         let mut league_results: Vec<LeagueResult> = pending.immediate_results;
+        let stage = PerformanceProfiler::stage_scope("country_league_results", 2)
+            .labelled(|| country_name.clone());
 
         // Per-league post-match work. Pending vector is parallel to
         // `self.leagues.leagues` (same length, same order).
+        // Serial on purpose. Unlike the build half — where a division's
+        // squad selection for a whole matchday is real work — the
+        // post-match pass is a table update and a fixture stamp; the
+        // per-match fan-out that costs anything happens later, in
+        // `process_local`. Measured across the world it is about two
+        // milliseconds a day, which a fork and a join per country would
+        // spend rather than save.
         let mut pending_iter = pending.leagues.into_iter();
         for league in &mut self.leagues.leagues {
             let slot = pending_iter.next().flatten();
@@ -565,7 +598,13 @@ impl Country {
         // fixture window from the (now-current) league schedule so
         // training in Phase 2 can react to real calendar distance to
         // the next match instead of guessing a Saturday fixture.
-        self.refresh_team_fixture_windows(ctx.simulation.date.date());
+        drop(stage);
+        PerformanceProfiler::stage_labelled(
+            "country_fixture_windows",
+            2,
+            || country_name.clone(),
+            || self.refresh_team_fixture_windows(ctx.simulation.date.date()),
+        );
 
         // Phase 2: Club Operations (with economic factors)
         // National team call-ups are handled at the continent level (cross-country visibility)
@@ -582,7 +621,12 @@ impl Country {
             }
             c
         };
-        let mut clubs_results = self.simulate_clubs(&ctx);
+        let mut clubs_results = PerformanceProfiler::stage_labelled(
+            "country_club_simulation",
+            2,
+            || country_name.clone(),
+            || self.simulate_clubs(&ctx),
+        );
 
         // Per-country local result processing — used to run serially in
         // Phase C after the parallel continent pass joined. Moved into
@@ -594,6 +638,8 @@ impl Country {
         // match store) stays in `CountryResult::process` until that
         // work is sharded too.
         let current_date = ctx.simulation.date.date();
+        let stage = PerformanceProfiler::stage_scope("country_local_results", 2)
+            .labelled(|| country_name.clone());
         CountryResult::simulate_media_coverage(self, &league_results);
         // End-of-period must run BEFORE downstream Phase C work that
         // reads player rosters — it retires players and triggers
@@ -617,6 +663,10 @@ impl Country {
         // captured into `processed_match_results` and folded back into
         // the LeagueResult so the simulator's serial Phase C drains
         // them into the world `SimulationResult`.
+        drop(stage);
+
+        let stage = PerformanceProfiler::stage_scope("country_match_fanout", 2)
+            .labelled(|| country_name.clone());
         let mut deferred = DeferredGlobalOps::new();
         let mut processed: Vec<(u32, Vec<MatchResult>)> = Vec::new();
         let mut league_results_after = Vec::with_capacity(league_results.len());
@@ -628,7 +678,9 @@ impl Country {
         // and player in the country, dominating wall-time on big
         // countries. Drop before `simulate_transfer_market_local`
         // since the transfer pipeline mutates rosters.
-        let lookup = CountryLookupIndex::build(self);
+        let lookup = PerformanceProfiler::stage("country_lookup_index", 3, || {
+            CountryLookupIndex::build(self)
+        });
         for lr in league_results {
             let league_id = lr.league_id;
             if lr.match_results.is_some() {
@@ -665,6 +717,7 @@ impl Country {
         // each player's `cup_statistics_by_competition`, and eligibility
         // hinges on those. Idempotent across ticks via the cup's own
         // `award_emitted_*` markers, so a no-op on every non-final day.
+        drop(stage);
         CountryResult::process_domestic_cup_winner_awards(self, current_date);
         // Grouped-competition playoff champions (MLS Cup, Torneo
         // Apertura/Clausura) + the Supporters' Shield. Same shape: a
@@ -714,6 +767,8 @@ impl Country {
                 ClubAcademyResult::new(PlayerCollectionResult::new(Vec::new())),
             ));
         }
+        let stage = PerformanceProfiler::stage_scope("country_club_results", 2)
+            .labelled(|| country_name.clone());
         let staged_parts: Vec<(DeferredGlobalOps, StagedClubOps)> = {
             // Disjoint field borrows: clubs mutable per worker, the
             // country-level context read-only and shared.
@@ -760,6 +815,7 @@ impl Country {
         // wrote them mid-iteration; the relative order across clubs is
         // preserved, and nothing between a club's process and this drain
         // reads the affected state.
+        let merge = PerformanceProfiler::stage_scope("country_club_staged_merge", 3);
         let mut staged_contract_interactions: Vec<DeferredContractInteraction> = Vec::new();
         for (worker_deferred, worker_staged) in staged_parts {
             deferred.merge(worker_deferred);
@@ -804,6 +860,9 @@ impl Country {
         // Drop the lookup index before the transfer market runs — the
         // pipeline mutates rosters (signings, free agents) and the
         // index would go stale.
+        drop(merge);
+        drop(stage);
+
         drop(lookup);
 
         // Phase 1d (NEW PARALLEL PATH): run the country-local transfer
@@ -813,6 +872,8 @@ impl Country {
         // Cross-country writes (sweeps, data.free_agents mutation,
         // transfer execution, foreign negotiations) go through the
         // returned DeferredTransferOps, drained by Phase C.
+        let stage = PerformanceProfiler::stage_scope("country_transfer_market", 2)
+            .labelled(|| country_name.clone());
         let transfer_ops = CountryResult::simulate_transfer_market_local(
             self,
             current_date,
@@ -820,6 +881,7 @@ impl Country {
             world.global_free_agents,
             world.market_map,
         );
+        drop(stage);
 
         // Stash the processed matches and any deferred global ops on
         // CountryResult so the serial Phase C can apply them.
@@ -857,6 +919,7 @@ impl Country {
     }
 
     fn simulate_clubs(&mut self, ctx: &GlobalContext<'_>) -> Vec<ClubResult> {
+        let prologue = PerformanceProfiler::stage_scope("country_club_prologue", 3);
         // Build team_id → (position, league_size, total_matches, matches_played, tier, league_rep)
         let mut team_league_info: HashMap<u32, (u8, u8, u8, u8, u8, u16)> = HashMap::new();
         for league in &self.leagues.leagues {
@@ -887,6 +950,7 @@ impl Country {
         }
 
         let country_reputation = self.reputation;
+        drop(prologue);
 
         self.clubs
             .par_iter_mut()

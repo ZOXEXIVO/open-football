@@ -5,12 +5,14 @@ mod league_newsroom;
 mod loan_wages;
 mod matchday;
 mod newsroom;
+mod performance;
 mod result;
 mod seeding;
 
 pub use country_info::CountryInfo;
 pub use data::{FreeAgentFlowCounters, SimulatorData};
 pub use matchday::WorldMatchdayResult;
+pub use performance::{PerformanceProfiler, PhaseScope, StageScope};
 pub use result::SimulationResult;
 
 use crate::club::board::manager_market;
@@ -87,7 +89,13 @@ impl FootballSimulator {
         data: &mut SimulatorData,
         config: &SimulatorConfig,
     ) -> SimulationResult {
+        PerformanceProfiler::init_from_env();
         let mut result = SimulationResult::new();
+
+        // Phase 0: world-level prologue — confederation clocks, the home-league
+        // table, the nationality reseed, national call-ups and the national
+        // fixture programme.
+        let phase = PerformanceProfiler::phase_scope("0_prologue", 0);
 
         let current_date = data.date;
 
@@ -154,6 +162,7 @@ impl FootballSimulator {
                 .push(match_result.clone(), current_date.date());
         }
         result.match_results.extend(national_match_results);
+        drop(phase);
 
         // Phase ordering note:
         // A simulates continents, dispatching every continent's matchday
@@ -199,6 +208,7 @@ impl FootballSimulator {
         // and the freshly-built `world_pool` / `global_free_agents`
         // snapshots, in parallel with the `&mut data.continents` from
         // `par_iter_mut`. Different fields ⇒ split borrow ⇒ safe.
+        let phase = PerformanceProfiler::phase_scope("A0_world_snapshots", 0);
         let world_date = data.date;
         let pool_date = data.date.date();
         let world_pool: Vec<PlayerSummary> = data
@@ -228,6 +238,7 @@ impl FootballSimulator {
             global_free_agents: &global_fa_snapshot,
             market_map: world_market_map,
         };
+        drop(phase);
         let world_matchday: WorldMatchdayResult<'_> = {
             // A1: parallel build. Each `Continent::simulate` returns a
             // `ContinentBuildOutput` carrying its `Match::make`
@@ -235,6 +246,7 @@ impl FootballSimulator {
             // so the slot's index alignment with `data.continents`
             // survives — A2 then skips its dispatch slot and emits an
             // empty `ContinentResult`.
+            let phase = PerformanceProfiler::phase_scope("A1_build", 0);
             let builds: Vec<Option<ContinentBuildOutput<'_>>> = data
                 .continents
                 .par_iter_mut()
@@ -262,11 +274,14 @@ impl FootballSimulator {
             // Wrap every continent's build into the single root-level
             // result. From here on the tick operates on `world_matchday`
             // rather than open-coded Vec<Option<ContinentBuildOutput>>.
+            drop(phase);
             let mut wm = WorldMatchdayResult::from_builds(builds);
 
             // A2: root-level dispatch + per-continent fan-out. Single
             // `engine_pool().play(..)` call across the entire world.
+            let phase = PerformanceProfiler::phase_scope("A2_process", 0);
             wm.process(&mut data.continents, world);
+            drop(phase);
             wm
         };
         result.panicked_continents = (ContinentPanicMetrics::total() - panicks_before) as u32;
@@ -289,6 +304,7 @@ impl FootballSimulator {
             // every club; the awards walk every player in every team in
             // every league).
             let phase_date = current_date.date();
+            let phase = PerformanceProfiler::phase_scope("C1_continent_periodic", 0);
             let award_outcomes: Vec<ContinentAwardOutcome> = data
                 .continents
                 .par_iter_mut()
@@ -316,9 +332,13 @@ impl FootballSimulator {
             // awards. `data.player_mut` resolves against every
             // continent, so this stays serial. Small N (3 nominees +
             // 1 winner per continent per year).
+            drop(phase);
+
+            let phase = PerformanceProfiler::phase_scope("C2_award_apply", 0);
             for outcome in award_outcomes {
                 ContinentResult::apply_continental_award_outcome(data, outcome, phase_date);
             }
+            drop(phase);
 
             // Cross-country interest sweep — batched. Each country's
             // Phase-A free-agent matching stages domestic signings on
@@ -328,26 +348,31 @@ impl FootballSimulator {
             // once per signing. We aggregate every signed id first,
             // then walk the world once in parallel via
             // `cleanup_player_transfer_interest_batch`.
+            let phase = PerformanceProfiler::phase_scope("C3_interest_cleanup", 0);
             let all_signed_ids = world_matchday.collect_domestic_signed_ids();
             PipelineProcessor::cleanup_player_transfer_interest_batch(data, &all_signed_ids);
+            drop(phase);
 
             // Free-agent market bumps (offer / reject / block-reason)
             // were per-country, each walking the whole `data.free_agents`
             // pool — O(countries × pool). Aggregate every country's bumps
             // and apply them in ONE pass over the pool before the drain,
             // mirroring the interest-cleanup batch above.
+            let phase = PerformanceProfiler::phase_scope("C4_free_agent_bumps", 0);
             let fa_bumps = world_matchday.collect_free_agent_bumps();
             PipelineProcessor::apply_free_agent_market_bumps_batch(
                 data,
                 &fa_bumps,
                 current_date.date(),
             );
+            drop(phase);
 
             // Unattached players still age. A light weekly development
             // tick with no club environment (neutral coach, league rep 0)
             // keeps pool veterans declining and pool youngsters ticking
             // over, instead of every free agent being frozen in time
             // until someone signs them.
+            let phase = PerformanceProfiler::phase_scope("C5_free_agent_development", 0);
             if SimulationContext::new(current_date).is_week_beginning() {
                 let neutral_coach = CoachingEffect::neutral();
                 let dev_date = current_date.date();
@@ -356,6 +381,7 @@ impl FootballSimulator {
                     .filter(|p| !p.retired)
                     .for_each(|p| p.process_development(dev_date, 0, &neutral_coach, 0.0));
             }
+            drop(phase);
 
             // Season-start career-history snapshot. Used to run serially
             // per country inside the drain (each country's club walk was
@@ -367,6 +393,7 @@ impl FootballSimulator {
             // home — the "snapshot before loan returns" ordering, now
             // applied world-wide. Country-local mutation only ⇒ safe in
             // `countries.par_iter_mut`.
+            let phase = PerformanceProfiler::phase_scope("C6_season_snapshot", 0);
             let new_season_country_ids = world_matchday.collect_new_season_country_ids();
             if !new_season_country_ids.is_empty() {
                 let new_season_set: HashSet<u32> = new_season_country_ids.into_iter().collect();
@@ -381,7 +408,11 @@ impl FootballSimulator {
                     });
             }
 
+            drop(phase);
+
+            let phase = PerformanceProfiler::phase_scope("C7_drain", 0);
             world_matchday.drain_into(data, &mut result);
+            drop(phase);
         }
         data.daily_world_player_pool = None;
         data.daily_global_free_agents = None;
@@ -389,7 +420,9 @@ impl FootballSimulator {
         // Phase D: world-level manager market. Order is load-bearing —
         // see `ManagerMarketTick::run` for the dependency rationale.
         let today = data.date.date();
+        let phase = PerformanceProfiler::phase_scope("D1_manager_market", 0);
         manager_market::ManagerMarketTick::run(data, today);
+        drop(phase);
 
         // Phase D2: parent-side loan wage settlement. Per-club monthly
         // finance runs inside Phase A and bills the borrower for the
@@ -398,6 +431,7 @@ impl FootballSimulator {
         // here at the world level because parent and borrower may live
         // in different countries — a per-country pass can't see them
         // both.
+        let phase = PerformanceProfiler::phase_scope("D2_monthly_loan_wages_fa", 0);
         if today.day() == 1 {
             loan_wages::settle_parent_residual_loan_wages(data);
             // Long-unemployed free agents eventually hang up the boots.
@@ -418,15 +452,20 @@ impl FootballSimulator {
             FreeAgentMarketAuditor::log_pool_stats(data, today);
             data.free_agent_flow.reset();
         }
+        drop(phase);
 
         // Global competitions (Champions League, World Cup, etc.)
+        let phase = PerformanceProfiler::phase_scope("D3_global_competitions", 0);
         GlobalCompetitionSimulator::simulate(data);
+        drop(phase);
 
         // Release Int statuses AFTER all matches (continent + global) —
         // a tournament final on the release date should be played
         // before the squad's flags are cleared.
         {
+            let phase = PerformanceProfiler::phase_scope("E1_national_release", 0);
             data.process_world_national_team_release();
+            drop(phase);
 
             // Move any player whose contract was cleared this tick (positional
             // surplus, free-transfer release, contract expiry) off their old
@@ -440,22 +479,30 @@ impl FootballSimulator {
             // loop — a deliberate one-tick latency, not same-tick global
             // matching. His own country released and could re-sign him within
             // this tick's Phase-A pass (which clears expired contracts inline).
+            let phase = PerformanceProfiler::phase_scope("E2_sweep_released", 0);
             data.sweep_released_to_free_agents();
+            drop(phase);
 
             // Refresh player indexes only if a transfer actually moved a player
             // between clubs today. Walking the world every day is wasteful.
+            let phase = PerformanceProfiler::phase_scope("E3_rebuild_indexes", 0);
             data.rebuild_indexes_if_dirty();
+            drop(phase);
 
             // Seed history for any players created today that haven't been seeded
             // (youth intake, regens, new clubs) — catches them within one tick.
+            let phase = PerformanceProfiler::phase_scope("E4_seed_histories", 0);
             data.seed_missing_player_histories();
+            drop(phase);
 
             // Periodic prune of the global match store. Cadence lives on the
             // config (default: first of every month). Cheap — BTreeMap range
             // walk over evicted dates only.
+            let phase = PerformanceProfiler::phase_scope("E5_match_store_trim", 0);
             if config.is_trim_day(current_date.date()) {
                 data.match_store.trim(current_date.date());
             }
+            drop(phase);
         }
 
         // Order: largest weekly award first so the centralised
@@ -470,6 +517,7 @@ impl FootballSimulator {
         // each tick re-aggregate the same week's matches independently.
         let today = data.date.date();
         {
+            let phase = PerformanceProfiler::phase_scope("F1_monday_awards", 0);
             if today.weekday() == Weekday::Mon {
                 let week_end = today;
                 let week_start = today - Duration::days(7);
@@ -491,6 +539,8 @@ impl FootballSimulator {
             }
             // Monthly awards — first day of each month, awarding the previous
             // calendar month.
+            drop(phase);
+            let phase = PerformanceProfiler::phase_scope("F2_periodic_awards", 0);
             MonthlyAwardsTick::run(data);
             // …and the divisions' own monthly papers, which read the
             // scoring charts the line above has just frozen. Strictly
@@ -505,6 +555,7 @@ impl FootballSimulator {
             // ranking from per-continent rankings so a top performer in any
             // league can win.
             WorldPlayerOfYearTick::run(data);
+            drop(phase);
         }
 
         data.next_date();

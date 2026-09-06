@@ -304,12 +304,34 @@ impl SimulatorDataIndexes {
             })
             .collect();
 
-        self.player_indexes.clear();
-        self.player_positions.clear();
-        for (id_shard, pos_shard) in shards {
-            self.player_indexes.extend(id_shard);
-            self.player_positions.extend(pos_shard);
-        }
+        // The shards are built in parallel but the merge is one pass by
+        // construction — ids are globally unique, so it is a disjoint
+        // `extend` and there is nothing to resolve. Two things make that
+        // pass the phase rather than a footnote: it rehashes all the way
+        // up from empty unless the tables are sized to the answer first,
+        // and it fills two independent maps one after the other. Size
+        // them, then fill them side by side.
+        let total: usize = shards.iter().map(|(ids, _)| ids.len()).sum();
+        let (id_shards, position_shards): (Vec<IdShard>, Vec<PosShard>) =
+            shards.into_iter().unzip();
+        let (player_indexes, player_positions) = rayon::join(
+            || {
+                let mut map: IdShard = HashMap::with_capacity(total);
+                for shard in id_shards {
+                    map.extend(shard);
+                }
+                map
+            },
+            || {
+                let mut map: PosShard = HashMap::with_capacity(total);
+                for shard in position_shards {
+                    map.extend(shard);
+                }
+                map
+            },
+        );
+        self.player_indexes = player_indexes;
+        self.player_positions = player_positions;
     }
 
     //player indexes

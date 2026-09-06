@@ -2,6 +2,7 @@ use chrono::NaiveDate;
 use std::collections::HashMap;
 
 use crate::club::player::transfer::AvailabilityBlockReason;
+use crate::simulator::PerformanceProfiler;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::ScoutMonitoringSource;
 use crate::transfers::pipeline::ScoutPlayerMonitoring;
@@ -542,7 +543,9 @@ impl PipelineProcessor {
 
         // One country walk so per-candidate plausibility re-checks below
         // resolve summaries via hash probe instead of a country scan.
-        let player_lookup = CountryPlayerLookup::build(country);
+        let player_lookup = PerformanceProfiler::stage("recs_player_lookup", 4, || {
+            CountryPlayerLookup::build(country)
+        });
 
         let is_january = Self::is_mid_season_window_for(country, date);
         let price_level = country.settings.pricing.price_level;
@@ -621,6 +624,7 @@ impl PipelineProcessor {
         // Snapshot pass (PARALLEL): pure per-player reads (valuation,
         // breakout score) — clubs fan out, ordered flatten keeps the
         // snapshot sequence identical to the serial walk.
+        let snapshot_stage = PerformanceProfiler::stage_scope("recs_snapshots", 4);
         let all_snapshots: Vec<PlayerSnapshot> = {
             let country: &Country = country;
             let performance_lookup = &performance_lookup;
@@ -763,7 +767,9 @@ impl PipelineProcessor {
         // loop; RNG draws move to the executing worker's thread-seeded
         // stream — the same order-of-execution dependence the tick
         // already has at country granularity.
-        let actions: Vec<RecommendationAction> = {
+        drop(snapshot_stage);
+        let scan_stage = PerformanceProfiler::stage_scope("recs_club_scan", 4);
+        let actions: Vec<Vec<RecommendationAction>> = {
             let country: &Country = country;
             let all_snapshots = &all_snapshots;
             let player_lookup = &player_lookup;
@@ -834,7 +840,7 @@ impl PipelineProcessor {
                                 is_loan,
                                 true,
                                 date,
-                                    None,
+                                None,
                             ),
                             Some(TransferPlausibilityVerdict::HardReject(_))
                         )
@@ -1790,71 +1796,87 @@ impl PipelineProcessor {
                     actions
                 })
                 .collect::<Vec<Vec<RecommendationAction>>>()
-                .into_iter()
-                .flatten()
-                .collect()
         };
+        drop(scan_stage);
 
-        // Pass 2: Push recommendations into club transfer plans
-        // Small clubs get higher cap
-        for action in actions {
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
-                let team = club.teams.teams.first();
-                let rep = team
-                    .map(|t| t.reputation.level())
-                    .unwrap_or(ReputationLevel::Amateur);
-                let rep_score = team.map(|t| t.reputation.overall_score()).unwrap_or(0.0);
-                let cap = Self::staff_recommendation_cap_score(rep, rep_score);
-                if club.transfer_plan.staff_recommendations.len() < cap {
-                    let rec = action.recommendation;
-                    let recommender_id = rec.recommender_staff_id;
-                    let player_id = rec.player_id;
-                    let assessed_ability = rec.assessed_ability;
-                    let assessed_potential = rec.assessed_potential;
-                    let confidence = rec.confidence;
-                    let estimated_fee = rec.estimated_fee;
-                    let source = match rec.source {
-                        RecommendationSource::ScoutNetwork => {
-                            ScoutMonitoringSource::StaffRecommendation
-                        }
-                        RecommendationSource::ChiefScoutReport => {
-                            ScoutMonitoringSource::StaffRecommendation
-                        }
-                        RecommendationSource::DirectorOfFootball => {
-                            ScoutMonitoringSource::StaffRecommendation
-                        }
-                        RecommendationSource::HeadCoach => {
-                            ScoutMonitoringSource::StaffRecommendation
-                        }
-                    };
-                    club.transfer_plan.staff_recommendations.push(rec);
+        // Pass 2: Push recommendations into club transfer plans (small clubs
+        // get a higher cap). The scan collects one bucket per club, in club
+        // order, so the commit is an indexed zip rather than a club scan per
+        // action — and each club's cap check only ever reads its own plan,
+        // so the clubs commit in parallel.
+        let apply_stage = PerformanceProfiler::stage_scope("recs_apply", 4);
+        country
+            .clubs
+            .par_iter_mut()
+            .zip(actions.into_par_iter())
+            .for_each(|(club, club_actions)| {
+                for action in club_actions {
+                    debug_assert_eq!(
+                        club.id, action.club_id,
+                        "staff recommendations: staged actions must belong to their own club"
+                    );
+                    let team = club.teams.teams.first();
+                    let rep = team
+                        .map(|t| t.reputation.level())
+                        .unwrap_or(ReputationLevel::Amateur);
+                    let rep_score = team.map(|t| t.reputation.overall_score()).unwrap_or(0.0);
+                    let cap = Self::staff_recommendation_cap_score(rep, rep_score);
+                    if club.transfer_plan.staff_recommendations.len() < cap {
+                        let rec = action.recommendation;
+                        let recommender_id = rec.recommender_staff_id;
+                        let player_id = rec.player_id;
+                        let assessed_ability = rec.assessed_ability;
+                        let assessed_potential = rec.assessed_potential;
+                        let confidence = rec.confidence;
+                        let estimated_fee = rec.estimated_fee;
+                        let source = match rec.source {
+                            RecommendationSource::ScoutNetwork => {
+                                ScoutMonitoringSource::StaffRecommendation
+                            }
+                            RecommendationSource::ChiefScoutReport => {
+                                ScoutMonitoringSource::StaffRecommendation
+                            }
+                            RecommendationSource::DirectorOfFootball => {
+                                ScoutMonitoringSource::StaffRecommendation
+                            }
+                            RecommendationSource::HeadCoach => {
+                                ScoutMonitoringSource::StaffRecommendation
+                            }
+                        };
+                        club.transfer_plan.staff_recommendations.push(rec);
 
-                    // Mirror the recommendation into a monitoring row
-                    // so the recruitment meeting and UI surfaces see
-                    // the player on this scout's books too.
-                    let plan = &mut club.transfer_plan;
-                    if plan
-                        .find_monitoring_mut(recommender_id, player_id)
-                        .is_none()
-                    {
-                        let id = plan.next_monitoring_id();
-                        let mut row =
-                            ScoutPlayerMonitoring::new(id, recommender_id, player_id, source, date);
-                        row.record_observation(
-                            assessed_ability,
-                            assessed_potential,
-                            confidence,
-                            1.0,
-                            estimated_fee,
-                            Vec::new(),
-                            date,
-                            false,
-                        );
-                        plan.scout_monitoring.push(row);
+                        // Mirror the recommendation into a monitoring row
+                        // so the recruitment meeting and UI surfaces see
+                        // the player on this scout's books too.
+                        let plan = &mut club.transfer_plan;
+                        if plan
+                            .find_monitoring_mut(recommender_id, player_id)
+                            .is_none()
+                        {
+                            let id = plan.next_monitoring_id();
+                            let mut row = ScoutPlayerMonitoring::new(
+                                id,
+                                recommender_id,
+                                player_id,
+                                source,
+                                date,
+                            );
+                            row.record_observation(
+                                assessed_ability,
+                                assessed_potential,
+                                confidence,
+                                1.0,
+                                estimated_fee,
+                                Vec::new(),
+                                date,
+                                false,
+                            );
+                            plan.scout_monitoring.push(row);
+                        }
                     }
                 }
-            }
-        }
+            });
+        drop(apply_stage);
     }
 
     pub fn process_staff_recommendations(country: &mut Country, date: NaiveDate) {

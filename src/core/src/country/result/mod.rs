@@ -10,7 +10,7 @@ use crate::country::result::transfers::DeferredTransferOps;
 use crate::league::LeagueResult;
 use crate::league::result::DeferredGlobalOps;
 use crate::r#match::MatchResult;
-use crate::simulator::SimulatorData;
+use crate::simulator::{PerformanceProfiler, SimulatorData};
 use crate::{ClubResult, SimulationResult};
 
 pub struct CountryResult {
@@ -103,6 +103,7 @@ impl CountryResult {
         // `Country::last_snapshotted_season_year`), so a year that
         // failed the `new_season_started` check is recovered the next
         // time any league does flip the gate.
+        let stage = PerformanceProfiler::stage_scope("drain_season_turn", 2);
         if any_new_season {
             // Career-history snapshot was hoisted out of this serial
             // drain into a parallel season-start pass in the simulator
@@ -123,6 +124,8 @@ impl CountryResult {
             Self::enforce_squad_registration(data, self.country_id, current_date);
         }
 
+        drop(stage);
+
         // Phase 2: Club result processing was driven from
         // `Country::simulate` (Phase A) via CountryProcessCtx. Nothing
         // to do here for the per-club mutations; placeholder shells
@@ -130,6 +133,7 @@ impl CountryResult {
         let _ = &self.clubs;
 
         // Regular loan return check for non-season-end days
+        let stage = PerformanceProfiler::stage_scope("drain_loans", 2);
         if !any_new_season {
             Self::process_loan_returns(data, country_id, current_date);
             // Monthly mid-loan recall pass: depth emergencies at the
@@ -137,6 +141,7 @@ impl CountryResult {
             // recall window into an actual early return.
             Self::process_loan_recalls(data, country_id, current_date);
         }
+        drop(stage);
 
         // Pre-season, international competitions, economic factors all
         // moved into `Country::simulate` (Phase A) so they parallelize
@@ -152,7 +157,9 @@ impl CountryResult {
         // mutate `data.free_agents`, execute deferred transfers,
         // kickoff foreign negotiations.
         if let Some(ops) = self.deferred_transfer_ops {
-            Self::apply_deferred_transfer_ops(data, ops, current_date);
+            PerformanceProfiler::stage("drain_transfer_ops", 2, || {
+                Self::apply_deferred_transfer_ops(data, ops, current_date)
+            });
         }
     }
 

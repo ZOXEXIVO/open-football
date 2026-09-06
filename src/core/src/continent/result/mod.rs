@@ -11,7 +11,7 @@ pub use types::*;
 use crate::SimulationResult;
 use crate::country::CountryResult;
 use crate::r#match::MatchResult;
-use crate::simulator::SimulatorData;
+use crate::simulator::{PerformanceProfiler, SimulatorData};
 
 pub struct ContinentResult {
     pub continent_id: u32,
@@ -47,19 +47,27 @@ impl ContinentResult {
     pub fn process(self, data: &mut SimulatorData, result: &mut SimulationResult) {
         let current_date = data.date.date();
 
+        let stage = PerformanceProfiler::stage_scope("drain_national_results", 1);
         for match_result in &self.national_match_results {
             data.match_store.push(match_result.clone(), current_date);
         }
+        drop(stage);
 
         // Phase 3: Continental Competition Processing
+        let stage = PerformanceProfiler::stage_scope("drain_competition_draws", 1);
         if self.is_competition_draw_period(current_date) {
             self.conduct_competition_draws(data, current_date);
         }
+        drop(stage);
 
-        let competition_results = self.simulate_continental_competitions(data, current_date);
+        let competition_results = PerformanceProfiler::stage("drain_continental_cups", 1, || {
+            self.simulate_continental_competitions(data, current_date)
+        });
+        let stage = PerformanceProfiler::stage_scope("drain_competition_results", 1);
         if let Some(comp_results) = competition_results {
             self.process_competition_results(comp_results, data, result);
         }
+        drop(stage);
 
         // Phases 2/4/5/6 — continental rankings (monthly), economic zone
         // (quarterly), regulations (yearly), and the player-of-year /
@@ -73,7 +81,7 @@ impl ContinentResult {
         // method runs.
 
         for country_result in self.countries {
-            country_result.process(data, result);
+            PerformanceProfiler::stage("drain_country", 1, || country_result.process(data, result));
         }
     }
 

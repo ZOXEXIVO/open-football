@@ -13,7 +13,7 @@ pub(crate) mod types;
 use super::CountryResult;
 use crate::club::player::events::transfer_social::TransferInterestSignal;
 use crate::club::player::transfer::FreeAgentBlockReason;
-use crate::simulator::SimulatorData;
+use crate::simulator::{PerformanceProfiler, SimulatorData};
 use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
@@ -156,6 +156,7 @@ impl CountryResult {
         market_map: &MarketMap,
     ) -> DeferredTransferOps {
         let country_id = country.id;
+        let country_name = country.name.clone();
         let mut summary = TransferActivitySummary::new();
         let window_manager = TransferWindowManager::for_country(country, current_date);
         let window_open = window_manager.is_window_open(country_id, current_date);
@@ -197,8 +198,12 @@ impl CountryResult {
         // outcomes: pool signings whose medical just cleared (executed
         // against `data.free_agents` in Phase C) and rejected-offer
         // counters for pool players who declined personal terms.
-        let outcomes =
-            Self::resolve_pending_negotiations(country, current_date, market_map, &mut summary);
+        let outcomes = PerformanceProfiler::stage_labelled(
+            "tm_resolve_negotiations",
+            3,
+            || country_name.clone(),
+            || Self::resolve_pending_negotiations(country, current_date, market_map, &mut summary),
+        );
         ops.deferred_transfers = outcomes.deferred;
         ops.global_signings = outcomes.free_agent_signings;
         ops.global_rejected_ids = outcomes.free_agent_rejected_ids;
@@ -232,23 +237,35 @@ impl CountryResult {
         // actually lands on the books over time. Credits owed to
         // foreign sellers can't be applied inside this country borrow —
         // they ride up on `ops` and drain globally in Phase C.
-        ops.cross_country_clause_credits = TransferClauseSettler::settle_due(country, current_date);
+        ops.cross_country_clause_credits = PerformanceProfiler::stage_labelled(
+            "tm_clause_settle",
+            3,
+            || country_name.clone(),
+            || TransferClauseSettler::settle_due(country, current_date),
+        );
 
         // Free agents and contract expirations. Returns deferred
         // signings sourced from the global pool (`data.free_agents`),
         // which we execute after the country borrow ends — appended to
         // the negotiation-driven pool signings collected above.
-        let pool_signings = Self::handle_free_agents(
-            country,
-            current_date,
-            &mut summary,
-            global_free_agents,
-            market_map,
-            &config,
-            &mut ops.domestic_signed_ids,
-            &mut ops.global_offered_ids,
-            &mut ops.global_rejected_ids,
-            &mut ops.global_block_reasons,
+        let pool_signings = PerformanceProfiler::stage_labelled(
+            "tm_handle_free_agents",
+            3,
+            || country_name.clone(),
+            || {
+                Self::handle_free_agents(
+                    country,
+                    current_date,
+                    &mut summary,
+                    global_free_agents,
+                    market_map,
+                    &config,
+                    &mut ops.domestic_signed_ids,
+                    &mut ops.global_offered_ids,
+                    &mut ops.global_rejected_ids,
+                    &mut ops.global_block_reasons,
+                )
+            },
         );
         ops.global_signings.extend(pool_signings);
 
@@ -257,7 +274,12 @@ impl CountryResult {
         // renew, so they move directly to a domestic rival on expiry
         // instead of lingering in the open pool. Window-independent — a
         // pre-contract is legal year-round inside the six-month window.
-        PreContractManager::stage(country, current_date, &config);
+        PerformanceProfiler::stage_labelled(
+            "tm_pre_contracts",
+            3,
+            || country_name.clone(),
+            || PreContractManager::stage(country, current_date, &config),
+        );
 
         // ── Year-round: planning and knowledge ──────────────────────
         //
@@ -273,9 +295,24 @@ impl CountryResult {
         // the work by the length of the year — it spreads the same work
         // across it, which is the point. The passes that MOVE money or
         // players stay inside the window below.
-        PipelineProcessor::evaluate_squads(country, current_date);
-        PipelineProcessor::generate_staff_recommendations(country, current_date);
-        PipelineProcessor::process_staff_recommendations(country, current_date);
+        PerformanceProfiler::stage_labelled(
+            "tm_evaluate_squads",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::evaluate_squads(country, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_staff_recommendations",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::generate_staff_recommendations(country, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_process_staff_recs",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::process_staff_recommendations(country, current_date),
+        );
         // The club's standing knowledge of the market: names within reach
         // and within the brief's envelope for each shirt it means to fill.
         // Weekly, all year — a scout does not stop watching football in
@@ -285,25 +322,92 @@ impl CountryResult {
         // markets it wants covered and hires the person who covers one it
         // does not. The only channel by which a corridor the shipped data
         // never named can appear in a save — see [`ScoutMarketDesk`].
-        ScoutMarketDesk::run(country, market_map, current_date);
-        PipelineProcessor::refresh_watchlists(country, world_pool, current_date);
-        PipelineProcessor::assign_scouts(country, current_date);
-        PipelineProcessor::assign_scouts_to_matches(country, current_date);
-        PipelineProcessor::process_match_scouting(country, current_date);
-        PipelineProcessor::process_scouting(country, &foreign_players, current_date, market_map);
-        PipelineProcessor::run_recruitment_meetings(country, current_date);
+        PerformanceProfiler::stage_labelled(
+            "tm_scout_market_desk",
+            3,
+            || country_name.clone(),
+            || ScoutMarketDesk::run(country, market_map, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_refresh_watchlists",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::refresh_watchlists(country, world_pool, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_assign_scouts",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::assign_scouts(country, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_assign_match_scouts",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::assign_scouts_to_matches(country, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_match_scouting",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::process_match_scouting(country, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_process_scouting",
+            3,
+            || country_name.clone(),
+            || {
+                PipelineProcessor::process_scouting(
+                    country,
+                    &foreign_players,
+                    current_date,
+                    market_map,
+                )
+            },
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_recruitment_meetings",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::run_recruitment_meetings(country, current_date),
+        );
 
         if window_open {
             debug!("Transfer window is OPEN - simulating pipeline-driven market activity");
-            Self::list_players_from_pipeline(country, current_date, &mut summary);
+            PerformanceProfiler::stage_labelled(
+                "tm_list_players",
+                3,
+                || country_name.clone(),
+                || Self::list_players_from_pipeline(country, current_date, &mut summary),
+            );
             // Market-circulation / diagnosis: record interest in (or a
             // coherent block reason for) every available signed player,
             // right after the recommendation sweep so this tick's interest
             // is already visible.
-            PipelineProcessor::circulate_available_players(country, current_date);
-            PipelineProcessor::build_shortlists(country, current_date);
-            PipelineProcessor::evaluate_board_approvals(country, current_date);
-            PipelineProcessor::initiate_negotiations(country, current_date);
+            PerformanceProfiler::stage_labelled(
+                "tm_circulate_available",
+                3,
+                || country_name.clone(),
+                || PipelineProcessor::circulate_available_players(country, current_date),
+            );
+            PerformanceProfiler::stage_labelled(
+                "tm_build_shortlists",
+                3,
+                || country_name.clone(),
+                || PipelineProcessor::build_shortlists(country, current_date),
+            );
+            PerformanceProfiler::stage_labelled(
+                "tm_board_approvals",
+                3,
+                || country_name.clone(),
+                || PipelineProcessor::evaluate_board_approvals(country, current_date),
+            );
+            PerformanceProfiler::stage_labelled(
+                "tm_initiate_negotiations",
+                3,
+                || country_name.clone(),
+                || PipelineProcessor::initiate_negotiations(country, current_date),
+            );
             // Seller-side push runs BEFORE the borrower scan: a National+ parent
             // evaluates the whole market and places each loan-listed development
             // prospect at the best (highest-level) club where he'd still start,
@@ -311,20 +415,42 @@ impl CountryResult {
             // scanning lower club snatching him first. The scan then fills
             // everything the broadcast didn't place — the bulk of loan volume —
             // so prospects are never starved of takers (no scan deferral).
-            PipelineProcessor::broadcast_listed_loans(country, current_date);
+            PerformanceProfiler::stage_labelled(
+                "tm_broadcast_loans",
+                3,
+                || country_name.clone(),
+                || PipelineProcessor::broadcast_listed_loans(country, current_date),
+            );
             // Stale permanent listings get the same push, permanent
             // flavor: a player unsold past the grace weeks asks the club
             // to find him a move and the scouts offer him around, the
             // tier reach widening cumulatively downward until a buyer
             // responds. Paired with the year-unsold free-exit valve
             // below, no listing lingers for seasons.
-            PipelineProcessor::broadcast_listed_transfers(country, current_date);
-            PipelineProcessor::scan_loan_market(country, current_date);
-            PipelineProcessor::scan_foreign_loan_market(
-                country,
-                &foreign_players,
-                current_date,
-                market_map,
+            PerformanceProfiler::stage_labelled(
+                "tm_broadcast_transfers",
+                3,
+                || country_name.clone(),
+                || PipelineProcessor::broadcast_listed_transfers(country, current_date),
+            );
+            PerformanceProfiler::stage_labelled(
+                "tm_scan_loan_market",
+                3,
+                || country_name.clone(),
+                || PipelineProcessor::scan_loan_market(country, current_date),
+            );
+            PerformanceProfiler::stage_labelled(
+                "tm_scan_foreign_loans",
+                3,
+                || country_name.clone(),
+                || {
+                    PipelineProcessor::scan_foreign_loan_market(
+                        country,
+                        &foreign_players,
+                        current_date,
+                        market_map,
+                    )
+                },
             );
         }
 
@@ -332,15 +458,35 @@ impl CountryResult {
         // year after being transfer-listed forces a mutual termination and
         // leaves on a free. Window-independent — tearing up a contract is
         // legal year-round; the free-agent sweep collects him next tick.
-        Self::release_unsold_listed_players(country, current_date);
+        PerformanceProfiler::stage_labelled(
+            "tm_release_unsold",
+            3,
+            || country_name.clone(),
+            || Self::release_unsold_listed_players(country, current_date),
+        );
 
-        PipelineProcessor::refresh_shadow_reports(country, current_date);
+        PerformanceProfiler::stage_labelled(
+            "tm_shadow_reports",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::refresh_shadow_reports(country, current_date),
+        );
         // Year-round breakout watch: discover high-form players on plausible
         // buyers' books even with the window shut. Runs outside the window
         // block (weekly cadence enforced inside) and only records scout
         // monitoring — never a negotiation.
-        PipelineProcessor::scan_breakout_form(country, &foreign_players, current_date);
-        PipelineProcessor::sync_wanted_status(country);
+        PerformanceProfiler::stage_labelled(
+            "tm_breakout_form",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::scan_breakout_form(country, &foreign_players, current_date),
+        );
+        PerformanceProfiler::stage_labelled(
+            "tm_sync_wanted",
+            3,
+            || country_name.clone(),
+            || PipelineProcessor::sync_wanted_status(country),
+        );
 
         ops.completed_after = summary.completed_transfers;
         ops.pre_contract_signed = summary.signed_pre_contract;
@@ -384,9 +530,11 @@ impl CountryResult {
         // country — the buyer was debited during the parallel Phase-A
         // pass; the foreign seller is credited here or the money is
         // destroyed.
+        let stage = PerformanceProfiler::stage_scope("drain_clause_credits", 3);
         for (club_id, amount) in &ops.cross_country_clause_credits {
             TransferExecution::credit_club_globally(data, *club_id, *amount);
         }
+        drop(stage);
 
         // Deliver saga beats to foreign players — the buying country's
         // parallel pass couldn't reach them. Player-dependent facts
@@ -394,16 +542,28 @@ impl CountryResult {
         // the seller's country is addressable. Delivered BEFORE the
         // deferred executions below so a player whose deal collapsed
         // hears about it before any unrelated roster churn.
-        Self::deliver_pending_player_signals(data, &ops.player_signals);
+        PerformanceProfiler::stage("drain_player_signals", 3, || {
+            Self::deliver_pending_player_signals(data, &ops.player_signals)
+        });
 
         // Execute global free-agent signings (Move-on-Free players from
         // `data.free_agents`).
         let mut completed = ops.completed_after;
+        let stage = PerformanceProfiler::stage_scope("drain_free_agent_signings", 3);
+        let mut placed_from_pool: Vec<u32> = Vec::new();
         for signing in &ops.global_signings {
             if execute_global_free_agent_signing(data, signing, current_date, &config) {
                 completed += 1;
+                placed_from_pool.push(signing.player_id);
             }
         }
+        // One world sweep for everyone this country just took out of the
+        // pool, not one per signing. Still ahead of the foreign-negotiation
+        // kickoff below, so no club can open a saga for a player who was
+        // signed a moment ago.
+        PipelineProcessor::cleanup_player_transfer_interest_batch(data, &placed_from_pool);
+
+        drop(stage);
 
         // If anything moved this tick the global indexes need refreshing.
         if completed > ops.completed_before {
@@ -427,29 +587,36 @@ impl CountryResult {
             .saturating_add(domestic_expiry);
 
         // Phase 2: Execute all completed transfers (domestic + foreign).
-        for transfer in &ops.deferred_transfers {
-            let success = execution::execute_transfer(data, transfer, current_date);
+        // One call for the whole country: the executor moves every player,
+        // then sweeps the world once for all of them, then stages the
+        // development loans — the same order a per-transfer call keeps, at
+        // one world walk instead of one per transfer.
+        let stage = PerformanceProfiler::stage_scope("drain_execute_transfers", 3);
+        let outcomes = execution::execute_transfers(data, &ops.deferred_transfers, current_date);
+        for (transfer, success) in ops.deferred_transfers.iter().zip(outcomes) {
             if success {
                 data.dirty_player_index = true;
+                continue;
             }
-            if !success {
-                if let Some(country) = data.country_mut(transfer.buying_country_id) {
-                    country.transfer_market.transfer_history.retain(|t| {
-                        !(t.player_id == transfer.player_id
-                            && t.to_club_id == transfer.buying_club_id
-                            && t.transfer_date == current_date)
-                    });
-                }
-                // The deal was optimistically finalised at medical stage but
-                // never executed — roll the market state back so the player
-                // stays visible and the buyer keeps looking.
-                execution::compensate_failed_execution(data, transfer);
+            if let Some(country) = data.country_mut(transfer.buying_country_id) {
+                country.transfer_market.transfer_history.retain(|t| {
+                    !(t.player_id == transfer.player_id
+                        && t.to_club_id == transfer.buying_club_id
+                        && t.transfer_date == current_date)
+                });
             }
+            // The deal was optimistically finalised at medical stage but
+            // never executed — roll the market state back so the player
+            // stays visible and the buyer keeps looking.
+            execution::compensate_failed_execution(data, transfer);
         }
+        drop(stage);
 
         // Phase 3: Foreign negotiation initiation (domestic priority).
         if ops.window_open {
-            PipelineProcessor::initiate_foreign_negotiations(data, ops.country_id, current_date);
+            PerformanceProfiler::stage("drain_foreign_negotiations", 3, || {
+                PipelineProcessor::initiate_foreign_negotiations(data, ops.country_id, current_date)
+            });
         }
     }
 

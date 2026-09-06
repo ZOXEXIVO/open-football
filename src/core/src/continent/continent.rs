@@ -8,6 +8,7 @@ use crate::continent::{
 use crate::country::{CountryPendingState, CountryResult};
 use crate::league::result::WorldSnapshot;
 use crate::r#match::{Match, MatchResult};
+use crate::simulator::PerformanceProfiler;
 use crate::utils::Logging;
 use log::debug;
 use rayon::iter::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
@@ -183,7 +184,13 @@ impl Continent {
             .countries
             .par_iter_mut()
             .zip(country_ctxs.par_iter())
-            .map(|(country, country_ctx)| country.simulate_build(country_ctx, world))
+            .map(|(country, country_ctx)| {
+                let stage = PerformanceProfiler::stage_scope("country_build", 1)
+                    .labelled(|| country.name.clone());
+                let output = country.simulate_build(country_ctx, world);
+                drop(stage);
+                output
+            })
             .collect();
 
         // Flatten per-country matches into one continent-local batch
@@ -243,10 +250,14 @@ impl Continent {
             .zip(per_country_results.into_par_iter())
             .map(|(((country, country_ctx), pending), results)| {
                 let message = format!("simulate country: {}", &country.name);
-                Logging::estimate_result(
+                let stage = PerformanceProfiler::stage_scope("country_process", 1)
+                    .labelled(|| country.name.clone());
+                let output = Logging::estimate_result(
                     || country.simulate_process(country_ctx, world, pending, results),
                     &message,
-                )
+                );
+                drop(stage);
+                output
             })
             .collect();
 

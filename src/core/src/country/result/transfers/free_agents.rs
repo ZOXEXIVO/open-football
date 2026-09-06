@@ -30,11 +30,11 @@ use crate::transfers::squad_needs::{
     EmergencyBuyerContext, EmergencyCandidateView, EmergencyGroupSlot, EmergencyProjectedSquad,
     EmergencySlotStrictness, EmergencySquadFillStrategy, EmergencyStrictness, FirstTeamSquadNeeds,
 };
-use crate::transfers::{CompletedTransfer, TransferType};
 use crate::transfers::{
     ClubMarketKnowledge, MarketAffinity, MarketAffinityInputs, MarketLedgerUpdate, MarketMap,
     MoveKind,
 };
+use crate::transfers::{CompletedTransfer, TransferType};
 use crate::utils::FormattingUtils;
 use crate::utils::IntegerUtils;
 use crate::{
@@ -2292,13 +2292,13 @@ impl CountryResult {
                 }
             }
             if fitting.is_empty() && unregistrable_fits > 0 {
-                recorder.record(candidate.player_id, FreeAgentBlockReason::NoRegistrationSlot);
+                recorder.record(
+                    candidate.player_id,
+                    FreeAgentBlockReason::NoRegistrationSlot,
+                );
             }
-            let chosen = Self::sample_clearing_buyer(
-                &fitting,
-                candidate.position_group,
-                &candidate_market,
-            );
+            let chosen =
+                Self::sample_clearing_buyer(&fitting, candidate.position_group, &candidate_market);
             let Some((buyer, min_ca, max_ca)) = chosen else {
                 recorder.record(
                     candidate.player_id,
@@ -3857,10 +3857,12 @@ pub(crate) fn execute_global_free_agent_signing(
 
     PipelineProcessor::clear_player_interest(buying_country, signing.player_id);
 
-    // Sweep stale interest in every country — clubs in other leagues may
-    // have monitoring or shortlist rows that survived the local clear.
-    let player_id = signing.player_id;
-    PipelineProcessor::cleanup_player_transfer_interest(data, player_id);
+    // Stale interest in OTHER countries — monitoring or shortlist rows
+    // that survived the local clear — is swept by the caller. That sweep
+    // walks the whole world and costs the same whether it strips one
+    // player or a hundred, so firing it per signing made the drain
+    // O(signings x world); the caller batches every id it just placed and
+    // sweeps once, before it initiates any foreign negotiation.
 
     // Monthly diagnostics flow counter — a player just left the global
     // pool for a club, which a later point-in-time scan can't recover.
@@ -5249,8 +5251,7 @@ mod emergency_fill_tests {
                 country_reputation: 6000,
                 country_code: code.to_string(),
                 continent_id,
-                region_prestige: ScoutingRegion::from_country(continent_id, code)
-                    .league_prestige(),
+                region_prestige: ScoutingRegion::from_country(continent_id, code).league_prestige(),
                 club_reputation_score: 0.45,
                 league_reputation: 5500,
                 negotiator_skill: 50,
@@ -5337,12 +5338,8 @@ mod emergency_fill_tests {
             EmergencyStrictness::Flexible,
             0.06,
         );
-        let keeper = EmergencyMarketFixtures::russian(
-            902,
-            PlayerFieldPositionGroup::Goalkeeper,
-            400,
-            0.95,
-        );
+        let keeper =
+            EmergencyMarketFixtures::russian(902, PlayerFieldPositionGroup::Goalkeeper, 400, 0.95);
         let visibility = FreeAgentMarketVisibility::build(
             EmergencyMarketFixtures::CM,
             &map,
