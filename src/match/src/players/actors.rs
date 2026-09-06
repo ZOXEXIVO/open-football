@@ -12,7 +12,7 @@ use crate::players::kit::{Complexion, Wardrobe};
 use crate::players::portrait::Portraits;
 use crate::recording::loader::ChunkLoader;
 use crate::recording::playback::Playback;
-use crate::recording::replay::{ReplayTracks, StateTrack, Track};
+use crate::recording::replay::{MatchEvent, ReplayTracks, StateTrack, Track};
 use std::collections::HashMap;
 use crate::scene::field::Field;
 use crate::scene::pitch::Pitch;
@@ -1829,7 +1829,13 @@ impl Actors {
         let coming = if playback.seeked {
             None
         } else {
-            Self::next_impact(&mut tracks.ball, now)
+            // The ball's own track first, and the event log for the two
+            // contacts it cannot show. See [`Actors::recorded_contact`].
+            let tracks = &mut *tracks;
+            match Self::next_impact(&mut tracks.ball, now) {
+                Some(contact) => Some(contact),
+                None => Self::recorded_contact(&tracks.events, &mut tracks.ball, now),
+            }
         };
 
         // Who has it in his gloves, where those gloves are, and who is nearest
@@ -2182,6 +2188,90 @@ impl Actors {
     /// swing is right wherever the playhead is put — scrubbed, reversed or
     /// running at 8x — instead of being right only if it was watched from the
     /// beginning.
+
+    /// **A contact the RECORDING names**, for the ones the ball's own track
+    /// cannot show.
+    ///
+    /// [`Self::next_impact`] reads a JUMP IN SPEED, and the two defensive
+    /// contacts in football are the opposite of one: a block takes the pace
+    /// off a shot, and a headed clearance meets a dropping cross and sends
+    /// it back out at much the same speed. Neither clears
+    /// [`Self::IMPACT_RATIO`], so both used to be drawn as a ball
+    /// rebounding off a man standing perfectly still.
+    ///
+    /// # Why this reads rather than infers
+    ///
+    /// Inference cannot do it. Measured off a recorded match, a turn rule —
+    /// "a contact is also a ball that changes direction sharply" — tops out
+    /// at **2.8% precision** whichever way it is tuned: at >60° and >8 m/s
+    /// it fires 200 times per 90 minutes, of which six are blocks. Football
+    /// is full of balls that turn hard at speed. Loosening it to catch more
+    /// blocks makes it worse, not better (>40° at >4 m/s: 1286 firings a
+    /// match, eleven of them real).
+    ///
+    /// The engine already knows. It writes `Blocked(id, position)` and
+    /// `HeadedClear(id, position)` into the event log with the man and the
+    /// tick, so this reads the answer instead of guessing at it — 20 blocks
+    /// a match and no false positives at all.
+    ///
+    /// # The two are not drawn the same way
+    ///
+    /// A defender who heads a cross away has gone to attack it: he gets the
+    /// normal look-ahead and the normal backswing. A man who blocks a shot
+    /// has not decided to — the ball hits him — so his contact is offered
+    /// only on the frame it happens, and the swing starts from where his leg
+    /// already was.
+    ///
+    /// Returns `None` when the recording carries no events at all, which is
+    /// every recording made with the match event log switched off; the rig
+    /// then behaves exactly as it did before this existed.
+    fn recorded_contact(events: &[MatchEvent], ball: &mut Track, now: f64) -> Option<Contact> {
+        let ahead = Self::WINDUP as f64 * 1000.0;
+        // Sorted on the way in — see `ReplayTracks::absorb_envelope`.
+        let first = events.partition_point(|event| (event.timestamp as f64) < now - Self::PROBE);
+        for event in &events[first..] {
+            let at_ms = event.timestamp as f64;
+            if at_ms > now + ahead {
+                break;
+            }
+            if event.category != "ball" {
+                continue;
+            }
+            let anticipated = if event.description.starts_with("HeadedClear(") {
+                true
+            } else if event.description.starts_with("Blocked(") {
+                false
+            } else {
+                continue;
+            };
+            // A block is offered on its own frame and no earlier. See above.
+            if !anticipated && at_ms - now > Self::PROBE {
+                continue;
+            }
+            let at = |ball: &mut Track, t: f64| {
+                ball.position_ahead(t)
+                    .map(|[x, y, z]| Field::to_world(x, y, z))
+            };
+            let here = at(ball, at_ms)?;
+            let leaving = at(ball, at_ms + Self::PROBE)?;
+            let velocity = (leaving - here) / (Self::PROBE as f32 / 1000.0);
+            // Nothing to draw for a ball that has stopped, and nothing
+            // trustworthy across a teleport.
+            if velocity.length() < Self::TOUCHED || velocity.length() > Self::TELEPORT {
+                continue;
+            }
+            let arriving = at(ball, at_ms - Self::PROBE)
+                .map(|before| (here - before).length() / (Self::PROBE as f32 / 1000.0))
+                .unwrap_or(0.0);
+            return Some(Contact {
+                at: here,
+                velocity,
+                delay: (((at_ms - now) / 1000.0) as f32).max(0.0),
+                kind: Self::strike_kind(here, arriving),
+            });
+        }
+        None
+    }
     fn next_impact(ball: &mut Track, now: f64) -> Option<Contact> {
         let at = |ball: &mut Track, t: f64| {
             ball.position_ahead(t)
@@ -5949,6 +6039,125 @@ mod kicks {
         })
     }
 
+    /// A deflection, which is what [`Actors::next_impact`] cannot see: the
+    /// ball arrives at 20 m/s (4.8 u a probe), comes off the blocker at 8
+    /// and 60° across — so it never speeds UP, and the speed rule has
+    /// nothing to find. Contact lands exactly on the sample at 150 ms.
+    const A_BLOCK: [(u32, f32, f32); 11] = [
+        (0, 40.0, 270.0),
+        (30, 35.2, 270.0),
+        (60, 30.4, 270.0),
+        (90, 25.6, 270.0),
+        (120, 20.8, 270.0),
+        (150, 16.0, 270.0),
+        (180, 15.04, 271.66),
+        (210, 14.08, 273.32),
+        (240, 13.12, 274.98),
+        (270, 12.16, 276.64),
+        (300, 11.2, 278.3),
+    ];
+
+    fn log(rows: &[(u64, &str, &str)]) -> Vec<MatchEvent> {
+        rows.iter()
+            .map(|&(timestamp, category, description)| MatchEvent {
+                timestamp,
+                category: category.to_string(),
+                description: description.to_string(),
+            })
+            .collect()
+    }
+
+    /// The rule this exists for: the ball's own track shows a deflection as
+    /// a ball SLOWING, so the speed detector never sees it and the blocker
+    /// is drawn standing still while the ball comes off him.
+    #[test]
+    fn the_speed_rule_cannot_see_a_deflection() {
+        let mut ball = track(&A_BLOCK);
+        // From the second probe on: the first has no history behind it to
+        // be a jump FROM, which is the start of a recording and not a kick.
+        for step in 1..9 {
+            assert!(
+                Actors::next_impact(&mut ball, step as f64 * 30.0).is_none(),
+                "a deflection is a ball losing pace — nothing here is a strike, \n                 but one was found at {} ms",
+                step * 30
+            );
+        }
+    }
+
+    /// …and the recording says so outright.
+    #[test]
+    fn a_recorded_block_is_a_contact() {
+        let events = log(&[(150, "ball", "Blocked(7, [[9.0, 270.0, 0.0]])")]);
+        let mut ball = track(&A_BLOCK);
+        let contact =
+            Actors::recorded_contact(&events, &mut ball, 150.0).expect("the engine named this one");
+        assert!(
+            contact.delay.abs() < 0.001,
+            "a block is not anticipated — it is drawn on its own frame: {}",
+            contact.delay
+        );
+        assert!(
+            contact.velocity.length() > Actors::TOUCHED,
+            "the ball is still travelling after it: {:?}",
+            contact.velocity
+        );
+    }
+
+    /// **A block gets no backswing.** A man who blocks a shot has not
+    /// decided to, so it is never offered early — offering it would draw him
+    /// winding up to meet a ball he has not seen.
+    #[test]
+    fn a_block_is_never_offered_early() {
+        let events = log(&[(150, "ball", "Blocked(7, [[9.0, 270.0, 0.0]])")]);
+        let mut ball = track(&A_BLOCK);
+        for now in [30.0, 60.0, 90.0] {
+            assert!(
+                Actors::recorded_contact(&events, &mut ball, now).is_none(),
+                "offered {} ms early",
+                150.0 - now
+            );
+        }
+    }
+
+    /// A headed clearance is the other way round: he has gone to attack it,
+    /// so it is read ahead of the playhead like any other strike and he
+    /// takes a backswing into it.
+    #[test]
+    fn a_headed_clear_is_seen_coming() {
+        let events = log(&[(150, "ball", "HeadedClear(7, [[9.0, 270.0, 0.0]])")]);
+        let mut ball = track(&A_BLOCK);
+        let contact =
+            Actors::recorded_contact(&events, &mut ball, 60.0).expect("inside the windup window");
+        assert!(
+            (contact.delay - 0.09).abs() < 0.001,
+            "the countdown to it is a countdown: {}",
+            contact.delay
+        );
+    }
+
+    /// **A recording with the event log switched off is unchanged.** The
+    /// setting is the player's, and the picture must not depend on it.
+    #[test]
+    fn no_event_log_means_no_change() {
+        let mut ball = track(&A_BLOCK);
+        assert!(Actors::recorded_contact(&[], &mut ball, 150.0).is_none());
+    }
+
+    /// And the log is full of everything else the engine books — a pass, a
+    /// claim, a carry. None of them is a contact this may draw.
+    #[test]
+    fn the_rest_of_the_event_log_is_not_a_contact() {
+        let events = log(&[
+            (150, "ball", "PassCompleted(7, 9)"),
+            (150, "player", "Blocked(7)"),
+            (150, "ball", "CarryEnded(7, [[0.0]], [[1.0]])"),
+        ]);
+        let mut ball = track(&A_BLOCK);
+        assert!(
+            Actors::recorded_contact(&events, &mut ball, 150.0).is_none(),
+            "only a BALL event naming a block or a headed clear is one"
+        );
+    }
     /// The kick is found before it happens, and the countdown to it is a
     /// countdown — which is the whole reason for reading ahead at all.
     #[test]

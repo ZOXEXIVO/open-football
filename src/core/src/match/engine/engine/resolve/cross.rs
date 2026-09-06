@@ -12,7 +12,9 @@ use crate::r#match::engine::ball::ball::AerialReach;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::diagnostics::block_diag::BlockDiag;
 use crate::r#match::engine::ball::ball::{Ball, DeliveryIntent, PlayerReach};
+use crate::r#match::engine::ball::events::BallEvent;
 use crate::r#match::engine::engine::*;
+use crate::r#match::engine::events::EventCollection;
 use crate::r#match::player::strategies::passing::CrossType;
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::CrossDiag;
@@ -138,6 +140,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub(in crate::r#match::engine::engine) fn resolve_cross_contest(
         field: &mut MatchField,
         context: &mut MatchContext,
+        events: &mut EventCollection,
     ) {
         let ball = &field.ball;
         if ball.cross_contest_resolved {
@@ -475,7 +478,15 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     !matches!(clearer, CrossClearer::OnIt),
                 );
                 match clearer {
-                    CrossClearer::OnIt => Self::hook_it_behind(field, ball_pos, attacked_goal),
+                    CrossClearer::OnIt => {
+                        if let Some(d) = best_def {
+                            events.add_ball_event(BallEvent::HeadedClear(
+                                field.players[d].id,
+                                ball_pos,
+                            ));
+                        }
+                        Self::hook_it_behind(field, ball_pos, attacked_goal)
+                    }
                     CrossClearer::Coming(d) => Self::deliver_to_winner(
                         field,
                         d,
@@ -557,6 +568,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             );
             match clearer {
                 CrossClearer::OnIt => {
+                    // He heads it away, and is credited with having done
+                    // it — see [`BallEvent::HeadedClear`].
+                    if let Some(d) = best_def {
+                        events
+                            .add_ball_event(BallEvent::HeadedClear(field.players[d].id, ball_pos));
+                    }
                     let b = &mut field.ball;
                     // ⚠ No height write. This used to be `b.position.z =
                     // 2.2`, which is a snap of up to 0.7 m on the one axis

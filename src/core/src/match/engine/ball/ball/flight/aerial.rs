@@ -1,6 +1,8 @@
 use crate::r#match::MatchContext;
 use crate::r#match::MatchPlayer;
 use crate::r#match::engine::ball::ball::{Ball, PlayerReach};
+use crate::r#match::engine::ball::events::BallEvent;
+use crate::r#match::engine::events::EventCollection;
 use nalgebra::Vector3;
 
 /// How high a footballer can play the ball, and what it costs him to do
@@ -321,6 +323,7 @@ impl Ball {
     pub(in crate::r#match::engine::ball::ball) fn tick_aerial_delivery(
         &mut self,
         players: &[MatchPlayer],
+        events: &mut EventCollection,
     ) {
         let Some(delivery) = self.aerial_delivery else {
             return;
@@ -440,10 +443,12 @@ impl Ball {
                 field_height,
             } => {
                 // He heads it over his own byline. The grant belongs to
-                // nobody now — this is a clearance, not a chance.
+                // nobody now — this is a clearance, not a chance, and it is
+                // booked as one: see [`BallEvent::HeadedClear`].
                 self.aerial_contest_winner = None;
                 self.pass_target_player_id = None;
                 self.clear_pending_pass_metadata();
+                events.add_ball_event(BallEvent::HeadedClear(delivery.winner_id, self.position));
                 Self::hook_behind_velocity(self.position, attacked_goal, field_height)
             }
             AerialOutcome::Cleared {
@@ -453,10 +458,12 @@ impl Ball {
             } => {
                 // His to clear, not his to attack — the same disarming the
                 // hooked branch does, and for the same reason: this is a
-                // clearance, so nothing here is anybody's chance.
+                // clearance, so nothing here is anybody's chance, and the
+                // man who made it gets the credit for it.
                 self.aerial_contest_winner = None;
                 self.pass_target_player_id = None;
                 self.clear_pending_pass_metadata();
+                events.add_ball_event(BallEvent::HeadedClear(delivery.winner_id, self.position));
                 Self::headed_clear_velocity(self.position, attacked_goal, range, apex)
             }
         };

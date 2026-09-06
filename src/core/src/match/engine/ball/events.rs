@@ -40,6 +40,26 @@ pub enum BallEvent {
     /// `Intercepted` so block credit cannot leak into an unrelated
     /// pass interception that happens to share the same tick.
     Blocked(u32, Vector3<f32>),
+    /// **A defender headed a lofted delivery away**: `(clearer_id,
+    /// ball_position)`. Emitted by `resolve_cross_contest` and by
+    /// `Ball::tick_aerial_delivery` applying an [`AerialOutcome::Cleared`]
+    /// or [`AerialOutcome::HookedBehind`] when the delivery reaches him.
+    ///
+    /// # Why the aerial contests need their own event
+    ///
+    /// `handle_clear_ball_event` credits a clearance off
+    /// `ball.current_owner` — a man who HAS the ball and hits it away. The
+    /// aerial contests never grant ownership: they decide a duel and write
+    /// the outcome onto the ball. So every headed clearance the box
+    /// produces was invisible to the stat, and `clearances` read **1.62
+    /// per defender per match against a real ~3.5** with the missing half
+    /// sitting right here — roughly 11 headed clears a match, across both
+    /// sides, credited to nobody.
+    ///
+    /// It matters beyond bookkeeping: `clearances` is a rating input
+    /// (`RatingMath::sat(clearances, 6.0)`), so a centre-half heading
+    /// crosses away all afternoon was being rated as though he had not.
+    HeadedClear(u32, Vector3<f32>),
     Gained(u32),
     TakeMe(u32),
     /// Offside resolved on receiver involvement: (receiver_id,
@@ -304,6 +324,21 @@ impl BallEventDispatcher {
                         PlayerEventDispatcher::zone_for_player(player, position, context)
                     {
                         player.statistics.note_block_zone(zone);
+                    }
+                }
+            }
+            BallEvent::HeadedClear(clearer_id, position) => {
+                // The same credit `handle_clear_ball_event` gives a man who
+                // clears a ball he owns, for the same action taken in the
+                // air. No `blocks` credit beside it: a block is a body put
+                // in the way of a strike, and this is a defender winning a
+                // duel and heading the ball away.
+                if let Some(player) = field.get_player_mut(clearer_id) {
+                    player.statistics.add_clearance();
+                    if let Some(zone) =
+                        PlayerEventDispatcher::zone_for_player(player, position, context)
+                    {
+                        player.statistics.note_clearance_zone(zone);
                     }
                 }
             }

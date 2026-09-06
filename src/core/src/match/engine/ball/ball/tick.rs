@@ -216,7 +216,7 @@ impl Ball {
         }
 
         self.update_velocity();
-        self.tick_aerial_delivery(players);
+        self.tick_aerial_delivery(players, events);
 
         self.try_intercept(context, players, events);
         #[cfg(feature = "match-logs")]
@@ -794,7 +794,7 @@ impl Ball {
         }
 
         self.update_velocity();
-        self.tick_aerial_delivery(players);
+        self.tick_aerial_delivery(players, events);
         self.try_intercept(context, players, events);
         self.try_block_shot(context, players, events);
         self.try_block_pass(context, players, events);

@@ -228,7 +228,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         Self::resolve_corner_contest(field, context);
         #[cfg(feature = "match-logs")]
         relocation.at(field, tc::STAGE_CORNER_CONTEST);
-        Self::resolve_cross_contest(field, context);
+        Self::resolve_cross_contest(field, context, events);
         #[cfg(feature = "match-logs")]
         relocation.at(field, tc::STAGE_CROSS_CONTEST);
 
