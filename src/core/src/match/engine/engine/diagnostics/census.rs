@@ -621,4 +621,139 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             state,
         );
     }
+
+    /// **What happens to a pass played inside our own penalty area.**
+    ///
+    /// [`Self::sample_box_delivery`] measures a LOOSE ball dropping into
+    /// the area and [`Self::sample_duel_gates`] measures the man CARRYING
+    /// it. Neither can see the population the report is about: the ball
+    /// in flight from one attacker to another, ten metres from goal, with
+    /// five defenders standing in the same box.
+    ///
+    /// Sampled every tick of such a flight. See
+    /// `mid_run_diag::BOXPASS_SAMPLES` for what the two numbers mean and
+    /// why the LANE distance is the one that decides it.
+    #[cfg(feature = "match-logs")]
+    pub(in crate::r#match::engine::engine) fn sample_box_pass(
+        field: &MatchField,
+        context: &MatchContext,
+    ) {
+        use crate::mid_run_diag::BoxPassDiag;
+
+        /// The radius `Ball::try_intercept` scores inside, quoted so the
+        /// census reports the model's own reach rather than a guess.
+        const INTERCEPT_RADIUS: f32 = 5.5;
+        /// 2 m and 4 m in game units (1u = 12.5 cm).
+        const WITHIN_2M: f32 = 16.0;
+        const WITHIN_4M: f32 = 32.0;
+        /// The lane half-width the PASSER's own `has_clear_pass` uses.
+        const LANE_HALF_WIDTH: f32 = 12.0;
+
+        let ball = &field.ball;
+        // A ball in flight that nobody owns, and not a shot — shots are
+        // `try_block_shot`'s population and have their own census.
+        if ball.current_owner.is_some()
+            || ball.flags.in_flight_state == 0
+            || ball.cached_shot_target.is_some()
+        {
+            return;
+        }
+        // Struck by an attacker, so the "defending side" is well defined.
+        let Some(passer) = ball
+            .previous_owner
+            .and_then(|id| field.players.iter().find(|p| p.id == id))
+        else {
+            return;
+        };
+        // Inside whose area is it? Both are tested — a match has two.
+        let in_left = context.penalty_area(true).contains(&ball.position);
+        let in_right = context.penalty_area(false).contains(&ball.position);
+        if !in_left && !in_right {
+            return;
+        }
+        let defending_side = if in_left {
+            PlayerSide::Left
+        } else {
+            PlayerSide::Right
+        };
+        // …and it has to be THEIR pass. A defender playing out of his own
+        // box is not the reported situation.
+        if passer.side == Some(defending_side) {
+            return;
+        }
+
+        // The line the ball is actually travelling along.
+        let travel = Vector3::new(ball.velocity.x, ball.velocity.y, 0.0);
+        let Some(dir) = travel.try_normalize(1.0e-4) else {
+            return;
+        };
+
+        let mut best: Option<(f32, f32, &MatchPlayer)> = None;
+        let mut bodies = 0u32;
+        for p in field.players.iter() {
+            if p.side != Some(defending_side) || p.tactical_position.current_position.is_goalkeeper()
+            {
+                continue;
+            }
+            if context.penalty_area(in_left).contains(&p.position) {
+                bodies += 1;
+            }
+            let to_me = Vector3::new(
+                p.position.x - ball.position.x,
+                p.position.y - ball.position.y,
+                0.0,
+            );
+            let gap = to_me.magnitude();
+            // Perpendicular offset from the flight line, unsigned — a man
+            // the ball has already gone past is as far off it as one it
+            // has yet to reach, and the ahead/behind split is the `gap`
+            // column's business.
+            let lane = (to_me - dir * to_me.dot(&dir)).magnitude();
+            if best.is_none_or(|(best_gap, _, _)| gap < best_gap) {
+                best = Some((gap, lane, p));
+            }
+        }
+        let Some((gap, lane, d)) = best else {
+            return;
+        };
+
+        let state = match d.state {
+            PlayerState::Defender(DefenderState::Marking)
+            | PlayerState::Midfielder(MidfielderState::Guarding) => 0,
+            PlayerState::Defender(DefenderState::Standing)
+            | PlayerState::Midfielder(MidfielderState::Standing) => 1,
+            PlayerState::Defender(DefenderState::HoldingLine) => 2,
+            PlayerState::Defender(DefenderState::Covering) => 3,
+            PlayerState::Defender(DefenderState::Pressing)
+            | PlayerState::Midfielder(MidfielderState::Pressing) => 4,
+            PlayerState::Defender(DefenderState::Running)
+            | PlayerState::Midfielder(MidfielderState::Running) => 5,
+            PlayerState::Defender(
+                DefenderState::Intercepting
+                | DefenderState::Tackling
+                | DefenderState::Heading
+                | DefenderState::Clearing
+                | DefenderState::TakeBall,
+            )
+            | PlayerState::Midfielder(
+                MidfielderState::Intercepting
+                | MidfielderState::Tackling
+                | MidfielderState::Heading
+                | MidfielderState::TakeBall,
+            ) => 6,
+            _ => 7,
+        };
+
+        BoxPassDiag::note(
+            gap,
+            lane,
+            ball.position.z,
+            bodies,
+            gap < WITHIN_2M,
+            gap < WITHIN_4M,
+            gap < INTERCEPT_RADIUS,
+            lane < LANE_HALF_WIDTH,
+            state,
+        );
+    }
 }

@@ -358,6 +358,14 @@ impl Ball {
                 self.current_owner = Some(interceptor_id);
                 #[cfg(feature = "match-logs")]
                 StrikeCensus::note_grant(GrantPath::CONTEST, self.position.z);
+                #[cfg(feature = "match-logs")]
+                {
+                    // Was this one of the passes the box-pass census is
+                    // about? See `mid_run_diag::BOXPASS_CUT_OUT`.
+                    let in_box = context.penalty_area(true).contains(&self.position)
+                        || context.penalty_area(false).contains(&self.position);
+                    crate::mid_run_diag::BoxPassDiag::note_cut_out(in_box);
+                }
                 self.pass_target_player_id = None;
                 self.flags.in_flight_state = 0;
                 self.claim_cooldown = 15;

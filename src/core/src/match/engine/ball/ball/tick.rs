@@ -227,6 +227,7 @@ impl Ball {
             0.0,
         );
         self.try_block_shot(context, players, events);
+        self.try_block_pass(context, players, events);
         #[cfg(feature = "match-logs")]
         probe.note(
             crate::r#match::engine::ball::ball::flight_diag::STAGE_BLOCK,
@@ -796,6 +797,7 @@ impl Ball {
         self.tick_aerial_delivery(players);
         self.try_intercept(context, players, events);
         self.try_block_shot(context, players, events);
+        self.try_block_pass(context, players, events);
         self.try_save_shot(context, players, events);
         self.process_ownership(context, players, events);
         self.tick_carry_tracker(events);

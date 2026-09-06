@@ -10787,6 +10787,49 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                     println!("    what he was doing: {}", rows.join("  ·  "));
                 }
             }
+            // "They calmly pass through the defenders in the box without
+            // anyone trying to intercept or get a foot in." A different
+            // population again: the ball is in FLIGHT between two
+            // attackers inside our own area. See
+            // `mid_run_diag::BOXPASS_SAMPLES`.
+            {
+                use core::mid_run_diag::BoxPassDiag;
+                let (pn, pgap, plane, ph, pbodies, preach, p2, p4, plane_hit) =
+                    BoxPassDiag::picture();
+                if pn > 0 {
+                    let (cut_box, cut_all) = BoxPassDiag::cut_outs();
+                    println!(
+                        "  BOX-PASS CENSUS ({pn} ticks of a pass in flight inside the defending side's own box)\n    \
+                         nearest defender {:.2} m from the ball, {:.2} m off the LANE — {:.1} defenders in the area, ball at {:.2} m\n    \
+                         →  in the interception radius (0.69 m) {:.1}% of ticks  ·  within 2 m {:.0}%  ·  within 4 m {:.0}%  ·  within 1.5 m of the lane {:.0}%",
+                        pgap / 8.0,
+                        plane / 8.0,
+                        pbodies,
+                        ph,
+                        preach * 100.0,
+                        p2 * 100.0,
+                        p4 * 100.0,
+                        plane_hit * 100.0,
+                    );
+                    println!(
+                        "    balls cut out of the air inside a box: {cut_box} of {cut_all} anywhere ({:.1} per match)",
+                        cut_box as f64 / n_matches.max(1) as f64,
+                    );
+                    let (br, bf, bc, bch) = BoxPassDiag::block_rolls();
+                    if br > 0 {
+                        println!(
+                            "    FOOT IN (`try_block_pass`): {br} passes reached the roll at mean p={bch:.3} → {bf} blocked ({:.1}/match, {:.1}%), of which {bc} kept at his feet",
+                            bf as f64 / n_matches.max(1) as f64,
+                            bf as f64 / br as f64 * 100.0,
+                        );
+                    }
+                    let rows: Vec<String> = BoxPassDiag::by_state()
+                        .iter()
+                        .map(|(l, c)| format!("{l} {:.0}%", *c as f64 / pn as f64 * 100.0))
+                        .collect();
+                    println!("    what the nearest man was doing: {}", rows.join("  ·  "));
+                }
+            }
             // "Defenders with TakeBall don't intercept — they run parallel
             // with the ball." A different population from the closing
             // census above: that one only samples while somebody OWNS the

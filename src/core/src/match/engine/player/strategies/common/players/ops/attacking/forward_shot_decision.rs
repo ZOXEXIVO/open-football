@@ -1302,6 +1302,221 @@ pub mod mid_run_diag {
         }
     }
 
+    /// ── THE BOX-PASS CENSUS ───────────────────────────────────────────
+    ///
+    /// Reported from the viewer: *"the attacking team calmly passes
+    /// through the defenders in the penalty area, without them even
+    /// attempting to intercept the ball or put a foot in to block it.
+    /// They run in groups and hold players while the forwards freely pass
+    /// the ball around the box."*
+    ///
+    /// [`BoxBallDiag`] measures a LOOSE ball dropping into the area — where
+    /// the nearest defender is running. This one measures the other half:
+    /// a ball in flight BETWEEN two attackers inside the defending side's
+    /// own penalty area, which is the ball nobody in the model is asked to
+    /// do anything about.
+    ///
+    /// The two quantities that decide whether such a pass can ever be cut
+    /// out, both sampled per tick of flight:
+    ///
+    ///   * **gap** — the nearest defending outfielder's distance to the
+    ///     BALL. `Ball::try_intercept` scores nobody beyond its
+    ///     `INTERCEPT_RADIUS` (5.5u ≈ 0.69 m), so this is the whole
+    ///     question of whether the interception model is even reachable.
+    ///   * **lane** — the same defender's PERPENDICULAR distance to the
+    ///     line the ball is travelling along. A defender 4 m away along
+    ///     the lane will be on it in a moment; one 4 m to the side never
+    ///     will be. Only the second is genuinely out of the pass.
+    ///
+    /// `REACHABLE` counts the ticks where somebody was inside the
+    /// interception radius at all — the ceiling on the whole channel.
+    pub static BOXPASS_SAMPLES: AtomicU64 = AtomicU64::new(0);
+    pub static BOXPASS_GAP_X100: AtomicU64 = AtomicU64::new(0);
+    pub static BOXPASS_LANE_X100: AtomicU64 = AtomicU64::new(0);
+    /// Ticks with a defender inside `Ball::try_intercept`'s radius.
+    pub static BOXPASS_REACHABLE: AtomicU64 = AtomicU64::new(0);
+    /// Ticks with a defender within 2 m / 4 m of the ball — the range a
+    /// real defender gets a foot or a shin to a pass from.
+    pub static BOXPASS_WITHIN_2M: AtomicU64 = AtomicU64::new(0);
+    pub static BOXPASS_WITHIN_4M: AtomicU64 = AtomicU64::new(0);
+    /// Ticks where the nearest defender was within 1.5 m of the LANE —
+    /// the ball is going past him, whatever the range.
+    pub static BOXPASS_IN_LANE: AtomicU64 = AtomicU64::new(0);
+    /// Mean height of the ball on those ticks, in metres ×100.
+    pub static BOXPASS_HEIGHT_X100: AtomicU64 = AtomicU64::new(0);
+    /// How many defending outfielders were inside the area at all.
+    pub static BOXPASS_BODIES_X100: AtomicU64 = AtomicU64::new(0);
+    /// What the nearest defender was doing. Indexed by [`BoxPassDiag::STATES`].
+    pub static BOXPASS_BY_STATE: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+    /// Balls cut out of the air by an outfielder inside a penalty area,
+    /// against the whole-pitch total — the outcome half of the census.
+    pub static BOXPASS_CUT_OUT: AtomicU64 = AtomicU64::new(0);
+    pub static BOXPASS_CUT_OUT_ANYWHERE: AtomicU64 = AtomicU64::new(0);
+    /// `Ball::try_block_pass`: passes that found a candidate and were
+    /// rolled for, the ones that were won, and the ones the blocker then
+    /// kept. Mean chance is over the rolled population.
+    pub static PASSBLOCK_ROLLED: AtomicU64 = AtomicU64::new(0);
+    pub static PASSBLOCK_FIRED: AtomicU64 = AtomicU64::new(0);
+    pub static PASSBLOCK_CONTROLLED: AtomicU64 = AtomicU64::new(0);
+    pub static PASSBLOCK_CHANCE_X10000: AtomicU64 = AtomicU64::new(0);
+
+    pub struct BoxPassDiag;
+
+    impl BoxPassDiag {
+        /// Labels for [`BOXPASS_BY_STATE`], in index order.
+        pub const STATES: [&'static str; 8] = [
+            "Marking",
+            "Standing",
+            "HoldingLine",
+            "Covering",
+            "Pressing",
+            "Running",
+            "playing-the-ball",
+            "other",
+        ];
+
+        #[allow(clippy::too_many_arguments)]
+        pub fn note(
+            gap: f32,
+            lane: f32,
+            height: f32,
+            bodies: u32,
+            within_2m: bool,
+            within_4m: bool,
+            reachable: bool,
+            in_lane: bool,
+            state: usize,
+        ) {
+            BOXPASS_SAMPLES.fetch_add(1, Ordering::Relaxed);
+            BOXPASS_GAP_X100.fetch_add((gap * 100.0) as u64, Ordering::Relaxed);
+            BOXPASS_LANE_X100.fetch_add((lane * 100.0) as u64, Ordering::Relaxed);
+            BOXPASS_HEIGHT_X100.fetch_add((height.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+            BOXPASS_BODIES_X100.fetch_add(bodies as u64 * 100, Ordering::Relaxed);
+            if within_2m {
+                BOXPASS_WITHIN_2M.fetch_add(1, Ordering::Relaxed);
+            }
+            if within_4m {
+                BOXPASS_WITHIN_4M.fetch_add(1, Ordering::Relaxed);
+            }
+            if reachable {
+                BOXPASS_REACHABLE.fetch_add(1, Ordering::Relaxed);
+            }
+            if in_lane {
+                BOXPASS_IN_LANE.fetch_add(1, Ordering::Relaxed);
+            }
+            BOXPASS_BY_STATE[state.min(Self::STATES.len() - 1)].fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// One ball cut out of the air by an outfielder — `in_box` says
+        /// whether it happened inside a penalty area.
+        pub fn note_cut_out(in_box: bool) {
+            BOXPASS_CUT_OUT_ANYWHERE.fetch_add(1, Ordering::Relaxed);
+            if in_box {
+                BOXPASS_CUT_OUT.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(samples, mean gap u, mean lane u, mean height m, mean bodies,
+        /// reachable share, within-2m share, within-4m share, in-lane share)`
+        #[allow(clippy::type_complexity)]
+        pub fn picture() -> (u64, f32, f32, f32, f32, f32, f32, f32, f32) {
+            let n = BOXPASS_SAMPLES.load(Ordering::Relaxed);
+            if n == 0 {
+                return (0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+            }
+            let f = n as f32;
+            let per = |c: &AtomicU64| c.load(Ordering::Relaxed) as f32 / 100.0 / f;
+            let share = |c: &AtomicU64| c.load(Ordering::Relaxed) as f32 / f;
+            (
+                n,
+                per(&BOXPASS_GAP_X100),
+                per(&BOXPASS_LANE_X100),
+                per(&BOXPASS_HEIGHT_X100),
+                per(&BOXPASS_BODIES_X100),
+                share(&BOXPASS_REACHABLE),
+                share(&BOXPASS_WITHIN_2M),
+                share(&BOXPASS_WITHIN_4M),
+                share(&BOXPASS_IN_LANE),
+            )
+        }
+
+        /// `(in-box cut-outs, cut-outs anywhere)`
+        pub fn cut_outs() -> (u64, u64) {
+            (
+                BOXPASS_CUT_OUT.load(Ordering::Relaxed),
+                BOXPASS_CUT_OUT_ANYWHERE.load(Ordering::Relaxed),
+            )
+        }
+
+        /// One pass that reached the block roll. `chance` is what it was
+        /// rolled at, so the mean says whether the model is being asked
+        /// and refused or never asked at all.
+        pub fn note_block_roll(chance: f32, fired: bool) {
+            PASSBLOCK_ROLLED.fetch_add(1, Ordering::Relaxed);
+            PASSBLOCK_CHANCE_X10000.fetch_add((chance * 10_000.0) as u64, Ordering::Relaxed);
+            if fired {
+                PASSBLOCK_FIRED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// …and the rare one he came away with at his feet.
+        pub fn note_block_controlled() {
+            PASSBLOCK_CONTROLLED.fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// `(rolled, fired, controlled, mean chance)`
+        pub fn block_rolls() -> (u64, u64, u64, f32) {
+            let n = PASSBLOCK_ROLLED.load(Ordering::Relaxed);
+            (
+                n,
+                PASSBLOCK_FIRED.load(Ordering::Relaxed),
+                PASSBLOCK_CONTROLLED.load(Ordering::Relaxed),
+                if n == 0 {
+                    0.0
+                } else {
+                    PASSBLOCK_CHANCE_X10000.load(Ordering::Relaxed) as f32 / 10_000.0 / n as f32
+                },
+            )
+        }
+
+        /// `(label, samples)` per state, heaviest first.
+        pub fn by_state() -> Vec<(&'static str, u64)> {
+            let mut rows: Vec<(&'static str, u64)> = Self::STATES
+                .iter()
+                .enumerate()
+                .map(|(i, label)| (*label, BOXPASS_BY_STATE[i].load(Ordering::Relaxed)))
+                .filter(|(_, n)| *n > 0)
+                .collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows
+        }
+
+        pub fn reset() {
+            for c in BOXPASS_BY_STATE.iter() {
+                c.store(0, Ordering::Relaxed);
+            }
+            for c in [
+                &BOXPASS_SAMPLES,
+                &BOXPASS_GAP_X100,
+                &BOXPASS_LANE_X100,
+                &BOXPASS_HEIGHT_X100,
+                &BOXPASS_BODIES_X100,
+                &BOXPASS_REACHABLE,
+                &BOXPASS_WITHIN_2M,
+                &BOXPASS_WITHIN_4M,
+                &BOXPASS_IN_LANE,
+                &BOXPASS_CUT_OUT,
+                &BOXPASS_CUT_OUT_ANYWHERE,
+                &PASSBLOCK_ROLLED,
+                &PASSBLOCK_FIRED,
+                &PASSBLOCK_CONTROLLED,
+                &PASSBLOCK_CHANCE_X10000,
+            ] {
+                c.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
     /// ── THE LOOSE-BALL CHASE CENSUS ───────────────────────────────────
     ///
     /// [`DuelDiag`]'s closing census only ever samples while somebody OWNS
@@ -3642,6 +3857,7 @@ pub mod mid_run_diag {
         DefenceDiag::reset();
         DuelDiag::reset();
         BoxBallDiag::reset();
+        BoxPassDiag::reset();
         RecoveryDiag::reset();
         ChaseDiag::reset();
         ClearDiag::reset();

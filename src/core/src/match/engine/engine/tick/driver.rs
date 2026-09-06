@@ -269,6 +269,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         #[cfg(feature = "match-logs")]
         Self::sample_box_delivery(field, context);
         #[cfg(feature = "match-logs")]
+        Self::sample_box_pass(field, context);
+        #[cfg(feature = "match-logs")]
         Self::sample_spacing(field, context);
         #[cfg(feature = "match-logs")]
         Self::sample_heatmap(field, context);

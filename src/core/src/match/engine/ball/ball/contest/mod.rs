@@ -8,6 +8,9 @@
 //!
 //! * [`interception`] — ≤ 2.5u, pass-targeted, a tiny per-tick chance.
 //! * [`block`] — ≤ 4u, shot-targeted, a higher per-event chance.
+//! * [`pass_block`] — the foot in: a defender's body in the path of a
+//!   PASS near his own goal. A DEFLECTION rather than a takeaway, which
+//!   is what keeps it out of the interception rate.
 //! * [`save`] — the keeper, and [`SaveModel`](save::SaveModel), the
 //!   shot-stopping curve the live path and the spread regression share.
 //!
@@ -31,6 +34,7 @@ pub mod body;
 pub mod contact;
 pub mod interception;
 pub mod ownership;
+pub mod pass_block;
 pub mod possession;
 pub mod reach;
 pub mod save;

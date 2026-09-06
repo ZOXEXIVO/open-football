@@ -1448,6 +1448,8 @@ impl PlayerEventDispatcher {
                 field.ball.pending_pass_set_tick = context.current_tick();
                 // Fresh pass, fresh interception attempt.
                 field.ball.intercept_rolled = false;
+                field.ball.pass_block_rolled = false;
+                field.ball.pass_blocked_by = None;
                 field.ball.pending_pass_origin = Some(passer_position);
                 field.ball.pending_pass_target = Some(pass_target);
                 field.ball.pending_pass_was_cross = was_cross;

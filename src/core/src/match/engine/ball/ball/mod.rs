@@ -179,6 +179,19 @@ pub struct Ball {
     /// rate is set by how long the flight window happens to be rather
     /// than by the defending. Reset when a pass is struck.
     pub intercept_rolled: bool,
+    /// The same latch for the pass-BLOCK contest — see
+    /// [`contest::pass_block`]. Kept separate from `intercept_rolled`
+    /// because the two are different actions on the same ball: one man
+    /// may read the pass and take it cleanly while another throws a leg
+    /// at it, and sharing a latch would make winning one silently
+    /// cancel the other.
+    pub pass_block_rolled: bool,
+    /// A pass-block that has been won, waiting for the ball to reach the
+    /// man who won it: `(blocker, outcome roll)`. The mirror of
+    /// `ShotTarget::blocked_by`, and it exists for the same reason — the
+    /// read happens where the defender sees the pass, the contact has to
+    /// happen where his body is.
+    pub pass_blocked_by: Option<(u32, f32)>,
     pub contested_claim_count: u32,
     pub unowned_ticks: u32,
     /// Snapshot captured at the moment the ball became uncontrolled — ball
@@ -776,6 +789,8 @@ impl Ball {
             possession_source: PossessionSource::Unknown,
             possession_source_for: None,
             intercept_rolled: false,
+            pass_block_rolled: false,
+            pass_blocked_by: None,
             contested_claim_count: 0,
             unowned_ticks: 0,
             stall_start_snapshot: None,
@@ -1508,6 +1523,8 @@ impl Ball {
         self.possession_source = PossessionSource::Unknown;
         self.possession_source_for = None;
         self.intercept_rolled = false;
+        self.pass_block_rolled = false;
+        self.pass_blocked_by = None;
         self.contested_claim_count = 0;
         self.unowned_ticks = 0;
         self.cached_landing_position = self.position;
