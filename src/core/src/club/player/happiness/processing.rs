@@ -470,6 +470,21 @@ impl Player {
         }
     }
 
+    /// His terms were rewritten in place — new wage, new end date.
+    ///
+    /// Whatever the old deal was souring is settled on the day it is
+    /// signed: the pay grievance goes, the club's next renewal attempt
+    /// starts from a clean sheet, and the formal `Unh` status is lifted
+    /// so the squad reads him as settled straight away. The weekly tick
+    /// re-derives all of it from the new salary, so a player who is
+    /// really unhappy about something else is unhappy again next week —
+    /// this clears the grievance, it does not buy immunity.
+    pub fn on_contract_terms_changed(&mut self) {
+        self.happiness.settle_wage_grievance();
+        self.pending_contract_ask = None;
+        self.statuses.remove(PlayerStatusType::Unh);
+    }
+
     /// Weekly happiness evaluation. Computes the seven legacy factors
     /// plus six derived "life in the team" factors (role clarity,
     /// coach credibility, dressing-room status, club fit, pressure
@@ -2659,5 +2674,134 @@ mod morale_timeline_tests {
             UnhappyAssessment::has_major_event(&repeated),
             "two conflict rows in the window should bypass persistence"
         );
+    }
+}
+
+#[cfg(test)]
+mod contract_terms_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::mailbox::PlayerContractAsk;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills,
+    };
+    use chrono::Duration;
+
+    fn now() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 5, 1).unwrap()
+    }
+
+    /// A player who has fallen out with the club over what he earns AND
+    /// separately over how he has been treated, so the test can tell the
+    /// two apart after the deal is rewritten.
+    fn aggrieved_player() -> Player {
+        let mut player = PlayerBuilder::new()
+            .id(301)
+            .full_name(FullName::new("Terms".into(), "Tester".into()))
+            .birth_date(NaiveDate::from_ymd_opt(1998, 3, 4).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenter,
+                    level: 18,
+                }],
+            })
+            .player_attributes(PlayerAttributes::default())
+            .build()
+            .unwrap();
+
+        player.contract = Some(PlayerClubContract::new(
+            20_000,
+            NaiveDate::from_ymd_opt(2027, 6, 30).unwrap(),
+        ));
+
+        player.happiness.factors.salary_satisfaction = -12.0;
+        player.happiness.factors.playing_time = -9.0;
+        player
+            .happiness
+            .add_event(HappinessEventType::SalaryShock, -10.0);
+        player
+            .happiness
+            .add_event(HappinessEventType::SalaryGapNoticed, -4.0);
+        player
+            .happiness
+            .add_event(HappinessEventType::RejectedContractOffer, -3.0);
+        player
+            .happiness
+            .add_event(HappinessEventType::ManagerCriticism, -5.0);
+        player.happiness.unhappy_streak = 3;
+        player.happiness.last_salary_negotiation = Some(now() - Duration::days(400));
+        player.happiness.recalculate_morale();
+
+        player.statuses.add(now(), PlayerStatusType::Unh);
+        player.pending_contract_ask = Some(PlayerContractAsk {
+            desired_salary: 60_000,
+            desired_years: 4,
+            recorded_on: now(),
+            demanded_status: None,
+            demanded_release_clause: None,
+            demanded_signing_bonus: None,
+            rejection_reason: None,
+        });
+        player
+    }
+
+    #[test]
+    fn rewriting_terms_settles_the_wage_grievance() {
+        let mut player = aggrieved_player();
+        let morale_before = player.happiness.morale;
+
+        player.on_contract_terms_changed();
+
+        assert_eq!(player.happiness.factors.salary_satisfaction, 0.0);
+        assert!(player.happiness.last_salary_negotiation.is_none());
+        assert_eq!(player.happiness.unhappy_streak, 0);
+        assert!(player.pending_contract_ask.is_none());
+        assert!(
+            !player.statuses.has(PlayerStatusType::Unh),
+            "the formal status must lift on the day the deal is signed"
+        );
+        assert!(
+            player.happiness.morale > morale_before,
+            "settling a grievance can only lift morale, was {morale_before} now {}",
+            player.happiness.morale
+        );
+    }
+
+    #[test]
+    fn only_the_pay_grievances_are_forgotten() {
+        let mut player = aggrieved_player();
+
+        player.on_contract_terms_changed();
+
+        for wage_event in [
+            HappinessEventType::SalaryShock,
+            HappinessEventType::SalaryGapNoticed,
+            HappinessEventType::RejectedContractOffer,
+        ] {
+            assert!(
+                !player
+                    .happiness
+                    .recent_events
+                    .iter()
+                    .any(|e| e.event_type == wage_event),
+                "{wage_event:?} is about the wage and should be settled with it"
+            );
+        }
+
+        // A new contract answers what he earns, not how he has been used.
+        assert!(
+            player
+                .happiness
+                .recent_events
+                .iter()
+                .any(|e| e.event_type == HappinessEventType::ManagerCriticism),
+            "criticism from the manager survives a pay rise"
+        );
+        assert_eq!(player.happiness.factors.playing_time, -9.0);
     }
 }

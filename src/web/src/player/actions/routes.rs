@@ -25,6 +25,14 @@ pub fn routes() -> Router<GameAppData> {
             post(super::cancel_loan_action),
         )
         .route(
+            "/api/players/{player_id}/contract-terms",
+            get(super::contract_terms_action),
+        )
+        .route(
+            "/api/players/{player_id}/change-contract",
+            post(super::change_contract_action),
+        )
+        .route(
             "/api/players/{player_id}/transfer",
             post(super::transfer_action),
         )

@@ -643,6 +643,22 @@ impl PlayerHappiness {
         self.add_event(event_type, magnitude);
     }
 
+    /// Settle the wage grievance after the deal itself was rewritten.
+    ///
+    /// Drops the pay-related memories the player was carrying, zeroes the
+    /// salary factor so the next weekly tick re-derives it from the new
+    /// wage, and restarts the renegotiation clock. Nothing else is
+    /// touched: a new contract answers what he earns, not his minutes,
+    /// his manager or the dressing room.
+    pub fn settle_wage_grievance(&mut self) {
+        self.recent_events
+            .retain(|e| !is_wage_grievance(&e.event_type));
+        self.factors.salary_satisfaction = 0.0;
+        self.last_salary_negotiation = None;
+        self.unhappy_streak = 0;
+        self.recalculate_morale();
+    }
+
     /// Reset happiness to neutral state (fresh start at a new club).
     /// `HappinessFactors::default()` zeroes all six derived factors —
     /// they're recomputed on the first weekly tick at the new club.
@@ -682,6 +698,18 @@ impl PlayerHappiness {
     pub fn add_negative(&mut self, _item: NegativeHappiness) {
         self.add_event_default(HappinessEventType::PoorTraining);
     }
+}
+
+/// Events a player only carries because of what he earns. Rewriting the
+/// contract answers exactly these and nothing else — a pay rise is not a
+/// reason to forget he was dropped or fell out with the manager.
+fn is_wage_grievance(event_type: &HappinessEventType) -> bool {
+    matches!(
+        event_type,
+        HappinessEventType::SalaryShock
+            | HappinessEventType::SalaryGapNoticed
+            | HappinessEventType::RejectedContractOffer
+    )
 }
 
 /// Event types that name a specific teammate and therefore must carry a

@@ -157,6 +157,7 @@
   "cancel_loan_confirm": "Отменить аренду и вернуть игрока в родной клуб?",
   "caps_goals": "{caps} матч. / {goals} гол.",
   "captain": "Капитан",
+  "change_contract": "Изменить контракт",
   "mind_blocked": "Он ничего не может с этим сделать",
   "mind_deadline": "Ждёт до {date}",
   "mind_fact_backed_me": "Он поверил в него, когда никто не верил",

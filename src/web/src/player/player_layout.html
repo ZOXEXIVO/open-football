@@ -130,12 +130,18 @@
         groups.push('<button onclick="playerMoveOnFree(' + playerId + ')">{{ i18n.t("move_on_free") }}</button>');
     }
 
-    // Group 3: Clear Unhappy
+    // Group 3: Change Contract. Free agents have no deal to rewrite, so
+    // the item is only there for a player who is actually at a club.
+    if (!isFreeAgent) {
+        groups.push('<button onclick="playerChangeContract(' + playerId + ')">{{ i18n.t("change_contract") }}</button>');
+    }
+
+    // Group 4: Clear Unhappy
     if (isUnhappy) {
         groups.push('<button onclick="playerClearUnhappy(' + playerId + ')">{{ i18n.t("clear_unhappy") }}</button>');
     }
 
-    // Group 3: Transfer actions
+    // Group 5: Transfer actions
     var transferItems = [];
     if (!isFreeAgent && isLoan) transferItems.push('<button onclick="playerCancelLoan(' + playerId + ')">{{ i18n.t("cancel_loan") }}</button>');
     if (!isLoan) {
@@ -178,6 +184,55 @@
         dd.classList.remove('fm-dd-open');
         fetch('/api/players/' + pid + '/clear-unhappy', { method: 'POST' })
             .then(function() { refreshContent(); });
+    };
+
+    // Rewrite the terms in place. The current deal is read back from the
+    // server rather than carried in the page — the dropdown is on every
+    // player tab and only this dialog ever needs the numbers.
+    window.playerChangeContract = function(pid) {
+        dd.classList.remove('fm-dd-open');
+        fetch('/api/players/' + pid + '/contract-terms')
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(terms) {
+                if (!terms) return;
+
+                var fields = [
+                    { name: 'expiration', label: '{{ i18n.t("contract_expiry") }}', type: 'date', value: terms.expiration, min: terms.today },
+                    { name: 'salary', label: '{{ i18n.t("wage") }}', type: 'number', value: terms.salary }
+                ];
+
+                // A loanee is on two deals at once. The club contract above
+                // is the parent's; the borrowing club's gets its own form
+                // underneath, so the two wages can't be mistaken for one.
+                if (terms.loan) {
+                    fields.push({ type: 'section', label: '{{ i18n.t("loan_details") }}' });
+                    fields.push({ name: 'loan_expiration', label: '{{ i18n.t("loan_expiry") }}', type: 'date', value: terms.loan.expiration, min: terms.today });
+                    fields.push({ name: 'loan_salary', label: '{{ i18n.t("wage") }}', type: 'number', value: terms.loan.salary });
+                }
+
+                OpenFootballDialog.open({
+                    title: '{{ i18n.t("change_contract") }}',
+                    fields: fields,
+                    confirmText: '{{ i18n.t("change_contract") }}',
+                    cancelText: '{{ i18n.t("cancel") }}',
+                    onConfirm: function(data) {
+                        if (!data.expiration) return;
+                        var body = {
+                            expiration: data.expiration,
+                            salary: parseInt(data.salary) || 0
+                        };
+                        if (terms.loan && data.loan_expiration) {
+                            body.loan_expiration = data.loan_expiration;
+                            body.loan_salary = parseInt(data.loan_salary) || 0;
+                        }
+                        fetch('/api/players/' + pid + '/change-contract', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(body)
+                        }).then(function() { refreshContent(); });
+                    }
+                });
+            });
     };
 
     window.playerClearInjury = function(pid) {

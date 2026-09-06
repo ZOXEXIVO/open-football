@@ -5,7 +5,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use chrono::Datelike;
+use chrono::{Datelike, NaiveDate};
 use core::club::player::calculators::WageCalculator;
 use core::club::player::transfer::ReleaseContext;
 use core::shared::{Currency, CurrencyValue};
@@ -425,6 +425,142 @@ pub async fn cancel_loan_action(
             .add(player);
 
         sim.rebuild_indexes();
+        return StatusCode::OK;
+    }
+
+    StatusCode::NOT_FOUND
+}
+
+// ── Change contract ─────────────────────────────────────────────
+
+/// ISO date the `<input type="date">` in the edit dialog speaks.
+const DATE_FMT: &str = "%Y-%m-%d";
+
+/// Terms as the edit dialog needs them: ISO dates an `<input type="date">`
+/// takes verbatim and raw salaries a number field round-trips, rather than
+/// the formatted money the contract page renders.
+#[derive(Serialize)]
+pub struct ContractTermsDto {
+    pub salary: u32,
+    pub expiration: String,
+    /// Present only while the player is out on loan — the borrowing club's
+    /// own deal, which the dialog edits in a second form under the first.
+    pub loan: Option<LoanTermsDto>,
+    /// Today in the game world, so the dialog can floor both date pickers.
+    pub today: String,
+}
+
+#[derive(Serialize)]
+pub struct LoanTermsDto {
+    pub salary: u32,
+    pub expiration: String,
+}
+
+pub async fn contract_terms_action(
+    State(state): State<GameAppData>,
+    Path(params): Path<PlayerPathParam>,
+) -> impl IntoResponse {
+    let guard = state.data.read().await;
+
+    let sim = match guard.as_ref() {
+        Some(data) => data,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    let player = match sim.player(params.player_id) {
+        Some(p) => p,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    // A free agent has nothing to edit — the menu already hides the item,
+    // this is the same answer for anyone who calls the endpoint anyway.
+    let contract = match player.contract.as_ref() {
+        Some(c) => c,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    Json(ContractTermsDto {
+        salary: contract.salary,
+        expiration: contract.expiration.format(DATE_FMT).to_string(),
+        loan: player.contract_loan.as_ref().map(|l| LoanTermsDto {
+            salary: l.salary,
+            expiration: l.expiration.format(DATE_FMT).to_string(),
+        }),
+        today: sim.date.date().format(DATE_FMT).to_string(),
+    })
+    .into_response()
+}
+
+#[derive(Deserialize)]
+pub struct ChangeContractRequest {
+    pub expiration: String,
+    pub salary: u32,
+    /// Both loan fields are sent together or not at all — the dialog only
+    /// grows the second form for a player who is actually out on loan.
+    pub loan_expiration: Option<String>,
+    pub loan_salary: Option<u32>,
+}
+
+pub async fn change_contract_action(
+    State(state): State<GameAppData>,
+    Path(params): Path<PlayerPathParam>,
+    Json(body): Json<ChangeContractRequest>,
+) -> impl IntoResponse {
+    let expiration = match NaiveDate::parse_from_str(&body.expiration, DATE_FMT) {
+        Ok(date) => date,
+        Err(_) => return StatusCode::BAD_REQUEST,
+    };
+
+    let loan_expiration = match body.loan_expiration.as_deref() {
+        Some(raw) => match NaiveDate::parse_from_str(raw, DATE_FMT) {
+            Ok(date) => Some(date),
+            Err(_) => return StatusCode::BAD_REQUEST,
+        },
+        None => None,
+    };
+
+    let data = Arc::clone(&state.data);
+    let mut guard = data.write().await;
+
+    if let Some(ref mut arc_data) = *guard {
+        let sim = Arc::make_mut(arc_data);
+        let today = sim.date.date();
+
+        // A deal that has already run out is not a deal — the expiry pass
+        // would release the player on the next tick and the edit would
+        // read as having done nothing. Both dates are checked before
+        // anything is written, so a bad loan date can't leave the club
+        // contract changed behind a 400.
+        if expiration <= today || loan_expiration.is_some_and(|d| d <= today) {
+            return StatusCode::BAD_REQUEST;
+        }
+
+        let player = match sim.player_mut(params.player_id) {
+            Some(p) => p,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        let contract = match player.contract.as_mut() {
+            Some(c) => c,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        contract.salary = body.salary;
+        contract.expiration = expiration;
+
+        if let Some(loan) = player.contract_loan.as_mut() {
+            if let Some(loan_expiration) = loan_expiration {
+                // A loan hangs off the parent deal and cannot outlive it:
+                // the day the contract ends the player is a free agent and
+                // there is nothing left for the borrowing club to hold.
+                loan.expiration = loan_expiration.min(expiration);
+            }
+            if let Some(loan_salary) = body.loan_salary {
+                loan.salary = loan_salary;
+            }
+        }
+
+        player.on_contract_terms_changed();
         return StatusCode::OK;
     }
 

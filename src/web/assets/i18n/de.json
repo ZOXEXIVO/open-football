@@ -157,6 +157,7 @@
   "cancel_loan_confirm": "Leihe abbrechen und Spieler zum Stammverein zurückschicken?",
   "caps_goals": "{caps} Länderspiele / {goals} Tore",
   "captain": "Kapitän",
+  "change_contract": "Vertrag ändern",
   "mind_blocked": "Er kann nichts daran ändern",
   "mind_deadline": "Gibt sich Zeit bis {date}",
   "mind_fact_backed_me": "Er hielt zu ihm, als es sonst niemand tat",

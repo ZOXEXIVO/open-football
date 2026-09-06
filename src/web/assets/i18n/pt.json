@@ -157,6 +157,7 @@
   "cancel_loan_confirm": "Cancelar o empréstimo e devolver o jogador ao clube de origem?",
   "caps_goals": "{caps} convocações / {goals} gols",
   "captain": "Capitão",
+  "change_contract": "Alterar contrato",
   "mind_blocked": "Não está nas mãos dele",
   "mind_deadline": "Deu-se até {date}",
   "mind_fact_backed_me": "Apoiou-o quando mais ninguém o fez",

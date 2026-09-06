@@ -157,6 +157,7 @@
   "cancel_loan_confirm": "Annuler le prêt et renvoyer le joueur à son club ?",
   "caps_goals": "{caps} sél. / {goals} buts",
   "captain": "Capitaine",
+  "change_contract": "Modifier le contrat",
   "mind_blocked": "Il n’y peut rien",
   "mind_deadline": "Se donne jusqu’au {date}",
   "mind_fact_backed_me": "Il l’a soutenu quand personne ne le faisait",

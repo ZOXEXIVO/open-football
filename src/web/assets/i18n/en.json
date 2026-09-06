@@ -157,6 +157,7 @@
   "cancel_loan_confirm": "Cancel this player's loan and return to parent club?",
   "caps_goals": "{caps} caps / {goals} goals",
   "captain": "Captain",
+  "change_contract": "Change Contract",
   "mind_blocked": "Nothing he can do about it",
   "mind_deadline": "Has given it until {date}",
   "mind_fact_backed_me": "He backed him when nobody else did",

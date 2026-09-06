@@ -30,6 +30,16 @@
  * Fields sharing a `key` share one list, so the transfer and loan dialogs
  * offer the same destination clubs. `exclude` drops one value from the row
  * (the club the player is already at). Entries are written on confirm.
+ *
+ * A `section` field is a divider with a name on it rather than an input —
+ * it starts a second form inside the same dialog, the way the contract
+ * dialog puts the loan terms under the club terms:
+ *
+ *   { type: 'section', label: 'Loan Details' },
+ *   { name: 'loan_expiration', label: 'Loan Expiry', type: 'date', value: '2027-06-30' }
+ *
+ * `date` fields take `value`, `min` and `max` as ISO `YYYY-MM-DD` strings
+ * and hand back the same shape.
  */
 (function () {
     'use strict';
@@ -123,6 +133,12 @@
     }
 
     function buildField(f) {
+        // A section is a divider carrying a name, not an input: it opens a
+        // second form under the first one inside the same dialog.
+        if (f.type === 'section') {
+            return '<div class="fm-dlg-section">' + escapeHtml(f.label) + '</div>';
+        }
+
         var id = 'fm-dlg-f-' + f.name;
         var html = '<div class="fm-dlg-field">';
         html += '<label for="' + id + '">' + escapeHtml(f.label) + '</label>';
@@ -148,6 +164,12 @@
         } else if (f.type === 'number') {
             html += '<input id="' + id + '" name="' + f.name + '" type="number" min="0"'
                 + (f.placeholder ? ' placeholder="' + escapeHtml(f.placeholder) + '"' : '')
+                + (f.value !== undefined ? ' value="' + escapeHtml(String(f.value)) + '"' : '')
+                + '>';
+        } else if (f.type === 'date') {
+            html += '<input id="' + id + '" name="' + f.name + '" type="date"'
+                + (f.min !== undefined ? ' min="' + escapeHtml(String(f.min)) + '"' : '')
+                + (f.max !== undefined ? ' max="' + escapeHtml(String(f.max)) + '"' : '')
                 + (f.value !== undefined ? ' value="' + escapeHtml(String(f.value)) + '"' : '')
                 + '>';
         } else {
@@ -190,6 +212,7 @@
     function gatherData(fields) {
         var data = {};
         (fields || []).forEach(function (f) {
+            if (f.type === 'section') return;
             if (f.type === 'autocomplete') {
                 var hid = document.getElementById('fm-dlg-f-' + f.name + '-val');
                 if (hid) data[f.name] = hid.value;
