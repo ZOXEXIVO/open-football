@@ -255,6 +255,31 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                         _ => 4,
                     };
                     DefenceDiag::note_duel((d.position - man.position).magnitude(), line, bucket);
+
+                    // …and WHERE he is standing relative to the pass that
+                    // would reach his man. "Goal-side of him" and "in
+                    // front of him" are different things, and only the
+                    // second one stops the ball arriving. See
+                    // `mid_run_diag::MARKLANE_PERP_X100`.
+                    let ball = field.ball.position;
+                    let to_man = man.position - ball;
+                    let span = to_man.magnitude();
+                    if span > 1.0 {
+                        let dir = to_man / span;
+                        let rel = d.position - ball;
+                        let along = rel.dot(&dir);
+                        let perp = (rel - dir * along).magnitude();
+                        let voice = if d.team_id == context.field_home_team_id {
+                            context.home_skill_aggregates.keeper_voice
+                        } else {
+                            context.away_skill_aggregates.keeper_voice
+                        };
+                        // In the lane means between the two AND near the
+                        // line — a man level with either end is not in the
+                        // way of anything.
+                        let in_lane = along > 0.0 && along < span && perp < 12.0;
+                        crate::mid_run_diag::BoxPassDiag::note_mark_lane(perp, in_lane, voice);
+                    }
                 }
             }
         }
@@ -755,5 +780,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             lane < LANE_HALF_WIDTH,
             state,
         );
+        // …and the same lane distance banded by the voice behind this
+        // back line, which is the only read-out `KeeperVoice::front_foot`
+        // has. See `mid_run_diag::BOXPASS_LANE_BY_VOICE`.
+        let aggregates = if d.team_id == context.field_home_team_id {
+            &context.home_skill_aggregates
+        } else {
+            &context.away_skill_aggregates
+        };
+        BoxPassDiag::note_voice(lane, aggregates.keeper_voice);
     }
 }

@@ -174,7 +174,35 @@ impl TackleDecision {
     /// a defender in his own area commits at about the same per-second
     /// rate as one in midfield — which is the floor of what the football
     /// asks for, not the ceiling.
-    const BOX_RESTRAINT: f32 = 0.32;
+    ///
+    /// ⚠ 0.32 → 0.44, AND THE PRICE THAT PAID FOR 0.32 HAS SINCE FALLEN.
+    ///
+    /// The pairing note above is the thing to read: this number was set
+    /// against the PENALTY rate, because a per-challenge foul model turns
+    /// extra box challenges into extra spot kicks. 0.32 was chosen when
+    /// that bought penalties at 0.300 a match against a real 0.25-0.30 —
+    /// i.e. it was spending the whole budget. Re-measured over 5×200
+    /// fixtures at level 14 they read **0.110-0.175, mean ~0.14** — half
+    /// the real rate. Something downstream has since made box challenges
+    /// cheaper, and the restraint has been quietly over-tight ever since.
+    ///
+    /// The report this reopens is the same one it was set for: *"they run
+    /// in groups and hold players while the forwards freely pass the ball
+    /// around the penalty area"*. The gate census says the bodies are
+    /// there and challenging — 83% of defender-ticks inside commit range
+    /// of a carrier in our own box are in a challenging state — and that
+    /// the commitment roll is what refuses: **p = 0.072 in our own box
+    /// against 0.111 in open play**, 75.5 decisions a match.
+    ///
+    /// 0.44 restores roughly a third of the gap and is sized off the
+    /// penalty budget, not off the challenge count: at ~0.14 penalties a
+    /// match against a real 0.25-0.30 there is room for a ×1.4 on box
+    /// challenges before the spot-kick rate reaches its own reference,
+    /// and both numbers move toward real together.
+    const BOX_RESTRAINT: f32 = 0.44;
+    /// The value before that, kept as the A/B arm — see
+    /// `MatchContext::box_defence_off`.
+    const BOX_RESTRAINT_LEGACY: f32 = 0.32;
     /// …and when he is the last man, where the challenge has to be made.
     const BOX_RESTRAINT_LAST_MAN: f32 = 0.72;
 
@@ -458,6 +486,10 @@ impl TackleDecision {
         }
         if Self::cover_exists(ctx) {
             // Somebody is behind me — there is no excuse at all.
+            // A/B control — see `MatchContext::box_defence_off`.
+            if MatchContext::box_defence_off() {
+                return Self::BOX_RESTRAINT_LEGACY;
+            }
             Self::BOX_RESTRAINT
         } else {
             // Last man. Still more careful than in open play, but this is

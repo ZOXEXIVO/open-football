@@ -91,6 +91,17 @@ pub struct DefensivePlan {
     pub(in crate::r#match::engine::teamplay::plans) len: usize,
     /// The opponent carrying the ball, if any.
     pub carrier: Option<u32>,
+    /// **"Pick him up!"** — the opponent the goalkeeper has called out.
+    ///
+    /// The keeper is the only man on the pitch with all twenty-one in
+    /// front of him, and the one thing that view is worth is seeing who
+    /// nobody has. [`KeeperVoice::free_man`] names him and the ranking
+    /// below puts him first, so the exclusive assignment covers him
+    /// before it covers anybody else. `None` whenever everybody inside
+    /// the zone his voice reaches is already somebody's — which is most
+    /// of the time, and is the point: an exception call, not a permanent
+    /// re-ranking.
+    pub keeper_call: Option<u32>,
     /// True while this side is the defending side and the plan is live.
     pub active: bool,
 }
@@ -101,6 +112,7 @@ impl DefensivePlan {
             duties: [(0, DefensiveDuty::HoldZone); MAX_UNIT],
             len: 0,
             carrier: None,
+            keeper_call: None,
             active: false,
         }
     }
@@ -160,9 +172,9 @@ impl DefensivePlan {
             .and_then(|id| field.players.iter().find(|p| p.id == id))
             .map(|p| p.team_id);
 
-        for (plan, team_id) in [
-            (&mut *home, inputs.home_team_id),
-            (&mut *away, inputs.away_team_id),
+        for (plan, team_id, keeper_voice) in [
+            (&mut *home, inputs.home_team_id, inputs.home_keeper_voice),
+            (&mut *away, inputs.away_team_id, inputs.away_keeper_voice),
         ] {
             // We are defending when somebody else has the ball, or when
             // it is loose — a loose ball in our half still has to be
@@ -175,7 +187,12 @@ impl DefensivePlan {
                 crate::mid_run_diag::DefenceDiag::note_plan(false, 0);
                 continue;
             }
-            DutyAssigner { field, team_id }.assign(plan, owner_team);
+            DutyAssigner {
+                field,
+                team_id,
+                keeper_voice,
+            }
+            .assign(plan, owner_team);
             #[cfg(feature = "match-logs")]
             crate::mid_run_diag::DefenceDiag::note_plan(plan.active, plan.individual_count());
         }
@@ -187,4 +204,10 @@ pub struct DefenceRefreshInputs<'a> {
     pub field: &'a MatchField,
     pub home_team_id: u32,
     pub away_team_id: u32,
+    /// `TeamSkillAggregates::keeper_voice` for each side — how far the
+    /// man behind the back line is organising, and how hard. Passed in
+    /// rather than recomputed so this and `ShapeDiscipline::line_band`
+    /// can never disagree about the same keeper. See [`KeeperVoice`].
+    pub home_keeper_voice: f32,
+    pub away_keeper_voice: f32,
 }

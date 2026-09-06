@@ -7,6 +7,7 @@ use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
 use crate::r#match::player::strategies::common::players::ops::marker_evasion::MarkerEvasion;
 use crate::r#match::player::strategies::common::states::{ContactFoul, MarkEngagement};
+use crate::r#match::player::strategies::common::team::KeeperVoice;
 use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::player::strategies::players::ops::skill_composites as sc;
 use crate::r#match::{
@@ -346,7 +347,26 @@ impl StateProcessingHandler for DefenderMarkingState {
             let to_ball = (ball_position - opponent_future_position).normalize();
             let ball_side_offset = to_ball * mark_dist * (1.0 - goal_side_w);
 
-            let desired_position = opponent_future_position + goal_side_offset + ball_side_offset;
+            // **"GET IN FRONT OF HIM!"**
+            //
+            // A marker who is purely goal-side of his man is BEHIND him
+            // when the ball arrives. All of box defending is being across
+            // him, on the side the ball is coming from, so the pass has
+            // to beat you before it beats the goal — and the man who can
+            // see whether that is happening is the one standing behind
+            // the whole picture. See [`KeeperVoice::front_foot`]: inside
+            // the zone his voice reaches, a commanding keeper's defenders
+            // stand up to a metre further across the lane and a quiet
+            // keeper's a step further behind it. Centred, so a median
+            // keeper leaves the marking geometry exactly where it was
+            // fitted, and applied as an absolute offset rather than as a
+            // shift on `goal_side_weight` — that blend is scaled by
+            // `ideal_marking_distance` and the same lean expressed
+            // through it was worth 7 cm, which measured as no channel at
+            // all.
+            let front_foot = to_ball * KeeperVoice::front_foot(ctx, own_goal);
+            let desired_position =
+                opponent_future_position + goal_side_offset + ball_side_offset + front_foot;
             // …but not at the cost of the unit's shape. Marking is 31% of
             // everything the back line does and referred to nothing but
             // its man, so a defender followed a runner clean across the

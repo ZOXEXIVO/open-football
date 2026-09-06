@@ -11,6 +11,7 @@
 //! See [`defence`](super::defence) for why any of this exists.
 
 use crate::r#match::engine::teamplay::plans::defence::{DefensiveDuty, DefensivePlan, MAX_UNIT};
+use crate::r#match::player::strategies::team::KeeperVoice;
 use crate::r#match::{MatchContext, MatchField, PlayerSide};
 use nalgebra::Vector3;
 
@@ -36,6 +37,8 @@ static MARK_CENSUS: [std::sync::atomic::AtomicU64; 11] = [
 pub(in crate::r#match::engine::teamplay::plans) struct DutyAssigner<'a> {
     pub(in crate::r#match::engine::teamplay::plans) field: &'a MatchField,
     pub(in crate::r#match::engine::teamplay::plans) team_id: u32,
+    /// How loud the man behind this back line is — see [`KeeperVoice`].
+    pub(in crate::r#match::engine::teamplay::plans) keeper_voice: f32,
 }
 
 impl DutyAssigner<'_> {
@@ -113,6 +116,17 @@ impl DutyAssigner<'_> {
     /// marker still has to be within [`Self::MARK_REACH`] of his man, so
     /// a threat nobody can reach costs a ranking slot and nothing else.
     const BALL_THREAT_RADIUS: f32 = 200.0;
+
+    /// What the keeper's shout is worth in the threat ranking.
+    ///
+    /// `threat_score` tops out a little under 2.0 (1.0 for standing on
+    /// the goal line, +0.45 for running at it, +0.35 for being next to
+    /// the ball, +0.18 for being a forward), so 4.0 is decisive by
+    /// construction. That is deliberate and it is the football: a keeper
+    /// shouting about the man nobody has picked up on his six-yard line
+    /// is not one input among several to be weighed, he is telling
+    /// somebody to go.
+    const KEEPER_CALL_BONUS: f32 = 4.0;
 
     pub(in crate::r#match::engine::teamplay::plans) fn assign(
         &self,
@@ -380,6 +394,53 @@ impl DutyAssigner<'_> {
             threats[threat_len] = (p.id, p.position, self.threat_score(p, own_goal));
             threat_len += 1;
         }
+        // ── "PICK HIM UP!" — the keeper re-ranks one man ─────────────
+        //
+        // Everything above scores the situation from the FIELD's point of
+        // view. The keeper's contribution is the one thing his position
+        // gives him that nobody else has: he can see who is genuinely
+        // unattended in front of his goal, and the whole of his job in a
+        // settled defensive phase is to say so.
+        //
+        // The call moves that man to the FRONT of the ranking rather than
+        // adding a marker, because the assignment is exclusive and the
+        // scarce thing is the best-placed defender, not the duty. Ranked
+        // first, he gets first pick; the men behind him shuffle down by
+        // one, which is precisely what happens when a keeper shouts.
+        //
+        // ⚠ Applied to the SCORE, not by reordering the array, so the
+        // deterministic tie-break below still owns the order and the plan
+        // stays reproducible run to run.
+        let call = KeeperVoice::free_man(
+            self.field,
+            self.team_id,
+            own_goal,
+            KeeperVoice::organise_reach_from(self.keeper_voice),
+        );
+        #[cfg(feature = "match-logs")]
+        crate::mid_run_diag::KeeperOrgDiag::note(
+            self.keeper_voice,
+            call.reach,
+            call.in_zone,
+            call.free,
+            call.mean_gap,
+            call.man.is_some(),
+        );
+        // A/B control — see `MatchContext::box_defence_off`. The census
+        // above still runs (it changes nothing), the RE-RANKING does not.
+        plan.keeper_call = call.man.filter(|_| !MatchContext::box_defence_off());
+        if let Some(called) = plan.keeper_call {
+            for t in threats[..threat_len].iter_mut() {
+                if t.0 == called {
+                    // Bigger than any score `threat_score` can produce,
+                    // so the call is decisive rather than a nudge — a
+                    // keeper shouting at you about the man on the six-yard
+                    // line is not one input among several.
+                    t.2 += Self::KEEPER_CALL_BONUS;
+                }
+            }
+        }
+
         // Insertion sort, most dangerous first; ties by id so the
         // assignment is reproducible run to run.
         for i in 1..threat_len {

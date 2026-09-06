@@ -44,6 +44,7 @@
 
 use crate::r#match::StateProcessingContext;
 use crate::r#match::player::strategies::common::players::ops::defender_skill::DefenderSkillProfile;
+use crate::r#match::player::strategies::common::team::KeeperVoice;
 
 pub struct ClearanceCall;
 
@@ -104,8 +105,18 @@ impl ClearanceCall {
         let situation = squeeze * (0.55 + 0.45 * danger);
 
         let profile = DefenderSkillProfile::from_ctx(ctx);
-        let tolerance =
-            Self::TOLERANCE_BASE + profile.buildup_profile.clamp(0.0, 1.0) * Self::TOLERANCE_SKILL;
+        // **"AWAY!"**
+        //
+        // The third of the keeper's calls — see [`KeeperVoice`]. He is
+        // the man who can see whether there is anything on, and "get rid
+        // of it" is the single most audible thing said in a penalty area.
+        // Subtracted from the tolerance, so a commanding keeper's defender
+        // clears sooner and a quiet keeper's tries to play; worth about
+        // an eighth of the skill axis at the extremes, and exactly
+        // nothing for a median keeper.
+        let tolerance = Self::TOLERANCE_BASE
+            + profile.buildup_profile.clamp(0.0, 1.0) * Self::TOLERANCE_SKILL
+            - KeeperVoice::away_shout(ctx);
         situation > tolerance
     }
 

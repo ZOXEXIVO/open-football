@@ -1348,6 +1348,36 @@ pub mod mid_run_diag {
     pub static BOXPASS_BODIES_X100: AtomicU64 = AtomicU64::new(0);
     /// What the nearest defender was doing. Indexed by [`BoxPassDiag::STATES`].
     pub static BOXPASS_BY_STATE: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+    /// The lane distance again, banded by the VOICE of the keeper behind
+    /// the defending side. ⚠ This one is DOMINATED BY NON-MARKERS — 74%
+    /// of its samples are the nearest man in a ball-playing state — so it
+    /// is the wrong read-out for `KeeperVoice::front_foot`, which only
+    /// touches markers. See `MARKLANE_PERP_X100` for the right one; this
+    /// stays because it is the honest picture of who is near a box pass.
+    pub static BOXPASS_LANE_BY_VOICE: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static BOXPASS_VOICE_N: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+
+    /// ── WHERE A MARKER STANDS RELATIVE TO THE PASS TO HIS MAN ─────────
+    ///
+    /// The read-out for
+    /// [`KeeperVoice::front_foot`](crate::r#match::player::strategies::team::KeeperVoice::front_foot),
+    /// and the one number that says whether a defence is "in front of"
+    /// its men or merely near them.
+    ///
+    /// For every ASSIGNED marker (`plan.mark_of`), project him onto the
+    /// line from the ball to the man he was given:
+    ///
+    ///   * `perp` — his perpendicular distance from that line. Small
+    ///     means the pass has to go through him.
+    ///   * `IN_LANE` — and he is also BETWEEN the two, rather than level
+    ///     with either end. Both together are "he is in front of his
+    ///     man".
+    ///
+    /// Banded by his keeper's voice, on the same edges as
+    /// [`KeeperOrgDiag::BANDS`].
+    pub static MARKLANE_PERP_X100: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static MARKLANE_N: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static MARKLANE_IN_LANE: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
     /// Balls cut out of the air by an outfielder inside a penalty area,
     /// against the whole-pitch total — the outcome half of the census.
     pub static BOXPASS_CUT_OUT: AtomicU64 = AtomicU64::new(0);
@@ -1359,6 +1389,9 @@ pub mod mid_run_diag {
     pub static PASSBLOCK_FIRED: AtomicU64 = AtomicU64::new(0);
     pub static PASSBLOCK_CONTROLLED: AtomicU64 = AtomicU64::new(0);
     pub static PASSBLOCK_CHANCE_X10000: AtomicU64 = AtomicU64::new(0);
+    /// …and how many of the blocks happened inside the penalty area
+    /// itself, which is the part of the report a viewer can see.
+    pub static PASSBLOCK_IN_BOX: AtomicU64 = AtomicU64::new(0);
 
     pub struct BoxPassDiag;
 
@@ -1374,6 +1407,61 @@ pub mod mid_run_diag {
             "playing-the-ball",
             "other",
         ];
+
+        /// One sample, banded by the defending keeper's voice. Same band
+        /// edges as [`KeeperOrgDiag::BANDS`] so the two blocks can be
+        /// read against each other.
+        pub fn note_voice(lane: f32, voice: f32) {
+            let b = KeeperOrgDiag::band_of(voice);
+            BOXPASS_LANE_BY_VOICE[b].fetch_add((lane * 100.0) as u64, Ordering::Relaxed);
+            BOXPASS_VOICE_N[b].fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// One assigned marker, measured against the line from the ball
+        /// to the man he was given.
+        pub fn note_mark_lane(perp: f32, in_lane: bool, voice: f32) {
+            let b = KeeperOrgDiag::band_of(voice);
+            MARKLANE_PERP_X100[b].fetch_add((perp * 100.0) as u64, Ordering::Relaxed);
+            MARKLANE_N[b].fetch_add(1, Ordering::Relaxed);
+            if in_lane {
+                MARKLANE_IN_LANE[b].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(band, samples, mean perp u, in-lane share)`
+        pub fn mark_lane_by_voice() -> Vec<(&'static str, u64, f32, f32)> {
+            (0..4)
+                .filter_map(|b| {
+                    let n = MARKLANE_N[b].load(Ordering::Relaxed);
+                    if n == 0 {
+                        return None;
+                    }
+                    Some((
+                        KeeperOrgDiag::BANDS[b],
+                        n,
+                        MARKLANE_PERP_X100[b].load(Ordering::Relaxed) as f32 / 100.0 / n as f32,
+                        MARKLANE_IN_LANE[b].load(Ordering::Relaxed) as f32 / n as f32,
+                    ))
+                })
+                .collect()
+        }
+
+        /// `(band, samples, mean lane u)`
+        pub fn lane_by_voice() -> Vec<(&'static str, u64, f32)> {
+            (0..4)
+                .filter_map(|b| {
+                    let n = BOXPASS_VOICE_N[b].load(Ordering::Relaxed);
+                    if n == 0 {
+                        return None;
+                    }
+                    Some((
+                        KeeperOrgDiag::BANDS[b],
+                        n,
+                        BOXPASS_LANE_BY_VOICE[b].load(Ordering::Relaxed) as f32 / 100.0 / n as f32,
+                    ))
+                })
+                .collect()
+        }
 
         #[allow(clippy::too_many_arguments)]
         pub fn note(
@@ -1464,13 +1552,19 @@ pub mod mid_run_diag {
             PASSBLOCK_CONTROLLED.fetch_add(1, Ordering::Relaxed);
         }
 
-        /// `(rolled, fired, controlled, mean chance)`
-        pub fn block_rolls() -> (u64, u64, u64, f32) {
+        /// A block that landed inside the penalty area.
+        pub fn note_block_in_box() {
+            PASSBLOCK_IN_BOX.fetch_add(1, Ordering::Relaxed);
+        }
+
+        /// `(rolled, fired, controlled, in-box, mean chance)`
+        pub fn block_rolls() -> (u64, u64, u64, u64, f32) {
             let n = PASSBLOCK_ROLLED.load(Ordering::Relaxed);
             (
                 n,
                 PASSBLOCK_FIRED.load(Ordering::Relaxed),
                 PASSBLOCK_CONTROLLED.load(Ordering::Relaxed),
+                PASSBLOCK_IN_BOX.load(Ordering::Relaxed),
                 if n == 0 {
                     0.0
                 } else {
@@ -1492,7 +1586,14 @@ pub mod mid_run_diag {
         }
 
         pub fn reset() {
-            for c in BOXPASS_BY_STATE.iter() {
+            for c in BOXPASS_BY_STATE
+                .iter()
+                .chain(BOXPASS_LANE_BY_VOICE.iter())
+                .chain(BOXPASS_VOICE_N.iter())
+                .chain(MARKLANE_PERP_X100.iter())
+                .chain(MARKLANE_N.iter())
+                .chain(MARKLANE_IN_LANE.iter())
+            {
                 c.store(0, Ordering::Relaxed);
             }
             for c in [
@@ -1511,12 +1612,116 @@ pub mod mid_run_diag {
                 &PASSBLOCK_FIRED,
                 &PASSBLOCK_CONTROLLED,
                 &PASSBLOCK_CHANCE_X10000,
+                &PASSBLOCK_IN_BOX,
             ] {
                 c.store(0, Ordering::Relaxed);
             }
         }
     }
 
+
+    /// ── THE KEEPER-ORGANISATION CENSUS ────────────────────────────────
+    ///
+    /// *"Make sure the goalkeeper is involved in the defenders'
+    /// positioning and gives them advice."*
+    ///
+    /// The one number that says whether he is: **how many opponents are
+    /// standing inside the zone he organises with nobody within 12 m of
+    /// them.** Banded by his own voice, because a channel that does not
+    /// separate a commanding keeper from a quiet one is not a keeper
+    /// channel at all — it is a constant with a skill name on it, which
+    /// is exactly what `sc::gk_communication` was before
+    /// [`KeeperVoice`](crate::r#match::player::strategies::team::KeeperVoice).
+    ///
+    /// Sampled once per defending side per plan refresh.
+    pub static KORG_REFRESHES: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static KORG_CALLS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static KORG_FREE: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static KORG_IN_ZONE: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static KORG_REACH_X100: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    /// Summed mean gap from a man in the zone to the nearest of ours —
+    /// the number `COVERED` has to be set against.
+    pub static KORG_GAP_X100: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    pub static KORG_GAP_N: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+
+    pub struct KeeperOrgDiag;
+
+    impl KeeperOrgDiag {
+        /// Band edges on `sc::gk_communication`, straddling the measured
+        /// population reference (0.560) rather than 0.5 — see the note on
+        /// `TeamSkillAggregates::KEEPER_VOICE_REFERENCE`.
+        pub const BANDS: [&'static str; 4] = ["quiet", "below-par", "solid", "commanding"];
+
+        /// Which band a voice falls in. Shared with `BoxPassDiag` so the
+        /// two keeper blocks are read against the same edges.
+        pub fn band_of(voice: f32) -> usize {
+            if voice < 0.46 {
+                0
+            } else if voice < 0.56 {
+                1
+            } else if voice < 0.66 {
+                2
+            } else {
+                3
+            }
+        }
+
+        pub fn note(voice: f32, reach: f32, in_zone: u32, free: u32, mean_gap: f32, called: bool) {
+            let b = Self::band_of(voice);
+            KORG_REFRESHES[b].fetch_add(1, Ordering::Relaxed);
+            KORG_IN_ZONE[b].fetch_add(in_zone as u64, Ordering::Relaxed);
+            KORG_FREE[b].fetch_add(free as u64, Ordering::Relaxed);
+            KORG_REACH_X100[b].fetch_add((reach * 100.0) as u64, Ordering::Relaxed);
+            if in_zone > 0 {
+                KORG_GAP_X100[b].fetch_add((mean_gap * 100.0) as u64, Ordering::Relaxed);
+                KORG_GAP_N[b].fetch_add(1, Ordering::Relaxed);
+            }
+            if called {
+                KORG_CALLS[b].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        /// `(band, refreshes, mean reach u, mean in-zone, mean free,
+        /// mean gap to the nearest of ours u, call share)`
+        #[allow(clippy::type_complexity)]
+        pub fn by_band() -> Vec<(&'static str, u64, f32, f32, f32, f32, f32)> {
+            (0..4)
+                .filter_map(|b| {
+                    let n = KORG_REFRESHES[b].load(Ordering::Relaxed);
+                    if n == 0 {
+                        return None;
+                    }
+                    let f = n as f32;
+                    let gn = KORG_GAP_N[b].load(Ordering::Relaxed);
+                    Some((
+                        Self::BANDS[b],
+                        n,
+                        KORG_REACH_X100[b].load(Ordering::Relaxed) as f32 / 100.0 / f,
+                        KORG_IN_ZONE[b].load(Ordering::Relaxed) as f32 / f,
+                        KORG_FREE[b].load(Ordering::Relaxed) as f32 / f,
+                        if gn == 0 {
+                            0.0
+                        } else {
+                            KORG_GAP_X100[b].load(Ordering::Relaxed) as f32 / 100.0 / gn as f32
+                        },
+                        KORG_CALLS[b].load(Ordering::Relaxed) as f32 / f,
+                    ))
+                })
+                .collect()
+        }
+
+        pub fn reset() {
+            for b in 0..4 {
+                KORG_REFRESHES[b].store(0, Ordering::Relaxed);
+                KORG_CALLS[b].store(0, Ordering::Relaxed);
+                KORG_FREE[b].store(0, Ordering::Relaxed);
+                KORG_IN_ZONE[b].store(0, Ordering::Relaxed);
+                KORG_REACH_X100[b].store(0, Ordering::Relaxed);
+                KORG_GAP_X100[b].store(0, Ordering::Relaxed);
+                KORG_GAP_N[b].store(0, Ordering::Relaxed);
+            }
+        }
+    }
     /// ── THE LOOSE-BALL CHASE CENSUS ───────────────────────────────────
     ///
     /// [`DuelDiag`]'s closing census only ever samples while somebody OWNS
@@ -3858,6 +4063,7 @@ pub mod mid_run_diag {
         DuelDiag::reset();
         BoxBallDiag::reset();
         BoxPassDiag::reset();
+        KeeperOrgDiag::reset();
         RecoveryDiag::reset();
         ChaseDiag::reset();
         ClearDiag::reset();

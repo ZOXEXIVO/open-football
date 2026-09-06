@@ -48,6 +48,28 @@
 //! the more of himself he will put in the way. [`Self::danger`] is that
 //! ramp, and it is what keeps a model of last-ditch defending out of the
 //! calibration of ordinary midfield passing.
+//!
+//! # Measured
+//!
+//! Matched 400-vs-400 at level 14 in the same binary, against
+//! `OF_BOX_DEFENCE_OFF` (which also reverts the keeper's calls and the
+//! box restraint — the three landed together and are judged together):
+//!
+//! | | off | on | real |
+//! |---|---|---|---|
+//! | goals/match | 3.15 | **3.03** | ~2.5 |
+//! | shots a team | 15.0 | **14.5** | ~13 |
+//! | pass accuracy | 88.5% | **87.6%** | ~85% |
+//! | penalties/match | 0.110 | **0.157** | 0.25-0.30 |
+//! | DEF blocks | 0.40 | **1.49** | ~1.4 (shots+passes) |
+//! | MID blocks | 0.03 | **0.98** | ~1.3 |
+//! | fouls a team | 12.2 | 12.3 | ~12 |
+//! | yellows/match | 3.45 | 3.43 | 3.5-4.5 |
+//!
+//! 18.2 passes a match are blocked, **5.7 of them inside the penalty
+//! area** — the part a viewer can see. Every calibration axis moved
+//! toward its reference or did not move; the ones that did not move are
+//! the discipline numbers, which is the pairing this had to preserve.
 
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
@@ -150,7 +172,7 @@ impl Ball {
             return;
         }
 
-        if self.pass_block_rolled {
+        if self.pass_block_rolled || MatchContext::box_defence_off() {
             return;
         }
         if self.current_owner.is_some()
@@ -292,11 +314,20 @@ impl Ball {
         self.resolve_pass_block(blocker_id, outcome_roll, context, players, events);
     }
 
-    /// Overall scale on the block chance. Set so that the corridor,
-    /// window and danger ramp above produce a rate in the real band
-    /// rather than by picking a number for its own sake — the reference
-    /// is DEF blocks per match, which reads 0.39 against a real ~0.9.
-    const BLOCK_GAIN: f32 = 1.05;
+    /// Overall scale on the block chance.
+    ///
+    /// **Measured, not chosen.** At 1.05 the corridor, window and danger
+    /// ramp above produced 46.9 blocked passes a match — 23.5 a team
+    /// against a real ~9-10 — and took DEF blocks from 0.39 to 3.18 and
+    /// MID blocks from 0.02 to 2.46. 0.40 is that rate scaled onto the
+    /// real one. The geometry is deliberately left alone: the shape of
+    /// the model (who is a candidate, and how the chance falls off across
+    /// the corridor) measured right, and only the level was wrong.
+    ///
+    /// At 0.40 it produces **18.2 blocked passes a match — 9.1 a team,
+    /// against a real 9-11** — at a mean per-pass chance of 0.019 over
+    /// the ~960 passes a match that reach the roll at all.
+    const BLOCK_GAIN: f32 = 0.40;
 
     /// Turn a won pass-block into a deflection, at the blocker.
     fn resolve_pass_block(
@@ -338,6 +369,12 @@ impl Ball {
         // He got something on it. That is a touch, and the touch is his —
         // which is also what makes a deflection over his own byline a
         // corner rather than a goal kick.
+        #[cfg(feature = "match-logs")]
+        if context.penalty_area(true).contains(&self.position)
+            || context.penalty_area(false).contains(&self.position)
+        {
+            crate::mid_run_diag::BoxPassDiag::note_block_in_box();
+        }
         self.record_touch(blocker_id, blocker_team, tick, controlled);
         self.pass_target_player_id = None;
         self.clear_pending_pass_metadata();

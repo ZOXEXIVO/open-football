@@ -48,6 +48,28 @@ impl MatchContext {
         *OFF.get_or_init(|| std::env::var("OF_SHAPE_OFF").is_ok())
     }
 
+    /// Diagnostic switch: with `OF_BOX_DEFENCE_OFF` set, the whole
+    /// box-defending layer reverts to what it was before 2026-09-06:
+    ///
+    /// * `Ball::try_block_pass` never runs, so the only thing that can
+    ///   touch a pass is `try_intercept`'s 69 cm standing radius;
+    /// * every one of [`KeeperVoice`]'s three calls returns neutral, so
+    ///   the goalkeeper organises nothing in front of him;
+    /// * `TackleDecision::BOX_RESTRAINT` goes back to 0.32.
+    ///
+    /// The A/B control for all three at once. They are deliberately on
+    /// ONE switch: each is small on its own and they are meant to be
+    /// judged as one answer to one report, and a per-channel arm would
+    /// tempt exactly the sort of single-lever tuning the calibration
+    /// memos warn about. Read once per process. Same pattern and purpose
+    /// as [`shape_off`](Self::shape_off) — debug infrastructure, do not
+    /// remove.
+    pub fn box_defence_off() -> bool {
+        use std::sync::OnceLock;
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| std::env::var("OF_BOX_DEFENCE_OFF").is_ok())
+    }
+
     /// Diagnostic switch: with `OF_BLOCK_RIGID` set, the positional block
     /// goes back to keeping its whole rectangle on the pitch by clamping
     /// its own CENTRE, instead of sliding freely and narrowing to fit.

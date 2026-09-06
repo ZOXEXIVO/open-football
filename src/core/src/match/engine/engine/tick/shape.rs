@@ -541,6 +541,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             field,
             home_team_id: context.field_home_team_id,
             away_team_id: context.field_away_team_id,
+            // The voice behind each back line — see `KeeperVoice`. Read
+            // off the aggregates rather than recomputed here so the
+            // organising zone and `ShapeDiscipline::line_band` can never
+            // disagree about how loud the same keeper is.
+            home_keeper_voice: context.home_skill_aggregates.keeper_voice,
+            away_keeper_voice: context.away_skill_aggregates.keeper_voice,
         };
         DefensivePlan::refresh(
             &mut context.defence_home,

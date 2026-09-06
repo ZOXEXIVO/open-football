@@ -6981,7 +6981,12 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                 per(d, d.blocks),
                 per(m, m.blocks),
                 per(f, f.blocks),
-                "~0.9 / ~0.3",
+                // ⚠ The column now carries BLOCKED PASSES as well as blocked
+                // shots — `Ball::try_block_pass` credits `add_block` because
+                // a body in the way of a pass is the same action and Opta
+                // files it the same way. The old "~0.9 / ~0.3" was a
+                // shot-block reference; these are the real TOTALS.
+                "~1.4 / ~1.3 incl. passes",
             ),
             (
                 "clearances",
@@ -10815,12 +10820,13 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         "    balls cut out of the air inside a box: {cut_box} of {cut_all} anywhere ({:.1} per match)",
                         cut_box as f64 / n_matches.max(1) as f64,
                     );
-                    let (br, bf, bc, bch) = BoxPassDiag::block_rolls();
+                    let (br, bf, bc, bbox, bch) = BoxPassDiag::block_rolls();
                     if br > 0 {
                         println!(
-                            "    FOOT IN (`try_block_pass`): {br} passes reached the roll at mean p={bch:.3} → {bf} blocked ({:.1}/match, {:.1}%), of which {bc} kept at his feet",
+                            "    FOOT IN (`try_block_pass`): {br} passes reached the roll at mean p={bch:.3} → {bf} blocked ({:.1}/match, {:.1}%), of which {bbox} INSIDE the area ({:.1}/match) and {bc} kept at his feet",
                             bf as f64 / n_matches.max(1) as f64,
                             bf as f64 / br as f64 * 100.0,
+                            bbox as f64 / n_matches.max(1) as f64,
                         );
                     }
                     let rows: Vec<String> = BoxPassDiag::by_state()
@@ -10828,6 +10834,50 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                         .map(|(l, c)| format!("{l} {:.0}%", *c as f64 / pn as f64 * 100.0))
                         .collect();
                     println!("    what the nearest man was doing: {}", rows.join("  ·  "));
+                }
+            }
+            // "The goalkeeper must be involved in the defenders'
+            // positioning and give them advice." How many men are loose
+            // inside the zone he organises, split by how loud he is —
+            // see `mid_run_diag::KORG_REFRESHES`.
+            {
+                use core::mid_run_diag::KeeperOrgDiag;
+                let bands = KeeperOrgDiag::by_band();
+                if !bands.is_empty() {
+                    println!("  KEEPER ORGANISATION (per defensive-plan refresh, by his own voice)");
+                    for (label, n, reach, in_zone, free, gap, calls) in bands {
+                        println!(
+                            "    {label:<12} n={n:<9} organises {:.1} m out — {in_zone:.2} opponents in the zone at a mean {:.1} m from our nearest man, {free:.2} of them FREE  →  shouts on {:.0}% of refreshes",
+                            reach / 8.0,
+                            gap / 8.0,
+                            calls * 100.0,
+                        );
+                    }
+                }
+                use core::mid_run_diag::BoxPassDiag as BPD;
+                let marks = BPD::mark_lane_by_voice();
+                if !marks.is_empty() {
+                    println!(
+                        "    …and where an ASSIGNED MARKER stands relative to the pass to his man (`front_foot`):"
+                    );
+                    for (label, n, perp, in_lane) in marks {
+                        println!(
+                            "      {label:<12} n={n:<11} {:.2} m off that line, IN the lane on {:.1}% of samples",
+                            perp / 8.0,
+                            in_lane * 100.0,
+                        );
+                    }
+                }
+                let lanes = BPD::lane_by_voice();
+                if !lanes.is_empty() {
+                    let rows: Vec<String> = lanes
+                        .iter()
+                        .map(|(l, n, lane)| format!("{l} {:.2} m (n={n})", lane / 8.0))
+                        .collect();
+                    println!(
+                        "    (nearest defender of ANY kind off the lane of a box pass, mostly ball-chasers: {})",
+                        rows.join("  ·  ")
+                    );
                 }
             }
             // "Defenders with TakeBall don't intercept — they run parallel
