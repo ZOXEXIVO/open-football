@@ -5099,7 +5099,39 @@ impl PlayerEventDispatcher {
         // (FWD 0.113 xG vs 10.2% conv, MID 0.066 vs 6.6%) — the property
         // that defines a calibrated xG model, and what stops the rating
         // layer charging forwards for chances they did not really have.
-        const XG_REPORT_SCALE: f32 = 0.45;
+        //
+        // ⚠ 0.45 → 0.97, 2026-09-06, BECAUSE THAT PROPERTY HAD BROKEN.
+        //
+        // The invariant this constant exists to hold is the sentence
+        // above: recorded xG tracks actual conversion. Re-measured over
+        // 600 fixtures at level 14 it did not, by more than a factor of
+        // two — **population xG/shot 0.048 against goals/shot 0.104**,
+        // `xG per team 0.72` against a real ~1.3, and a goals-vs-xG delta
+        // of **+1.60** against a real ~0.0. Per line: FWD 0.044 xG
+        // against 9.8% conversion, MID 0.066 against 12.3%.
+        //
+        // Nothing moved the SCALE; the two discounts stacked underneath
+        // it did. The angle factor and the pressure factor were each
+        // added later, each correctly, and each multiplies this product —
+        // and the pressure one bites hard now that the box actually has
+        // bodies in it (49% of shots are struck with a defender inside
+        // 1 m). Two correct terms and one stale constant.
+        //
+        // The direction matters for the rating layer, and it is the
+        // opposite of the failure the note above describes.
+        // `RatingVolume::XG_TO_REAL` is identity precisely because this
+        // site is supposed to deliver real units, so an xG that is half
+        // of conversion means the clinical (goals-over-xG) bonus pays on
+        // every forward in the game while the wasted-xG drag can never
+        // fire — the mirror image of the bug 0.41 was chosen to fix.
+        //
+        // 0.97 is 0.45 scaled by the measured ratio (0.104 / 0.048). It
+        // is a pure multiplier, so the population lands where the
+        // arithmetic says. `HighlightSelector::MIN_XG` is scaled by the
+        // same factor in the same change — its own doc says it is
+        // calibrated against this scale and against a population mean,
+        // and both move together or the chance shortlist changes meaning.
+        const XG_REPORT_SCALE: f32 = 0.97;
         // Angle discrimination. The profile at this site is built with
         // `shot_clarity: 1.0, has_clear_shot: true`, so the recorded xG
         // was pure DISTANCE — a byline effort from 6m priced identically

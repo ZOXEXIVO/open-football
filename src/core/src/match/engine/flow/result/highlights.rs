@@ -114,7 +114,16 @@ impl HighlightSelector {
     /// that comes out with three or four is a side that genuinely never
     /// threatened. Anything that moves the recorded-xG scale moves this with it
     /// — re-measure, don't convert.
-    pub const MIN_XG: f32 = 0.035;
+    ///
+    /// ⚠ 0.035 → 0.075, 2026-09-06, and it WAS re-measured. `XG_REPORT_SCALE`
+    /// moved 0.45 → 0.97 to restore the invariant that recorded xG tracks
+    /// actual conversion (it had drifted to 0.048/shot against 0.104 converted),
+    /// which roughly doubles every recorded figure. The population re-measured
+    /// after the change is what this bar is set against, not the arithmetic:
+    /// `dev_match reel 60 14 14` at 0.075 keeps **4.13 and 4.15 chance markers
+    /// a side**, five or more on 98% of matches and none at all on 0% — the
+    /// same shape as the 3.7-3.9 this note recorded at the old scale.
+    pub const MIN_XG: f32 = 0.075;
 
     /// How far apart two markers have to be, as a divisor of the match length —
     /// a forty-fifth of ninety minutes is two of them.

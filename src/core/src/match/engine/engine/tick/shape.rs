@@ -499,7 +499,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             away_tactics,
             home_skills: home_skill_aggregates,
             away_skills: away_skill_aggregates,
-            home_edge: context.environment.crowd_intensity * context.environment.home_advantage,
+            // A/B control — see `MatchContext::home_flat`.
+            home_edge: if MatchContext::home_flat() {
+                0.0
+            } else {
+                context.environment.crowd_intensity * context.environment.home_advantage
+            },
             standard_shift: MatchStandard::shift(context),
             standard_gk_shift: MatchStandard::keeper_shift(context),
         };

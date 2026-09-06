@@ -74,7 +74,7 @@
 use crate::PlayerFieldPositionGroup;
 use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::contest::interception::InterceptionDuel;
-use crate::r#match::engine::ball::ball::{Ball, CONTROL_DISTANCE};
+use crate::r#match::engine::ball::ball::{Ball, CONTROL_DISTANCE, FlightProtection};
 use crate::r#match::events::EventCollection;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::strategies::players::ops::effective_skill::{
@@ -109,6 +109,17 @@ impl Ball {
     /// Below this the ball is not really travelling and the loose-ball
     /// machinery owns it. Matches `try_intercept`'s own floor.
     const MIN_PASS_SPEED: f32 = 0.25;
+    /// Outside this depth from his own goal there is always somewhere
+    /// else to put it. 150u ≈ 18.75 m — the same window
+    /// `DeliveryResolver::heads_it_behind` uses, because it is the same
+    /// question about the same defender.
+    const BEHIND_DEPTH: f32 = 150.0;
+    /// …and the share of blocks that go behind when he is right on his
+    /// own goal line. Deliberately below the headed clearance's 0.50: a
+    /// header is a deliberate act with a chosen direction, while a block
+    /// is a ball coming off a leg, so it is less often aimed anywhere at
+    /// all — including behind.
+    const BEHIND_AT_LINE: f32 = 0.38;
 
     /// **Will he put a leg in it?** — the depth ramp.
     ///
@@ -412,6 +423,45 @@ impl Ball {
             context.field_size.height as f32 / 2.0,
             0.0,
         );
+        // ── …AND SOMETIMES IT GOES BEHIND ────────────────────────────
+        //
+        // The commonest corner in football is a defender getting
+        // something on a ball played across his own six-yard box and
+        // putting it out, and the engine had no path for it at all. The
+        // corner-source census reads **ordinary play 0.15 a match (4%)**
+        // against a real ~25% of a 10.4-corner match, while the whole
+        // "defender puts it behind" family is fed only by SHOTS and by
+        // AIRBORNE deliveries — `try_block_shot`'s corner branch and
+        // `DeliveryResolver::heads_it_behind`. The low ball across the
+        // face of goal had no way of ending up behind, which is exactly
+        // the note `try_block_shot` carries about an earlier attempt at
+        // this: correct football, dead because the situation never
+        // arose. It arises now — this contest fires 5.7 times a match
+        // INSIDE the penalty area.
+        //
+        // Same curve as `heads_it_behind`, deliberately: the closer to
+        // his own line the defender is, the less choice he has about
+        // where it goes, and on the line there is no "away" left. A
+        // block at the edge of the area still comes off him up the
+        // pitch, which is what the branch below does.
+        let depth = (self.position.x - own_goal.x).abs();
+        if depth <= Self::BEHIND_DEPTH {
+            let urgency = 1.0 - depth / Self::BEHIND_DEPTH;
+            if context.rng.unit_f32() < Self::BEHIND_AT_LINE * urgency.powf(1.2) {
+                // The same geometry the headed clearance uses, so a
+                // blocked ball and a headed one leave the pitch the same
+                // way. `record_touch` above already made this HIS touch,
+                // which is what makes it a corner rather than a goal
+                // kick.
+                self.velocity =
+                    Ball::hook_behind_velocity(self.position, own_goal, context.field_size.height as f32);
+                self.flags.in_flight_state =
+                    FlightProtection::for_launch(self.velocity, self.position.z);
+                self.claim_cooldown = self.claim_cooldown.max(4);
+                return;
+            }
+        }
+
         let away = (self.position - own_goal)
             .try_normalize(1.0e-3)
             .unwrap_or_else(|| Vector3::new(-self.velocity.x, -self.velocity.y, 0.0).normalize());

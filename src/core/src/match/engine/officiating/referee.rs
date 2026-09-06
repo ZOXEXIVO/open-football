@@ -3,6 +3,7 @@
 /// Pure scoring; no RNG. Callers fold these into their own random rolls.
 /// Inputs that come from match state (crowd, derby, match_temperature) are
 /// supplied per-call so the referee profile itself stays stable across the match.
+use crate::r#match::MatchContext;
 use crate::r#match::engine::environment::MatchEnvironment;
 
 #[derive(Debug, Clone, Copy)]
@@ -78,7 +79,14 @@ impl RefereeProfile {
     /// number only governs whether the whistle goes at all.
     pub fn foul_call_prob(&self, env: &MatchEnvironment, ctx: FoulCallContext) -> f32 {
         let bias_dir = if ctx.fouled_team_is_home { 1.0 } else { -1.0 };
-        let crowd_pressure = env.crowd_intensity * env.home_advantage;
+        // A/B control — see `MatchContext::home_flat`. The referee is the
+        // third declared home-advantage channel and has to go quiet with
+        // the other two, or the decomposition is not one.
+        let crowd_pressure = if MatchContext::home_flat() {
+            0.0
+        } else {
+            env.crowd_intensity * env.home_advantage
+        };
         let bias_term = self.home_bias * bias_dir * crowd_pressure;
 
         let pen_strict_bonus = if ctx.location == ContactLocation::PenaltyBox {

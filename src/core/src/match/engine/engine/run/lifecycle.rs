@@ -159,12 +159,48 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // this module's documented target of 42-48 / 23-30 / 27-34 and a
         // real home-goal edge of ~+0.35.
         //
-        // The lesson the two re-titrations share: this constant is not a
-        // property of home advantage, it is a property of how strongly
+        // Re-titrated a THIRD time, 2026-09-06 (0.13 / 0.075 → 0.05 /
+        // 0.029), and this one was DECOMPOSED first rather than tuned
+        // blind — see `MatchContext::home_flat`, which takes all three
+        // declared channels (this one, the tactical press/risk/tempo
+        // lift, and `RefereeProfile::home_bias`) to neutral at once.
+        //
+        // That arm was the thing worth knowing. With every channel off,
+        // 400 equal-strength fixtures came out **34.0 / 29.0 / 37.0 with
+        // home 1.38 goals against away 1.51** — symmetric to inside the
+        // noise, and if anything leaning AWAY. So there is no hidden
+        // side-swap bug handing the home team an edge; the whole of the
+        // measured **60.5 / 24.0 / 15.5** was these constants, and a
+        // 5.8% effective-skill gap was being amplified into +0.87
+        // goals a match against a real +0.35.
+        //
+        // Titrated on the override (400 fixtures an arm, home/away/goal
+        // gap): flat −0.13 · 0.050 **+0.37** · 0.070 +0.50 · 0.095 +0.77
+        // · 0.130 +0.87. Monotone, and 0.050 lands 47.8 / 25.2 / 27.0
+        // against a real 45 / 25 / 30.
+        //
+        // ⚠ Note what else it lands. Draws came out at 25.2% against a
+        // real 25%, from 24.0% here and 29.0% flat. The draw surplus
+        // recorded in the titration memo as "the remaining
+        // distributional defect" was, at this setting, not a separate
+        // mechanism at all: the excess home wins were eating the AWAY
+        // wins, and away is the column that was 15pp short.
+        //
+        // The lesson the three re-titrations share: this constant is not
+        // a property of home advantage, it is a property of how strongly
         // THIS engine converts skill into goals, so it has to be re-read
         // after any change to the duel model.
-        let home_arousal = 1.0 + 0.13 * home_edge;
-        let away_arousal = 1.0 - 0.075 * home_edge;
+        // A/B + titration controls — see `MatchContext::home_flat` and
+        // `MatchContext::home_arousal_override`.
+        let home_edge = if MatchContext::home_flat() {
+            0.0
+        } else {
+            home_edge
+        };
+        let (home_gain, away_gain) =
+            MatchContext::home_arousal_override().unwrap_or((0.050, 0.029));
+        let home_arousal = 1.0 + home_gain * home_edge;
+        let away_arousal = 1.0 - away_gain * home_edge;
         let home_team_id = field.home_team_id;
         for p in field.players.iter_mut().chain(field.substitutes.iter_mut()) {
             p.crowd_arousal = if p.team_id == home_team_id {

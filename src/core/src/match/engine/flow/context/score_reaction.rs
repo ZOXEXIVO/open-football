@@ -70,6 +70,49 @@ impl MatchContext {
         *OFF.get_or_init(|| std::env::var("OF_BOX_DEFENCE_OFF").is_ok())
     }
 
+    /// Diagnostic switch: with `OF_HOME_FLAT` set, EVERY home-advantage
+    /// channel is neutral — `crowd_arousal` is 1.0 for both sides, the
+    /// tactical press/risk/tempo lift is not applied, and the referee's
+    /// marginal-call bias is zeroed.
+    ///
+    /// This is the decomposition arm, and it exists because the home
+    /// split is the one distribution in the engine that has been
+    /// re-titrated three times without ever being decomposed. Home wins
+    /// measured 60.5% against a real 45%, and there are two very
+    /// different explanations: the crowd constant is too large, or
+    /// something in the engine is not side-swap-aware and hands the home
+    /// side an edge no constant controls. With every declared channel off
+    /// the remaining split answers that question directly — anything
+    /// materially above 50/25/25 with this set is a bug, not a constant.
+    ///
+    /// Read once per process. Debug infrastructure — do not remove.
+    pub fn home_flat() -> bool {
+        use std::sync::OnceLock;
+        static FLAT: OnceLock<bool> = OnceLock::new();
+        *FLAT.get_or_init(|| std::env::var("OF_HOME_FLAT").is_ok())
+    }
+
+    /// Titration override for the two `crowd_arousal` constants:
+    /// `OF_HOME_AROUSAL=<home>,<away>`, e.g. `0.06,0.035`.
+    ///
+    /// This constant has now needed re-titrating three times, always for
+    /// the same reason — it is not a property of home advantage, it is a
+    /// property of how strongly THIS engine converts an effective-skill
+    /// edge into goals, so it moves whenever the duel model does. Each
+    /// re-titration previously cost a rebuild per arm. It does not any
+    /// more.
+    ///
+    /// Read once per process. Debug infrastructure — do not remove.
+    pub fn home_arousal_override() -> Option<(f32, f32)> {
+        use std::sync::OnceLock;
+        static OVERRIDE: OnceLock<Option<(f32, f32)>> = OnceLock::new();
+        *OVERRIDE.get_or_init(|| {
+            let raw = std::env::var("OF_HOME_AROUSAL").ok()?;
+            let (h, a) = raw.split_once(',')?;
+            Some((h.trim().parse().ok()?, a.trim().parse().ok()?))
+        })
+    }
+
     /// Diagnostic switch: with `OF_BLOCK_RIGID` set, the positional block
     /// goes back to keeping its whole rectangle on the pitch by clamping
     /// its own CENTRE, instead of sliding freely and narrowing to fit.
