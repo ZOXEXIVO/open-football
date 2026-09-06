@@ -105,6 +105,42 @@ impl MatchContext {
         *FLAT.get_or_init(|| std::env::var("OF_AERIAL_ARRIVAL_FLAT").is_ok())
     }
 
+    /// Diagnostic switch: with `OF_DELIVERY_RELAUNCH` set,
+    /// `deliver_to_winner` solves a fresh ballistic arc for EVERY armed
+    /// delivery, the way it did before 2026-09-07 — including for a ball
+    /// already descending through the heading band a stride from the man,
+    /// where the solved arc is a metres-high pop written onto a ball
+    /// nobody touched.
+    ///
+    /// The A/B control for the cross contest riding the flight the ball
+    /// already has. It changes how many deliveries reach their man, which
+    /// is a population question about headers, corners and goals — so the
+    /// only honest way to answer it is the same binary run twice. Read
+    /// once per process. Debug infrastructure — do not remove.
+    pub fn delivery_relaunch_flat() -> bool {
+        use std::sync::OnceLock;
+        static FLAT: OnceLock<bool> = OnceLock::new();
+        *FLAT.get_or_init(|| std::env::var("OF_DELIVERY_RELAUNCH").is_ok())
+    }
+
+    /// Diagnostic switch: with `OF_CROSS_CLEAR_FLAT` set,
+    /// `resolve_cross_contest` applies its DEFENSIVE outcomes the way it
+    /// did before 2026-09-07 — the clearance and the hook written onto the
+    /// ball wherever it happens to be, with no defender required to be
+    /// near it and, when none is contesting at all, no defender required
+    /// to exist.
+    ///
+    /// The A/B control for the clearance happening at a man. It is the
+    /// majority outcome of every open-play cross, so what it does to
+    /// possession, second balls and the corner supply is a population
+    /// question. Read once per process. Debug infrastructure — do not
+    /// remove.
+    pub fn cross_clear_flat() -> bool {
+        use std::sync::OnceLock;
+        static FLAT: OnceLock<bool> = OnceLock::new();
+        *FLAT.get_or_init(|| std::env::var("OF_CROSS_CLEAR_FLAT").is_ok())
+    }
+
     /// Diagnostic switch: with `OF_HOME_FLAT` set, EVERY home-advantage
     /// channel is neutral — `crowd_arousal` is 1.0 for both sides, the
     /// tactical press/risk/tempo lift is not applied, and the referee's

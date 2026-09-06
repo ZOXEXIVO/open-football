@@ -902,36 +902,55 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
         // National-team football goes last, after the club lines it sits
         // outside of. A cap is earned for a country, so it is never
         // folded into the League row the way a continental club tie is —
-        // it gets its own line or none at all.
+        // it gets its own line or none at all. These rows are career
+        // totals, not this season's; see `international_rows`.
         ordered.extend(self.international_rows(player));
         ordered
     }
 
-    /// This season's national-team lines — senior above U21, then by
-    /// competition, so a player who turns out at both levels reads in a
-    /// stable order.
+    /// The player's national-team lines — one per (level, competition),
+    /// totalled across every season he has played it. Senior above U21,
+    /// then by competition, so a player who turns out at both levels
+    /// reads in a stable order.
     ///
-    /// A slice with no appearances yet is skipped rather than shown at
+    /// **Career-scoped on purpose**, unlike the club rows above it. The
+    /// caps line at the top of this page ("U21: 2 caps / 0 goals") is a
+    /// career figure, and these rows are the only place the reader can
+    /// see what is behind it. Scoping them to the current season instead
+    /// made the two disagree for most of the year: international
+    /// football happens in four windows a season, so a player whose last
+    /// cap was in March has an empty current-season slice from August
+    /// onwards — the caps line said 2 and the table said nothing. A club
+    /// row can be season-scoped because a club plays every week; a
+    /// national side cannot.
+    ///
+    /// A competition with no appearances is skipped rather than shown at
     /// zero: unlike the League row, which tells the reader which
     /// competition the player is registered for, an empty international
     /// row says nothing a call-up hasn't already said.
     fn international_rows(&self, player: &Player) -> Vec<CompetitionStatisticsRow> {
-        let season = InternationalStatistics::season_of(self.data.date.date());
-        let mut slices: Vec<&InternationalStatistics> = player
-            .international_statistics
-            .iter()
-            .filter(|s| s.season_start_year == season && s.statistics.total_games() > 0)
-            .collect();
-        slices.sort_by(|a, b| {
+        let mut grouped: Vec<(&InternationalStatistics, SeasonStatistics)> = Vec::new();
+        for slice in &player.international_statistics {
+            if slice.statistics.total_games() == 0 {
+                continue;
+            }
+            match grouped.iter_mut().find(|(head, _)| {
+                head.level == slice.level && head.competition_name == slice.competition_name
+            }) {
+                Some((_, totals)) => totals.merge_from(&slice.statistics),
+                None => grouped.push((slice, slice.statistics.clone())),
+            }
+        }
+        grouped.sort_by(|(a, _), (b, _)| {
             a.is_under21()
                 .cmp(&b.is_under21())
                 .then_with(|| a.competition_name.cmp(&b.competition_name))
         });
-        slices
+        grouped
             .into_iter()
-            .map(|s| CompetitionStatisticsRow {
-                competition_name: self.international_row_label(s),
-                stats: Self::to_dto(&s.statistics),
+            .map(|(head, totals)| CompetitionStatisticsRow {
+                competition_name: self.international_row_label(head),
+                stats: Self::to_dto(&totals),
             })
             .collect()
     }

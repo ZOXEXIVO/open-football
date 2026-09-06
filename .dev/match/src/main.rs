@@ -7776,6 +7776,46 @@ fn run_stats(n_matches: usize, level_a: Option<u8>, level_b: Option<u8>) {
                                     waited,
                                 );
                             }
+                            // …and WHAT THE ARMING DID TO THE BALL. The
+                            // arrival block above asks whether the ball
+                            // reaches the man; this asks what the engine
+                            // did to send it. A corner armed at the flag
+                            // is a KICK. A cross armed while descending
+                            // through head height a stride from the winner
+                            // is a second launch on a ball nobody touched
+                            // — and the apex the source asks for is
+                            // measured over the BALL, so `peak` is where
+                            // it really tops out.
+                            for (src, label) in [
+                                (0usize, "corner won"),
+                                (1, "corner behind"),
+                                (2, "cross won"),
+                                (3, "cross clear"),
+                                (4, "cross behind"),
+                            ] {
+                                let (n, moving, turn, hard, launch, peak, high, range, miss, kept) =
+                                    core::teleport::TeleportCensus::arming_snapshot(src);
+                                if n == 0 {
+                                    continue;
+                                }
+                                println!(
+                                    "        armed {label:>13}: {:>4} ({:.2}/match) at {:.2} m \
+                                     over {:.1} m — {:.0}% already flying, turned {:.0}° \
+                                     ({:.0}% past 90°), peak {:.2} m ({:.0}% over 5 m); \
+                                     its own flight lands {:.2} m from him, KEPT {:.0}%",
+                                    n,
+                                    n as f32 / n_matches as f32,
+                                    launch,
+                                    range,
+                                    moving as f32 * 100.0 / n as f32,
+                                    turn,
+                                    hard * 100.0,
+                                    peak,
+                                    high * 100.0,
+                                    miss,
+                                    kept * 100.0,
+                                );
+                            }
                         }
                         // ── THE TWENTY-TWO ──────────────────────────────
                         //

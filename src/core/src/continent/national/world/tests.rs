@@ -37,6 +37,7 @@ use crate::NationalTeam;
 use crate::NationalTeamLevel;
 use crate::Player;
 use crate::Team;
+use crate::TeamInfo;
 
 // ============================================================
 // Test fixtures
@@ -212,6 +213,55 @@ fn synth_score(home: u8, away: u8) -> Score {
     }
 }
 
+/// A 90-minute stat line with nothing on it — the base every fixture
+/// helper below builds from.
+fn empty_end_stats() -> PlayerMatchEndStats {
+    PlayerMatchEndStats {
+        shots_on_target: 0,
+        shots_total: 0,
+        passes_attempted: 0,
+        passes_completed: 0,
+        tackles: 0,
+        interceptions: 0,
+        saves: 0,
+        shots_faced: 0,
+        goals: 0,
+        assists: 0,
+        match_rating: 6.5,
+        raw_match_rating: 6.5,
+        xg: 0.0,
+        position_group: PlayerFieldPositionGroup::Forward,
+        fouls: 0,
+        yellow_cards: 0,
+        red_cards: 0,
+        minutes_played: 90,
+        key_passes: 0,
+        progressive_passes: 0,
+        progressive_carries: 0,
+        successful_dribbles: 0,
+        attempted_dribbles: 0,
+        successful_pressures: 0,
+        pressures: 0,
+        blocks: 0,
+        clearances: 0,
+        passes_into_box: 0,
+        crosses_attempted: 0,
+        crosses_completed: 0,
+        xg_chain: 0.0,
+        xg_buildup: 0.0,
+        miscontrols: 0,
+        heavy_touches: 0,
+        carry_distance: 0,
+        errors_leading_to_shot: 0,
+        errors_leading_to_goal: 0,
+        xg_prevented: 0.0,
+        xg_faced: 0.0,
+        offsides: 0,
+        own_goals: 0,
+        zone_stats: Default::default(),
+    }
+}
+
 fn synth_match_result(home_score: u8, away_score: u8, scorer_id: Option<u32>) -> MatchResultRaw {
     let mut player_stats: HashMap<u32, PlayerMatchEndStats> = HashMap::new();
     if let Some(id) = scorer_id {
@@ -220,46 +270,11 @@ fn synth_match_result(home_score: u8, away_score: u8, scorer_id: Option<u32>) ->
             PlayerMatchEndStats {
                 shots_on_target: 1,
                 shots_total: 1,
-                passes_attempted: 0,
-                passes_completed: 0,
-                tackles: 0,
-                interceptions: 0,
-                saves: 0,
-                shots_faced: 0,
                 goals: 1,
-                assists: 0,
                 match_rating: 8.0,
                 raw_match_rating: 8.0,
                 xg: 0.5,
-                position_group: PlayerFieldPositionGroup::Forward,
-                fouls: 0,
-                yellow_cards: 0,
-                red_cards: 0,
-                minutes_played: 90,
-                key_passes: 0,
-                progressive_passes: 0,
-                progressive_carries: 0,
-                successful_dribbles: 0,
-                attempted_dribbles: 0,
-                successful_pressures: 0,
-                pressures: 0,
-                blocks: 0,
-                clearances: 0,
-                passes_into_box: 0,
-                crosses_attempted: 0,
-                crosses_completed: 0,
-                xg_chain: 0.0,
-                xg_buildup: 0.0,
-                miscontrols: 0,
-                heavy_touches: 0,
-                carry_distance: 0,
-                errors_leading_to_shot: 0,
-                errors_leading_to_goal: 0,
-                xg_prevented: 0.0,
-                xg_faced: 0.0,
-                offsides: 0,
-                own_goals: 0,
-                zone_stats: Default::default(),
+                ..empty_end_stats()
             },
         );
     }
@@ -804,6 +819,83 @@ fn u21_match_stats_increment_only_u21_caps() {
     assert_eq!(slice.competition_name, "UEFA U21 Championship");
     assert_eq!(slice.statistics.played, 1);
     assert_eq!(slice.statistics.goals, 2);
+}
+
+/// The appearance map is what tells the world sweep which side a player
+/// turned out for, whether he started, and how many his team conceded.
+/// All three come from the match squads rather than from the player's
+/// passport or his club — a Russian on loan in Slovakia turning out for
+/// Russia must still be booked as a HOME STARTER for Russia.
+#[test]
+fn appearance_map_reads_side_and_starter_from_the_match_squads() {
+    // Home 1-2 away. Two players: a home starter and an away substitute.
+    let mut raw = synth_match_result(1, 2, Some(101));
+    raw.player_stats.insert(202, empty_end_stats());
+    raw.right_team_players.substitutes.push(202);
+    raw.player_of_the_match_id = Some(202);
+
+    let appearances = collect_international_appearances(&raw, 791, 799, 1, 2);
+
+    let home = appearances.get(&101).expect("home scorer must appear");
+    assert!(home.is_starter, "he is named in the home starting eleven");
+    assert_eq!(home.country_id, 791, "he played for the home country");
+    assert_eq!(home.team_goals_against, 2, "his side conceded the two");
+    assert!(!home.is_motm);
+
+    let away = appearances.get(&202).expect("away substitute must appear");
+    assert!(!away.is_starter, "he came off the bench");
+    assert_eq!(away.country_id, 799, "he played for the away country");
+    assert_eq!(away.team_goals_against, 1, "his side conceded the one");
+    assert!(away.is_motm);
+}
+
+/// A cap belongs to the player, not to whichever club employs him this
+/// month. The live-repro shape: a Russia U21 keeper loaned abroad, whose
+/// two caps must survive the loan out and the return — every club-side
+/// bucket is drained by those handlers, and this one must not be.
+#[test]
+fn international_record_survives_a_loan_and_the_return() {
+    let mut player = make_player(101, 1, PlayerPositionType::Goalkeeper);
+    let parent = TeamInfo {
+        name: "Dinamo Moscow".to_string(),
+        slug: "dinamo-moscow".to_string(),
+        reputation: 100,
+        league_name: "Premier League".to_string(),
+        league_slug: "russian-premier-league".to_string(),
+    };
+    let borrower = TeamInfo {
+        name: "Spartak Trnava".to_string(),
+        slug: "spartak-trnava".to_string(),
+        reputation: 80,
+        league_name: "Super Liga".to_string(),
+        league_slug: "slovak-super-liga".to_string(),
+    };
+    player
+        .statistics_history
+        .seed_initial_team(&parent, d(2026, 8, 1), false);
+
+    player
+        .international_statistics_mut(2026, NationalTeamLevel::Under21, 1, "UEFA U21 Championship")
+        .record_match_line(&empty_end_stats(), 6.7, true, false, true, 2);
+
+    player.on_loan(&parent, &borrower, 0.0, d(2027, 1, 15));
+    assert_eq!(
+        player.international_statistics.len(),
+        1,
+        "the loan out must not drain the international record"
+    );
+
+    player.on_loan_return(&borrower, &parent, d(2027, 6, 30));
+    let slice = player
+        .international_statistics
+        .first()
+        .expect("the cap must still be on the player after the return");
+    assert_eq!(slice.level, NationalTeamLevel::Under21);
+    assert_eq!(slice.statistics.played, 1);
+    assert_eq!(
+        slice.statistics.conceded, 2,
+        "a starting keeper carries the goals his side conceded"
+    );
 }
 
 /// Releasing U21 statuses clears `IntU21` for U21-selected players but

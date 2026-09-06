@@ -39,7 +39,8 @@ pub use contest::{
 // rotation they need from the same Magnus coefficient the physics
 // integrates, so the two can never drift apart.
 pub use flight::{
-    AIR_DRAG_PER_TICK, AerialDelivery, AerialOutcome, AerialReach, BallRoll, FlightProtection,
+    AIR_DRAG_PER_TICK, AerialDelivery, AerialOutcome, AerialReach, BallRoll, DeliveryIntent,
+    FlightProtection,
     GRAVITY_PER_TICK, GROUND_FRICTION, aerial, ballistics, motion, roll,
 };
 // `pub` for `dead_ball_diag` — the stall attribution counters are read by
@@ -1124,6 +1125,40 @@ impl Ball {
         Vector3::new(dir.x * speed, dir.y * speed, vz)
     }
 
+    /// **The velocity of a defensive header clearing the ball upfield**,
+    /// struck from `from`, travelling `range` units and peaking `apex`
+    /// metres over the strike.
+    ///
+    /// Extracted from `resolve_cross_contest` for the same reason
+    /// [`Self::hook_behind_velocity`] was extracted from `hook_it_behind`:
+    /// two callers need one piece of geometry. The resolver strikes it
+    /// where the ball already is when the clearer is on it, and
+    /// [`tick_aerial_delivery`](Self::tick_aerial_delivery) strikes it
+    /// where the ball actually arrives when he was a stride away and it
+    /// had to fly to him — and a clearance that differs between those two
+    /// is a clearance whose direction depends on which branch ran.
+    ///
+    /// Headers are cleared toward the touchline, not straight back down
+    /// the middle the attack came from.
+    pub fn headed_clear_velocity(
+        from: Vector3<f32>,
+        attacked_goal: Vector3<f32>,
+        range: f32,
+        apex: f32,
+    ) -> Vector3<f32> {
+        let vz = Self::launch_speed_for_apex(apex);
+        let hang = Self::hang_ticks(vz).max(1.0);
+        let speed = range / hang;
+        let away = (from - attacked_goal)
+            .try_normalize(0.01)
+            .unwrap_or_else(|| Vector3::new(1.0, 0.0, 0.0));
+        let lateral = if from.y >= attacked_goal.y { 1.0 } else { -1.0 };
+        let dir = Vector3::new(away.x + lateral * 0.15, away.y + lateral * 0.55, 0.0)
+            .try_normalize(0.01)
+            .unwrap_or(away);
+        Vector3::new(dir.x * speed, dir.y * speed, vz)
+    }
+
     /// **Somebody is on the ball: settle the throw-in in progress.**
     ///
     /// The throw belongs to its thrower until another player plays it
@@ -1694,5 +1729,84 @@ mod gk_handling_tests {
         // ball permanently unclaimable — the claim path skips it entirely.
         b.current_owner = None;
         assert!(b.check_invariants().is_err());
+    }
+}
+
+#[cfg(test)]
+mod headed_clear_tests {
+    use super::*;
+
+    /// The goal being defended, and the shape of the clearance asked for.
+    struct Box;
+
+    impl Box {
+        const GOAL: Vector3<f32> = Vector3::new(0.0, 272.0, 0.0);
+        const RANGE: f32 = 160.0;
+        const APEX: f32 = 6.0;
+        fn from(x: f32, y: f32) -> Vector3<f32> {
+            Vector3::new(x, y, 2.4)
+        }
+    }
+
+    /// A clearance goes AWAY from the goal it is defending and out toward
+    /// the touchline, never back across the face of it.
+    #[test]
+    fn a_headed_clear_goes_away_from_goal_and_toward_the_touchline() {
+        let out =
+            Ball::headed_clear_velocity(Box::from(96.0, 330.0), Box::GOAL, Box::RANGE, Box::APEX);
+        assert!(
+            out.x > 0.0,
+            "it has to travel away from its own line, not back over it: {out:?}"
+        );
+        assert!(out.y > 0.0, "and out to the side he is already on: {out:?}");
+        assert!(out.z > 0.0, "a headed clear is not a ground pass");
+    }
+
+    /// …and mirrored, from the other side of the same goal.
+    #[test]
+    fn the_touchline_it_picks_is_the_one_he_is_on() {
+        let low =
+            Ball::headed_clear_velocity(Box::from(96.0, 210.0), Box::GOAL, Box::RANGE, Box::APEX);
+        assert!(low.y < 0.0, "on the low side it clears low: {low:?}");
+    }
+
+    /// The apex is the one that was ordered and the range is carried by
+    /// the hang it buys — the pairing that stops a hand-written `z` from
+    /// reading as a sane number while meaning a forty-metre apex.
+    #[test]
+    fn the_arc_is_the_one_that_was_ordered() {
+        let out =
+            Ball::headed_clear_velocity(Box::from(96.0, 330.0), Box::GOAL, Box::RANGE, Box::APEX);
+        let apex = Ball::apex_for_launch(out.z);
+        assert!(
+            (apex - Box::APEX).abs() < 0.01,
+            "asked for {} m, got {apex} m",
+            Box::APEX
+        );
+        let ground = out.x.hypot(out.y) * Ball::hang_ticks(out.z);
+        assert!(
+            (ground - Box::RANGE).abs() < 1.0,
+            "asked for {}u of ground, the hang carries {ground}u",
+            Box::RANGE
+        );
+    }
+
+    /// **Where he meets it decides where it goes** — which is the whole
+    /// reason this is a function of `from` and not a vector frozen at the
+    /// contest. A delivery that has to fly to the clearer strikes its
+    /// clearance from where the ball REACHES him, a second later and
+    /// several metres on.
+    #[test]
+    fn where_he_meets_it_decides_where_it_goes() {
+        // On his own six-yard line, and out on the penalty spot.
+        let deep =
+            Ball::headed_clear_velocity(Box::from(20.0, 300.0), Box::GOAL, Box::RANGE, Box::APEX);
+        let out =
+            Ball::headed_clear_velocity(Box::from(200.0, 300.0), Box::GOAL, Box::RANGE, Box::APEX);
+        assert!(
+            out.x > deep.x * 1.5,
+            "a header met on the penalty spot goes UPFIELD; one met on the \
+             six-yard line has to go sideways to get out at all: {deep:?} vs {out:?}"
+        );
     }
 }

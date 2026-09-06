@@ -800,15 +800,28 @@ impl Actors {
     /// see `Track::TELEPORT_SPEED`, which holds the same line for the drawn
     /// position.
     const BALL_TELEPORT: f32 = 45.0;
-    /// How close the ball has to be to count as struck by this player — within
-    /// a stride of him.
+    /// How close the ball has to be to count as struck by this player.
     ///
-    /// `pub(crate)` because the soundtrack's own softer detector uses the same
-    /// reach — see [`Soundtrack::brushed`](crate::sound::matchday::Soundtrack).
-    /// It deliberately does NOT reuse the speed gates below, which are what it
-    /// exists to be gentler than, but "close enough to have touched it" is one
-    /// question with one answer.
-    pub(crate) const STRIKE_REACH: f32 = 1.7;
+    /// **1.875 m is the engine's own `KICKABLE_DISTANCE`** (15 u), and that
+    /// is the whole justification: the rig must be able to attribute
+    /// anything the engine allowed a man to do. It used to be 1.7 m — "a
+    /// stride" — which is a sane number and the wrong one, because it left
+    /// a 17.5 cm shell around every player in which the engine grants a
+    /// touch and the picture draws nobody touching anything.
+    ///
+    /// Measured off a recorded match with
+    /// `docs/census/invisible_bounce_census.js`, which walks every sharp
+    /// turn of the ball and asks how far the nearest man was: after the
+    /// engine-side fixes of 2026-09-07 the whole airborne residue was
+    /// gone, and **every ground-level survivor sat between 1.86 and
+    /// 1.92 m** — the band between the two constants, and nothing else.
+    ///
+    /// `pub(crate)` because the soundtrack's own softer detector uses the
+    /// same reach — see [`Soundtrack::brushed`](crate::sound::matchday::Soundtrack).
+    /// It deliberately does NOT reuse the speed gates below, which are what
+    /// it exists to be gentler than, but "close enough to have touched it"
+    /// is one question with one answer.
+    pub(crate) const STRIKE_REACH: f32 = 1.875;
     /// And how fast it has to be leaving. Below this it is a touch, a trap or
     /// a ball rolling past, none of which a player opens his body up for.
     const STRUCK: f32 = 7.0;

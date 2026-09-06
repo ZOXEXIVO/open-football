@@ -157,6 +157,40 @@ pub enum AerialOutcome {
         attacked_goal: Vector3<f32>,
         field_height: f32,
     },
+    /// The defender won it and heads it away upfield.
+    ///
+    /// Carried as an INTENT rather than a solved vector for the same
+    /// reason [`Self::HookedBehind`] is: the clearance is struck from
+    /// wherever the ball actually reaches him, and a velocity frozen at
+    /// the contest would be aimed from where the ball was a second
+    /// earlier. See [`Ball::headed_clear_velocity`].
+    Cleared {
+        attacked_goal: Vector3<f32>,
+        /// How far the clearance travels, in units.
+        range: f32,
+        /// How high it goes over the strike, in metres.
+        apex: f32,
+    },
+}
+
+/// **What the man who won an aerial contest is going to do with the ball**
+/// — the caller's half of [`AerialOutcome`], stated before the geometry
+/// that depends on where the ball actually arrives is known.
+///
+/// The two are separate because a contest is decided at one place and
+/// applied at another. `resolve_corner_contest` elects a winner while the
+/// ball is still at the flag; the header, the hook or the clearance is
+/// struck a second and a half later, twenty-five metres away, and every
+/// one of those is aimed from where the ball IS when he meets it.
+#[derive(Clone, Copy, Debug)]
+pub enum DeliveryIntent {
+    /// He attacks it. The ball is held in the heading band for him and his
+    /// own heading state strikes it through the normal shot pipeline.
+    Header,
+    /// He hooks it over his own byline and concedes the corner.
+    HookedBehind,
+    /// He heads it away upfield — `range` units at `apex` metres.
+    Cleared { range: f32, apex: f32 },
 }
 
 /// A delivery whose aerial contest is already decided, in the air on its
@@ -223,6 +257,51 @@ pub struct AerialDelivery {
 }
 
 impl Ball {
+    /// **Where this ball's own flight next comes down through
+    /// `arrival_height`** — the point a delivery would reach if nothing
+    /// re-aimed it, plus how many ticks it takes to get there.
+    ///
+    /// This is the question
+    /// [`deliver_to_winner`](crate::r#match::engine::engine::FootballEngine::deliver_to_winner)
+    /// has to ask before it solves an arc. A contest resolved at the
+    /// STRIKE — a corner, still at the flag with the winner twenty-five
+    /// metres away — genuinely has to launch the ball. A contest resolved
+    /// MID-FLIGHT — an open-play cross, already descending through head
+    /// height a stride from the man — does not: the ball is already going
+    /// to him, and writing a fresh launch onto it turns a ball nobody has
+    /// touched.
+    ///
+    /// `None` when the ball is not on a flight that gets there — it
+    /// reaches the turf first, or is rolling along it already.
+    pub fn natural_drop(&self, arrival_height: f32) -> Option<(Vector3<f32>, u32)> {
+        // Already under the band on the way down: it is there now.
+        if self.velocity.z <= 0.0 && self.position.z <= arrival_height {
+            return Some((self.position, 0));
+        }
+        let horizontal = self.velocity.x.hypot(self.velocity.y);
+        // Straight down is a legitimate flight and has no heading — there
+        // is nowhere for it to land but under itself.
+        let heading = Vector3::new(self.velocity.x, self.velocity.y, 0.0)
+            .try_normalize(1.0e-4)
+            .unwrap_or_else(Vector3::zeros);
+        let (range, ticks) =
+            Self::ballistic_arrival(horizontal, self.velocity.z, self.position.z, arrival_height);
+        // `ballistic_arrival` reports the turf, not the band, for a ball
+        // that never comes down through it — a flight that ends on the
+        // deck has no drop point at heading height.
+        if self.position.z + Self::apex_for_launch(self.velocity.z) < arrival_height {
+            return None;
+        }
+        Some((
+            Vector3::new(
+                self.position.x + heading.x * range,
+                self.position.y + heading.y * range,
+                arrival_height,
+            ),
+            ticks,
+        ))
+    }
+
     /// Carry a decided aerial contest through its flight, and apply its
     /// outcome the tick the ball actually gets there.
     ///
@@ -367,6 +446,19 @@ impl Ball {
                 self.clear_pending_pass_metadata();
                 Self::hook_behind_velocity(self.position, attacked_goal, field_height)
             }
+            AerialOutcome::Cleared {
+                attacked_goal,
+                range,
+                apex,
+            } => {
+                // His to clear, not his to attack — the same disarming the
+                // hooked branch does, and for the same reason: this is a
+                // clearance, so nothing here is anybody's chance.
+                self.aerial_contest_winner = None;
+                self.pass_target_player_id = None;
+                self.clear_pending_pass_metadata();
+                Self::headed_clear_velocity(self.position, attacked_goal, range, apex)
+            }
         };
         self.aerial_delivery = None;
     }
@@ -477,6 +569,82 @@ mod aerial_reach_tests {
         assert!(
             AerialReach::header_leap_for(z, jumping) > 0.0,
             "but heading it means jumping"
+        );
+    }
+}
+
+#[cfg(test)]
+mod natural_drop_tests {
+    use super::*;
+
+    /// A ball, put where the test wants it and sent where the test says.
+    struct Flight;
+
+    impl Flight {
+        fn at(position: Vector3<f32>, velocity: Vector3<f32>) -> Ball {
+            let mut ball = Ball::with_coord(840.0, 545.0);
+            ball.position = position;
+            ball.velocity = velocity;
+            ball
+        }
+    }
+
+    /// The case the whole fix turns on: a cross descending through the
+    /// heading band is ALREADY where the delivery was going to put it, so
+    /// its drop point is under itself and no arc has to be solved.
+    #[test]
+    fn a_ball_already_in_the_band_drops_where_it_is() {
+        let ball = Flight::at(
+            Vector3::new(400.0, 250.0, 2.3),
+            Vector3::new(0.6, -0.2, -0.05),
+        );
+        let (drop, ticks) = ball.natural_drop(2.5).expect("it is in the band now");
+        assert_eq!(ticks, 0, "it has already arrived — there is nothing to fly");
+        assert_eq!(drop, ball.position);
+    }
+
+    /// …and one still coming down through it lands AHEAD of itself, along
+    /// its own heading. This is the aim point a kept delivery is given.
+    #[test]
+    fn a_ball_still_coming_down_lands_ahead_of_itself() {
+        let ball = Flight::at(
+            Vector3::new(400.0, 250.0, 3.0),
+            Vector3::new(0.8, 0.0, -0.04),
+        );
+        let (drop, ticks) = ball.natural_drop(2.5).expect("it comes down through it");
+        assert!(ticks > 0, "it has not got there yet");
+        assert!(
+            drop.x > ball.position.x,
+            "it drops down the line it is travelling, not behind itself: {drop:?}"
+        );
+        assert_eq!(drop.z, 2.5, "the drop is BY DEFINITION at the band");
+    }
+
+    /// A ball whose whole flight stays under the band never reaches it —
+    /// and answering "under itself" there would let a delivery ride a
+    /// flight that is really a ball rolling along the floor.
+    #[test]
+    fn a_flight_that_never_climbs_to_the_band_has_no_drop() {
+        let ball = Flight::at(
+            Vector3::new(400.0, 250.0, 0.3),
+            Vector3::new(1.2, 0.0, 0.02),
+        );
+        assert!(
+            ball.natural_drop(2.5).is_none(),
+            "a ball peaking well under head height never comes down through it"
+        );
+    }
+
+    /// A corner, one tick off the taker's boot: climbing, and below the
+    /// band. This is the arm that MUST still solve an arc — the winner is
+    /// twenty-five metres away and the ball's own flight is nowhere near
+    /// him — so it must not read as "already there".
+    #[test]
+    fn a_corner_leaving_the_flag_is_not_already_in_the_band() {
+        let ball = Flight::at(Vector3::new(419.0, 5.0, 2.1), Vector3::new(1.4, 1.0, 0.18));
+        assert!(
+            ball.velocity.z > 0.0,
+            "the discriminant is CLIMBING, and this is the case it protects"
         );
     }
 }

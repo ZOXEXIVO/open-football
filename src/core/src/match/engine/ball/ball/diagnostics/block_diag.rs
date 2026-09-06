@@ -116,21 +116,21 @@ pub static NEAREST_DEF_AT_STRIKE: [AtomicU64; 6] = [const { AtomicU64::new(0) };
 // came off him. Index 0 is the shot block, 1 the pass block — see
 // [`BlockDiag::CHANNELS`].
 /// Blocks resolved, per channel.
-pub static CONTACTS: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+pub static CONTACTS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 /// …of which arrived through the deferred `blocked_by` commitment
 /// rather than firing on the tick the roll was won.
-pub static CONTACT_DEFERRED: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+pub static CONTACT_DEFERRED: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 /// Ball height at the contact, metres x100, summed.
-pub static CONTACT_HEIGHT_X100: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+pub static CONTACT_HEIGHT_X100: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 /// Distance across the grass from the blocker, metres x100, summed.
-pub static CONTACT_GAP_X100: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+pub static CONTACT_GAP_X100: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 /// Contacts above the channel's OWN stated ceiling — the number the
 /// roll checked and the contact did not.
-pub static CONTACT_OVER_CEILING: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+pub static CONTACT_OVER_CEILING: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 /// Contacts the replay rig cannot attribute to anybody: further than
 /// `Actors::STRIKE_REACH` across the grass, or above `Actors::OVERHEAD`.
 /// **This is the reported artefact, counted.**
-pub static CONTACT_UNDRAWABLE: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+pub static CONTACT_UNDRAWABLE: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 /// Height bands, shared by both channels:
 /// `deck (<0.4) | shin-to-volley (<1.45) | head (<2.2) | jump (<2.8) | OVER`.
 pub static CONTACT_HEIGHT_BANDS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
@@ -141,8 +141,14 @@ pub static CONTACT_HEIGHT_BANDS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 
 pub struct BlockDiag;
 
 impl BlockDiag {
-    /// Labels for the contact census's two channels, in index order.
-    pub const CHANNELS: [&'static str; 2] = ["shot", "pass"];
+    /// Labels for the contact census channels, in index order.
+    pub const CHANNELS: [&'static str; 5] = [
+        "shot",
+        "pass",
+        "cross clear",
+        "cross behind",
+        "cross keeper",
+    ];
     /// …and for [`CONTACT_HEIGHT_BANDS`].
     pub const HEIGHT_BANDS: [&'static str; 5] = ["deck", "<1.45m", "<2.2m", "<2.8m", "over 2.8m"];
 
@@ -161,9 +167,17 @@ impl BlockDiag {
         /// 1u = 0.125 m.
         const M_PER_U: f32 = 0.125;
         /// The rig's own reach and ceiling — see the module note. Copied
-        /// rather than shared because the viewer is a different crate
-        /// and this is a measurement OF the disagreement.
-        const DRAWN_REACH: f32 = 1.7;
+        /// rather than shared because the viewer is a different crate and
+        /// this is a measurement OF the disagreement.
+        ///
+        /// ⚠ **Keep this equal to `Actors::STRIKE_REACH`.** It was 1.7
+        /// until 2026-09-07, when the rig was raised to the engine's own
+        /// `KICKABLE_DISTANCE` (15u = 1.875 m) because the 17.5 cm between
+        /// them was a shell around every player in which the engine grants
+        /// a touch and the picture draws nobody touching anything. A
+        /// counter that keeps the old number reports contacts as
+        /// undrawable that the rig now draws.
+        const DRAWN_REACH: f32 = 1.875;
         const DRAWN_CEILING: f32 = 2.8;
 
         let height = height_m;

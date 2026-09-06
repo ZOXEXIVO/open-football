@@ -8,6 +8,7 @@
 //! winner's own heading state then strikes it through the normal shot /
 //! save pipeline, so goals, shots, xG and saves all credit as usual.
 
+use crate::r#match::engine::ball::ball::DeliveryIntent;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::corner_shape::CornerShape;
 use crate::r#match::engine::engine::*;
@@ -300,8 +301,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 taker,
                 Self::CORNER_DROP_BEHIND,
                 Self::CORNER_APEX,
+                DeliveryIntent::Header,
                 true,
-                true,
+                0,
             );
         } else if let Some(clearer) = best_def {
             // **The repeat corner.** The defending side wins the header,
@@ -336,8 +338,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     taker,
                     Self::CORNER_DROP_BEHIND,
                     Self::CORNER_APEX,
+                    DeliveryIntent::HookedBehind,
                     false,
-                    false,
+                    1,
                 );
             }
         }

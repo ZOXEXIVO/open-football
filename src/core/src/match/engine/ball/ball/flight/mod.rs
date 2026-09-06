@@ -18,6 +18,6 @@ pub mod ballistics;
 pub mod motion;
 pub mod roll;
 
-pub use aerial::{AerialDelivery, AerialOutcome, AerialReach};
+pub use aerial::{AerialDelivery, AerialOutcome, AerialReach, DeliveryIntent};
 pub use ballistics::{AIR_DRAG_PER_TICK, FlightProtection, GRAVITY_PER_TICK, GROUND_FRICTION};
 pub use roll::BallRoll;

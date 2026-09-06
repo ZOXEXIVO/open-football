@@ -13,7 +13,9 @@
 use crate::r#match::engine::ball::ball::Ball;
 #[cfg(feature = "match-logs")]
 use crate::r#match::engine::ball::ball::teleport as tc;
-use crate::r#match::engine::ball::ball::{AerialDelivery, AerialOutcome, FlightProtection};
+use crate::r#match::engine::ball::ball::{
+    AerialDelivery, AerialOutcome, AerialReach, DeliveryIntent, FlightProtection,
+};
 use crate::r#match::engine::engine::*;
 use nalgebra::Vector3;
 #[cfg(feature = "match-logs")]
@@ -87,9 +89,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         previous_owner: Option<u32>,
         behind: f32,
         apex: f32,
-        outcome_is_header: bool,
+        intent: DeliveryIntent,
         force_heading: bool,
+        source: usize,
     ) {
+        // Read only by the arming census.
+        #[cfg(not(feature = "match-logs"))]
+        let _ = source;
         /// Head height, in metres. One tick above the intercept window,
         /// which is what the corner path's own comment sized it at.
         const HEADING_HEIGHT: f32 = 2.5;
@@ -113,18 +119,34 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             HEADING_HEIGHT,
         );
         // The calibrated hang, unchanged: −0.02 m/tick walks the ball down
-        // through the [1.4, 2.5] heading band over ~40 ticks and 0.12
+        // through the [1.4, 2.5] heading band over ~40 ticks, and 0.12
         // u/tick of goalward drift keeps it inside the 6u header reach for
         // all of them, so ANY winner's state machine gets a valid tick.
-        let outcome = if outcome_is_header {
-            AerialOutcome::Header {
+        //
+        // Each intent becomes the outcome that will be struck WHERE THE
+        // BALL ARRIVES — the geometry of a hook and of a clearance both
+        // depend on where he actually meets it, which is not where the
+        // contest was decided. See [`DeliveryIntent`].
+        let outcome_is_header = matches!(intent, DeliveryIntent::Header);
+        let outcome = match intent {
+            DeliveryIntent::Header => AerialOutcome::Header {
                 drift: Vector3::new(dir.x * 0.12, dir.y * 0.12, -0.02),
-            }
-        } else {
-            AerialOutcome::HookedBehind {
+            },
+            DeliveryIntent::HookedBehind => AerialOutcome::HookedBehind {
                 attacked_goal,
                 field_height: field.size.height as f32,
-            }
+            },
+            // `clear_apex` and not `apex`: the outer one is the height of
+            // the DELIVERY to him, this is the height of the clearance he
+            // strikes when it gets there.
+            DeliveryIntent::Cleared {
+                range,
+                apex: clear_apex,
+            } => AerialOutcome::Cleared {
+                attacked_goal,
+                range,
+                apex: clear_apex,
+            },
         };
 
         let b = &mut field.ball;
@@ -138,8 +160,96 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             b.aerial_contest_winner = Some(winner_id);
         }
 
-        match Ball::ballistic_launch_arriving_at(b.position, target, apex) {
-            Some((velocity, ticks)) => {
+        // ⚠ **A ball already in the heading band is not launched again.**
+        //
+        // `ballistic_launch_arriving_at` solves the arc from where the ball
+        // is NOW, and its apex is measured over the BALL rather than over
+        // the ground. That is right for a contest resolved AT THE STRIKE —
+        // a corner, armed a tick after the taker hit it, climbing through
+        // 2 m with the winner twenty-seven metres away, where the solved
+        // arc IS the corner and turns the ball 6°. It is wrong for one
+        // resolved MID-FLIGHT. `resolve_cross_contest` fires on a ball
+        // already descending through [1.5, 2.9] m with the winner inside
+        // 4.3 m, and there the same call is a second launch on a ball
+        // nobody touched.
+        //
+        // Measured over 200 matches before this existed, per arming:
+        //
+        // | source | armed at | to travel | turned | peak |
+        // |---|---|---|---|---|
+        // | corner won | 2.07 m | 27.3 m | 6° | 7.07 m |
+        // | corner behind | 2.07 m | 23.2 m | 3° | 7.07 m |
+        // | **open cross** | **2.82 m** | **3.0 m** | **41°, 19% past 90°** | **6.82 m** |
+        //
+        // Four metres straight up to travel three, 4.45 times a match,
+        // with nobody within a stride of it. That is the reported *"the
+        // ball bounces off an invisible object above the player"*.
+        //
+        // The ball is already where the delivery was going to put it, so
+        // it keeps its own flight and the delivery is aimed at where that
+        // flight actually arrives. `PlayerReach::can_strike` at the
+        // arrival is still what makes the winner reach it, and the
+        // deadline is still what ends it if he never does.
+        //
+        // `OF_DELIVERY_RELAUNCH=1` restores the unconditional launch.
+        let kept = if MatchContext::delivery_relaunch_flat() {
+            None
+        } else {
+            // Descending, and no higher than a man can head it: this
+            // contest was resolved in mid-flight, not at a strike.
+            b.natural_drop(HEADING_HEIGHT)
+                .filter(|_| b.velocity.z <= 0.0 && b.position.z <= AerialReach::HIGHEST)
+        };
+        let launch = Ball::ballistic_launch_arriving_at(b.position, target, apex);
+
+        #[cfg(feature = "match-logs")]
+        {
+            /// Metres per game unit on the horizontal axes — the census
+            /// reports distances in metres and these two are in units.
+            const M_PER_U: f32 = 0.125;
+            /// Under this the ball is not meaningfully travelling, so the
+            /// arc it is given cannot be said to have TURNED it.
+            /// 0.05 u/tick is 0.6 m/s.
+            const ARMED_IN_FLIGHT: f32 = 0.05;
+
+            // What the arming ACTUALLY did, not what the unused arc would
+            // have done: a flight that is kept turns the ball by nothing
+            // and peaked before it ever got here.
+            let flat = Vector3::new(b.velocity.x, b.velocity.y, 0.0);
+            let moving = flat.norm() > ARMED_IN_FLIGHT;
+            let turn = launch
+                .filter(|_| kept.is_none())
+                .map(|(v, _)| Vector3::new(v.x, v.y, 0.0))
+                .filter(|to| moving && to.norm() > 1.0e-4)
+                .map(|to| flat.angle(&to).to_degrees())
+                .unwrap_or(0.0);
+            let peak = if kept.is_some() {
+                b.position.z
+            } else {
+                b.position.z + apex
+            };
+            tc::TeleportCensus::note_delivery_arming(
+                source,
+                moving,
+                turn,
+                b.position.z,
+                peak,
+                (target.x - b.position.x).hypot(target.y - b.position.y) * M_PER_U,
+                b.natural_drop(HEADING_HEIGHT).map(|(drop, _)| {
+                    (drop.x - winner_pos.x).hypot(drop.y - winner_pos.y) * M_PER_U
+                }),
+                kept.is_some(),
+            );
+        }
+
+        // The ball's own flight first, the solved arc second. Both arms
+        // arm the SAME delivery — what differs is whether the velocity is
+        // rewritten and where the aim point is.
+        match kept
+            .map(|(drop, ticks)| (b.velocity, drop, ticks))
+            .or_else(|| launch.map(|(velocity, ticks)| (velocity, target, ticks)))
+        {
+            Some((velocity, aim, ticks)) => {
                 #[cfg(feature = "match-logs")]
                 tc::TeleportCensus::note_delivery_armed(ticks);
                 b.velocity = velocity;
@@ -149,7 +259,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 b.flags.in_flight_state = ticks as usize + GRACE_TICKS as usize;
                 b.aerial_delivery = Some(AerialDelivery {
                     winner_id,
-                    target,
+                    target: aim,
                     outcome,
                     arrival_height: HEADING_HEIGHT,
                     deadline_tick: b.current_tick_cached + ticks as u64 + GRACE_TICKS,
@@ -157,9 +267,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 });
             }
             None => {
-                // The ball is already standing on the target — there is no
-                // arc to solve and nothing to fly. Apply the outcome now;
-                // the "relocation" is under a unit.
+                // Neither arm has anything to fly: the ball is not in the
+                // band, and it is already standing on the target so there
+                // is no arc to solve either. Apply the outcome now; the
+                // "relocation" is under a unit.
                 // A `Header` outcome is a HOLD in the heading band, over
                 // in a tick — its own guard (`aerial_contest_winner`) is
                 // what protects it. A `HookedBehind` is a real 5 m arc,
@@ -177,6 +288,22 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     } => {
                         b.velocity =
                             Ball::hook_behind_velocity(b.position, attacked_goal, field_height);
+                        FlightProtection::for_launch(b.velocity, b.position.z)
+                    }
+                    // …and so is a headed clear: a 6 m arc that has to
+                    // travel twenty metres, which nothing may claim off
+                    // him while it is still going up.
+                    AerialOutcome::Cleared {
+                        attacked_goal,
+                        range,
+                        apex: clear_apex,
+                    } => {
+                        b.velocity = Ball::headed_clear_velocity(
+                            b.position,
+                            attacked_goal,
+                            range,
+                            clear_apex,
+                        );
                         FlightProtection::for_launch(b.velocity, b.position.z)
                     }
                 };

@@ -396,6 +396,78 @@ impl TeleportCensus {
             DELIVERIES[4].load(Ordering::Relaxed) as f32 / 100.0 / arrived.max(1) as f32,
         )
     }
+    /// **What the arming did to a ball that was already flying.**
+    ///
+    /// `deliver_to_winner` solves an arc and writes it onto the ball. When
+    /// the contest resolved at the strike that IS the kick; when it
+    /// resolved mid-flight it is a launch nobody applied, and the ball
+    /// turns in the air off nothing. `turn` is the angle between the old
+    /// and the new heading in degrees, `peak` the height the new arc tops
+    /// out at over the GROUND (the apex the callers pass is measured over
+    /// the BALL, which is why a delivery armed at 2.5 m peaks a good deal
+    /// higher than the number in the source), and `natural_miss` how far
+    /// the ball's own flight would have come down from the winner — the
+    /// figure that says whether the re-aim was needed at all.
+    ///
+    /// `source`: 0 corner won, 1 corner hooked behind, 2 cross won, 3 cross
+    /// cleared, 4 cross hooked behind.
+    pub fn note_delivery_arming(
+        source: usize,
+        moving: bool,
+        turn: f32,
+        launch_z: f32,
+        peak: f32,
+        range: f32,
+        natural_miss: Option<f32>,
+        kept: bool,
+    ) {
+        let c = &ARMINGS[source.min(ARMING_SOURCES - 1)];
+        c[0].fetch_add(1, Ordering::Relaxed);
+        if moving {
+            c[1].fetch_add(1, Ordering::Relaxed);
+            c[2].fetch_add((turn.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+            if turn > 90.0 {
+                c[3].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        c[4].fetch_add((launch_z.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+        c[5].fetch_add((peak.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+        if peak > 5.0 {
+            c[6].fetch_add(1, Ordering::Relaxed);
+        }
+        c[7].fetch_add((range.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+        if let Some(miss) = natural_miss {
+            c[8].fetch_add(1, Ordering::Relaxed);
+            c[9].fetch_add((miss.max(0.0) * 100.0) as u64, Ordering::Relaxed);
+        }
+        if kept {
+            c[10].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// `(armed, in flight when armed, mean turn in degrees, share turned
+    /// past 90 degrees, mean launch height, mean peak over the ground,
+    /// share peaking above 5 m, mean range in metres, mean natural miss in
+    /// metres, share whose own flight was KEPT)`.
+    pub fn arming_snapshot(source: usize) -> (u64, u64, f32, f32, f32, f32, f32, f32, f32, f32) {
+        let c = &ARMINGS[source.min(ARMING_SOURCES - 1)];
+        let n = c[0].load(Ordering::Relaxed);
+        let moving = c[1].load(Ordering::Relaxed);
+        let natural = c[8].load(Ordering::Relaxed);
+        let per = |i: usize, d: u64| c[i].load(Ordering::Relaxed) as f32 / 100.0 / d.max(1) as f32;
+        (
+            n,
+            moving,
+            per(2, moving),
+            c[3].load(Ordering::Relaxed) as f32 / moving.max(1) as f32,
+            per(4, n),
+            per(5, n),
+            c[6].load(Ordering::Relaxed) as f32 / n.max(1) as f32,
+            per(7, n),
+            per(9, natural),
+            c[10].load(Ordering::Relaxed) as f32 / n.max(1) as f32,
+        )
+    }
 
     pub fn reset() {
         for i in 0..N {
@@ -409,6 +481,11 @@ impl TeleportCensus {
         }
         for c in DELIVERIES.iter() {
             c.store(0, Ordering::Relaxed);
+        }
+        for s in ARMINGS.iter() {
+            for c in s.iter() {
+                c.store(0, Ordering::Relaxed);
+            }
         }
         for i in 0..EVENTS {
             EVENT_JUMPS[i].store(0, Ordering::Relaxed);
@@ -430,6 +507,26 @@ impl TeleportCensus {
 /// that times out has moved the artefact rather than removed it: the ball
 /// no longer teleports onto his head, and he never heads it either.
 pub static DELIVERIES: [AtomicU64; 9] = [const { AtomicU64::new(0) }; 9];
+
+/// How many callers arm an aerial delivery: the corner contest's won and
+/// hooked-behind branches, and the open-play cross's won, cleared and
+/// hooked-behind ones.
+pub const ARMING_SOURCES: usize = 5;
+
+/// **What each delivery's arming did to the ball**, per source:
+/// `(armed, in flight when armed, Σ turn degrees ×100, turned past 90°,
+/// Σ launch height ×100, Σ peak over the ground ×100, peaked above 5 m,
+/// Σ range in metres ×100, natural drops found, Σ natural miss ×100,
+/// flights KEPT)`.
+///
+/// [`DELIVERIES`] asks whether the ball reaches the man. This asks the
+/// question one step earlier and on the other side of the flight — **what
+/// the engine did to the ball to send it**. A corner armed at the flag is
+/// a kick; a cross armed while descending onto the winner's head is a
+/// second launch on a ball nobody touched, and the two are indistinguishable
+/// in `DELIVERIES` because both arrive.
+pub static ARMINGS: [[AtomicU64; 11]; ARMING_SOURCES] =
+    [const { [const { AtomicU64::new(0) }; 11] }; ARMING_SOURCES];
 
 /// Splits the ball's own pass into its three exits.
 ///
