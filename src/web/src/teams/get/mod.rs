@@ -128,6 +128,9 @@ pub async fn team_get_action(
     let captain_id = team.captain_id;
     let vice_captain_id = team.vice_captain_id;
 
+    // Potential stars are this coach's own read of each player's
+    // ceiling — the viewer has no club, so every roster shows what its
+    // coach believes, mistakes included.
     let head_coach = team.staffs.head_coach();
 
     let mut players: Vec<TeamPlayer> = team

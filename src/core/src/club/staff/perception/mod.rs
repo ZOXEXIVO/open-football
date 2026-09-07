@@ -1,5 +1,6 @@
 pub mod ability;
 pub mod bias;
+pub mod eye;
 
 pub mod potential;
 pub mod profile;
@@ -8,6 +9,7 @@ pub mod utils;
 // Re-export key types at module level
 pub use ability::{AbilityEstimator, DevelopmentFormEvidence};
 pub use bias::{PlayerBias, PlayerImpression, RecentMove, RecentMoveType};
+pub use eye::CoachEye;
 pub use potential::{EstimationContext, PotentialEstimate, PotentialEstimator};
 pub use profile::{CoachProfile, PerceptionLens};
 pub use utils::{date_to_week, seeded_decision, sigmoid_probability};

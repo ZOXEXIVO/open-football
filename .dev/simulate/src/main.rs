@@ -24,8 +24,15 @@
 //!       ./target/profiling/dev_simulate 60
 
 use core::PlayerFieldPositionGroup;
+use core::club::staff::perception::{
+    AbilityEstimator, CoachEye, EstimationContext, PotentialEstimator,
+};
 use core::r#match::FieldSquad;
-use core::{FootballSimulator, PerformanceProfiler, SimulationResult, SimulatorData};
+use core::utils::DateUtils;
+use core::{
+    FootballSimulator, PerformanceProfiler, SimulationResult, SimulatorData,
+    TeamType,
+};
 use database::{DatabaseGenerator, DatabaseLoader};
 use mimalloc::MiMalloc;
 
@@ -284,6 +291,23 @@ fn main() {
         "world generated in {:.2} s — simulating {days} days",
         gen_start.elapsed().as_secs_f64(),
     );
+
+    // `dev_simulate stars [team-slug] [days]` — the potential-star census:
+    // how the coach's displayed potential stars relate to the hidden PA
+    // across the day-0 world (and after `days` ticks when given).
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(|a| a == "stars").unwrap_or(false) {
+        let slug = args.iter().skip(1).find(|a| a.parse::<u32>().is_err()).cloned();
+        let ticks = args.iter().skip(1).find_map(|a| a.parse::<u32>().ok()).unwrap_or(0);
+        for _ in 0..ticks {
+            harness.tick();
+        }
+        StarCensus::take(&harness.data).print();
+        if let Some(slug) = slug {
+            StarCensus::print_team(&harness.data, &slug);
+        }
+        return;
+    }
 
     harness.bench(days);
 }
@@ -741,5 +765,382 @@ impl YouthSquadCensus {
             "world growth",
             Self::pct(after.world_players, self.world_players.max(1)) - 100.0,
         );
+    }
+}
+
+/// Accuracy counters for one read model against the hidden PA.
+#[derive(Default, Clone)]
+struct ReadAccuracy {
+    n: u32,
+    exact: u32,
+    within_half: u32,
+    off_full: u32,
+    under_full: u32,
+    over_full: u32,
+    shown: [u32; 6],
+    sx: f64,
+    sy: f64,
+    sxx: f64,
+    syy: f64,
+    sxy: f64,
+}
+
+impl ReadAccuracy {
+    fn add(&mut self, shown_halves: u8, truth_halves: u8, read: u8, pa: u8) {
+        self.n += 1;
+        let d = shown_halves as i16 - truth_halves as i16;
+        if d == 0 {
+            self.exact += 1;
+        }
+        if d.abs() <= 1 {
+            self.within_half += 1;
+        }
+        if d.abs() >= 2 {
+            self.off_full += 1;
+        }
+        if d <= -2 {
+            self.under_full += 1;
+        }
+        if d >= 2 {
+            self.over_full += 1;
+        }
+        self.shown[(shown_halves / 2) as usize] += 1;
+        let (x, y) = (read as f64, pa as f64);
+        self.sx += x;
+        self.sy += y;
+        self.sxx += x * x;
+        self.syy += y * y;
+        self.sxy += x * y;
+    }
+
+    fn corr(&self) -> f64 {
+        let n = self.n as f64;
+        if n < 2.0 {
+            return 0.0;
+        }
+        let cov = self.sxy / n - (self.sx / n) * (self.sy / n);
+        let vx = self.sxx / n - (self.sx / n).powi(2);
+        let vy = self.syy / n - (self.sy / n).powi(2);
+        if vx <= 0.0 || vy <= 0.0 {
+            0.0
+        } else {
+            cov / (vx * vy).sqrt()
+        }
+    }
+
+    fn pct(&self, c: u32) -> f64 {
+        if self.n == 0 {
+            0.0
+        } else {
+            c as f64 / self.n as f64 * 100.0
+        }
+    }
+
+    fn line(&self, label: &str) -> String {
+        format!(
+            "{label:<22} {:>6} {:>5.2} {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}%",
+            self.n,
+            self.corr(),
+            self.pct(self.exact),
+            self.pct(self.within_half),
+            self.pct(self.off_full),
+            self.pct(self.under_full),
+            self.pct(self.over_full),
+        )
+    }
+
+    fn header() -> String {
+        format!(
+            "{:<22} {:>6} {:>5} {:>7} {:>7} {:>7} {:>7} {:>7}",
+            "", "n", "corr", "exact", "<=half", ">=1*", "under", "over"
+        )
+    }
+}
+
+/// One age band of the potential-star census.
+#[derive(Default, Clone)]
+struct StarBand {
+    n: u32,
+    /// Players judged by the stub coach (vacant bench) -> observer-free read.
+    stub_coach: u32,
+    /// Hidden PA by whole stars, for comparison.
+    truth: [u32; 6],
+    /// Displayed CURRENT ability, whole stars.
+    current: [u32; 6],
+    /// Confusion of the LIVE read: truth star (row) x shown star (column).
+    confusion: [[u32; 6]; 6],
+    live: ReadAccuracy,
+    proposed: ReadAccuracy,
+    /// Proposed read split by the judging coach: JPP <=7 / 8..13 / >=14.
+    proposed_by_jpp: [ReadAccuracy; 3],
+    sum_pa: f64,
+    sum_ca: f64,
+    sum_visible: f64,
+    sum_credible: f64,
+    sum_ceiling: f64,
+    sum_estimated: f64,
+    sum_proposed: f64,
+}
+
+/// Potential-star census: the web's `PotentialStarsView` recomputed here
+/// against every player in the world, next to the hidden PA it is never
+/// allowed to read. Answers "does a 5-star boy show 5 stars to a coach who
+/// can judge him?" with numbers instead of one roster page.
+struct StarCensus {
+    bands: [StarBand; 5],
+}
+
+impl StarCensus {
+    const BAND_LABELS: [&'static str; 5] = ["<=17", "18-20", "21-23", "24-28", "29+"];
+    const JPP_LABELS: [&'static str; 3] = ["JPP <=7", "JPP 8-13", "JPP >=14"];
+
+    fn band(age: u8) -> usize {
+        match age {
+            0..=17 => 0,
+            18..=20 => 1,
+            21..=23 => 2,
+            24..=28 => 3,
+            _ => 4,
+        }
+    }
+
+    fn jpp_bucket(jpp: u8) -> usize {
+        match jpp {
+            0..=7 => 0,
+            8..=13 => 1,
+            _ => 2,
+        }
+    }
+
+    /// The web's `StarRating::from_ability_scale`: 1..200 -> 0..=10 halves.
+    fn halves(value: u8) -> u8 {
+        (((value as f32 / 200.0) * 10.0).round().clamp(0.0, 10.0) as u8).min(10)
+    }
+
+    /// `StarRating` orders by (full, half); the web floors potential at the
+    /// current-ability stars with `Ord::max` on that pair, which is the same
+    /// as max on halves.
+    fn shown_halves(current: u8, credible: u8) -> u8 {
+        Self::halves(credible).max(Self::halves(current))
+    }
+
+    fn take(data: &SimulatorData) -> Self {
+        let now = data.date.date();
+        let mut bands: [StarBand; 5] = Default::default();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for team in &club.teams.teams {
+                        let coach = team.staffs.head_coach();
+                        let is_main = team.team_type == TeamType::Main;
+                        let jpp = coach.staff_attributes.knowledge.judging_player_potential;
+                        for p in team.players.iter() {
+                            let age = DateUtils::age(p.birth_date, now);
+                            let b = &mut bands[Self::band(age)];
+                            let pa = p.player_attributes.potential_ability;
+                            let ca = p.player_attributes.current_ability;
+                            let visible = PotentialEstimator::visible_ability(p);
+                            let level = AbilityEstimator::observable_level(p);
+                            let ceiling = PotentialEstimator::observable_ceiling(p, now);
+                            let (credible, estimated, proposed) = if coach.id == 0 {
+                                b.stub_coach += 1;
+                                (ceiling, ceiling, ceiling)
+                            } else {
+                                let ctx = EstimationContext {
+                                    observation_count: 20,
+                                    is_main_team: is_main,
+                                    ..EstimationContext::default()
+                                };
+                                let e = PotentialEstimator::estimate_for_staff(p, coach, &ctx, now);
+                                let eye = CoachEye::read(p, coach, &EstimationContext { observation_count: 20, is_main_team: is_main, ..EstimationContext::default() }, now);
+                                (e.credible_potential, e.estimated_potential, eye)
+                            };
+                            let shown = Self::shown_halves(level, credible);
+                            let shown_new = Self::shown_halves(level, proposed);
+                            let truth = Self::halves(pa);
+                            let cur = Self::halves(level);
+                            b.n += 1;
+                            b.truth[(truth / 2) as usize] += 1;
+                            b.current[(cur / 2) as usize] += 1;
+                            b.confusion[(truth / 2) as usize][(shown / 2) as usize] += 1;
+                            b.live.add(shown, truth, credible, pa);
+                            b.proposed.add(shown_new, truth, proposed, pa);
+                            if coach.id != 0 {
+                                b.proposed_by_jpp[Self::jpp_bucket(jpp)]
+                                    .add(shown_new, truth, proposed, pa);
+                            }
+                            b.sum_pa += pa as f64;
+                            b.sum_ca += ca as f64;
+                            b.sum_visible += visible as f64;
+                            b.sum_credible += credible as f64;
+                            b.sum_ceiling += ceiling as f64;
+                            b.sum_estimated += estimated as f64;
+                            b.sum_proposed += proposed as f64;
+                        }
+                    }
+                }
+            }
+        }
+        StarCensus { bands }
+    }
+
+    fn row(label: &str, hist: &[u32; 6], n: u32) -> String {
+        let pct = |c: u32| if n == 0 { 0.0 } else { c as f64 / n as f64 * 100.0 };
+        format!(
+            "{label:<14} {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}%",
+            pct(hist[0]),
+            pct(hist[1]),
+            pct(hist[2]),
+            pct(hist[3]),
+            pct(hist[4]),
+            pct(hist[5]),
+        )
+    }
+
+    fn print(&self) {
+        println!("\n--- POTENTIAL STARS vs HIDDEN PA (coach read with 20 observations) ---");
+        println!(
+            "{:<7} {:>7} {:>6} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+            "age", "players", "stub%", "PA", "CA", "visible", "ceiling", "estim", "credib", "eye"
+        );
+        for (i, b) in self.bands.iter().enumerate() {
+            let n = b.n.max(1) as f64;
+            println!(
+                "{:<7} {:>7} {:>5.1}% {:>7.1} {:>7.1} {:>7.1} {:>7.1} {:>7.1} {:>7.1} {:>7.1}",
+                Self::BAND_LABELS[i],
+                b.n,
+                b.stub_coach as f64 / n * 100.0,
+                b.sum_pa / n,
+                b.sum_ca / n,
+                b.sum_visible / n,
+                b.sum_ceiling / n,
+                b.sum_estimated / n,
+                b.sum_credible / n,
+                b.sum_proposed / n,
+            );
+        }
+        for (i, b) in self.bands.iter().enumerate() {
+            println!(
+                "\n[{}] whole-star distribution (columns 0..5 stars), n={}",
+                Self::BAND_LABELS[i],
+                b.n
+            );
+            println!(
+                "{:<14} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7}",
+                "", "0", "1", "2", "3", "4", "5"
+            );
+            println!("{}", Self::row("hidden PA", &b.truth, b.n));
+            println!("{}", Self::row("shown cur", &b.current, b.n));
+            println!("{}", Self::row("live pot", &b.live.shown, b.n));
+            println!("{}", Self::row("eye pot", &b.proposed.shown, b.n));
+            println!("{}", ReadAccuracy::header());
+            println!("{}", b.live.line("live (credible)"));
+            println!("{}", b.proposed.line("coach eye (proposed)"));
+            for (j, acc) in b.proposed_by_jpp.iter().enumerate() {
+                println!("{}", acc.line(&format!("  eye, {}", Self::JPP_LABELS[j])));
+            }
+            if i <= 1 {
+                println!("live confusion: rows = hidden-PA stars, columns = shown potential stars (row %)");
+                for (t, row) in b.confusion.iter().enumerate() {
+                    let rn: u32 = row.iter().sum();
+                    println!("{}", Self::row(&format!("PA {t}* n={rn}"), row, rn));
+                }
+            }
+        }
+    }
+
+    fn print_team(data: &SimulatorData, slug: &str) {
+        let now = data.date.date();
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for team in &club.teams.teams {
+                        if team.slug != slug {
+                            continue;
+                        }
+                        let coach = team.staffs.head_coach();
+                        let is_main = team.team_type == TeamType::Main;
+                        // The same man with his judging_player_potential
+                        // forced, so the sweep isolates the judge from the roster.
+                        let mut weak = coach.clone();
+                        weak.staff_attributes.knowledge.judging_player_potential = 3;
+                        let mut elite = coach.clone();
+                        elite.staff_attributes.knowledge.judging_player_potential = 18;
+                        println!(
+                            "\n--- {} ({:?}) coach id={} JPP={} JPA={} WwY={} ---",
+                            team.name,
+                            team.team_type,
+                            coach.id,
+                            coach.staff_attributes.knowledge.judging_player_potential,
+                            coach.staff_attributes.knowledge.judging_player_ability,
+                            coach.staff_attributes.coaching.working_with_youngsters,
+                        );
+                        for t in &club.teams.teams {
+                            let room: Vec<String> = t
+                                .staffs
+                                .staffs
+                                .iter()
+                                .map(|s| {
+                                    format!(
+                                        "{:?}:{}",
+                                        s.contract.as_ref().map(|c| c.position.clone()),
+                                        s.staff_attributes.knowledge.judging_player_potential
+                                    )
+                                })
+                                .collect();
+                            println!("staff room {:?} (JPP): {}", t.team_type, room.join(", "));
+                        }
+                        println!(
+                            "{:<22} {:>3} {:>4} {:>4} {:>4} {:>5} {:>5} {:>5} {:>5} {:>4} | {:>5} {:>5} {:>5} | {:>6} {:>6} {:>6}",
+                            "name", "age", "PA", "CA", "vis", "level", "ceil", "estim", "cred",
+                            "unc", "eye", "eye3", "eye18", "cur*", "live*", "eye*"
+                        );
+                        for p in team.players.iter() {
+                            let age = DateUtils::age(p.birth_date, now);
+                            let visible = PotentialEstimator::visible_ability(p);
+                            let level = AbilityEstimator::observable_level(p);
+                            let ceiling = PotentialEstimator::observable_ceiling(p, now);
+                            let ctx = EstimationContext {
+                                observation_count: 20,
+                                is_main_team: is_main,
+                                ..EstimationContext::default()
+                            };
+                            let e = PotentialEstimator::estimate_for_staff(p, coach, &ctx, now);
+                            let credible = if coach.id == 0 {
+                                ceiling
+                            } else {
+                                e.credible_potential
+                            };
+                            let eye = CoachEye::read(p, coach, &EstimationContext { observation_count: 20, is_main_team: is_main, ..EstimationContext::default() }, now);
+                            let eye3 = CoachEye::read(p, &weak, &ctx, now);
+                            let eye18 = CoachEye::read(p, &elite, &ctx, now);
+                            let shown = Self::shown_halves(level, credible);
+                            let shown_eye = Self::shown_halves(level, eye);
+                            println!(
+                                "{:<22} {:>3} {:>4} {:>4} {:>4} {:>5} {:>5} {:>5} {:>5} {:>4} | {:>5} {:>5} {:>5} | {:>6.1} {:>6.1} {:>6.1}",
+                                p.full_name.display_last_name(),
+                                age,
+                                p.player_attributes.potential_ability,
+                                p.player_attributes.current_ability,
+                                visible,
+                                level,
+                                ceiling,
+                                e.estimated_potential,
+                                credible,
+                                e.uncertainty,
+                                eye,
+                                eye3,
+                                eye18,
+                                Self::halves(level) as f32 / 2.0,
+                                shown as f32 / 2.0,
+                                shown_eye as f32 / 2.0,
+                            );
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+        println!("\nno team with slug {slug}");
     }
 }

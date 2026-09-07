@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 use core::Player;
 use core::Staff;
-use core::club::staff::perception::{AbilityEstimator, EstimationContext, PotentialEstimator};
+use core::club::staff::perception::{AbilityEstimator, CoachEye, EstimationContext};
 
 /// Star rating on a half-star scale — 0..=10 halves render as 0..=5 stars.
 /// Precomputed into full/half/empty segment counts so templates stay a
@@ -27,14 +27,22 @@ impl StarRating {
 }
 
 /// Star-rating projector for the web crate. Absolute scale only —
-/// no club-relative baselines. Both rows are *perception*, never the
-/// hidden digits: ability comes from the coach-observable level
-/// (visible skills + match results + training + reputation), potential
-/// from staff-assessed projections. The biological `current_ability` /
-/// `potential_ability` numbers never leak onto a page.
+/// no club-relative baselines. Ability is the coach-observable level
+/// (visible skills + match results + training + reputation), never the
+/// hidden `current_ability` digit. Potential is the judge's eye: the
+/// team's own head coach reads the player's ceiling and gets it wrong by
+/// as much as his `judging_player_potential`, the player's age and his
+/// own biases allow (see [`CoachEye`]). The viewer has no club of his
+/// own, so every page shows what that club's coach believes — mistakes
+/// included. The read is licensed for display only; club decisions keep
+/// the observable estimator.
 pub struct PotentialStarsView;
 
 impl PotentialStarsView {
+    /// The club's own coach has watched this player for a long time — a
+    /// saturated observation count, not a scout's cold first read.
+    const OWN_PLAYER_OBSERVATIONS: u8 = 20;
+
     /// Stars from the coach-observable current level — what any
     /// competent observer concludes from watching the player play,
     /// train, and perform. Never the hidden CA digit.
@@ -42,44 +50,53 @@ impl PotentialStarsView {
         StarRating::from_ability_scale(AbilityEstimator::observable_level(player))
     }
 
-    /// Staff-assessed potential stars: the observer's *credible*
-    /// projection (uncertainty-discounted believed ceiling) on the
-    /// 1..200 scale. The employing club's coach watches this player
-    /// every day — a saturated observation count, not a scout's cold
-    /// first read — so the error band is tight and the stars stay
-    /// stable. `is_main_team` marks whether the player is in the
-    /// observer's daily training group (false for academy kids and
-    /// loaned-out players assessed from the parent club). Floored at
-    /// the current-ability stars: staff don't tell you the ceiling is
-    /// below where the player already plays.
+    /// Potential stars as this coach reads them. `is_main_team` marks
+    /// whether the player is in the coach's daily training group (false
+    /// for academy kids and loaned-out players assessed from the parent
+    /// club) — a coach sees less of those unless he has an eye for
+    /// youth. Floored at the current-ability stars: nobody tells you the
+    /// ceiling is below where the player already plays. A vacant bench
+    /// resolves to the stub staff (id 0), one shared phantom judge; that
+    /// falls back to the market consensus instead.
     pub fn potential_by_staff(
         player: &Player,
         staff: &Staff,
         is_main_team: bool,
         date: NaiveDate,
     ) -> StarRating {
-        // A vacant bench resolves to the stub staff (id 0) — one shared
-        // phantom judge whose noise seed is identical world-wide. Fall
-        // back to the observer-free ceiling instead of pretending a
-        // coach exists.
+        StarRating::from_ability_scale(Self::potential_value_by_staff(
+            player,
+            staff,
+            is_main_team,
+            date,
+        ))
+        .max(Self::current(player))
+    }
+
+    /// The 1..200 value behind [`Self::potential_by_staff`], for pages
+    /// that sort by the same read they display.
+    pub fn potential_value_by_staff(
+        player: &Player,
+        staff: &Staff,
+        is_main_team: bool,
+        date: NaiveDate,
+    ) -> u8 {
         if staff.id == 0 {
-            return Self::potential_absolute(player, date);
+            return CoachEye::consensus(player, date);
         }
         let ctx = EstimationContext {
-            observation_count: 20,
+            observation_count: Self::OWN_PLAYER_OBSERVATIONS,
             is_main_team,
             ..EstimationContext::default()
         };
-        let estimate = PotentialEstimator::estimate_for_staff(player, staff, &ctx, date);
-        StarRating::from_ability_scale(estimate.credible_potential).max(Self::current(player))
+        CoachEye::read(player, staff, &ctx, date)
     }
 
-    /// Observer-free potential stars — the "any reasonable observer"
-    /// ceiling for free-agent and retired views where no employing
-    /// club exists. Same floor as the staff read.
+    /// Judge-free potential stars — the market's consensus read for
+    /// free-agent and retired views where no employing club exists.
+    /// Same floor as the coach read.
     pub fn potential_absolute(player: &Player, date: NaiveDate) -> StarRating {
-        let ceiling = PotentialEstimator::observable_ceiling(player, date);
-        StarRating::from_ability_scale(ceiling).max(Self::current(player))
+        StarRating::from_ability_scale(CoachEye::consensus(player, date)).max(Self::current(player))
     }
 }
 

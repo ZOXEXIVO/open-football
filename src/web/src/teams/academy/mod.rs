@@ -13,7 +13,6 @@ use core::SimulatorData;
 use core::club::academy::{
     AcademyDevelopmentIdentity, AcademyPlayerPhase, AcademyReadinessScorer, AcademyTier,
 };
-use core::club::staff::perception::PotentialEstimator;
 use core::utils::DateUtils;
 use serde::Deserialize;
 
@@ -167,7 +166,9 @@ pub async fn team_academy_action(
                 potential_ability: PotentialStarsView::potential_by_staff(
                     p, head_coach, false, now,
                 ),
-                potential_sort: PotentialEstimator::observable_ceiling(p, now),
+                potential_sort: PotentialStarsView::potential_value_by_staff(
+                    p, head_coach, false, now,
+                ),
                 conditions: (100f32 * (p.player_attributes.condition as f32 / 10000.0)) as u8,
                 phase_key: phase_i18n_key(phase),
                 phase_sort: phase.index(),
