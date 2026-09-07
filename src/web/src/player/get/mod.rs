@@ -902,36 +902,72 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
         // National-team football goes last, after the club lines it sits
         // outside of. A cap is earned for a country, so it is never
         // folded into the League row the way a continental club tie is —
-        // it gets its own line or none at all. These rows are career
-        // totals, not this season's; see `international_rows`.
+        // it gets its own line or none at all. Scoped to the season in
+        // progress like every row above it; see `international_rows`.
         ordered.extend(self.international_rows(player));
         ordered
     }
 
-    /// The player's national-team lines — one per (level, competition),
-    /// totalled across every season he has played it. Senior above U21,
-    /// then by competition, so a player who turns out at both levels
-    /// reads in a stable order.
+    /// The player's national-team lines for the season in progress —
+    /// one per (level, competition), merged across every side he turned
+    /// out for in it. Senior above U21, then by competition, so a player
+    /// called up at both levels reads in a stable order.
     ///
-    /// **Career-scoped on purpose**, unlike the club rows above it. The
-    /// caps line at the top of this page ("U21: 2 caps / 0 goals") is a
-    /// career figure, and these rows are the only place the reader can
-    /// see what is behind it. Scoping them to the current season instead
-    /// made the two disagree for most of the year: international
-    /// football happens in four windows a season, so a player whose last
-    /// cap was in March has an empty current-season slice from August
-    /// onwards — the caps line said 2 and the table said nothing. A club
-    /// row can be season-scoped because a club plays every week; a
-    /// national side cannot.
+    /// **Season-scoped, exactly like the club rows above it.** These
+    /// were career totals for one day and the reader saw a U21 line on
+    /// a 26-year-old's current-season panel years after his last call-up
+    /// (user: "I see U21 stats in player profile after few years of this
+    /// games — it must be clear on new player season with other league
+    /// statistics"). The panel answers one question — what has he done
+    /// this campaign — and a row that never clears is not an answer to
+    /// it. The career figure lives in the caps line at the top of the
+    /// page, which is where a reader looks for a career figure.
+    ///
+    /// The cost is real and accepted: a national side plays in four
+    /// windows a year, so a player whose last cap was in March shows no
+    /// row here from August onwards while the caps line still reads 2.
+    /// That is the same bargain the League row makes — this season, or
+    /// nothing — and consistency across the panel beats a row that
+    /// keeps a stale figure alive to stay agreeable.
+    ///
+    /// The boundary is `InternationalStatistics::season_of`, the stamp
+    /// the write site uses, and never the projection's
+    /// `current_season_year`: that one's frozen-league floor is a
+    /// club-ledger correction for calendar-year leagues and would ask
+    /// for a year no cap was ever stamped with.
     ///
     /// A competition with no appearances is skipped rather than shown at
     /// zero: unlike the League row, which tells the reader which
     /// competition the player is registered for, an empty international
     /// row says nothing a call-up hasn't already said.
     fn international_rows(&self, player: &Player) -> Vec<CompetitionStatisticsRow> {
+        let season = InternationalStatistics::season_of(self.data.date.date());
+        Self::international_slices(&player.international_statistics, season)
+            .into_iter()
+            .map(|(head, totals)| CompetitionStatisticsRow {
+                competition_name: self.international_row_label(head),
+                stats: Self::to_dto(&totals),
+            })
+            .collect()
+    }
+
+    /// The season filter and the grouping of [`international_rows`], split
+    /// out from the label resolution so it can be tested without a world
+    /// behind it: every slice stamped with `season`, merged into one entry
+    /// per (level, competition), senior side first.
+    ///
+    /// Merging across `country_id` is deliberate. The slice key includes the
+    /// country because a naturalised player can be capped by two of them, and
+    /// two rows both reading "UEFA U21 Championship" would only puzzle the
+    /// reader; the head slice keeps the first country, which is all the label
+    /// fallback needs.
+    fn international_slices(
+        slices: &[InternationalStatistics],
+        season: u16,
+    ) -> Vec<(&InternationalStatistics, SeasonStatistics)> {
         let mut grouped: Vec<(&InternationalStatistics, SeasonStatistics)> = Vec::new();
-        for slice in &player.international_statistics {
-            if slice.statistics.total_games() == 0 {
+        for slice in slices {
+            if slice.season_start_year != season || slice.statistics.total_games() == 0 {
                 continue;
             }
             match grouped.iter_mut().find(|(head, _)| {
@@ -947,12 +983,6 @@ impl<'a> PlayerOverviewStatsBuilder<'a> {
                 .then_with(|| a.competition_name.cmp(&b.competition_name))
         });
         grouped
-            .into_iter()
-            .map(|(head, totals)| CompetitionStatisticsRow {
-                competition_name: self.international_row_label(head),
-                stats: Self::to_dto(&totals),
-            })
-            .collect()
     }
 
     /// Display label for a national-team line: the competition it was
@@ -1165,5 +1195,103 @@ fn get_position_map(player: &Player) -> PositionMapDto {
         fr: active.contains(&PlayerPositionType::ForwardRight),
         st: active.contains(&PlayerPositionType::Striker),
         primary,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::NationalTeamLevel;
+
+    /// The one youth competition the game configures; see `uefa_u21_championship_config`.
+    const CUP: &str = "UEFA U21 Championship";
+
+    fn slice(
+        season: u16,
+        level: NationalTeamLevel,
+        country_id: u32,
+        competition: &str,
+        played: u16,
+        goals: u16,
+    ) -> InternationalStatistics {
+        let mut statistics = SeasonStatistics::default();
+        statistics.played = played;
+        statistics.goals = goals;
+        InternationalStatistics {
+            season_start_year: season,
+            level,
+            country_id,
+            competition_name: competition.to_string(),
+            statistics,
+        }
+    }
+
+    /// The reported bug: a U21 line was still on the panel seasons after the
+    /// last call-up, sitting beside a League row that had cleared on 1 August.
+    /// The panel is a current-campaign view; a national-team row has to obey
+    /// the same boundary as the club rows it is printed under.
+    #[test]
+    fn only_this_seasons_caps_reach_the_overview_panel() {
+        let slices = vec![
+            slice(2024, NationalTeamLevel::Under21, 1, CUP, 4, 1),
+            slice(2026, NationalTeamLevel::Under21, 1, CUP, 2, 0),
+        ];
+
+        let rows = PlayerOverviewStatsBuilder::international_slices(&slices, 2026);
+        assert_eq!(rows.len(), 1, "both seasons reached the panel");
+        assert_eq!(rows[0].1.played, 2);
+        assert_eq!(rows[0].1.goals, 0);
+
+        // A season he played nothing in shows no row at all, rather than a
+        // zero line kept alive from the season before.
+        assert!(
+            PlayerOverviewStatsBuilder::international_slices(&slices, 2027).is_empty(),
+            "a season with no caps still produced a row"
+        );
+    }
+
+    /// Senior above U21, and a level played in the same season as another is
+    /// its own line — a senior debut must not be swallowed by the U21 row the
+    /// player was still filling that spring.
+    #[test]
+    fn the_levels_are_separate_lines_in_a_stable_order() {
+        let slices = vec![
+            slice(2026, NationalTeamLevel::Under21, 1, CUP, 3, 2),
+            slice(2026, NationalTeamLevel::Senior, 1, "FIFA World Cup", 1, 0),
+        ];
+
+        let rows = PlayerOverviewStatsBuilder::international_slices(&slices, 2026);
+        assert_eq!(rows.len(), 2);
+        assert!(!rows[0].0.is_under21(), "the senior line must come first");
+        assert_eq!(rows[0].1.played, 1);
+        assert!(rows[1].0.is_under21());
+        assert_eq!(rows[1].1.goals, 2);
+    }
+
+    /// Two countries, one competition, one season — one row. The slice key
+    /// carries `country_id` so a naturalised player's caps stay attributable,
+    /// but the panel has no column for it and two identically-labelled rows
+    /// would read as a duplicate.
+    #[test]
+    fn caps_for_two_countries_in_one_competition_merge_into_one_row() {
+        let slices = vec![
+            slice(2026, NationalTeamLevel::Under21, 1, CUP, 2, 1),
+            slice(2026, NationalTeamLevel::Under21, 7, CUP, 1, 1),
+        ];
+
+        let rows = PlayerOverviewStatsBuilder::international_slices(&slices, 2026);
+        assert_eq!(rows.len(), 1, "the two countries produced two rows");
+        assert_eq!(rows[0].1.played, 3);
+        assert_eq!(rows[0].1.goals, 2);
+    }
+
+    /// A call-up that never became an appearance is not a statistics row.
+    /// `record_match_line` only runs for a player with a stat line, so a
+    /// 0-app slice means he travelled and sat; the squad page is where that
+    /// belongs.
+    #[test]
+    fn a_slice_with_no_appearances_is_skipped() {
+        let slices = vec![slice(2026, NationalTeamLevel::Under21, 1, CUP, 0, 0)];
+        assert!(PlayerOverviewStatsBuilder::international_slices(&slices, 2026).is_empty());
     }
 }

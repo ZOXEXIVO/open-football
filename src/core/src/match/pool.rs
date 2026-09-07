@@ -1,3 +1,4 @@
+use crate::MatchRuntime;
 use crate::r#match::engine::FootballEngine;
 use crate::r#match::{Match, MatchDispatcherRegistry, MatchResult, MatchResultRaw, MatchSquad};
 use rayon::ThreadPool;
@@ -44,12 +45,20 @@ impl MatchPlayEnginePool {
         &self,
         matches: Vec<(usize, MatchSquad, MatchSquad, bool)>,
     ) -> Vec<(usize, MatchResultRaw)> {
+        // Recordings follow the process-global flag here too — see
+        // `play_squads_with_knockout`.
+        let recordings = MatchRuntime::recordings_mode();
         self.pool.install(|| {
             matches
                 .into_par_iter()
                 .map(|(idx, home, away, is_knockout)| {
-                    let result =
-                        FootballEngine::<840, 545>::play(home, away, false, false, is_knockout);
+                    let result = FootballEngine::<840, 545>::play(
+                        home,
+                        away,
+                        recordings,
+                        false,
+                        is_knockout,
+                    );
                     (idx, result)
                 })
                 .collect()
@@ -105,12 +114,25 @@ impl MatchPlayEnginePool {
             },
             None => matches,
         };
+        // The same flag `Match::play` reads, decided the same way. A
+        // national-team fixture is the one match kind that never becomes a
+        // `Match`, and this path hardcoded `false` from the day it was
+        // written — so every international, senior and U21 alike, was played
+        // with the recorder switched off, and the match page had nothing to
+        // offer but "Nothing was recorded in this match". A cap is not a
+        // lesser fixture than a league game.
+        let recordings = MatchRuntime::recordings_mode();
         self.pool.install(|| {
             matches
                 .into_par_iter()
                 .map(|(idx, home, away, is_knockout)| {
-                    let result =
-                        FootballEngine::<840, 545>::play(home, away, false, false, is_knockout);
+                    let result = FootballEngine::<840, 545>::play(
+                        home,
+                        away,
+                        recordings,
+                        false,
+                        is_knockout,
+                    );
                     (idx, result)
                 })
                 .collect()
