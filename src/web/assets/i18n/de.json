@@ -456,6 +456,7 @@
   "dec_loan_listed": "Auf Leihliste gesetzt",
   "dec_pre_contract_agreed": "Vorvertrag vereinbart",
   "dec_reason_aging_declining": "Alternder Spieler, sinkender Wert",
+  "dec_reason_below_club_level": "Unter dem Niveau des Vereins",
   "dec_reason_aging_surplus": "Alternder Spieler, überzählig",
   "dec_reason_below_avg_surplus": "Unterdurchschnittlich auf überbesetzter Position",
   "dec_reason_blocked_by_better": "Von besseren Spielern auf gleicher Position blockiert",

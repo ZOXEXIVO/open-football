@@ -456,6 +456,7 @@
   "dec_loan_listed": "Colocado na lista de empréstimos",
   "dec_pre_contract_agreed": "Pré-contrato acertado",
   "dec_reason_aging_declining": "Jogador envelhecendo, valor em declínio",
+  "dec_reason_below_club_level": "Abaixo do nível do clube",
   "dec_reason_aging_surplus": "Jogador veterano, excedente no elenco",
   "dec_reason_below_avg_surplus": "Abaixo da média em posição excedente",
   "dec_reason_blocked_by_better": "Bloqueado por jogadores melhores na mesma posição",

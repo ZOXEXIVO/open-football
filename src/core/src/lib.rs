@@ -229,6 +229,7 @@ pub use club::{
     PlayerRelationshipChangeResult,
     PlayerResult,
     PlayerSkills,
+    ClubLevelAnchor,
     PlayerSquadStatus,
     PlayerStatCompetitionKind,
     PlayerStatLedgerEntry,

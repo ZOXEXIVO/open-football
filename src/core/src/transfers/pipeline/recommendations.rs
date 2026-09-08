@@ -99,6 +99,14 @@ pub(in crate::transfers::pipeline) struct BuyerNeedPicture {
 }
 
 impl BuyerNeedPicture {
+    /// Points a staff tip may fall short of an open request's ability bar
+    /// and still count as an answer to it — a scout's read is noisy, a
+    /// twenty-point miss is not noise. Without it an open "quality
+    /// upgrade" request at a giant was answered by any tip in the group:
+    /// the request said 168, the tip said 146, and the club bought the
+    /// tip because "it had an open request there".
+    pub const STAFF_TIP_ABILITY_TOLERANCE: u8 = 5;
+
     /// Which of this candidate's roles to judge the move against.
     ///
     /// Judging him by the group his primary label happens to fall in reads a
@@ -1207,6 +1215,23 @@ impl PipelineProcessor {
                                 && r.status != TransferRequestStatus::Abandoned
                         })
                     };
+                    // The lowest bar among those requests. A request is an
+                    // ask for a LEVEL, not for a body in the group: the
+                    // improvement gate below waives "must be an upgrade"
+                    // for a candidate the club has an open request for,
+                    // and that waiver must only ever reach the players the
+                    // request actually describes.
+                    let open_request_bar = |group: PlayerFieldPositionGroup| -> Option<u8> {
+                        plan.transfer_requests
+                            .iter()
+                            .filter(|r| {
+                                r.position.position_group() == group
+                                    && r.status != TransferRequestStatus::Fulfilled
+                                    && r.status != TransferRequestStatus::Abandoned
+                            })
+                            .map(|r| r.min_ability)
+                            .min()
+                    };
 
                     // Built ONCE per club: `buyer_has_aging_starter` walks the
                     // whole squad, so resolving a candidate's judged role must
@@ -1285,7 +1310,15 @@ impl PipelineProcessor {
                                     .get(&judged_group)
                                     .copied()
                                     .unwrap_or(0),
-                                has_open_request: buyer_open_request_for(judged_group),
+                                has_open_request: open_request_bar(judged_group).is_some_and(
+                                    |bar| {
+                                        p.ability
+                                            .saturating_add(
+                                                BuyerNeedPicture::STAFF_TIP_ABILITY_TOLERANCE,
+                                            )
+                                            >= bar
+                                    },
+                                ),
                                 has_aging_starter: buyer_has_aging_starter(judged_group),
                                 // In-window listed-star sweep: only publicly
                                 // available players (Lst/Req/Unh, or Loa+breakout).
@@ -2017,6 +2050,14 @@ impl PipelineProcessor {
                                 age >= r.preferred_age_min
                                     && age <= r.preferred_age_max.saturating_add(3)
                             })
+                            // …and near the level the request asks for. A
+                            // tip twenty points under the bar is not that
+                            // request's answer; it opens its own, smaller
+                            // request below (or nothing).
+                            && rec
+                                .assessed_ability
+                                .saturating_add(BuyerNeedPicture::STAFF_TIP_ABILITY_TOLERANCE)
+                                >= r.min_ability
                     })
                     .min_by_key(|r| {
                         (

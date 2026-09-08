@@ -15,6 +15,7 @@ use crate::continent::competitions::{
     CHAMPIONS_LEAGUE_SLUG, CONFERENCE_LEAGUE_SLUG, COPA_LIBERTADORES_SLUG, EUROPA_LEAGUE_SLUG,
 };
 use crate::league::Season;
+use chrono::NaiveDate;
 
 /// Discriminates the four "kinds" of competitive context a stat slice
 /// can belong to. Every renderable row is labelled with exactly one
@@ -94,6 +95,20 @@ pub struct PlayerStatLedgerEntry {
     /// the "collapse a 0-app stint that covered <40% of the season" rule
     /// from real time-at-club data instead of sibling heuristics.
     pub coverage_days: Option<u16>,
+    /// Last day of the season window the spell(s) behind this entry
+    /// actually covered — `departed_date` clamped to the season, or the
+    /// season's own last day when the player was still there when it
+    /// closed; the MAX across merged spells of the same key, so a club
+    /// the player left and came back to reads by its later leg. `None`
+    /// when unknown (legacy `items` adapters, cup/friendly slices,
+    /// synthetic gap rows).
+    ///
+    /// This is what orders the History page WITHIN a season: an
+    /// interleaved career — signed, loaned out, recalled, loaned again —
+    /// only reads correctly when the rows follow the real periods, and
+    /// `seq_id` cannot supply them (a merged entry keeps the seq of its
+    /// FIRST leg, and a post-return reserve re-place inflates it).
+    pub spell_end: Option<NaiveDate>,
     pub statistics: PlayerStatistics,
 }
 
@@ -124,6 +139,10 @@ pub struct PlayerHistoryRow {
     pub league_name: String,
     pub is_loan: bool,
     pub transfer_fee: Option<f64>,
+    /// Latest [`PlayerStatLedgerEntry::spell_end`] of the entries folded
+    /// into this row — the day the player's stay at this club ended
+    /// inside this season. Orders rows within a season.
+    pub spell_end: Option<NaiveDate>,
     pub statistics: PlayerStatistics,
 }
 

@@ -1458,9 +1458,15 @@ impl Player {
         let Some(contract) = self.contract.as_ref() else {
             return false;
         };
-        // A manager-pinned player IS first-team by definition, and a
-        // player the club has already written off or already listed is
-        // being handled by the listing / release systems.
+        // A manager-pinned player IS first-team by definition. A player the
+        // club has put up for sale is being handled by the listing /
+        // release systems: the contract flag is a live market intent —
+        // the listing pass turns it into a row, the seller push and the
+        // unsold-exit valve resolve it, and the depth cap clears it the
+        // moment the club cannot act on it — so it never exempts a man
+        // nobody is actually selling. A bare "not needed" label is not
+        // that: a written-off player the club has not put on the market
+        // is exactly the man this request exists for.
         if self.is_force_match_selection || contract.is_transfer_listed {
             return false;
         }
@@ -1469,9 +1475,6 @@ impl Player {
         // concerned, and it is the first team he wants to play for.
         let squad_tier = ctx.squad_team_type.unwrap_or(TeamType::Main);
         let squad_status = contract.squad_status.as_first_team_designation(squad_tier);
-        if matches!(squad_status, PlayerSquadStatus::NotNeeded) {
-            return false;
-        }
 
         let is_goalkeeper = self.position().is_goalkeeper();
         // Under-24s belong to the development-loan pathway — the answer
@@ -1512,9 +1515,13 @@ impl Player {
             return false;
         }
 
-        // Eligibility: the perennial backup by squad status, or anyone
-        // the club keeps shipping out on loan instead of playing.
-        let is_backup = matches!(squad_status, PlayerSquadStatus::MainBackupPlayer);
+        // Eligibility: the perennial backup by squad status, the man the
+        // club has written off without putting him on the market, or
+        // anyone the club keeps shipping out on loan instead of playing.
+        let is_backup = matches!(
+            squad_status,
+            PlayerSquadStatus::MainBackupPlayer | PlayerSquadStatus::NotNeeded
+        );
         if !is_backup && !scan.serial_loanee {
             return false;
         }
@@ -2027,6 +2034,7 @@ mod career_desire_tests {
             is_loan,
             transfer_fee: None,
             coverage_days: None,
+            spell_end: None,
             statistics: crate::PlayerStatistics {
                 played: starts,
                 ..Default::default()
@@ -2152,6 +2160,46 @@ mod career_desire_tests {
             !p.transfer_request_reasons
                 .contains(&TransferRequestReason::WantsFirstTeamFootball),
             "the reason is for squad fillers and serial loanees, not first-team players"
+        );
+    }
+
+    /// The Sokolic case: a keeper the club labelled "not needed" but never
+    /// actually put on the market sat for seasons with no channel of his
+    /// own — the label used to exempt him on the premise that the listing
+    /// system had him, which was false.
+    #[test]
+    fn a_written_off_backup_the_club_has_not_listed_asks_out_himself() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(27, 16.0, 8.0, today);
+        p.contract.as_mut().unwrap().squad_status = PlayerSquadStatus::NotNeeded;
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        assert!(
+            p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsFirstTeamFootball),
+            "a written-off player nobody is selling has to be able to ask out himself"
+        );
+        assert!(p.statuses.has(PlayerStatusType::Req));
+    }
+
+    /// Once the club has put him up for sale the market owns the exit:
+    /// the listing pass makes the row, the push and the unsold valve
+    /// resolve it, and the request would only duplicate that.
+    #[test]
+    fn a_player_the_club_is_selling_leaves_it_to_the_market() {
+        let today = d(2026, 6, 1);
+        let mut p = parked_backup(27, 16.0, 8.0, today);
+        {
+            let contract = p.contract.as_mut().unwrap();
+            contract.squad_status = PlayerSquadStatus::NotNeeded;
+            contract.is_transfer_listed = true;
+        }
+        let mut result = PlayerResult::new(p.id);
+        p.process_transfer_desire(&mut result, today, &elite_ctx());
+        assert!(
+            !p.transfer_request_reasons
+                .contains(&TransferRequestReason::WantsFirstTeamFootball),
+            "a live sale intent is the club handling him; the request stays down"
         );
     }
 

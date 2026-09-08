@@ -456,6 +456,7 @@
   "dec_loan_listed": "Kiralık listesinde",
   "dec_pre_contract_agreed": "Ön sözleşme anlaşıldı",
   "dec_reason_aging_declining": "Yaşlanan oyuncu, düşen değer",
+  "dec_reason_below_club_level": "Kulübün seviyesinin altında",
   "dec_reason_aging_surplus": "Yaşlanan oyuncu, ihtiyaç fazlası",
   "dec_reason_below_avg_surplus": "Fazla pozisyon grubunda ortalamanın altında",
   "dec_reason_blocked_by_better": "Aynı pozisyondaki daha iyi oyuncular tarafından engelleniyor",

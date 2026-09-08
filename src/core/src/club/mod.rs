@@ -175,6 +175,7 @@ pub use player::{
     PlayerPreferredFoot,
     PlayerResult,
     PlayerSkills,
+    ClubLevelAnchor,
     PlayerSquadStatus,
     PlayerStatCompetitionKind,
     PlayerStatLedgerEntry,

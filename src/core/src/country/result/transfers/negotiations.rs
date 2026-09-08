@@ -5,6 +5,7 @@ use super::types::{
     DeferredTransfer, NegotiationData, PendingPlayerSignal, TransferActivitySummary,
     find_player_in_country, find_player_in_country_mut,
 };
+use crate::club::WageReliefSale;
 use crate::club::board::ownership::ClubBenefactor;
 use crate::club::player::events::transfer_social::{
     TransferContinentalPath, TransferInterestSignal,
@@ -558,6 +559,31 @@ impl CountryResult {
     /// and a conversation the seller was half expecting.
     const AGENT_LIFT: f32 = 20.0;
 
+    /// Most the seller's reservation premium eases when its own books say
+    /// sell — the fire-sale counterpart of `SellerWindfall::RESERVATION_EASE`.
+    const FIRE_SALE_RESERVATION_EASE: f64 = 0.25;
+
+    /// How badly the selling club needs a fee, 0..1 — the wage-relief
+    /// severity ladder read off its debt standing and cash distress. Only a
+    /// domestic seller's books are visible here; a foreign seller's staged
+    /// snapshot carries no standing, so it reads 0 and behaves as before.
+    fn seller_fire_sale_pressure(country: &Country, neg_data: &NegotiationData) -> f32 {
+        if neg_data.selling_country_id.is_some() || neg_data.selling_club_id == 0 {
+            return 0.0;
+        }
+        country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.selling_club_id)
+            .map(|c| {
+                WageReliefSale::fire_sale_pressure(
+                    c.finance.debt.standing,
+                    c.finance.distress_level,
+                )
+            })
+            .unwrap_or(0.0)
+    }
+
     /// The selling club's finances for the windfall model — read live for a
     /// domestic seller, off the staged snapshot for a foreign one (his club
     /// sits in another country's borrow while this negotiation resolves).
@@ -785,8 +811,16 @@ impl CountryResult {
         // a giant at asking price and then went on a rejection cooldown.
         // Nothing else is forgiven: the rival penalty, the insult guard and
         // the absolute fee floor are untouched.
+        //
+        // The chairman has a second reason to overrule the coach: the
+        // books. A club in emergency measures gives the damper back in
+        // full whatever the fee is worth to its year — the wage-relief
+        // pass has already put the man on the market for exactly that
+        // reason, and a seller that lists its key man and then refuses to
+        // talk about him is what kept an insolvent giant's stars unsold.
         let windfall = Self::seller_windfall(country, neg_data, date);
-        chance += importance_penalty * windfall.ratio;
+        let fire_sale = Self::seller_fire_sale_pressure(country, neg_data);
+        chance += importance_penalty * windfall.ratio.max(fire_sale);
 
         // The agent channel. A player drawn to a bigger stage is quietly
         // circulated, and a club that can offer him one finds the seller
@@ -1136,6 +1170,11 @@ impl CountryResult {
         // the clamp keeps the reservation in the same band it always had.
         let windfall = Self::seller_windfall(country, neg_data, date);
         seller_reservation -= windfall.reservation_ease();
+        // …and what the seller's own books say. A club that must shed
+        // wages holds out for no premium at all; the absolute floor below
+        // still stops a fire sale from becoming a giveaway.
+        seller_reservation -= Self::seller_fire_sale_pressure(country, neg_data) as f64
+            * Self::FIRE_SALE_RESERVATION_EASE;
 
         // Can the seller replace him with the money? A fee is only worth
         // taking if it buys a successor, and a club with nobody on its own

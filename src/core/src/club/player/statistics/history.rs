@@ -1,5 +1,5 @@
 use super::ledger::{PlayerStatCompetitionKind, PlayerStatLedgerEntry};
-use super::types::{PlayerStatistics, SecondaryTeamStatistics, TeamInfo};
+use super::types::{CompetitiveTally, PlayerStatistics, SecondaryTeamStatistics, TeamInfo};
 use crate::league::Season;
 use chrono::NaiveDate;
 use std::collections::HashSet;
@@ -127,6 +127,7 @@ impl PlayerStatisticsHistory {
                 is_loan: i.is_loan,
                 transfer_fee: i.transfer_fee,
                 coverage_days: None,
+                spell_end: None,
                 statistics: i.statistics.clone(),
             })
             .collect();
@@ -165,6 +166,7 @@ impl PlayerStatisticsHistory {
         is_loan: bool,
         transfer_fee: Option<f64>,
         coverage_days: Option<u16>,
+        spell_end: Option<NaiveDate>,
         statistics: PlayerStatistics,
     ) {
         let slug = team.league_slug.clone();
@@ -176,6 +178,7 @@ impl PlayerStatisticsHistory {
             is_loan,
             transfer_fee,
             coverage_days,
+            spell_end,
             statistics,
         );
     }
@@ -209,6 +212,7 @@ impl PlayerStatisticsHistory {
             false,
             None,
             None,
+            None,
             statistics,
         );
     }
@@ -222,6 +226,7 @@ impl PlayerStatisticsHistory {
         is_loan: bool,
         transfer_fee: Option<f64>,
         coverage_days: Option<u16>,
+        spell_end: Option<NaiveDate>,
         statistics: PlayerStatistics,
     ) {
         if let Some(existing) = self.season_ledger.iter_mut().find(|e| {
@@ -241,6 +246,13 @@ impl PlayerStatisticsHistory {
             // rule should measure.
             existing.coverage_days = match (existing.coverage_days, coverage_days) {
                 (Some(a), Some(b)) => Some(a.saturating_add(b)),
+                (a, b) => a.or(b),
+            };
+            // ...but they do NOT sum their end days: the row ends when the
+            // LATER leg ended, which is the moment the within-season order
+            // reads it by.
+            existing.spell_end = match (existing.spell_end, spell_end) {
+                (Some(a), Some(b)) => Some(a.max(b)),
                 (a, b) => a.or(b),
             };
             if existing.team_reputation == 0 && team.reputation > 0 {
@@ -269,6 +281,7 @@ impl PlayerStatisticsHistory {
             is_loan,
             transfer_fee,
             coverage_days,
+            spell_end,
             statistics,
         });
     }
@@ -288,6 +301,25 @@ impl PlayerStatisticsHistory {
         let span_start = joined.max(window_start);
         let span_end = departed.unwrap_or(window_end).min(window_end);
         (span_end - span_start).num_days().max(0) as u16
+    }
+
+    /// The last day of one spell inside one season — the departure date
+    /// clamped to the season window, or the season's own last day when
+    /// the player was still at the club when it closed. Companion to
+    /// [`Self::spell_coverage_days`]: coverage answers "how long", this
+    /// answers "until when", which is what orders same-season rows on the
+    /// History page. Every ledger writer must compute it the same way.
+    pub(super) fn spell_last_day(
+        season: &Season,
+        joined: NaiveDate,
+        departed: Option<NaiveDate>,
+    ) -> NaiveDate {
+        let window_start = season.start_date();
+        let window_end = season.end_date();
+        departed
+            .unwrap_or(window_end)
+            .min(window_end)
+            .max(window_start.min(joined))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -393,6 +425,7 @@ impl PlayerStatisticsHistory {
                 &team,
                 PlayerStatCompetitionKind::League,
                 false,
+                None,
                 None,
                 None,
                 slice.statistics,
@@ -662,6 +695,7 @@ impl PlayerStatisticsHistory {
             };
             let covered =
                 Self::spell_coverage_days(&entry_season, entry.joined_date, entry.departed_date);
+            let ended = Self::spell_last_day(&entry_season, entry.joined_date, entry.departed_date);
             self.append_to_ledger(
                 entry_year,
                 &entry_team,
@@ -669,6 +703,7 @@ impl PlayerStatisticsHistory {
                 entry.is_loan,
                 entry.transfer_fee,
                 Some(covered),
+                Some(ended),
                 entry.statistics.clone(),
             );
 
@@ -1149,6 +1184,7 @@ impl PlayerStatisticsHistory {
             };
             let covered =
                 Self::spell_coverage_days(&entry_season, entry.joined_date, entry.departed_date);
+            let ended = Self::spell_last_day(&entry_season, entry.joined_date, entry.departed_date);
             self.append_to_ledger(
                 entry_year,
                 &entry_team,
@@ -1156,6 +1192,7 @@ impl PlayerStatisticsHistory {
                 entry.is_loan,
                 entry.transfer_fee,
                 Some(covered),
+                Some(ended),
                 entry.statistics.clone(),
             );
 
@@ -1293,6 +1330,7 @@ impl PlayerStatisticsHistory {
                     fallback_team,
                     PlayerStatCompetitionKind::League,
                     fallback_is_loan,
+                    None,
                     None,
                     None,
                     PlayerStatistics::default(),
@@ -1465,7 +1503,16 @@ impl PlayerStatisticsHistory {
         // to the closing season's window) so the projection can apply
         // the coverage-based collapse rule instead of guessing from
         // sibling rows.
-        let entries_snapshot: Vec<(u32, TeamInfo, bool, Option<f64>, PlayerStatistics, u16)> = self
+        type ClosingEntry = (
+            u32,
+            TeamInfo,
+            bool,
+            Option<f64>,
+            PlayerStatistics,
+            u16,
+            NaiveDate,
+        );
+        let entries_snapshot: Vec<ClosingEntry> = self
             .current
             .iter()
             .map(|entry| {
@@ -1482,12 +1529,20 @@ impl PlayerStatisticsHistory {
                     entry.transfer_fee,
                     entry.statistics.clone(),
                     Self::spell_coverage_days(&season, entry.joined_date, entry.departed_date),
+                    Self::spell_last_day(&season, entry.joined_date, entry.departed_date),
                 )
             })
             .collect();
         let mut closing_team_recorded = false;
-        for (entry_seq, entry_team, entry_loan, entry_fee, entry_stats, entry_coverage) in
-            entries_snapshot
+        for (
+            entry_seq,
+            entry_team,
+            entry_loan,
+            entry_fee,
+            entry_stats,
+            entry_coverage,
+            entry_end,
+        ) in entries_snapshot
         {
             if is_carried_entry(entry_seq) {
                 continue;
@@ -1504,6 +1559,7 @@ impl PlayerStatisticsHistory {
                 entry_loan,
                 entry_fee,
                 Some(entry_coverage),
+                Some(entry_end),
                 stats,
             );
         }
@@ -1521,6 +1577,7 @@ impl PlayerStatisticsHistory {
                 is_loan,
                 None,
                 Some(Self::spell_coverage_days(&season, joined, None)),
+                Some(Self::spell_last_day(&season, joined, None)),
                 current_stats.clone(),
             );
         }
@@ -2229,6 +2286,69 @@ impl PlayerStatisticsHistory {
             .saturating_add(live_played as u32)
             .saturating_add(live_played_subs as u32);
         total
+    }
+
+    /// Everything competitive the player has done for the club he is at
+    /// now, across every spell there: frozen seasons, league and cup rows
+    /// alike; this season's closed spells; and `live`, the open spell's
+    /// buckets already tallied by the caller, which no store holds until
+    /// the spell closes.
+    ///
+    /// The read the once-per-tenure events key on — "his first goal for
+    /// the club". [`Self::current_club_career_apps`] stays league-only by
+    /// contract for the wage clauses; this counts every competitive game
+    /// and never a friendly. With no active spell there is nothing to
+    /// attribute, and only `live` counts.
+    pub fn club_tally(&self, live: CompetitiveTally) -> CompetitiveTally {
+        match self.active_team_slug() {
+            Some(slug) => self.tally(Some(slug), live),
+            None => live,
+        }
+    }
+
+    /// The whole competitive career, every club, `live` included — the
+    /// read the appearance and goal milestones key on. Internationals
+    /// keep their own ledger and are not part of it.
+    pub fn career_tally(&self, live: CompetitiveTally) -> CompetitiveTally {
+        self.tally(None, live)
+    }
+
+    /// Sum frozen rows, this season's closed spells and the live tally,
+    /// at one club or across all of them. The canonical ledger is the
+    /// frozen source and carries the cup slices; a save written before
+    /// it existed falls back to the league-only `items`, the projection's
+    /// own rule. Nothing in `current` overlaps the ledger — a spell is
+    /// frozen out of it at season end, never before — and the borrowed
+    /// slices in `current_secondary` are live games at another of the
+    /// club's teams, frozen the same way.
+    fn tally(&self, team_slug: Option<&str>, live: CompetitiveTally) -> CompetitiveTally {
+        let mut tally = live;
+        if self.season_ledger.is_empty() {
+            for item in &self.items {
+                if team_slug.is_none_or(|slug| item.team_slug == slug) {
+                    tally.add(&item.statistics);
+                }
+            }
+        } else {
+            for entry in &self.season_ledger {
+                if entry.competition_kind.counts_toward_career_history()
+                    && team_slug.is_none_or(|slug| entry.team_slug == slug)
+                {
+                    tally.add(&entry.statistics);
+                }
+            }
+        }
+        for entry in &self.current {
+            if team_slug.is_none_or(|slug| entry.team_slug == slug) {
+                tally.add(&entry.statistics);
+            }
+        }
+        for slice in &self.current_secondary {
+            if team_slug.is_none_or(|slug| slice.team_slug == slug) {
+                tally.add(&slice.statistics);
+            }
+        }
+        tally
     }
 }
 

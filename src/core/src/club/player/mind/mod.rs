@@ -530,6 +530,15 @@ impl PlayerMind {
         // the stack before the review that decides whether he says it —
         // and before consolidation encodes anything against it.
         if let Some(situation) = situation {
+            // A move puts a hold on the wants he brought with him — the
+            // new club is owed a fair look before he presses any of
+            // them. The hold lifts when he has settled, on the same
+            // clock the faculties use to start reading where he is as
+            // his own situation. It is re-read here every week rather
+            // than remembered, because nothing else ever lifted it.
+            if situation.is_settled() {
+                self.organs.goals.unblock(GoalBlocker::JustArrived);
+            }
             let view = MindView {
                 tick: ctx,
                 situation,

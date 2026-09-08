@@ -233,6 +233,25 @@ impl GoalStack {
         }
     }
 
+    /// The reason he could not act has gone. Lifts `blocker` from every
+    /// live goal held for that reason and no other — a goal blocked for
+    /// some different reason keeps it.
+    ///
+    /// Blockers are re-read, never remembered: whoever knows the
+    /// condition asserts the block while it holds and lifts it when it
+    /// stops. Without the lift a man carried "he has only just arrived"
+    /// on a want for the rest of his time at the club.
+    pub fn unblock(&mut self, blocker: GoalBlocker) {
+        if !blocker.is_blocked() {
+            return;
+        }
+        for goal in self.goals.iter_mut() {
+            if goal.is_live() && goal.blocked_by == blocker {
+                goal.blocked_by = GoalBlocker::None;
+            }
+        }
+    }
+
     /// Give himself until a date on a goal he holds. "I'll see how the
     /// first half of the season goes."
     pub fn commit_until(&mut self, kind: GoalKind, deadline: EpochDay) {
@@ -771,6 +790,29 @@ mod tests {
             .get(GoalKind::BePaidWhatImWorth)
             .expect("being underpaid is not settled by changing employer");
         assert_eq!(wage.blocked_by, GoalBlocker::JustArrived);
+    }
+
+    #[test]
+    fn lifting_a_blocker_frees_only_the_goals_held_for_that_reason() {
+        let mut stack = GoalStack::new();
+        feed(&mut stack, GoalKind::BePaidWhatImWorth, 8, TODAY);
+        feed(&mut stack, GoalKind::WinATrophy, 8, TODAY);
+        stack.review(TODAY);
+        stack.on_club_change();
+        stack.block(GoalKind::WinATrophy, GoalBlocker::FrozenOut);
+
+        stack.unblock(GoalBlocker::JustArrived);
+
+        assert_eq!(
+            stack.get(GoalKind::BePaidWhatImWorth).unwrap().blocked_by,
+            GoalBlocker::None,
+            "settling in lifts what the move put on him"
+        );
+        assert_eq!(
+            stack.get(GoalKind::WinATrophy).unwrap().blocked_by,
+            GoalBlocker::FrozenOut,
+            "a want held for another reason keeps that reason"
+        );
     }
 
     #[test]

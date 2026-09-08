@@ -155,6 +155,37 @@ impl InternationalStatistics {
     }
 }
 
+/// Competitive appearances, goals and clean sheets summed over a stretch
+/// of a player's record — every spell at one club, or the whole career.
+/// Friendlies never enter it.
+///
+/// The read the once-in-a-career events key on: "his first goal for the
+/// club", the appearance and goal milestones. Those used to read the live
+/// season counters, which are drained every summer, so they fired again
+/// every season.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CompetitiveTally {
+    pub apps: u32,
+    pub goals: u32,
+    pub clean_sheets: u32,
+}
+
+impl CompetitiveTally {
+    /// A tally holding one bucket.
+    pub fn of(stats: &PlayerStatistics) -> Self {
+        let mut tally = Self::default();
+        tally.add(stats);
+        tally
+    }
+
+    /// Fold another bucket in.
+    pub fn add(&mut self, stats: &PlayerStatistics) {
+        self.apps = self.apps.saturating_add(stats.total_games() as u32);
+        self.goals = self.goals.saturating_add(stats.goals as u32);
+        self.clean_sheets = self.clean_sheets.saturating_add(stats.clean_sheets as u32);
+    }
+}
+
 impl PlayerStatistics {
     /// Total appearances (started + substitute)
     #[inline]

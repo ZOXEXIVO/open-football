@@ -20,13 +20,100 @@
 use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::happiness::PlayingTimeFrustrationConfig;
 use crate::club::team::Team;
+use crate::league::Season;
 use crate::utils::DateUtils;
 use crate::{
-    HappinessEventType, MatchExperienceBackground, Player, PlayerFieldPositionGroup,
-    PlayerSquadStatus,
+    ClubLevelAnchor, HappinessEventType, MatchExperienceBackground, Player,
+    PlayerFieldPositionGroup, PlayerSquadStatus,
 };
 use chrono::{Duration, NaiveDate};
 use std::collections::HashMap;
+
+/// The squad's match sample over a rolling window — this season and the
+/// last completed one — so the honesty cap on a label can read what a
+/// player has been getting LATELY rather than over his whole stay.
+///
+/// The since-join counters the cap used to read never forget: a man who
+/// started ninety games in his first three seasons and eight in the next
+/// three still carried a lifetime share above the regular bar, so the
+/// label the renewal clock, the asset classifier and the listing sweeps
+/// all trusted said "First Team Regular" about a 35-year-old the coach
+/// had stopped picking years earlier.
+struct RecentInvolvementSample {
+    /// Official matches the club has played this season — the busiest
+    /// squad member's appearances, the same proxy the evidence context
+    /// reads.
+    club_matches_this_season: u16,
+    /// The most recent completed season across the squad, if any.
+    last_completed_year: Option<u16>,
+    /// The same proxy for that season.
+    club_matches_last_season: u16,
+}
+
+impl RecentInvolvementSample {
+    fn of_team(team: &Team, date: NaiveDate) -> Self {
+        let current_year = Season::from_date(date).start_year;
+        let own = || team.players.iter().filter(|p| !p.is_on_loan());
+        let club_matches_this_season = own().map(Self::official_appearances).max().unwrap_or(0);
+        let last_completed_year = own()
+            .flat_map(|p| p.statistics_history.items.iter())
+            .map(|h| h.season.start_year)
+            .filter(|&year| year < current_year)
+            .max();
+        let club_matches_last_season = last_completed_year
+            .map(|year| {
+                own()
+                    .map(|p| Self::season_games(p, year, 1.0, 1.0))
+                    .fold(0.0_f32, f32::max)
+                    .round() as u16
+            })
+            .unwrap_or(0);
+        RecentInvolvementSample {
+            club_matches_this_season,
+            last_completed_year,
+            club_matches_last_season,
+        }
+    }
+
+    /// Official (league + cup) appearances this season.
+    fn official_appearances(player: &Player) -> u16 {
+        player.statistics.played
+            + player.statistics.played_subs
+            + player.cup_statistics.played
+            + player.cup_statistics.played_subs
+    }
+
+    /// Weighted games in one completed season, parent and loan spells
+    /// summed: a start counts `start_weight`, a substitute appearance
+    /// `sub_weight`.
+    fn season_games(player: &Player, year: u16, start_weight: f32, sub_weight: f32) -> f32 {
+        player
+            .statistics_history
+            .items
+            .iter()
+            .filter(|h| h.season.start_year == year)
+            .map(|h| {
+                h.statistics.played as f32 * start_weight
+                    + h.statistics.played_subs as f32 * sub_weight
+            })
+            .sum()
+    }
+
+    /// `(weighted involvement, eligible matches)` for one player over the
+    /// window, on the same start / sub weighting as the since-join score.
+    fn player_window(&self, player: &Player, cfg: &PlayingTimeFrustrationConfig) -> (f32, f32) {
+        let this_season = (player.statistics.played + player.cup_statistics.played) as f32
+            * cfg.start_weight
+            + (player.statistics.played_subs + player.cup_statistics.played_subs) as f32
+                * cfg.sub_app_weight;
+        let last_season = self
+            .last_completed_year
+            .map(|year| Self::season_games(player, year, cfg.start_weight, cfg.sub_app_weight))
+            .unwrap_or(0.0);
+        let eligible = (self.club_matches_this_season + self.club_matches_last_season) as f32;
+        (this_season + last_season, eligible)
+    }
+}
 
 pub struct SquadStatusUpdater;
 
@@ -70,6 +157,10 @@ impl SquadStatusUpdater {
             .map(|s| s.staff_attributes.mental.man_management >= Self::MAN_MANAGEMENT_TO_EXPLAIN)
             .unwrap_or(false);
         let team_reputation = team.reputation.world;
+        // What this club expects of a starter: the rank inside the group
+        // hands out the labels, the club's level caps them.
+        let club_level = ClubLevelAnchor::for_reputation(team.reputation.overall_score());
+        let recent = RecentInvolvementSample::of_team(team, date);
 
         for player in team.players.iter_mut() {
             let group = player.position().position_group();
@@ -78,7 +169,7 @@ impl SquadStatusUpdater {
 
             // Honesty ceiling from actual involvement, computed before the
             // mutable contract borrow (it reads the whole player).
-            let involvement_ceiling = Self::involvement_status_ceiling(player, date);
+            let involvement_ceiling = Self::involvement_status_ceiling(player, date, &recent);
             // The returnee verdict: a fresh returnee whose loan record
             // holds up at this club's level gets his label graduated.
             let record_floor = Self::returnee_record_floor(player, team_reputation, date);
@@ -118,6 +209,15 @@ impl SquadStatusUpdater {
                         };
                     }
                 }
+                // The club's own level caps whatever rank and minutes
+                // agreed on: a man far below what this club recruits at is
+                // rotation depth or a backup even while he starts every
+                // week, because he starts for want of anyone better. The
+                // returnee verdict and a signing promise below still floor
+                // it — the record was already read at this club's level,
+                // and a promise is a promise.
+                new_status =
+                    PlayerSquadStatus::cap_at_level(new_status, ca, age, group, Some(club_level));
                 // The returnee verdict: the loan record is admissible
                 // evidence. A young returnee otherwise stays a "prospect"
                 // by age and a fringe senior stays a backup by CA rank —
@@ -339,23 +439,39 @@ impl SquadStatusUpdater {
     /// under each status's `expected_start_share` so only a player clearly
     /// below his tier is demoted, giving hysteresis against month-to-month
     /// CA-rank wobble.
-    fn involvement_status_ceiling(player: &Player, date: NaiveDate) -> Option<PlayerSquadStatus> {
+    fn involvement_status_ceiling(
+        player: &Player,
+        date: NaiveDate,
+        recent: &RecentInvolvementSample,
+    ) -> Option<PlayerSquadStatus> {
         /// Enough eligible matches (~a third of a season) to trust the share.
         const MIN_ELIGIBLE_TO_JUDGE: u16 = 10;
         /// Give a player a fair chunk of a season at the club before his
         /// label can be demoted on appearances.
         const MIN_DAYS_AT_CLUB: i64 = 120;
+        /// Past a year at the club the since-join counters stop being a
+        /// recent record and become a career one; from here the cap reads
+        /// this season and the last.
+        const ROLLING_WINDOW_DAYS: i64 = 365;
 
         let opp = player.playing_time_opportunity(date);
-        if opp.eligible_official_matches_since_join < MIN_ELIGIBLE_TO_JUDGE
-            || opp.days_since_join < MIN_DAYS_AT_CLUB
-        {
+        if opp.days_since_join < MIN_DAYS_AT_CLUB {
             return None;
         }
 
         let cfg = PlayingTimeFrustrationConfig::default();
-        let eligible = opp.eligible_official_matches_since_join as f32;
-        let share = (opp.actual_involvement_score(&cfg) / eligible).clamp(0.0, 1.0);
+        let (involvement, eligible) = if opp.days_since_join >= ROLLING_WINDOW_DAYS {
+            recent.player_window(player, &cfg)
+        } else {
+            (
+                opp.actual_involvement_score(&cfg),
+                opp.eligible_official_matches_since_join as f32,
+            )
+        };
+        if eligible < MIN_ELIGIBLE_TO_JUDGE as f32 {
+            return None;
+        }
+        let share = (involvement / eligible).clamp(0.0, 1.0);
 
         let ceiling = if share >= 0.50 {
             PlayerSquadStatus::KeyPlayer
@@ -553,6 +669,175 @@ mod development_squad_tests {
 }
 
 #[cfg(test)]
+mod club_level_tests {
+    use super::*;
+    use crate::club::player::builder::PlayerBuilder;
+    use crate::shared::fullname::FullName;
+    use crate::{
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition,
+        PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatistics,
+        PlayerStatisticsHistoryItem, StaffCollection, Team, TeamBuilder, TeamReputation,
+        TeamType, TrainingSchedule,
+    };
+    use chrono::NaiveTime;
+
+    /// October: the season is two months old and the last completed one
+    /// is unambiguous.
+    fn today() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()
+    }
+
+    fn forward(id: u32, birth_year: i32, ca: u8) -> Player {
+        let mut attrs = PlayerAttributes::default();
+        attrs.current_ability = ca;
+        let mut contract =
+            PlayerClubContract::new(20_000, NaiveDate::from_ymd_opt(2030, 6, 30).unwrap());
+        contract.squad_status = PlayerSquadStatus::NotYetSet;
+        let mut p = PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("F".into(), format!("P{id}")))
+            .birth_date(NaiveDate::from_ymd_opt(birth_year, 1, 1).unwrap())
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position: PlayerPositionType::Striker,
+                    level: 20,
+                }],
+            })
+            .player_attributes(attrs)
+            .build()
+            .unwrap();
+        p.contract = Some(contract);
+        p
+    }
+
+    fn main_squad(reputation: u16, players: Vec<Player>) -> Team {
+        TeamBuilder::new()
+            .id(1)
+            .league_id(None)
+            .club_id(1)
+            .name("Main".into())
+            .slug("main".into())
+            .team_type(TeamType::Main)
+            .players(PlayerCollection::new(players))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(reputation, reputation, reputation))
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            ))
+            .build()
+            .unwrap()
+    }
+
+    fn status_of(team: &Team, id: u32) -> PlayerSquadStatus {
+        team.players
+            .players
+            .iter()
+            .find(|p| p.id == id)
+            .unwrap()
+            .contract
+            .as_ref()
+            .unwrap()
+            .squad_status
+            .clone()
+    }
+
+    fn last_season(played: u16) -> PlayerStatisticsHistoryItem {
+        PlayerStatisticsHistoryItem {
+            season: Season::new(2025),
+            team_name: "Main".into(),
+            team_slug: "main".into(),
+            team_reputation: 9_000,
+            league_name: "L".into(),
+            league_slug: "l".into(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: PlayerStatistics {
+                played,
+                ..Default::default()
+            },
+            seq_id: 0,
+        }
+    }
+
+    #[test]
+    fn a_giant_labels_its_second_forward_by_its_own_level() {
+        // The same two men at a giant and at a modest club: rank crowns the
+        // second body a regular in both; only the giant's level says he is
+        // rotation depth.
+        let mut giant = main_squad(9_000, vec![forward(1, 1998, 158), forward(2, 1997, 128)]);
+        SquadStatusUpdater::apply(&mut giant, today());
+        assert_eq!(status_of(&giant, 1), PlayerSquadStatus::KeyPlayer);
+        assert_eq!(
+            status_of(&giant, 2),
+            PlayerSquadStatus::FirstTeamSquadRotation,
+            "a 128 is not a first-team regular at a club that recruits at 147"
+        );
+
+        let mut modest = main_squad(3_000, vec![forward(1, 1998, 158), forward(2, 1997, 128)]);
+        SquadStatusUpdater::apply(&mut modest, today());
+        assert_eq!(status_of(&modest, 2), PlayerSquadStatus::FirstTeamRegular);
+    }
+
+    /// The Sobolev case: ninety starts in his first three seasons, eight in
+    /// the next three. The lifetime since-join share still cleared the
+    /// regular bar, so the label said "First Team Regular" about a man the
+    /// coach had stopped picking years before. The window reads what he is
+    /// getting now.
+    #[test]
+    fn a_long_serving_forward_the_coach_stopped_picking_is_a_backup() {
+        let joined = today() - Duration::days(6 * 365);
+        let mut stalwart = forward(2, 1997, 150);
+        stalwart.last_transfer_date = Some(joined);
+        stalwart.happiness.eligible_official_matches_since_join = 270;
+        stalwart.happiness.starts_since_join = 92;
+        stalwart.statistics.played = 1;
+        stalwart.statistics_history.items.push(last_season(3));
+
+        let mut ever_present = forward(1, 1999, 158);
+        ever_present.last_transfer_date = Some(joined);
+        ever_present.happiness.eligible_official_matches_since_join = 270;
+        ever_present.happiness.starts_since_join = 240;
+        ever_present.statistics.played = 8;
+        ever_present.statistics_history.items.push(last_season(40));
+
+        let mut team = main_squad(9_000, vec![ever_present, stalwart]);
+        SquadStatusUpdater::apply(&mut team, today());
+
+        assert_eq!(status_of(&team, 1), PlayerSquadStatus::KeyPlayer);
+        assert_eq!(
+            status_of(&team, 2),
+            PlayerSquadStatus::MainBackupPlayer,
+            "four games in forty-eight is a backup, whatever the career share says"
+        );
+    }
+
+    #[test]
+    fn a_recent_signing_is_still_judged_on_his_since_join_record() {
+        // Joined last winter: eight months at the club, twenty eligible
+        // matches, started sixteen — a regular on the only record that
+        // exists for him, whatever last season's history at another club
+        // would say.
+        let mut newcomer = forward(2, 1997, 150);
+        newcomer.last_transfer_date = Some(today() - Duration::days(240));
+        newcomer.happiness.eligible_official_matches_since_join = 20;
+        newcomer.happiness.starts_since_join = 16;
+        newcomer.statistics.played = 8;
+
+        let mut star = forward(1, 1999, 158);
+        star.statistics.played = 8;
+        star.statistics_history.items.push(last_season(40));
+
+        let mut team = main_squad(9_000, vec![star, newcomer]);
+        SquadStatusUpdater::apply(&mut team, today());
+        assert_eq!(status_of(&team, 2), PlayerSquadStatus::FirstTeamRegular);
+    }
+}
+
+#[cfg(test)]
 mod returnee_verdict_tests {
     use super::*;
     use crate::club::player::builder::PlayerBuilder;
@@ -602,6 +887,7 @@ mod returnee_verdict_tests {
             is_loan: true,
             transfer_fee: None,
             coverage_days: None,
+            spell_end: None,
             statistics: PlayerStatistics {
                 played: starts,
                 ..Default::default()

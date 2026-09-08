@@ -456,6 +456,7 @@
   "dec_loan_listed": "已掛牌租借",
   "dec_pre_contract_agreed": "预合同已达成",
   "dec_reason_aging_declining": "老化球員，身價下降",
+  "dec_reason_below_club_level": "低於球會水準",
   "dec_reason_aging_surplus": "老化球員，超出需求",
   "dec_reason_below_avg_surplus": "在過剩位置中低於平均水準",
   "dec_reason_blocked_by_better": "被同位置更優秀的球員擋住",

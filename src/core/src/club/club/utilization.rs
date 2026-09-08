@@ -1,19 +1,19 @@
 use super::Club;
 use super::WageReliefSale;
 use crate::club::player::statistics::StuckCareerScan;
-use crate::transfers::pipeline::TransferTrace;
 use crate::club::staff::goalkeeping::{KeeperAdvice, KeeperRoomPlan};
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext, SquadEvidenceContext};
 use crate::shared::{Currency, CurrencyValue};
+use crate::transfers::pipeline::TransferTrace;
 use crate::transfers::pipeline::{
     LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
 };
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
-    ContractType, Person, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel, Team,
-    TransferItem,
+    ContractType, Person, Player, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel,
+    Team, TransferItem,
 };
 use chrono::NaiveDate;
 use log::debug;
@@ -398,20 +398,24 @@ impl Club {
         // Wages already committed to leaving: players on the market from a
         // previous pass, plus anyone the sporting sweeps listed earlier in
         // this same tick. Credited against the target so the club doesn't
-        // stack a fresh batch on top of an unsold one every month.
+        // stack a fresh batch on top of an unsold one every month — for as
+        // long as the listing is a live commitment. A badge older than a
+        // window with nobody having taken him is a price the market has
+        // refused, not a wage about to leave: crediting it for ever meant
+        // a club owing a year of wages listed eleven fringe players once,
+        // "met" its target with them every month thereafter, and never
+        // reached the earners it could actually sell.
+        let listing_is_live = |p: &Player| {
+            already.contains(&p.id)
+                || p.statuses
+                    .held_for_days(PlayerStatusType::Lst, date)
+                    .is_some_and(|days| days <= WageReliefSale::LISTING_CREDIT_DAYS)
+        };
         let already_listed_wages: i64 = self
             .teams
             .iter()
             .flat_map(|t| t.players.iter())
-            .filter(|p| {
-                !p.is_on_loan()
-                    && (already.contains(&p.id)
-                        || p.statuses.has(PlayerStatusType::Lst)
-                        || p.contract
-                            .as_ref()
-                            .map(|c| c.is_transfer_listed)
-                            .unwrap_or(false))
-            })
+            .filter(|p| !p.is_on_loan() && listing_is_live(p))
             .filter_map(|p| p.contract.as_ref())
             .map(|c| c.salary as i64)
             .sum();
@@ -564,6 +568,17 @@ impl Club {
             };
 
             player.statuses.add(date, PlayerStatusType::Lst);
+            // The badge is the visible half of the decision; the contract
+            // flag is the durable half. The flag survives the listing
+            // pass's badge reconciliation, blocks renewal offers, and tells
+            // the pass this is a club decision to materialise without a
+            // second history row. Without it the badge was stripped the
+            // first time the pass ran, the renewal manager saw a clean
+            // player and re-signed him, and this audit listed him again
+            // every window.
+            if let Some(contract) = player.contract.as_mut() {
+                contract.is_transfer_listed = true;
+            }
             player.decision_history.add(
                 date,
                 "dec_board_transfer_listed".to_string(),
@@ -1409,6 +1424,42 @@ mod tests {
             .filter(|d| d.movement == "dec_board_transfer_listed")
             .count();
         assert_eq!(rows, 1, "an already-listed player is never re-listed");
+    }
+
+    /// The badge is the visible half of a board listing; the contract flag
+    /// is the half that survives the listing pass's badge reconciliation,
+    /// blocks a renewal offer, and tells the pass this is a club decision
+    /// to materialise. Without it a listed keeper was re-signed twice with
+    /// raises and re-listed every window.
+    #[test]
+    fn board_transfer_listing_sets_the_contract_flag() {
+        let deadwood = Fx::player(300, 55, 60, 34, PlayerSquadStatus::NotYetSet, 0, 0);
+        let mut club = Fx::club(vec![deadwood]);
+        club.board.season_targets = Some(SeasonTargets {
+            transfer_budget: 0,
+            wage_budget: 0,
+            max_squad_size: 0,
+            min_squad_size: 0,
+            expected_position: 5,
+            min_acceptable_position: 10,
+            ..Default::default()
+        });
+
+        club.audit_squad_utilization(Fx::date());
+
+        let flagged = club
+            .teams
+            .teams
+            .iter()
+            .flat_map(|t| t.players.players.iter())
+            .find(|p| p.id == 300)
+            .and_then(|p| p.contract.as_ref())
+            .map(|c| c.is_transfer_listed)
+            .unwrap_or(false);
+        assert!(
+            Fx::has(&club, 300, PlayerStatusType::Lst) && flagged,
+            "a board listing is a badge AND a durable sale intent on the contract"
+        );
     }
 
     /// The size trim never breaks up a main-team position group at (or

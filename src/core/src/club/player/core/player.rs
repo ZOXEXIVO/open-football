@@ -37,7 +37,7 @@ use crate::utils::DateUtils;
 use crate::{
     CompetitionStatistics, IndividualTrainingPlan, InternationalStatistics, NationalTeamLevel,
     Person, PersonAttributes, PlayerDecisionHistory, PlayerHappiness, PlayerPositionType,
-    PlayerPositions, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
+    PlayerPositions, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus, PlayerStatusType,
     PlayerTrainingHistory, PlayerValueCalculator, Relations,
 };
 use crate::{
@@ -1696,6 +1696,18 @@ impl Player {
 
     pub fn is_on_loan(&self) -> bool {
         self.contract_loan.is_some()
+    }
+
+    /// The club has decided he goes: transfer-listed (the contract flag or
+    /// the `Lst` badge) or told he is not needed. From here the market owns
+    /// his future — the manager makes him no playing-time promise, a talk
+    /// does not clear his unhappiness, and the listing pass owes him a
+    /// market row.
+    pub fn is_being_moved_on(&self) -> bool {
+        self.statuses.has(PlayerStatusType::Lst)
+            || self.contract.as_ref().is_some_and(|c| {
+                c.is_transfer_listed || matches!(c.squad_status, PlayerSquadStatus::NotNeeded)
+            })
     }
 
     /// True when the player is physically present at `club_id` because of

@@ -149,6 +149,23 @@ impl WageReliefSale {
         Self::severity(standing, distress) >= 3
     }
 
+    /// How hard the club needs a fee, 0..1 — the severity ladder read as a
+    /// continuous pressure so the market side can price it. A healthy club
+    /// is 0; a club in emergency measures or administration is 1. Consumed
+    /// by the seller resolvers: the importance damper a coach puts on a key
+    /// man's sale is the chairman's to give back when the books say sell.
+    pub fn fire_sale_pressure(standing: DebtStanding, distress: DistressLevel) -> f32 {
+        Self::severity(standing, distress) as f32 / 3.0
+    }
+
+    /// Days a listing stays credited against the wage-relief target. A
+    /// listed player only leaves the bill when he actually leaves, and a
+    /// market that has not taken him in a full window has said what it
+    /// thinks of the price: crediting his wage for ever let a club in
+    /// nine-figure debt "satisfy" its reduction with the same unsellable
+    /// fringe every month and never reach the earners a buyer would pay for.
+    pub const LISTING_CREDIT_DAYS: i64 = 120;
+
     /// 0 = healthy, 3 = fire sale.
     fn severity(standing: DebtStanding, distress: DistressLevel) -> u8 {
         let by_standing = match standing {
@@ -183,6 +200,29 @@ impl WageReliefSale {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fire_sale_pressure_follows_the_severity_ladder() {
+        assert_eq!(
+            WageReliefSale::fire_sale_pressure(DebtStanding::Solvent, DistressLevel::None),
+            0.0
+        );
+        assert!(
+            (WageReliefSale::fire_sale_pressure(DebtStanding::OwnerFunded, DistressLevel::None)
+                - 2.0 / 3.0)
+                .abs()
+                < 1e-6
+        );
+        assert_eq!(
+            WageReliefSale::fire_sale_pressure(DebtStanding::Leveraged, DistressLevel::Insolvency),
+            1.0,
+            "cash distress alone can put a club in a fire sale"
+        );
+        assert_eq!(
+            WageReliefSale::fire_sale_pressure(DebtStanding::Administration, DistressLevel::None),
+            1.0
+        );
+    }
 
     #[test]
     fn a_club_inside_its_mandate_sells_nobody() {

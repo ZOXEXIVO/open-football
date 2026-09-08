@@ -456,6 +456,7 @@
   "dec_loan_listed": "レンタルリスト入り",
   "dec_pre_contract_agreed": "事前契約に合意",
   "dec_reason_aging_declining": "高齢化選手、価値低下中",
+  "dec_reason_below_club_level": "クラブの水準に届かない",
   "dec_reason_aging_surplus": "高齢化選手、構想外",
   "dec_reason_below_avg_surplus": "余剰ポジションで平均以下",
   "dec_reason_blocked_by_better": "同ポジションのより優秀な選手に阻まれている",

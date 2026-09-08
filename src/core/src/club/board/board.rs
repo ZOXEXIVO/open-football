@@ -1139,6 +1139,39 @@ impl ClubBoard {
         } else {
             0.0
         };
+        // Income floor: what a going concern finances against its
+        // TURNOVER. The revenue budget above is the P&L surplus, and for
+        // every established club the P&L is roughly flat — wages, the
+        // amortization of past fees and the ground eat the income — so the
+        // surplus is zero and the reserve floor was the whole budget. Ten
+        // per cent of the cash pile is a war chest for a club with no
+        // revenue; for a giant earning $800M it froze the top of the
+        // market: the 2032 census read every solvent giant at 52–95M
+        // against strikers valued 83–307M, while the same clubs banked
+        // half a billion. A fee is not paid out of last year's profit — it
+        // is financed over the contract against next year's turnover,
+        // which is why real clubs of that size gross-spend 15–25 % of
+        // revenue in an ordinary year. The floor is that share, scaled by
+        // how much of a wage-cover cushion the club actually holds (six
+        // months of wages in the bank = full cover, nothing = none), so a
+        // club living hand-to-mouth gets nothing from it and an indebted
+        // one nothing at all. Gated on FFP like the reserve floor; the
+        // ceiling below still caps it.
+        const INCOME_FLOOR_SHARE: f64 = 0.15;
+        const CASH_COVER_WAGE_MONTHS: f64 = 6.0;
+        let income_floor = {
+            let cover_bar =
+                board_ctx.total_annual_wages as f64 * CASH_COVER_WAGE_MONTHS / 12.0;
+            let cash_cover = if board_ctx.balance > 0 && cover_bar > 0.0 {
+                (board_ctx.balance as f64 / cover_bar).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            board_ctx.trailing_annual_income.max(0) as f64
+                * INCOME_FLOOR_SHARE
+                * cash_cover
+                * ffp_mult
+        };
         // An owner-funded club spends its owner's cash on fees as well as
         // on wages: the 8 % idle-cash share below is what a club prudently
         // reinvests, and it is nothing like what a benefactor will write a
@@ -1155,6 +1188,7 @@ impl ClubBoard {
         // because bids are sized against `season_targets.transfer_budget`.
         let raw_budget = (revenue_budget + seed_budget)
             .max(reserve_floor)
+            .max(income_floor)
             .max(owner_fee_headroom)
             .max(0.0);
 
@@ -2490,6 +2524,51 @@ mod budget_tests {
             "a solvent break-even club must still have a transfer budget: {}",
             t.transfer_budget
         );
+    }
+
+    /// The 2032 census: every solvent giant sat on the 10 %-of-cash reserve
+    /// floor because its P&L was flat, and 52–95M bought nothing in a
+    /// market where a starting striker is valued at 83–307M. A club that
+    /// turns over 800M with six months of wages in the bank finances fees
+    /// against its turnover, not out of last year's profit.
+    #[test]
+    fn a_break_even_giant_spends_against_its_turnover() {
+        let mut ctx = make_ctx(800_000_000, 800_000_000, FfpStatus::Clean);
+        ctx.balance = 500_000_000;
+        ctx.total_annual_wages = 480_000_000;
+        ctx.reputation_score = 0.9;
+        let t = calc(&ctx);
+        assert!(
+            t.transfer_budget >= 110_000_000,
+            "a cash-covered break-even giant must reach the income floor: {}",
+            t.transfer_budget
+        );
+        assert!(
+            t.transfer_budget <= 130_000_000,
+            "…and no further than its turnover share allows: {}",
+            t.transfer_budget
+        );
+    }
+
+    #[test]
+    fn the_income_floor_needs_cash_cover_and_a_positive_balance() {
+        // Same turnover, but living hand-to-mouth: a tenth of the wage
+        // cover means a tenth of the floor.
+        let mut thin = make_ctx(800_000_000, 800_000_000, FfpStatus::Clean);
+        thin.balance = 24_000_000;
+        thin.total_annual_wages = 480_000_000;
+        let t_thin = calc(&thin);
+        assert!(
+            t_thin.transfer_budget < 30_000_000,
+            "a cash-poor club gets only the covered slice: {}",
+            t_thin.transfer_budget
+        );
+
+        // In the red there is no floor at all, whatever the turnover.
+        let mut indebted = make_ctx(800_000_000, 900_000_000, FfpStatus::Clean);
+        indebted.balance = -100_000_000;
+        indebted.total_annual_wages = 480_000_000;
+        assert_eq!(calc(&indebted).transfer_budget, 0);
     }
 
     #[test]

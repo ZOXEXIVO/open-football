@@ -12,11 +12,12 @@ use crate::transfers::pipeline::{LoanOutReason, PipelineProcessor};
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::{
     NegotiationStatus, TransferListing, TransferListingOrigin, TransferListingStatus,
-    TransferListingType,
+    TransferListingType, TransferMarket,
 };
 use crate::{
-    Club, ContractType, Country, HappinessEventType, Person, Player, PlayerFieldPositionGroup,
-    PlayerPositionType, PlayerSquadStatus, PlayerStatusType, ReputationLevel,
+    Club, ClubLevelAnchor, ContractType, Country, HappinessEventType, Person, Player,
+    PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, PlayerStatusType,
+    ReputationLevel,
 };
 use chrono::{Datelike, NaiveDate, Weekday};
 use log::debug;
@@ -25,9 +26,61 @@ use std::collections::{HashMap, HashSet};
 #[cfg_attr(test, derive(Debug))]
 pub(crate) enum ListingDecision {
     Keep,
-    Transfer { reason: String },
-    Loan { reason: String },
+    Transfer {
+        reason: String,
+    },
+    Loan {
+        reason: String,
+    },
     FreeTransfer,
+    /// The player's live loan listing becomes a permanent listing in
+    /// place — same row, same `listed_date`, so the unsold-exit valve's
+    /// clock keeps the time already served on the loan list.
+    UpgradeLoanToTransfer,
+}
+
+/// A loan listing that has found no borrower for this long, on a player
+/// the club has also decided to sell, upgrades in place to a permanent
+/// listing. Shared by the main-squad decision and the reserve branch so
+/// the two squads keep one clock.
+pub(crate) const LOAN_UNSOLD_UPGRADE_DAYS: i64 = 180;
+
+/// What the country market already holds for a player, read once per
+/// player before the listing decision. The decision is made on rows, not
+/// on `Lst` / `Loa` badges: a badge is a claim about the market, and the
+/// listing pass is what makes it true.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct MarketPresence {
+    /// An Available / InNegotiation permanent listing exists.
+    pub for_sale: bool,
+    /// `listed_date` of the oldest Available / InNegotiation loan listing.
+    pub loan_listed_since: Option<NaiveDate>,
+}
+
+impl MarketPresence {
+    pub(crate) fn of(market: &TransferMarket, player_id: u32) -> Self {
+        let mut presence = Self::default();
+        for listing in market.listings.iter().filter(|l| {
+            l.player_id == player_id
+                && matches!(
+                    l.status,
+                    TransferListingStatus::Available | TransferListingStatus::InNegotiation
+                )
+        }) {
+            match listing.listing_type {
+                TransferListingType::Transfer => presence.for_sale = true,
+                TransferListingType::Loan => {
+                    presence.loan_listed_since = Some(
+                        presence
+                            .loan_listed_since
+                            .map_or(listing.listed_date, |d| d.min(listing.listed_date)),
+                    );
+                }
+                TransferListingType::EndOfContract => {}
+            }
+        }
+        presence
+    }
 }
 
 struct PendingListing {
@@ -77,14 +130,27 @@ impl CountryResult {
             let decided_by = main_team.staffs.head_coach_name();
 
             for player in &main_team.players.players {
+                let presence = MarketPresence::of(&country.transfer_market, player.id);
                 match Self::evaluate_player_listing(
                     player,
                     &squad_analysis,
                     club,
                     date,
                     current_window,
+                    presence,
                 ) {
                     ListingDecision::Keep => {}
+                    ListingDecision::UpgradeLoanToTransfer => {
+                        let asking_price = Self::calculate_asking_price(
+                            player,
+                            club,
+                            date,
+                            price_level,
+                            league_reputation,
+                            club_reputation,
+                        );
+                        listings_to_upgrade.push((player.id, asking_price));
+                    }
                     ListingDecision::FreeTransfer => {
                         let free_price = CurrencyValue {
                             amount: 0.0,
@@ -192,7 +258,6 @@ impl CountryResult {
                                 // kept, so a long-stranded player reaches the
                                 // valve's one-year clock immediately instead
                                 // of restarting it.
-                                const LOAN_UNSOLD_UPGRADE_DAYS: i64 = 180;
                                 let flagged_for_sale = player
                                     .contract
                                     .as_ref()
@@ -745,8 +810,14 @@ impl CountryResult {
                     contract.is_transfer_listed = false;
                 }
                 // The badge is the visible half of the same intent; a
-                // player the club cannot sell is not "transfer listed".
+                // player the club cannot sell is not "transfer listed", and
+                // a player it cannot loan is not "loan listed" — the badge
+                // would silence his own playing-time complaints and hide
+                // him from the next audit for a listing that never comes.
                 player.statuses.remove(PlayerStatusType::Lst);
+                if dropped.listing_type == TransferListingType::Loan {
+                    player.statuses.remove(PlayerStatusType::Loa);
+                }
                 break;
             }
         }
@@ -845,12 +916,21 @@ impl CountryResult {
             // this month; once one clears (either sells or gets delisted),
             // a new slot opens next cycle. Exempt listings (REQ / UNH)
             // aren't subject to this throttle — when the player wants out,
-            // he goes regardless of how full the selling queue is.
+            // he goes regardless of how full the selling queue is. This
+            // pass's own candidates are not "already listed": the board
+            // audit stamps the badge the day it decides, so a candidate
+            // used to count against his own slot.
+            let in_this_pass: HashSet<u32> = result
+                .iter()
+                .chain(group_listings.iter())
+                .map(|l| l.player_id)
+                .collect();
             let already_listed_in_group = find_main(club_id)
                 .map(|t| {
                     t.players
                         .iter()
                         .filter(|p| p.position().position_group() == group)
+                        .filter(|p| !in_this_pass.contains(&p.id))
                         .filter(|p| {
                             p.statuses.has(PlayerStatusType::Lst)
                                 || p.statuses.has(PlayerStatusType::Loa)
@@ -966,6 +1046,7 @@ impl CountryResult {
         club: &Club,
         date: NaiveDate,
         current_window: Option<(NaiveDate, NaiveDate)>,
+        presence: MarketPresence,
     ) -> ListingDecision {
         // Loan players belong to another club — cannot be listed by the loan club
         if player.is_on_loan() {
@@ -988,11 +1069,45 @@ impl CountryResult {
             }
         }
 
-        // Already listed
-        if player.statuses.has(PlayerStatusType::Lst)
-            || player.statuses.has(PlayerStatusType::Loa)
-            || player.statuses.has(PlayerStatusType::Frt)
-        {
+        // Already on the market — read the market rows, not the badges.
+        // `Lst` / `Loa` are claims about the market and this pass is what
+        // makes them true: the board audit stamps the badge the day it
+        // decides. Treating the badge as proof of a row stranded every
+        // board-listed main-squad player — badge, no row, nothing for a
+        // buyer, the seller push or the unsold-exit valve to read — while
+        // the reconcile stripped the badge again and the renewal manager
+        // saw a clean player. A free-transfer release is a decision
+        // already made.
+        if presence.for_sale || player.statuses.has(PlayerStatusType::Frt) {
+            return ListingDecision::Keep;
+        }
+        let flagged_for_sale = player
+            .contract
+            .as_ref()
+            .is_some_and(|c| c.is_transfer_listed);
+        let labelled_not_needed = player
+            .contract
+            .as_ref()
+            .is_some_and(|c| matches!(c.squad_status, PlayerSquadStatus::NotNeeded));
+        if let Some(loan_listed_since) = presence.loan_listed_since {
+            // On the loan market. The row upgrades in place to a permanent
+            // listing — the reserve branch's rule, on the same clock —
+            // when the player himself wants out, or when the club has also
+            // decided to sell and half a year has found no borrower.
+            // Otherwise the loan market keeps him.
+            let player_wants_out = player.statuses.has(PlayerStatusType::Req)
+                || player
+                    .statuses
+                    .held_for_days(PlayerStatusType::Unh, date)
+                    .is_some_and(|days| days >= UNHAPPY_LISTING_MIN_DAYS);
+            let club_wants_sale = flagged_for_sale
+                || player.statuses.has(PlayerStatusType::Lst)
+                || labelled_not_needed;
+            let unsold_for_months =
+                (date - loan_listed_since).num_days() >= LOAN_UNSOLD_UPGRADE_DAYS;
+            if player_wants_out || (club_wants_sale && unsold_for_months) {
+                return ListingDecision::UpgradeLoanToTransfer;
+            }
             return ListingDecision::Keep;
         }
 
@@ -1042,6 +1157,14 @@ impl CountryResult {
             .find(|c| c.player_id == player.id);
 
         if let Some(candidate) = loan_candidate {
+            // The board audit stamps `Loa` and writes the decision-history
+            // row when it adds the candidate; materialising that badge here
+            // must not add a second, vaguer entry.
+            if player.statuses.has(PlayerStatusType::Loa) {
+                return ListingDecision::Loan {
+                    reason: "dec_reason_club_listed".to_string(),
+                };
+            }
             let reason = match &candidate.reason {
                 LoanOutReason::NeedsGameTime => "dec_reason_needs_game_time",
                 LoanOutReason::BlockedByBetterPlayer => "dec_reason_blocked_by_better",
@@ -1126,22 +1249,31 @@ impl CountryResult {
             return ListingDecision::Keep;
         }
 
-        // Club decisions persisted on the contract.
-        if let Some(ref contract) = player.contract {
-            if matches!(contract.squad_status, PlayerSquadStatus::NotNeeded) {
-                return Self::decide_listing_type(
-                    player,
-                    &rep_level,
-                    avg,
-                    date,
-                    "dec_reason_surplus_squad".to_string(),
-                );
-            }
-            if contract.is_transfer_listed {
-                return ListingDecision::Transfer {
-                    reason: "dec_reason_club_listed".to_string(),
-                };
-            }
+        // Club decisions recorded on the player but not yet on the market:
+        // the contract flag (surplus trim, salary fallback, the board audit)
+        // or a bare badge the board audit stamped the day it decided.
+        // `dec_reason_club_listed` writes no history — the decider already
+        // did. Checked before the `NotNeeded` label: a badge is a concrete
+        // listing verdict, the label is what this pass turns into one when
+        // nobody else has.
+        if flagged_for_sale || player.statuses.has(PlayerStatusType::Lst) {
+            return ListingDecision::Transfer {
+                reason: "dec_reason_club_listed".to_string(),
+            };
+        }
+        if player.statuses.has(PlayerStatusType::Loa) {
+            return ListingDecision::Loan {
+                reason: "dec_reason_club_listed".to_string(),
+            };
+        }
+        if labelled_not_needed {
+            return Self::decide_listing_type(
+                player,
+                &rep_level,
+                avg,
+                date,
+                "dec_reason_surplus_squad".to_string(),
+            );
         }
 
         // Squad members the club wouldn't move on pure maths. Runs after
@@ -1153,6 +1285,36 @@ impl CountryResult {
         }
 
         let is_promising_youth = age <= 23 && pa > ca + 10;
+
+        // Below the CLUB's level. Every gate from here down measures a
+        // player against his squad-mates — the squad average, a surplus
+        // position, his age — and none of them asked what this club
+        // expects of a starter. The buy side asks exactly that when it
+        // briefs a shirt, so a giant could decide its striker was below
+        // the standard it recruits at, buy better, and then keep the man
+        // for years because he was never twenty-five points under the
+        // squad mean. Same anchor the brief shops against; listable only
+        // once the club has somebody in the group who does clear its
+        // level (a squad that is weak everywhere has nothing to cycle
+        // him out for), once the season has produced a sample, and never
+        // below the group's depth floor.
+        if let Some(level) = Self::club_level(club) {
+            let group = player.position().position_group();
+            if !is_promising_youth
+                && level.is_below_rotation_band(ca, group)
+                && !SquadEvidenceContext::current_season_sample(date, club).is_early_season()
+                && Self::group_has_starter_at_level(club, group, &level)
+                && Self::position_group_has_depth(club, player, date)
+            {
+                return Self::decide_listing_type(
+                    player,
+                    &rep_level,
+                    avg,
+                    date,
+                    "dec_reason_below_club_level".to_string(),
+                );
+            }
+        }
 
         // Wealth-aware quality gap threshold — shared with the buy-side
         // squad-fit gate so selling and buying agree on what "too far
@@ -1329,6 +1491,10 @@ impl CountryResult {
     /// Official appearances at or below which a fit player has been frozen
     /// out rather than merely rotated.
     const FROZEN_OUT_APPEARANCE_BAR: u16 = 3;
+    /// Share of the club's official matches (per cent) a fit player must
+    /// have featured in for a standing-based protection to hold — the
+    /// rotation bar the label's own honesty cap reads.
+    const STANDING_SHARE_PCT: u32 = 15;
 
     /// Whether a protection resting on STANDING rather than numbers — long
     /// service, dressing-room authority, a veteran keeper's mentoring role
@@ -1345,7 +1511,8 @@ impl CountryResult {
     /// not use, and the sweeps should be free to move him on. Injury and
     /// suspension are excused — being unavailable is not being unwanted.
     fn standing_protection_still_earned(player: &Player, club: &Club, date: NaiveDate) -> bool {
-        if SquadEvidenceContext::current_season_sample(date, club).is_early_season() {
+        let sample = SquadEvidenceContext::current_season_sample(date, club);
+        if sample.is_early_season() {
             return true;
         }
         if player.player_attributes.is_injured
@@ -1358,7 +1525,14 @@ impl CountryResult {
             + player.statistics.played_subs
             + player.cup_statistics.played
             + player.cup_statistics.played_subs;
+        // A share of the club's season, not a raw count: four appearances
+        // in a fifty-match campaign is a frozen-out player at a club that
+        // plays that much, and the count alone read him as "still part of
+        // the team" — which is how a six-year servant with eight games in
+        // three seasons stayed shielded from every sweep.
         appearances > Self::FROZEN_OUT_APPEARANCE_BAR
+            && u32::from(appearances) * 100
+                >= u32::from(sample.club_matches_proxy()) * Self::STANDING_SHARE_PCT
     }
 
     fn is_squad_protected(player: &Player, club: &Club, date: NaiveDate) -> bool {
@@ -1439,7 +1613,10 @@ impl CountryResult {
             .map(|h| h.statistics.average_rating_realistic(pos))
             .unwrap_or(0.0);
 
-        if tenure_years >= 4 && last_rating >= 6.9 {
+        // …and still part of the team: a rating from a handful of games
+        // is not "still delivering", it is a farewell season being read
+        // as a form line.
+        if tenure_years >= 4 && last_rating >= 6.9 && standing_earned {
             return true;
         }
 
@@ -1473,6 +1650,36 @@ impl CountryResult {
         }
 
         false
+    }
+
+    /// What this club expects of a starter, read off its main team's
+    /// reputation — the same anchor the recruitment brief shops against.
+    fn club_level(club: &Club) -> Option<ClubLevelAnchor> {
+        club.teams
+            .main()
+            .or_else(|| club.teams.teams.first())
+            .map(|team| ClubLevelAnchor::for_reputation(team.reputation.overall_score()))
+    }
+
+    /// True when somebody in this group on the main team clears the club's
+    /// key-player floor — the club has a starter at its own level, so a
+    /// squad-mate far below it is depth it can cycle out, not the best it
+    /// has.
+    fn group_has_starter_at_level(
+        club: &Club,
+        group: PlayerFieldPositionGroup,
+        level: &ClubLevelAnchor,
+    ) -> bool {
+        club.teams
+            .main()
+            .or_else(|| club.teams.teams.first())
+            .is_some_and(|team| {
+                team.players
+                    .iter()
+                    .filter(|p| !p.is_on_loan())
+                    .filter(|p| p.position().position_group() == group)
+                    .any(|p| level.meets_key_level(p.player_attributes.current_ability, group))
+            })
     }
 
     /// Returns true if the player's position group already has enough players.
@@ -1808,8 +2015,14 @@ mod tests {
         )]);
         let analysis = CountryResult::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision =
-            CountryResult::evaluate_player_listing(player_ref, &analysis, &club, today, None);
+        let decision = CountryResult::evaluate_player_listing(
+            player_ref,
+            &analysis,
+            &club,
+            today,
+            None,
+            MarketPresence::default(),
+        );
         assert!(
             matches!(decision, ListingDecision::Keep),
             "pure expiry must not list — saw {:?}",
@@ -1831,8 +2044,14 @@ mod tests {
         club.transfer_plan.manager_review_until = Some(Fixture::date(2026, 7, 15));
         let analysis = CountryResult::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision =
-            CountryResult::evaluate_player_listing(player_ref, &analysis, &club, today, None);
+        let decision = CountryResult::evaluate_player_listing(
+            player_ref,
+            &analysis,
+            &club,
+            today,
+            None,
+            MarketPresence::default(),
+        );
         assert!(
             matches!(decision, ListingDecision::Keep),
             "the old regime's listing flag waits for the new manager's review — saw {:?}",
@@ -1856,8 +2075,14 @@ mod tests {
         club.transfer_plan.manager_review_until = Some(Fixture::date(2026, 7, 15));
         let analysis = CountryResult::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision =
-            CountryResult::evaluate_player_listing(player_ref, &analysis, &club, today, None);
+        let decision = CountryResult::evaluate_player_listing(
+            player_ref,
+            &analysis,
+            &club,
+            today,
+            None,
+            MarketPresence::default(),
+        );
         assert!(
             matches!(decision, ListingDecision::Transfer { .. }),
             "a formal request is listed even during the review window — saw {:?}",
@@ -2048,6 +2273,166 @@ mod tests {
                 .count(),
             1,
             "exactly one listing decision — written when the player was flagged"
+        );
+    }
+
+    // ── Badges are claims; the pass makes the rows ──────────────
+
+    /// The Sokolic case. The board audit stamps `Lst` the day it decides,
+    /// and the pass used to treat that badge as proof of a market row —
+    /// so the row was never made, nothing could buy him, the unsold-exit
+    /// valve never saw him, and the reconcile stripped the badge again so
+    /// the renewal manager re-signed him. The badge is now materialised
+    /// into a permanent listing with no duplicate history (the board wrote
+    /// its own), and a candidate's own badge does not occupy the selling
+    /// slot the depth cap is counting.
+    #[test]
+    fn a_board_badge_without_a_market_row_reaches_the_market() {
+        let today = Fixture::date(2026, 5, 1);
+        // Seven midfielders: the position-group minimum (6) leaves exactly
+        // one listing slot, which the candidate's own badge used to fill.
+        let mut players: Vec<Player> = (101..=107).map(Fixture::player).collect();
+        {
+            let listed = &mut players[0];
+            listed
+                .statuses
+                .add(Fixture::date(2026, 4, 1), PlayerStatusType::Lst);
+            listed.decision_history.add(
+                Fixture::date(2026, 4, 1),
+                "dec_board_transfer_listed".to_string(),
+                "dec_reason_underutilized".to_string(),
+                "dec_decided_board".to_string(),
+            );
+        }
+        let club = Fixture::club(vec![Fixture::team(10, "main", TeamType::Main, players)]);
+        let mut country = Fixture::country(club);
+        let mut summary = TransferActivitySummary::new();
+
+        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+
+        let listing = country
+            .transfer_market
+            .listings
+            .iter()
+            .find(|l| l.player_id == 101)
+            .expect("a board-listed main-squad player must reach the market");
+        assert_eq!(listing.listing_type, TransferListingType::Transfer);
+        assert_eq!(listing.status, TransferListingStatus::Available);
+        let player = country.clubs[0].teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 101)
+            .unwrap();
+        assert!(
+            player.statuses.has(PlayerStatusType::Lst),
+            "the badge is backed by a row now and survives the reconcile"
+        );
+        assert_eq!(
+            player
+                .decision_history
+                .items
+                .iter()
+                .filter(|d| d.movement == "dec_transfer_listed")
+                .count(),
+            0,
+            "the board wrote the decision; the pass must not add a second"
+        );
+    }
+
+    /// A main-squad player on a loan row nobody has taken for half a year,
+    /// whom the club has also decided to sell, is upgraded in place — the
+    /// row keeps its date so the unsold-exit valve's clock keeps the time
+    /// already served. The reserve branch had this rule; the main squad
+    /// did not, which is how a keeper sat on a five-year-old loan row.
+    #[test]
+    fn a_stale_loan_row_on_a_main_squad_player_the_club_wants_sold_upgrades_in_place() {
+        let today = Fixture::date(2026, 5, 1);
+        let listed_on = Fixture::date(2025, 10, 1);
+        let mut players: Vec<Player> = (101..=107).map(Fixture::player).collect();
+        {
+            let warehoused = &mut players[0];
+            warehoused.statuses.add(listed_on, PlayerStatusType::Loa);
+            warehoused.contract.as_mut().unwrap().squad_status = PlayerSquadStatus::NotNeeded;
+        }
+        let club = Fixture::club(vec![Fixture::team(10, "main", TeamType::Main, players)]);
+        let mut country = Fixture::country(club);
+        country.transfer_market.add_listing(TransferListing::new(
+            101,
+            100,
+            10,
+            CurrencyValue {
+                amount: 0.0,
+                currency: Currency::Usd,
+            },
+            listed_on,
+            TransferListingType::Loan,
+        ));
+        let mut summary = TransferActivitySummary::new();
+
+        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+
+        let rows: Vec<&TransferListing> = country
+            .transfer_market
+            .listings
+            .iter()
+            .filter(|l| l.player_id == 101)
+            .collect();
+        assert_eq!(rows.len(), 1, "upgraded in place, not duplicated");
+        assert_eq!(rows[0].listing_type, TransferListingType::Transfer);
+        assert_eq!(
+            rows[0].listed_date, listed_on,
+            "the valve's clock keeps the time served on the loan list"
+        );
+        let player = country.clubs[0].teams.teams[0]
+            .players
+            .players
+            .iter()
+            .find(|p| p.id == 101)
+            .unwrap();
+        assert!(player.statuses.has(PlayerStatusType::Lst));
+    }
+
+    /// A loan row the market has only just seen is left to the loan
+    /// market, sale intent or not.
+    #[test]
+    fn a_fresh_loan_row_is_left_to_the_loan_market() {
+        let today = Fixture::date(2026, 5, 1);
+        let listed_on = Fixture::date(2026, 4, 1);
+        let mut players: Vec<Player> = (101..=107).map(Fixture::player).collect();
+        {
+            let loaned = &mut players[0];
+            loaned.statuses.add(listed_on, PlayerStatusType::Loa);
+            loaned.contract.as_mut().unwrap().squad_status = PlayerSquadStatus::NotNeeded;
+        }
+        let club = Fixture::club(vec![Fixture::team(10, "main", TeamType::Main, players)]);
+        let mut country = Fixture::country(club);
+        country.transfer_market.add_listing(TransferListing::new(
+            101,
+            100,
+            10,
+            CurrencyValue {
+                amount: 0.0,
+                currency: Currency::Usd,
+            },
+            listed_on,
+            TransferListingType::Loan,
+        ));
+        let mut summary = TransferActivitySummary::new();
+
+        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+
+        let rows: Vec<&TransferListing> = country
+            .transfer_market
+            .listings
+            .iter()
+            .filter(|l| l.player_id == 101)
+            .collect();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].listing_type,
+            TransferListingType::Loan,
+            "a month on the loan list is not a stalemate"
         );
     }
 
@@ -2277,8 +2662,14 @@ mod tests {
         )]);
         let analysis = CountryResult::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision =
-            CountryResult::evaluate_player_listing(player_ref, &analysis, &club, today, None);
+        let decision = CountryResult::evaluate_player_listing(
+            player_ref,
+            &analysis,
+            &club,
+            today,
+            None,
+            MarketPresence::default(),
+        );
         assert!(
             matches!(decision, ListingDecision::Keep),
             "unhappy-but-useful regular frustrated only by minutes must be kept — saw {:?}",
@@ -2300,8 +2691,14 @@ mod tests {
         )]);
         let analysis = CountryResult::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision =
-            CountryResult::evaluate_player_listing(player_ref, &analysis, &club, today, None);
+        let decision = CountryResult::evaluate_player_listing(
+            player_ref,
+            &analysis,
+            &club,
+            today,
+            None,
+            MarketPresence::default(),
+        );
         assert!(
             matches!(decision, ListingDecision::Keep),
             "a first-team regular with no minutes early-season must be kept — saw {:?}",
@@ -2326,8 +2723,14 @@ mod tests {
         )]);
         let analysis = CountryResult::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision =
-            CountryResult::evaluate_player_listing(player_ref, &analysis, &club, today, None);
+        let decision = CountryResult::evaluate_player_listing(
+            player_ref,
+            &analysis,
+            &club,
+            today,
+            None,
+            MarketPresence::default(),
+        );
         assert!(
             matches!(decision, ListingDecision::Keep),
             "an unhappy rotation player must be kept, not listed — saw {:?}",
@@ -2354,8 +2757,14 @@ mod tests {
         )]);
         let analysis = CountryResult::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision =
-            CountryResult::evaluate_player_listing(player_ref, &analysis, &club, today, None);
+        let decision = CountryResult::evaluate_player_listing(
+            player_ref,
+            &analysis,
+            &club,
+            today,
+            None,
+            MarketPresence::default(),
+        );
         assert!(
             matches!(decision, ListingDecision::Transfer { ref reason } if reason == "dec_reason_player_unhappy"),
             "an unhappy player past six months must be listed — saw {:?}",
@@ -2385,8 +2794,14 @@ mod tests {
         )]);
         let analysis = CountryResult::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision =
-            CountryResult::evaluate_player_listing(player_ref, &analysis, &club, today, None);
+        let decision = CountryResult::evaluate_player_listing(
+            player_ref,
+            &analysis,
+            &club,
+            today,
+            None,
+            MarketPresence::default(),
+        );
         assert!(
             matches!(decision, ListingDecision::Keep),
             "a recently-unhappy useful player must be kept until six months — saw {:?}",
@@ -2408,8 +2823,14 @@ mod tests {
         )]);
         let analysis = CountryResult::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision =
-            CountryResult::evaluate_player_listing(player_ref, &analysis, &club, today, None);
+        let decision = CountryResult::evaluate_player_listing(
+            player_ref,
+            &analysis,
+            &club,
+            today,
+            None,
+            MarketPresence::default(),
+        );
         assert!(
             !matches!(decision, ListingDecision::Keep),
             "an explicit NotNeeded surplus player must still be actioned — saw {:?}",
@@ -2431,8 +2852,14 @@ mod tests {
         )]);
         let analysis = CountryResult::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision =
-            CountryResult::evaluate_player_listing(player_ref, &analysis, &club, today, None);
+        let decision = CountryResult::evaluate_player_listing(
+            player_ref,
+            &analysis,
+            &club,
+            today,
+            None,
+            MarketPresence::default(),
+        );
         assert!(
             matches!(decision, ListingDecision::Transfer { ref reason } if reason == "dec_reason_player_requested"),
             "a formal transfer request must still list — saw {:?}",
@@ -2571,8 +2998,14 @@ mod tests {
                 .iter()
                 .find(|p| p.id == 99)
                 .unwrap();
-            let decision =
-                CountryResult::evaluate_player_listing(player, &analysis, &club, today, None);
+            let decision = CountryResult::evaluate_player_listing(
+                player,
+                &analysis,
+                &club,
+                today,
+                None,
+                MarketPresence::default(),
+            );
             assert!(
                 matches!(decision, ListingDecision::Keep),
                 "last season's regular must be kept under {:?} — saw {:?}",

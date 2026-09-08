@@ -1,4 +1,5 @@
 use crate::club::player::ManagerPromiseKind;
+use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::club::player::interaction::{
     InteractionOutcome, InteractionTone, InteractionTopic, ManagerInteraction,
@@ -224,11 +225,33 @@ impl TeamBehaviourResult {
 
                 let mut promise_created = false;
 
-                // Remove statuses on success
+                // The moving-on talk is the honest word, success or not:
+                // the club is finding him a move. It lands as the same
+                // told-not-in-plans event the listing pass uses, on the
+                // same cooldown, so a player who keeps asking hears it at
+                // most twice a season and nothing here clears his
+                // unhappiness.
+                if matches!(talk.talk_type, ManagerTalkType::MovingOnTalk) {
+                    let magnitude = HappinessConfig::default().catalog.told_not_in_plans;
+                    player.happiness.add_event_with_cooldown(
+                        HappinessEventType::ToldNotInPlans,
+                        magnitude,
+                        180,
+                    );
+                }
+
+                // Remove statuses on success. A player the club is moving
+                // on keeps his unhappiness whatever a talk achieved: the
+                // grievance is that he is not wanted, and no chat changes
+                // that — clearing it reset the six-month clock behind his
+                // own transfer request every week.
+                let being_moved_on = player.is_being_moved_on();
                 if talk.success {
                     match talk.talk_type {
                         ManagerTalkType::PlayingTimeTalk | ManagerTalkType::MoraleTalk => {
-                            player.statuses.remove(PlayerStatusType::Unh);
+                            if !being_moved_on {
+                                player.statuses.remove(PlayerStatusType::Unh);
+                            }
                             // A successful playing-time chat is a concrete
                             // promise — record it with full credibility &
                             // importance context so verification weights
@@ -992,6 +1015,12 @@ pub enum ManagerTalkType {
     PlayingTimeTalk,
     MoraleTalk,
     TransferDiscussion,
+    /// The manager's answer to a player the club is moving on who asks
+    /// about his minutes or his future: the club is finding him a move.
+    /// No promise, no lift, and it never clears his unhappiness — the
+    /// honest word lands as the told-not-in-plans event, rate-limited to
+    /// the same cooldown the listing pass uses when it tells him.
+    MovingOnTalk,
     Praise,
     Discipline,
     Motivational,
@@ -1011,7 +1040,9 @@ pub(crate) fn topic_for_talk(talk: ManagerTalkType) -> InteractionTopic {
         ManagerTalkType::MoraleTalk | ManagerTalkType::Motivational => InteractionTopic::PoorForm,
         ManagerTalkType::Praise => InteractionTopic::GoodForm,
         ManagerTalkType::Discipline => InteractionTopic::Discipline,
-        ManagerTalkType::TransferDiscussion => InteractionTopic::TransferRequest,
+        ManagerTalkType::TransferDiscussion | ManagerTalkType::MovingOnTalk => {
+            InteractionTopic::TransferRequest
+        }
         ManagerTalkType::LoanRequest => InteractionTopic::LoanRequest,
     }
 }
@@ -1029,6 +1060,11 @@ struct TalkFeedGate;
 
 impl TalkFeedGate {
     fn feed_worthy(talk_type: &ManagerTalkType, success: bool, morale_change: f32) -> bool {
+        // The moving-on talk's feed row is the told-not-in-plans event it
+        // lands separately; as a talk row it would read as praise.
+        if matches!(talk_type, ManagerTalkType::MovingOnTalk) {
+            return false;
+        }
         success || morale_change < 0.0 || matches!(talk_type, ManagerTalkType::Discipline)
     }
 }
@@ -1049,7 +1085,9 @@ impl ManagerInteractionTopicMapper {
                 ManagerInteractionTopic::Other
             }
             ManagerTalkType::Discipline => ManagerInteractionTopic::Discipline,
-            ManagerTalkType::TransferDiscussion => ManagerInteractionTopic::Other,
+            ManagerTalkType::TransferDiscussion | ManagerTalkType::MovingOnTalk => {
+                ManagerInteractionTopic::Other
+            }
             ManagerTalkType::LoanRequest => ManagerInteractionTopic::Other,
         }
     }
@@ -1354,8 +1392,8 @@ mod severity_cap_tests {
     use crate::transfers::TransferListing;
     use crate::{
         Club, ConflictLocation, Country, HappinessEventCause, HappinessEventSeverity,
-        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
-        PlayerSkills, Team, TeammateConflictContext, TeammateConflictReason,
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, Team, TeammateConflictContext, TeammateConflictReason,
     };
     use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
     use std::collections::HashMap;
@@ -1690,5 +1728,103 @@ mod severity_cap_tests {
             .happiness
             .same_tick_event_count(&HappinessEventType::ConflictWithTeammate);
         assert!(already_today >= 2);
+    }
+
+    // ── Talks and the player the club is moving on ──────────────
+
+    /// A successful playing-time talk clears an ordinary backup's
+    /// unhappiness, but never that of a player the club is moving on: his
+    /// grievance is that he is not wanted, and clearing it reset the
+    /// six-month clock behind his own transfer request every week.
+    #[test]
+    fn a_promise_does_not_clear_the_unhappiness_of_a_player_being_moved_on() {
+        let now = Fixtures::midnight(2026, 6, 1);
+        let mut moved_on = Fixtures::player(1);
+        let mut backup = Fixtures::player(2);
+        for (player, status) in [
+            (&mut moved_on, PlayerSquadStatus::NotNeeded),
+            (&mut backup, PlayerSquadStatus::MainBackupPlayer),
+        ] {
+            let mut contract = PlayerClubContract::new(50_000, Fixtures::date(2028, 6, 30));
+            contract.squad_status = status;
+            player.contract = Some(contract);
+            player
+                .statuses
+                .add(Fixtures::date(2026, 1, 1), PlayerStatusType::Unh);
+        }
+        let mut data = StubData::new(now, vec![moved_on, backup]);
+
+        let mut result = TeamBehaviourResult::new();
+        for id in [1u32, 2] {
+            result.manager_talks.push(ManagerTalkResult {
+                player_id: id,
+                staff_id: 7,
+                talk_type: ManagerTalkType::PlayingTimeTalk,
+                success: true,
+                morale_change: 10.0,
+                relationship_change: 0.3,
+                tone: InteractionTone::Calm,
+                honest_framing: false,
+                mood_before: 30.0,
+            });
+        }
+        result.process(&mut data);
+
+        assert!(
+            data.player(1).unwrap().statuses.has(PlayerStatusType::Unh),
+            "a written-off player keeps the grievance a promise cannot answer"
+        );
+        assert!(
+            !data.player(2).unwrap().statuses.has(PlayerStatusType::Unh),
+            "an ordinary backup is settled by the same talk"
+        );
+    }
+
+    /// The moving-on talk lands as the honest word — the same
+    /// told-not-in-plans event the listing pass uses — and leaves the
+    /// unhappiness where it is.
+    #[test]
+    fn the_moving_on_talk_lands_as_the_honest_word() {
+        let now = Fixtures::midnight(2026, 6, 1);
+        let mut moved_on = Fixtures::player(1);
+        let mut contract = PlayerClubContract::new(50_000, Fixtures::date(2028, 6, 30));
+        contract.squad_status = PlayerSquadStatus::NotNeeded;
+        moved_on.contract = Some(contract);
+        moved_on
+            .statuses
+            .add(Fixtures::date(2026, 1, 1), PlayerStatusType::Unh);
+        let mut data = StubData::new(now, vec![moved_on]);
+
+        let mut result = TeamBehaviourResult::new();
+        result.manager_talks.push(ManagerTalkResult {
+            player_id: 1,
+            staff_id: 7,
+            talk_type: ManagerTalkType::MovingOnTalk,
+            success: true,
+            morale_change: 0.0,
+            relationship_change: 0.0,
+            tone: InteractionTone::Honest,
+            honest_framing: true,
+            mood_before: 30.0,
+        });
+        result.process(&mut data);
+
+        let player = data.player(1).unwrap();
+        assert!(player.statuses.has(PlayerStatusType::Unh));
+        assert!(
+            player
+                .happiness
+                .has_recent_event(&HappinessEventType::ToldNotInPlans, 7),
+            "the answer he gets is that he is not in the plans"
+        );
+        assert!(
+            !player
+                .happiness
+                .has_recent_event(&HappinessEventType::ManagerPlayingTimePromise, 7)
+                && !player
+                    .happiness
+                    .has_recent_event(&HappinessEventType::ManagerPraise, 7),
+            "no promise and no praise row for the honest word"
+        );
     }
 }

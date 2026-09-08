@@ -11,12 +11,14 @@ use crate::club::mind::organs::memory::ActorRef;
 use crate::club::player::builder::PlayerBuilder;
 use crate::club::player::condition::InjuryRiskInputs;
 use crate::club::player::player::Player;
+use crate::league::Season;
 use crate::r#match::engine::result::PlayerMatchEndStats;
 use crate::shared::fullname::FullName;
 use crate::{
     AwardReputationInput, AwardReputationKind, HappinessEventType, PersonAttributes,
     PlayerAttributes, PlayerFieldPositionGroup, PlayerPosition, PlayerPositionType,
-    PlayerPositions, PlayerSkills, PlayerStatusType,
+    PlayerPositions, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory,
+    PlayerStatisticsHistoryItem, PlayerStatusType, TeamInfo,
 };
 use chrono::NaiveDate;
 
@@ -157,6 +159,146 @@ fn seed_home(p: &mut Player, slug: &str, league_slug: &str) {
         },
         d(2026, 8, 1),
         false,
+    );
+}
+
+/// The stretch of a career the once-in-a-tenure events read: the frozen
+/// seasons behind him, and the match that adds to them.
+struct Career;
+
+impl Career {
+    fn team(slug: &str, league_slug: &str) -> TeamInfo {
+        TeamInfo {
+            name: slug.to_string(),
+            slug: slug.to_string(),
+            reputation: 100,
+            league_name: league_slug.to_string(),
+            league_slug: league_slug.to_string(),
+        }
+    }
+
+    /// A completed league season at `slug`.
+    fn frozen_season(
+        slug: &str,
+        start_year: u16,
+        played: u16,
+        goals: u16,
+        seq_id: u32,
+    ) -> PlayerStatisticsHistoryItem {
+        PlayerStatisticsHistoryItem {
+            season: Season::new(start_year),
+            team_name: slug.to_string(),
+            team_slug: slug.to_string(),
+            team_reputation: 100,
+            league_name: "rpl".to_string(),
+            league_slug: "rpl".to_string(),
+            is_loan: false,
+            transfer_fee: None,
+            statistics: PlayerStatistics {
+                played,
+                goals,
+                ..PlayerStatistics::default()
+            },
+            seq_id,
+        }
+    }
+
+    /// A competitive start with one goal in it.
+    fn score(p: &mut Player) {
+        let s = stats(7.0, 1, 0, 0, PlayerFieldPositionGroup::Forward);
+        let o = outcome(
+            &s,
+            7.0,
+            false,
+            false,
+            false,
+            false,
+            2,
+            0,
+            MatchParticipation::Starter,
+        );
+        p.on_match_played(&o);
+    }
+}
+
+// ── Once per tenure, not once per season ─────────────────────────────
+//
+// The live season counters are drained into his history every summer,
+// so any "first" or milestone read off them alone came back every
+// August: a ten-year servant scored "his first goal for the club" once
+// a season, and the appearance ladder could only see a fifty-game
+// season. The reads now go through the career tally.
+
+#[test]
+fn a_first_goal_for_the_club_is_a_first_for_the_tenure_not_the_season() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    seed_home(&mut p, "rubin", "rpl");
+
+    Career::score(&mut p);
+    assert_eq!(count_events(&p, &HappinessEventType::FirstClubGoal), 1);
+
+    // The summer drains the season's counters into his history, and by
+    // the next August the event that fired is long pruned from the
+    // recent list — the cooldown alone never held this back.
+    p.on_season_end(
+        Season::new(2026),
+        &Career::team("rubin", "rpl"),
+        d(2027, 6, 1),
+    );
+    p.happiness.recent_events.clear();
+
+    Career::score(&mut p);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::FirstClubGoal),
+        0,
+        "his second season's first goal is not his first for the club"
+    );
+}
+
+#[test]
+fn a_new_club_is_a_new_first_goal() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    seed_home(&mut p, "rubin", "rpl");
+    Career::score(&mut p);
+
+    p.on_transfer(
+        &Career::team("rubin", "rpl"),
+        &Career::team("spartak", "rpl"),
+        1_000_000.0,
+        d(2027, 1, 15),
+    );
+    // The move wipes the mood ledger, as `reset_on_club_change` does.
+    p.happiness.recent_events.clear();
+
+    Career::score(&mut p);
+    assert_eq!(
+        count_events(&p, &HappinessEventType::FirstClubGoal),
+        1,
+        "what he did for the last club does not count here"
+    );
+}
+
+#[test]
+fn milestones_read_the_career_not_the_season() {
+    let mut p = build_player(PlayerPositionType::Striker, PersonAttributes::default());
+    // Forty-nine games and twenty-four goals across two frozen seasons.
+    p.statistics_history = PlayerStatisticsHistory::from_items(vec![
+        Career::frozen_season("rubin", 2024, 30, 12, 0),
+        Career::frozen_season("rubin", 2025, 19, 12, 1),
+    ]);
+    seed_home(&mut p, "rubin", "rpl");
+
+    Career::score(&mut p);
+
+    assert_eq!(
+        count_events(&p, &HappinessEventType::AppearanceMilestone),
+        1,
+        "his fiftieth game — the season counter alone reads one"
+    );
+    assert_eq!(
+        count_events(&p, &HappinessEventType::GoalMilestone),
+        1,
+        "and his twenty-fifth goal"
     );
 }
 

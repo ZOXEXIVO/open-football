@@ -1,6 +1,7 @@
 use crate::PlayerStatistics;
 use crate::TeamInfo;
 use crate::club::player::player::Player;
+use crate::club::player::statistics::CompetitiveTally;
 use crate::continent::competitions::{
     CHAMPIONS_LEAGUE_SLUG, CONFERENCE_LEAGUE_SLUG, COPA_LIBERTADORES_SLUG, EUROPA_LEAGUE_SLUG,
 };
@@ -278,6 +279,27 @@ impl Player {
             is_loan,
             date,
         );
+    }
+
+    /// Everything competitive he has done for the club he is at now,
+    /// the open spell's league and cup games included. See
+    /// [`crate::PlayerStatisticsHistory::club_tally`].
+    pub fn club_tally(&self) -> CompetitiveTally {
+        self.statistics_history.club_tally(self.live_tally())
+    }
+
+    /// The whole competitive career, the open spell included. See
+    /// [`crate::PlayerStatisticsHistory::career_tally`].
+    pub fn career_tally(&self) -> CompetitiveTally {
+        self.statistics_history.career_tally(self.live_tally())
+    }
+
+    /// League and cup games of the open spell, which no store holds
+    /// until the spell closes.
+    fn live_tally(&self) -> CompetitiveTally {
+        let mut live = CompetitiveTally::of(&self.statistics);
+        live.add(&self.cup_statistics);
+        live
     }
 
     /// Season-end snapshot for a player sitting on a non-senior squad
@@ -1579,6 +1601,7 @@ mod tests {
                 is_loan: false,
                 transfer_fee: None,
                 coverage_days: None,
+                spell_end: None,
                 statistics: make_stats(25, 3),
             });
 
@@ -1778,6 +1801,84 @@ mod tests {
         assert!(
             naxxar_pos < floriana_pos,
             "loan row must render above the parent registration row: {rows:?}"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // User-reported (Alexandr Maximenko): four spells inside one season,
+    // two of them at the same club. Sold by Spartak Moscow on 2 Aug 2026
+    // after one game, loaned straight back out to Zbrojovka Brno on 22
+    // Aug, recalled in January, played for Wikki Tourists, then loaned to
+    // Rubin on 5 Feb 2027 — where he still is. The page must read in the
+    // order the transfers happened, newest first.
+    //
+    // Nothing but the spells' end days can produce that order: the Wikki
+    // row MERGES its pre-loan and post-recall legs, so it keeps the
+    // `seq_id` of the leg that came before Brno's, and the old
+    // rank-then-seq sort floated it above both loans — burying the club
+    // the player actually plays for under the parent that owns him.
+    // ---------------------------------------------------------------
+    #[test]
+    fn four_spells_in_one_season_read_in_transfer_order() {
+        let spartak = team_with_league(
+            "Spartak Moscow",
+            "spartak-moscow",
+            "Premier League",
+            "russian-premier-league",
+        );
+        let wikki = team_with_league(
+            "Wikki Tourists",
+            "wikki-tourists",
+            "Premier League",
+            "nigerian-premier-league",
+        );
+        let brno = team_with_league(
+            "Zbrojovka Brno",
+            "zbrojovka-brno",
+            "First League",
+            "czech-first-league",
+        );
+        let rubin = team_with_league("Rubin", "rubin", "Premier League", "russian-premier-league");
+        let mut p = make_player();
+
+        // One Spartak game, then sold to Wikki Tourists for 100K.
+        p.statistics_history
+            .seed_initial_team(&spartak, make_date(2026, 8, 1), false);
+        p.statistics = make_stats(1, 0);
+        p.on_manual_transfer(&spartak, &wikki, Some(100_000.0), make_date(2026, 8, 2));
+
+        // Loaned straight out to Brno — 18 apps — and recalled in January.
+        p.contract_loan = Some(loan_contract_until(2027, 6, 30));
+        p.on_manual_loan(&wikki, &wikki, &brno, make_date(2026, 8, 22));
+        p.statistics = make_stats(18, 0);
+        p.contract_loan = None;
+        p.on_loan_return(&brno, &wikki, make_date(2027, 1, 10));
+
+        // A month at Wikki — 10 apps — then out on loan to Rubin.
+        p.statistics = make_stats(10, 0);
+        p.contract_loan = Some(loan_contract_until(2028, 6, 30));
+        p.on_manual_loan(&wikki, &wikki, &rubin, make_date(2027, 2, 5));
+        p.statistics = make_stats(2, 0);
+
+        // Season closes with the player still on loan at Rubin.
+        p.on_season_end(Season::new(2026), &rubin, make_date(2027, 5, 25));
+
+        let rows = history_rows_of(&p, make_date(2027, 8, 24));
+        let season: Vec<(String, bool, u16)> = rows
+            .iter()
+            .filter(|r| r.0 == 2026)
+            .map(|r| (r.1.clone(), r.2, r.3))
+            .collect();
+        assert_eq!(
+            season,
+            vec![
+                ("rubin".to_string(), true, 2),
+                ("wikki-tourists".to_string(), false, 10),
+                ("zbrojovka-brno".to_string(), true, 18),
+                ("spartak-moscow".to_string(), false, 1),
+            ],
+            "2026/27 must read newest spell first — Rubin (5 Feb), Wikki (recalled \
+             10 Jan, left 5 Feb), Brno (22 Aug), Spartak (sold 2 Aug): {rows:?}"
         );
     }
 

@@ -173,15 +173,34 @@ impl DebtProfile {
         let facility = Self::facility_limit(trailing_annual_income);
         let debt = -balance;
 
+        // Inside the facility the ladder reads the debt against the
+        // revenue that services it — but a club can sit comfortably
+        // inside a 1.5×-turnover facility while owing more than a year of
+        // wages, and that is the balance sheet of a club that has stopped
+        // trading normally, whatever the bank's paperwork says. Real
+        // Madrid at minus 904M on a 955M turnover read as merely
+        // "Leveraged": no owner conversation, no wage ceiling, and the
+        // wage-relief pass at its politest setting. Insolvency-level
+        // distress lifts the reading to the owner's desk; the facility
+        // decides only how much further it goes.
+        let insolvent = matches!(distress, DistressLevel::Insolvency);
         if debt <= facility / 2 {
-            return DebtStanding::Solvent;
+            return if insolvent {
+                DebtStanding::OwnerFunded
+            } else {
+                DebtStanding::Solvent
+            };
         }
         if debt <= facility {
-            return DebtStanding::Leveraged;
+            return if insolvent {
+                DebtStanding::OwnerFunded
+            } else {
+                DebtStanding::Leveraged
+            };
         }
         // Past the facility. How far past, and how bad the cash burn is,
         // decides whether the owner is still willing to fund it.
-        if debt <= facility * 2 && !matches!(distress, DistressLevel::Insolvency) {
+        if debt <= facility * 2 && !insolvent {
             return DebtStanding::OwnerFunded;
         }
         DebtStanding::Emergency
@@ -325,6 +344,29 @@ mod tests {
         assert_eq!(
             DebtProfile::classify(-facility * 3, REVENUE, DistressLevel::Insolvency, None),
             DebtStanding::Emergency
+        );
+    }
+
+    /// Real Madrid, 2032: minus 904M on a 955M turnover sat inside the
+    /// facility and read as merely "Leveraged" — no owner conversation, no
+    /// wage ceiling, the politest wage-relief setting — while the club owed
+    /// more than a year of wages. Insolvency-level distress reaches the
+    /// owner's desk wherever the facility says the debt sits.
+    #[test]
+    fn insolvency_inside_the_facility_reaches_the_owner() {
+        let facility = DebtProfile::facility_limit(REVENUE);
+        assert_eq!(
+            DebtProfile::classify(-facility / 4, REVENUE, DistressLevel::Insolvency, None),
+            DebtStanding::OwnerFunded
+        );
+        assert_eq!(
+            DebtProfile::classify(-facility * 3 / 4, REVENUE, DistressLevel::Insolvency, None),
+            DebtStanding::OwnerFunded
+        );
+        // Ordinary distress inside the facility is still ordinary borrowing.
+        assert_eq!(
+            DebtProfile::classify(-facility / 4, REVENUE, DistressLevel::Severe, None),
+            DebtStanding::Solvent
         );
     }
 

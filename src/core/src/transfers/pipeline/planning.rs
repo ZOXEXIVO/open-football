@@ -457,6 +457,15 @@ pub struct BriefSlot {
     pub min_gain: i16,
     /// Money this slot may command.
     pub envelope: f64,
+    /// Money the department may LOOK at for this slot. For an ordinary
+    /// slot it is the envelope; for the one transformative search it is
+    /// the whole pot, because a board that has decided on a marquee
+    /// signing redirects the cover money to it rather than let the one
+    /// name that would change the side fall outside a 60 % slice. The
+    /// envelope is still what the bid is sized against and the board still
+    /// vetoes above the budget — this only widens what gets watched and
+    /// shortlisted.
+    pub fee_reach: f64,
     pub age_band: (u8, u8),
     pub promised_status: PlayerSquadStatus,
     /// The level the plan AIMS at in this shirt: the divisional baseline
@@ -671,6 +680,10 @@ impl SquadPlanner {
             let tier = Self::tier_for(cand, rank, slack.ratio, roster_full);
             let envelope = (inputs.available_budget * tier.envelope_share())
                 .min((inputs.available_budget - committed).max(0.0));
+            let fee_reach = match tier {
+                BriefTier::A => inputs.available_budget.max(envelope),
+                BriefTier::B | BriefTier::C => envelope,
+            };
             let reason = Self::reason_for(cand, inputs.group_needs);
             let priority = Self::priority_for(cand, tier);
 
@@ -695,6 +708,7 @@ impl SquadPlanner {
                     tier.min_gain().max(cand.gap.max(0))
                 },
                 envelope,
+                fee_reach,
                 age_band,
                 promised_status: tier.promised_status(),
                 target_level: cand.target,
@@ -879,6 +893,7 @@ impl SquadPlanner {
                 gap: 0,
                 min_gain: 0,
                 envelope,
+                fee_reach: envelope,
                 age_band: Self::age_band(
                     plan.age_profile_target(),
                     BriefTier::C,
@@ -1056,6 +1071,7 @@ mod planning_tests {
                 gap: 140,
                 min_gain: BriefTier::B.min_gain(),
                 envelope: 0.0,
+                fee_reach: 0.0,
                 age_band: (20, 30),
                 promised_status: PlayerSquadStatus::FirstTeamRegular,
                 target_level: 140,

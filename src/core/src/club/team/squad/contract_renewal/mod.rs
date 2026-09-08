@@ -13,8 +13,8 @@ use crate::club::staff::perception::PotentialEstimator;
 use crate::utils::DateUtils;
 use crate::utils::FormattingUtils;
 use crate::{
-    PlayerContractProposal, PlayerMessage, PlayerMessageType, PlayerSquadStatus, PlayerStatusType,
-    Team, TeamType,
+    PlayerContractProposal, PlayerFieldPositionGroup, PlayerMessage, PlayerMessageType,
+    PlayerSquadStatus, PlayerStatusType, Team, TeamType,
 };
 use chrono::NaiveDate;
 use log::debug;
@@ -579,10 +579,15 @@ impl ContractRenewalManager {
     /// Deliberately narrow. Youngsters are exempt — the development
     /// pathway, not the contract clock, owns a blocked 21-year-old, and a
     /// club that let every unplayed prospect walk would gut its academy.
-    /// Veterans are exempt too: a settled deputy seeing out his career is
-    /// a real role, and the veteran-keeper protection elsewhere says so.
-    /// What is left is exactly the wasted prime the club should either
-    /// start picking or stop paying.
+    /// A veteran deputy KEEPER is exempt: the mentoring number two is a
+    /// real role, and the veteran-keeper protection elsewhere says so. An
+    /// outfield veteran is not — "seeing out his career" means letting the
+    /// deal he has run down, not signing him three more times. Left
+    /// unchecked, a 35-year-old forward with eight games in three seasons
+    /// was re-signed every time his deal dipped under the regular's
+    /// eighteen-month threshold, six times in four years, the last to 37.
+    /// What is left is exactly the wasted years the club should either
+    /// start picking or stop paying for.
     fn renewal_has_no_football_case(
         player: &Player,
         date: NaiveDate,
@@ -590,16 +595,28 @@ impl ContractRenewalManager {
     ) -> bool {
         /// Below this age a blocked player is a development case.
         const MIN_AGE: u8 = 25;
-        /// From this age a squad role is a career, not a waste.
+        /// From this age a squad role is judged on the shorter clock.
         const VETERAN_AGE: u8 = 33;
         /// Consecutive seasons without first-team football before the
         /// club stops offering fresh terms.
         const STUCK_SEASONS: u16 = 3;
+        /// A veteran has fewer seasons left to wait out; two unused ones
+        /// are the case.
+        const VETERAN_STUCK_SEASONS: u16 = 2;
 
         let age = player.age(date);
-        if age < MIN_AGE || age >= VETERAN_AGE {
+        if age < MIN_AGE {
             return false;
         }
+        let is_veteran = age >= VETERAN_AGE;
+        if is_veteran && player.position().position_group() == PlayerFieldPositionGroup::Goalkeeper {
+            return false;
+        }
+        let stuck_bar = if is_veteran {
+            VETERAN_STUCK_SEASONS
+        } else {
+            STUCK_SEASONS
+        };
         // A manager-pinned player is wanted by definition.
         if player.is_force_match_selection {
             return false;
@@ -618,7 +635,7 @@ impl ContractRenewalManager {
             return false;
         }
         StuckCareerScan::of_in_squad(player, date, squad_tier)
-            .map(|scan| scan.stuck_years >= STUCK_SEASONS)
+            .map(|scan| scan.stuck_years >= stuck_bar)
             .unwrap_or(false)
     }
 

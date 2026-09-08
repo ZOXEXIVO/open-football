@@ -3744,6 +3744,7 @@ mod tests {
             is_loan,
             transfer_fee: None,
             coverage_days: None,
+            spell_end: None,
             statistics: PlayerStatistics {
                 played: starts,
                 ..Default::default()

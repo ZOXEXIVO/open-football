@@ -70,8 +70,15 @@ impl TeamBehaviour {
                 talk_candidates.push((player.id, ManagerTalkType::TransferDiscussion, 100));
             }
 
-            // High priority: unhappy players
-            if player.statuses.has(PlayerStatusType::Unh) {
+            // High priority: unhappy players. A player the club is moving
+            // on has had his conversation — he was told he is not in the
+            // plans when he was listed — and the market owns him now. The
+            // weekly playing-time talk used to promise him minutes the
+            // manager could not give, and every successful one cleared his
+            // unhappiness, so the six-month clock behind his own transfer
+            // request never completed: seventeen promises in a season to a
+            // keeper the board had listed three times.
+            if player.statuses.has(PlayerStatusType::Unh) && !player.is_being_moved_on() {
                 // Decide between playing time talk and morale talk
                 let talk_type = if player.happiness.factors.playing_time < -5.0 {
                     ManagerTalkType::PlayingTimeTalk
@@ -92,7 +99,7 @@ impl TeamBehaviour {
                     if let Some(reason) = PrivateTalkInbox::pending_reason(player, date) {
                         talk_candidates.push((
                             player.id,
-                            PrivateTalkInbox::talk_type_for(reason),
+                            PrivateTalkInbox::talk_type_for(reason, player),
                             95,
                         ));
                     }
@@ -306,6 +313,10 @@ impl TeamBehaviour {
             (ManagerTalkType::MoraleTalk, false) => (-3.0, -0.2),
             (ManagerTalkType::TransferDiscussion, true) => (5.0, 0.2),
             (ManagerTalkType::TransferDiscussion, false) => (0.0, 0.0),
+            // The honest answer to a man the club is moving on carries no
+            // lift and no promise; what it costs him lands as the
+            // told-not-in-plans event when the result is applied.
+            (ManagerTalkType::MovingOnTalk, _) => (0.0, 0.0),
             (ManagerTalkType::Praise, true) => (5.0, 0.5),
             (ManagerTalkType::Praise, false) => (1.0, 0.1),
             (ManagerTalkType::Discipline, true) => (-3.0, 0.1),
@@ -446,9 +457,12 @@ impl TeamBehaviour {
             let ambition = player.attributes.ambition;
             let determination = player.skills.mental.determination;
 
-            // Skip players marked as NotNeeded (they accept their fate)
+            // A player the club is moving on — not needed, or already put
+            // up for sale — does not lobby the manager for minutes or a
+            // loan; the market owns him, and his own transfer request (the
+            // transfer-desire pass) is the channel left to him.
             let squad_status = player.contract.as_ref().map(|c| &c.squad_status);
-            if matches!(squad_status, Some(PlayerSquadStatus::NotNeeded)) {
+            if player.is_being_moved_on() {
                 continue;
             }
 
@@ -1241,6 +1255,7 @@ fn pick_tone(talk_type: &ManagerTalkType, manager: &Staff, _player: &Player) -> 
         ManagerTalkType::PlayingTimeTalk
         | ManagerTalkType::PlayingTimeRequest
         | ManagerTalkType::TransferDiscussion
+        | ManagerTalkType::MovingOnTalk
         | ManagerTalkType::LoanRequest => {
             if man_mgmt >= 15 {
                 InteractionTone::Honest
@@ -1441,9 +1456,22 @@ impl PrivateTalkInbox {
     /// role, eroded trust) all resolve through the morale-talk path,
     /// which carries tone selection, outcome recording, and follow-up
     /// promises.
-    fn talk_type_for(reason: PrivateTalkReason) -> ManagerTalkType {
+    ///
+    /// A man the club is moving on gets the truth instead of a promise:
+    /// asked about his minutes or his future, the manager tells him the
+    /// club is finding him a move ([`ManagerTalkType::MovingOnTalk`]),
+    /// which answers the knock on the door without clearing the
+    /// unhappiness a written-off player is entitled to.
+    fn talk_type_for(reason: PrivateTalkReason, player: &Player) -> ManagerTalkType {
+        let being_moved_on = player.is_being_moved_on();
         match reason {
+            PrivateTalkReason::PlayingTime if being_moved_on => ManagerTalkType::MovingOnTalk,
             PrivateTalkReason::PlayingTime => ManagerTalkType::PlayingTimeTalk,
+            PrivateTalkReason::TransferStatus
+                if being_moved_on && !player.statuses.has(PlayerStatusType::Req) =>
+            {
+                ManagerTalkType::MovingOnTalk
+            }
             PrivateTalkReason::TransferStatus => ManagerTalkType::TransferDiscussion,
             PrivateTalkReason::Contract
             | PrivateTalkReason::CaptaincyOrStatus
@@ -2197,5 +2225,162 @@ mod player_forced_termination_tests {
                 .is_none(),
             "a player getting his minutes has nothing to force an exit over"
         );
+    }
+}
+
+#[cfg(test)]
+mod moving_on_talk_tests {
+    //! A player the club is moving on gets no playing-time promise from
+    //! the weekly talk queue, and his knock on the door is answered with
+    //! the truth rather than a promise the manager cannot keep.
+    use super::*;
+    use crate::club::StaffStub;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
+    use crate::shared::fullname::FullName;
+    use crate::{
+        HappinessEventCause, HappinessEventContext, HappinessEventScope, HappinessEventSeverity,
+        PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
+        PlayerPositions, PlayerSkills, PrivateTalkRequestContext,
+    };
+    use chrono::NaiveDate;
+
+    struct Fx;
+
+    impl Fx {
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 6, 12).unwrap()
+        }
+
+        fn head_coach_only() -> StaffCollection {
+            let mut staff = StaffStub::default();
+            staff.id = 1;
+            staff.contract = Some(StaffClubContract::new(
+                50_000,
+                NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
+                StaffPosition::Manager,
+                StaffStatus::Active,
+            ));
+            StaffCollection::new(vec![staff])
+        }
+
+        /// An unhappy senior with a playing-time grievance, under the
+        /// given first-team label.
+        fn unhappy_senior(id: u32, status: PlayerSquadStatus) -> Player {
+            let mut contract =
+                PlayerClubContract::new(50_000, NaiveDate::from_ymd_opt(2028, 6, 30).unwrap());
+            contract.squad_status = status;
+            let mut player = PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("Test".to_string(), format!("Player{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(1998, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::default())
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition {
+                        position: PlayerPositionType::Goalkeeper,
+                        level: 20,
+                    }],
+                })
+                .player_attributes(PlayerAttributes::default())
+                .contract(Some(contract))
+                .build()
+                .unwrap();
+            player.statuses.add(Self::date(), PlayerStatusType::Unh);
+            player.happiness.factors.playing_time = -10.0;
+            player
+        }
+
+        /// He has asked the manager for a word about his minutes.
+        fn asked_about_minutes(player: &mut Player) {
+            let ctx = HappinessEventContext::new(
+                HappinessEventCause::Other,
+                HappinessEventSeverity::Serious,
+                HappinessEventScope::Personal,
+            )
+            .with_private_talk_context(PrivateTalkRequestContext::new(
+                PrivateTalkReason::PlayingTime,
+            ));
+            player.happiness.add_event_with_context(
+                HappinessEventType::AskedForPrivateTalk,
+                -2.0,
+                None,
+                ctx,
+            );
+        }
+
+        fn talks_for(players: Vec<Player>) -> Vec<ManagerTalkType> {
+            let players = PlayerCollection::new(players);
+            let staffs = Self::head_coach_only();
+            let mut result = TeamBehaviourResult::new();
+            TeamBehaviour::process_manager_player_talks_dated(
+                &players,
+                &staffs,
+                &mut result,
+                Some(Self::date()),
+            );
+            result
+                .manager_talks
+                .iter()
+                .map(|t| t.talk_type.clone())
+                .collect()
+        }
+    }
+
+    #[test]
+    fn an_unhappy_backup_still_gets_his_playing_time_talk() {
+        let talks = Fx::talks_for(vec![Fx::unhappy_senior(
+            1,
+            PlayerSquadStatus::MainBackupPlayer,
+        )]);
+        assert!(
+            talks.contains(&ManagerTalkType::PlayingTimeTalk),
+            "an unhappy backup is talked to about his minutes: {talks:?}"
+        );
+    }
+
+    #[test]
+    fn a_written_off_unhappy_player_gets_no_playing_time_promise() {
+        let talks = Fx::talks_for(vec![Fx::unhappy_senior(1, PlayerSquadStatus::NotNeeded)]);
+        assert!(
+            !talks.contains(&ManagerTalkType::PlayingTimeTalk),
+            "the manager does not promise minutes to a man he has written off: {talks:?}"
+        );
+    }
+
+    #[test]
+    fn a_listed_player_gets_no_playing_time_promise_either() {
+        let mut listed = Fx::unhappy_senior(1, PlayerSquadStatus::MainBackupPlayer);
+        listed.contract.as_mut().unwrap().is_transfer_listed = true;
+        let talks = Fx::talks_for(vec![listed]);
+        assert!(
+            !talks.contains(&ManagerTalkType::PlayingTimeTalk),
+            "a player the club is selling belongs to the market: {talks:?}"
+        );
+    }
+
+    #[test]
+    fn his_knock_on_the_door_is_answered_with_the_truth() {
+        let mut moved_on = Fx::unhappy_senior(1, PlayerSquadStatus::NotNeeded);
+        Fx::asked_about_minutes(&mut moved_on);
+        let talks = Fx::talks_for(vec![moved_on]);
+        assert!(
+            talks.contains(&ManagerTalkType::MovingOnTalk),
+            "asked about his minutes, a written-off player hears the club is finding him a move: {talks:?}"
+        );
+        assert!(!talks.contains(&ManagerTalkType::PlayingTimeTalk));
+    }
+
+    #[test]
+    fn an_ordinary_backup_who_asks_is_promised_minutes() {
+        let mut backup = Fx::unhappy_senior(1, PlayerSquadStatus::MainBackupPlayer);
+        Fx::asked_about_minutes(&mut backup);
+        let talks = Fx::talks_for(vec![backup]);
+        assert!(
+            talks.contains(&ManagerTalkType::PlayingTimeTalk),
+            "{talks:?}"
+        );
+        assert!(!talks.contains(&ManagerTalkType::MovingOnTalk));
     }
 }

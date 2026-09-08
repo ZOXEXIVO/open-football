@@ -210,6 +210,15 @@ impl SubMind for CompetitiveMind {
             self.extend_run(true);
         }
 
+        // Being frozen out is re-read every week, not remembered. The
+        // moment he is back in the manager's thinking the want is his
+        // to pursue again — and `weigh` stops reading it as the reason
+        // to go. The freeze itself is asserted further down, while it
+        // holds.
+        if !self.is_frozen_out(s) {
+            organs.goals.unblock(GoalBlocker::FrozenOut);
+        }
+
         if gap >= 0.0 {
             // He is playing. Whatever he wanted about his place is
             // answered, gradually.
@@ -386,6 +395,52 @@ mod tests {
             age: 29,
             ..MindSituation::neutral()
         }
+    }
+
+    /// The same man, ranked in the bottom half at his position behind
+    /// players he is plainly better than — the read of a manager who
+    /// has decided.
+    fn frozen_out() -> MindSituation {
+        MindSituation {
+            pecking_rank: 4,
+            rivals_at_position: 4,
+            rival_gap: 12,
+            ..settled_but_benched()
+        }
+    }
+
+    #[test]
+    fn coming_back_into_the_reckoning_lifts_the_freeze() {
+        let mut mind = CompetitiveMind::default();
+        let mut organs = MindOrgans::new();
+
+        // The run has to lengthen before watching reads as a freeze.
+        for _ in 0..10 {
+            reflect(&mut mind, &frozen_out(), &mut organs);
+        }
+        let held = organs
+            .goals
+            .get(GoalKind::WinBackMyPlace)
+            .expect("he still wants his place");
+        assert_eq!(held.blocked_by, GoalBlocker::FrozenOut);
+
+        // Then he is starting again — the manager changed his mind, or
+        // the man in front got hurt. Nothing about the want is answered
+        // by one start; it is simply his to pursue again.
+        let back_in = MindSituation {
+            starter_ratio: 0.80,
+            ..frozen_out()
+        };
+        reflect(&mut mind, &back_in, &mut organs);
+        let freed = organs
+            .goals
+            .get(GoalKind::WinBackMyPlace)
+            .expect("one start does not answer the want");
+        assert_eq!(
+            freed.blocked_by,
+            GoalBlocker::None,
+            "the freeze is a weekly read, not a life sentence"
+        );
     }
 
     #[test]

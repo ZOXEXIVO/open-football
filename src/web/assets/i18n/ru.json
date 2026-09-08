@@ -456,6 +456,7 @@
   "dec_loan_listed": "Выставлен на аренду",
   "dec_pre_contract_agreed": "Предконтракт согласован",
   "dec_reason_aging_declining": "Возрастной игрок, снижение ценности",
+  "dec_reason_below_club_level": "Ниже уровня клуба",
   "dec_reason_aging_surplus": "Возрастной игрок, лишний в составе",
   "dec_reason_below_avg_surplus": "Ниже среднего на перенасыщенной позиции",
   "dec_reason_blocked_by_better": "Заблокирован более сильными игроками на той же позиции",

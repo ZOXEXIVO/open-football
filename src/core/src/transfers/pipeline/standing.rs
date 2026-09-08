@@ -467,6 +467,7 @@ mod career_record_tests {
                     is_loan: false,
                     transfer_fee: None,
                     coverage_days: None,
+                    spell_end: None,
                     statistics,
                 });
             self
@@ -563,6 +564,7 @@ mod career_record_tests {
                 is_loan: false,
                 transfer_fee: None,
                 coverage_days: None,
+                spell_end: None,
                 statistics,
             });
 

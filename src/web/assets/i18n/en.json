@@ -456,6 +456,7 @@
   "dec_loan_listed": "Loan listed",
   "dec_pre_contract_agreed": "Pre-contract agreed",
   "dec_reason_aging_declining": "Aging player, declining value",
+  "dec_reason_below_club_level": "Below the club's level",
   "dec_reason_aging_surplus": "Aging player, surplus to requirements",
   "dec_reason_below_avg_surplus": "Below average in surplus position group",
   "dec_reason_blocked_by_better": "Blocked by better players in same position",

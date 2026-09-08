@@ -1,5 +1,6 @@
 use crate::PlayerFieldPositionGroup;
 use crate::TeamType;
+use crate::transfers::pipeline::PipelineProcessor;
 use chrono::Duration;
 use chrono::NaiveDateTime;
 pub use chrono::prelude::{DateTime, Datelike, NaiveDate, Utc};
@@ -12,6 +13,88 @@ pub enum ContractType {
     Youth,
     NonContract,
     Loan,
+}
+
+/// What a club of a given reputation expects of a starter, per position
+/// group — the divisional baseline the recruitment brief already shops
+/// against, read from the club's OWN side of the desk.
+///
+/// Until this existed the level lived only on the buy side: a club could
+/// decide its striker was below the standard it recruits at and go
+/// shopping, while every sell-side reading — squad status, asset class,
+/// the listing sweeps, the renewal clock — kept measuring the same man
+/// against his squad-mates and found him fine. The anchor closes that gap
+/// with three bands below the starter baseline: within the club's own
+/// upgrade tolerance is key-player territory, one upgrade band lower is
+/// still a regular, the recommendation floor lower still is rotation
+/// depth, and below that a player is a backup wherever he ranks.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClubLevelAnchor {
+    score: f32,
+    tolerance: i16,
+}
+
+impl ClubLevelAnchor {
+    /// Points under the key-player floor a regular may sit — the brief's
+    /// own upgrade tolerance for a tier-A / tier-B shirt.
+    pub const REGULAR_BAND: i16 = 8;
+    /// Points under the key-player floor rotation depth may sit — the
+    /// recommendation desk's admission floor below the baseline.
+    pub const ROTATION_BAND: i16 = 20;
+
+    /// The anchor for a club whose reputation `overall_score` is `score`.
+    pub fn for_reputation(score: f32) -> Self {
+        ClubLevelAnchor {
+            score: score.clamp(0.0, 1.0),
+            tolerance: PipelineProcessor::tier_quality_tolerance_score(score),
+        }
+    }
+
+    /// Expected starter ability in this group at this club.
+    pub fn starter_level(&self, group: PlayerFieldPositionGroup) -> u8 {
+        PipelineProcessor::tier_starter_ca_score(self.score, group)
+    }
+
+    /// Lowest ability the club still reads as a key man in this group.
+    pub fn key_floor(&self, group: PlayerFieldPositionGroup) -> i16 {
+        self.starter_level(group) as i16 - self.tolerance
+    }
+
+    /// Lowest ability the club still reads as a first-team regular.
+    pub fn regular_floor(&self, group: PlayerFieldPositionGroup) -> i16 {
+        self.key_floor(group) - Self::REGULAR_BAND
+    }
+
+    /// Lowest ability the club still reads as rotation depth. Below it a
+    /// player is not first-team quality for this club at all.
+    pub fn rotation_floor(&self, group: PlayerFieldPositionGroup) -> i16 {
+        self.key_floor(group) - Self::ROTATION_BAND
+    }
+
+    /// Whether an ability clears the club's key-player floor in this group.
+    pub fn meets_key_level(&self, ability: u8, group: PlayerFieldPositionGroup) -> bool {
+        ability as i16 >= self.key_floor(group)
+    }
+
+    /// Whether an ability sits below everything the club calls first-team
+    /// quality in this group.
+    pub fn is_below_rotation_band(&self, ability: u8, group: PlayerFieldPositionGroup) -> bool {
+        (ability as i16) < self.rotation_floor(group)
+    }
+
+    /// The highest senior label an ability may carry at this club.
+    pub fn label_cap(&self, ability: u8, group: PlayerFieldPositionGroup) -> PlayerSquadStatus {
+        let ability = ability as i16;
+        if ability >= self.key_floor(group) {
+            PlayerSquadStatus::KeyPlayer
+        } else if ability >= self.regular_floor(group) {
+            PlayerSquadStatus::FirstTeamRegular
+        } else if ability >= self.rotation_floor(group) {
+            PlayerSquadStatus::FirstTeamSquadRotation
+        } else {
+            PlayerSquadStatus::MainBackupPlayer
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,6 +195,73 @@ impl PlayerSquadStatus {
             PlayerSquadStatus::MainBackupPlayer
         } else {
             PlayerSquadStatus::NotNeeded
+        }
+    }
+
+    /// [`calculate`](Self::calculate) with the club's own LEVEL as a ceiling
+    /// on the label.
+    ///
+    /// Rank inside the group says who the club's best striker is; it says
+    /// nothing about whether he is a striker for THIS club. A two-starter
+    /// group hands out "Key Player" and "First Team Regular" to its best two
+    /// bodies unconditionally, so a giant whose forwards were far below what
+    /// its reputation buys everywhere else in the game read them as its key
+    /// men — and every protection, renewal threshold and team-sheet bonus
+    /// downstream believed it. The anchor is the same divisional starter
+    /// baseline the buy side already shops against: below it by the club's
+    /// own tolerance a player cannot be a key man, a band further down not
+    /// a regular, a band further still only a backup. The cap only ever
+    /// lowers a label — rank still decides between players who clear it —
+    /// and it never manufactures `NotNeeded`, which stays a rank verdict.
+    /// Youth labels are untouched.
+    pub fn calculate_at_level(
+        player_ca: u8,
+        player_age: u8,
+        group: PlayerFieldPositionGroup,
+        team_cas: &[u8],
+        level: Option<ClubLevelAnchor>,
+    ) -> Self {
+        let by_rank = Self::calculate(player_ca, player_age, group, team_cas);
+        Self::cap_at_level(by_rank, player_ca, player_age, group, level)
+    }
+
+    /// Apply the club's level as a ceiling on an already-decided label —
+    /// the last word after rank, the minutes-based honesty cap and the
+    /// "still starting every week" floor have had theirs. The floor exists
+    /// so a regular is not relabelled a backup because a pricier signing
+    /// outranks him on ability; it must not turn a below-level starter's
+    /// weekly selection (he plays because the club has nobody better) back
+    /// into a first-team label the club would never recruit at.
+    pub fn cap_at_level(
+        status: PlayerSquadStatus,
+        player_ca: u8,
+        player_age: u8,
+        group: PlayerFieldPositionGroup,
+        level: Option<ClubLevelAnchor>,
+    ) -> Self {
+        let Some(level) = level else {
+            return status;
+        };
+        if player_age <= 19 {
+            return status;
+        }
+        let cap = level.label_cap(player_ca, group);
+        if Self::senior_ladder(&cap) < Self::senior_ladder(&status) {
+            cap
+        } else {
+            status
+        }
+    }
+
+    /// Senior-ladder height for the level cap: only the four senior labels
+    /// are ordered; everything else sits below them and is never capped.
+    fn senior_ladder(status: &PlayerSquadStatus) -> u8 {
+        match status {
+            PlayerSquadStatus::KeyPlayer => 4,
+            PlayerSquadStatus::FirstTeamRegular => 3,
+            PlayerSquadStatus::FirstTeamSquadRotation => 2,
+            PlayerSquadStatus::MainBackupPlayer => 1,
+            _ => 0,
         }
     }
 
@@ -952,6 +1102,69 @@ mod squad_status_calc_tests {
         assert_eq!(
             PlayerSquadStatus::calculate(100, 18, mid, &mids),
             PlayerSquadStatus::DecentYoungster
+        );
+    }
+
+    /// The Barcelona case: a two-starter forward group handed "Key Player"
+    /// and "First Team Regular" to its best two bodies whatever their
+    /// level, so a giant whose forwards sat far below what its reputation
+    /// buys read them as its key men. Against the club's level the same
+    /// ranks collapse to what they are.
+    #[test]
+    fn a_giant_reads_its_forwards_against_its_own_level() {
+        let fwd = PlayerFieldPositionGroup::Forward;
+        let giant = ClubLevelAnchor::for_reputation(0.9);
+        let forwards = [158u8, 130, 118];
+        assert_eq!(
+            PlayerSquadStatus::calculate_at_level(158, 27, fwd, &forwards, Some(giant)),
+            PlayerSquadStatus::KeyPlayer,
+            "a forward at the club's level keeps the rank's verdict"
+        );
+        assert_eq!(
+            PlayerSquadStatus::calculate(130, 30, fwd, &forwards),
+            PlayerSquadStatus::FirstTeamRegular,
+            "rank alone still crowns the second body a regular"
+        );
+        assert_eq!(
+            PlayerSquadStatus::calculate_at_level(130, 30, fwd, &forwards, Some(giant)),
+            PlayerSquadStatus::FirstTeamSquadRotation,
+            "a regular's band below the club's level is rotation depth"
+        );
+        assert_eq!(
+            PlayerSquadStatus::calculate_at_level(118, 33, fwd, &forwards, Some(giant)),
+            PlayerSquadStatus::MainBackupPlayer,
+            "below every first-team band he is a backup wherever he ranks"
+        );
+    }
+
+    #[test]
+    fn a_small_club_ladder_is_untouched_by_the_anchor() {
+        let fwd = PlayerFieldPositionGroup::Forward;
+        let modest = ClubLevelAnchor::for_reputation(0.3);
+        let forwards = [92u8, 84, 70, 62];
+        for (ca, age) in [(92u8, 26u8), (84, 29), (70, 31), (62, 24)] {
+            assert_eq!(
+                PlayerSquadStatus::calculate_at_level(ca, age, fwd, &forwards, Some(modest)),
+                PlayerSquadStatus::calculate(ca, age, fwd, &forwards),
+                "a squad at its own level is labelled by rank alone"
+            );
+        }
+    }
+
+    #[test]
+    fn the_anchor_never_invents_not_needed_or_touches_youth() {
+        let fwd = PlayerFieldPositionGroup::Forward;
+        let giant = ClubLevelAnchor::for_reputation(0.9);
+        let forwards = [158u8, 150, 60];
+        assert_eq!(
+            PlayerSquadStatus::calculate_at_level(60, 30, fwd, &forwards, Some(giant)),
+            PlayerSquadStatus::MainBackupPlayer,
+            "surplus stays a rank verdict"
+        );
+        assert_eq!(
+            PlayerSquadStatus::calculate_at_level(60, 18, fwd, &forwards, Some(giant)),
+            PlayerSquadStatus::calculate(60, 18, fwd, &forwards),
+            "youth labels are not senior roles and are never capped"
         );
     }
 }

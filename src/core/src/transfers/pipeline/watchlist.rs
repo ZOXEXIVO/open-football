@@ -409,7 +409,9 @@ impl MarketKnowledge {
         let mut entries: Vec<WatchlistEntry> = Vec::new();
         for slot in brief.slots.iter() {
             let pool = &by_group[slot.group.index()];
-            let envelope_ceiling = slot.envelope * Self::ENVELOPE_SLACK;
+            // The reach, not the envelope: the transformative slot watches
+            // the whole pot's worth of names (see `BriefSlot::fee_reach`).
+            let envelope_ceiling = slot.fee_reach * Self::ENVELOPE_SLACK;
             // A bounded top-`WATCH_PER_ROLE` board rather than a sorted
             // list of everyone who survived the gates. The pool is the
             // world; sorting it per slot per club every Monday is the

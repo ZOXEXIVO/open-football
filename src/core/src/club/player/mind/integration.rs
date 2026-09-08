@@ -12,8 +12,8 @@ use crate::club::player::core::player::{
     ManagerPromise, ManagerPromiseKind, TransferRequestReason,
 };
 use crate::club::player::mind::{
-    ActorRef, EpisodeKind, FactClaim, GoalBridge, GoalEvidence, GoalKind, GoalOrigin, GoalStatus,
-    MindClock, MindSituation, RecallCue,
+    ActorRef, EpisodeKind, FactClaim, GoalBlocker, GoalBridge, GoalEvidence, GoalKind, GoalOrigin,
+    GoalStatus, MindClock, MindSituation, RecallCue,
 };
 use crate::shared::fullname::FullName;
 use crate::{
@@ -651,6 +651,61 @@ impl Weeks {
         }
         day
     }
+}
+
+#[test]
+fn settling_in_lifts_the_hold_a_move_put_on_what_he_brought_with_him() {
+    let mut p = Fixture::player();
+    let ctx = p.mind_context(Fixture::date(2026, 6, 1), Some(CLUB));
+    p.mind.pursue(
+        GoalKind::BePaidWhatImWorth,
+        GoalOrigin::Grievance,
+        GoalEvidence::of(&[GoalEvidence::PAID_BELOW_HIS_PEERS]),
+        0.8,
+        &ctx,
+    );
+
+    // Sold. Being underpaid travels with him — on hold, because the new
+    // club is owed a fair look before he presses it.
+    p.mind.on_club_change(CLUB);
+    let held = p
+        .mind
+        .goals()
+        .get(GoalKind::BePaidWhatImWorth)
+        .expect("a wage grievance is not settled by changing employer");
+    assert_eq!(held.blocked_by, GoalBlocker::JustArrived);
+
+    // His first month there.
+    let new_signing = MindSituation {
+        days_at_club: 20,
+        ..Fixture::situation()
+    };
+    let day = Weeks::run(&mut p, &new_signing, 4, Fixture::date(2026, 7, 1));
+    let still_new = p
+        .mind
+        .goals()
+        .get(GoalKind::BePaidWhatImWorth)
+        .expect("still underpaid");
+    assert_eq!(
+        still_new.blocked_by,
+        GoalBlocker::JustArrived,
+        "four weeks in he is the new signing"
+    );
+
+    // Settled. The hold went with the honeymoon, not with the want —
+    // this is the line that used to read "he has only just arrived"
+    // three seasons later.
+    let settled = MindSituation {
+        days_at_club: MindSituation::SETTLING_DAYS,
+        ..Fixture::situation()
+    };
+    Weeks::run(&mut p, &settled, 1, day);
+    let free = p
+        .mind
+        .goals()
+        .get(GoalKind::BePaidWhatImWorth)
+        .expect("still underpaid, and now able to say so");
+    assert_eq!(free.blocked_by, GoalBlocker::None);
 }
 
 #[test]

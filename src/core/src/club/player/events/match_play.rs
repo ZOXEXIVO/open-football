@@ -337,14 +337,18 @@ impl Player {
             self.remember_match(EpisodeKind::SentOff, ActorRef::NONE, o);
         }
 
-        // First competitive goal at this club. Stats are reset on club
-        // change (see `on_transfer` / `on_loan`), so the only way the
-        // running competitive total equals this match's goals is when
-        // this is the first scoring match of the tenure. Long cooldown
-        // prevents the milestone from firing again later in the spell.
+        // First competitive goal for this club. Read against everything
+        // he has done for the club across every spell there — frozen
+        // seasons, this season's closed spells and the live buckets — so
+        // it fires once per tenure. The live season counters alone
+        // cannot say this: `on_season_end` drains them every summer, and
+        // a "running total equals this match's goals" test fired again
+        // on the first scoring match of every season once the cooldown
+        // had lapsed. The cooldown stays only as the re-entry guard the
+        // other milestones use.
         if o.stats.goals > 0 {
-            let total_competitive = self.statistics.goals + self.cup_statistics.goals;
-            if total_competitive == o.stats.goals
+            let for_the_club = self.club_tally();
+            if for_the_club.goals == u32::from(o.stats.goals)
                 && !self
                     .happiness
                     .has_recent_event(&HappinessEventType::FirstClubGoal, 300)
@@ -824,18 +828,20 @@ impl Player {
         }
     }
 
-    /// Single-fire milestone events when competitive totals cross fixed
+    /// Single-fire milestone events when career totals cross fixed
     /// thresholds in this match. Stats have already been updated, so the
-    /// crossing is detected by inspecting `total_after` against the
+    /// crossing is detected by inspecting the total after against the
     /// per-match contribution.
+    ///
+    /// The career, not the season. The live counters are drained into
+    /// his history every summer, so a ladder read off them could only
+    /// ever see a fifty-game *season* — and the 250 rung, never.
     fn record_milestones(&mut self, o: &MatchOutcome<'_>) {
-        let games_after = self.statistics.played
-            + self.statistics.played_subs
-            + self.cup_statistics.played
-            + self.cup_statistics.played_subs;
+        let career = self.career_tally();
+        let games_after = career.apps;
         // Apps ladder: this match contributed exactly +1 appearance.
         for &(threshold, mul) in &[
-            (50u16, 0.8f32),
+            (50u32, 0.8f32),
             (100, 1.0),
             (250, 1.25),
             (500, 1.6),
@@ -852,10 +858,10 @@ impl Player {
             }
         }
 
-        let goals_after = self.statistics.goals + self.cup_statistics.goals;
-        let goals_before = goals_after.saturating_sub(o.stats.goals);
+        let goals_after = career.goals;
+        let goals_before = goals_after.saturating_sub(u32::from(o.stats.goals));
         for &(threshold, mul) in &[
-            (25u16, 0.8f32),
+            (25u32, 0.8f32),
             (50, 1.0),
             (100, 1.25),
             (200, 1.6),
@@ -873,9 +879,9 @@ impl Player {
             && matches!(o.participation, MatchParticipation::Starter)
             && o.team_goals_against == 0
         {
-            let cs_after = self.statistics.clean_sheets + self.cup_statistics.clean_sheets;
+            let cs_after = career.clean_sheets;
             let cs_before = cs_after.saturating_sub(1);
-            for &(threshold, mul) in &[(25u16, 0.8f32), (50, 1.0), (100, 1.25), (200, 1.6)] {
+            for &(threshold, mul) in &[(25u32, 0.8f32), (50, 1.0), (100, 1.25), (200, 1.6)] {
                 if cs_before < threshold && cs_after >= threshold {
                     let cfg = HappinessConfig::default();
                     let mag = cfg.catalog.clean_sheet_milestone * mul;

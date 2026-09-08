@@ -70,8 +70,8 @@ use crate::club::player::statistics::StuckCareerScan;
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::league::Season;
 use crate::{
-    Club, Person, Player, PlayerCollection, PlayerFieldPositionGroup, PlayerSquadStatus,
-    PlayerStatusType, TeamType,
+    Club, ClubLevelAnchor, Person, Player, PlayerCollection, PlayerFieldPositionGroup,
+    PlayerSquadStatus, PlayerStatusType, TeamType,
 };
 
 /// What a player is to his club, derived from observable signals. Ordered
@@ -235,6 +235,11 @@ pub struct SquadAssetContext {
     /// Season-sample evidence, carried so callers can suppress
     /// appearance-driven decisions while the sample is small.
     evidence: SquadEvidenceContext,
+    /// What this club expects of a starter, per group — `None` when the
+    /// context was built from a bare roster with no reputation to read.
+    /// The rank ladder below measures a player against his squad-mates;
+    /// this is the one reading that measures him against the CLUB.
+    club_level: Option<ClubLevelAnchor>,
 }
 
 impl SquadAssetContext {
@@ -294,9 +299,19 @@ impl SquadAssetContext {
     pub fn build(club: &Club, date: NaiveDate) -> Self {
         let _ = date;
         match club.teams.main().or_else(|| club.teams.teams.first()) {
-            Some(team) => Self::for_squad(&team.players),
+            Some(team) => Self::for_squad_at_level(
+                &team.players,
+                Some(ClubLevelAnchor::for_reputation(
+                    team.reputation.overall_score(),
+                )),
+            ),
             None => Self::for_squad(&PlayerCollection::new(Vec::new())),
         }
+    }
+
+    /// The club's own level, when the context knows it.
+    pub fn club_level(&self) -> Option<ClubLevelAnchor> {
+        self.club_level
     }
 
     /// Build the classifier context from a single squad's roster — the
@@ -306,6 +321,15 @@ impl SquadAssetContext {
     /// "team level" is then that squad's average, which is exactly the bar
     /// a reserve / youth coach measures his own deadwood against.
     pub fn for_squad(players: &PlayerCollection) -> Self {
+        Self::for_squad_at_level(players, None)
+    }
+
+    /// [`Self::for_squad`] with the club's level attached, so the ladder
+    /// can tell a de-facto starter from a starter for THIS club.
+    pub fn for_squad_at_level(
+        players: &PlayerCollection,
+        club_level: Option<ClubLevelAnchor>,
+    ) -> Self {
         let mut group_levels: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
         let mut reputations: Vec<i16> = Vec::new();
         let mut level_sum: u32 = 0;
@@ -344,6 +368,7 @@ impl SquadAssetContext {
             squad_avg_ability,
             top_quartile_reputation,
             evidence,
+            club_level,
         }
     }
 
@@ -472,15 +497,32 @@ impl SquadAssetContext {
         let group_avg = self.group_avg(group).unwrap_or(level) as i16;
         let squad_avg = self.squad_avg_level as i16;
 
+        // Standing at this club is worth nothing below the club's level.
+        // The three branches that follow protect a player for WHERE he
+        // ranks — best of his group, a recognised name, top three — and
+        // rank is relative to whoever happens to be here: a giant whose
+        // forwards all sat far below what its reputation buys read every
+        // one of them as a first-team asset. A man the club would not
+        // recruit at this level is at most rotation depth, whatever his
+        // rank; the evidence branches (last season's minutes) still speak.
+        let below_club_level = self
+            .club_level
+            .is_some_and(|anchor| anchor.is_below_rotation_band(level, group));
+
         // De-facto starter — best in a genuinely contested position group.
-        if group_size >= 2 && higher_in_group == 0 {
+        if group_size >= 2 && higher_in_group == 0 && !below_club_level {
             return SquadAssetClass::CorePlayer;
         }
 
         // A recognised name at this club (top reputation tier) is a
         // first-team asset even with a thin current sample — the Zobnin
-        // case: form may have dipped but standing has not.
-        if self.is_high_reputation_for_club(player) {
+        // case: form may have dipped but standing has not. A full season
+        // of not being picked is not a thin sample, though: a famous name
+        // the coach has stopped using is a name, not an asset.
+        if self.is_high_reputation_for_club(player)
+            && !below_club_level
+            && !self.unused_despite_rank(player)
+        {
             return SquadAssetClass::FirstTeamUseful;
         }
 
@@ -519,6 +561,7 @@ impl SquadAssetContext {
         if group_size >= Self::MIN_GROUP_FOR_TOP_RANK
             && higher_in_group <= Self::TOP_GROUP_RANK
             && ranks_in_top_half
+            && !below_club_level
             && (level as i16) >= group_avg - Self::NEAR_GROUP_GAP
             && !Self::career_stalled_at_club(player, date)
             && !self.unused_despite_rank(player)
@@ -916,6 +959,7 @@ mod tests {
                 is_loan,
                 transfer_fee: None,
                 coverage_days: None,
+                spell_end: None,
                 statistics: PlayerStatistics {
                     played: starts,
                     ..Default::default()

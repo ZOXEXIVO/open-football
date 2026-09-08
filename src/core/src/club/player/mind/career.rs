@@ -557,7 +557,14 @@ impl CareerMind {
                     today,
                 );
             } else {
-                organs.goals.advance(GoalKind::GoOutOnLoan, 0.3);
+                // The route home has opened, or he has outgrown the
+                // idea. He never had the loan, so this is not the want
+                // being met — it is a want he minds less each week the
+                // side keeps picking him, until he has let it go.
+                // Advancing it here resolved it as *got*, and his diary
+                // read "he got what he wanted: a loan" for a loan that
+                // never happened.
+                organs.goals.ease(GoalKind::GoOutOnLoan, 0.3);
             }
             return false;
         }
@@ -602,7 +609,7 @@ impl CareerMind {
 #[cfg(test)]
 mod tests {
     use super::super::MindTickContext;
-    use super::super::organs::memory::MindClock;
+    use super::super::organs::memory::{EpochDay, MindClock};
     use super::super::situation::MindSituation;
     use super::*;
     use crate::club::person::PersonAttributes;
@@ -686,6 +693,55 @@ mod tests {
             mind.observe(&episode(EpisodeKind::Relegated), &mut organs);
         }
         assert!(mind.trajectory() < 0.0, "it can go the other way too");
+    }
+
+    #[test]
+    fn games_at_his_own_club_let_the_loan_want_go_rather_than_meet_it() {
+        let mut mind = CareerMind::default();
+        let mut organs = MindOrgans::new();
+        let day = MindClock::day(tick().today);
+
+        // Twenty-one, settled, and not in the picture at all.
+        let stuck = MindSituation {
+            age: 21,
+            days_at_club: 400,
+            starter_ratio: 0.10,
+            ..MindSituation::neutral()
+        };
+        reflect(&mut mind, &stuck, &mut organs);
+        assert!(
+            organs.goals.pressure_of(GoalKind::GoOutOnLoan) > 0.0,
+            "a young man with no route to the side wants a loan"
+        );
+
+        // Then he starts getting games at home. The loan never
+        // happened, so it cannot be something he got.
+        let playing = MindSituation {
+            starter_ratio: 0.60,
+            ..stuck
+        };
+        let mut let_go = 0;
+        for week in 1..=16u16 {
+            reflect(&mut mind, &playing, &mut organs);
+            let Some(report) = organs.goals.review(day + EpochDay::from(week) * 7) else {
+                continue;
+            };
+            for change in report.changes() {
+                if change.kind != GoalKind::GoOutOnLoan {
+                    continue;
+                }
+                assert_ne!(
+                    change.to,
+                    GoalStatus::Satisfied,
+                    "a loan he never went on is not a want he got"
+                );
+                if change.to == GoalStatus::Abandoned {
+                    let_go += 1;
+                }
+            }
+        }
+        assert_eq!(let_go, 1, "he lets it go instead");
+        assert!(organs.goals.get(GoalKind::GoOutOnLoan).is_none());
     }
 
     #[test]
