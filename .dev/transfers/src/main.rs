@@ -3327,8 +3327,20 @@ struct LoanAssetRow {
     parent_tier: &'static str,
     parent_band: &'static str,
     /// Loanee CA minus his parent club's key-player floor in his group —
-    /// positive means the parent reads him as a key man.
-    over_parent_key_floor: i16,
+    /// positive means the parent reads him as a key man. `None` when the
+    /// parent lives in another country and this pass cannot reach him: a
+    /// zero there would read as "exactly at the key floor" and quietly
+    /// inflate every count built on it.
+    over_parent_key_floor: Option<i16>,
+    /// The parent's own first choice in that shirt, and whether the
+    /// player himself asked to go — the pair the acceptance target
+    /// "loans of first-choice players without `Req` from Continental+
+    /// parents → 0" is counted on. `None` for an unreachable parent.
+    parent_first_choice: Option<bool>,
+    player_requested: bool,
+    /// He is genuinely below his parent's own regular floor — the
+    /// development pathway the guard must not close.
+    below_parent_regular: Option<bool>,
     borrower_name: String,
     borrower_tier: &'static str,
     borrower_band: &'static str,
@@ -3374,6 +3386,20 @@ impl LoanAssetCensus {
     /// youth registration is a TRAP rather than a judgement call. Mirrors
     /// `squad.rs`'s `PROMOTION_CLEAR_MARGIN`.
     const TRAP_MARGIN: u8 = 8;
+    /// The floor `rebalance_squads` uses for a group the first team is
+    /// SHORT at — mirrored from `squad.rs`'s `DEPTH_GAP_FLOOR`.
+    const DEPTH_GAP_FLOOR: u8 = 60;
+
+    /// Below this many first-team players a group is short — mirrored
+    /// from `squad.rs`'s `MIN_MAIN_DEPTH`.
+    fn min_main_depth(group: PlayerFieldPositionGroup) -> usize {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => 2,
+            PlayerFieldPositionGroup::Defender => 6,
+            PlayerFieldPositionGroup::Midfielder => 6,
+            PlayerFieldPositionGroup::Forward => 4,
+        }
+    }
 
     fn observe(&mut self, data: &SimulatorData, day: u32) {
         let date = data.date.date();
@@ -3391,7 +3417,13 @@ impl LoanAssetCensus {
                 }
 
                 for club in &country.clubs {
-                    let main = match club.teams.main().or_else(|| club.teams.teams.first()) {
+                    // A club with NO first team has no promotion to be
+                    // trapped out of — `rebalance_squads` returns on the
+                    // spot for it. Falling back to `teams.first()` here
+                    // made the youth squad its own promotion bar and
+                    // flagged every boy in it against his own team-mates.
+                    let first_team = club.teams.main();
+                    let main = match first_team.or_else(|| club.teams.teams.first()) {
                         Some(t) => t,
                         None => continue,
                     };
@@ -3402,20 +3434,35 @@ impl LoanAssetCensus {
                         .unwrap_or(0);
 
                     // ---- the trap census ------------------------------
-                    let floors: Vec<(PlayerFieldPositionGroup, u8)> =
-                        PlayerFieldPositionGroup::ALL
+                    //
+                    // The bar has to be the promoter's own, or the census
+                    // measures a trap that is not there: `rebalance_squads`
+                    // does NOT promote into a group the first team is short
+                    // at on "better than the worst man here" — it demands
+                    // `DEPTH_GAP_FLOOR`, because a short group has no
+                    // depth chart to be better than. Reading `worst + 1`
+                    // for those groups flags every academy boy at every
+                    // small club.
+                    let floors: Vec<(PlayerFieldPositionGroup, u8)> = first_team
+                        .into_iter()
+                        .flat_map(|first_team| {
+                            PlayerFieldPositionGroup::ALL
                             .iter()
-                            .map(|&group| {
-                                let worst = main
+                            .map(move |&group| {
+                                let levels: Vec<u8> = first_team
                                     .players
                                     .iter()
                                     .filter(|p| p.position().position_group() == group)
                                     .map(AbilityEstimator::observable_level)
-                                    .min()
-                                    .unwrap_or(0);
+                                    .collect();
+                                if levels.len() < Self::min_main_depth(group) {
+                                    return (group, Self::DEPTH_GAP_FLOOR);
+                                }
+                                let worst = levels.iter().copied().min().unwrap_or(0);
                                 (group, worst.saturating_add(1))
                             })
-                            .collect();
+                        })
+                        .collect();
                     for team in &club.teams.teams {
                         if !team.team_type.is_youth() {
                             continue;
@@ -3425,11 +3472,15 @@ impl LoanAssetCensus {
                                 continue;
                             }
                             let group = player.position().position_group();
-                            let floor = floors
+                            // No first team, no floor — nothing to be
+                            // trapped out of.
+                            let Some(floor) = floors
                                 .iter()
                                 .find(|(g, _)| *g == group)
                                 .map(|(_, f)| *f)
-                                .unwrap_or(0);
+                            else {
+                                continue;
+                            };
                             let level =
                                 AbilityEstimator::observable_level(
                                     player,
@@ -3466,6 +3517,15 @@ impl LoanAssetCensus {
                                 continue;
                             };
                             if !self.seen.insert((player.id, club.id)) {
+                                continue;
+                            }
+                            // Day zero is the world as the source database
+                            // describes it — those loans are records, not
+                            // decisions the market made, and their
+                            // borrowers have no finance history yet to
+                            // price them against. Seed the set so they are
+                            // never re-profiled later, and profile nothing.
+                            if day == 0 {
                                 continue;
                             }
                             let group = player.position().position_group();
@@ -3512,8 +3572,35 @@ impl LoanAssetCensus {
                                     .unwrap_or("unknown"),
                                 parent_band: league_band(parent_league_rep),
                                 over_parent_key_floor: parent_anchor
-                                    .map(|a| ability as i16 - a.key_floor(group))
-                                    .unwrap_or(0),
+                                    .map(|a| ability as i16 - a.key_floor(group)),
+                                parent_first_choice: parent.map(|c| {
+                                    let anchor = parent_anchor.expect("resolved parent has a main");
+                                    // Rank across the parent's own
+                                    // first-team depth chart — Main plus
+                                    // the youth squads it registers its
+                                    // own boys in, which is the reading
+                                    // `PipelineProcessor::position_group_rank`
+                                    // performs inside the engine.
+                                    let better = c
+                                        .teams
+                                        .teams
+                                        .iter()
+                                        .filter(|t| {
+                                            matches!(t.team_type, TeamType::Main)
+                                                || t.team_type.is_youth()
+                                        })
+                                        .flat_map(|t| t.players.iter())
+                                        .filter(|p| {
+                                            p.position().position_group() == group
+                                                && p.player_attributes.current_ability > ability
+                                        })
+                                        .count();
+                                    ability as i16 >= anchor.key_floor(group)
+                                        && better < group.typical_starters()
+                                }),
+                                player_requested: player.statuses.has(PlayerStatusType::Req),
+                                below_parent_regular: parent_anchor
+                                    .map(|a| (ability as i16) < a.regular_floor(group)),
                                 borrower_name: club.name.clone(),
                                 borrower_tier: Self::tier_label(main.reputation.level()),
                                 borrower_band: league_band(borrower_league_rep),
@@ -3652,12 +3739,21 @@ impl LoanAssetPrinter {
                 .map(|r| r.over_borrower_best as f64)
                 .collect(),
         );
+        // Every reading below that needs the parent's own level is
+        // restricted to loans whose parent this pass could reach: a
+        // cross-border parent lives in another country's borrow, and
+        // counting him as "exactly at the key floor" would invent
+        // agreement out of missing data.
+        let resolved: Vec<&LoanAssetRow> = census
+            .rows
+            .iter()
+            .filter(|r| r.over_parent_key_floor.is_some())
+            .collect();
         Self::quantile_line(
             "loanee CA - parent key floor",
-            census
-                .rows
+            resolved
                 .iter()
-                .map(|r| r.over_parent_key_floor as f64)
+                .filter_map(|r| r.over_parent_key_floor.map(|v| v as f64))
                 .collect(),
         );
         Self::quantile_line(
@@ -3670,18 +3766,63 @@ impl LoanAssetPrinter {
             .iter()
             .filter(|r| r.over_borrower_best > 25)
             .count();
-        let key_men = census
-            .rows
-            .iter()
-            .filter(|r| r.over_parent_key_floor >= 0)
-            .count();
         println!(
             "  loans with weight > 1.0: {over_weight}  [target 0]   \
              CA-over-borrower-best > 25: {over_gap} ({:.1}%)   \
-             loanees at/above the parent's KEY floor: {key_men} ({:.1}%)",
+             parent resolvable on {} of {} rows",
             ReportPrinter::pct(over_gap, census.rows.len()),
-            ReportPrinter::pct(key_men, census.rows.len()),
+            resolved.len(),
+            census.rows.len(),
         );
+        // The second named target: a club does not lend its own starter
+        // unless he asked to go.
+        let starters_lent = resolved
+            .iter()
+            .filter(|r| {
+                r.parent_first_choice == Some(true)
+                    && !r.player_requested
+                    && matches!(r.parent_tier, "elite" | "continental")
+            })
+            .count();
+        // …and the pathway that must survive: a genuinely below-level
+        // U23 going from a big club to National football or better.
+        let pathway = resolved
+            .iter()
+            .filter(|r| {
+                r.below_parent_regular == Some(true)
+                    && r.age <= 23
+                    && matches!(r.parent_tier, "elite" | "continental")
+                    && matches!(r.borrower_tier, "elite" | "continental" | "national")
+            })
+            .count();
+        println!(
+            "  first-choice loans without Req from a Continental+ parent: {starters_lent}  \
+             [target 0]   Elite/Continental → National+ development loans: {pathway}  \
+             [target >= 85% of the OFF arm]",
+        );
+        // Name them. A residual on this target is a path that reached a
+        // loan intent without consulting the parent-side veto, and the
+        // only way to find which one is to see who it moved.
+        for row in resolved.iter().filter(|r| {
+            r.parent_first_choice == Some(true)
+                && !r.player_requested
+                && matches!(r.parent_tier, "elite" | "continental")
+        }) {
+            println!(
+                "    ! {:<24} {:>3}y ca {:>3}  {} ({}) → {} ({})  over-key {}  [{}]",
+                row.player_name,
+                row.age,
+                row.ability,
+                row.parent_name,
+                row.parent_tier,
+                row.borrower_name,
+                row.borrower_tier,
+                row.over_parent_key_floor
+                    .map(|v| format!("{v:+}"))
+                    .unwrap_or_else(|| "?".to_string()),
+                row.label,
+            );
+        }
         let mut by_label: HashMap<&'static str, usize> = HashMap::new();
         for row in &census.rows {
             *by_label.entry(row.label).or_insert(0) += 1;
@@ -3713,7 +3854,7 @@ impl LoanAssetPrinter {
             println!(
                 "  {:<24} {:>3}y ca {:>3}  {:>7.1}M  {} ({}) → {} ({}, income {:.1}M, \
                  wages {:.1}M)  weight {:.2}  wage share {:.2}  over-best {:+}  \
-                 over-key {:+}  [{}]",
+                 over-key {}  [{}]",
                 row.player_name,
                 row.age,
                 row.ability,
@@ -3727,7 +3868,10 @@ impl LoanAssetPrinter {
                 row.weight,
                 row.wage_share,
                 row.over_borrower_best,
-                row.over_parent_key_floor,
+                row
+                    .over_parent_key_floor
+                    .map(|v| format!("{v:+}"))
+                    .unwrap_or_else(|| "?".to_string()),
                 row.label,
             );
         }
