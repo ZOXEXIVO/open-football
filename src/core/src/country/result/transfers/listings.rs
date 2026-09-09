@@ -8,7 +8,7 @@ use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection, SquadEvide
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
-use crate::transfers::pipeline::{LoanOutReason, PipelineProcessor};
+use crate::transfers::pipeline::{LoanAssetGuard, LoanOutReason, PipelineProcessor, TransferTrace};
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::{
     NegotiationStatus, TransferListing, TransferListingOrigin, TransferListingStatus,
@@ -106,6 +106,10 @@ impl CountryResult {
         // (`contract.is_transfer_listed`) — upgraded in place to permanent
         // listings so the unsold-exit valve can finally reach them.
         let mut listings_to_upgrade: Vec<(u32, CurrencyValue)> = Vec::new();
+        // Loan intents the weekly rebalance withdrew because it promoted
+        // the player instead. The club has already stripped the badge and
+        // the candidate row; the live market row is this pass's to pull.
+        Self::withdraw_cancelled_loan_listings(country, date);
         let price_level = country.settings.pricing.price_level;
         let window_mgr = TransferWindowManager::for_country(country, date);
         let current_window = window_mgr.current_window_dates(country.id, date);
@@ -534,6 +538,43 @@ impl CountryResult {
         // live market listing or a pending listing intent, so the flag and
         // the status can never drift into a stale "Transfer Listed".
         Self::reconcile_stale_market_statuses(country);
+    }
+
+    /// Pull the live loan listings of players whose club withdrew the loan
+    /// intent — the weekly rebalance promoted them into the first team
+    /// instead ([`crate::Club::rebalance_squads`]).
+    ///
+    /// The club can strip the badge and drop the candidate row on its own,
+    /// but the market row lives on the country and would otherwise keep
+    /// advertising a player his club has just promoted — and a listing
+    /// riding a live negotiation is a deal in flight, so those are left
+    /// alone and the withdrawal simply lapses.
+    fn withdraw_cancelled_loan_listings(country: &mut Country, date: NaiveDate) {
+        let withdrawn: Vec<u32> = country
+            .clubs
+            .iter_mut()
+            .flat_map(|club| club.transfer_plan.loan_withdrawals.drain(..))
+            .collect();
+        if withdrawn.is_empty() {
+            return;
+        }
+        let before = country.transfer_market.listings.len();
+        country.transfer_market.listings.retain(|listing| {
+            !(listing.listing_type == TransferListingType::Loan
+                && listing.status == TransferListingStatus::Available
+                && withdrawn.contains(&listing.player_id))
+        });
+        let pulled = before - country.transfer_market.listings.len();
+        debug!("loan withdrawals: {} rows pulled on {date}", pulled);
+        for player_id in withdrawn {
+            if TransferTrace::is(player_id) {
+                TransferTrace::line(
+                    player_id,
+                    "list",
+                    format!("pass=loan_withdrawal reason=promoted_instead date={date}"),
+                );
+            }
+        }
     }
 
     /// Clear a player's `Lst` / `Loa` market badge when it no longer reflects
@@ -1198,6 +1239,11 @@ impl CountryResult {
             };
         }
 
+        // Would the club entertain a loan of this man at all? Read once —
+        // every loan arm below consults it, and a sale never does: a club
+        // may decide to SELL its starter, it does not lend him out.
+        let parent_holds = LoanAssetGuard::parent_holds_for(club, player, date);
+
         // Unhappiness is not, on its own, a reason to sell. The formal
         // `Unh` status is also reached by playing-time frustration — a
         // benched but still-useful squad member — and shipping such a
@@ -1226,9 +1272,19 @@ impl CountryResult {
                 | SquadAssetClass::FirstTeamUseful
                 | SquadAssetClass::RotationUseful
                 | SquadAssetClass::UnknownNeedsEvaluation => ListingDecision::Keep,
-                SquadAssetClass::ProspectDevelopment => ListingDecision::Loan {
-                    reason: "dec_reason_young_needs_practice".to_string(),
-                },
+                // A grumbling prospect goes out for minutes — but the
+                // club's own first choice in that shirt is not a prospect
+                // whatever his birth year says, and unhappiness is not the
+                // club's cue to lend him away.
+                SquadAssetClass::ProspectDevelopment => {
+                    if LoanAssetGuard::parent_holds_for(club, player, date) {
+                        ListingDecision::Keep
+                    } else {
+                        ListingDecision::Loan {
+                            reason: "dec_reason_young_needs_practice".to_string(),
+                        }
+                    }
+                }
                 SquadAssetClass::TrueSurplus => ListingDecision::Transfer {
                     reason: "dec_reason_player_unhappy".to_string(),
                 },
@@ -1272,6 +1328,7 @@ impl CountryResult {
                 &rep_level,
                 avg,
                 date,
+                parent_holds,
                 "dec_reason_surplus_squad".to_string(),
             );
         }
@@ -1311,6 +1368,7 @@ impl CountryResult {
                     &rep_level,
                     avg,
                     date,
+                    parent_holds,
                     "dec_reason_below_club_level".to_string(),
                 );
             }
@@ -1332,6 +1390,7 @@ impl CountryResult {
                 &rep_level,
                 avg,
                 date,
+                parent_holds,
                 "dec_reason_well_below_avg".to_string(),
             );
         }
@@ -1346,6 +1405,7 @@ impl CountryResult {
                         &rep_level,
                         avg,
                         date,
+                        parent_holds,
                         "dec_reason_below_avg_surplus".to_string(),
                     );
                 }
@@ -1386,6 +1446,7 @@ impl CountryResult {
                 &rep_level,
                 avg,
                 date,
+                parent_holds,
                 "dec_reason_squad_oversized".to_string(),
             );
         }
@@ -1414,6 +1475,7 @@ impl CountryResult {
         rep_level: &ReputationLevel,
         avg: i16,
         date: NaiveDate,
+        parent_holds: bool,
         base_reason: String,
     ) -> ListingDecision {
         let age = player.age(date);
@@ -1427,8 +1489,13 @@ impl CountryResult {
             return ListingDecision::FreeTransfer;
         }
 
-        // Young with development potential → loan for match practice
-        if age <= 23 && pa > ca + 10 {
+        // Young with development potential → loan for match practice.
+        // Never the club's own first choice in that shirt: `parent_holds`
+        // is the standing read, and a starter needs no match practice
+        // elsewhere. Every loan arm below answers to it — the transfer
+        // arms do not, because a sale is a decision the club is entitled
+        // to make about anybody.
+        if age <= 23 && pa > ca + 10 && !parent_holds {
             return ListingDecision::Loan {
                 reason: "dec_reason_young_needs_practice".to_string(),
             };
@@ -1436,6 +1503,7 @@ impl CountryResult {
 
         // At wealthy club, young enough and decent quality → loan to preserve asset
         if age <= 25
+            && !parent_holds
             && matches!(
                 rep_level,
                 ReputationLevel::Elite | ReputationLevel::Continental
@@ -1462,6 +1530,7 @@ impl CountryResult {
 
         // Mid-career at wealthy club → loan to preserve value
         if age <= 27
+            && !parent_holds
             && matches!(
                 rep_level,
                 ReputationLevel::Elite | ReputationLevel::Continental
@@ -1491,9 +1560,11 @@ impl CountryResult {
     /// Official appearances at or below which a fit player has been frozen
     /// out rather than merely rotated.
     const FROZEN_OUT_APPEARANCE_BAR: u16 = 3;
-    /// Share of the club's official matches (per cent) a fit player must
-    /// have featured in for a standing-based protection to hold — the
-    /// rotation bar the label's own honesty cap reads.
+    /// Share of the club's official matches (per cent) below which a
+    /// player the club has outgrown counts as no longer being picked —
+    /// the rotation bar the label's own honesty cap reads. Only ever
+    /// consulted together with the club-level test, in
+    /// [`Self::outgrown_and_barely_playing`].
     const STANDING_SHARE_PCT: u32 = 15;
 
     /// Whether a protection resting on STANDING rather than numbers — long
@@ -1525,14 +1596,47 @@ impl CountryResult {
             + player.statistics.played_subs
             + player.cup_statistics.played
             + player.cup_statistics.played_subs;
-        // A share of the club's season, not a raw count: four appearances
-        // in a fifty-match campaign is a frozen-out player at a club that
-        // plays that much, and the count alone read him as "still part of
-        // the team" — which is how a six-year servant with eight games in
-        // three seasons stayed shielded from every sweep.
         appearances > Self::FROZEN_OUT_APPEARANCE_BAR
-            && u32::from(appearances) * 100
-                >= u32::from(sample.club_matches_proxy()) * Self::STANDING_SHARE_PCT
+    }
+
+    /// A player the club has outgrown who is also barely being picked.
+    ///
+    /// Long service, dressing-room authority and a veteran keeper's
+    /// mentoring role are real reasons to keep a man a spreadsheet would
+    /// move on — but they are reasons to keep a SQUAD player, not one the
+    /// club has outgrown and stopped selecting. This pairs the two tests
+    /// so the shields lapse for exactly that man.
+    ///
+    /// The share test is deliberately confined to this pair. Applied on
+    /// its own inside [`Self::standing_protection_still_earned`] it was
+    /// measured over a season, twice, and rejected: it stripped
+    /// protection from ordinary fringe players at every club in the world
+    /// and took transfer listings up 38 % and standing unhappiness up
+    /// 72 %, which is a different change from the one this fixes.
+    fn outgrown_and_barely_playing(player: &Player, club: &Club, date: NaiveDate) -> bool {
+        let Some(level) = Self::club_level(club) else {
+            return false;
+        };
+        let group = player.position().position_group();
+        if !level.is_below_rotation_band(player.player_attributes.current_ability, group) {
+            return false;
+        }
+        let sample = SquadEvidenceContext::current_season_sample(date, club);
+        if sample.is_early_season() {
+            return false;
+        }
+        if player.player_attributes.is_injured
+            || player.player_attributes.is_banned
+            || player.player_attributes.is_in_recovery()
+        {
+            return false;
+        }
+        let appearances = player.statistics.played
+            + player.statistics.played_subs
+            + player.cup_statistics.played
+            + player.cup_statistics.played_subs;
+        u32::from(appearances) * 100
+            < u32::from(sample.club_matches_proxy()) * Self::STANDING_SHARE_PCT
     }
 
     fn is_squad_protected(player: &Player, club: &Club, date: NaiveDate) -> bool {
@@ -1588,7 +1692,8 @@ impl CountryResult {
         // Dressing-room leader — strong leadership attribute + seasoned.
         // Skills are on the 1-20 scale; >=15 is genuine locker-room
         // authority, not just any veteran.
-        let standing_earned = Self::standing_protection_still_earned(player, club, date);
+        let standing_earned = Self::standing_protection_still_earned(player, club, date)
+            && !Self::outgrown_and_barely_playing(player, club, date);
 
         if age >= 26 && player.skills.mental.leadership >= 15.0 && standing_earned {
             return true;

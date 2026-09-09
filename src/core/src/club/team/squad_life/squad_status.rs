@@ -676,8 +676,8 @@ mod club_level_tests {
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition,
         PlayerPositionType, PlayerPositions, PlayerSkills, PlayerStatistics,
-        PlayerStatisticsHistoryItem, StaffCollection, Team, TeamBuilder, TeamReputation,
-        TeamType, TrainingSchedule,
+        PlayerStatisticsHistoryItem, StaffCollection, Team, TeamBuilder, TeamReputation, TeamType,
+        TrainingSchedule,
     };
     use chrono::NaiveTime;
 

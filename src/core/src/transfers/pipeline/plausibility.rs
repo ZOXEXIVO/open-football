@@ -40,6 +40,8 @@
 //! a listing to back our bid" listings are excluded: callers populate the
 //! listing flags from the player's real status only.
 
+use crate::club::player::calculators::WageCalculator;
+use crate::transfers::pipeline::loan_guard::LoanAssetGuard;
 use crate::{PlayerFieldPositionGroup, PlayerSquadStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,6 +67,13 @@ pub enum TransferPlausibilityReason {
     /// unsold resignation all open it, because each of those is the
     /// player's side reaching OUT rather than the club reaching in.
     MarketOutsideBuyersReach,
+    /// The loan is free and the borrower still cannot take it: the player
+    /// is worth more than the club's whole year. Loans bypass the fee gate
+    /// by design — a loan fee is a token — so nothing else in the model
+    /// ever compared the asset to the borrower's economy, and a
+    /// nine-figure teenager could be lent to a second-division club for
+    /// nothing.
+    LoanBeyondBorrowerMeans,
 }
 
 // ============================================================
@@ -425,6 +434,14 @@ pub struct TransferPlausibilityInputs {
     /// public status — no `Lst`, no event, no override of the squad-asset
     /// protections.
     pub seller_marketed: bool,
+    /// Annualised trailing income of the BUYING club and its best-paid
+    /// player — the two numbers a LOAN is priced against (the `weight` and
+    /// `carry` terms of [`super::loan_guard::LoanAssetGuard`]). A
+    /// permanent move reads neither: a purchase is priced by the fee gate.
+    /// Zero income means "the borrower's books could not be read", which
+    /// stands both loan money gates down rather than guessing.
+    pub buyer_annual_income: i64,
+    pub buyer_top_earner: u32,
 }
 
 impl TransferPlausibilityInputs {
@@ -438,6 +455,34 @@ impl TransferPlausibilityInputs {
             self.player_home_rep,
             self.same_country || self.same_league_or_division,
         )
+    }
+
+    /// Value of the asset against the borrower's whole year — the
+    /// `weight` term of [`LoanAssetGuard`]. Zero when the borrower's books
+    /// could not be read, which stands the gate down rather than guessing.
+    pub fn loan_asset_weight(&self) -> f64 {
+        if self.buyer_annual_income <= 0 {
+            return 0.0;
+        }
+        self.estimated_value / self.buyer_annual_income as f64
+    }
+
+    /// Share of his wage the borrower would pick up, against what it can
+    /// pay — the `carry` term of [`LoanAssetGuard`], built from the same
+    /// split the loan contract is actually written with.
+    pub fn loan_wage_carry(&self, wage_headroom: i64) -> f64 {
+        // Unknown payroll stands the term down — see
+        // [`LoanAssetGuard::assess`].
+        if wage_headroom <= 0 && self.buyer_top_earner == 0 {
+            return 0.0;
+        }
+        let borrower_score = (self.buyer_world_rep.max(0) as f32 / 10_000.0).clamp(0.0, 1.0);
+        let (borrower_wage, _) =
+            WageCalculator::loan_wage_split_v2(self.current_salary, borrower_score, 0.0);
+        let ceiling = (wage_headroom.max(0) as f64 * 1.30)
+            .max(self.buyer_top_earner as f64 * 1.50)
+            .max(1.0);
+        borrower_wage as f64 / ceiling
     }
 
     /// The buyer's reputation reach on the 0..10000 scale — its world
@@ -611,7 +656,7 @@ impl TransferPlausibilityInputs {
 /// Soft thresholds and weights for the plausibility evaluator. Kept as
 /// a single constant so any future calibration tweak lands in one place
 /// and the evaluator body stays pure.
-mod thresholds {
+pub(crate) mod thresholds {
     pub const IMPORTANT: f32 = 0.78;
     pub const VERY_IMPORTANT: f32 = 0.90;
     pub const PRIME_AGE_MIN: u8 = 23;
@@ -701,6 +746,32 @@ mod thresholds {
     /// asking-price decay (−5%/week to a 60% floor) plus the seller-floor
     /// erosion, so the gate prices the market reality, not the fresh tag.
     pub const RESIGNATION_VALUE_SOFTENING: f64 = 0.40;
+}
+
+/// Whether a player's own registration produces the evidence the
+/// corroboration taper reads.
+///
+/// The taper divides his appearances by his CLUB's fixture list and reads
+/// a low share as "the coach has stopped picking him". For a player
+/// registered in a youth squad that division is meaningless: youth
+/// competitions are friendlies (`League.friendly`), their appearances land
+/// in a separate statistics bucket, and his official count is therefore
+/// structurally zero. Scoring him at the floor multiplier said the first
+/// team had looked at him for a season and declined — when the first team
+/// had never had the chance to contradict anything. A zero denominator is
+/// the honest read: the season cannot speak yet, so the paper claim stands.
+pub(crate) struct SquadEvidenceSource;
+
+impl SquadEvidenceSource {
+    /// The club-match denominator for a player registered in `team_type`,
+    /// whose squad does (`has_league`) or does not play league football.
+    pub(crate) fn club_matches(team_type: TeamType, has_league: bool, club_matches: u16) -> u16 {
+        if team_type.is_youth() || !has_league {
+            0
+        } else {
+            club_matches
+        }
+    }
 }
 
 /// Per-axis importance scoring plus the objective-evidence floor. Wrapped
@@ -1155,10 +1226,17 @@ impl TransferMovePlausibility {
         // month re-reads what level actually wants him — his own transfer
         // request endorses any destination he can reach, and a forced
         // route bypasses as everywhere else.
-        let renown_gap_tolerated = thresholds::REP_STEP_DOWN_GAP as f32
-            + resignation * thresholds::LOAN_RENOWN_RESIGNATION_SPAN;
+        //
+        // The development-age exemption is gone. It read "a young player's
+        // renown is a promise rather than a status" and then switched the
+        // gate off entirely below 24 — so a nineteen-year-old with a
+        // nine-figure name could be offered anywhere at all, which is not
+        // what "his renown counts for less" means. The band is now
+        // continuous in age: wide for a boy, ordinary at the development
+        // age, and never absent.
+        let renown_gap_tolerated =
+            LoanAssetGuard::renown_gap_tolerated(inputs.player_age, resignation);
         if inputs.is_loan
-            && inputs.player_age > thresholds::PRIME_AGE_MIN
             && !inputs.is_transfer_requested
             && !matches!(strength, AvailabilityStrength::Forced)
             && rep_drop as f32 > renown_gap_tolerated
@@ -1176,13 +1254,31 @@ impl TransferMovePlausibility {
         if !strength.waives_wage_floor() {
             let wage_headroom =
                 (inputs.buyer_wage_budget as i64 - inputs.buyer_total_wages as i64).max(0);
-            let soft_wage_cap =
-                ((inputs.current_salary as f64 * 1.15).max(wage_headroom as f64 * 1.30)).max(0.0);
-            if soft_wage_cap > 0.0 && (inputs.expected_annual_wage as f64) > soft_wage_cap {
-                return make(
-                    TransferMoveStage::CanShortlistInternally,
-                    Some(TransferPlausibilityReason::UnaffordableWages),
-                );
+            if inputs.is_loan {
+                // A loan is not a new deal — the borrower picks up a SHARE
+                // of the wage the player already has, so the permanent
+                // gate's `current_salary × 1.15` term (which models a
+                // buyer matching the existing contract) reads as "any club
+                // affords any wage": the cap is anchored on the player's
+                // own salary, which is precisely the number that makes it
+                // unaffordable. Price the share against what this club can
+                // actually pay instead.
+                if inputs.loan_wage_carry(wage_headroom) > LoanAssetGuard::CARRY_MAX {
+                    return make(
+                        TransferMoveStage::CanShortlistInternally,
+                        Some(TransferPlausibilityReason::UnaffordableWages),
+                    );
+                }
+            } else {
+                let soft_wage_cap = ((inputs.current_salary as f64 * 1.15)
+                    .max(wage_headroom as f64 * 1.30))
+                .max(0.0);
+                if soft_wage_cap > 0.0 && (inputs.expected_annual_wage as f64) > soft_wage_cap {
+                    return make(
+                        TransferMoveStage::CanShortlistInternally,
+                        Some(TransferPlausibilityReason::UnaffordableWages),
+                    );
+                }
             }
         }
 
@@ -1200,6 +1296,19 @@ impl TransferMovePlausibility {
             return make(
                 TransferMoveStage::CanShowPublicInterest,
                 Some(TransferPlausibilityReason::UnaffordableFee),
+            );
+        }
+
+        // Loans keep bypassing the fee test — the fee is a fraction of a
+        // valuation nobody is paying. What they cannot bypass is the
+        // asset's WEIGHT: a club does not take custody of a player worth
+        // more than everything it earns in a year, however free the loan
+        // is, because it cannot insure him, cannot pay him and cannot
+        // replace him if it breaks him.
+        if inputs.is_loan && inputs.loan_asset_weight() > LoanAssetGuard::W_MAX {
+            return make(
+                TransferMoveStage::CanShowPublicInterest,
+                Some(TransferPlausibilityReason::LoanBeyondBorrowerMeans),
             );
         }
 
@@ -1399,7 +1508,6 @@ impl TransferMovePlausibility {
 // callers.
 
 use crate::Player;
-use crate::club::player::calculators::WageCalculator;
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use crate::transfers::{
     ClubMarketKnowledge, MarketAffinity, MarketAffinityInputs, MarketMap, MoveKind,
@@ -1420,10 +1528,18 @@ pub(crate) struct BuyerPlausibilityContext {
     pub buyer_country_id: u32,
     pub buyer_country_code: String,
     pub buyer_league_id: Option<u32>,
+    /// Annualised trailing income of the BUYING club, and its best-paid
+    /// player. The two numbers a loan is priced against (see
+    /// [`super::loan_guard::LoanAssetGuard`]): a club whose whole year is
+    /// worth less than the asset does not borrow it, and one already at
+    /// its wage ceiling cannot carry the wage that comes with him.
+    /// Permanent moves read neither — a purchase is priced by the fee gate.
+    pub buyer_annual_income: i64,
+    pub buyer_top_earner: u32,
 }
 
 impl BuyerPlausibilityContext {
-    pub(crate) fn build(country: &Country, club: &Club) -> Self {
+    pub(crate) fn build(country: &Country, club: &Club, date: NaiveDate) -> Self {
         let main_team = club
             .teams
             .iter()
@@ -1460,6 +1576,14 @@ impl BuyerPlausibilityContext {
             buyer_country_id: country.id,
             buyer_country_code: country.code.clone(),
             buyer_league_id,
+            buyer_annual_income: club.finance.estimated_annual_income(date),
+            buyer_top_earner: club
+                .teams
+                .iter()
+                .flat_map(|t| t.players.iter())
+                .filter_map(|p| p.contract.as_ref().map(|c| c.salary))
+                .max()
+                .unwrap_or(0),
         }
     }
 }
@@ -1576,6 +1700,8 @@ impl TransferPlausibilityBuilder {
             market_affinity: market_reach.unwrap_or(1.0).clamp(0.0, 1.0),
             buyer_market_knowledge: 1.0,
             seller_marketed: seller.is_marketed,
+            buyer_annual_income: buyer_ctx.buyer_annual_income,
+            buyer_top_earner: buyer_ctx.buyer_top_earner,
         })
     }
 
@@ -1640,7 +1766,7 @@ impl TransferPlausibilityBuilder {
         date: NaiveDate,
         market_map: &MarketMap,
     ) -> TransferPlausibilityInputs {
-        let buyer_ctx = BuyerPlausibilityContext::build(buying_country, buying_club);
+        let buyer_ctx = BuyerPlausibilityContext::build(buying_country, buying_club, date);
 
         let main_team = selling_club
             .teams
@@ -1795,12 +1921,22 @@ impl TransferPlausibilityBuilder {
             current_salary,
             estimated_value,
             player_appearances: player.statistics.total_games(),
-            seller_club_matches:
-                crate::club::team::squad::SquadEvidenceContext::current_season_sample(
-                    date,
-                    selling_club,
+            seller_club_matches: {
+                let squad = selling_club
+                    .teams
+                    .teams
+                    .iter()
+                    .find(|t| t.players.players.iter().any(|p| p.id == player.id));
+                SquadEvidenceSource::club_matches(
+                    squad.map(|t| t.team_type).unwrap_or(TeamType::Main),
+                    squad.map(|t| t.league_id.is_some()).unwrap_or(true),
+                    crate::club::team::squad::SquadEvidenceContext::current_season_sample(
+                        date,
+                        selling_club,
+                    )
+                    .club_matches_proxy(),
                 )
-                .club_matches_proxy(),
+            },
             seller_position_rank: rank,
             player_ca,
             best_group_ca_at_seller: best_group_ca,
@@ -1820,6 +1956,8 @@ impl TransferPlausibilityBuilder {
             market_affinity,
             buyer_market_knowledge,
             seller_marketed: selling_club.transfer_plan.is_marketed(player.id),
+            buyer_annual_income: buyer_ctx.buyer_annual_income,
+            buyer_top_earner: buyer_ctx.buyer_top_earner,
         }
     }
 
@@ -1905,6 +2043,8 @@ mod tests {
             expected_annual_wage: 1_000_000,
             player_stage_inclination: 0.0,
             seller_marketed: false,
+            buyer_annual_income: 0,
+            buyer_top_earner: 0,
             market_affinity: 1.0,
             buyer_market_knowledge: 1.0,
         }
@@ -1956,6 +2096,8 @@ mod tests {
             expected_annual_wage: 800_000,
             player_stage_inclination: 0.0,
             seller_marketed: false,
+            buyer_annual_income: 0,
+            buyer_top_earner: 0,
             market_affinity: 1.0,
             buyer_market_knowledge: 1.0,
         }
@@ -2500,18 +2642,57 @@ mod tests {
         );
     }
 
+    /// The renown band widens with youth; it does not vanish.
+    ///
+    /// It used to be switched OFF outright below the prime-age bar, on the
+    /// grounds that a young player's renown is a promise rather than a
+    /// status. That is a reason to weigh it less, not a reason to stop
+    /// weighing it — and with the gate off, a nineteen-year-old with a
+    /// nine-figure name could be offered around the third tier abroad,
+    /// which is the shape this whole campaign exists to close.
     #[test]
-    fn the_renown_loan_floor_never_touches_the_development_pathway() {
-        // Identical name-versus-destination shape, but a development-age
-        // player: dropping a long way for minutes is the whole point of
-        // his loan, and his renown is a promise, not a status.
+    fn the_renown_loan_band_widens_with_youth_but_never_vanishes() {
+        let at_21 = LoanAssetGuard::renown_gap_tolerated(21, 0.0);
+        let at_33 = LoanAssetGuard::renown_gap_tolerated(33, 0.0);
+        assert!(at_21 > at_33, "{at_21} vs {at_33}");
+        assert!(at_33 > 0.0, "the band never closes to nothing");
+
+        // Same name, same third-division destination abroad, but a
+        // development-age player: the band is wider and the drop is still
+        // far beyond it.
         let mut inputs = declined_veteran_foreign_loan_inputs();
         inputs.player_age = 21;
-        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
         assert!(
-            matches!(v, TransferPlausibilityVerdict::Allow(_)),
-            "got {:?}",
-            v
+            matches!(
+                TransferPlausibilityEvaluator::evaluate(&inputs),
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::LoanNotCredible
+                )
+            ),
+            "a recognised name is not lent to the third tier because he is 21"
+        );
+
+        // A destination inside the widened band IS open to him — and only
+        // to him: the same club is beyond the veteran's narrower one.
+        let mut reachable = inputs.clone();
+        reachable.buyer_world_rep = 2800;
+        reachable.buyer_league_rep = 2200;
+        reachable.buyer_rep = 0.42;
+        assert!(
+            matches!(
+                TransferPlausibilityEvaluator::evaluate(&reachable),
+                TransferPlausibilityVerdict::Allow(_)
+            ),
+            "the widened band is what the development pathway actually gets"
+        );
+        let mut veteran = reachable.clone();
+        veteran.player_age = 33;
+        assert!(
+            matches!(
+                TransferPlausibilityEvaluator::evaluate(&veteran),
+                TransferPlausibilityVerdict::HardReject(_)
+            ),
+            "the same destination sits outside a 33-year-old's band"
         );
     }
 
@@ -3110,6 +3291,8 @@ mod tests {
             expected_annual_wage: 400_000,
             player_stage_inclination: 0.0,
             seller_marketed: false,
+            buyer_annual_income: 0,
+            buyer_top_earner: 0,
             market_affinity: 1.0,
             buyer_market_knowledge: 1.0,
         }
@@ -3290,6 +3473,68 @@ mod tests {
         // floor, that closes the cold approach.
         assert!(a.blocking_reason.is_some());
     }
+
+    /// WI-6: a youth registration produces no official football, so the
+    /// season cannot contradict the paper claim — and the corroboration
+    /// taper must not read that silence as "the coach has stopped picking
+    /// him". It scaled importance by the floor multiplier instead, which
+    /// is how a first-team-calibre teenager scored below the loan block.
+    #[test]
+    fn a_youth_registration_produces_no_evidence_to_taper_by() {
+        assert_eq!(
+            SquadEvidenceSource::club_matches(TeamType::U20, false, 34),
+            0,
+            "youth competitions are friendlies — there is nothing to divide by"
+        );
+        assert_eq!(
+            SquadEvidenceSource::club_matches(TeamType::U18, true, 34),
+            0,
+            "an age-restricted squad produces no official appearances either way"
+        );
+        assert_eq!(
+            SquadEvidenceSource::club_matches(TeamType::Main, true, 34),
+            34,
+            "the first team's own fixture list still counts against him"
+        );
+        assert_eq!(
+            SquadEvidenceSource::club_matches(TeamType::B, true, 34),
+            34,
+            "a B side plays real league football — its record is evidence"
+        );
+        assert_eq!(
+            SquadEvidenceSource::club_matches(TeamType::Reserve, false, 34),
+            0,
+            "a league-less reserve side plays friendlies, like a youth squad"
+        );
+    }
+
+    /// The taper itself, read through the denominator: a zero club-match
+    /// count is "the season cannot speak yet", which leaves the standing
+    /// claim whole.
+    #[test]
+    fn zero_official_appearances_at_a_youth_registration_do_not_erode_importance() {
+        let mut youth = base_inputs();
+        youth.squad_status = PlayerSquadStatus::KeyPlayer;
+        youth.seller_position_rank = 0;
+        youth.player_ca = 176;
+        youth.best_group_ca_at_seller = 176;
+        youth.player_appearances = 0;
+        youth.seller_club_matches = 0;
+        let registered_below = TransferPlausibilityEvaluator::player_importance(&youth);
+
+        let mut counted = youth.clone();
+        counted.seller_club_matches = 34;
+        let tapered = TransferPlausibilityEvaluator::player_importance(&counted);
+
+        assert!(
+            registered_below > thresholds::LOAN_IMPORTANCE_BLOCK,
+            "the club's best forward is an important player: {registered_below}"
+        );
+        assert!(
+            tapered < registered_below,
+            "the taper is real for a man the first team HAS had the chance to pick"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -3343,6 +3588,8 @@ mod agent_channel_tests {
                 expected_annual_wage: 9_000_000,
                 player_stage_inclination: 0.35,
                 seller_marketed: false,
+                buyer_annual_income: 0,
+                buyer_top_earner: 0,
                 market_affinity: 1.0,
                 buyer_market_knowledge: 1.0,
             }
@@ -3391,6 +3638,8 @@ mod agent_channel_tests {
             player_age: 31,
             player_stage_inclination: 0.0,
             seller_marketed: false,
+            buyer_annual_income: 0,
+            buyer_top_earner: 0,
             market_affinity: 1.0,
             buyer_market_knowledge: 1.0,
             ..AgentFixtures::contented_standout()

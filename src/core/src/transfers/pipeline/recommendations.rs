@@ -832,7 +832,7 @@ impl PipelineProcessor {
                     // Buyer context for the plausibility gate. Built once per
                     // club so each recommendation sub-path can veto unrealistic
                     // targets without re-walking reputation / wage data.
-                    let buyer_plaus_ctx = BuyerPlausibilityContext::build(country, club);
+                    let buyer_plaus_ctx = BuyerPlausibilityContext::build(country, club, date);
                     // Closure shorthand: true when adding `player_id` to the
                     // recommendation list would push an impossible move (Maximenko-
                     // class step-down) into the pipeline.
@@ -1312,11 +1312,9 @@ impl PipelineProcessor {
                                     .unwrap_or(0),
                                 has_open_request: open_request_bar(judged_group).is_some_and(
                                     |bar| {
-                                        p.ability
-                                            .saturating_add(
-                                                BuyerNeedPicture::STAFF_TIP_ABILITY_TOLERANCE,
-                                            )
-                                            >= bar
+                                        p.ability.saturating_add(
+                                            BuyerNeedPicture::STAFF_TIP_ABILITY_TOLERANCE,
+                                        ) >= bar
                                     },
                                 ),
                                 has_aging_starter: buyer_has_aging_starter(judged_group),
@@ -1969,7 +1967,7 @@ impl PipelineProcessor {
             if !plan.initialized {
                 continue;
             }
-            let buyer_ctx = BuyerPlausibilityContext::build(country, club);
+            let buyer_ctx = BuyerPlausibilityContext::build(country, club, date);
 
             let recent_recs: Vec<&StaffRecommendation> = plan
                 .staff_recommendations

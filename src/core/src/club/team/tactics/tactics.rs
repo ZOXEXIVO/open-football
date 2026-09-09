@@ -1,5 +1,5 @@
 use crate::Team;
-use crate::club::{PersonBehaviourState, Player, PlayerPositionType, Staff};
+use crate::club::{PersonBehaviourState, Player, PlayerPositionType, RoleFamiliarity, Staff};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
@@ -179,58 +179,85 @@ impl Tactics {
 
     /// Calculate how well this tactic suits the available players.
     ///
-    /// Returns the average per-slot fitness on a discriminating scale:
-    /// each slot is satisfied only when the best available player has a
-    /// real position level for it (level ≥ 14 / "natural"). Players who
-    /// only loosely cover a position contribute partial credit. Slots
-    /// the squad cannot fill at all carry a hard zero — so 4-2-3-1
-    /// without a true number 10 scores meaningfully worse than 4-4-2,
-    /// and 3-5-2 without wingbacks scores worse than both. The previous
-    /// formula clustered every formation in [0.45, 0.65] and let
-    /// noise / coach-confidence pick the winner.
+    /// The shape is graded by the **best eleven it can actually field**:
+    /// every player fills at most one shirt. That exclusivity is what makes
+    /// "which shape gets the most out of these players" answerable at all.
+    /// The old formula took the best man for each slot independently, so a
+    /// club's outstanding attacker was credited to the wide slot, the
+    /// centre-forward slot and the number ten at once — every shape was
+    /// handed the same stars, nothing ever registered as *leaving a good
+    /// player out*, and the comparison collapsed onto position codes. It
+    /// is why the model could say, with a straight face, that raw ability
+    /// "is the same regardless of which shape you pick": under cloning it
+    /// was.
+    ///
+    /// A pairing is worth the ability the player carries into the role
+    /// ([`RoleFamiliarity::strength_at_slot`]) — ability and familiarity in
+    /// one number rather than a 0.70/0.20 blend that let a 176 and a 130
+    /// differ by five score points in a hundred. The total is expressed as
+    /// a share of the same squad's strongest eleven at full value, so the
+    /// number reads as *suitability* — a shape that fits approaches 1.0 —
+    /// and stays comparable between a giant and a lower-league side rather
+    /// than becoming a restatement of how good the club is.
     pub fn calculate_formation_fitness(&self, players: &[&Player]) -> f32 {
-        let required_positions = self.positions();
-        if required_positions.is_empty() {
+        let slots = self.positions();
+        if slots.is_empty() || players.is_empty() {
             return 0.0;
         }
-        let mut total = 0.0;
-        for required_pos in required_positions.iter() {
-            let best = players
-                .iter()
-                .map(|p| self.calculate_player_position_fitness(p, required_pos))
-                .fold(0.0f32, |acc, x| acc.max(x));
-            total += best;
+
+        // The ceiling: this squad's strongest bodies, each at full value.
+        let mut abilities: Vec<u8> = players
+            .iter()
+            .map(|p| p.player_attributes.current_ability)
+            .collect();
+        abilities.sort_unstable_by(|a, b| b.cmp(a));
+        let ideal: f32 = abilities.iter().take(slots.len()).map(|&c| c as f32).sum();
+        if ideal <= 0.0 {
+            return 0.0;
         }
-        total / required_positions.len() as f32
+
+        (Self::best_eleven_strength(slots, players) / ideal).clamp(0.0, 1.0)
     }
 
-    fn calculate_player_position_fitness(
-        &self,
-        player: &Player,
-        position: &PlayerPositionType,
-    ) -> f32 {
-        // Position familiarity carries the most weight. Natural (≥18)
-        // is full credit, accomplished (15-17) ~0.85, competent (12-14)
-        // ~0.6, awkward (8-11) ~0.3, none (<8) basically zero.
-        let raw_level = player.positions.get_level(*position) as f32;
-        let position_term = if raw_level >= 18.0 {
-            1.0
-        } else if raw_level >= 15.0 {
-            0.75 + (raw_level - 15.0) / 12.0
-        } else if raw_level >= 12.0 {
-            0.45 + (raw_level - 12.0) / 12.0
-        } else if raw_level >= 8.0 {
-            0.10 + (raw_level - 8.0) / 16.0
-        } else {
-            0.0
-        };
-        // CA bonus is small — it's the *position fit* signal that
-        // discriminates between formations, not raw ability (which is
-        // the same regardless of which shape you pick).
-        let ability_term = (player.player_attributes.current_ability as f32 / 200.0).min(1.0);
-        let readiness_term = (player.skills.physical.match_readiness / 20.0).clamp(0.0, 1.0);
+    /// Greedy maximum assignment of players to the shape's eleven shirts:
+    /// take the strongest pairing still open, then the next, until the side
+    /// is full. Each player and each shirt is consumed exactly once, and a
+    /// shirt nobody can fill earns nothing — the honest verdict on asking a
+    /// squad to play a shape it has not got the players for.
+    fn best_eleven_strength(slots: &[PlayerPositionType], players: &[&Player]) -> f32 {
+        let mut pairings: Vec<(f32, usize, usize)> =
+            Vec::with_capacity(players.len() * slots.len());
+        for (player_idx, player) in players.iter().enumerate() {
+            for (slot_idx, slot) in slots.iter().enumerate() {
+                let strength = RoleFamiliarity::strength_at_slot(
+                    player.player_attributes.current_ability,
+                    &player.positions,
+                    *slot,
+                );
+                if strength > 0.0 {
+                    pairings.push((strength, player_idx, slot_idx));
+                }
+            }
+        }
+        pairings.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal));
 
-        position_term * 0.70 + ability_term * 0.20 + readiness_term * 0.10
+        let mut player_used = vec![false; players.len()];
+        let mut slot_filled = vec![false; slots.len()];
+        let mut total = 0.0;
+        let mut filled = 0usize;
+        for (strength, player_idx, slot_idx) in pairings {
+            if filled == slots.len() {
+                break;
+            }
+            if player_used[player_idx] || slot_filled[slot_idx] {
+                continue;
+            }
+            player_used[player_idx] = true;
+            slot_filled[slot_idx] = true;
+            total += strength;
+            filled += 1;
+        }
+        total
     }
 }
 
@@ -558,6 +585,17 @@ impl MatchTacticType {
 pub struct TacticsSelector;
 
 impl TacticsSelector {
+    /// Share of the formation verdict the head coach's own preference is
+    /// worth, against the squad's fit for the shape. Small on purpose: a
+    /// manager has a way he likes to play and it settles the close calls,
+    /// but he does not field a back three because he fancies one when he
+    /// has no wing-backs.
+    /// Measured: the whole spread between a squad's best and worst shape is
+    /// ~0.03 for a well-covered side and ~0.07 for a lopsided one. At 0.06 a
+    /// manager plays his own way whenever the squad can field anything, and
+    /// is overruled only when his shape genuinely wastes the side.
+    const COACH_TASTE_SHARE: f32 = 0.06;
+
     /// Main method to select the best tactic for a team
     pub fn select(team: &Team, coach: &Staff) -> Tactics {
         let available_players: Vec<&Player> = team
@@ -576,7 +614,14 @@ impl TacticsSelector {
             );
         }
 
-        // Evaluate multiple selection strategies
+        // Evaluate multiple selection strategies. Each answers with the
+        // shape it would play and, separately, the score the comparison
+        // should judge it on — deliberately NOT the stored
+        // `formation_strength`, which is the honest fit and is clamped to
+        // 0..1. Folding the coach's conviction into the stored number let
+        // it saturate against that clamp, and a saturated preference then
+        // beat every other strategy outright however badly the shape
+        // suited the squad.
         let strategies = vec![
             Self::select_by_coach_preference(coach, &available_players),
             Self::select_by_team_composition(&available_players),
@@ -586,18 +631,15 @@ impl TacticsSelector {
         // Choose the best strategy result
         strategies
             .into_iter()
-            .max_by(|a, b| {
-                a.formation_strength
-                    .partial_cmp(&b.formation_strength)
-                    .unwrap_or(Ordering::Equal)
-            })
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
+            .map(|(tactics, _)| tactics)
             .unwrap_or_else(|| {
                 Tactics::with_reason(MatchTacticType::T442, TacticSelectionReason::Default, 0.5)
             })
     }
 
     /// Select tactic based on coach attributes and behavior
-    fn select_by_coach_preference(coach: &Staff, players: &[&Player]) -> Tactics {
+    fn select_by_coach_preference(coach: &Staff, players: &[&Player]) -> (Tactics, f32) {
         let tactical_knowledge = coach.staff_attributes.knowledge.tactical_knowledge;
         let attacking_coaching = coach.staff_attributes.coaching.attacking;
         let defending_coaching = coach.staff_attributes.coaching.defending;
@@ -624,13 +666,21 @@ impl TacticsSelector {
         };
 
         let tactic = Tactics::new(preferred_tactic);
-        let strength =
-            tactic.calculate_formation_fitness(players) * Self::coach_confidence_multiplier(coach);
+        let fit = tactic.calculate_formation_fitness(players);
+        // Taste is added to the *comparison*, not multiplied into the
+        // stored fitness. `coach_confidence_multiplier` runs 0.5..1.5; read
+        // as a conviction of 0..1 it buys at most `COACH_TASTE_SHARE` —
+        // enough to win a near-tie, never enough to impose a shape the
+        // squad cannot fill.
+        let conviction = (Self::coach_confidence_multiplier(coach) - 0.5).clamp(0.0, 1.0);
 
-        Tactics::with_reason(
-            preferred_tactic,
-            TacticSelectionReason::CoachPreference,
-            strength,
+        (
+            Tactics::with_reason(
+                preferred_tactic,
+                TacticSelectionReason::CoachPreference,
+                fit,
+            ),
+            fit + conviction * Self::COACH_TASTE_SHARE,
         )
     }
 
@@ -701,16 +751,19 @@ impl TacticsSelector {
     }
 
     /// Select tactic based on available player composition
-    fn select_by_team_composition(players: &[&Player]) -> Tactics {
+    fn select_by_team_composition(players: &[&Player]) -> (Tactics, f32) {
         let position_analysis = Self::analyze_team_composition(players);
 
         let selected_tactic = Self::match_formation_to_composition(&position_analysis);
         let tactic = Tactics::new(selected_tactic);
         let strength = tactic.calculate_formation_fitness(players);
 
-        Tactics::with_reason(
-            selected_tactic,
-            TacticSelectionReason::TeamComposition,
+        (
+            Tactics::with_reason(
+                selected_tactic,
+                TacticSelectionReason::TeamComposition,
+                strength,
+            ),
             strength,
         )
     }
@@ -813,7 +866,7 @@ impl TacticsSelector {
     /// the one whose slot-by-slot fitness best matches the squad. Ties
     /// fall to the lower enum variant so output is deterministic across
     /// runs.
-    fn select_by_player_quality(players: &[&Player]) -> Tactics {
+    fn select_by_player_quality(players: &[&Player]) -> (Tactics, f32) {
         let mut best: Option<(MatchTacticType, f32)> = None;
         for tactic_type in MatchTacticType::all() {
             let tac = Tactics::new(tactic_type);
@@ -830,9 +883,12 @@ impl TacticsSelector {
             });
         }
         let (tactic_type, strength) = best.unwrap_or((MatchTacticType::T442, 0.5));
-        Tactics::with_reason(
-            tactic_type,
-            TacticSelectionReason::TeamComposition,
+        (
+            Tactics::with_reason(
+                tactic_type,
+                TacticSelectionReason::TeamComposition,
+                strength,
+            ),
             strength,
         )
     }
@@ -1070,6 +1126,118 @@ mod tests {
             .expect("Failed to build test player")
     }
 
+    /// A player who genuinely holds several roles, for the tests that turn
+    /// on whether one man can be credited with more than one shirt.
+    fn create_versatile_player(id: u32, roles: &[PlayerPositionType], ability: u8) -> Player {
+        use crate::{PlayerPosition, PlayerPositions};
+
+        let mut player = create_test_player(id, roles[0], ability);
+        player.positions = PlayerPositions {
+            positions: roles
+                .iter()
+                .map(|&position| PlayerPosition {
+                    position,
+                    level: 18,
+                })
+                .collect(),
+        };
+        player
+    }
+
+    /// Everything behind the front line, identical in both squads below.
+    fn spine() -> Vec<Player> {
+        let mut v = squad_at(PlayerPositionType::Goalkeeper, 1, 150);
+        for (id, position) in [
+            PlayerPositionType::DefenderLeft,
+            PlayerPositionType::DefenderCenter,
+            PlayerPositionType::DefenderCenterRight,
+            PlayerPositionType::DefenderRight,
+            PlayerPositionType::DefensiveMidfielder,
+            PlayerPositionType::MidfielderCenter,
+            PlayerPositionType::MidfielderCenterLeft,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            v.push(create_test_player(50 + id as u32, position, 140));
+        }
+        v
+    }
+
+    #[test]
+    fn one_man_cannot_wear_three_shirts() {
+        // Same squad size, same spine, same best player. The only
+        // difference is whether the three attacking shirts are covered by
+        // one outstanding man plus two journeymen, or by three outstanding
+        // men. Scoring each slot with its best candidate independently
+        // rated these identically — the versatile star answered for all
+        // three — which is exactly why the shape comparison could never
+        // notice a good player being left out.
+        let shape = Tactics::new(MatchTacticType::T4231);
+        let roles = [
+            PlayerPositionType::AttackingMidfielderLeft,
+            PlayerPositionType::AttackingMidfielderCenter,
+            PlayerPositionType::AttackingMidfielderRight,
+        ];
+
+        let mut lone = spine();
+        lone.push(create_versatile_player(80, &roles, 180));
+        lone.push(create_versatile_player(81, &roles, 110));
+        lone.push(create_versatile_player(82, &roles, 110));
+        lone.push(create_test_player(83, PlayerPositionType::Striker, 150));
+
+        let mut three = spine();
+        three.push(create_versatile_player(80, &roles, 180));
+        three.push(create_versatile_player(81, &roles, 180));
+        three.push(create_versatile_player(82, &roles, 180));
+        three.push(create_test_player(83, PlayerPositionType::Striker, 150));
+
+        let lone_refs: Vec<&Player> = lone.iter().collect();
+        let three_refs: Vec<&Player> = three.iter().collect();
+        assert!(
+            shape.calculate_formation_fitness(&three_refs)
+                > shape.calculate_formation_fitness(&lone_refs),
+            "three good attackers must beat one good attacker and two reserves"
+        );
+    }
+
+    #[test]
+    fn a_shape_that_leaves_the_best_players_out_scores_lower() {
+        // Six front-line players are the squad's best. A shape with four
+        // attacking shirts gets more of them onto the pitch than one with
+        // two, and has to say so.
+        let mut players = spine();
+        for (i, roles) in [
+            vec![PlayerPositionType::Striker],
+            vec![
+                PlayerPositionType::AttackingMidfielderLeft,
+                PlayerPositionType::Striker,
+            ],
+            vec![
+                PlayerPositionType::AttackingMidfielderRight,
+                PlayerPositionType::Striker,
+            ],
+            vec![
+                PlayerPositionType::AttackingMidfielderCenter,
+                PlayerPositionType::Striker,
+            ],
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            players.push(create_versatile_player(90 + i as u32, &roles, 185));
+        }
+        let refs: Vec<&Player> = players.iter().collect();
+
+        let four_attacking = Tactics::new(MatchTacticType::T4231);
+        let one_attacking = Tactics::new(MatchTacticType::T4141);
+        assert!(
+            four_attacking.calculate_formation_fitness(&refs)
+                > one_attacking.calculate_formation_fitness(&refs),
+            "a shape that fields four of the squad's best six must rate above one that fields one"
+        );
+    }
+
     #[test]
     fn test_formation_fitness_calculation() {
         let players = vec![
@@ -1097,7 +1265,7 @@ mod tests {
         ];
 
         let player_refs: Vec<&Player> = players.iter().collect();
-        let result = TacticsSelector::select_by_team_composition(&player_refs);
+        let result = TacticsSelector::select_by_team_composition(&player_refs).0;
 
         // Should prefer attacking formation for strong forwards
         assert!(
@@ -1249,7 +1417,7 @@ mod tests {
         players.extend(squad_at(PlayerPositionType::ForwardRight, 2, 175));
         let player_refs: Vec<&Player> = players.iter().collect();
 
-        let by_comp = TacticsSelector::select_by_team_composition(&player_refs);
+        let by_comp = TacticsSelector::select_by_team_composition(&player_refs).0;
         assert_ne!(
             by_comp.tactic_type,
             MatchTacticType::T442,
@@ -1257,7 +1425,7 @@ mod tests {
             by_comp.tactic_type,
         );
 
-        let by_quality = TacticsSelector::select_by_player_quality(&player_refs);
+        let by_quality = TacticsSelector::select_by_player_quality(&player_refs).0;
         assert_ne!(
             by_quality.tactic_type,
             MatchTacticType::T442,
@@ -1283,7 +1451,7 @@ mod tests {
         players.extend(squad_at(PlayerPositionType::Striker, 1, 130));
         let player_refs: Vec<&Player> = players.iter().collect();
 
-        let by_comp = TacticsSelector::select_by_team_composition(&player_refs);
+        let by_comp = TacticsSelector::select_by_team_composition(&player_refs).0;
         assert_ne!(
             by_comp.tactic_type,
             MatchTacticType::T442,
@@ -1370,7 +1538,7 @@ mod tests {
         // open to producing other shapes when the squad is uniform.
         let players = balanced_squad();
         let player_refs: Vec<&Player> = players.iter().collect();
-        let result = TacticsSelector::select_by_player_quality(&player_refs);
+        let result = TacticsSelector::select_by_player_quality(&player_refs).0;
         // Either T442 (legitimate for a uniform squad) or another
         // matching shape; the test guards against the legacy bug
         // where T442 always won on tie.

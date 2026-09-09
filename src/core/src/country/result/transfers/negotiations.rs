@@ -30,6 +30,7 @@ use crate::transfers::pipeline::appraisal::{
 use crate::transfers::pipeline::appraisal_inputs::{
     AvailabilityView, OfferViewBuilder, PlayerStanceBuilder, StanceInputs,
 };
+use crate::transfers::pipeline::loan_guard::{LoanBorrowerProfile, LoanGuardVerdict};
 use crate::transfers::pipeline::asset_ledger::ReplacementScarcity;
 use crate::transfers::pipeline::auction::AuctionState;
 use crate::transfers::pipeline::planning::{BriefTier, PlanningCadence};
@@ -680,6 +681,41 @@ impl CountryResult {
         }
     }
 
+    /// Price this loan's destination from the seller's side — the same
+    /// [`LoanAssetGuard`] verdict every loan-scan gate reads, re-read here
+    /// because the approach can also arrive from a path that never ran
+    /// them (a broadcast response, a resumed cascade).
+    ///
+    /// `None` for permanent moves and whenever either side cannot be read
+    /// in this country's borrow — a cross-border seller, above all — which
+    /// leaves the acceptance roll exactly as it was.
+    fn loan_guard_verdict(
+        country: &Country,
+        neg_data: &NegotiationData,
+        date: NaiveDate,
+    ) -> Option<LoanGuardVerdict> {
+        if !neg_data.is_loan || neg_data.selling_country_id.is_some() {
+            return None;
+        }
+        let selling_club = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.selling_club_id)?;
+        let player = find_player_in_country(country, neg_data.player_id)?;
+        let guard = PipelineProcessor::loan_guard_for(country, selling_club, player, date)?;
+        let borrower = country
+            .clubs
+            .iter()
+            .find(|c| c.id == neg_data.buying_club_id)?;
+        let borrower_league_rep = PipelineProcessor::club_league_reputation(country, borrower);
+        let profile = LoanBorrowerProfile::of(borrower, date, borrower_league_rep)?
+            .with_best_in_group(PipelineProcessor::best_ca_in_group(
+                borrower,
+                player.position().position_group(),
+            ));
+        Some(guard.assess(&profile))
+    }
+
     fn resolve_initial_approach(
         country: &mut Country,
         neg_id: u32,
@@ -752,13 +788,27 @@ impl CountryResult {
             1.0
         };
 
-        let mut chance: f32 = if neg_data.player_is_available {
+        // The parent's answer to WHERE, not merely to whether. A loan
+        // listing says the club will lend him out; it says nothing about
+        // lending him to a club whose whole year is worth less than he is,
+        // and the 80-point "he's available" base was handing exactly those
+        // approaches a near-certain yes. So the base applies only when the
+        // borrower is inside the verdict's own reach, and the verdict's
+        // refusal is added on top: a flat no for a man the club will not
+        // send anywhere, a firm one for a destination below his level, and
+        // a continuous grumble for a borrower he is merely expensive for.
+        let loan_verdict = Self::loan_guard_verdict(country, neg_data, date);
+        let within_reach = loan_verdict.map(|v| v.within_reach).unwrap_or(true);
+        let mut chance: f32 = if neg_data.player_is_available && within_reach {
             80.0
         } else if neg_data.is_unsolicited {
             35.0
         } else {
             55.0
         };
+        if let Some(verdict) = loan_verdict.as_ref() {
+            chance += verdict.refusal_delta;
+        }
 
         // Reservation-price guardrails: randomness adds texture, but it
         // should not let insulting bids or unaffordable rival taps through.

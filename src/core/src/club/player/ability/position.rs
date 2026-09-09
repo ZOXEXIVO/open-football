@@ -256,16 +256,24 @@ impl RoleFamiliarity {
     /// still most of the player he is, and pricing that as a third of him off
     /// would have every club in the world reading its own shape as a crisis.
     pub fn credit(level: u8) -> f32 {
-        let l = level as f32;
-        if level >= 18 {
+        Self::credit_at(level as f32)
+    }
+
+    /// [`Self::credit`] on a continuous familiarity, for callers holding a
+    /// converted level rather than a listed one — rounding a 16.4 down to
+    /// 16 before the curve throws away the very precision the conversion
+    /// was computed to.
+    pub fn credit_at(level: f32) -> f32 {
+        let l = level;
+        if l >= 18.0 {
             1.0
-        } else if level >= 15 {
+        } else if l >= 15.0 {
             0.92 + (l - 15.0) * (0.08 / 3.0)
-        } else if level >= 12 {
+        } else if l >= 12.0 {
             0.80 + (l - 12.0) * (0.12 / 3.0)
-        } else if level >= 8 {
+        } else if l >= 8.0 {
             0.62 + (l - 8.0) * (0.18 / 4.0)
-        } else if level >= REQUIRED_POSITION_LEVEL {
+        } else if l >= REQUIRED_POSITION_LEVEL as f32 {
             0.50 + (l - REQUIRED_POSITION_LEVEL as f32) * (0.12 / 3.0)
         } else {
             0.0
@@ -298,6 +306,108 @@ impl RoleFamiliarity {
             .map(|p| p.level)
             .max()
             .unwrap_or(0)
+    }
+
+    /// How much of the familiarity a player holds at `held` carries into
+    /// a `slot` he is not listed at — one shared answer to "he isn't
+    /// down for that shirt, how close is it?".
+    ///
+    /// This table carries far more weight than a list of near-misses
+    /// normally would. The formations ask for eleven shirts, but eight of
+    /// the codes they use — `SW`, `DCL`, `DCR`, `MCL`, `MCR`, `FL`, `FC`,
+    /// `FR` — appear **zero** times in the player database, whose
+    /// vocabulary is FM's other fourteen. At those slots every player in
+    /// the world is an unlisted conversion, so without this the game
+    /// reads a squad of centre-backs as having nobody who can play the
+    /// left of a back four, and a squad of strikers as having nobody who
+    /// can lead the line.
+    ///
+    /// Deliberately keyed on the role the player actually HOLDS rather
+    /// than his primary label: that label is the first entry of a record
+    /// ordered deepest-first, which makes it an arbitrary pick among
+    /// equally natural roles and files most of the world's strikers as
+    /// midfielders.
+    pub fn conversion(held: PlayerPositionType, slot: PlayerPositionType) -> f32 {
+        use PlayerPositionType::{
+            AttackingMidfielderLeft, AttackingMidfielderRight, DefenderCenter, DefenderCenterLeft,
+            DefenderCenterRight, DefenderLeft, DefenderRight, ForwardCenter, ForwardLeft,
+            ForwardRight, MidfielderCenter, MidfielderCenterLeft, MidfielderCenterRight,
+            MidfielderLeft, MidfielderRight, Striker, WingbackLeft, WingbackRight,
+        };
+
+        if held == slot {
+            return 1.0;
+        }
+
+        match (held, slot) {
+            // Full-back and wing-back are the same job at two heights, and
+            // a wide midfielder pushed up (or a winger dropped back) is
+            // still playing his own flank.
+            (DefenderLeft, WingbackLeft)
+            | (WingbackLeft, DefenderLeft)
+            | (DefenderRight, WingbackRight)
+            | (WingbackRight, DefenderRight)
+            | (MidfielderLeft, AttackingMidfielderLeft)
+            | (AttackingMidfielderLeft, MidfielderLeft)
+            | (MidfielderRight, AttackingMidfielderRight)
+            | (AttackingMidfielderRight, MidfielderRight) => 0.86,
+
+            // The same central shirt one step off the middle — plus the
+            // centre-forward slot, which is a striker's own job under a
+            // code no player record ever carries.
+            (DefenderCenter, DefenderCenterLeft)
+            | (DefenderCenter, DefenderCenterRight)
+            | (DefenderCenterLeft, DefenderCenter)
+            | (DefenderCenterRight, DefenderCenter)
+            | (MidfielderCenter, MidfielderCenterLeft)
+            | (MidfielderCenter, MidfielderCenterRight)
+            | (MidfielderCenterLeft, MidfielderCenter)
+            | (MidfielderCenterRight, MidfielderCenter)
+            | (ForwardCenter, Striker)
+            | (Striker, ForwardCenter) => 0.82,
+
+            // A winger asked to be the wide forward of a front three.
+            (ForwardLeft, AttackingMidfielderLeft)
+            | (AttackingMidfielderLeft, ForwardLeft)
+            | (ForwardRight, AttackingMidfielderRight)
+            | (AttackingMidfielderRight, ForwardRight) => 0.78,
+
+            _ => {
+                let held_group = held.position_group();
+                let slot_group = slot.position_group();
+                if held_group == slot_group {
+                    0.62
+                } else if held_group.is_adjacent_to(slot_group) {
+                    0.40
+                } else {
+                    0.0
+                }
+            }
+        }
+    }
+
+    /// Best familiarity level a player brings to `slot`, converting from
+    /// whichever role he actually holds — the level he is listed at when
+    /// he holds the slot outright, the best discounted conversion
+    /// otherwise, and zero when nothing he plays reaches that line.
+    pub fn level_for_slot(positions: &PlayerPositions, slot: PlayerPositionType) -> f32 {
+        positions
+            .positions
+            .iter()
+            .map(|p| p.level as f32 * Self::conversion(p.position, slot))
+            .fold(0.0, f32::max)
+    }
+
+    /// How much of a player of `current_ability` actually turns up in a
+    /// given shirt — his ability scaled by the familiarity he converts
+    /// into it. Zero when nothing he plays reaches that slot, which is the
+    /// honest verdict on asking him to fill it.
+    pub fn strength_at_slot(
+        current_ability: u8,
+        positions: &PlayerPositions,
+        slot: PlayerPositionType,
+    ) -> f32 {
+        current_ability as f32 * Self::credit_at(Self::level_for_slot(positions, slot))
     }
 
     /// Effective ability a player of `current_ability` brings to a role he
@@ -862,6 +972,20 @@ impl PlayerFieldPositionGroup {
             PlayerFieldPositionGroup::Forward => 2,
         }
     }
+
+    /// Do these two groups share a line of the pitch? A player asked to
+    /// fill the group next to his own is stretching; two lines away he is
+    /// out of his sport.
+    pub fn is_adjacent_to(&self, other: PlayerFieldPositionGroup) -> bool {
+        use PlayerFieldPositionGroup::{Defender, Forward, Midfielder};
+        matches!(
+            (*self, other),
+            (Defender, Midfielder)
+                | (Midfielder, Defender)
+                | (Midfielder, Forward)
+                | (Forward, Midfielder)
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1004,6 +1128,93 @@ mod role_capability_tests {
             RoleFamiliarity::best_in_group(&player, 150, PlayerFieldPositionGroup::Defender),
             0,
             "and not at all where he cannot play"
+        );
+    }
+
+    /// The eight shirts the formations ask for that no player record ever
+    /// carries. A squad has to be able to fill them out of the fourteen
+    /// codes the database does use, or a formation spelled in them reads
+    /// as unfillable for every club in the world.
+    const CODES_NO_RECORD_CARRIES: [PlayerPositionType; 8] = [
+        PlayerPositionType::Sweeper,
+        PlayerPositionType::DefenderCenterLeft,
+        PlayerPositionType::DefenderCenterRight,
+        PlayerPositionType::MidfielderCenterLeft,
+        PlayerPositionType::MidfielderCenterRight,
+        PlayerPositionType::ForwardLeft,
+        PlayerPositionType::ForwardCenter,
+        PlayerPositionType::ForwardRight,
+    ];
+
+    #[test]
+    fn the_shirts_no_record_carries_are_still_reachable() {
+        // One natural of each database code, the way a real squad is
+        // stocked. Sweeper is the exception the game keeps: nobody is
+        // listed there and nothing converts into it.
+        let stock = [
+            (
+                PlayerPositionType::DefenderCenter,
+                PlayerPositionType::DefenderCenterLeft,
+            ),
+            (
+                PlayerPositionType::DefenderCenter,
+                PlayerPositionType::DefenderCenterRight,
+            ),
+            (
+                PlayerPositionType::MidfielderCenter,
+                PlayerPositionType::MidfielderCenterLeft,
+            ),
+            (
+                PlayerPositionType::MidfielderCenter,
+                PlayerPositionType::MidfielderCenterRight,
+            ),
+            (
+                PlayerPositionType::AttackingMidfielderLeft,
+                PlayerPositionType::ForwardLeft,
+            ),
+            (
+                PlayerPositionType::Striker,
+                PlayerPositionType::ForwardCenter,
+            ),
+            (
+                PlayerPositionType::AttackingMidfielderRight,
+                PlayerPositionType::ForwardRight,
+            ),
+        ];
+        for (held, slot) in stock {
+            assert!(
+                CODES_NO_RECORD_CARRIES.contains(&slot),
+                "{slot:?} is supposed to be one of the absent codes"
+            );
+            let credit = RoleFamiliarity::conversion(held, slot);
+            assert!(
+                credit >= 0.62,
+                "{held:?} must be a real answer at {slot:?}, got {credit}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_role_converts_from_the_shirt_the_player_holds_not_the_one_listed_first() {
+        // Deepest-first record ordering: this man's one "primary" label is
+        // the wing, but he leads the line at full competence.
+        let player = RoleFx::wide_forward();
+        let pure_striker = RoleFx::positions(&[(PlayerPositionType::Striker, 20)]);
+
+        assert_eq!(
+            RoleFamiliarity::level_for_slot(&player, PlayerPositionType::Striker),
+            20.0,
+            "he is listed at striker — the label ahead of it changes nothing"
+        );
+        assert_eq!(
+            RoleFamiliarity::level_for_slot(&player, PlayerPositionType::ForwardCenter),
+            RoleFamiliarity::level_for_slot(&pure_striker, PlayerPositionType::ForwardCenter),
+            "and he leads a front three exactly as well as a man filed as a striker"
+        );
+        assert!(
+            RoleFamiliarity::level_for_slot(&player, PlayerPositionType::ForwardLeft)
+                > RoleFamiliarity::level_for_slot(&pure_striker, PlayerPositionType::ForwardLeft),
+            "on the left of it he is the better answer — he actually plays there"
         );
     }
 }

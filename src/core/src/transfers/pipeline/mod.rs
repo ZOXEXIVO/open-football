@@ -8,6 +8,7 @@ mod circulation;
 mod evaluation;
 mod exposure;
 mod helpers;
+pub mod loan_guard;
 mod loan_home;
 mod loan_interest;
 mod loan_market;
@@ -44,6 +45,7 @@ pub use self::appraisal_inputs::{
     AvailabilityView, OfferViewBuilder, PlayerStanceBuilder, StanceInputs,
 };
 pub use self::asset_ledger::{AssetLedger, SellListEntry, SellMotive};
+pub use self::loan_guard::{LoanAssetGuard, LoanBorrowerProfile, LoanGuardVerdict, LoanReach};
 pub use self::loan_home::{
     HomeLoanGates, HomeLoanPull, HomePull, SquadHomeContext, UnsettledAbroadScan,
 };
@@ -1362,6 +1364,14 @@ pub struct ClubTransferPlan {
 
     pub loan_out_candidates: Vec<LoanOutCandidate>,
 
+    /// Players whose loan intent the club has just withdrawn — promoted
+    /// into the first team instead. The club can strip the `Loa` badge and
+    /// the candidate row itself, but the live market row belongs to the
+    /// country listing pass, which drains this on its next run and pulls
+    /// the listing. Without it the club has promoted a player the market
+    /// is still advertising for loan.
+    pub loan_withdrawals: Vec<u32>,
+
     /// Positions the club has shopped for and failed to fill. Survives
     /// `reset_for_window` on purpose — a need that went unanswered all summer
     /// is exactly the thing the club should walk into January still carrying.
@@ -1589,6 +1599,7 @@ impl ClubTransferPlan {
             scouting_reports: Vec::new(),
             shortlists: Vec::new(),
             loan_out_candidates: Vec::new(),
+            loan_withdrawals: Vec::new(),
             loan_broadcasts: HashMap::new(),
             transfer_broadcasts: HashMap::new(),
             manager_review_until: None,

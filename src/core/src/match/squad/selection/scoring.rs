@@ -5,7 +5,8 @@ use crate::club::player::load::{
 use crate::club::staff::CoachPlayerBond;
 use crate::club::staff::perception::{CoachProfile, PotentialEstimator};
 use crate::club::{
-    ClubPhilosophy, PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, Staff,
+    ClubPhilosophy, PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus,
+    PositionCoverage, Staff,
 };
 use crate::utils::DateUtils;
 use crate::{Player, PlayerStatusType, SelectionScoreFactor, Tactics};
@@ -689,7 +690,7 @@ impl ScoringEngine {
         let p = &self.profile;
         let mut b = SlotScoreBreakdown::default();
 
-        b.position_fit = helpers::position_fit_score(player, slot_position, slot_group)
+        b.position_fit = helpers::position_fit_score(player, slot_position)
             * (0.20 * (1.0 - p.tactical_blindness * 0.3));
 
         b.perceived_quality = self.perceived_quality(player) * (0.40 + p.judging_accuracy * 0.05);
@@ -733,7 +734,11 @@ impl ScoringEngine {
         b.force_selection = self.force_selection_bonus(player);
         b.philosophy = self.philosophy_bonus(player, date);
 
-        if player.position().position_group() != slot_group {
+        // Out of his line — charged on what the player can actually play,
+        // not on the single label his record happens to list first. A man
+        // down for the slot's own shirt is not playing out of position,
+        // however deep the arbitrary "primary" position ahead of it sits.
+        if !PositionCoverage::of(&player.positions).covers_group(slot_group) {
             b.group_mismatch = -1.5;
         }
 
@@ -1429,9 +1434,7 @@ impl ScoringEngine {
         // Current-ability floor: the prospect needs a baseline to belong.
         let current_floor = ((ca - 70.0) / 90.0).clamp(0.0, 1.0);
 
-        let group = slot.position_group();
-        let position_fit =
-            (helpers::position_fit_score(player, slot, group) / 20.0).clamp(0.0, 1.0);
+        let position_fit = (helpers::position_fit_score(player, slot) / 20.0).clamp(0.0, 1.0);
 
         let readiness = (self.match_readiness(player) / 20.0).clamp(0.0, 1.0);
         let training = ((self.training_impression(player) - 10.0) / 12.0).clamp(-0.4, 0.6);

@@ -418,9 +418,7 @@ impl SelectionScoringContext<'_> {
                     if cand.position().position_group() != group {
                         continue;
                     }
-                    if helpers::position_fit_score(cand, slot, group)
-                        < COHESION_SWAP_MIN_POSITION_FIT
-                    {
+                    if helpers::position_fit_score(cand, slot) < COHESION_SWAP_MIN_POSITION_FIT {
                         continue;
                     }
                     let cand_base = self.starting_slot_score(cand, slot, available);
@@ -654,10 +652,9 @@ impl SelectionScoringContext<'_> {
                 }
 
                 let starter_score = self.starting_slot_score(starter, slot, available);
-                let slot_group = slot.position_group();
 
                 for &cand in bench_pool.iter() {
-                    let fit = helpers::position_fit_score(cand, slot, slot_group);
+                    let fit = helpers::position_fit_score(cand, slot);
                     // "0.70 fit" on a 0..20 level scale: a level-14 specialist
                     // at the slot, or a same-group player whose proximity
                     // multiplier × primary level lands at or above 14.
@@ -1350,9 +1347,7 @@ impl SelectionScoringContext<'_> {
         let Some(coach) = self.coach else {
             return 0.0;
         };
-        let target_group = slot.position_group();
-        let natural_role_fit =
-            (helpers::position_fit_score(player, slot, target_group) / 20.0).clamp(0.0, 1.0);
+        let natural_role_fit = (helpers::position_fit_score(player, slot) / 20.0).clamp(0.0, 1.0);
         let coach_ctx = CoachSelectionContext {
             date: self.date,
             match_importance: self.match_importance,
@@ -1375,9 +1370,7 @@ impl SelectionScoringContext<'_> {
             return 0.0;
         };
         let slot = helpers::best_tactical_position(player, self.tactics);
-        let natural_role_fit = (helpers::position_fit_score(player, slot, slot.position_group())
-            / 20.0)
-            .clamp(0.0, 1.0);
+        let natural_role_fit = (helpers::position_fit_score(player, slot) / 20.0).clamp(0.0, 1.0);
         let coach_ctx = CoachSelectionContext {
             date: self.date,
             match_importance: self.match_importance,

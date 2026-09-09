@@ -5,6 +5,10 @@ use crate::{
 };
 use log::{debug, info};
 
+/// How much more of the squad's strongest eleven a different shape must
+/// put on the pitch before a coach abandons the one he picked.
+const FORMATION_SWITCH_GAIN: f32 = 0.03;
+
 impl Team {
     /// Adaptive tactics during a match based on game state
     pub fn adapt_tactics_during_match_enhanced(
@@ -57,7 +61,13 @@ impl Team {
             let fitness_suggested =
                 suggested_tactics.calculate_formation_fitness(&available_players);
 
-            if fitness_suggested > fitness_current + 0.1 {
+            // Fitness is the share of the squad's strongest eleven a shape
+            // gets onto the pitch, so the whole spread between the best and
+            // worst formation for a given squad is a few points — the old
+            // 0.1 bar was set against a scale that zeroed every slot whose
+            // position code the database never carries, and would now never
+            // be cleared. Three points of the best eleven is a real gain.
+            if fitness_suggested > fitness_current + FORMATION_SWITCH_GAIN {
                 // Significant improvement threshold
                 info!(
                     "Switching tactics for better formation fitness: {:.2} -> {:.2}",

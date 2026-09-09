@@ -155,16 +155,6 @@ impl PlayerSquadStatus {
             return PlayerSquadStatus::FirstTeamRegular;
         }
 
-        // Youth players get youth-specific statuses
-        if player_age <= 19 {
-            let avg_ca = team_cas.iter().map(|&c| c as u32).sum::<u32>() / squad_size as u32;
-            return if (player_ca as u32) >= avg_ca {
-                PlayerSquadStatus::HotProspectForTheFuture
-            } else {
-                PlayerSquadStatus::DecentYoungster
-            };
-        }
-
         // Find player's rank in his position group (0 = best).
         let rank = team_cas.iter().filter(|&&ca| ca > player_ca).count();
 
@@ -184,6 +174,20 @@ impl PlayerSquadStatus {
         let regular_cutoff = starters;
         let rotation_cutoff = regular_cutoff + rotation_slots;
         let backup_cutoff = rotation_cutoff + if is_goalkeeper { 2 } else { starters };
+
+        // A label follows RANK; "prospect" is what a club calls a
+        // youngster who is not yet in the side. Reading the birth year
+        // first made every teenager a prospect however he ranked — so a
+        // nineteen-year-old who was his club's first-choice forward was
+        // filed as a Hot Prospect, which short-circuits the asset
+        // classifier to a development-loan asset, scores 0.45 on the
+        // market's importance model, and told every loan path he was
+        // there to be borrowed. A teenager inside the starting slots takes
+        // the senior ladder like anyone else; behind them he keeps the
+        // youth labels, which is what they are for.
+        if player_age <= 19 && rank >= regular_cutoff {
+            return Self::youth_label(player_ca, team_cas);
+        }
 
         if rank < key_cutoff {
             PlayerSquadStatus::KeyPlayer
@@ -242,14 +246,32 @@ impl PlayerSquadStatus {
         let Some(level) = level else {
             return status;
         };
-        if player_age <= 19 {
-            return status;
-        }
+        // No age exemption: a teenager who reaches a senior label reaches
+        // it on rank, so the club's own level caps him exactly as it caps
+        // everybody else. The two development labels sit off the senior
+        // ladder entirely and are left alone by the comparison below,
+        // which is where "youth labels are untouched" actually lives.
+        let _ = player_age;
         let cap = level.label_cap(player_ca, group);
         if Self::senior_ladder(&cap) < Self::senior_ladder(&status) {
             cap
         } else {
             status
+        }
+    }
+
+    /// The two development labels, chosen on how the youngster compares
+    /// with the squad he is registered in. The one place both the rank
+    /// ladder and the youth-squad path mint them, so they can never drift.
+    fn youth_label(player_ca: u8, team_cas: &[u8]) -> PlayerSquadStatus {
+        if team_cas.is_empty() {
+            return PlayerSquadStatus::HotProspectForTheFuture;
+        }
+        let avg_ca = team_cas.iter().map(|&c| c as u32).sum::<u32>() / team_cas.len() as u32;
+        if (player_ca as u32) >= avg_ca {
+            PlayerSquadStatus::HotProspectForTheFuture
+        } else {
+            PlayerSquadStatus::DecentYoungster
         }
     }
 
@@ -283,8 +305,17 @@ impl PlayerSquadStatus {
         group: PlayerFieldPositionGroup,
         team_cas: &[u8],
     ) -> Self {
-        if team_type.owns_squad_status() || player_age <= 19 {
+        if team_type.owns_squad_status() {
             return Self::calculate(player_ca, player_age, group, team_cas);
+        }
+        // A development or parking squad refreshes a youngster's prospect
+        // label against the squad he is actually in — never the senior
+        // ladder, which this squad does not own. (The rank-first rule in
+        // `calculate` is about the FIRST TEAM's own ranking; ranking a boy
+        // against his U20 team-mates would crown one of them a key player
+        // of a squad that has none.)
+        if player_age <= 19 {
+            return Self::youth_label(player_ca, team_cas);
         }
         match current {
             PlayerSquadStatus::KeyPlayer
@@ -1091,16 +1122,74 @@ mod squad_status_calc_tests {
         );
     }
 
+    /// A label follows RANK, and youth labels are what a club calls the
+    /// boys who are not in the side. The teenager who tops a contested
+    /// group is a key player — reading his birth year first is what filed
+    /// a first-choice forward as a "Hot Prospect", which every loan path
+    /// downstream then read as "lend him out".
     #[test]
-    fn young_players_still_get_youth_labels() {
-        let mids = [180u8, 120, 100];
+    fn young_players_get_youth_labels_only_behind_the_starting_slots() {
+        // Four midfielders; the group starts four, so ranks 0-3 are
+        // first-team slots and rank 4 is the first youth label.
+        let mids = [180u8, 160, 140, 120, 100];
         let mid = PlayerFieldPositionGroup::Midfielder;
         assert_eq!(
             PlayerSquadStatus::calculate(180, 18, mid, &mids),
+            PlayerSquadStatus::KeyPlayer,
+            "an eighteen-year-old who is the best in a contested group is a key player"
+        );
+        assert_eq!(
+            PlayerSquadStatus::calculate(140, 18, mid, &mids),
+            PlayerSquadStatus::FirstTeamRegular,
+            "…and one inside the starting slots is a regular"
+        );
+        // Behind the starting slots the youth ladder owns him again, and
+        // it still splits on how he compares with the squad (avg 140).
+        assert_eq!(
+            PlayerSquadStatus::calculate(100, 18, mid, &mids),
+            PlayerSquadStatus::DecentYoungster
+        );
+        let thin = [180u8, 170, 160, 150, 140];
+        assert_eq!(
+            PlayerSquadStatus::calculate(140, 18, mid, &thin),
+            PlayerSquadStatus::DecentYoungster,
+            "rank 4 of five is outside the slots, so the youth ladder decides"
+        );
+        let strong_reserve = [100u8, 90, 80, 70, 160];
+        assert_eq!(
+            PlayerSquadStatus::calculate(160, 19, mid, &strong_reserve),
+            PlayerSquadStatus::KeyPlayer,
+            "rank decides for a nineteen-year-old exactly as it does for anyone else"
+        );
+    }
+
+    /// A development squad still hands out development labels — ranking a
+    /// boy against his U20 team-mates would crown one of them the key
+    /// player of a squad that has none.
+    #[test]
+    fn a_youth_squad_still_mints_youth_labels() {
+        let mids = [120u8, 100, 90];
+        let mid = PlayerFieldPositionGroup::Midfielder;
+        assert_eq!(
+            PlayerSquadStatus::calculate_for_team(
+                TeamType::U20,
+                &PlayerSquadStatus::NotYetSet,
+                120,
+                18,
+                mid,
+                &mids
+            ),
             PlayerSquadStatus::HotProspectForTheFuture
         );
         assert_eq!(
-            PlayerSquadStatus::calculate(100, 18, mid, &mids),
+            PlayerSquadStatus::calculate_for_team(
+                TeamType::U20,
+                &PlayerSquadStatus::NotYetSet,
+                90,
+                18,
+                mid,
+                &mids
+            ),
             PlayerSquadStatus::DecentYoungster
         );
     }

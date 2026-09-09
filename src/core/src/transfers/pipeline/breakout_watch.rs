@@ -632,7 +632,7 @@ impl PipelineProcessor {
                 .map(|s| s.id)
                 .or_else(|| resolved.scouts.first().map(|s| s.id))
                 .unwrap_or(team.staffs.head_coach().id);
-            let buyer_plaus_ctx = BuyerPlausibilityContext::build(country, club);
+            let buyer_plaus_ctx = BuyerPlausibilityContext::build(country, club, date);
 
             // The club's scouting NETWORK — which regions of the world its
             // watch actually covers. Always includes the home backyard, so

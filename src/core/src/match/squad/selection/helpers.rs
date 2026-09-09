@@ -1,4 +1,4 @@
-use crate::club::{PlayerFieldPositionGroup, PlayerPositionType};
+use crate::club::{PlayerFieldPositionGroup, PlayerPositionType, RoleFamiliarity};
 use crate::utils::DateUtils;
 use crate::{Player, PlayerPreferredFoot, PlayerStatusType, TacticalStyle, Tactics};
 use chrono::NaiveDate;
@@ -215,117 +215,27 @@ impl KeeperAvailability {
 }
 
 pub fn is_adjacent_group(a: PlayerFieldPositionGroup, b: PlayerFieldPositionGroup) -> bool {
-    matches!(
-        (a, b),
-        (
-            PlayerFieldPositionGroup::Defender,
-            PlayerFieldPositionGroup::Midfielder
-        ) | (
-            PlayerFieldPositionGroup::Midfielder,
-            PlayerFieldPositionGroup::Defender
-        ) | (
-            PlayerFieldPositionGroup::Midfielder,
-            PlayerFieldPositionGroup::Forward
-        ) | (
-            PlayerFieldPositionGroup::Forward,
-            PlayerFieldPositionGroup::Midfielder
-        )
-    )
+    a.is_adjacent_to(b)
 }
 
 /// Calculate how well a player fits a target position (0..20)
-pub fn position_fit_score(
-    player: &Player,
-    slot_position: PlayerPositionType,
-    slot_group: PlayerFieldPositionGroup,
-) -> f32 {
-    let exact_level = player.positions.get_level(slot_position);
-    if exact_level > 0 {
-        return exact_level as f32;
+///
+/// The grade is the best conversion any role the player actually holds
+/// makes into the slot ([`RoleFamiliarity::conversion`]). It used to read
+/// his *primary label* instead — the first entry of a database record
+/// ordered deepest-first — which asked the wrong question twice over: a
+/// forward listed behind a wing was judged as a midfielder filling in up
+/// front, and the conversion itself was priced from a shirt he wasn't
+/// being asked to wear.
+pub fn position_fit_score(player: &Player, slot_position: PlayerPositionType) -> f32 {
+    let converted = RoleFamiliarity::level_for_slot(&player.positions, slot_position);
+    if converted > 0.0 {
+        return converted;
     }
 
-    let player_group = player.position().position_group();
-
-    if player_group == slot_group {
-        let primary_level = player
-            .positions
-            .positions
-            .iter()
-            .map(|p| p.level)
-            .max()
-            .unwrap_or(0);
-        return primary_level as f32 * same_group_fit_multiplier(player.position(), slot_position);
-    }
-
-    let adjacent = matches!(
-        (player_group, slot_group),
-        (
-            PlayerFieldPositionGroup::Defender,
-            PlayerFieldPositionGroup::Midfielder
-        ) | (
-            PlayerFieldPositionGroup::Midfielder,
-            PlayerFieldPositionGroup::Defender
-        ) | (
-            PlayerFieldPositionGroup::Midfielder,
-            PlayerFieldPositionGroup::Forward
-        ) | (
-            PlayerFieldPositionGroup::Forward,
-            PlayerFieldPositionGroup::Midfielder
-        )
-    );
-
-    if adjacent {
-        let primary_level = player
-            .positions
-            .positions
-            .iter()
-            .map(|p| p.level)
-            .max()
-            .unwrap_or(0);
-        return primary_level as f32 * 0.4;
-    }
-
+    // Nothing he plays reaches that line at all. Keep the old floor so a
+    // desperate assignment still grades above an empty shirt.
     1.0
-}
-
-/// More realistic compatibility for nearby roles. This keeps the old broad
-/// group fallback, but distinguishes sensible conversions (DR -> WBR) from
-/// desperate ones (DC -> DL).
-fn same_group_fit_multiplier(primary: PlayerPositionType, slot: PlayerPositionType) -> f32 {
-    if primary == slot {
-        return 1.0;
-    }
-
-    match (primary, slot) {
-        (PlayerPositionType::DefenderLeft, PlayerPositionType::WingbackLeft)
-        | (PlayerPositionType::WingbackLeft, PlayerPositionType::DefenderLeft)
-        | (PlayerPositionType::DefenderRight, PlayerPositionType::WingbackRight)
-        | (PlayerPositionType::WingbackRight, PlayerPositionType::DefenderRight)
-        | (PlayerPositionType::MidfielderLeft, PlayerPositionType::AttackingMidfielderLeft)
-        | (PlayerPositionType::AttackingMidfielderLeft, PlayerPositionType::MidfielderLeft)
-        | (PlayerPositionType::MidfielderRight, PlayerPositionType::AttackingMidfielderRight)
-        | (PlayerPositionType::AttackingMidfielderRight, PlayerPositionType::MidfielderRight) => {
-            0.86
-        }
-
-        (PlayerPositionType::DefenderCenter, PlayerPositionType::DefenderCenterLeft)
-        | (PlayerPositionType::DefenderCenter, PlayerPositionType::DefenderCenterRight)
-        | (PlayerPositionType::DefenderCenterLeft, PlayerPositionType::DefenderCenter)
-        | (PlayerPositionType::DefenderCenterRight, PlayerPositionType::DefenderCenter)
-        | (PlayerPositionType::MidfielderCenter, PlayerPositionType::MidfielderCenterLeft)
-        | (PlayerPositionType::MidfielderCenter, PlayerPositionType::MidfielderCenterRight)
-        | (PlayerPositionType::MidfielderCenterLeft, PlayerPositionType::MidfielderCenter)
-        | (PlayerPositionType::MidfielderCenterRight, PlayerPositionType::MidfielderCenter)
-        | (PlayerPositionType::ForwardCenter, PlayerPositionType::Striker)
-        | (PlayerPositionType::Striker, PlayerPositionType::ForwardCenter) => 0.82,
-
-        (PlayerPositionType::ForwardLeft, PlayerPositionType::AttackingMidfielderLeft)
-        | (PlayerPositionType::AttackingMidfielderLeft, PlayerPositionType::ForwardLeft)
-        | (PlayerPositionType::ForwardRight, PlayerPositionType::AttackingMidfielderRight)
-        | (PlayerPositionType::AttackingMidfielderRight, PlayerPositionType::ForwardRight) => 0.78,
-
-        _ => 0.62,
-    }
 }
 
 pub fn side_foot_bonus(player: &Player, position: PlayerPositionType) -> f32 {

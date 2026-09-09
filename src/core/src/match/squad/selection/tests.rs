@@ -3,8 +3,8 @@ use super::*;
 use crate::PlayerPositions;
 use crate::StaffStub;
 use crate::Team;
+use crate::club::ClubPhilosophy;
 use crate::club::player::skills::{Goalkeeping, Mental, Physical, Technical};
-use crate::club::{ClubPhilosophy, PlayerFieldPositionGroup};
 use crate::{
     ChangeType, IntegerUtils, MatchTacticType, PeopleNameGeneratorData, PlayerClubContract,
     PlayerCollection, PlayerGenerator, PlayerPosition, PlayerSquadStatus, PlayerStatusType,
@@ -147,7 +147,6 @@ fn test_position_group_matching() {
     let score = helpers::position_fit_score(
         &generate_defender_center(),
         PlayerPositionType::DefenderCenterLeft,
-        PlayerFieldPositionGroup::Defender,
     );
     assert!(
         score > 5.0,

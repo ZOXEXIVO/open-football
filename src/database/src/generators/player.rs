@@ -9,7 +9,8 @@ use core::shared::FullName;
 use core::utils::IntegerUtils;
 use core::{
     ContractType, Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
-    PlayerAttributes, PlayerClubContract, PlayerFoots, PlayerPosition, PlayerPositionType,
+    PlayerAttributes, PlayerClubContract, PlayerFieldPositionGroup, PlayerFoots, PlayerPosition,
+    PlayerPositionType,
     PlayerPositions, PlayerPreferredFoot, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory,
     PlayerStatisticsHistoryItem, PositionWeights, TeamType, Technical, WageCalculator,
 };
@@ -2090,6 +2091,42 @@ impl PositionType {
             | PlayerPositionType::ForwardRight
             | PlayerPositionType::Striker => PositionType::Striker,
         }
+    }
+}
+
+/// Reading the source record's position codes without hydrating a player.
+///
+/// Squad placement runs BEFORE hydration — it decides which team bucket a
+/// record lands in, and it needs to know which position group the record
+/// competes in to measure him against that club's own seniors at his
+/// position. Wrapped in a struct so the placement pass reaches one named
+/// API rather than a free helper.
+pub struct OdbPositionCode;
+
+impl OdbPositionCode {
+    /// The position group the record's STRONGEST listed position falls in
+    /// — the same "primary position" reading hydration performs when it
+    /// sorts `positions_from_odb` by level, descending. Records with no
+    /// parseable code fall back to midfield, exactly as hydration does.
+    pub fn group(positions: &[OdbPosition]) -> PlayerFieldPositionGroup {
+        // FIRST maximum, not the last: `positions_from_odb` sorts by level
+        // with a STABLE sort and the runtime reads the front, so record
+        // order breaks a tie there. `max_by_key` breaks it the other way,
+        // which quietly filed every equally-rated two-position player under
+        // a different group here than the hydrated player ends up in — and
+        // the two readings have to agree, or the placement bar is measured
+        // against the wrong group.
+        positions
+            .iter()
+            .filter_map(|p| parse_position_code(&p.code).map(|pt| (p.level, pt)))
+            .fold(None, |best: Option<(u8, PlayerPositionType)>, candidate| {
+                match best {
+                    Some((level, _)) if level >= candidate.0 => best,
+                    _ => Some(candidate),
+                }
+            })
+            .map(|(_, pt)| pt.position_group())
+            .unwrap_or(PlayerFieldPositionGroup::Midfielder)
     }
 }
 

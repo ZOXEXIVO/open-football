@@ -1160,8 +1160,7 @@ impl ClubBoard {
         const INCOME_FLOOR_SHARE: f64 = 0.15;
         const CASH_COVER_WAGE_MONTHS: f64 = 6.0;
         let income_floor = {
-            let cover_bar =
-                board_ctx.total_annual_wages as f64 * CASH_COVER_WAGE_MONTHS / 12.0;
+            let cover_bar = board_ctx.total_annual_wages as f64 * CASH_COVER_WAGE_MONTHS / 12.0;
             let cash_cover = if board_ctx.balance > 0 && cover_bar > 0.0 {
                 (board_ctx.balance as f64 / cover_bar).clamp(0.0, 1.0)
             } else {

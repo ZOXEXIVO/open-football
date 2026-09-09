@@ -1273,7 +1273,20 @@ fn execute_loan_within_country(
         // Parent develops loanees more aggressively if the player is
         // young or was signed as a development project. The plan role is
         // the club's own stated intent — clubs can't see biological PA.
-        let parent_desire = if player.age(date) <= 22
+        //
+        // "Young" alone is not the club's intent: a twenty-year-old who
+        // already starts is not on a development pathway, and subsidising
+        // his wage to get him lent out is the parent paying to weaken
+        // itself. The standing read decides — below his club's own level,
+        // or an explicit development plan.
+        let below_own_level = country
+            .clubs
+            .iter()
+            .find(|c| c.id == selling_club_id)
+            .and_then(|c| PipelineProcessor::loan_guard_for(country, c, &player, date))
+            .map(|guard| guard.is_development())
+            .unwrap_or(player.age(date) <= 22);
+        let parent_desire = if below_own_level
             || player
                 .plan
                 .as_ref()

@@ -12,7 +12,7 @@ use crate::transfers::pipeline::helpers::ClubGroupRanks;
 use crate::transfers::pipeline::loan_home::HomeLoanGates;
 use crate::transfers::pipeline::loan_interest::InterestDraw;
 use crate::transfers::pipeline::plausibility::{
-    BuyerPlausibilityContext, TransferMoveStage, TransferPlausibilityBuilder,
+    BuyerPlausibilityContext, SquadEvidenceSource, TransferMoveStage, TransferPlausibilityBuilder,
     TransferPlausibilityVerdict,
 };
 use crate::transfers::pipeline::processor::{
@@ -1181,7 +1181,11 @@ impl PipelineProcessor {
                                 days_on_market: player.days_available(date).min(i16::MAX as i64)
                                     as i16,
                                 market_resignation: player.market_resignation(date),
-                                club_matches_played: seller_club_matches,
+                                club_matches_played: SquadEvidenceSource::club_matches(
+                                    team.team_type,
+                                    team.league_id.is_some(),
+                                    seller_club_matches,
+                                ),
                                 big_stage_inclination: player.big_stage_inclination,
                                 is_marketed: club.transfer_plan.is_marketed(player.id),
                             },
@@ -1406,7 +1410,7 @@ impl PipelineProcessor {
             // with the player-importance + sporting-drop checks so a
             // first-choice prime-age GK at a peer-tier club (where the
             // simpler club-rep-gap test passes) still gets blocked.
-            let buyer_plausibility_ctx = BuyerPlausibilityContext::build(country, club);
+            let buyer_plausibility_ctx = BuyerPlausibilityContext::build(country, club, date);
             // Real fee headroom (transfer budget × the negotiation fee-gate
             // multiplier). Lets a well-funded club scout up to what it can
             // actually spend, not just its bare reputation tier — reconciling

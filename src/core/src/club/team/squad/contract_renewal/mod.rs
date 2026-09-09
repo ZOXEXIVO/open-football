@@ -609,7 +609,8 @@ impl ContractRenewalManager {
             return false;
         }
         let is_veteran = age >= VETERAN_AGE;
-        if is_veteran && player.position().position_group() == PlayerFieldPositionGroup::Goalkeeper {
+        if is_veteran && player.position().position_group() == PlayerFieldPositionGroup::Goalkeeper
+        {
             return false;
         }
         let stuck_bar = if is_veteran {
@@ -1473,7 +1474,14 @@ fn decorate_proposal(
             // claimed the privilege — otherwise the wage hierarchy collapses.
             if matches!(status, PlayerSquadStatus::KeyPlayer)
                 && structure.top_earner > 0
-                && salary >= (structure.top_earner * 90 / 100)
+                // Widened to u64 before the multiply: annual wages are held
+                // in whole units, so a top earner past ~47.7M overflowed the
+                // u32 here. In release that wrap is silent — the comparison
+                // then reads backwards, every near-top earner is granted the
+                // match-highest-earner clause, and the corrupted wage
+                // propagates until the process dies with an access
+                // violation a couple of simulated days in.
+                && salary as u64 >= (structure.top_earner as u64 * 90 / 100)
                 && !match_highest_already_used
             {
                 proposal.match_highest_earner = true;

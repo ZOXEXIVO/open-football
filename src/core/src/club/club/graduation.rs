@@ -82,19 +82,27 @@ impl Club {
             .map(|t| t.name.clone())
             .unwrap_or_else(|| self.name.clone());
 
-        // Lowest bracket first: the U18 is the academy's own next step,
-        // and a club fielding both a U18 and a U20 wants its oldest
-        // prospects in the former before the latter sees any of them.
-        for team_type in TeamType::YOUTH_PROGRESSION {
+        // Largest hole first. The old order was "lowest bracket first",
+        // which is the right instinct about WHERE academy boys belong and
+        // the wrong rule for a rescue: a club whose U18 is one man short
+        // and whose U20 has four spent the whole budget on the U18 and
+        // left the U20 unable to field a side — and a squad that never
+        // reaches eleven is the squad the promotion guard then refuses to
+        // let anybody out of. The deficit is the severity ladder; ties keep
+        // the old lowest-bracket preference.
+        let mut brackets: Vec<(TeamType, usize, usize)> = TeamType::YOUTH_PROGRESSION
+            .iter()
+            .filter_map(|team_type| {
+                let idx = self.teams.index_of_type(*team_type)?;
+                let squad = self.teams.teams[idx].players.len();
+                (squad < ClubAcademy::EMERGENCY_YOUTH_SIZE).then_some((*team_type, idx, squad))
+            })
+            .collect();
+        brackets.sort_by_key(|(_, _, squad)| *squad);
+
+        for (team_type, idx, squad) in brackets {
             if budget == 0 {
                 break;
-            }
-            let Some(idx) = self.teams.index_of_type(*team_type) else {
-                continue;
-            };
-            let squad = self.teams.teams[idx].players.len();
-            if squad >= ClubAcademy::EMERGENCY_YOUTH_SIZE {
-                continue;
             }
             // Continuous in the size of the hole: an empty squad gets
             // fourteen, a squad of nine gets five. No severity ladder —

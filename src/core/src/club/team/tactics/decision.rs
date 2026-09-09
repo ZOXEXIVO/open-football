@@ -5,6 +5,10 @@ use crate::{MatchTacticType, Player, Staff, Team};
 pub struct TacticalDecisionEngine;
 
 impl TacticalDecisionEngine {
+    /// Below this share of the squad's strongest eleven, the shape is
+    /// wasting enough of the side to be worth raising with the manager.
+    const FORMATION_FITNESS_CONCERN: f32 = 0.90;
+
     /// Make comprehensive tactical decisions for a team
     pub fn make_tactical_decisions(team: &mut Team) -> TacticalDecisionResult {
         let head_coach = team.staffs.head_coach();
@@ -134,7 +138,14 @@ impl TacticalDecisionEngine {
             .collect();
 
         let formation_fitness = current_tactics.calculate_formation_fitness(&available_players);
-        if formation_fitness < 0.6 {
+        // Fitness is now the share of the squad's strongest eleven the shape
+        // actually gets onto the pitch, so it sits high for any side that can
+        // field its shape at all — a well-covered squad reads ~0.98 and one
+        // being asked to play a formation it has no players for ~0.87. The
+        // old 0.6 was calibrated against a scale that scored every slot whose
+        // position code the database never carries at zero, and would now
+        // never fire.
+        if formation_fitness < Self::FORMATION_FITNESS_CONCERN {
             recommendations.push(TacticalRecommendation {
                 priority: RecommendationPriority::Medium,
                 category: RecommendationCategory::SquadSelection,

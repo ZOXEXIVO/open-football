@@ -13,19 +13,22 @@ use crate::transfers::market::{
 use crate::transfers::negotiation::NegotiationStatus;
 use crate::transfers::offer::{PersonalTermsOffer, TransferClause, TransferOffer};
 use crate::transfers::pipeline::appraisal_inputs::PlayerStanceBuilder;
+use crate::transfers::pipeline::loan_guard::{
+    LoanAssetGuard, LoanBorrowerProfile, LoanReach,
+};
 use crate::transfers::pipeline::loan_home::{HomeLoanGates, HomeLoanPull, UnsettledAbroadScan};
 use crate::transfers::pipeline::loan_interest::{
     BorrowerTaste, DestinationAppeal, GroupPressure, InterestDraw, LoanApproachMemory,
     LoanCandidateProfile,
 };
 use crate::transfers::pipeline::plausibility::{
-    BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityEvaluator,
-    TransferPlausibilityVerdict,
+    BuyerPlausibilityContext, EffectivePlayerReputation, TransferPlausibilityBuilder,
+    TransferPlausibilityEvaluator, TransferPlausibilityVerdict,
 };
 use crate::transfers::pipeline::playing_time::LoanPromise;
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
 use crate::transfers::pipeline::squad_fit::{SquadFitSnapshot, SquadRegistrationLimits};
-use crate::transfers::pipeline::trace::MarketSwitches;
+use crate::transfers::pipeline::trace::{MarketSwitches, TransferTrace};
 use crate::transfers::pipeline::{
     AvailabilityBroadcast, LoanDestinationPreference, LoanOutStatus, TransferRequestStatus,
 };
@@ -36,7 +39,7 @@ use crate::utils::FormattingUtils;
 use crate::{
     Club, ClubPhilosophy, Country, HappinessEventCause, HappinessEventContext, HappinessEventScope,
     HappinessEventSeverity, HappinessEventType, Person, Player, PlayerFieldPositionGroup,
-    PlayerStatusType, ReputationLevel, RoleFamiliarity, Team, TeamType,
+    PlayerSquadStatus, PlayerStatusType, ReputationLevel, RoleFamiliarity, Team, TeamType,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -186,6 +189,11 @@ impl PipelineProcessor {
             /// standard the loanee is dropping down from. Drives the
             /// division-level gate ([`Self::loan_league_level_ok`]).
             parent_league_rep: u16,
+            /// The asset's own price on this move — what he is worth
+            /// against a borrower's year and what his wage costs it.
+            /// `None` only when the parent side could not be read at all
+            /// (no contract, no squad), which stands the guard down.
+            guard: Option<LoanAssetGuard>,
         }
 
         let mut loan_listings: Vec<LoanListing> = Vec::new();
@@ -226,14 +234,18 @@ impl PipelineProcessor {
                             .unwrap_or(0)
                     })
                     .unwrap_or(0);
+                let guard =
+                    parent_club.and_then(|c| Self::loan_guard_for(country, c, player, date));
                 // Treat as a "development" move (stricter minutes gate so he
                 // actually plays, relaxed reputation/level floors so he can
                 // drop a level or two to do so) either when the loan is
                 // game-time-driven (development pathway, blocked prospect,
-                // needs-minutes) OR simply when the player is young: a <=23
-                // on the loan market is there for match practice. Pure
-                // older-surplus / financial loans keep the looser cover bar.
-                let is_development = player.age(date) <= UnsolicitedLoanTarget::DEVELOPMENT_AGE
+                // needs-minutes) or when the player is genuinely below his
+                // own club's level. "Under 23" alone used to be enough,
+                // which handed the whole allowance to a teenager who was
+                // already his club's first-choice. Pure older-surplus /
+                // financial loans keep the looser cover bar.
+                let is_development = Self::is_development_loan(guard.as_ref(), player.age(date))
                     || parent_club
                         .map(|c| {
                             c.transfer_plan.loan_out_candidates.iter().any(|cand| {
@@ -255,6 +267,7 @@ impl PipelineProcessor {
                     parent_league_rep: parent_club
                         .map(|c| Self::club_league_reputation(country, c))
                         .unwrap_or(0),
+                    guard,
                 });
             }
         }
@@ -287,13 +300,61 @@ impl PipelineProcessor {
                     for player in team.players.iter() {
                         let age = player.age(date);
                         let asset_class = asset_ctx.classify_in_squad(player, date, team.team_type);
+                        // The parent's own veto, read before anybody asks:
+                        // a club does not entertain a cold call about the
+                        // man who starts for it.
+                        let guard = LoanAssetGuard::for_player(
+                            club,
+                            player,
+                            date,
+                            seller_league_rep,
+                            seller_club_rep,
+                        );
+                        let parent_holds = guard.map(|g| g.parent_holds()).unwrap_or(false)
+                            && !MarketSwitches::loan_guard_off();
+                        if TransferTrace::is(player.id) {
+                            TransferTrace::line(
+                                player.id,
+                                "loan",
+                                format!(
+                                    "parent={} squad={:?} label={:?} asset={} rank={} \
+                                     standing={:.2} first_choice={} development={} \
+                                     parent_holds={parent_holds} reach={}",
+                                    club.name,
+                                    team.team_type,
+                                    player
+                                        .contract
+                                        .as_ref()
+                                        .map(|c| c.squad_status.clone())
+                                        .unwrap_or(PlayerSquadStatus::NotYetSet),
+                                    asset_class.label(),
+                                    PipelineProcessor::position_group_rank(
+                                        club,
+                                        player.id,
+                                        player.position().position_group(),
+                                    ),
+                                    guard.map(|g| g.standing()).unwrap_or(0.0),
+                                    guard.map(|g| g.first_choice()).unwrap_or(false),
+                                    guard.map(|g| g.is_development()).unwrap_or(false),
+                                    guard
+                                        .map(|g| g.parent_reach().label())
+                                        .unwrap_or("unknown"),
+                                ),
+                            );
+                        }
                         let is_development = match UnsolicitedLoanTarget::classify(
                             player,
                             age,
                             MAX_LOAN_TARGET_AGE,
                             asset_class,
+                            parent_holds,
                         ) {
-                            Some(dev) => dev,
+                            // A development loan is one the player NEEDS —
+                            // below his club's own level, not merely young.
+                            // The asset class says whether he is
+                            // approachable; the guard says whether the
+                            // development allowances belong to him.
+                            Some(dev) => dev && Self::is_development_loan(guard.as_ref(), age),
                             None => continue,
                         };
 
@@ -361,6 +422,7 @@ impl PipelineProcessor {
                             parent_best_in_group,
                             is_development,
                             parent_league_rep: seller_league_rep,
+                            guard,
                         });
                     }
                 }
@@ -472,6 +534,13 @@ impl PipelineProcessor {
             // Standard of football on offer here — the division gate reads
             // this against the parent's own competition.
             let borrower_league_rep = Self::club_league_reputation(country, club);
+            // What this club's own year and payroll can carry — read once,
+            // then folded per candidate with the group he plays in.
+            let borrower_profile =
+                LoanBorrowerProfile::of(club, date, borrower_league_rep);
+            let borrower_for = |group: PlayerFieldPositionGroup| -> Option<LoanBorrowerProfile> {
+                borrower_profile.map(|p| p.with_best_in_group(borrower_depth.best_in_group(group)))
+            };
 
             let should_skip_loan =
                 |group: PlayerFieldPositionGroup, loan_ability: u8, development: bool| -> bool {
@@ -576,6 +645,27 @@ impl PipelineProcessor {
                                 .transfer_market
                                 .has_active_negotiation_for(l.player_id, club.id)
                             && !actions.iter().any(|a| a.player_id == l.player_id)
+                            // Every destination gate's own reading, taken before any
+                            // of them can short-circuit it away — the funnel is a
+                            // table, not a re-derivation.
+                            && Self::trace_loan_destination(
+                                l.player_id,
+                                &club.name,
+                                l.position_group,
+                                l.ability,
+                                l.is_development,
+                                l.parent_best_in_group,
+                                &LoanDestinationLevel {
+                                    ability: l.ability,
+                                    parent_best_in_group: l.parent_best_in_group,
+                                    parent_rep: l.parent_rep,
+                                    borrower_rep: borrower_world_rep,
+                                    parent_league_rep: l.parent_league_rep,
+                                    borrower_league_rep,
+                                    is_development: l.is_development,
+                                },
+                                &borrower_depth,
+                            )
                             // Room check with the CANDIDATE's real ability
                             // and dev flag — the request-level pre-gate
                             // above judged the room bar at the request's
@@ -593,6 +683,7 @@ impl PipelineProcessor {
                                 l.position_group,
                                 l.ability,
                                 l.is_development,
+                                l.parent_best_in_group,
                             )
                             && LoanDestinationLevel {
                                 ability: l.ability,
@@ -604,6 +695,11 @@ impl PipelineProcessor {
                                 is_development: l.is_development,
                             }
                             .is_plausible()
+                            && Self::loan_guard_allows(
+                                l.guard.as_ref(),
+                                borrower_for(l.position_group).as_ref(),
+                                l.player_id,
+                            )
                     })
                     .collect();
 
@@ -668,12 +764,34 @@ impl PipelineProcessor {
                                 .transfer_market
                                 .has_active_negotiation_for(l.player_id, club.id)
                             && !actions.iter().any(|a| a.player_id == l.player_id)
+                            // Every destination gate's own reading, taken before any
+                            // of them can short-circuit it away — the funnel is a
+                            // table, not a re-derivation.
+                            && Self::trace_loan_destination(
+                                l.player_id,
+                                &club.name,
+                                l.position_group,
+                                l.ability,
+                                l.is_development,
+                                l.parent_best_in_group,
+                                &LoanDestinationLevel {
+                                    ability: l.ability,
+                                    parent_best_in_group: l.parent_best_in_group,
+                                    parent_rep: l.parent_rep,
+                                    borrower_rep: borrower_world_rep,
+                                    parent_league_rep: l.parent_league_rep,
+                                    borrower_league_rep,
+                                    is_development: l.is_development,
+                                },
+                                &borrower_depth,
+                            )
                             && !scanned_position_groups.contains(&l.position_group)
                             && !should_skip_loan(l.position_group, l.ability, l.is_development)
                             && borrower_depth.would_get_loan_minutes(
                                 l.position_group,
                                 l.ability,
                                 l.is_development,
+                                l.parent_best_in_group,
                             )
                             && LoanDestinationLevel {
                                 ability: l.ability,
@@ -685,6 +803,11 @@ impl PipelineProcessor {
                                 is_development: l.is_development,
                             }
                             .is_plausible()
+                            && Self::loan_guard_allows(
+                                l.guard.as_ref(),
+                                borrower_for(l.position_group).as_ref(),
+                                l.player_id,
+                            )
                     })
                     .collect();
 
@@ -748,12 +871,34 @@ impl PipelineProcessor {
                                 .transfer_market
                                 .has_active_negotiation_for(l.player_id, club.id)
                             && !actions.iter().any(|a| a.player_id == l.player_id)
+                            // Every destination gate's own reading, taken before any
+                            // of them can short-circuit it away — the funnel is a
+                            // table, not a re-derivation.
+                            && Self::trace_loan_destination(
+                                l.player_id,
+                                &club.name,
+                                l.position_group,
+                                l.ability,
+                                l.is_development,
+                                l.parent_best_in_group,
+                                &LoanDestinationLevel {
+                                    ability: l.ability,
+                                    parent_best_in_group: l.parent_best_in_group,
+                                    parent_rep: l.parent_rep,
+                                    borrower_rep: borrower_world_rep,
+                                    parent_league_rep: l.parent_league_rep,
+                                    borrower_league_rep,
+                                    is_development: l.is_development,
+                                },
+                                &borrower_depth,
+                            )
                             && !scanned_position_groups.contains(&l.position_group)
                             && !should_skip_loan(l.position_group, l.ability, l.is_development)
                             && borrower_depth.would_get_loan_minutes(
                                 l.position_group,
                                 l.ability,
                                 l.is_development,
+                                l.parent_best_in_group,
                             )
                             && LoanDestinationLevel {
                                 ability: l.ability,
@@ -765,6 +910,11 @@ impl PipelineProcessor {
                                 is_development: l.is_development,
                             }
                             .is_plausible()
+                            && Self::loan_guard_allows(
+                                l.guard.as_ref(),
+                                borrower_for(l.position_group).as_ref(),
+                                l.player_id,
+                            )
                     })
                     .collect();
 
@@ -801,11 +951,19 @@ impl PipelineProcessor {
             // is plausible. First-team contributors were already excluded
             // when the target pool was built, so this never strips a club of
             // a key player.
+            //
+            // Continental clubs join the branch for PEER-LEVEL targets
+            // only. They used to be excluded outright, so the first tier
+            // that ever cold-called a big club's near-ready youngster was,
+            // by construction, the one below the top flight — the exclusion
+            // was itself a reason the boy ended up two divisions down.
+            let cold_peer_only = matches!(rep_level, ReputationLevel::Continental);
             if scan_unsolicited
                 && scans_this_club < max_scans
                 && matches!(
                     rep_level,
-                    ReputationLevel::National
+                    ReputationLevel::Continental
+                        | ReputationLevel::National
                         | ReputationLevel::Regional
                         | ReputationLevel::Local
                         | ReputationLevel::Amateur
@@ -826,6 +984,27 @@ impl PipelineProcessor {
                                 .transfer_market
                                 .has_active_negotiation_for(l.player_id, club.id)
                             && !actions.iter().any(|a| a.player_id == l.player_id)
+                            // Every destination gate's own reading, taken before any
+                            // of them can short-circuit it away — the funnel is a
+                            // table, not a re-derivation.
+                            && Self::trace_loan_destination(
+                                l.player_id,
+                                &club.name,
+                                l.position_group,
+                                l.ability,
+                                l.is_development,
+                                l.parent_best_in_group,
+                                &LoanDestinationLevel {
+                                    ability: l.ability,
+                                    parent_best_in_group: l.parent_best_in_group,
+                                    parent_rep: l.parent_rep,
+                                    borrower_rep: borrower_world_rep,
+                                    parent_league_rep: l.parent_league_rep,
+                                    borrower_league_rep,
+                                    is_development: l.is_development,
+                                },
+                                &borrower_depth,
+                            )
                             && !scanned_position_groups.contains(&l.position_group)
                             // Will he actually play here? Position-aware, and
                             // for keepers the strict plausible-#1 rule — this
@@ -835,6 +1014,7 @@ impl PipelineProcessor {
                                 l.position_group,
                                 l.ability,
                                 l.is_development,
+                                l.parent_best_in_group,
                             )
                             // Squad-average / reputation-drop floors apply to
                             // cover loans only; development loans lean on the
@@ -852,6 +1032,16 @@ impl PipelineProcessor {
                                     is_development: l.is_development,
                                 },
                             )
+                            && Self::loan_guard_allows(
+                                l.guard.as_ref(),
+                                borrower_for(l.position_group).as_ref(),
+                                l.player_id,
+                            )
+                            && (!cold_peer_only
+                                || Self::loan_guard_reach(
+                                    l.guard.as_ref(),
+                                    borrower_for(l.position_group).as_ref(),
+                                ) == Some(LoanReach::PeerLevel))
                     })
                     .collect();
 
@@ -1148,6 +1338,8 @@ impl PipelineProcessor {
             nationality_country_id: u32,
             nationality_region: Option<ScoutingRegion>,
             return_home_desire: f32,
+            /// The asset's own price on this move — see [`LoanAssetGuard`].
+            guard: Option<LoanAssetGuard>,
         }
 
         let mut broadcastable: Vec<Broadcastable> = Vec::new();
@@ -1211,7 +1403,8 @@ impl PipelineProcessor {
                 .map(|p| p.player_attributes.current_ability)
                 .max()
                 .unwrap_or(0);
-            let is_development = player.age(date) <= UnsolicitedLoanTarget::DEVELOPMENT_AGE
+            let guard = Self::loan_guard_for(country, parent_club, player, date);
+            let is_development = Self::is_development_loan(guard.as_ref(), player.age(date))
                 || parent_club
                     .transfer_plan
                     .loan_out_candidates
@@ -1242,6 +1435,7 @@ impl PipelineProcessor {
                 nationality_country_id: player.country_id,
                 nationality_region: player.home_region(),
                 return_home_desire: player.home_pull.desire,
+                guard,
             });
         }
 
@@ -1274,8 +1468,22 @@ impl PipelineProcessor {
                 },
                 Some(prev) => {
                     if (date - prev.since).num_days() >= Self::BROADCAST_RESPONSE_DAYS {
+                        // …but only down to the floor the asset's own
+                        // standing allows. A listing is consent to a loan,
+                        // not consent to any destination: walking a
+                        // near-ready first-teamer one tier down every
+                        // fortnight is how a fortnight's silence turned
+                        // into a third-tier offer. A cascade that reaches
+                        // its floor with no taker simply stays there — the
+                        // 180-day loan → transfer upgrade owns what
+                        // happens next.
+                        let floor = b
+                            .guard
+                            .filter(|_| !MarketSwitches::loan_guard_off())
+                            .map(|g| g.parent_reach().cascade_floor(b.parent_tier))
+                            .unwrap_or(ReputationLevel::Amateur);
                         AvailabilityBroadcast {
-                            tier: prev.tier.next_lower(),
+                            tier: prev.tier.next_lower().max(floor),
                             since: date,
                             // The tier moved; the posting did not.
                             posted_since: prev.posted_since,
@@ -1433,9 +1641,44 @@ impl PipelineProcessor {
                 // whose forward line was thin as an invitation, which is
                 // precisely backwards at a side whose attack is carried by
                 // wide men filed elsewhere.
-                if !LoanBorrowerAppetite::assess(club, team, is_january)
-                    .accepts_push(club, b.group, b.ability, b.age)
-                {
+                //
+                // The upgrade exception is the other half of that: a club
+                // that "only shops in January" does not turn down a genuine
+                // first-team-level loanee in August, and its refusal was
+                // exactly what walked the boy down to the tier below.
+                let borrower_league_rep = Self::club_league_reputation(country, club);
+                let borrower_best_here = team
+                    .players
+                    .iter()
+                    .filter_map(|p| {
+                        let effective = RoleFamiliarity::best_in_group(
+                            &p.positions,
+                            p.player_attributes.current_ability,
+                            b.group,
+                        );
+                        (effective > 0).then_some(effective)
+                    })
+                    .max()
+                    .unwrap_or(0);
+                let borrower_profile = LoanBorrowerProfile::of(club, date, borrower_league_rep)
+                    .map(|p| p.with_best_in_group(borrower_best_here));
+                let upgrade_welcome = borrower_profile
+                    .as_ref()
+                    .zip(b.guard.as_ref())
+                    .map(|(profile, guard)| {
+                        let verdict = guard.assess(profile);
+                        verdict.allows() && verdict.carry <= LoanAssetGuard::CARRY_MAX
+                    })
+                    .unwrap_or(false)
+                    && !MarketSwitches::loan_guard_off();
+                if !LoanBorrowerAppetite::assess(club, team, is_january).accepts_push(
+                    club,
+                    b.group,
+                    b.ability,
+                    b.age,
+                    borrower_best_here,
+                    upgrade_welcome,
+                ) {
                     continue;
                 }
                 if country
@@ -1468,13 +1711,25 @@ impl PipelineProcessor {
                     parent_rep: b.parent_rep,
                     borrower_rep,
                     parent_league_rep: b.parent_league_rep,
-                    borrower_league_rep: Self::club_league_reputation(country, club),
+                    borrower_league_rep,
                     is_development: b.is_development,
                 };
                 if !depth.has_room_for(b.group, b.ability, b.is_development)
-                    || !depth.would_get_loan_minutes(b.group, b.ability, b.is_development)
+                    || !depth.would_get_loan_minutes(
+                        b.group,
+                        b.ability,
+                        b.is_development,
+                        b.parent_best_in_group,
+                    )
                     || !level.is_plausible()
                 {
+                    continue;
+                }
+                if !Self::loan_guard_allows(
+                    b.guard.as_ref(),
+                    borrower_profile.as_ref(),
+                    b.player_id,
+                ) {
                     continue;
                 }
                 destinations.push((
@@ -2401,13 +2656,24 @@ impl PipelineProcessor {
             // `foreign_loans.iter()` cheap.
             let borrower_position_depth = BorrowerPositionDepth::snapshot(team)
                 .with_pending_loans(pending_loans.get(&club.id).map_or(&[], |v| v.as_slice()));
+            // What this club's year and payroll can carry — the same two
+            // money terms the domestic scan prices, which cross a border
+            // unchanged: a Segunda club's revenue is a Segunda club's
+            // revenue whoever the parent is.
+            let foreign_borrower_profile =
+                LoanBorrowerProfile::of(club, date, borrower_league_rep);
+            let foreign_borrower_for =
+                |group: PlayerFieldPositionGroup| -> Option<LoanBorrowerProfile> {
+                    foreign_borrower_profile
+                        .map(|p| p.with_best_in_group(borrower_position_depth.best_in_group(group)))
+                };
 
             // Staged-plausibility buyer context, built once per club so the
             // foreign-loan filter can run the same cross-border veto the
             // scouting / permanent paths use. The candidate `PlayerSummary`
             // carries the seller-side context, so no selling-country ref is
             // needed here.
-            let buyer_loan_ctx = BuyerPlausibilityContext::build(country, club);
+            let buyer_loan_ctx = BuyerPlausibilityContext::build(country, club, date);
 
             // Same preference model the domestic scan uses. The cross-border
             // branches ranked on `(same_region, skill_ability)`, which made the
@@ -2554,6 +2820,7 @@ impl PipelineProcessor {
                                 p.position_group,
                                 p.skill_ability,
                                 ForeignUnsolicitedLoanTarget::is_development(p.age),
+                                p.club_best_in_group,
                             )
                             // Parent-club reputation drop — same realism
                             // gate as the domestic scan, anchored on the
@@ -2586,6 +2853,12 @@ impl PipelineProcessor {
                                         None,
                                 ),
                                 Some(TransferPlausibilityVerdict::HardReject(_))
+                            )
+                            // The asset's own price on this destination —
+                            // the two money terms cross a border unchanged.
+                            && Self::foreign_loan_guard_allows(
+                                p,
+                                foreign_borrower_for(p.position_group).as_ref(),
                             )
                     })
                     .collect();
@@ -2695,6 +2968,7 @@ impl PipelineProcessor {
                                 p.position_group,
                                 p.skill_ability,
                                 true,
+                                p.club_best_in_group,
                             )
                             && Self::loan_level_ok(
                                 team_rep,
@@ -2718,6 +2992,12 @@ impl PipelineProcessor {
                                         None,
                                 ),
                                 Some(TransferPlausibilityVerdict::HardReject(_))
+                            )
+                            // The asset's own price on this destination —
+                            // the two money terms cross a border unchanged.
+                            && Self::foreign_loan_guard_allows(
+                                p,
+                                foreign_borrower_for(p.position_group).as_ref(),
                             )
                     })
                     .collect();
@@ -3027,11 +3307,161 @@ impl PipelineProcessor {
         ))
     }
 
+    /// Price the parent side of a loan for this player — the same seller
+    /// context the valuation and every other sell-side reading resolve, so
+    /// the guard and the market quote one number.
+    pub(crate) fn loan_guard_for(
+        country: &Country,
+        club: &Club,
+        player: &Player,
+        date: NaiveDate,
+    ) -> Option<LoanAssetGuard> {
+        let (league_rep, club_rep) = PlayerValuationCalculator::seller_context(country, club);
+        LoanAssetGuard::for_player(club, player, date, league_rep, club_rep)
+    }
+
+    /// Is this a DEVELOPMENT loan — one the player needs because he is
+    /// below his club's own level — rather than merely a loan of somebody
+    /// young? Falls back to the age band when the parent side could not be
+    /// read, and reverts to it entirely on the `OF_LOAN_GUARD_OFF` arm.
+    pub(crate) fn is_development_loan(guard: Option<&LoanAssetGuard>, age: u8) -> bool {
+        if MarketSwitches::loan_guard_off() {
+            return age <= UnsolicitedLoanTarget::DEVELOPMENT_AGE;
+        }
+        guard
+            .map(|g| g.is_development())
+            .unwrap_or(age <= UnsolicitedLoanTarget::DEVELOPMENT_AGE)
+    }
+
+    /// Would the guard let this loan reach this borrower? `None` on either
+    /// side stands the guard down — it never invents a verdict from
+    /// missing facts — and so does the `OF_LOAN_GUARD_OFF` arm.
+    fn loan_guard_allows(
+        guard: Option<&LoanAssetGuard>,
+        borrower: Option<&LoanBorrowerProfile>,
+        player_id: u32,
+    ) -> bool {
+        if MarketSwitches::loan_guard_off() {
+            return true;
+        }
+        let (Some(guard), Some(borrower)) = (guard, borrower) else {
+            return true;
+        };
+        let verdict = guard.assess(borrower);
+        if TransferTrace::is(player_id) {
+            TransferTrace::line(player_id, "loan", guard.diagnostics(borrower, &verdict));
+        }
+        verdict.allows()
+    }
+
+    /// One `loan` trace line per (traced player, candidate borrower):
+    /// every destination gate's own reading, side by side, so the funnel
+    /// can be read as a table instead of re-derived from file:line.
+    ///
+    /// Always returns `true` — it is a diagnostic, never a gate — so a
+    /// caller folds it into its filter chain wherever it wants the reading
+    /// taken. Costs one cached `OnceLock` read when disarmed.
+    #[allow(clippy::too_many_arguments)]
+    fn trace_loan_destination(
+        player_id: u32,
+        borrower_name: &str,
+        group: PlayerFieldPositionGroup,
+        ability: u8,
+        is_development: bool,
+        parent_best_in_group: u8,
+        level: &LoanDestinationLevel,
+        depth: &BorrowerPositionDepth,
+    ) -> bool {
+        if !TransferTrace::is(player_id) {
+            return true;
+        }
+        TransferTrace::line(
+            player_id,
+            "loan",
+            format!(
+                "borrower={borrower_name} dev={is_development} readiness={:.2} \
+                 division_floor={:.3} rep={}/{} league={}/{} standing_ok={} division_ok={} \
+                 room={} minutes={} best_here={}",
+                level.readiness(),
+                level.division_floor(),
+                level.borrower_rep,
+                level.parent_rep,
+                level.borrower_league_rep,
+                level.parent_league_rep,
+                level.clears_club_standing(),
+                level.clears_division(),
+                depth.has_room_for(group, ability, is_development),
+                depth.would_get_loan_minutes(
+                    group,
+                    ability,
+                    is_development,
+                    parent_best_in_group
+                ),
+                depth.best_in_group(group),
+            ),
+        );
+        true
+    }
+
+    /// [`Self::loan_guard_allows`] across a border, where the parent side
+    /// is only reachable through the player's summary.
+    fn foreign_loan_guard_allows(
+        target: &PlayerSummary,
+        borrower: Option<&LoanBorrowerProfile>,
+    ) -> bool {
+        if MarketSwitches::loan_guard_off() {
+            return true;
+        }
+        let Some(borrower) = borrower else {
+            return true;
+        };
+        let guard = LoanAssetGuard::from_summary(
+            target.skill_ability,
+            target.age,
+            target.position_group,
+            target.club_world_reputation,
+            target.club_best_in_group,
+            target.seller_ctx.league_reputation,
+            target.estimated_value,
+            target.salary,
+            target.is_loan_listed,
+            EffectivePlayerReputation::compute(
+                target.world_reputation,
+                target.current_reputation,
+                target.home_reputation,
+                false,
+            ),
+        );
+        let verdict = guard.assess(borrower);
+        if TransferTrace::is(target.player_id) {
+            TransferTrace::line(
+                target.player_id,
+                "loan",
+                format!("foreign {}", guard.diagnostics(borrower, &verdict)),
+            );
+        }
+        verdict.allows()
+    }
+
+    /// The guard's verdict alone, for the paths that need the reach rather
+    /// than the yes/no — the broadcast cascade's floor tier and the
+    /// Continental cold approach, which is peer-level business only.
+    fn loan_guard_reach(
+        guard: Option<&LoanAssetGuard>,
+        borrower: Option<&LoanBorrowerProfile>,
+    ) -> Option<LoanReach> {
+        if MarketSwitches::loan_guard_off() {
+            return None;
+        }
+        let (guard, borrower) = (guard?, borrower?);
+        Some(guard.assess(borrower).reach)
+    }
+
     /// League reputation of a club's main competition, or 0 when the club
     /// plays no league at all (a friendly-only side). Zero suspends the
     /// division gate, which then defers to the club-standing one rather than
     /// inventing a verdict.
-    fn club_league_reputation(country: &Country, club: &Club) -> u16 {
+    pub(crate) fn club_league_reputation(country: &Country, club: &Club) -> u16 {
         club.teams
             .main()
             .or_else(|| club.teams.teams.first())
@@ -3251,9 +3681,25 @@ impl LoanDestinationLevel {
     const RAW_LEAGUE_FLOOR: f32 = 0.45;
     /// … and the much tighter share a near-ready one may.
     const READY_LEAGUE_FLOOR: f32 = 0.85;
-    /// Extra room a development loan gets: playing every week one or two
-    /// divisions down is the point of the move.
-    const DEVELOPMENT_LEAGUE_ALLOWANCE: f32 = 0.75;
+    /// Room the drop gets for being a drop the player NEEDS, at its
+    /// widest — a raw youngster playing every week two divisions down is
+    /// the point of his move.
+    ///
+    /// This used to be a flat multiplier applied to every loan of anybody
+    /// aged 23 or under, which made the readiness curve above a fiction:
+    /// a parent's own best forward reads readiness 1.0 and a floor of
+    /// 0.85, and the blanket allowance dropped it to 0.6375 — under the
+    /// 0.707 that separates a top flight from its second division. The
+    /// allowance is now continuous in the same readiness the floor is: a
+    /// raw player keeps the full width, a first-team-ready one gets none
+    /// of it and is held to his parent's own level.
+    const RAW_LEAGUE_ALLOWANCE: f32 = 0.25;
+    /// Club-standing floor a raw non-development loanee is held to …
+    const RAW_STANDING_FLOOR: f32 = 0.12;
+    /// … and the extra share a fully first-team-ready one adds to it, so a
+    /// ready player's destination is a peer rather than "a quarter of my
+    /// club", which is what a flat 0.25 made credible.
+    const READY_STANDING_SPAN: f32 = 0.63;
 
     /// Both gates. A destination has to be a credible club **and** a
     /// credible division.
@@ -3268,14 +3714,19 @@ impl LoanDestinationLevel {
             return true;
         }
         let very_raw = self.ability.saturating_add(25) <= self.parent_best_in_group;
-        let floor = if very_raw {
-            // Raw player: a development youngster drops without a reputation
-            // floor (the minutes gate is the realism check); a non-development
-            // raw player keeps only the light floor.
-            if self.is_development { 0.0 } else { 0.12 }
+        let floor = if very_raw && self.is_development {
+            // A development youngster genuinely years off the shirt drops
+            // without a reputation floor at all — the minutes gate is the
+            // realism check for him.
+            0.0
+        } else if MarketSwitches::loan_guard_off() {
+            if very_raw { 0.12 } else { 0.25 }
         } else {
-            // Near-ready or established: peer-level moves only, whatever the age.
-            0.25
+            // Continuous in how ready he already is: the raw floor at one
+            // end, a peer-level club at the other. A flat 0.25 made a club
+            // a quarter of the parent's standing a credible home for the
+            // parent's own first-choice.
+            Self::RAW_STANDING_FLOOR + Self::READY_STANDING_SPAN * self.readiness()
         };
         self.borrower_rep as f32 >= self.parent_rep as f32 * floor
     }
@@ -3300,22 +3751,45 @@ impl LoanDestinationLevel {
         self.borrower_league_rep as f32 >= self.parent_league_rep as f32 * self.division_floor()
     }
 
+    /// How ready this player already is for his parent club's own first
+    /// team, 0..1 — measured against the parent's best at his position.
+    /// Zero (unknown parent standard) reads as fully raw, which is what
+    /// stands both floors down.
+    fn readiness(&self) -> f32 {
+        Self::readiness_of(self.ability, self.parent_best_in_group)
+    }
+
+    /// [`Self::readiness`] from the two bare numbers, for the gates that
+    /// hold them without building a whole destination.
+    fn readiness_of(ability: u8, parent_best_in_group: u8) -> f32 {
+        if parent_best_in_group == 0 {
+            return 0.0;
+        }
+        let ability_ratio = ability as f32 / parent_best_in_group as f32;
+        ((ability_ratio - Self::RAW_ABILITY_RATIO)
+            / (Self::READY_ABILITY_RATIO - Self::RAW_ABILITY_RATIO))
+            .clamp(0.0, 1.0)
+    }
+
     /// Share of the parent's league level this loan may drop to.
     fn division_floor(&self) -> f32 {
         if self.parent_best_in_group == 0 {
             return 0.0;
         }
-        let ability_ratio = self.ability as f32 / self.parent_best_in_group as f32;
-        let readiness = ((ability_ratio - Self::RAW_ABILITY_RATIO)
-            / (Self::READY_ABILITY_RATIO - Self::RAW_ABILITY_RATIO))
-            .clamp(0.0, 1.0);
+        let readiness = self.readiness();
         let floor = Self::RAW_LEAGUE_FLOOR
             + (Self::READY_LEAGUE_FLOOR - Self::RAW_LEAGUE_FLOOR) * readiness;
-        if self.is_development {
-            floor * Self::DEVELOPMENT_LEAGUE_ALLOWANCE
-        } else {
-            floor
+        if MarketSwitches::loan_guard_off() {
+            return if self.is_development {
+                floor * (1.0 - Self::RAW_LEAGUE_ALLOWANCE)
+            } else {
+                floor
+            };
         }
+        // The allowance a drop earns for being a drop the player needs,
+        // continuous in readiness rather than switched on by his birth
+        // year: full width when he is raw, none of it when he is ready.
+        floor * (1.0 - Self::RAW_LEAGUE_ALLOWANCE * (1.0 - readiness))
     }
 }
 
@@ -3342,8 +3816,18 @@ impl UnsolicitedLoanTarget {
         age: u8,
         max_age: u8,
         asset_class: SquadAssetClass,
+        parent_holds: bool,
     ) -> Option<bool> {
         if player.contract.is_none() || player.is_on_loan() {
+            return None;
+        }
+        // The parent's own first choice is never cold-called, whatever
+        // label the monthly rank pass happens to have stamped on him. The
+        // asset class below is a good answer to "is he surplus?" and a
+        // poor one to "is he ours?" — a nineteen-year-old starter reads
+        // `ProspectDevelopment` off a birth year and walks straight
+        // through it.
+        if parent_holds {
             return None;
         }
         if age > max_age {
@@ -3491,6 +3975,10 @@ impl LoanBorrowerAppetite {
     const REQUEST_AGE_SLACK: u8 = 3;
     /// Ability slack, likewise mirrored from the scan's `relaxed_min`.
     const REQUEST_ABILITY_SLACK: u8 = 5;
+    /// CA over the borrower's own best in the group at which a pushed
+    /// loanee stops being "somebody else's player" and becomes an
+    /// upgrade any club takes, in any month.
+    const UPGRADE_MARGIN: u8 = 5;
 
     fn assess(club: &Club, team: &Team, is_january: bool) -> Self {
         // Critical-need override: a club whose squad is genuinely short at
@@ -3543,14 +4031,31 @@ impl LoanBorrowerAppetite {
     /// shopping for a centre-forward who can lead its line has not thereby
     /// agreed to take any centre-forward alive, and a club with no request at
     /// the position has not asked for anybody at all.
+    ///
+    /// The one unconditional yes is an UPGRADE: a loanee clearly better
+    /// than anything the club has in that group, whose wage it can carry
+    /// and who is inside the guard's reach. A Continental club that
+    /// "only loans in January, and only in the red" turning that down in
+    /// August is not caution — it is the refusal that handed the boy to
+    /// the tier below, every time.
+    #[allow(clippy::too_many_arguments)]
     fn accepts_push(
         &self,
         club: &Club,
         group: PlayerFieldPositionGroup,
         candidate_ability: u8,
         candidate_age: u8,
+        borrower_best_in_group: u8,
+        guard_clears: bool,
     ) -> bool {
         if self.scans || self.critical_shortage {
+            return true;
+        }
+        if guard_clears
+            && borrower_best_in_group > 0
+            && candidate_ability
+                >= borrower_best_in_group.saturating_add(Self::UPGRADE_MARGIN)
+        {
             return true;
         }
         club.transfer_plan
@@ -3712,16 +4217,34 @@ impl BorrowerPositionDepth {
         }
     }
 
+    /// CA over the borrower's best in the group at which a "minutes" loan
+    /// stops being one, at full readiness …
+    const OVERQUALIFIED_GAP_READY: f32 = 25.0;
+    /// … plus the extra a raw youngster is allowed, because his whole
+    /// pathway is dropping below his own level to play.
+    const OVERQUALIFIED_GAP_RAW_EXTRA: f32 = 15.0;
+
     /// Minutes gate with a development-strictness switch. Development
     /// loans exist to buy PLAYING time, so a young development loanee
     /// tolerates at most ONE clearly better outfielder ahead of him;
     /// generic squad/emergency cover keeps the looser bar of two. GK
     /// loans must always arrive as plausible first choice.
+    ///
+    /// The gate had no UPPER bound: it asked only whether the player would
+    /// play here, and a loanee forty points better than the borrower's
+    /// best is the strongest possible yes. That is not a minutes loan, it
+    /// is a mismatch — the borrower cannot coach him, cannot pay him and
+    /// is not the level he needs — so the same reading now closes from
+    /// both sides. The bound widens as the loanee gets rawer, because
+    /// dropping below his own level IS a raw player's pathway;
+    /// `parent_best_in_group` of 0 means the parent's standard is unknown,
+    /// which stands the upper bound down rather than guessing.
     fn would_get_loan_minutes(
         &self,
         group: PlayerFieldPositionGroup,
         candidate_ability: u8,
         development: bool,
+        parent_best_in_group: u8,
     ) -> bool {
         match self.role_row(group) {
             Some((_, abilities)) => {
@@ -3729,13 +4252,38 @@ impl BorrowerPositionDepth {
                     .iter()
                     .filter(|&&a| a >= candidate_ability.saturating_add(8))
                     .count();
-                match group {
+                let plays = match group {
                     PlayerFieldPositionGroup::Goalkeeper => clearly_better == 0,
                     _ => clearly_better < if development { 2 } else { 3 },
-                }
+                };
+                plays && self.is_not_overqualified(group, candidate_ability, parent_best_in_group)
             }
             None => true,
         }
+    }
+
+    /// The upper half of the minutes gate — see
+    /// [`Self::would_get_loan_minutes`].
+    fn is_not_overqualified(
+        &self,
+        group: PlayerFieldPositionGroup,
+        candidate_ability: u8,
+        parent_best_in_group: u8,
+    ) -> bool {
+        if parent_best_in_group == 0 || MarketSwitches::loan_guard_off() {
+            return true;
+        }
+        let best_here = self
+            .role_row(group)
+            .and_then(|(_, abilities)| abilities.iter().copied().max())
+            .unwrap_or(0);
+        if best_here == 0 {
+            return true;
+        }
+        let readiness = LoanDestinationLevel::readiness_of(candidate_ability, parent_best_in_group);
+        let allowed =
+            Self::OVERQUALIFIED_GAP_READY + Self::OVERQUALIFIED_GAP_RAW_EXTRA * (1.0 - readiness);
+        (candidate_ability as f32 - best_here as f32) <= allowed
     }
 
     /// How clearly the candidate would be first choice here, 0..1 — the same
@@ -3774,6 +4322,15 @@ impl BorrowerPositionDepth {
     /// pressure.
     fn headcount(&self, group: PlayerFieldPositionGroup) -> usize {
         self.row(group).map(|(_, _, a)| a.len()).unwrap_or(0)
+    }
+
+    /// Best ability the borrower can already field in this group — the
+    /// competition view, so a wide forward filed as a midfielder counts
+    /// where he actually plays.
+    fn best_in_group(&self, group: PlayerFieldPositionGroup) -> u8 {
+        self.role_row(group)
+            .and_then(|(_, abilities)| abilities.iter().copied().max())
+            .unwrap_or(0)
     }
 }
 
@@ -3841,6 +4398,38 @@ mod borrower_gate_tests {
         }
     }
 
+
+    /// WI-5: the minutes gate had no UPPER bound. It asked only "would he
+    /// play here", and a loanee forty points better than the borrower's
+    /// best is the strongest possible yes — which is precisely the
+    /// mismatch that made a second-division side the most attractive
+    /// destination in the country for a giant's first-choice teenager.
+    #[test]
+    fn an_absurdly_overqualified_loanee_is_a_mismatch_not_a_minutes_loan() {
+        let depth = BorrowerPositionDepth::snapshot(&BorrowerFixtures::team(vec![
+            BorrowerFixtures::player(1, PlayerPositionType::Striker, 120),
+            BorrowerFixtures::player(2, PlayerPositionType::Striker, 115),
+        ]));
+        // Ready for his parent's own first team (176 against a 176 best):
+        // the bound is at its tightest, 25 over the borrower's best.
+        assert!(
+            !depth.would_get_loan_minutes(PlayerFieldPositionGroup::Forward, 176, false, 176),
+            "56 CA over the borrower's best is not a minutes loan"
+        );
+        assert!(
+            depth.would_get_loan_minutes(PlayerFieldPositionGroup::Forward, 140, false, 176),
+            "a 20-point upgrade is exactly the loan that should happen"
+        );
+        // A raw prospect gets the wider bound: dropping below his own
+        // level IS his pathway.
+        assert!(
+            depth.would_get_loan_minutes(PlayerFieldPositionGroup::Forward, 150, true, 245),
+            "a genuinely raw loanee keeps the wider allowance"
+        );
+        // An unknown parent standard stands the bound down rather than
+        // guessing, exactly as an unknown competition does.
+        assert!(depth.would_get_loan_minutes(PlayerFieldPositionGroup::Forward, 176, false, 0));
+    }
     #[test]
     fn full_group_rejects_comparable_loan_but_accepts_clear_upgrade() {
         // Three keepers fill the GK cap; a comparable 4th is bloat, a
@@ -3870,11 +4459,11 @@ mod borrower_gate_tests {
         )]);
         let depth = BorrowerPositionDepth::snapshot(&team);
         assert!(
-            !depth.would_get_loan_minutes(PlayerFieldPositionGroup::Goalkeeper, 70, false),
+            !depth.would_get_loan_minutes(PlayerFieldPositionGroup::Goalkeeper, 70, false, 0),
             "a dev keeper behind a clearly better #1 plays zero minutes"
         );
         assert!(
-            depth.would_get_loan_minutes(PlayerFieldPositionGroup::Goalkeeper, 75, false),
+            depth.would_get_loan_minutes(PlayerFieldPositionGroup::Goalkeeper, 75, false, 0),
             "a keeper close to the incumbent can compete for the shirt"
         );
     }
@@ -3888,7 +4477,7 @@ mod borrower_gate_tests {
         ]);
         let depth = BorrowerPositionDepth::snapshot(&blocked_team);
         assert!(
-            !depth.would_get_loan_minutes(PlayerFieldPositionGroup::Midfielder, 70, false),
+            !depth.would_get_loan_minutes(PlayerFieldPositionGroup::Midfielder, 70, false, 0),
             "three clearly better midfielders leave no realistic minutes"
         );
 
@@ -3899,7 +4488,7 @@ mod borrower_gate_tests {
         ]);
         let depth = BorrowerPositionDepth::snapshot(&open_team);
         assert!(
-            depth.would_get_loan_minutes(PlayerFieldPositionGroup::Midfielder, 70, false),
+            depth.would_get_loan_minutes(PlayerFieldPositionGroup::Midfielder, 70, false, 0),
             "with only two clearly better names the loanee can rotate in"
         );
     }
@@ -3914,11 +4503,11 @@ mod borrower_gate_tests {
         ]);
         let depth = BorrowerPositionDepth::snapshot(&team);
         assert!(
-            depth.would_get_loan_minutes(PlayerFieldPositionGroup::Midfielder, 70, false),
+            depth.would_get_loan_minutes(PlayerFieldPositionGroup::Midfielder, 70, false, 0),
             "generic cover tolerates two better names"
         );
         assert!(
-            !depth.would_get_loan_minutes(PlayerFieldPositionGroup::Midfielder, 70, true),
+            !depth.would_get_loan_minutes(PlayerFieldPositionGroup::Midfielder, 70, true, 0),
             "a development loanee behind two starters won't get his minutes"
         );
     }
@@ -4035,14 +4624,21 @@ mod borrower_gate_tests {
         assert!(!PipelineProcessor::loan_reputation_drop_ok(
             2000, 9000, 120, 130, false
         ));
-        // Same borrower is fine for a very raw player — any senior
-        // football is the point of the loan.
+        // Same borrower is fine for a genuinely raw player — any senior
+        // football is the point of the loan. The floor tracks readiness
+        // continuously now rather than switching on a "very raw" flag, so
+        // this is the man who is years off the shirt, not merely below it.
         assert!(PipelineProcessor::loan_reputation_drop_ok(
-            2000, 9000, 90, 130, false
+            2000, 9000, 80, 130, false
         ));
-        // A mid-table borrower clears the floor for the established
-        // player too.
+        // A PEER-level borrower clears the floor for the established
+        // player — that is the destination doctrine leaves him.
         assert!(PipelineProcessor::loan_reputation_drop_ok(
+            7000, 9000, 120, 130, false
+        ));
+        // …and a mid-table one does not: a man at his club's own level
+        // goes sideways or stays.
+        assert!(!PipelineProcessor::loan_reputation_drop_ok(
             3000, 9000, 120, 130, false
         ));
         // Unknown parent reputation never blocks.
@@ -4184,7 +4780,7 @@ mod unsolicited_loan_target_tests {
     fn young_unlisted_prospect_is_a_development_target() {
         let p = Fx::player(true);
         assert_eq!(
-            UnsolicitedLoanTarget::classify(&p, 18, Fx::MAX, SquadAssetClass::ProspectDevelopment),
+            UnsolicitedLoanTarget::classify(&p, 18, Fx::MAX, SquadAssetClass::ProspectDevelopment, false),
             Some(true),
             "an unlisted young prospect is approachable as a development loan"
         );
@@ -4198,11 +4794,43 @@ mod unsolicited_loan_target_tests {
             SquadAssetClass::FirstTeamUseful,
         ] {
             assert_eq!(
-                UnsolicitedLoanTarget::classify(&p, 18, Fx::MAX, class),
+                UnsolicitedLoanTarget::classify(&p, 18, Fx::MAX, class, false),
                 None,
                 "a first-team contributor must never be cold-approached"
             );
         }
+    }
+
+    /// …and the same protection read off STANDING rather than off a
+    /// label. A nineteen-year-old first choice carries
+    /// `ProspectDevelopment` because the class follows a squad status he
+    /// gets from his birth year, and that walked straight through the arm
+    /// above.
+    #[test]
+    fn the_parents_own_first_choice_is_never_cold_approached_either() {
+        let p = Fx::player(true);
+        assert_eq!(
+            UnsolicitedLoanTarget::classify(
+                &p,
+                19,
+                Fx::MAX,
+                SquadAssetClass::ProspectDevelopment,
+                true,
+            ),
+            None,
+            "a club does not entertain a cold call about the man who starts for it"
+        );
+        assert_eq!(
+            UnsolicitedLoanTarget::classify(
+                &p,
+                19,
+                Fx::MAX,
+                SquadAssetClass::ProspectDevelopment,
+                false,
+            ),
+            Some(true),
+            "a genuine prospect is still a development target"
+        );
     }
 
     #[test]
@@ -4213,7 +4841,7 @@ mod unsolicited_loan_target_tests {
                 &p,
                 18,
                 Fx::MAX,
-                SquadAssetClass::UnknownNeedsEvaluation
+                SquadAssetClass::UnknownNeedsEvaluation, false
             ),
             None,
             "a player the club hasn't evaluated yet is left alone"
@@ -4224,7 +4852,7 @@ mod unsolicited_loan_target_tests {
     fn older_surplus_is_a_generic_cover_target() {
         let p = Fx::player(true);
         assert_eq!(
-            UnsolicitedLoanTarget::classify(&p, 30, Fx::MAX, SquadAssetClass::TrueSurplus),
+            UnsolicitedLoanTarget::classify(&p, 30, Fx::MAX, SquadAssetClass::TrueSurplus, false),
             Some(false),
             "older genuine surplus is loanable, but as generic cover (not development)"
         );
@@ -4234,12 +4862,12 @@ mod unsolicited_loan_target_tests {
     fn young_rotation_develops_but_older_rotation_does_not() {
         let p = Fx::player(true);
         assert_eq!(
-            UnsolicitedLoanTarget::classify(&p, 20, Fx::MAX, SquadAssetClass::RotationUseful),
+            UnsolicitedLoanTarget::classify(&p, 20, Fx::MAX, SquadAssetClass::RotationUseful, false),
             Some(true),
             "a young rotation player can go on a development loan"
         );
         assert_eq!(
-            UnsolicitedLoanTarget::classify(&p, 30, Fx::MAX, SquadAssetClass::RotationUseful),
+            UnsolicitedLoanTarget::classify(&p, 30, Fx::MAX, SquadAssetClass::RotationUseful, false),
             None,
             "an older rotation player is squad depth, not a cold loan target"
         );
@@ -4249,7 +4877,7 @@ mod unsolicited_loan_target_tests {
     fn over_age_cap_is_not_a_target() {
         let p = Fx::player(true);
         assert_eq!(
-            UnsolicitedLoanTarget::classify(&p, Fx::MAX + 1, Fx::MAX, SquadAssetClass::TrueSurplus),
+            UnsolicitedLoanTarget::classify(&p, Fx::MAX + 1, Fx::MAX, SquadAssetClass::TrueSurplus, false),
             None,
             "past the loan age cap nobody is a target"
         );
@@ -4264,7 +4892,7 @@ mod unsolicited_loan_target_tests {
                 &listed,
                 18,
                 Fx::MAX,
-                SquadAssetClass::ProspectDevelopment
+                SquadAssetClass::ProspectDevelopment, false
             ),
             None,
             "a loan-listed player flows through the normal listed path"
@@ -4277,7 +4905,7 @@ mod unsolicited_loan_target_tests {
                 &pinned,
                 18,
                 Fx::MAX,
-                SquadAssetClass::ProspectDevelopment
+                SquadAssetClass::ProspectDevelopment, false
             ),
             None,
             "a manager-pinned player is never cold-approached"
@@ -4288,7 +4916,7 @@ mod unsolicited_loan_target_tests {
     fn contract_less_player_is_not_a_target() {
         let p = Fx::player(false);
         assert_eq!(
-            UnsolicitedLoanTarget::classify(&p, 18, Fx::MAX, SquadAssetClass::ProspectDevelopment),
+            UnsolicitedLoanTarget::classify(&p, 18, Fx::MAX, SquadAssetClass::ProspectDevelopment, false),
             None,
             "a contract-less player (free agent / returning loanee) is not loaned out"
         );
@@ -4442,33 +5070,44 @@ mod loan_destination_level_tests {
     }
 
     /// The Litvinov destination. A centre-back already competing for his
-    /// parent's first team is not loaned into the division below, however
-    /// reputable the borrower's badge — the club-standing gate passes this
-    /// pairing comfortably (3200 is well above the 25% floor of 7600), so
-    /// only the division gate can stop it.
+    /// parent's first team is not loaned into the division below — and now
+    /// BOTH halves say so, because the club-standing floor is continuous
+    /// in readiness too: a man at his parent's own level goes to a peer or
+    /// he does not go. A borrower at 42 % of a giant's standing is not a
+    /// peer.
     #[test]
     fn near_ready_regular_is_not_loaned_a_division_down() {
         let drop = Fx::to(122, Fx::SECOND_TIER, 3200, false);
-        assert!(
-            drop.clears_club_standing(),
-            "the club-standing gate is not what should be deciding this"
-        );
+        assert!(!drop.clears_club_standing());
         assert!(!drop.clears_division());
         assert!(!drop.is_plausible());
     }
 
-    /// …but a sideways move inside his own division is fine.
+    /// …but a sideways move to a PEER is fine: same division, comparable
+    /// standing. This is the destination the doctrine leaves open for him,
+    /// and the one the flat 0.25 standing floor used to share with clubs a
+    /// quarter of his parent's size.
     #[test]
-    fn near_ready_regular_may_loan_within_his_own_division() {
-        assert!(Fx::to(122, Fx::TOP_FLIGHT, 3200, false).is_plausible());
+    fn near_ready_regular_may_loan_to_a_peer_in_his_own_division() {
+        assert!(Fx::to(122, Fx::TOP_FLIGHT, 6000, false).is_plausible());
+        assert!(
+            !Fx::to(122, Fx::TOP_FLIGHT, 3200, false).is_plausible(),
+            "same division is not the same level"
+        );
     }
 
-    /// The development pathway is untouched: a raw prospect still drops a
-    /// division — or two — to play senior football every week.
+    /// The development pathway survives, keyed to how raw he actually is
+    /// rather than to his birth year: one division down for a prospect who
+    /// is some way off his parent's standard, two for one who is genuinely
+    /// years away.
     #[test]
     fn raw_prospect_still_drops_for_minutes() {
         assert!(Fx::to(95, Fx::SECOND_TIER, 3200, true).is_plausible());
-        assert!(Fx::to(95, Fx::THIRD_TIER, 3200, true).is_plausible());
+        assert!(Fx::to(85, Fx::THIRD_TIER, 3200, true).is_plausible());
+        assert!(
+            !Fx::to(120, Fx::THIRD_TIER, 3200, true).is_plausible(),
+            "a near-ready player gets none of the development allowance"
+        );
     }
 
     /// And a genuine fringe senior — clearly short of his parent's standard,
@@ -4480,8 +5119,49 @@ mod loan_destination_level_tests {
         assert!(!Fx::to(100, Fx::THIRD_TIER, 3200, false).clears_division());
     }
 
-    /// The readiness curve is continuous — the further a player is from his
-    /// parent's best, the further he may drop.
+    /// The three readiness stops the WI-5 curve is specified at. The
+    /// allowance a drop earns is continuous in readiness rather than
+    /// switched on by a birth year, so a raw player keeps today's full
+    /// width and a first-team-ready one is held to his parent's level.
+    #[test]
+    fn the_division_floor_tracks_readiness_at_every_stop() {
+        // readiness 0: exactly the old raw floor with the full allowance.
+        let raw = Fx::to(
+            (Fx::PARENT_BEST as f32 * 0.60).round() as u8,
+            Fx::SECOND_TIER,
+            3200,
+            true,
+        );
+        assert!(
+            (raw.division_floor() - 0.45 * 0.75).abs() < 0.01,
+            "raw reads {}",
+            raw.division_floor()
+        );
+
+        // readiness 0.6: the mid-pathway prospect, comfortably clear of
+        // the Segunda-to-La-Liga ratio of 0.707.
+        let mid = Fx::to(
+            (Fx::PARENT_BEST as f32 * (0.60 + 0.6 * 0.30)).round() as u8,
+            Fx::SECOND_TIER,
+            3200,
+            true,
+        );
+        let mid_floor = mid.division_floor();
+        assert!(
+            (0.60..0.64).contains(&mid_floor),
+            "0.6 readiness reads {mid_floor}"
+        );
+        assert!(mid_floor < 0.707);
+
+        // readiness 1: no allowance at all, and 0.707 fails — the Yamal
+        // destination, refused on the division alone.
+        let ready = Fx::to(Fx::PARENT_BEST, Fx::SECOND_TIER, 3200, true);
+        assert!((ready.division_floor() - 0.85).abs() < 0.01);
+        assert!(ready.division_floor() > 0.707);
+    }
+
+    /// The readiness curve is continuous — the further a player is from
+    /// his parent's best, the further he may drop.
     #[test]
     fn division_floor_falls_as_the_player_gets_rawer() {
         let floor = |ability| Fx::to(ability, Fx::SECOND_TIER, 3200, false).division_floor();
@@ -5690,7 +6370,7 @@ mod loan_push_gate_tests {
 
         let depth = BorrowerPositionDepth::snapshot(team);
         assert!(
-            !depth.would_get_loan_minutes(PlayerFieldPositionGroup::Forward, 95, true),
+            !depth.would_get_loan_minutes(PlayerFieldPositionGroup::Forward, 95, true, 0),
             "three natural centre-forwards ahead of him is not a route to minutes"
         );
     }
@@ -5704,7 +6384,7 @@ mod loan_push_gate_tests {
 
         let depth = BorrowerPositionDepth::snapshot(&team);
         assert!(
-            depth.would_get_loan_minutes(PlayerFieldPositionGroup::Forward, 95, true),
+            depth.would_get_loan_minutes(PlayerFieldPositionGroup::Forward, 95, true, 0),
             "with the wide forwards gone he is competing for the shirt"
         );
     }
@@ -5727,7 +6407,7 @@ mod loan_push_gate_tests {
         );
 
         assert!(
-            !appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 92, 17),
+            !appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 92, 17, 0, false),
             "reputation makes a club attractive; it is not consent"
         );
     }
@@ -5746,15 +6426,15 @@ mod loan_push_gate_tests {
 
         let appetite = LoanBorrowerAppetite::assess(&club, PushFx::main_team(&club), false);
         assert!(
-            !appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 92, 17),
+            !appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 92, 17, 0, false),
             "a 92-rated seventeen-year-old is not what a 129-minimum brief asked for"
         );
         assert!(
-            appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 132, 24),
+            appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 132, 24, 0, false),
             "…and the centre-forward it did ask for is welcome"
         );
         assert!(
-            !appetite.accepts_push(&club, PlayerFieldPositionGroup::Defender, 132, 24),
+            !appetite.accepts_push(&club, PlayerFieldPositionGroup::Defender, 132, 24, 0, false),
             "the request was for a forward, not a defender"
         );
     }
@@ -5774,6 +6454,53 @@ mod loan_push_gate_tests {
             appetite.critical_shortage,
             "a side with no forwards at all is short"
         );
-        assert!(appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 92, 17));
+        assert!(appetite.accepts_push(&club, PlayerFieldPositionGroup::Forward, 92, 17, 0, false));
+    }
+
+    /// WI-7: the upgrade acceptance. A club that "only loans in January,
+    /// and only while in the red" does not turn down a genuine first-team
+    /// upgrade in August — and its refusal was exactly what walked a
+    /// giant's near-ready youngster down to the tier below, a fortnight at
+    /// a time.
+    #[test]
+    fn a_clear_upgrade_is_welcome_in_any_month() {
+        let club = PushFx::giant_with_hidden_attack();
+        let appetite = LoanBorrowerAppetite::assess(&club, PushFx::main_team(&club), false);
+        assert!(!appetite.scans, "precondition: this club runs no loan scans");
+
+        let best_here = 130u8;
+        assert!(
+            appetite.accepts_push(
+                &club,
+                PlayerFieldPositionGroup::Forward,
+                best_here + LoanBorrowerAppetite::UPGRADE_MARGIN,
+                21,
+                best_here,
+                true,
+            ),
+            "a loanee clearly better than anything here, whose wage it can carry"
+        );
+        assert!(
+            !appetite.accepts_push(
+                &club,
+                PlayerFieldPositionGroup::Forward,
+                best_here + LoanBorrowerAppetite::UPGRADE_MARGIN,
+                21,
+                best_here,
+                false,
+            ),
+            "…but only inside the guard's reach: an unaffordable upgrade is not one"
+        );
+        assert!(
+            !appetite.accepts_push(
+                &club,
+                PlayerFieldPositionGroup::Forward,
+                best_here,
+                21,
+                best_here,
+                true,
+            ),
+            "a comparable body is not an upgrade, guard or no guard"
+        );
     }
 }

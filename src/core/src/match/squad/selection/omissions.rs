@@ -521,9 +521,7 @@ impl<'a> OmissionBuilder<'a> {
     fn coach_memory_reason(&self, omitted: &Player) -> Option<SelectionOmissionReason> {
         let coach = self.coach?;
         let slot = best_natural_position(omitted, self.tactics)?;
-        let natural_role_fit = (helpers::position_fit_score(omitted, slot, slot.position_group())
-            / 20.0)
-            .clamp(0.0, 1.0);
+        let natural_role_fit = (helpers::position_fit_score(omitted, slot) / 20.0).clamp(0.0, 1.0);
         let coach_ctx = CoachSelectionContext {
             date: self.date,
             match_importance: self.match_importance,

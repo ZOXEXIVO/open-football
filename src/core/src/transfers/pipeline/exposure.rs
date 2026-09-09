@@ -276,6 +276,12 @@ impl MarketDiscoveryDiagnosis {
                 AvailabilityBlockReason::PlayerWontStepDown
             }
             TransferPlausibilityReason::UnaffordableWages => AvailabilityBlockReason::WageTooHigh,
+            // The loan is free and he is still beyond them — the closest
+            // thing the taxonomy has is the price wall, because that is
+            // what it is: the asset costs more than this club's year.
+            TransferPlausibilityReason::LoanBeyondBorrowerMeans => {
+                AvailabilityBlockReason::AskingPriceTooHigh
+            }
             TransferPlausibilityReason::UnaffordableFee => {
                 AvailabilityBlockReason::AskingPriceTooHigh
             }

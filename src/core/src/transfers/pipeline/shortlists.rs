@@ -172,7 +172,7 @@ impl PipelineProcessor {
         let mut results: Vec<ShortlistResult> = Vec::new();
         {
             let plan = &club.transfer_plan;
-            let buyer_ctx = BuyerPlausibilityContext::build(country, club);
+            let buyer_ctx = BuyerPlausibilityContext::build(country, club, date);
 
             let existing_shortlist_request_ids: Vec<u32> = plan
                 .shortlists

@@ -28,6 +28,14 @@
 //!                   listed him, for what reason, and whether his signing
 //!                   protection was live at the time
 //!   * `exit`      — a release, a terminated contract, or a squad removal
+//!   * `squad`     — where the club registered him and why: the day-0
+//!                   placement verdict, and every weekly promotion the
+//!                   rebalance considered (which guard stopped it, or
+//!                   which loan intent it withdrew)
+//!   * `loan`      — the loan funnel, one line per gate per candidate
+//!                   destination: the asset class, the unsolicited-target
+//!                   verdict, the guard's reach and both money terms, the
+//!                   destination-level floors and the minutes read
 //!
 //! `list` and `exit` are the seller-side half the funnel used to have no
 //! record of at all. A move that never happens leaves no evidence; so does a
@@ -220,5 +228,22 @@ impl MarketSwitches {
     pub fn geography_off() -> bool {
         static OFF: OnceLock<bool> = OnceLock::new();
         *OFF.get_or_init(|| Self::read("OF_GEOGRAPHY_OFF"))
+    }
+
+    /// The loan asset guard and every gate it re-shapes: the
+    /// destination pricing ([`super::loan_guard::LoanAssetGuard`]), the
+    /// readiness-continuous destination floors, the overqualified-minutes
+    /// bound, the renown band on a loan, the wage carry, the seller's
+    /// refusal delta and the broadcast cascade floor.
+    ///
+    /// The A/B arm for the loan-asset campaign. Only the *gates* are
+    /// disarmed: squad placement at load, the promotion rules and the
+    /// label / asset-class fixes are data-identity work and stay on in
+    /// both arms, because comparing a world where a first-teamer is
+    /// registered in the U20 against one where he is not compares two
+    /// worlds rather than two policies (memory `elite_market_freeze_2026_09`).
+    pub fn loan_guard_off() -> bool {
+        static OFF: OnceLock<bool> = OnceLock::new();
+        *OFF.get_or_init(|| Self::read("OF_LOAN_GUARD_OFF"))
     }
 }

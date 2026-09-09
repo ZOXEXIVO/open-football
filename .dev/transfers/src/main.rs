@@ -42,6 +42,19 @@
 //!                                 weighting and the player's own place
 //!                                 familiarity. The baseline arm for the
 //!                                 corridor census.
+//!   * `OF_LOAN_GUARD_OFF`      — the LOAN ASSET guard and every gate it
+//!                                 re-shaped: destination pricing (weight /
+//!                                 carry), the readiness-continuous level
+//!                                 floors, the overqualified-minutes bound,
+//!                                 the renown band on a loan, the seller's
+//!                                 refusal and the broadcast cascade floor.
+//!                                 Squad placement, the promotion rules and
+//!                                 the label / asset-class fixes are data
+//!                                 identity and stay ON in both arms — a
+//!                                 world where a first-teamer is registered
+//!                                 in the U20 is a different world, not a
+//!                                 different policy. The baseline arm for
+//!                                 the loan asset census.
 //!
 //! `OF_TRACE_PLAYER=<id>` prints one funnel line per stage for that
 //! player, to stderr.
@@ -63,6 +76,7 @@ use core::club::player::core::player::TransferRequestReason;
 use core::club::player::mind::GoalKind;
 use core::club::player::statistics::StuckCareerScan;
 use core::club::player::transfer::{BigStagePull, BigStagePullContext};
+use core::club::staff::perception::AbilityEstimator;
 use core::club::team::squad::{SquadAssetClass, SquadAssetContext};
 use core::country::result::transfers::free_agent_audit::FreeAgentMarketAuditor;
 use core::transfers::pipeline::appraisal::TermsRefusalCause;
@@ -75,9 +89,11 @@ use core::transfers::{MarketAffinity, MarketAffinityInputs, MoveKind as Geograph
 use core::transfers::{
     TransferListingOrigin, TransferListingStatus, TransferListingType, TransferType,
 };
+use core::transfers::window::PlayerValuationCalculator;
 use core::utils::DateUtils;
 use core::{
-    FootballSimulator, PlayerSquadStatus, PlayerStatusType, SimulationResult, SimulatorData,
+    Club, ClubLevelAnchor, FootballSimulator, Person, Player, PlayerFieldPositionGroup,
+    PlayerSquadStatus, PlayerStatusType, ReputationLevel, SimulationResult, SimulatorData,
     TeamType,
 };
 use database::{DatabaseGenerator, DatabaseLoader};
@@ -89,7 +105,7 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use chrono::{Duration, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 use env_logger::Env;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -620,7 +636,7 @@ struct MarketCensus;
 impl MarketCensus {
     /// Official appearances in the *current* (in-progress) season, read
     /// off the live counters.
-    fn live_apps(player: &core::Player) -> u16 {
+    fn live_apps(player: &Player) -> u16 {
         player.statistics.played
             + player.statistics.played_subs
             + player.cup_statistics.played
@@ -637,7 +653,7 @@ impl MarketCensus {
     /// play last year" — and is stable wherever in the calendar the
     /// sample lands. `None` for a player with no completed season yet
     /// (a first-year academy graduate), who is not a market failure.
-    fn last_season_apps(player: &core::Player) -> Option<(u16, u16)> {
+    fn last_season_apps(player: &Player) -> Option<(u16, u16)> {
         let ledger = &player.statistics_history.season_ledger;
         let newest = ledger
             .iter()
@@ -960,7 +976,7 @@ impl MarketCensus {
                     // Squad size against the board's own registered cap,
                     // and the country's foreigner rule. Both are P5
                     // acceptance metrics and both must stay clean.
-                    let senior: Vec<&core::Player> =
+                    let senior: Vec<&Player> =
                         main.players.iter().filter(|p| !p.is_on_loan()).collect();
                     report.live.squad_sizes.push(senior.len());
                     if let Some(cap) = club.board.season_targets.as_ref().map(|t| t.max_squad_size)
@@ -2494,8 +2510,8 @@ impl PlayerSideCensus {
     /// One player's contribution to the posting funnel (C4).
     fn fold_funnel(
         funnel: &mut HomeFunnel,
-        player: &core::Player,
-        club: &core::Club,
+        player: &Player,
+        club: &Club,
         club_country_id: u32,
     ) {
         // "Abroad" by PASSPORT — the same test the mind now makes.
@@ -2692,7 +2708,7 @@ impl CensusFacts {
     /// `ClubTransferPlan::is_marketed` per player is a linear scan of that
     /// list, and this runs for every player in the world every day.
     fn availability_of(
-        player: &core::Player,
+        player: &Player,
         marketed: &HashSet<u32>,
         date: NaiveDate,
     ) -> Availability {
@@ -2727,7 +2743,7 @@ impl CensusFacts {
 
     /// The honest anchor for a stay — a loan return re-stamps
     /// `last_transfer_date` (memory `loan_pipeline`).
-    fn tenure_days(player: &core::Player, date: NaiveDate) -> u16 {
+    fn tenure_days(player: &Player, date: NaiveDate) -> u16 {
         StuckCareerScan::club_tenure_days(player, date)
             .unwrap_or(i64::from(u16::MAX))
             .clamp(0, i64::from(u16::MAX)) as u16
@@ -3286,12 +3302,582 @@ impl PlayerSidePrinter {
         }
     }
 }
+
+// ---------------------------------------------------------------------
+// Loan asset census (WI-0b)
+// ---------------------------------------------------------------------
+
+/// One live loan, priced the way the guard prices it.
+///
+/// The loan volume counters and the who-lends-to-whom matrix could both
+/// look perfectly healthy while the market lent a nine-figure teenager to
+/// a second-division club for nothing: neither of them reads the ASSET.
+/// These columns do — what the loanee is worth against the borrower's
+/// year, what his wage is against its payroll, and how far above the
+/// borrower's own best he sits.
+#[derive(Debug, Clone)]
+struct LoanAssetRow {
+    season: u16,
+    player_name: String,
+    age: u8,
+    ability: u8,
+    value: f64,
+    label: &'static str,
+    parent_name: String,
+    parent_tier: &'static str,
+    parent_band: &'static str,
+    /// Loanee CA minus his parent club's key-player floor in his group —
+    /// positive means the parent reads him as a key man.
+    over_parent_key_floor: i16,
+    borrower_name: String,
+    borrower_tier: &'static str,
+    borrower_band: &'static str,
+    borrower_income: i64,
+    borrower_wage_bill: i64,
+    /// Value ÷ the borrower's annualised income. Above 1.0 the club is
+    /// borrowing an asset worth more than everything it earns in a year.
+    weight: f64,
+    /// The borrower's share of his wage ÷ its whole wage bill.
+    wage_share: f64,
+    /// Loanee CA minus the borrower's best in his group.
+    over_borrower_best: i16,
+}
+
+/// A youth-registered player whose observable level clears the first
+/// team's own promotion floor by the margin — the trap the placement and
+/// promotion guards exist to empty.
+#[derive(Debug, Clone)]
+struct TrapRow {
+    player_name: String,
+    club_name: String,
+    squad: String,
+    level: u8,
+    floor: u8,
+    days_clear: u32,
+}
+
+#[derive(Debug, Default)]
+struct LoanAssetCensus {
+    /// Every loan seen at least once, profiled on the first tick it is
+    /// live. Keyed so a loan is never counted twice as it runs.
+    rows: Vec<LoanAssetRow>,
+    seen: HashSet<(u32, u32)>,
+    /// player_id → the day his level first cleared the promotion floor by
+    /// the margin while registered below the first team.
+    trap_since: HashMap<u32, u32>,
+    /// The trap census as of the latest observation.
+    trap: Vec<TrapRow>,
+}
+
+impl LoanAssetCensus {
+    /// Observable level over the first team's promotion floor at which a
+    /// youth registration is a TRAP rather than a judgement call. Mirrors
+    /// `squad.rs`'s `PROMOTION_CLEAR_MARGIN`.
+    const TRAP_MARGIN: u8 = 8;
+
+    fn observe(&mut self, data: &SimulatorData, day: u32) {
+        let date = data.date.date();
+        // Calendar year of the tick — enough to split the census by
+        // season without re-deriving a country's own calendar.
+        let season = date.format("%Y").to_string().parse::<u16>().unwrap_or(0);
+        let mut trap = Vec::new();
+
+        for continent in &data.continents {
+            for country in &continent.countries {
+                // Club facts this pass needs, resolved once per country.
+                let mut club_index: HashMap<u32, &Club> = HashMap::new();
+                for club in &country.clubs {
+                    club_index.insert(club.id, club);
+                }
+
+                for club in &country.clubs {
+                    let main = match club.teams.main().or_else(|| club.teams.teams.first()) {
+                        Some(t) => t,
+                        None => continue,
+                    };
+                    let borrower_league_rep = main
+                        .league_id
+                        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                        .map(|l| l.reputation)
+                        .unwrap_or(0);
+
+                    // ---- the trap census ------------------------------
+                    let floors: Vec<(PlayerFieldPositionGroup, u8)> =
+                        PlayerFieldPositionGroup::ALL
+                            .iter()
+                            .map(|&group| {
+                                let worst = main
+                                    .players
+                                    .iter()
+                                    .filter(|p| p.position().position_group() == group)
+                                    .map(AbilityEstimator::observable_level)
+                                    .min()
+                                    .unwrap_or(0);
+                                (group, worst.saturating_add(1))
+                            })
+                            .collect();
+                    for team in &club.teams.teams {
+                        if !team.team_type.is_youth() {
+                            continue;
+                        }
+                        for player in team.players.iter() {
+                            if player.is_on_loan() || player.contract.is_none() {
+                                continue;
+                            }
+                            let group = player.position().position_group();
+                            let floor = floors
+                                .iter()
+                                .find(|(g, _)| *g == group)
+                                .map(|(_, f)| *f)
+                                .unwrap_or(0);
+                            let level =
+                                AbilityEstimator::observable_level(
+                                    player,
+                                );
+                            if level < floor.saturating_add(Self::TRAP_MARGIN) {
+                                self.trap_since.remove(&player.id);
+                                continue;
+                            }
+                            let since = *self.trap_since.entry(player.id).or_insert(day);
+                            trap.push(TrapRow {
+                                player_name: player.full_name.to_string(),
+                                club_name: club.name.clone(),
+                                squad: format!("{:?}", team.team_type),
+                                level,
+                                floor,
+                                days_clear: day.saturating_sub(since),
+                            });
+                        }
+                    }
+
+                    // ---- the live-loan profile ------------------------
+                    let borrower_income = club.finance.estimated_annual_income(date);
+                    let borrower_wage_bill: i64 = club
+                        .teams
+                        .iter()
+                        .map(|t| t.get_annual_salary() as i64)
+                        .sum();
+                    for team in &club.teams.teams {
+                        for player in team.players.iter() {
+                            let Some(loan) = player.contract_loan.as_ref() else {
+                                continue;
+                            };
+                            let Some(parent_id) = loan.loan_from_club_id else {
+                                continue;
+                            };
+                            if !self.seen.insert((player.id, club.id)) {
+                                continue;
+                            }
+                            let group = player.position().position_group();
+                            let borrower_best = main
+                                .players
+                                .iter()
+                                .filter(|p| {
+                                    p.position().position_group() == group && !p.is_on_loan()
+                                })
+                                .map(|p| p.player_attributes.current_ability)
+                                .max()
+                                .unwrap_or(0);
+                            let parent = club_index.get(&parent_id).copied();
+                            let (parent_league_rep, parent_club_rep) = parent
+                                .map(|c| {
+                                    PlayerValuationCalculator::seller_context(
+                                        country, c,
+                                    )
+                                })
+                                .unwrap_or((0, 0));
+                            let parent_main =
+                                parent.and_then(|c| c.teams.main().or_else(|| c.teams.teams.first()));
+                            let parent_anchor = parent_main.map(|t| {
+                                ClubLevelAnchor::for_reputation(t.reputation.overall_score())
+                            });
+                            let value = player.value(date, parent_league_rep, parent_club_rep);
+                            let ability = player.player_attributes.current_ability;
+                            self.rows.push(LoanAssetRow {
+                                season,
+                                player_name: player.full_name.to_string(),
+                                age: player.age(date),
+                                ability,
+                                value,
+                                label: player
+                                    .contract
+                                    .as_ref()
+                                    .map(|c| MarketCensus::squad_status_label(&c.squad_status))
+                                    .unwrap_or("none"),
+                                parent_name: parent
+                                    .map(|c| c.name.clone())
+                                    .unwrap_or_else(|| format!("#{parent_id}")),
+                                parent_tier: parent_main
+                                    .map(|t| Self::tier_label(t.reputation.level()))
+                                    .unwrap_or("unknown"),
+                                parent_band: league_band(parent_league_rep),
+                                over_parent_key_floor: parent_anchor
+                                    .map(|a| ability as i16 - a.key_floor(group))
+                                    .unwrap_or(0),
+                                borrower_name: club.name.clone(),
+                                borrower_tier: Self::tier_label(main.reputation.level()),
+                                borrower_band: league_band(borrower_league_rep),
+                                borrower_income,
+                                borrower_wage_bill,
+                                weight: if borrower_income > 0 {
+                                    value / borrower_income as f64
+                                } else {
+                                    0.0
+                                },
+                                wage_share: if borrower_wage_bill > 0 {
+                                    loan.salary as f64 / borrower_wage_bill as f64
+                                } else {
+                                    0.0
+                                },
+                                over_borrower_best: ability as i16 - borrower_best as i16,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        self.trap = trap;
+    }
+
+    fn tier_label(level: ReputationLevel) -> &'static str {
+        match level {
+            ReputationLevel::Elite => "elite",
+            ReputationLevel::Continental => "continental",
+            ReputationLevel::National => "national",
+            ReputationLevel::Regional => "regional",
+            ReputationLevel::Local => "local",
+            ReputationLevel::Amateur => "amateur",
+        }
+    }
+}
+
+/// Prints the loan asset census. Separate from the collector so the
+/// harness's "collect while running, print on a cadence" shape holds.
+struct LoanAssetPrinter;
+
+impl LoanAssetPrinter {
+    const TIERS: [&'static str; 6] = [
+        "elite",
+        "continental",
+        "national",
+        "regional",
+        "local",
+        "amateur",
+    ];
+    const TOP_ROWS: usize = 20;
+
+    fn print(census: &LoanAssetCensus) {
+        println!("\n================ LOAN ASSET CENSUS ================");
+        println!("loans profiled: {}", census.rows.len());
+        if census.rows.is_empty() {
+            Self::print_trap(census);
+            return;
+        }
+        Self::print_tier_matrix(census);
+        Self::print_band_matrix(census);
+        Self::print_quantiles(census);
+        Self::print_top_by_value(census);
+        Self::print_trap(census);
+    }
+
+    fn print_tier_matrix(census: &LoanAssetCensus) {
+        let mut seasons: Vec<u16> = census.rows.iter().map(|r| r.season).collect();
+        seasons.sort_unstable();
+        seasons.dedup();
+        let per_season: Vec<String> = seasons
+            .iter()
+            .map(|s| {
+                format!(
+                    "{s}={}",
+                    census.rows.iter().filter(|r| r.season == *s).count()
+                )
+            })
+            .collect();
+        println!("  loans by season: {}", per_season.join("  "));
+        println!("\n-- loan matrix: parent tier → borrower tier --");
+        print!("{:<14}", "parent\\borrow");
+        for tier in Self::TIERS {
+            print!("{:>13}", tier);
+        }
+        println!();
+        for from in Self::TIERS {
+            print!("{:<14}", from);
+            for to in Self::TIERS {
+                let n = census
+                    .rows
+                    .iter()
+                    .filter(|r| r.parent_tier == from && r.borrower_tier == to)
+                    .count();
+                print!("{:>13}", n);
+            }
+            println!();
+        }
+    }
+
+    fn print_band_matrix(census: &LoanAssetCensus) {
+        println!("\n-- loan matrix: parent league band → borrower league band --");
+        for from in BandLadder::RUNGS {
+            let out: Vec<String> = BandLadder::RUNGS
+                .iter()
+                .filter_map(|to| {
+                    let n = census
+                        .rows
+                        .iter()
+                        .filter(|r| r.parent_band == from && r.borrower_band == *to)
+                        .count();
+                    (n > 0).then(|| format!("{to}={n}"))
+                })
+                .collect();
+            if !out.is_empty() {
+                println!("  {:<20} → {}", from, out.join("  "));
+            }
+        }
+    }
+
+    fn print_quantiles(census: &LoanAssetCensus) {
+        println!("\n-- asset profile of every loan (quantiles) --");
+        Self::quantile_line(
+            "value / borrower annual income",
+            census.rows.iter().map(|r| r.weight).collect(),
+        );
+        Self::quantile_line(
+            "borrower wage share / wage bill",
+            census.rows.iter().map(|r| r.wage_share).collect(),
+        );
+        Self::quantile_line(
+            "loanee CA - borrower best   ",
+            census
+                .rows
+                .iter()
+                .map(|r| r.over_borrower_best as f64)
+                .collect(),
+        );
+        Self::quantile_line(
+            "loanee CA - parent key floor",
+            census
+                .rows
+                .iter()
+                .map(|r| r.over_parent_key_floor as f64)
+                .collect(),
+        );
+        Self::quantile_line(
+            "age                         ",
+            census.rows.iter().map(|r| r.age as f64).collect(),
+        );
+        let over_weight = census.rows.iter().filter(|r| r.weight > 1.0).count();
+        let over_gap = census
+            .rows
+            .iter()
+            .filter(|r| r.over_borrower_best > 25)
+            .count();
+        let key_men = census
+            .rows
+            .iter()
+            .filter(|r| r.over_parent_key_floor >= 0)
+            .count();
+        println!(
+            "  loans with weight > 1.0: {over_weight}  [target 0]   \
+             CA-over-borrower-best > 25: {over_gap} ({:.1}%)   \
+             loanees at/above the parent's KEY floor: {key_men} ({:.1}%)",
+            ReportPrinter::pct(over_gap, census.rows.len()),
+            ReportPrinter::pct(key_men, census.rows.len()),
+        );
+        let mut by_label: HashMap<&'static str, usize> = HashMap::new();
+        for row in &census.rows {
+            *by_label.entry(row.label).or_insert(0) += 1;
+        }
+        println!("  label at departure: {}", ReportPrinter::top(&by_label, 8));
+    }
+
+    fn quantile_line(name: &str, mut values: Vec<f64>) {
+        if values.is_empty() {
+            return;
+        }
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+        let at = |q: f64| values[((values.len() - 1) as f64 * q).round() as usize];
+        println!(
+            "  {name}  p10 {:>8.2}  p50 {:>8.2}  p90 {:>8.2}  p95 {:>8.2}  max {:>8.2}",
+            at(0.10),
+            at(0.50),
+            at(0.90),
+            at(0.95),
+            at(1.0),
+        );
+    }
+
+    fn print_top_by_value(census: &LoanAssetCensus) {
+        let mut rows: Vec<&LoanAssetRow> = census.rows.iter().collect();
+        rows.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(Ordering::Equal));
+        println!("\n-- top {} loans by loanee value --", Self::TOP_ROWS);
+        for row in rows.into_iter().take(Self::TOP_ROWS) {
+            println!(
+                "  {:<24} {:>3}y ca {:>3}  {:>7.1}M  {} ({}) → {} ({}, income {:.1}M, \
+                 wages {:.1}M)  weight {:.2}  wage share {:.2}  over-best {:+}  \
+                 over-key {:+}  [{}]",
+                row.player_name,
+                row.age,
+                row.ability,
+                row.value / 1_000_000.0,
+                row.parent_name,
+                row.parent_tier,
+                row.borrower_name,
+                row.borrower_tier,
+                row.borrower_income as f64 / 1_000_000.0,
+                row.borrower_wage_bill as f64 / 1_000_000.0,
+                row.weight,
+                row.wage_share,
+                row.over_borrower_best,
+                row.over_parent_key_floor,
+                row.label,
+            );
+        }
+    }
+
+    fn print_trap(census: &LoanAssetCensus) {
+        println!(
+            "\n-- trap census: youth-registered above the main promotion floor + {} --",
+            LoanAssetCensus::TRAP_MARGIN
+        );
+        println!("  players: {}  [target ~0 from day 30]", census.trap.len());
+        let mut rows: Vec<&TrapRow> = census.trap.iter().collect();
+        rows.sort_by(|a, b| b.days_clear.cmp(&a.days_clear));
+        for row in rows.into_iter().take(Self::TOP_ROWS) {
+            println!(
+                "  {:<24} {:<22} {:<5} level {:>3} vs floor {:>3}  clear for {} days",
+                row.player_name, row.club_name, row.squad, row.level, row.floor, row.days_clear,
+            );
+        }
+    }
+}
+
+/// Day-0 placement census: per ODB club, players registered in a youth
+/// bucket whose current ability already clears the club's own senior bar.
+///
+/// The only number in this whole file that can be checked before a single
+/// tick, and the one the placement fix is measured on.
+struct PlacementCensus;
+
+impl PlacementCensus {
+    const TOP_ROWS: usize = 20;
+
+    fn report(data: &SimulatorData, odb_clubs: &HashSet<u32>) {
+        let date = data.date.date();
+        let mut offenders: Vec<(String, String, String, u8, i16)> = Vec::new();
+        let mut clubs_with_youth = 0usize;
+        let mut clubs_offending = 0usize;
+
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    let Some(main) = club.teams.main() else {
+                        continue;
+                    };
+                    if !club.teams.teams.iter().any(|t| t.team_type.is_youth()) {
+                        continue;
+                    }
+                    // ODB-backed clubs only. A club with no record in the
+                    // source database has its whole squad — youth included
+                    // — minted by the procedural generator, so there is no
+                    // placement decision to get wrong there.
+                    if !odb_clubs.contains(&club.id) {
+                        continue;
+                    }
+                    clubs_with_youth += 1;
+                    // The WI-1 definition, re-derived on the hydrated
+                    // world: the club's own record where it is deep enough
+                    // to state a bar, its divisional rotation band where it
+                    // is not.
+                    let anchor =
+                        ClubLevelAnchor::for_reputation(main.reputation.overall_score());
+                    let floors: Vec<(PlayerFieldPositionGroup, i16, usize, i16)> =
+                        PlayerFieldPositionGroup::ALL
+                            .iter()
+                            .map(|&group| {
+                                let depth = group.main_depth_cap();
+                                let anchor_floor = anchor.rotation_floor(group);
+                                let mut established: Vec<u8> = club
+                                    .teams
+                                    .teams
+                                    .iter()
+                                    .flat_map(|t| t.players.iter())
+                                    .filter(|p| {
+                                        p.position().position_group() == group
+                                            && date.year() - p.birth_date.year() >= 21
+                                    })
+                                    .map(|p| p.player_attributes.current_ability)
+                                    .collect();
+                                let n = established.len();
+                                if n < depth {
+                                    return (group, anchor_floor, n, anchor_floor);
+                                }
+                                established.sort_unstable_by(|a, b| b.cmp(a));
+                                let measured = established[depth - 1] as i16;
+                                (group, measured.min(anchor_floor), n, anchor_floor)
+                            })
+                            .collect();
+                    let mut club_offends = false;
+                    for team in &club.teams.teams {
+                        if !team.team_type.is_youth() {
+                            continue;
+                        }
+                        for player in team.players.iter() {
+                            let group = player.position().position_group();
+                            let (floor, seniors, anchor_floor) = floors
+                                .iter()
+                                .find(|(g, _, _, _)| *g == group)
+                                .map(|(_, f, n, a)| (*f, *n, *a))
+                                .unwrap_or((i16::MAX, 0, i16::MAX));
+                            let ca = player.player_attributes.current_ability as i16;
+                            if ca >= floor {
+                                club_offends = true;
+                                offenders.push((
+                                    format!("{} #{}", player.full_name, player.id),
+                                    club.name.clone(),
+                                    format!(
+                                        "{:?} {:?} seniors={seniors} anchor={anchor_floor}",
+                                        team.team_type, group
+                                    ),
+                                    player.player_attributes.current_ability,
+                                    floor,
+                                ));
+                            }
+                        }
+                    }
+                    if club_offends {
+                        clubs_offending += 1;
+                    }
+                }
+            }
+        }
+
+        println!("\n-- day-0 placement census: first-team-calibre players in a youth bucket --");
+        println!(
+            "  offending players: {}   clubs: {} of {} ODB-backed clubs with a youth squad  [target 0]",
+            offenders.len(),
+            clubs_offending,
+            clubs_with_youth,
+        );
+        offenders.sort_by(|a, b| b.3.cmp(&a.3));
+        for (player, club, squad, ca, floor) in offenders.into_iter().take(Self::TOP_ROWS) {
+            println!("  {player:<32} {club:<24} {squad:<48} ca {ca:>3} vs senior floor {floor:>3}");
+        }
+    }
+}
 // ---------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------
 
 struct SimHarness {
     data: SimulatorData,
+    /// The loan ASSET census — every live loan priced against the
+    /// borrower it landed at, plus the youth-registration trap. Running,
+    /// like the player-side census: a loan that has already returned
+    /// leaves no state to profile at report time.
+    loan_assets: LoanAssetCensus,
+    /// Clubs the source database actually carries a squad for. A club
+    /// without one is generated end to end, youth included, so the
+    /// placement census has nothing to measure there.
+    odb_clubs: HashSet<u32>,
     /// The player-side census is a running tracker, not a report-time
     /// walk: the transfer record carries no wage, so the only way to see a
     /// pay cut at all is to hold yesterday's number and compare.
@@ -3301,14 +3887,29 @@ struct SimHarness {
 impl SimHarness {
     fn generate() -> Self {
         let database = DatabaseLoader::load();
+        let odb_clubs: HashSet<u32> = database
+            .clubs
+            .iter()
+            .filter(|club| {
+                database
+                    .players_odb
+                    .as_ref()
+                    .map(|odb| odb.has_club(club.id))
+                    .unwrap_or(false)
+            })
+            .map(|club| club.id)
+            .collect();
         let data = DatabaseGenerator::generate(&database);
         let mut harness = SimHarness {
             data,
+            loan_assets: LoanAssetCensus::default(),
+            odb_clubs,
             player_side: PlayerSideCensus::default(),
         };
         // Day zero: every player's starting wage, so the very first
         // window's moves already have a "before" to compare against.
         harness.player_side.observe(&harness.data, 0);
+        harness.loan_assets.observe(&harness.data, 0);
         harness
     }
 
@@ -3335,6 +3936,7 @@ impl SimHarness {
         for day in 1..=days {
             self.tick();
             self.player_side.observe(&self.data, day);
+            self.loan_assets.observe(&self.data, day);
             if day % 25 == 0 {
                 eprintln!(
                     "  … day {day}/{days}  {}  ({:.0}s elapsed)",
@@ -3352,6 +3954,7 @@ impl SimHarness {
                 CorridorCensus::report(&self.data, day);
                 self.player_side.sample_idle_trail();
                 PlayerSidePrinter::print(&self.player_side);
+                LoanAssetPrinter::print(&self.loan_assets);
             }
         }
         let mut report = MarketCensus::collect(&self.data);
@@ -3359,6 +3962,7 @@ impl SimHarness {
         CorridorCensus::report(&self.data, days);
         self.player_side.sample_idle_trail();
         PlayerSidePrinter::print(&self.player_side);
+        LoanAssetPrinter::print(&self.loan_assets);
         eprintln!(
             "simulated {days} days in {:.1}s",
             start.elapsed().as_secs_f64()
@@ -3375,7 +3979,7 @@ struct HarnessUsage;
 
 impl HarnessUsage {
     /// Env switches, in the order the design's Part III runs them.
-    const ARMS: [(&'static str, &'static str); 3] = [
+    const ARMS: [(&'static str, &'static str); 4] = [
         (
             "OF_HOME_REACH_OFF",
             "a club sees only what its own scouts cover — no compatriot reach",
@@ -3387,6 +3991,11 @@ impl HarnessUsage {
         (
             "OF_OWNER_MONEY_OFF",
             "every owner cheque is zero: wage subsidy, tier envelopes, fee headroom",
+        ),
+        (
+            "OF_LOAN_GUARD_OFF",
+            "no loan asset guard: destinations priced as they were before the \
+             Yamal campaign (placement / promotion / label fixes stay on)",
         ),
     ];
 
@@ -3457,6 +4066,7 @@ fn main() {
     let mut initial = MarketCensus::collect(&harness.data);
     ReportPrinter::print(&mut initial, &harness.data, 0);
     CorridorCensus::report(&harness.data, 0);
+    PlacementCensus::report(&harness.data, &harness.odb_clubs);
 
     harness.run(days, every);
 }

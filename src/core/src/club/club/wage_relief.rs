@@ -158,14 +158,6 @@ impl WageReliefSale {
         Self::severity(standing, distress) as f32 / 3.0
     }
 
-    /// Days a listing stays credited against the wage-relief target. A
-    /// listed player only leaves the bill when he actually leaves, and a
-    /// market that has not taken him in a full window has said what it
-    /// thinks of the price: crediting his wage for ever let a club in
-    /// nine-figure debt "satisfy" its reduction with the same unsellable
-    /// fringe every month and never reach the earners a buyer would pay for.
-    pub const LISTING_CREDIT_DAYS: i64 = 120;
-
     /// 0 = healthy, 3 = fire sale.
     fn severity(standing: DebtStanding, distress: DistressLevel) -> u8 {
         let by_standing = match standing {

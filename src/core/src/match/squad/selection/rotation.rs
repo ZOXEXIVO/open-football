@@ -20,10 +20,10 @@
 //! so a player falling behind his planned share builds selection pressure
 //! that no tie-break can hide.
 
+use crate::club::PlayerPositionType;
 use crate::club::staff::perception::{
     AbilityEstimator, CoachProfile, DevelopmentFormEvidence, PotentialEstimator,
 };
-use crate::club::{PlayerFieldPositionGroup, PlayerPositionType};
 use crate::r#match::player::MatchPlayer;
 use crate::utils::DateUtils;
 use crate::{Player, PlayerStatusType, Tactics, TeamType};
@@ -130,14 +130,13 @@ impl DevelopmentSelection<'_> {
             if pos == PlayerPositionType::Goalkeeper {
                 continue;
             }
-            let target_group = pos.position_group();
 
             let best = outfield
                 .iter()
                 .filter(|p| !used_ids.contains(&p.id))
                 .max_by(|a, b| {
-                    let sa = self.slot_score(&plan, a, pos, target_group);
-                    let sb = self.slot_score(&plan, b, pos, target_group);
+                    let sa = self.slot_score(&plan, a, pos);
+                    let sb = self.slot_score(&plan, b, pos);
                     sa.partial_cmp(&sb).unwrap_or(Ordering::Equal)
                 })
                 .copied();
@@ -268,7 +267,6 @@ impl DevelopmentSelection<'_> {
         plan: &DevelopmentPlan,
         player: &Player,
         slot_position: PlayerPositionType,
-        slot_group: PlayerFieldPositionGroup,
     ) -> f32 {
         let condition_pct = player.player_attributes.condition_percentage() as f32;
         if condition_pct < Self::SOFT_CONDITION_FLOOR {
@@ -285,7 +283,7 @@ impl DevelopmentSelection<'_> {
         // is the real hierarchy); a guest keeps only his familiarity
         // fraction, re-based onto the own squad's mean grade, so a
         // stronger visitor slots in as a positional peer, not a superior.
-        let raw_fit = helpers::position_fit_score(player, slot_position, slot_group);
+        let raw_fit = helpers::position_fit_score(player, slot_position);
         let fit = if self.is_guest(player.id) {
             (raw_fit / DevelopmentPlan::primary_position_level(player))
                 * plan.own_mean_position_level

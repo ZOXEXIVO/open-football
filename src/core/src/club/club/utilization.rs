@@ -6,14 +6,15 @@ use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext, SquadEvidenceContext};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::pipeline::TransferTrace;
+use crate::transfers::pipeline::loan_guard::LoanAssetGuard;
 use crate::transfers::pipeline::{
     LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
 };
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
-    ContractType, Person, Player, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel,
-    Team, TransferItem,
+    ContractType, Person, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel, Team,
+    TransferItem,
 };
 use chrono::NaiveDate;
 use log::debug;
@@ -110,9 +111,10 @@ impl Club {
             // not stagnate in the youth squad.
             let plays_league_football = team.league_id.is_some() && !team.team_type.is_youth();
             if !plays_league_football {
-                Self::collect_surplus_loans(team, ti, &keepers, &mut loan_players);
+                Self::collect_surplus_loans(self, team, ti, date, &keepers, &mut loan_players);
                 if team.team_type.is_youth() {
                     Self::collect_youth_development_loans(
+                        self,
                         team,
                         ti,
                         &main_floor,
@@ -251,7 +253,18 @@ impl Club {
                     | SquadAssetClass::RotationUseful
                     | SquadAssetClass::UnknownNeedsEvaluation => continue,
                     SquadAssetClass::ProspectDevelopment => {
-                        loan_players.push((ti, player.id, "dec_reason_young_develop".to_string()));
+                        // …unless he is the club's own first choice in
+                        // that shirt. The class is minted from a squad
+                        // label a teenager gets on his birth year, so it
+                        // reads a nineteen-year-old starter as a loan
+                        // asset; standing does not.
+                        if !LoanAssetGuard::parent_holds_for(self, player, date) {
+                            loan_players.push((
+                                ti,
+                                player.id,
+                                "dec_reason_young_develop".to_string(),
+                            ));
+                        }
                         continue;
                     }
                     SquadAssetClass::TrueSurplus => {}
@@ -398,24 +411,32 @@ impl Club {
         // Wages already committed to leaving: players on the market from a
         // previous pass, plus anyone the sporting sweeps listed earlier in
         // this same tick. Credited against the target so the club doesn't
-        // stack a fresh batch on top of an unsold one every month — for as
-        // long as the listing is a live commitment. A badge older than a
-        // window with nobody having taken him is a price the market has
-        // refused, not a wage about to leave: crediting it for ever meant
-        // a club owing a year of wages listed eleven fringe players once,
-        // "met" its target with them every month thereafter, and never
-        // reached the earners it could actually sell.
-        let listing_is_live = |p: &Player| {
-            already.contains(&p.id)
-                || p.statuses
-                    .held_for_days(PlayerStatusType::Lst, date)
-                    .is_some_and(|days| days <= WageReliefSale::LISTING_CREDIT_DAYS)
-        };
+        // stack a fresh batch on top of an unsold one every month.
+        //
+        // The credit is deliberately open-ended. Expiring it after a
+        // window — so a club whose listings the market had refused would
+        // go looking for more names — was measured over a season and
+        // rejected: it doubled the world's population of players carrying
+        // the sell flag with no market row (1582 → 3558), because each
+        // fresh wave outran the per-position caps that turn a flag into a
+        // listing a buyer can actually see. A listing the market has
+        // refused is a PRICE problem, and it already has two owners: the
+        // tier-cascading seller push and the 365-day free-exit valve.
+        // What a club in real trouble needs is not more names but better
+        // ones, which is what the debt-standing escalation now gives it.
         let already_listed_wages: i64 = self
             .teams
             .iter()
             .flat_map(|t| t.players.iter())
-            .filter(|p| !p.is_on_loan() && listing_is_live(p))
+            .filter(|p| {
+                !p.is_on_loan()
+                    && (already.contains(&p.id)
+                        || p.statuses.has(PlayerStatusType::Lst)
+                        || p.contract
+                            .as_ref()
+                            .map(|c| c.is_transfer_listed)
+                            .unwrap_or(false))
+            })
             .filter_map(|p| p.contract.as_ref())
             .map(|c| c.salary as i64)
             .sum();
@@ -766,8 +787,10 @@ impl Club {
     /// deliberately not checked: this is the one path that loans both
     /// full-time and youth-contract prospects out.
     fn collect_surplus_loans(
+        club: &Club,
         team: &Team,
         team_idx: usize,
+        date: NaiveDate,
         keepers: &KeeperLoanView,
         loan_players: &mut Vec<(usize, u32, String)>,
     ) {
@@ -792,7 +815,15 @@ impl Club {
                     (
                         p.id,
                         AbilityEstimator::observable_level(p),
-                        p.is_force_match_selection,
+                        // A first-team-calibre player registered on a youth
+                        // or league-less side is not "surplus depth" there
+                        // — he is the club's own starter, filed in the
+                        // wrong squad, and the weekly rebalance is about to
+                        // promote him. He still COUNTS toward the squad's
+                        // depth (he is on this roster today); he is simply
+                        // never the body that leaves.
+                        p.is_force_match_selection
+                            || LoanAssetGuard::parent_holds_for(club, p, date),
                     )
                 })
                 .collect();
@@ -861,6 +892,7 @@ impl Club {
     /// took, and never touches a promotion-bound prospect (the rebalance
     /// promotes him) or an on-loan / listed / pinned / contract-less player.
     fn collect_youth_development_loans(
+        club: &Club,
         team: &Team,
         team_idx: usize,
         main_floor: &MainPromotionFloor,
@@ -879,7 +911,7 @@ impl Club {
 
             // Stay-eligible players in this group, excluding anyone the
             // surplus pass already flagged. (id, age, current ability).
-            let active: Vec<(u32, u8, u8)> = team
+            let active: Vec<(u32, u8, u8, bool)> = team
                 .players
                 .iter()
                 .filter(|p| {
@@ -895,7 +927,18 @@ impl Club {
                         // exactly where the club decided to put him.
                         && !keepers.protects(p.id)
                 })
-                .map(|p| (p.id, p.age(date), p.player_attributes.current_ability))
+                .map(|p| {
+                    (
+                        p.id,
+                        p.age(date),
+                        p.player_attributes.current_ability,
+                        // The boy who is already good enough to start for
+                        // the first team is a promotion, not a development
+                        // loan. He still counts toward the youth side's
+                        // fielding minimum — he is on this roster today.
+                        LoanAssetGuard::parent_holds_for(club, p, date),
+                    )
+                })
                 .collect();
 
             let mut remaining = active.len();
@@ -908,10 +951,12 @@ impl Club {
             // youth rotation). Loan them down to the fielding minimum.
             let mut candidates: Vec<(u32, u8)> = active
                 .iter()
-                .filter(|(_, age, ca)| {
-                    *age >= YouthDevelopmentLoanPolicy::SENIOR_LOAN_AGE && *ca < floor
+                .filter(|(_, age, ca, parent_holds)| {
+                    !parent_holds
+                        && *age >= YouthDevelopmentLoanPolicy::SENIOR_LOAN_AGE
+                        && *ca < floor
                 })
-                .map(|(id, age, _)| (*id, *age))
+                .map(|(id, age, _, _)| (*id, *age))
                 .collect();
             candidates.sort_by(|a, b| b.1.cmp(&a.1));
 

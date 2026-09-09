@@ -240,6 +240,17 @@ pub struct SquadAssetContext {
     /// The rank ladder below measures a player against his squad-mates;
     /// this is the one reading that measures him against the CLUB.
     club_level: Option<ClubLevelAnchor>,
+    /// Observable levels of players registered in the club's YOUTH squads
+    /// (U18..U23), per group.
+    ///
+    /// Counted only when ranking — never in the group average, the squad
+    /// average or the reputation quartile, which are readings of the FIRST
+    /// TEAM and must not be dragged down by an academy roster. Rank is a
+    /// different question: a boy registered in the U20 who is one of the
+    /// two best forwards at the club is one of the two best forwards at
+    /// the club, and a classifier that ranked him only against seniors he
+    /// is not filed with read him as nobody.
+    youth_group_levels: HashMap<PlayerFieldPositionGroup, Vec<u8>>,
 }
 
 impl SquadAssetContext {
@@ -295,10 +306,11 @@ impl SquadAssetContext {
     /// the player, whatever his position in the depth chart.
     const UNUSED_APPEARANCE_BAR: u16 = 3;
 
-    /// Build the classifier context from a club's senior (main) squad.
+    /// Build the classifier context from a club's senior (main) squad,
+    /// with the club's youth registrations folded into the RANK view only.
     pub fn build(club: &Club, date: NaiveDate) -> Self {
         let _ = date;
-        match club.teams.main().or_else(|| club.teams.teams.first()) {
+        let mut context = match club.teams.main().or_else(|| club.teams.teams.first()) {
             Some(team) => Self::for_squad_at_level(
                 &team.players,
                 Some(ClubLevelAnchor::for_reputation(
@@ -306,7 +318,23 @@ impl SquadAssetContext {
                 )),
             ),
             None => Self::for_squad(&PlayerCollection::new(Vec::new())),
+        };
+        for team in &club.teams.teams {
+            if !team.team_type.is_youth() {
+                continue;
+            }
+            for player in team.players.iter() {
+                if player.is_on_loan() {
+                    continue;
+                }
+                context
+                    .youth_group_levels
+                    .entry(player.position().position_group())
+                    .or_default()
+                    .push(AbilityEstimator::observable_level(player));
+            }
         }
+        context
     }
 
     /// The club's own level, when the context knows it.
@@ -369,6 +397,7 @@ impl SquadAssetContext {
             top_quartile_reputation,
             evidence,
             club_level,
+            youth_group_levels: HashMap::new(),
         }
     }
 
@@ -447,8 +476,28 @@ impl SquadAssetContext {
                     SquadAssetClass::RotationUseful
                 };
             }
+            // A development label is a claim about STANDING, not about age,
+            // and it only holds while the standing does. Returning
+            // `ProspectDevelopment` for it unconditionally is what made
+            // every teenager a loan asset: the class is not
+            // `is_first_team_protected`, so the unsolicited-loan
+            // classifier, the board utilisation audit and the unhappy
+            // listing branch all read "lend him out" off a birth year.
+            // He is a prospect while he is below what this club calls
+            // first-team quality, or while enough better players stand in
+            // front of him that he is not in the side; otherwise the
+            // ordinary inference decides, and for a contested group's best
+            // man that is `CorePlayer`.
             PlayerSquadStatus::HotProspectForTheFuture | PlayerSquadStatus::DecentYoungster => {
-                return SquadAssetClass::ProspectDevelopment;
+                let group = player.position().position_group();
+                let level = AbilityEstimator::observable_level(player);
+                let below_club_level = self
+                    .club_level
+                    .is_some_and(|anchor| anchor.is_below_rotation_band(level, group));
+                let higher_in_group = self.higher_level_in_group(group, level);
+                if below_club_level || higher_in_group >= group.typical_starters() {
+                    return SquadAssetClass::ProspectDevelopment;
+                }
             }
             // NotNeeded / Invalid are explicit "surplus / cleanup" decisions —
             // but a young player with genuine upside who is merely buried on
@@ -664,10 +713,12 @@ impl SquadAssetContext {
     /// strictly higher observable level — the player's depth rank in the
     /// coach's eyes (0 = the best option at his position).
     fn higher_level_in_group(&self, group: PlayerFieldPositionGroup, level: u8) -> usize {
-        self.group_levels
-            .get(&group)
-            .map(|v| v.iter().filter(|&&l| l > level).count())
-            .unwrap_or(0)
+        let count = |levels: Option<&Vec<u8>>| {
+            levels
+                .map(|v| v.iter().filter(|&&l| l > level).count())
+                .unwrap_or(0)
+        };
+        count(self.group_levels.get(&group)) + count(self.youth_group_levels.get(&group))
     }
 
     fn group_avg(&self, group: PlayerFieldPositionGroup) -> Option<u8> {
@@ -1855,6 +1906,143 @@ mod tests {
         assert_eq!(
             SquadAssetProtection::classify(best, &club, Fx::date()),
             SquadAssetContext::build(&club, Fx::date()).classify(best, Fx::date())
+        );
+    }
+
+    /// WI-3: the development LABEL is a claim about standing, and the
+    /// class only follows it while the standing does.
+    ///
+    /// `HotProspectForTheFuture` short-circuited straight to
+    /// `ProspectDevelopment` — a class that is not first-team protected —
+    /// with no ability, rank or level check at all. Since a teenager gets
+    /// that label from his birth year, the club's own best forward read as
+    /// a loan asset to every path downstream.
+    #[test]
+    fn a_prospect_label_on_the_best_man_in_a_contested_group_is_not_a_loan_asset() {
+        let club = Fx::club(vec![
+            Fx::player(
+                1,
+                PlayerPositionType::Striker,
+                150,
+                19,
+                200,
+                PlayerSquadStatus::HotProspectForTheFuture,
+            ),
+            Fx::player(
+                2,
+                PlayerPositionType::Striker,
+                140,
+                27,
+                200,
+                PlayerSquadStatus::FirstTeamRegular,
+            ),
+            Fx::player(
+                3,
+                PlayerPositionType::Striker,
+                135,
+                25,
+                200,
+                PlayerSquadStatus::FirstTeamRegular,
+            ),
+        ]);
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let best = club.teams.teams[0].players.players.first().unwrap();
+        assert_eq!(
+            ctx.classify(best, Fx::date()),
+            SquadAssetClass::CorePlayer,
+            "the best man in a contested group is a core player at any age"
+        );
+        assert!(ctx.classify(best, Fx::date()).is_first_team_protected());
+    }
+
+    /// …and the same label on a boy behind the starting slots still means
+    /// what it says. The forward group starts two, so rank 4 of five is
+    /// squarely a development case.
+    #[test]
+    fn a_prospect_label_behind_the_starting_slots_is_still_a_loan_asset() {
+        let mut players = vec![Fx::player(
+            1,
+            PlayerPositionType::Striker,
+            90,
+            19,
+            200,
+            PlayerSquadStatus::HotProspectForTheFuture,
+        )];
+        for (id, ca) in [(2u32, 150u8), (3, 145), (4, 140), (5, 135)] {
+            players.push(Fx::player(
+                id,
+                PlayerPositionType::Striker,
+                ca,
+                27,
+                200,
+                PlayerSquadStatus::FirstTeamRegular,
+            ));
+        }
+        let club = Fx::club(players);
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let buried = club.teams.teams[0].players.players.first().unwrap();
+        assert_eq!(
+            ctx.classify(buried, Fx::date()),
+            SquadAssetClass::ProspectDevelopment
+        );
+    }
+
+    /// Rank is read across the FIRST TEAM's own depth chart, which
+    /// includes the squads it registers its youngsters in. A boy filed in
+    /// the U20 who is one of the club's two best forwards ranks where his
+    /// ability puts him, not behind everybody by default.
+    #[test]
+    fn a_youth_registration_still_ranks_inside_the_first_teams_depth_chart() {
+        let mut club = Fx::club(vec![
+            Fx::player(
+                2,
+                PlayerPositionType::Striker,
+                140,
+                27,
+                200,
+                PlayerSquadStatus::FirstTeamRegular,
+            ),
+            Fx::player(
+                3,
+                PlayerPositionType::Striker,
+                90,
+                24,
+                200,
+                PlayerSquadStatus::MainBackupPlayer,
+            ),
+        ]);
+        let youngster = Fx::player(
+            1,
+            PlayerPositionType::Striker,
+            150,
+            19,
+            200,
+            PlayerSquadStatus::HotProspectForTheFuture,
+        );
+        let u20 = TeamBuilder::new()
+            .id(20)
+            .league_id(None)
+            .club_id(100)
+            .name("U20".to_string())
+            .slug("u20".to_string())
+            .team_type(TeamType::U20)
+            .players(PlayerCollection::new(vec![youngster]))
+            .staffs(StaffCollection::new(Vec::new()))
+            .reputation(TeamReputation::new(3000, 3000, 3000))
+            .training_schedule(TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            ))
+            .build()
+            .unwrap();
+        club.teams.teams.push(u20);
+
+        let ctx = SquadAssetContext::build(&club, Fx::date());
+        let senior = club.teams.teams[0].players.players.first().unwrap();
+        assert_eq!(
+            ctx.classify(senior, Fx::date()),
+            SquadAssetClass::FirstTeamUseful,
+            "the senior is no longer the de-facto best: the boy in the U20 is above him"
         );
     }
 }

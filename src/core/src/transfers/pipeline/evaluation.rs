@@ -18,6 +18,7 @@ use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::window::PlayerValuationCalculator;
 
 use crate::club::player::adaptation::AdaptationSquadContext;
+use crate::transfers::pipeline::loan_guard::LoanAssetGuard;
 use crate::transfers::pipeline::loan_home::{SquadHomeContext, UnsettledAbroadScan};
 use crate::transfers::pipeline::{
     ClubTransferPlan, LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
@@ -1924,6 +1925,7 @@ impl PipelineProcessor {
         // ──────────────────────────────────────────────────────────
 
         Self::identify_loan_outs(
+            club,
             &squad,
             &rep_level,
             avg_ability,
@@ -2684,6 +2686,7 @@ impl PipelineProcessor {
     /// Identify loan-out candidates based on club reputation tier.
     #[allow(clippy::too_many_arguments)]
     fn identify_loan_outs(
+        club: &Club,
         squad: &[SquadPlayerInfo],
         rep_level: &ReputationLevel,
         avg_ability: u8,
@@ -2738,6 +2741,17 @@ impl PipelineProcessor {
                     player_info.player_id,
                     player_info.asset_class.label()
                 );
+                continue;
+            }
+
+            // …and the same protection read off STANDING rather than off a
+            // label. The asset class above is minted from
+            // `contract.squad_status`, which a teenager gets on his birth
+            // year, so a nineteen-year-old first-choice forward walked
+            // through it as `ProspectDevelopment`. A club does not loan out
+            // the man who starts for it — unless he has asked to go, which
+            // is his decision and not the club's.
+            if LoanAssetGuard::parent_holds_for(club, player, date) {
                 continue;
             }
 
@@ -3121,14 +3135,17 @@ impl PipelineProcessor {
 #[cfg(test)]
 mod stalled_prospect_tests {
     use super::*;
+    use crate::club::academy::ClubAcademy;
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::club::team::squad::SquadAssetClass;
     use crate::context::HomeLeagueTable;
     use crate::league::Season;
+    use crate::shared::Location;
     use crate::shared::fullname::FullName;
     use crate::{
-        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositions, PlayerSkills,
-        PlayerStatistics, PlayerStatisticsHistoryItem,
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
+        PlayerPosition, PlayerPositions, PlayerSkills, PlayerStatistics,
+        PlayerStatisticsHistoryItem, TeamCollection,
     };
     use std::collections::HashMap;
 
@@ -3139,6 +3156,25 @@ mod stalled_prospect_tests {
     impl Fx {
         fn date(y: i32, m: u32, d: u32) -> NaiveDate {
             NaiveDate::from_ymd_opt(y, m, d).unwrap()
+        }
+
+        /// A club with no squad registered on it. The loan-out sweep under
+        /// test reads the `squad` / `players` slices it is handed, and the
+        /// parent-side standing guard stands down when there is no roster
+        /// to read a club level from — so these fixtures exercise exactly
+        /// the branches they were written for.
+        fn rosterless_club() -> Club {
+            Club::new(
+                1,
+                "Fixture FC".to_string(),
+                Location::new(1),
+                ClubFinances::new(1_000_000, Vec::new()),
+                ClubAcademy::new(1),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(Vec::new()),
+                ClubFacilities::default(),
+            )
         }
 
         /// The canonical "blocked, unused, high-potential January prospect"
@@ -3779,6 +3815,7 @@ mod stalled_prospect_tests {
     ) -> Vec<LoanOutCandidate> {
         let mut loan_outs = Vec::new();
         PipelineProcessor::identify_loan_outs(
+            &Fx::rosterless_club(),
             squad,
             &ReputationLevel::Regional,
             116,

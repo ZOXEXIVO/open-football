@@ -20,6 +20,22 @@ use log::debug;
 const MIN_YOUTH_SQUAD: usize = 11;
 /// Minimum players the main team should keep before allowing demotions.
 const MIN_MAIN_SQUAD: usize = 22;
+/// Observable level ABOVE the first team's promotion floor at which a
+/// promotion stops being a judgement call and becomes an obvious one — the
+/// boy is not "ready soon", he is already better than the last man in the
+/// group.
+///
+/// Two guards stand down at this margin, and both were traps rather than
+/// policies. [`MIN_YOUTH_SQUAD`] used to block every non-overage promotion
+/// out of a squad already at eleven, which is exactly the state a squad
+/// holding first-team players sits in — so the four real players stayed
+/// there indefinitely and the emergency call-up, which fills the LOWEST
+/// bracket first and only up to fourteen, never reached them. And a `Loa`
+/// badge blocked promotion outright, so the first loan intent that landed
+/// on such a player shut the door for good. Fielding the youth side is the
+/// academy's job; a club does not loan out the boy who has just become
+/// first-team ready.
+const PROMOTION_CLEAR_MARGIN: u8 = 8;
 
 impl Club {
     /// Every force-selected player across the club, regardless of the
@@ -63,6 +79,12 @@ impl Club {
             to: usize,
             player_id: u32,
             reason: &'static str,
+            /// The promotion is obvious enough that the squad it empties
+            /// does not get a veto — see [`PROMOTION_CLEAR_MARGIN`].
+            clears_by_margin: bool,
+            /// He was carrying a loan intent when the promotion fired, so
+            /// the intent is withdrawn as part of the move.
+            withdraws_loan: bool,
         }
 
         // Per-position promotion floor on the main team. Using a single
@@ -100,14 +122,17 @@ impl Club {
             (count, if count == 0 { 0 } else { worst })
         };
 
-        let promotion_threshold = |group: PlayerFieldPositionGroup| -> u8 {
-            let (count, worst) = group_stats(group);
-            let min_depth = MIN_MAIN_DEPTH
+        let min_main_depth = |group: PlayerFieldPositionGroup| -> usize {
+            MIN_MAIN_DEPTH
                 .iter()
                 .find(|(g, _)| *g == group)
                 .map(|(_, d)| *d)
-                .unwrap_or(0);
-            if count < min_depth {
+                .unwrap_or(0)
+        };
+
+        let promotion_threshold = |group: PlayerFieldPositionGroup| -> u8 {
+            let (count, worst) = group_stats(group);
+            if count < min_main_depth(group) {
                 DEPTH_GAP_FLOOR
             } else {
                 // Strictly greater than the current worst — equal CA wouldn't
@@ -115,6 +140,12 @@ impl Club {
                 worst.saturating_add(1)
             }
         };
+
+        // Is the first team a body short in this group? A promotion into a
+        // hole is never held up by the squad it comes out of — the youth
+        // side can be topped up, a matchday XI cannot.
+        let main_group_short =
+            |group: PlayerFieldPositionGroup| -> bool { group_stats(group).0 < min_main_depth(group) };
 
         let mut moves: Vec<PendingMove> = Vec::new();
 
@@ -145,24 +176,46 @@ impl Club {
                 let level = AbilityEstimator::observable_level(p);
                 let overage = graduate_out_age.map_or(false, |limit| age > limit);
 
-                // Never promote players marked for departure
-                let listed =
-                    p.statuses.has(PlayerStatusType::Lst) || p.statuses.has(PlayerStatusType::Loa);
+                // Never promote a player the club has decided to SELL —
+                // a sale is a decision, and the first team is not where a
+                // listed player waits for it. A loan intent is a different
+                // thing: it is the club's answer to "he has no football
+                // here", and the promotion is a better one.
+                let listed = p.statuses.has(PlayerStatusType::Lst);
+                let loan_intent = p.statuses.has(PlayerStatusType::Loa);
 
                 // Senior cameos already earned via matchday call-ups are
                 // direct evidence the player belongs — each one buys the
                 // bar down, so the staged pipeline (call-up → cameos →
                 // promotion) converges instead of waiting for the kid to
                 // out-level a senior on the training pitch alone.
+                let group = p.position().position_group();
                 let cameo_discount = PromotionEvidence::cameo_discount(p, team.team_type);
-                let floor = promotion_threshold(p.position().position_group())
-                    .saturating_sub(club_discount + cameo_discount);
-                if level >= floor && !listed {
+                let floor =
+                    promotion_threshold(group).saturating_sub(club_discount + cameo_discount);
+                let clears_by_margin = level >= floor.saturating_add(PROMOTION_CLEAR_MARGIN)
+                    || main_group_short(group);
+                if TransferTrace::is(p.id) {
+                    TransferTrace::line(
+                        p.id,
+                        "squad",
+                        format!(
+                            "rebalance squad={:?} level={level} floor={floor} \
+                             clears_by_margin={clears_by_margin} lst={listed} loa={loan_intent} \
+                             source_size={} overage={overage}",
+                            team.team_type,
+                            team.players.len(),
+                        ),
+                    );
+                }
+                if level >= floor && !listed && (!loan_intent || clears_by_margin) {
                     moves.push(PendingMove {
                         from: ti,
                         to: main_idx,
                         player_id: p.id,
                         reason: "skill level ready for first team",
+                        clears_by_margin,
+                        withdraws_loan: loan_intent,
                     });
                     continue;
                 }
@@ -177,7 +230,7 @@ impl Club {
                     // no reserve) leave the player where he is; his exit is
                     // the market listing itself, which the country listing
                     // pass keeps live from any squad.
-                    let dest = if listed {
+                    let dest = if listed || loan_intent {
                         match next.or_else(|| self.find_demotion_target(age)) {
                             Some(idx) => idx,
                             None => continue, // no youth/reserve team available
@@ -197,6 +250,8 @@ impl Club {
                         to: dest,
                         player_id: p.id,
                         reason: "overage for current team",
+                        clears_by_margin: false,
+                        withdraws_loan: false,
                     });
                 }
             }
@@ -310,6 +365,8 @@ impl Club {
                     to: dest,
                     player_id,
                     reason: "surplus at position",
+                    clears_by_margin: false,
+                    withdraws_loan: false,
                 });
             }
         }
@@ -368,8 +425,20 @@ impl Club {
             };
             if m.reason != "overage for current team"
                 && m.reason != "surplus at position"
+                && !m.clears_by_margin
                 && source_size.saturating_sub(already_taken) <= min_for_source
             {
+                if TransferTrace::is(m.player_id) {
+                    TransferTrace::line(
+                        m.player_id,
+                        "squad",
+                        format!(
+                            "move={} blocked_by=min_squad source_size={source_size} \
+                             taken={already_taken} min={min_for_source}",
+                            m.reason,
+                        ),
+                    );
+                }
                 continue;
             }
 
@@ -379,6 +448,51 @@ impl Club {
             let to_senior = self.teams.teams[m.to].team_type.is_own_team();
 
             if let Some(mut player) = self.teams.teams[m.from].players.take_player(&m.player_id) {
+                // A club does not loan out the boy who has just become
+                // first-team ready. The badge goes, the candidate row goes,
+                // and the country pass is told to pull his live loan
+                // listing — otherwise the row keeps advertising a player
+                // the club has just promoted.
+                if m.withdraws_loan {
+                    player.statuses.remove(PlayerStatusType::Loa);
+                    player.decision_history.add(
+                        date,
+                        "dec_loan_withdrawn".to_string(),
+                        "dec_reason_promoted_instead".to_string(),
+                        "dec_decided_board".to_string(),
+                    );
+                    self.transfer_plan
+                        .loan_out_candidates
+                        .retain(|c| c.player_id != m.player_id);
+                    if !self
+                        .transfer_plan
+                        .loan_withdrawals
+                        .contains(&m.player_id)
+                    {
+                        self.transfer_plan.loan_withdrawals.push(m.player_id);
+                    }
+                    if TransferTrace::is(m.player_id) {
+                        TransferTrace::line(
+                            m.player_id,
+                            "squad",
+                            "promotion=granted loan_intent=withdrawn \
+                             reason=promoted_instead",
+                        );
+                    }
+                }
+                if TransferTrace::is(m.player_id) {
+                    TransferTrace::line(
+                        m.player_id,
+                        "squad",
+                        format!(
+                            "move={} from={} to={} clears_by_margin={}",
+                            m.reason,
+                            self.teams.teams[m.from].name,
+                            self.teams.teams[m.to].name,
+                            m.clears_by_margin,
+                        ),
+                    );
+                }
                 // Upgrade youth contract to full when promoting to main
                 if m.to == main_idx {
                     ProfessionalContractPromotion::upgrade(
@@ -2197,5 +2311,241 @@ mod youth_contract_review_tests {
             ContractType::Youth,
             "a player below the professional-contract age floor must stay on youth terms"
         );
+    }
+}
+
+#[cfg(test)]
+mod promotion_guard_tests {
+    //! WI-2: the two guards that kept four first-team players inside an
+    //! eight-man U20 for months on end. `MIN_YOUTH_SQUAD` refused any
+    //! non-overage promotion out of a squad already at eleven — which is
+    //! exactly the state such a squad sits in — and a `Loa` badge closed
+    //! the door for good the moment any loan intent landed on the player.
+
+    use super::*;
+    use crate::academy::ClubAcademy;
+    use crate::club::player::core::builder::PlayerBuilder;
+    use crate::shared::Location;
+    use crate::shared::fullname::FullName;
+    use crate::transfers::pipeline::{LoanDestinationPreference, LoanOutCandidate, LoanOutReason};
+    use crate::{
+        ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
+        PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
+        StaffCollection, TeamBuilder, TeamCollection, TeamReputation, TrainingSchedule,
+    };
+    use chrono::{Datelike, NaiveTime};
+
+    struct Fx;
+
+    impl Fx {
+        /// Well clear of the main roster's promotion bar (~121) by more
+        /// than [`PROMOTION_CLEAR_MARGIN`].
+        const READY: u8 = 160;
+
+        fn date() -> NaiveDate {
+            NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()
+        }
+
+        fn schedule() -> TrainingSchedule {
+            TrainingSchedule::new(
+                NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+                NaiveTime::from_hms_opt(15, 0, 0).unwrap(),
+            )
+        }
+
+        fn player(id: u32, position: PlayerPositionType, ability: u8, age: u8) -> Player {
+            let date = Self::date();
+            let mut attrs = PlayerAttributes::default();
+            attrs.current_ability = ability;
+            attrs.potential_ability = ability;
+            attrs.condition = 10_000;
+            PlayerBuilder::new()
+                .id(id)
+                .full_name(FullName::new("T".to_string(), format!("P{id}")))
+                .birth_date(NaiveDate::from_ymd_opt(date.year() - age as i32, 1, 1).unwrap())
+                .country_id(1)
+                .attributes(PersonAttributes::default())
+                .skills(PlayerSkills::flat_for_ability(ability))
+                .positions(PlayerPositions {
+                    positions: vec![PlayerPosition { position, level: 18 }],
+                })
+                .player_attributes(attrs)
+                .contract(Some(PlayerClubContract::new(
+                    20_000,
+                    NaiveDate::from_ymd_opt(2029, 6, 30).unwrap(),
+                )))
+                .build()
+                .unwrap()
+        }
+
+        /// 22 seniors at ~120 across the four groups, all inside the
+        /// minimum depths, so the promotion bar is "better than the worst
+        /// man here" rather than a depth-gap floor.
+        fn main_roster() -> Vec<Player> {
+            let mut players = Vec::new();
+            let mut id = 100u32;
+            let mut push = |pos: PlayerPositionType, n: usize| {
+                for _ in 0..n {
+                    players.push(Self::player(id, pos, 120, 27));
+                    id += 1;
+                }
+            };
+            push(PlayerPositionType::Goalkeeper, 2);
+            push(PlayerPositionType::DefenderCenter, 8);
+            push(PlayerPositionType::MidfielderCenter, 6);
+            push(PlayerPositionType::Striker, 6);
+            players
+        }
+
+        /// The live-site picture: an eight-man U20, already under
+        /// `MIN_YOUTH_SQUAD`.
+        fn u20_roster(candidate: Player) -> Vec<Player> {
+            let mut players = vec![candidate];
+            let mut id = 300u32;
+            for _ in 0..7 {
+                players.push(Self::player(id, PlayerPositionType::DefenderCenter, 50, 18));
+                id += 1;
+            }
+            players
+        }
+
+        fn club(candidate: Player) -> Club {
+            let main = TeamBuilder::new()
+                .id(10)
+                .league_id(Some(1))
+                .club_id(100)
+                .name("Main".to_string())
+                .slug("main".to_string())
+                .team_type(TeamType::Main)
+                .players(PlayerCollection::new(Self::main_roster()))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(500, 500, 500))
+                .training_schedule(Self::schedule())
+                .build()
+                .unwrap();
+            let u20 = TeamBuilder::new()
+                .id(20)
+                .league_id(None)
+                .club_id(100)
+                .name("U20".to_string())
+                .slug("u20".to_string())
+                .team_type(TeamType::U20)
+                .players(PlayerCollection::new(Self::u20_roster(candidate)))
+                .staffs(StaffCollection::new(Vec::new()))
+                .reputation(TeamReputation::new(300, 300, 300))
+                .training_schedule(Self::schedule())
+                .build()
+                .unwrap();
+            Club::new(
+                100,
+                "Club".to_string(),
+                Location::new(1),
+                ClubFinances::new(10_000_000, Vec::new()),
+                ClubAcademy::new(3),
+                ClubStatus::Professional,
+                ClubColors::default(),
+                TeamCollection::new(vec![main, u20]),
+                ClubFacilities::default(),
+            )
+        }
+
+        fn on_main(club: &Club, id: u32) -> bool {
+            club.teams.teams[0]
+                .players
+                .players
+                .iter()
+                .any(|p| p.id == id)
+        }
+
+        fn find(club: &Club, id: u32) -> &Player {
+            club.teams
+                .teams
+                .iter()
+                .flat_map(|t| t.players.players.iter())
+                .find(|p| p.id == id)
+                .expect("player must stay somewhere in the club")
+        }
+    }
+
+    #[test]
+    fn an_eight_man_youth_squad_still_releases_a_first_team_ready_player() {
+        let candidate = Fx::player(1, PlayerPositionType::MidfielderCenter, Fx::READY, 19);
+        let mut club = Fx::club(candidate);
+        assert!(club.teams.teams[1].players.len() < MIN_YOUTH_SQUAD);
+
+        club.rebalance_squads(Fx::date());
+
+        assert!(
+            Fx::on_main(&club, 1),
+            "fielding the youth side is the academy's job — it cannot veto a promotion"
+        );
+    }
+
+    /// …but only when he clears the bar by the margin. A prospect who is
+    /// merely at the bar is still held by the squad-size guard, which is
+    /// what stops the youth side being emptied by ordinary churn.
+    #[test]
+    fn a_marginal_prospect_is_still_held_by_the_squad_minimum() {
+        // One point over the worst senior in his group, nowhere near
+        // `PROMOTION_CLEAR_MARGIN` clear of it.
+        let candidate = Fx::player(1, PlayerPositionType::MidfielderCenter, 122, 19);
+        let mut club = Fx::club(candidate);
+
+        club.rebalance_squads(Fx::date());
+
+        assert!(!Fx::on_main(&club, 1));
+    }
+
+    #[test]
+    fn a_loan_intent_is_withdrawn_when_the_boy_is_promoted_instead() {
+        let mut candidate = Fx::player(1, PlayerPositionType::MidfielderCenter, Fx::READY, 19);
+        candidate.statuses.add(Fx::date(), PlayerStatusType::Loa);
+        let mut club = Fx::club(candidate);
+        club.transfer_plan
+            .loan_out_candidates
+            .push(LoanOutCandidate {
+                player_id: 1,
+                reason: LoanOutReason::DevelopmentPathway,
+                status: LoanOutStatus::Listed,
+                loan_fee: 0.0,
+                preferred_destination: LoanDestinationPreference::Any,
+            });
+
+        club.rebalance_squads(Fx::date());
+
+        assert!(Fx::on_main(&club, 1), "promotion beats a loan intent");
+        let promoted = Fx::find(&club, 1);
+        assert!(
+            !promoted.statuses.has(PlayerStatusType::Loa),
+            "the badge goes with the intent"
+        );
+        assert!(club.transfer_plan.loan_out_candidates.is_empty());
+        assert_eq!(
+            club.transfer_plan.loan_withdrawals,
+            vec![1],
+            "the country pass is told to pull the live listing"
+        );
+        assert!(
+            promoted
+                .decision_history
+                .items
+                .iter()
+                .any(|d| d.decision == "dec_reason_promoted_instead"),
+            "the withdrawal is recorded on the player"
+        );
+    }
+
+    /// `Lst` keeps blocking. A sale is a decision the club has made about
+    /// him; the first team is not where a listed player waits for it.
+    #[test]
+    fn a_transfer_listing_still_blocks_the_promotion() {
+        let mut candidate = Fx::player(1, PlayerPositionType::MidfielderCenter, Fx::READY, 19);
+        candidate.statuses.add(Fx::date(), PlayerStatusType::Lst);
+        let mut club = Fx::club(candidate);
+
+        club.rebalance_squads(Fx::date());
+
+        assert!(!Fx::on_main(&club, 1));
+        assert!(club.transfer_plan.loan_withdrawals.is_empty());
     }
 }

@@ -20,7 +20,7 @@ use crate::transfers::window::{PlayerValuationCalculator, TransferCalendar};
 use crate::utils::FormattingUtils;
 use crate::{
     Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType,
-    PositionCoverage, ReputationLevel, StaffPosition, TeamType, TransferInterestSource,
+    PositionCoverage, ReputationLevel, StaffPosition, Team, TeamType, TransferInterestSource,
     TransferInterestStage,
 };
 use chrono::Weekday;
@@ -459,33 +459,48 @@ impl PipelineProcessor {
             .unwrap_or(0)
     }
 
-    /// 0-indexed position-group rank of a player within their main
-    /// team, ordered by current ability (descending). Used by the
+    /// Squads whose players are part of the FIRST TEAM's own depth chart:
+    /// the main squad plus the club's age-restricted development sides.
+    ///
+    /// Senior reserves (B / Second / Reserve) are deliberately excluded —
+    /// they are branded senior sides that own their own hierarchy, and
+    /// folding their regulars into the first team's ranking would tell the
+    /// market a B-team striker is competing for the first team's shirt.
+    /// The youth squads are the opposite case: a boy registered there is
+    /// registered there BY the first team, and where his ability puts him
+    /// in the club's depth chart is exactly the fact every rank-driven
+    /// reading needs. Reading the main roster alone is what let a
+    /// first-team-calibre teenager score `seller_position_rank = unknown`
+    /// (importance 0.62 at best), which is the number the loan gates then
+    /// judged him unimportant on.
+    pub(super) fn ranks_with_first_team(team_type: TeamType) -> bool {
+        matches!(team_type, TeamType::Main) || team_type.is_youth()
+    }
+
+    /// 0-indexed position-group rank of a player within their club's
+    /// first-team depth chart (main squad plus development squads),
+    /// ordered by current ability (descending). Used by the
     /// plausibility layer — first-choice GKs are protected by rank in
     /// a way average + status alone don't capture.
-    /// Returns `u8::MAX` when the player is not on the club's main
-    /// team — callers should treat that as "unknown" and avoid using
-    /// the rank-driven importance bump.
+    /// Returns `u8::MAX` when the player is not on any of those squads —
+    /// callers should treat that as "unknown" and avoid using the
+    /// rank-driven importance bump.
     pub(crate) fn position_group_rank(
         club: &Club,
         player_id: u32,
         group: PlayerFieldPositionGroup,
     ) -> u8 {
-        let team = match club
+        let mut peers: Vec<(u32, u8)> = club
             .teams
             .iter()
-            .find(|t| matches!(t.team_type, TeamType::Main))
-        {
-            Some(t) => t,
-            None => return u8::MAX,
-        };
-        let mut peers: Vec<(u32, u8)> = team
-            .players
-            .players
-            .iter()
+            .filter(|t| Self::ranks_with_first_team(t.team_type))
+            .flat_map(|t| t.players.players.iter())
             .filter(|p| p.position().position_group() == group)
             .map(|p| (p.id, p.player_attributes.current_ability))
             .collect();
+        if peers.is_empty() {
+            return u8::MAX;
+        }
         peers.sort_by(|a, b| b.1.cmp(&a.1));
         peers
             .iter()
@@ -494,19 +509,13 @@ impl PipelineProcessor {
             .unwrap_or(u8::MAX)
     }
 
-    /// Best CA at the given position group on the club's main team.
+    /// Best CA at the given position group across the club's first-team
+    /// depth chart — see [`Self::ranks_with_first_team`].
     pub(crate) fn best_ca_in_group(club: &Club, group: PlayerFieldPositionGroup) -> u8 {
-        let team = match club
-            .teams
+        club.teams
             .iter()
-            .find(|t| matches!(t.team_type, TeamType::Main))
-        {
-            Some(t) => t,
-            None => return 0,
-        };
-        team.players
-            .players
-            .iter()
+            .filter(|t| Self::ranks_with_first_team(t.team_type))
+            .flat_map(|t| t.players.players.iter())
             .filter(|p| p.position().position_group() == group)
             .map(|p| p.player_attributes.current_ability)
             .max()
@@ -936,15 +945,22 @@ impl ClubGroupRanks {
         let mut rank_by_player = FxHashMap::default();
         let mut best_by_group = [0u8; PlayerFieldPositionGroup::COUNT];
         let mut size_by_group = [0u8; PlayerFieldPositionGroup::COUNT];
-        let team = club
+        // The FIRST TEAM's own depth chart: the main squad plus the club's
+        // age-restricted development sides, which the first team registers
+        // its own youngsters in. Senior reserves stay out — see
+        // [`PipelineProcessor::ranks_with_first_team`], whose contract this
+        // mirrors so the pool builder and the live lookup can never
+        // disagree about a player's rank.
+        let squads: Vec<&Team> = club
             .teams
             .teams
             .iter()
-            .find(|t| matches!(t.team_type, TeamType::Main));
-        if let Some(team) = team {
+            .filter(|t| PipelineProcessor::ranks_with_first_team(t.team_type))
+            .collect();
+        if !squads.is_empty() {
             let mut peers_by_group: [Vec<(u32, u8)>; PlayerFieldPositionGroup::COUNT] =
                 Default::default();
-            for p in &team.players.players {
+            for p in squads.iter().flat_map(|t| t.players.players.iter()) {
                 let group = p.position().position_group();
                 peers_by_group[group.index()].push((p.id, p.player_attributes.current_ability));
             }
