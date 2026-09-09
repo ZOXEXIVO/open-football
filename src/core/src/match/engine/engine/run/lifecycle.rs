@@ -241,9 +241,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // never left, which reads identically to a dead end — see
         // `TransitionGraph::note_final_states`.
         #[cfg(feature = "match-logs")]
-        crate::r#match::TransitionGraph::note_final_states(
-            field.players.iter().map(|p| p.state),
-        );
+        crate::r#match::TransitionGraph::note_final_states(field.players.iter().map(|p| p.state));
 
         let result = Self::build_result(field, context, match_position_data);
         if PhaseProf::enabled() {

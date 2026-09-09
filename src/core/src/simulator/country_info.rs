@@ -1,4 +1,4 @@
-use crate::transfers::market_map::CountryTransferProfile;
+use crate::transfers::market::map::CountryTransferProfile;
 
 /// Lightweight country info for nationality lookups.
 /// Covers ALL countries (not just simulation participants).
@@ -25,7 +25,7 @@ pub struct CountryInfo {
     /// play in, and it is what decides whether "home" is a place to be
     /// SEEN. `0` for a country with no leagues in this save, which fails
     /// the bar closed. See
-    /// [`crate::transfers::pipeline::loan_home::UnsettledAbroadScan::HOME_LEAGUE_BAR`].
+    /// [`crate::transfers::loan::home::UnsettledAbroadScan::HOME_LEAGUE_BAR`].
     pub top_flight_reputation: u16,
     /// The nationality's transfer-market card. Carried here as well as on
     /// [`crate::Country`] because most of the 224 nationalities run no

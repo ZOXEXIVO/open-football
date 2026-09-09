@@ -133,11 +133,7 @@ mod tests {
             }
         }
 
-        fn kinds(
-            fixture: NextFixture,
-            own_position: u8,
-            rivals: &[u32],
-        ) -> Vec<NewsStoryKind> {
+        fn kinds(fixture: NextFixture, own_position: u8, rivals: &[u32]) -> Vec<NewsStoryKind> {
             let mut out: Vec<NewsStory> = Vec::new();
             let rivals: FxHashSet<u32> = rivals.iter().copied().collect();
             PreviewDesk::file(

@@ -5,7 +5,7 @@ use crate::club::player::maturation::{MaturationGroup, SkillMaturation};
 use crate::club::player::mind::PlayerMind;
 use crate::club::player::rapport::PlayerRapport;
 use crate::shared::FullName;
-use crate::transfers::pipeline::HomePull;
+use crate::transfers::HomePull;
 use crate::utils::IntegerUtils;
 use crate::{
     Mental, PeopleNameGeneratorData, PersonAttributes, PersonBehaviour, PersonBehaviourState,
@@ -1139,7 +1139,8 @@ impl PlayerGenerator {
                 international_apps: 0,
                 international_goals: 0,
                 under_21_international_apps: 0,
-                under_21_international_goals: 0,                injury_days_remaining: 0,
+                under_21_international_goals: 0,
+                injury_days_remaining: 0,
                 injury_type: None,
                 injury_proneness: (IntegerUtils::random(1, 10) + IntegerUtils::random(1, 10)) as u8,
                 recovery_days_remaining: 0,

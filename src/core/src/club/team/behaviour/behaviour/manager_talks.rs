@@ -20,7 +20,7 @@ use crate::club::team::behaviour::{
 };
 use crate::club::team::squad::SquadAssetContext;
 use crate::context::GlobalContext;
-use crate::transfers::pipeline::{HomeLoanGates, HomePull, UnsettledAbroadScan};
+use crate::transfers::loan::home::{HomeLoanGates, HomePull, UnsettledAbroadScan};
 use crate::utils::DateUtils;
 use crate::{
     ContractType, HappinessEventType, Player, PlayerCollection, PlayerFieldPositionGroup,

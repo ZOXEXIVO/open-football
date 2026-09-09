@@ -30,19 +30,19 @@ use chrono::NaiveDate;
 use log::debug;
 
 use crate::club::player::transfer::AvailabilityBlockReason;
-use crate::transfers::negotiation::NegotiationStatus;
-use crate::transfers::pipeline::TransferRequestStatus;
-use crate::transfers::pipeline::breakout::LeaguePerformanceLookup;
-use crate::transfers::pipeline::exposure::MarketDiscoveryDiagnosis;
-use crate::transfers::pipeline::plausibility::{
+use crate::transfers::deal::negotiation::NegotiationStatus;
+use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
+use crate::transfers::gate::{
     TransferPlausibilityBuilder, TransferPlausibilityEvaluator, TransferPlausibilityVerdict,
 };
-use crate::transfers::pipeline::processor::PipelineProcessor;
-use crate::transfers::pipeline::recommendations::{
-    BuyerContext, ListedTargetVerdict, ListedTargetView, evaluate_listed_target,
+use crate::transfers::pipeline::TransferRequestStatus;
+use crate::transfers::pipeline::advice::{
+    BuyerContext, ListedTargetScreen, ListedTargetVerdict, ListedTargetView,
 };
-use crate::transfers::pipeline::squad_fit::{SquadFitSnapshot, SquadRegistrationLimits};
-use crate::transfers::window::PlayerValuationCalculator;
+use crate::transfers::pipeline::processor::PipelineProcessor;
+use crate::transfers::scouting::breakout::LeaguePerformanceLookup;
+use crate::transfers::scouting::exposure::MarketDiscoveryDiagnosis;
+use crate::transfers::value::PlayerValuationCalculator;
 use crate::{Club, Country, Person, PlayerFieldPositionGroup, PlayerStatusType};
 
 /// Minimum days on the market before the pass spends a buyer scan to
@@ -69,9 +69,9 @@ enum CirculationAction {
 /// Precomputed buyer snapshot reused across every available player so the
 /// scan doesn't re-walk a club's reputation / wage / squad data per
 /// candidate. Built once per club at the start of the pass. Shared with the
-/// year-round breakout watch ([`super::breakout_watch`]) so both passes
+/// year-round breakout watch ([`crate::transfers::scouting::watch`]) so both passes
 /// derive the buyer's [`BuyerContext`] from one place.
-pub(in crate::transfers::pipeline) struct BuyerScan {
+pub(in crate::transfers) struct BuyerScan {
     rep_score: f32,
     world_rep: i16,
     league_rep: u16,
@@ -86,7 +86,7 @@ pub(in crate::transfers::pipeline) struct BuyerScan {
 }
 
 impl BuyerScan {
-    pub(in crate::transfers::pipeline) fn build(
+    pub(in crate::transfers) fn build(
         country: &Country,
         club: &Club,
         date: NaiveDate,
@@ -181,7 +181,7 @@ impl BuyerScan {
     /// is `false` for the availability-driven diagnosis / listed sweep and
     /// `true` for the year-round breakout watch (which may surface a player
     /// who has not advertised availability).
-    pub(in crate::transfers::pipeline) fn buyer_context(
+    pub(in crate::transfers) fn buyer_context(
         &self,
         group: PlayerFieldPositionGroup,
         form_discovery: bool,
@@ -392,7 +392,7 @@ impl PipelineProcessor {
                             continue;
                         };
                         let bctx = scan.buyer_context(group, false);
-                        match evaluate_listed_target(&view, &bctx) {
+                        match ListedTargetScreen::evaluate(&view, &bctx) {
                             ListedTargetVerdict::Reject(reason) => {
                                 reasons.push(MarketDiscoveryDiagnosis::from_listed_reject(reason));
                             }

@@ -231,9 +231,8 @@ impl LooseBallChase {
             let line_of_sight = to_ball / gap;
             let ball_dir = ball_vel / ball_speed;
             let across = ball_vel - line_of_sight * ball_vel.dot(&line_of_sight);
-            let closing =
-                (speed * speed - across.norm_squared()).max(0.0).sqrt()
-                    - ball_vel.dot(&line_of_sight);
+            let closing = (speed * speed - across.norm_squared()).max(0.0).sqrt()
+                - ball_vel.dot(&line_of_sight);
             let ticks = gap / closing.max(1e-3);
             flat(ball_pos) + ball_dir * BallRoll::distance(ball_speed, ticks)
         } else {

@@ -11,7 +11,7 @@
 //! player relaxes his wage demand) as the failed weeks accumulate.
 //!
 //! The market-exposure *scoring* lives in
-//! [`crate::transfers::pipeline::exposure`]; this module owns only the
+//! [`crate::transfers::scouting::exposure`]; this module owns only the
 //! durable state and the reason taxonomy, exactly as `free_agent_market`
 //! owns `FreeAgentMarketState` / `FreeAgentBlockReason` while the matcher
 //! lives in the country pipeline.

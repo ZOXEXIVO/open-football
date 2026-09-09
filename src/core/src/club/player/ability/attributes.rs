@@ -189,7 +189,7 @@ impl PlayerAttributes {
     /// Delegates to the market's own blend so the player-side gates and
     /// the transfer pipeline can never drift apart.
     pub fn effective_reputation(&self, domestic: bool) -> i16 {
-        crate::transfers::pipeline::plausibility::EffectivePlayerReputation::compute(
+        crate::transfers::gate::EffectivePlayerReputation::compute(
             self.world_reputation,
             self.current_reputation,
             self.home_reputation,

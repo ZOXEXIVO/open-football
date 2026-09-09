@@ -455,8 +455,7 @@ impl<'a> SteeringBehavior<'a> {
                     // Past [`Self::COMMIT_FAR`] the law is byte-for-byte
                     // the pre-rescue one.
                     let commit = 1.0
-                        - ((when - Self::COMMIT_NEAR)
-                            / (Self::COMMIT_FAR - Self::COMMIT_NEAR))
+                        - ((when - Self::COMMIT_NEAR) / (Self::COMMIT_FAR - Self::COMMIT_NEAR))
                             .clamp(0.0, 1.0);
                     let commit = commit * commit * (3.0 - 2.0 * commit);
                     let cut = (meet - here)

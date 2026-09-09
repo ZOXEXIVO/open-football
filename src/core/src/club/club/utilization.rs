@@ -5,12 +5,12 @@ use crate::club::staff::goalkeeping::{KeeperAdvice, KeeperRoomPlan};
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext, SquadEvidenceContext};
 use crate::shared::{Currency, CurrencyValue};
+use crate::transfers::loan::guard::LoanAssetGuard;
 use crate::transfers::pipeline::TransferTrace;
-use crate::transfers::pipeline::loan_guard::LoanAssetGuard;
 use crate::transfers::pipeline::{
     LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
 };
-use crate::transfers::window::PlayerValuationCalculator;
+use crate::transfers::value::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
     ContractType, Person, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel, Team,

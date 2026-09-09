@@ -129,10 +129,7 @@ impl LoanDesk {
         // with the club that does not want him.
         if entry.wants_permanent && entry.is_first_choice() {
             let (kind, produced) = if entry.is_goalkeeper {
-                (
-                    NewsStoryKind::KeeperLoanWantsPermanent,
-                    entry.clean_sheets,
-                )
+                (NewsStoryKind::KeeperLoanWantsPermanent, entry.clean_sheets)
             } else {
                 (NewsStoryKind::LoanWantsPermanent, entry.goals)
             };

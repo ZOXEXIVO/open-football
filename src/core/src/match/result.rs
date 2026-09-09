@@ -722,7 +722,8 @@ impl ResultMatchPositionData {
         // hop. Any change of height at all, while either end of the step
         // is airborne, is a sample. It costs a keeper's ~40 airborne
         // episodes a match at 30 ms, a few hundred samples.
-        let leaves_the_ground = (position.z > Quantize::GROUNDED || last.position.z > Quantize::GROUNDED)
+        let leaves_the_ground = (position.z > Quantize::GROUNDED
+            || last.position.z > Quantize::GROUNDED)
             && (position.z - last.position.z).abs() >= Quantize::GROUNDED;
         Quantize::separation_sq(position, last.position) >= DEDUP_TOLERANCE_SQ
             || leaves_the_ground
@@ -1559,12 +1560,19 @@ mod height_recording_tests {
         // Five, not six: the second of the two identical apex samples is
         // deduplicated, and the line between two equal heights is flat
         // whether or not it is written down.
-        assert_eq!(airborne.len(), 5, "every airborne sample is kept: {samples:?}");
+        assert_eq!(
+            airborne.len(),
+            5,
+            "every airborne sample is kept: {samples:?}"
+        );
         // …and the sample before the first airborne one is a grounded
         // anchor one cadence step earlier, not the dedup's stale sample.
         let first_up = samples.iter().position(|s| s.position.z > 0.0).unwrap();
         let anchor = &samples[first_up - 1];
-        assert_eq!(anchor.timestamp, 570, "anchor written one step before take-off");
+        assert_eq!(
+            anchor.timestamp, 570,
+            "anchor written one step before take-off"
+        );
         assert_eq!(anchor.position.z, 0.0);
         // The landing is kept too, so the hop ends where it ended.
         assert_eq!(samples.last().unwrap().position.z, 0.0);

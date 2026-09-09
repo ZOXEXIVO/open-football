@@ -1,11 +1,9 @@
 use crate::club::player::events::transfer_social::TransferContinentalPath;
+use crate::transfers::deal::negotiation::NegotiationPhase;
+use crate::transfers::deal::offer::{PersonalTermsOffer, TransferClause};
+use crate::transfers::gate::appraisal::PlayerStance;
 use crate::transfers::market::TransferListingOrigin;
-use crate::transfers::negotiation::NegotiationPhase;
-use crate::transfers::offer::{PersonalTermsOffer, TransferClause};
-use crate::transfers::pipeline::appraisal::PlayerStance;
-use crate::{
-    Club, Country, Player, PlayerPositionType, TransferInterestSource, TransferInterestStage,
-};
+use crate::{Country, Player, PlayerPositionType, TransferInterestSource, TransferInterestStage};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -30,12 +28,6 @@ impl TransferActivitySummary {
             total_fees_exchanged: 0.0,
             signed_pre_contract: 0,
         }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn get_market_heat_index(&self) -> f32 {
-        let activity = (self.active_negotiations as f32 + self.completed_transfers as f32) / 100.0;
-        activity.min(1.0)
     }
 }
 
@@ -136,11 +128,11 @@ pub(crate) struct NegotiationData {
     pub(crate) foreign_seller_importance: Option<f32>,
     /// Foreign moves only: `(annual income, annual wage bill, wage budget)`
     /// for the selling club, staged at creation — see the twin field on
-    /// [`crate::transfers::negotiation::TransferNegotiation`]. `None` for
+    /// [`crate::transfers::deal::negotiation::TransferNegotiation`]. `None` for
     /// domestic moves, whose seller is readable live.
     pub(crate) foreign_seller_finances: Option<(i64, i64, i64)>,
     /// The player's own side of the appraisal, staged at creation — see
-    /// [`crate::transfers::negotiation::TransferNegotiation::staged_stance`].
+    /// [`crate::transfers::deal::negotiation::TransferNegotiation::staged_stance`].
     /// `None` for domestic moves, which rebuild it live each round.
     pub(crate) staged_stance: Option<PlayerStance>,
     /// Sporting distance of the move, staged with the stance.
@@ -183,21 +175,6 @@ pub struct DeferredTransfer {
     /// market's `pending_clauses` queue without re-reading the
     /// negotiation (which is about to be dropped).
     pub(crate) offer_clauses: Vec<TransferClause>,
-}
-
-pub(crate) fn can_club_accept_player(club: &Club) -> bool {
-    let max_squad = club
-        .board
-        .season_targets
-        .as_ref()
-        .map(|t| t.max_squad_size as usize)
-        .unwrap_or(50);
-    // Only count main team players for squad cap — youth/reserve teams are
-    // separate. Resolve the Main team by type, NOT teams[0]: the main team
-    // is not guaranteed to be first in the collection, and counting the
-    // wrong squad would gate the cap against a reserve/B roster.
-    let main_squad = club.teams.main().map(|t| t.players.len()).unwrap_or(0);
-    main_squad < max_squad
 }
 
 pub(crate) fn find_player_in_country(country: &Country, player_id: u32) -> Option<&Player> {

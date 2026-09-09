@@ -165,7 +165,10 @@ impl SupportOffer {
     }
 
     /// The opponent nearest the carrier, whoever he is marking.
-    fn nearest_presser(ctx: &StateProcessingContext, carrier: Vector3<f32>) -> Option<Vector3<f32>> {
+    fn nearest_presser(
+        ctx: &StateProcessingContext,
+        carrier: Vector3<f32>,
+    ) -> Option<Vector3<f32>> {
         ctx.players()
             .opponents()
             .all()

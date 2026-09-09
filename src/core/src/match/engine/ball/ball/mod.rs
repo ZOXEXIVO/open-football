@@ -40,8 +40,7 @@ pub use contest::{
 // integrates, so the two can never drift apart.
 pub use flight::{
     AIR_DRAG_PER_TICK, AerialDelivery, AerialOutcome, AerialReach, BallRoll, DeliveryIntent,
-    FlightProtection,
-    GRAVITY_PER_TICK, GROUND_FRICTION, aerial, ballistics, motion, roll,
+    FlightProtection, GRAVITY_PER_TICK, GROUND_FRICTION, aerial, ballistics, motion, roll,
 };
 // `pub` for `dead_ball_diag` — the stall attribution counters are read by
 // the dev harness, same as `ownership::reception_diag`.

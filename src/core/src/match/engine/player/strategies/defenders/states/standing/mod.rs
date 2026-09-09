@@ -431,8 +431,7 @@ impl DefenderStandingState {
             .next()
             .is_none();
 
-        let close_to_optimal_position =
-            ctx.team().distance_from_anchor() < WALK_DISTANCE_THRESHOLD;
+        let close_to_optimal_position = ctx.team().distance_from_anchor() < WALK_DISTANCE_THRESHOLD;
         let team_in_control = ctx.team().is_control_ball();
 
         (is_tired || standing_too_long)

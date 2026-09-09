@@ -29,9 +29,10 @@ use crate::club::Club;
 use crate::club::StaffPosition;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::r#match::{FieldSquad, MatchResultRaw};
-use crate::transfers::pipeline::scouting_config::ScoutingConfig;
-use crate::transfers::pipeline::{KnownPlayerMemory, ScoutMonitoringSource, TransferRequestStatus};
-use crate::transfers::window::PlayerValuationCalculator;
+use crate::transfers::pipeline::{KnownPlayerMemory, TransferRequestStatus};
+use crate::transfers::scouting::config::ScoutingConfig;
+use crate::transfers::scouting::recruitment::ScoutMonitoringSource;
+use crate::transfers::value::PlayerValuationCalculator;
 use crate::utils::IntegerUtils;
 use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 
@@ -1030,8 +1031,9 @@ mod tests {
     /// past the meeting threshold and flips the row to `ReportReady`.
     #[test]
     fn repeated_cup_showcase_creates_then_promotes_monitoring() {
-        use crate::transfers::pipeline::{
-            ClubTransferPlan, ScoutMonitoringStatus, ScoutPlayerMonitoring,
+        use crate::transfers::pipeline::ClubTransferPlan;
+        use crate::transfers::scouting::recruitment::{
+            ScoutMonitoringStatus, ScoutPlayerMonitoring,
         };
 
         let date = NaiveDate::from_ymd_opt(2026, 5, 27).unwrap();

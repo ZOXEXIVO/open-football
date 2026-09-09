@@ -1619,7 +1619,6 @@ pub mod mid_run_diag {
         }
     }
 
-
     /// ── THE KEEPER-ORGANISATION CENSUS ────────────────────────────────
     ///
     /// *"Make sure the goalkeeper is involved in the defenders'

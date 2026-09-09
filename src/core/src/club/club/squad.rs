@@ -144,8 +144,9 @@ impl Club {
         // Is the first team a body short in this group? A promotion into a
         // hole is never held up by the squad it comes out of — the youth
         // side can be topped up, a matchday XI cannot.
-        let main_group_short =
-            |group: PlayerFieldPositionGroup| -> bool { group_stats(group).0 < min_main_depth(group) };
+        let main_group_short = |group: PlayerFieldPositionGroup| -> bool {
+            group_stats(group).0 < min_main_depth(group)
+        };
 
         let mut moves: Vec<PendingMove> = Vec::new();
 
@@ -464,11 +465,7 @@ impl Club {
                     self.transfer_plan
                         .loan_out_candidates
                         .retain(|c| c.player_id != m.player_id);
-                    if !self
-                        .transfer_plan
-                        .loan_withdrawals
-                        .contains(&m.player_id)
-                    {
+                    if !self.transfer_plan.loan_withdrawals.contains(&m.player_id) {
                         self.transfer_plan.loan_withdrawals.push(m.player_id);
                     }
                     if TransferTrace::is(m.player_id) {
@@ -2367,7 +2364,10 @@ mod promotion_guard_tests {
                 .attributes(PersonAttributes::default())
                 .skills(PlayerSkills::flat_for_ability(ability))
                 .positions(PlayerPositions {
-                    positions: vec![PlayerPosition { position, level: 18 }],
+                    positions: vec![PlayerPosition {
+                        position,
+                        level: 18,
+                    }],
                 })
                 .player_attributes(attrs)
                 .contract(Some(PlayerClubContract::new(

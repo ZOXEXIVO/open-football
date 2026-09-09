@@ -20,7 +20,7 @@ use crate::club::player::contract::contract::{
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::player::{Player, SellOnObligation};
 use crate::club::staff::perception::PotentialEstimator;
-use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus};
+use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus};
 use crate::{
     ContractBonusType, HappinessEventType, Person, PlayerHappiness, PlayerPlan, PlayerSquadStatus,
     PlayerStatusType,

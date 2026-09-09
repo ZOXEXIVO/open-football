@@ -135,11 +135,7 @@ impl KeeperSetPieceStance {
         let theirs = |id: u32| ctx.players().opponents().all().any(|p| p.id == id);
         let dead = DeadBall::taker(ctx.tick_context.ball.restart_taker).is_some_and(theirs);
         let over_it = ball.velocity.norm() < Self::UNSTRUCK
-            && ctx
-                .tick_context
-                .ball
-                .current_owner
-                .is_some_and(theirs);
+            && ctx.tick_context.ball.current_owner.is_some_and(theirs);
         if !dead && !over_it {
             return None;
         }
@@ -315,7 +311,11 @@ impl KeeperPenaltyStance {
         // read of the crossing point, which is the thing being modelled.
         let truth = if ball.velocity.y.abs() < 1e-3 {
             // Dead centre: whichever way he goes is a guess he loses.
-            if ctx.context.rng.unit_f32() < 0.5 { -1.0 } else { 1.0 }
+            if ctx.context.rng.unit_f32() < 0.5 {
+                -1.0
+            } else {
+                1.0
+            }
         } else {
             ball.velocity.y.signum()
         };

@@ -4,7 +4,7 @@ use crate::club::academy::ClubAcademy;
 use crate::club::player::calculators::FreeAgentReleaseReason;
 use crate::club::player::language::{Language, PlayerLanguage};
 use crate::shared::{Currency, CurrencyValue};
-use crate::transfers::reason::TransferReason;
+use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::{CompletedTransfer, TransferType};
 use crate::{PlayerStatusType, TeamType};
 use chrono::NaiveDate;

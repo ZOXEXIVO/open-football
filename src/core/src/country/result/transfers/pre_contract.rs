@@ -21,11 +21,11 @@
 
 use super::config::TransferConfig;
 use super::free_agent_market_calc::{BuyerRoleFit, FreeAgentMarketCalculator};
-use super::types::can_club_accept_player;
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::contract::RENEWAL_REJECTED_LABEL;
 use crate::club::player::transfer::{MarketStage, PreContractAgreement};
 use crate::transfers::pipeline::TransferRequestStatus;
+use crate::transfers::view::club::ClubView;
 use crate::utils::IntegerUtils;
 use crate::{
     ClubAffair, Country, Person, Player, PlayerClubContract, PlayerFieldPositionGroup,
@@ -283,7 +283,7 @@ impl PreContractManager {
             if club.id == player.current_club_id || club.teams.teams.is_empty() {
                 continue;
             }
-            if !can_club_accept_player(club) {
+            if !ClubView::can_accept_player(club) {
                 continue;
             }
             let plan = &club.transfer_plan;
@@ -710,7 +710,7 @@ mod tests {
         }
 
         /// A domestic club whose squad cap is already reached, so
-        /// `can_club_accept_player` rejects it — a buyer that "filled up"
+        /// `ClubView::can_accept_player` rejects it — a buyer that "filled up"
         /// before the pre-contract could execute.
         fn full_buyer(id: u32) -> Club {
             let mut club = Self::plain_buyer(id);

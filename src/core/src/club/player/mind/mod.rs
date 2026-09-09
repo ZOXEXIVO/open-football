@@ -97,7 +97,7 @@ pub use organs::memory::{
 };
 
 use crate::club::person::PersonAttributes;
-use crate::transfers::pipeline::appraisal::{
+use crate::transfers::gate::appraisal::{
     Appraisal, AppraisalConfig, OfferView, PlayerOfferAppraisal, PlayerStance,
 };
 use chrono::NaiveDate;

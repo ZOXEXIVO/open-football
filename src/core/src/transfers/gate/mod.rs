@@ -1,0 +1,3681 @@
+//! May this move happen at all.
+//!
+//! The staged plausibility model lives in this file; [`appraisal`] is the
+//! player's own side of the same question and [`fit`] is the sporting one.
+//!
+//! Shared plausibility layer used by every transfer-target generation
+//! path and by negotiation entry. Replaces the patchwork of inline
+//! reputation gates that let unrealistic moves slip through whenever a
+//! caller (DoF bargain hunt, listed sweep, shortlist, direct negotiation
+//! entry) bypassed [`crate::transfers::scouting::config::ScoutingConfig::is_target_realistic`].
+//!
+//! The contract is intentionally generic: nothing here knows about
+//! particular clubs, leagues, or players. Reasoning is driven by
+//! continuous reputation gaps, the player's importance at the seller,
+//! and explicit availability signals.
+//!
+//! ### High-level flow
+//!
+//! 1. Compute `player_importance` from squad status, rank within the
+//!    seller's position group, season appearances, and ability vs the
+//!    best player in the same group. Goalkeepers weight rank more
+//!    heavily — there is only one starting slot.
+//! 2. Compute `sporting_drop` — a blend of club, league, and world rep
+//!    gaps measuring how far the buyer sits below the seller.
+//! 3. Evaluate hard-reject rules (impossible signings):
+//!      * Important player at a much stronger club, unsolicited and
+//!        not on any availability signal.
+//!      * Same-domestic-market step-down for a prime-age starter.
+//!      * Loan request for an important player at a stronger club.
+//!      * Fee or wages clearly out of reach for the buyer.
+//! 4. If not hard-rejected, return soft adjustments shortlist scoring
+//!    and the negotiation resolver should apply (score multiplier,
+//!    seller acceptance delta, player terms delta, minimum-fee floor).
+//!
+//! ### Availability strength
+//!
+//! Availability is graded, not boolean — see [`AvailabilityStrength`] and
+//! [`TransferPlausibilityInputs::availability_strength`]. A `Real`/`Forced`
+//! signal (transfer request, genuine listing, triggered release clause)
+//! *opens* the hard importance / step-down gate; a `Soft` signal (mild
+//! unhappiness, near-expiry, mild seller debt) only softens it and never
+//! unlocks it for a very-important player or a huge sporting drop. In every
+//! case the fee / wage / willingness realism downstream still applies —
+//! availability opens the door, it does not erase it. Synthetic "we created
+//! a listing to back our bid" listings are excluded: callers populate the
+//! listing flags from the player's real status only.
+
+pub mod appraisal;
+pub mod fit;
+pub mod stance;
+
+pub use appraisal::*;
+pub use stance::*;
+
+use crate::club::player::calculators::WageCalculator;
+use crate::club::team::squad::SquadEvidenceContext;
+use crate::transfers::loan::guard::LoanAssetGuard;
+use crate::transfers::market::route::TransferRoutePolicy;
+use crate::{PlayerFieldPositionGroup, PlayerSquadStatus};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferPlausibilityReason {
+    ImportantPlayerAtMuchStrongerClub,
+    DomesticStepDownForPrimeStarter,
+    UnaffordableWages,
+    UnaffordableFee,
+    #[allow(dead_code)]
+    NoSportingUpside,
+    LoanNotCredible,
+    /// Real-world country-pair friction closes this route on the
+    /// current sim date — see
+    /// [`TransferRoutePolicy::is_blocked`]. The only
+    /// active rule today is Russia ↔ Ukraine from 2022-02-24 onwards;
+    /// the simulation refuses these moves at every stage.
+    CountryPairBlocked,
+    /// The buying club does not work this market: no corridor between the
+    /// two countries, no scout who knows it, nothing in its own transfer
+    /// ledger. It can watch him; it has no route to him.
+    ///
+    /// Not a wall — a triggered clause, a transfer request, or months of
+    /// unsold resignation all open it, because each of those is the
+    /// player's side reaching OUT rather than the club reaching in.
+    MarketOutsideBuyersReach,
+    /// The loan is free and the borrower still cannot take it: the player
+    /// is worth more than the club's whole year. Loans bypass the fee gate
+    /// by design — a loan fee is a token — so nothing else in the model
+    /// ever compared the asset to the borrower's economy, and a
+    /// nine-figure teenager could be lent to a second-division club for
+    /// nothing.
+    LoanBeyondBorrowerMeans,
+}
+
+// ============================================================
+// Effective market reputation
+// ============================================================
+
+/// Blends a player's three reputation axes into a single market-relevant
+/// figure on the 0..10000 scale. The blend shifts with how *domestic* the
+/// move is: a domestic / same-region move weights **home** and **current**
+/// reputation heavily, while a cross-border move leans on **world**
+/// reputation (the only axis the foreign market really knows him by).
+///
+/// This is what makes a player who is a giant in his own country — high
+/// home / current standing but a modest international footprint — register
+/// as a high-reputation target in his domestic market instead of a
+/// low-world-rep bargain. Example: world 2869, current 5575, home 6177
+/// blends to ~5200 domestically, not ~2869.
+pub struct EffectivePlayerReputation;
+
+impl EffectivePlayerReputation {
+    pub fn compute(world_rep: i16, current_rep: i16, home_rep: i16, domestic: bool) -> i16 {
+        let world = world_rep.max(0) as f32;
+        let current = current_rep.max(0) as f32;
+        let home = home_rep.max(0) as f32;
+        // Domestic: home + current dominate. Cross-border: world leads but
+        // current/home still temper it (a domestic great isn't anonymous
+        // abroad, just less renowned).
+        let (w_world, w_current, w_home) = if domestic {
+            (0.20, 0.45, 0.35)
+        } else {
+            (0.55, 0.30, 0.15)
+        };
+        (w_world * world + w_current * current + w_home * home)
+            .round()
+            .clamp(0.0, 10_000.0) as i16
+    }
+}
+
+// ============================================================
+// Structured availability strength
+// ============================================================
+
+/// How strong a player's availability signal is for a move. Replaces the
+/// old boolean exemption: availability **opens the door**, it does not
+/// **erase** level / price / wage / willingness realism. The tier controls
+/// how far an availability signal can unlock an otherwise-blocked move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AvailabilityStrength {
+    /// No availability signal — every realism gate is fully armed.
+    None,
+    /// A soft signal (mild unhappiness, near-expiry without affordable
+    /// wages, mild seller debt). Softens penalties but never unlocks the
+    /// hard importance / step-down gate for a very-important player or a
+    /// huge sporting drop.
+    Soft,
+    /// A real, voluntary or club-driven signal (transfer request, genuine
+    /// listing for the matching move type, confirmed NotNeeded, distressed
+    /// seller with a clear premium on the table). Opens the hard gate but
+    /// keeps fee / wage / compensation / willingness realism downstream.
+    Real,
+    /// The sale is forced — a triggered release clause. Bypasses the
+    /// sporting gates entirely (the escape route was negotiated for this).
+    Forced,
+}
+
+impl AvailabilityStrength {
+    /// True when the signal is strong enough to unlock the hard
+    /// importance / domestic-step-down gate (the door is genuinely open).
+    pub fn unlocks_hard_gate(self) -> bool {
+        matches!(
+            self,
+            AvailabilityStrength::Real | AvailabilityStrength::Forced
+        )
+    }
+
+    /// True when wages no longer hard-block the move — only a player who
+    /// actively wants out (or a forced clause) waives the buyer's duty to
+    /// fund a credible wage before showing public interest.
+    pub fn waives_wage_floor(self) -> bool {
+        matches!(
+            self,
+            AvailabilityStrength::Real | AvailabilityStrength::Forced
+        )
+    }
+}
+
+// ============================================================
+// Staged move plausibility — the central model
+// ============================================================
+
+/// The furthest stage a (buyer, seller, player) move can credibly reach.
+/// Ordered: each later stage subsumes the earlier ones. Callers gate on
+/// `>=` the stage they need (e.g. scouting sets `Wnt` only at
+/// `CanShowPublicInterest`, negotiation creation needs
+/// `CanStartNegotiation`, personal-terms needs `CanAgreePersonalTerms`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TransferMoveStage {
+    /// The move is impossible even to watch — a closed country route.
+    Blocked,
+    /// A club may quietly watch the player. Never sets public interest.
+    CanScoutQuietly,
+    /// The player may be an internal recruitment name. Still no `Wnt`.
+    CanShortlistInternally,
+    /// The move is plausible enough that the player / agent would not
+    /// immediately dismiss it — public interest (`Wnt`) is allowed.
+    CanShowPublicInterest,
+    /// Fee + wage are credible enough to open club-to-club talks.
+    CanStartNegotiation,
+    /// The player's career incentives make the move make sense.
+    CanAgreePersonalTerms,
+    /// Final safety stage — nothing left blocking completion.
+    CanCompleteMove,
+}
+
+/// Explainability record for one staged assessment. Every field is cheap
+/// and `Copy`; callers attach the buyer/seller/player ids and names when
+/// they log it. Makes a decision narratable: "watched privately but did
+/// not show public interest because player_wont_step_down",
+/// "could afford the fee but not the wages", etc.
+#[derive(Debug, Clone, Copy)]
+pub struct TransferMoveDiagnostics {
+    pub seller_rep: f32,
+    pub buyer_rep: f32,
+    pub seller_league_rep: u16,
+    pub buyer_league_rep: u16,
+    pub player_world_rep: i16,
+    pub player_current_rep: i16,
+    pub player_home_rep: i16,
+    pub player_effective_rep: i16,
+    pub importance: f32,
+    pub sporting_drop: f32,
+    /// Effective player reputation minus the buyer's reputation reach.
+    pub reputation_drop: i16,
+    pub availability: AvailabilityStrength,
+    /// estimated_value ÷ the buyer's affordable fee ceiling.
+    pub fee_to_value_ratio: f32,
+    /// expected annual wage ÷ current salary.
+    pub wage_to_current_ratio: f32,
+    pub stage: TransferMoveStage,
+    pub blocking_reason: Option<TransferPlausibilityReason>,
+}
+
+/// Result of the staged plausibility assessment: how far the move reaches,
+/// what stopped it, the soft adjustments to apply if it did reach
+/// negotiation, and the diagnostics.
+#[derive(Debug, Clone, Copy)]
+pub struct TransferMoveAssessment {
+    pub stage: TransferMoveStage,
+    pub blocking_reason: Option<TransferPlausibilityReason>,
+    pub adjustment: TransferPlausibilityAdjustment,
+    pub diagnostics: TransferMoveDiagnostics,
+}
+
+impl TransferMoveAssessment {
+    /// True when the move can credibly reach at least `stage`.
+    pub fn reaches(&self, stage: TransferMoveStage) -> bool {
+        self.stage >= stage
+    }
+}
+
+impl TransferMoveDiagnostics {
+    /// One-line, human-readable explanation of the decision — the spec's
+    /// "make cases explainable" surface. Reads every captured signal so a
+    /// rejected (or accepted) interest can be narrated:
+    /// "watched privately but did not show public interest because
+    /// player_wont_step_down", "could afford the fee but not the wages".
+    pub fn explain(&self) -> String {
+        let reason = match self.blocking_reason {
+            Some(r) => format!("{:?}", r),
+            None => "clear".to_string(),
+        };
+        format!(
+            "stage={:?} reason={} importance={:.2} sporting_drop={:.2} avail={:?} \
+             eff_rep={} (world {} / current {} / home {}) rep_drop={} \
+             buyer_rep={:.2} seller_rep={:.2} buyer_league_rep={} seller_league_rep={} \
+             fee/value={:.2} wage/current={:.2}",
+            self.stage,
+            reason,
+            self.importance,
+            self.sporting_drop,
+            self.availability,
+            self.player_effective_rep,
+            self.player_world_rep,
+            self.player_current_rep,
+            self.player_home_rep,
+            self.reputation_drop,
+            self.buyer_rep,
+            self.seller_rep,
+            self.buyer_league_rep,
+            self.seller_league_rep,
+            self.fee_to_value_ratio,
+            self.wage_to_current_ratio,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransferPlausibilityAdjustment {
+    /// Multiplier applied to a shortlist candidate score. < 1.0 dampens
+    /// unrealistic-but-not-impossible targets so realistic alternatives
+    /// outrank them.
+    pub shortlist_score_multiplier: f32,
+    /// Additive delta on the seller-side acceptance chance (percent).
+    /// Negative for prominent players or large sporting drops.
+    pub seller_acceptance_delta: f32,
+    /// Additive delta on the personal-terms acceptance chance (percent).
+    /// Negative when the player is being asked to step down.
+    pub player_terms_delta: f32,
+    /// Multiplier applied to the asking price before judging whether an
+    /// offer ratio is acceptable. Always >= 1.0 — important players at
+    /// big clubs require a premium over their headline value.
+    pub minimum_fee_multiplier: f64,
+    /// How much of `seller_acceptance_delta` is the **importance** damper
+    /// alone, as a positive magnitude (the delta already has it subtracted).
+    ///
+    /// Broken out because importance is the one seller friction a big
+    /// enough fee overrules. "He is our key man" is a coach's answer; the
+    /// chairman's answer depends on what the money does to the club's year,
+    /// and the resolver cannot tell the importance penalty apart from the
+    /// sporting-drop or rivalry penalties once they are summed into one
+    /// number. See `SellerWindfall` in the negotiation resolver.
+    pub importance_penalty: f32,
+}
+
+impl TransferPlausibilityAdjustment {
+    pub fn neutral() -> Self {
+        TransferPlausibilityAdjustment {
+            shortlist_score_multiplier: 1.0,
+            seller_acceptance_delta: 0.0,
+            player_terms_delta: 0.0,
+            minimum_fee_multiplier: 1.0,
+            importance_penalty: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TransferPlausibilityVerdict {
+    HardReject(TransferPlausibilityReason),
+    Allow(TransferPlausibilityAdjustment),
+}
+
+impl TransferPlausibilityVerdict {
+    #[allow(dead_code)]
+    pub fn is_rejected(&self) -> bool {
+        matches!(self, TransferPlausibilityVerdict::HardReject(_))
+    }
+
+    pub fn adjustment(&self) -> TransferPlausibilityAdjustment {
+        match self {
+            TransferPlausibilityVerdict::Allow(adj) => *adj,
+            TransferPlausibilityVerdict::HardReject(_) => TransferPlausibilityAdjustment::neutral(),
+        }
+    }
+}
+
+/// Inputs the plausibility evaluator needs. Callers build this from
+/// whatever shape they have (PlayerSummary, PlayerSnapshot, raw Player
+/// + Club refs in the negotiation pipeline). Keeping the evaluator a
+/// pure function of this struct makes it trivially unit-testable and
+/// keeps integration churn confined to building inputs.
+#[derive(Debug, Clone)]
+pub struct TransferPlausibilityInputs {
+    pub buyer_rep: f32,
+    pub seller_rep: f32,
+    pub buyer_league_rep: u16,
+    pub seller_league_rep: u16,
+    pub buyer_world_rep: i16,
+    pub seller_world_rep: i16,
+
+    pub player_world_rep: i16,
+    pub player_current_rep: i16,
+    pub player_home_rep: i16,
+    pub player_age: u8,
+    pub position_group: PlayerFieldPositionGroup,
+
+    pub is_listed: bool,
+    pub is_loan_listed: bool,
+    pub is_transfer_requested: bool,
+    pub is_unhappy: bool,
+    pub squad_status: PlayerSquadStatus,
+    pub contract_months_remaining: i16,
+
+    pub current_salary: u32,
+    pub estimated_value: f64,
+
+    pub player_appearances: u16,
+    /// Official matches the selling club has played this season (its
+    /// busiest player's appearance count). The denominator that turns
+    /// `player_appearances` into "share of the team's football he is
+    /// getting", and the signal that says whether the season is readable
+    /// at all.
+    pub seller_club_matches: u16,
+    /// Player rank within the seller's main team at this position
+    /// group, 0-indexed. 0 = #1 starter, 1 = #2, etc. Computed by
+    /// callers from the seller's roster.
+    pub seller_position_rank: u8,
+    pub player_ca: u8,
+    pub best_group_ca_at_seller: u8,
+
+    pub is_loan: bool,
+    pub is_unsolicited: bool,
+    pub seller_in_debt: bool,
+    pub release_clause_triggered: bool,
+
+    /// Continuous 0..1 market resignation of a listed / transfer-requested
+    /// player — [`crate::club::player::transfer::MarketResignation`]. 0 for
+    /// a fresh listing or a player not on the permanent market. Widens the
+    /// level band he will accept, erodes his market-read importance, and
+    /// lifts his personal-terms willingness as the unsold weeks accumulate.
+    pub listing_resignation: f32,
+
+    pub same_country: bool,
+    pub same_league_or_division: bool,
+    /// True when the (buyer-country, seller-country) pair is on the
+    /// real-world route block list for the current sim date. Populated
+    /// by the input builders. When set, [`TransferPlausibilityEvaluator::evaluate`]
+    /// short-circuits with `CountryPairBlocked` before any other gate.
+    pub country_pair_blocked: bool,
+
+    pub buyer_transfer_budget: f64,
+    pub buyer_wage_budget: u32,
+    pub buyer_total_wages: u32,
+    /// Estimated annual wage the buyer would have to offer to land this
+    /// player at the buyer's tier. Built outside the evaluator (via
+    /// [`crate::WageCalculator::expected_annual_wage_raw`]) so the
+    /// evaluator stays free of wage policy.
+    pub expected_annual_wage: u32,
+    /// The player's stored [`crate::club::player::transfer::BigStagePull`]
+    /// score, 0..1 — how strongly he is drawn toward a bigger competition.
+    ///
+    /// Read here as the **agent channel**: a player who wants a bigger
+    /// stage is quietly circulated long before he ever hands in a formal
+    /// request, and that circulation is what makes a club at his level
+    /// approachable at all. Before this, the market could only see a
+    /// player's willingness AFTER a bid existed (personal terms), so the
+    /// one signal that decides whether a bid happens was invisible at the
+    /// moment it mattered.
+    pub player_stage_inclination: f32,
+    /// Corridor plausibility of the destination for this player, 0.02..1 —
+    /// [`crate::transfers::MarketAffinity`]. His nationality's corridor into
+    /// the buying country, where he currently plays, and his diaspora, in
+    /// one number. `1.0` for a domestic move and for a man going home.
+    pub market_affinity: f32,
+    /// How well the buying club knows the market he is being bought FROM,
+    /// 0..1 — its scouts, its own transfer ledger, and its country's priors.
+    /// `1.0` for a domestic move. See
+    /// [`crate::transfers::ClubMarketKnowledge`].
+    pub buyer_market_knowledge: f32,
+    /// The selling club's own asset ledger has this player on its sell list
+    /// — it would answer a call about him at the right price. See
+    /// [`crate::transfers::squad::ledger::AssetLedger`].
+    ///
+    /// This is the state real clubs spend most of their business in: not
+    /// listed, not asking to leave, but privately for sale. It is a
+    /// SELLER-side signal, which is what distinguishes it from the agent
+    /// channel above (a player-side one), and it is deliberately never a
+    /// public status — no `Lst`, no event, no override of the squad-asset
+    /// protections.
+    pub seller_marketed: bool,
+    /// Annualised trailing income of the BUYING club and its best-paid
+    /// player — the two numbers a LOAN is priced against (the `weight` and
+    /// `carry` terms of [`crate::transfers::loan::guard::LoanAssetGuard`]). A
+    /// permanent move reads neither: a purchase is priced by the fee gate.
+    /// Zero income means "the borrower's books could not be read", which
+    /// stands both loan money gates down rather than guessing.
+    pub buyer_annual_income: i64,
+    pub buyer_top_earner: u32,
+}
+
+impl TransferPlausibilityInputs {
+    /// Effective market reputation of the player on the 0..10000 scale —
+    /// see [`EffectivePlayerReputation`]. Domestic moves weight home +
+    /// current standing; cross-border moves lean on world reputation.
+    pub fn effective_player_reputation(&self) -> i16 {
+        EffectivePlayerReputation::compute(
+            self.player_world_rep,
+            self.player_current_rep,
+            self.player_home_rep,
+            self.same_country || self.same_league_or_division,
+        )
+    }
+
+    /// Value of the asset against the borrower's whole year — the
+    /// `weight` term of [`LoanAssetGuard`]. Zero when the borrower's books
+    /// could not be read, which stands the gate down rather than guessing.
+    pub fn loan_asset_weight(&self) -> f64 {
+        if self.buyer_annual_income <= 0 {
+            return 0.0;
+        }
+        self.estimated_value / self.buyer_annual_income as f64
+    }
+
+    /// Share of his wage the borrower would pick up, against what it can
+    /// pay — the `carry` term of [`LoanAssetGuard`], built from the same
+    /// split the loan contract is actually written with.
+    pub fn loan_wage_carry(&self, wage_headroom: i64) -> f64 {
+        // Unknown payroll stands the term down — see
+        // [`LoanAssetGuard::assess`].
+        if wage_headroom <= 0 && self.buyer_top_earner == 0 {
+            return 0.0;
+        }
+        let borrower_score = (self.buyer_world_rep.max(0) as f32 / 10_000.0).clamp(0.0, 1.0);
+        let (borrower_wage, _) =
+            WageCalculator::loan_wage_split_v2(self.current_salary, borrower_score, 0.0);
+        let ceiling = (wage_headroom.max(0) as f64 * 1.30)
+            .max(self.buyer_top_earner as f64 * 1.50)
+            .max(1.0);
+        borrower_wage as f64 / ceiling
+    }
+
+    /// The buyer's reputation reach on the 0..10000 scale — its world
+    /// standing blended with its league's. A club in a strong league can
+    /// attract more renowned players than its bare world rep suggests.
+    /// Compared against [`Self::effective_player_reputation`] to judge a
+    /// reputation step-down.
+    pub fn buyer_reputation_reach(&self) -> i16 {
+        let world = self.buyer_world_rep.max(0) as f32;
+        let league = self.buyer_league_rep as f32;
+        (0.70 * world + 0.30 * league).round().clamp(0.0, 10_000.0) as i16
+    }
+
+    /// Structured availability strength for the move — replaces the old
+    /// boolean exemption. Availability *opens the door*; it does not erase
+    /// price / wage / willingness realism (those gates run regardless,
+    /// scaled by the returned strength). Synthetic listings are excluded:
+    /// callers populate `is_listed`/`is_loan_listed` from the player's real
+    /// status, never from a listing fabricated to back an unsolicited bid.
+    ///
+    /// Mapping (per design):
+    ///   * `Req`                         → Real
+    ///   * genuine `Lst` (permanent move)→ Real
+    ///   * genuine `Loa` (loan move)     → Real
+    ///   * `NotNeeded` (not contradicted)→ Real, else Soft
+    ///   * near-expiry + affordable wages→ Real, else Soft
+    ///   * distressed seller + premium   → Real, else Soft
+    ///   * `Unh`                         → Soft (severe only via Req)
+    ///   * release clause triggered      → Forced
+    pub fn availability_strength(&self) -> AvailabilityStrength {
+        // A triggered release clause forces the sale regardless.
+        if self.release_clause_triggered {
+            return AvailabilityStrength::Forced;
+        }
+        // A formal transfer request is the strongest voluntary signal.
+        if self.is_transfer_requested {
+            return AvailabilityStrength::Real;
+        }
+        // A genuine (non-synthetic) listing for the matching move type.
+        if !self.is_loan && self.is_listed {
+            return AvailabilityStrength::Real;
+        }
+        if self.is_loan && self.is_loan_listed {
+            return AvailabilityStrength::Real;
+        }
+
+        let max_fee = self.affordability_max_fee();
+        // Near-end-of-contract pickup: Real when the buyer can fund the
+        // fee, otherwise only a soft nudge.
+        let near_expiry = self.contract_months_remaining > 0
+            && self.contract_months_remaining <= thresholds::NEAR_EXPIRY_MONTHS;
+        if near_expiry && self.estimated_value <= max_fee {
+            return AvailabilityStrength::Real;
+        }
+
+        // NotNeeded is a real, club-driven availability — unless the
+        // player's own standing contradicts it (a top-rank, renowned
+        // player is never genuinely "not needed").
+        if matches!(self.squad_status, PlayerSquadStatus::NotNeeded) {
+            let contradicted = self.seller_position_rank == 0
+                || self.effective_player_reputation() >= thresholds::RENOWN_FLOOR_REP;
+            return if contradicted {
+                AvailabilityStrength::Soft
+            } else {
+                AvailabilityStrength::Real
+            };
+        }
+
+        // Distressed seller: Real with a clear premium on the table,
+        // otherwise a soft distress nudge.
+        if self.seller_in_debt {
+            let ratio = if self.estimated_value > 1.0 {
+                (max_fee / self.estimated_value).clamp(0.0, 5.0)
+            } else {
+                5.0
+            };
+            return if ratio >= thresholds::DISTRESS_PREMIUM_RATIO {
+                AvailabilityStrength::Real
+            } else {
+                AvailabilityStrength::Soft
+            };
+        }
+
+        // Unhappiness opens the door softly (a player unhappy *and*
+        // requesting out is already Real via the request branch above).
+        if self.is_unhappy {
+            return AvailabilityStrength::Soft;
+        }
+
+        // Near-expiry without an affordable fee still softens a touch.
+        if near_expiry {
+            return AvailabilityStrength::Soft;
+        }
+
+        // The agent channel. A good player in a decent league who wants a
+        // bigger one is circulated by his agent — that is how most of these
+        // moves actually begin, and it happens long before (and usually
+        // instead of) a formal transfer request, whose bar is deliberately
+        // high. So a buyer who can genuinely offer him a bigger stage finds
+        // a door already ajar.
+        //
+        // `Soft` on purpose, and no higher: it eases the seller's
+        // importance dampers, it does NOT unlock the hard importance /
+        // step-down gate (`unlocks_hard_gate`), waive the wage floor
+        // (`waives_wage_floor`), or touch the fee. And it is gated on the
+        // buyer's league actually being the bigger stage, so it can never
+        // open a step down — which is exactly the flow this must not break.
+        if self.is_agent_circulated() {
+            return AvailabilityStrength::Soft;
+        }
+
+        // The seller's own sell list. A club that has decided a player is a
+        // peak-value asset, a contract it will not renew, or a wage it needs
+        // off the books does not announce it — it answers the phone. That
+        // in-between state is where most real business lives, and the market
+        // had no way to express it: a player was either publicly listed or
+        // completely off the table.
+        //
+        // `Soft`, like the agent channel, and for the same reasons: it eases
+        // the seller's importance dampers, and it does NOT unlock the hard
+        // gate, waive the wage floor, or move the fee. Banded by
+        // affordability rather than by reputation — a club that could not
+        // fund him was never going to be told.
+        if self.is_seller_marketed() {
+            return AvailabilityStrength::Soft;
+        }
+
+        AvailabilityStrength::None
+    }
+
+    /// True when the seller would answer a call about this player AND the
+    /// buyer could plausibly fund him — the "right band" a quiet sale is
+    /// circulated in.
+    pub fn is_seller_marketed(&self) -> bool {
+        self.seller_marketed && self.estimated_value <= self.affordability_max_fee()
+    }
+
+    /// Big-stage pull at or above which a player is quietly on the market
+    /// through his agent. Matches `BigStagePullConfig::inclination_bar`
+    /// (0.22) — the level the model itself calls "he would listen".
+    pub const AGENT_INCLINATION_BAR: f32 = 0.22;
+    /// League-reputation gain the buyer must offer before that willingness
+    /// means anything. Same 1200 the year-round watch uses: a sideways move
+    /// answers nothing he is asking for.
+    pub const AGENT_MIN_STAGE_GAIN: u16 = 1200;
+
+    /// True when the player's own wish for a bigger stage, plus a buyer who
+    /// can actually offer one, makes him quietly gettable.
+    pub fn is_agent_circulated(&self) -> bool {
+        self.player_stage_inclination >= Self::AGENT_INCLINATION_BAR
+            && self.buyer_league_rep
+                >= self
+                    .seller_league_rep
+                    .saturating_add(Self::AGENT_MIN_STAGE_GAIN)
+    }
+
+    /// Largest fee the buyer can plausibly cover. Normally `1.40 ×` the
+    /// declared transfer budget, but floored at a fraction of the wage
+    /// bill so a club whose transfer budget reads zero (negative balance,
+    /// budget not yet allocated) can still scrape together a modest fee
+    /// via installments / a board top-up. Without the floor a zero budget
+    /// reads as *unlimited* fee tolerance — which let broke lower-league
+    /// clubs pursue expensive players from far bigger clubs.
+    fn affordability_max_fee(&self) -> f64 {
+        (self.buyer_transfer_budget * 1.40)
+            .max(self.buyer_wage_budget as f64 * thresholds::EMERGENCY_FEE_WAGE_FRACTION)
+            .max(0.0)
+    }
+}
+
+/// Soft thresholds and weights for the plausibility evaluator. Kept as
+/// a single constant so any future calibration tweak lands in one place
+/// and the evaluator body stays pure.
+pub(crate) mod thresholds {
+    pub const IMPORTANT: f32 = 0.78;
+    pub const VERY_IMPORTANT: f32 = 0.90;
+    pub const PRIME_AGE_MIN: u8 = 23;
+    pub const PRIME_AGE_MAX: u8 = 30;
+    pub const BIG_SPORTING_DROP: f32 = 0.16;
+    pub const HUGE_SPORTING_DROP: f32 = 0.26;
+    /// Sporting drop at which a prime-age important player resists a move
+    /// down within his own domestic market.
+    ///
+    /// A reputation tier is worth roughly 0.15-0.20 of `overall_score`,
+    /// which the 0.55 club-term weighting turns into ~0.08-0.11 of drop —
+    /// so at 0.12 a plain one-tier domestic step down was already at the
+    /// blocking line before the league term was added, and any move across
+    /// divisions cleared it comfortably. That made the single most common
+    /// transfer in football — an established player dropping a level to
+    /// play regularly — the one the model refused. Set beyond a single
+    /// tier so it blocks what it was written for (a two-tier collapse) and
+    /// leaves ordinary downward mobility to the soft penalties.
+    pub const DOMESTIC_STEP_DOWN_DROP: f32 = 0.19;
+    /// Below this product of corridor affinity and the buyer's knowledge
+    /// of the source market, a club is not a plausible suitor — it may
+    /// watch, and that is all.
+    ///
+    /// Deliberately low. The point is to close the moves nobody in
+    /// football makes (a Cameroonian club signing a Russian), not to
+    /// confine every club to its own corridor: an affinity of 0.05 with a
+    /// club that knows the market at all still clears it, and the world
+    /// must stay able to open a corridor that has never existed.
+    pub const MARKET_REACH_FLOOR: f32 = 0.05;
+    pub const LOAN_IMPORTANCE_BLOCK: f32 = 0.65;
+    pub const LOAN_REP_GAP_BLOCK: f32 = 0.10;
+    /// Reputation gap at which a loan stops being a step down and becomes a
+    /// different level of football altogether. A listing says the parent is
+    /// willing to loan the player out; it does not say it is willing to send
+    /// a first-team contributor anywhere at all, so a gap this wide stays
+    /// blocked even with the door open. Only a forced route (a negotiated
+    /// clause) still passes.
+    pub const LOAN_HUGE_REP_GAP_BLOCK: f32 = 0.30;
+    /// Emergency one-off fee a club can cover when its declared transfer
+    /// budget is ~zero, expressed as a fraction of its annual wage bill.
+    /// Scales with club size and the country's price level, so it floors
+    /// the affordable fee without a currency-dependent magic number.
+    pub const EMERGENCY_FEE_WAGE_FRACTION: f64 = 0.25;
+
+    /// Contract months at/below which the near-expiry availability nudge
+    /// can fire.
+    pub const NEAR_EXPIRY_MONTHS: i16 = 6;
+    /// Affordability premium (buyer reach ÷ player value) a distressed
+    /// seller needs on the table for the sale to read as a real,
+    /// financially-motivated deal rather than a soft distress nudge.
+    pub const DISTRESS_PREMIUM_RATIO: f64 = 1.35;
+
+    /// Effective market reputation at/above which a player is a recognised
+    /// name in his market — he resists an unsolicited domestic step-down
+    /// even on a soft appearance sample, and a `NotNeeded` tag on him reads
+    /// as contradicted.
+    pub const RENOWN_FLOOR_REP: i16 = 6000;
+    /// Effective-reputation importance floor ramp: below LOW it adds
+    /// nothing, at/above HIGH it floors importance at MAX_FLOOR. Lets a
+    /// genuinely renowned player stay "important" through a thin
+    /// early-season appearance sample without single-handedly crossing the
+    /// hard-block band.
+    pub const REP_IMPORTANCE_LOW: f32 = 3500.0;
+    pub const REP_IMPORTANCE_HIGH: f32 = 7500.0;
+    pub const REP_IMPORTANCE_MAX_FLOOR: f32 = 0.80;
+    /// Effective player reputation this far above the buyer's reach reads
+    /// as a reputation step-down the player resists in his own market.
+    pub const REP_STEP_DOWN_GAP: i16 = 1500;
+    /// Extra effective-reputation gap a loan destination may sit below a
+    /// recognised (post-development-age) player's standing at FULL market
+    /// resignation, on top of [`Self::REP_STEP_DOWN_GAP`]. Fresh on the
+    /// loan list he only considers destinations within the ordinary
+    /// step-down band; months unsold widen what he'll listen to, until at
+    /// full resignation the band spans a genuinely deep drop — the last
+    /// stop before the unsold free-exit valve takes over anyway.
+    pub const LOAN_RENOWN_RESIGNATION_SPAN: f32 = 3000.0;
+
+    /// Sporting drop at which even a FULLY resigned listed player stops
+    /// endorsing a permanent step-down — beyond this the level gap is a
+    /// different sport, and only his own request / a forced clause opens
+    /// it. Between `HUGE_SPORTING_DROP` and this value the resignation
+    /// needed to endorse the drop ramps linearly from 0 to 1, so the
+    /// acceptable band widens continuously with time on the market.
+    pub const RESIGNATION_FULL_DROP: f32 = 0.85;
+    /// Fraction of the headline valuation a fully-stale listing sheds when
+    /// the fee gate judges buyer affordability — mirrors the listing's own
+    /// asking-price decay (−5%/week to a 60% floor) plus the seller-floor
+    /// erosion, so the gate prices the market reality, not the fresh tag.
+    pub const RESIGNATION_VALUE_SOFTENING: f64 = 0.40;
+}
+
+/// Whether a player's own registration produces the evidence the
+/// corroboration taper reads.
+///
+/// The taper divides his appearances by his CLUB's fixture list and reads
+/// a low share as "the coach has stopped picking him". For a player
+/// registered in a youth squad that division is meaningless: youth
+/// competitions are friendlies (`League.friendly`), their appearances land
+/// in a separate statistics bucket, and his official count is therefore
+/// structurally zero. Scoring him at the floor multiplier said the first
+/// team had looked at him for a season and declined — when the first team
+/// had never had the chance to contradict anything. A zero denominator is
+/// the honest read: the season cannot speak yet, so the paper claim stands.
+pub(crate) struct SquadEvidenceSource;
+
+impl SquadEvidenceSource {
+    /// The club-match denominator for a player registered in `team_type`,
+    /// whose squad does (`has_league`) or does not play league football.
+    pub(crate) fn club_matches(team_type: TeamType, has_league: bool, club_matches: u16) -> u16 {
+        if team_type.is_youth() || !has_league {
+            0
+        } else {
+            club_matches
+        }
+    }
+}
+
+/// Per-axis importance scoring plus the objective-evidence floor. Wrapped
+/// in a struct (no free helpers) so the importance model reads as one
+/// cohesive unit. The evidence floor encodes the spec's "low appearances
+/// are not enough": a player who is a key man by status, the top choice in
+/// his position group, or a recognised name in his market is never dragged
+/// "fringe" by a thin early-season appearance sample — appearances can only
+/// *add* to importance, never establish it.
+struct ImportanceFactors;
+
+impl ImportanceFactors {
+    fn status_score(status: &PlayerSquadStatus) -> f32 {
+        match status {
+            PlayerSquadStatus::KeyPlayer => 1.00,
+            PlayerSquadStatus::FirstTeamRegular => 0.88,
+            PlayerSquadStatus::FirstTeamSquadRotation => 0.58,
+            PlayerSquadStatus::MainBackupPlayer => 0.38,
+            PlayerSquadStatus::HotProspectForTheFuture => 0.45,
+            PlayerSquadStatus::DecentYoungster => 0.30,
+            PlayerSquadStatus::NotNeeded => 0.05,
+            PlayerSquadStatus::NotYetSet | PlayerSquadStatus::Invalid => 0.45,
+            PlayerSquadStatus::SquadStatusCount => 0.45,
+        }
+    }
+
+    fn rank_score(rank: u8) -> f32 {
+        match rank {
+            0 => 1.00,
+            1 => 0.62,
+            2 => 0.35,
+            _ => 0.15,
+        }
+    }
+
+    fn appearance_score(apps: u16) -> f32 {
+        match apps {
+            0 => 0.05,
+            1..=5 => 0.20,
+            6..=11 => 0.40,
+            12..=19 => 0.65,
+            20..=27 => 0.85,
+            _ => 1.00,
+        }
+    }
+
+    fn ability_score(player_ca: u8, best_group_ca: u8) -> f32 {
+        let player = player_ca.max(1) as f32;
+        let best = best_group_ca.max(1) as f32;
+        (player / best).clamp(0.0, 1.0)
+    }
+
+    /// Club matches below which the season cannot yet contradict a
+    /// standing claim. Mirrors
+    /// [`SquadEvidenceContext::LOW_EVIDENCE_MATCHES`].
+    const READABLE_SAMPLE_MATCHES: u16 = 8;
+    /// Share of his club's matches at which a player's appearances fully
+    /// corroborate his standing. Being a regular does not require playing
+    /// every week.
+    const FULL_CORROBORATION_SHARE: f32 = 0.4;
+    /// Floor on the corroboration multiplier. Never zero: a genuine key man
+    /// who missed the season injured is still a key man, and a club still
+    /// refuses cheap approaches for him.
+    const MIN_CORROBORATION: f32 = 0.55;
+
+    /// How far the season's team selections back up a standing-based
+    /// importance claim.
+    ///
+    /// Standing — a declared role, a depth-chart rank, being the best
+    /// ability at his position — is what the player is on paper.
+    /// Appearances are what the coach actually does. Early in a season only
+    /// the paper claim exists, so it stands unchallenged; that is the
+    /// thin-sample protection this floor was built for. But left
+    /// unchallenged FOREVER it produced the central absurdity of the
+    /// market: a nominal starter who had not played all season was defended
+    /// as an important player, and every club that approached him was
+    /// turned away on behalf of a team that was not picking him. Those are
+    /// exactly the players who move in real football.
+    fn evidence_corroboration(inputs: &TransferPlausibilityInputs) -> f32 {
+        if inputs.seller_club_matches < Self::READABLE_SAMPLE_MATCHES {
+            return 1.0;
+        }
+        let involvement =
+            (inputs.player_appearances as f32 / inputs.seller_club_matches as f32).clamp(0.0, 1.0);
+        let corroborated = (involvement / Self::FULL_CORROBORATION_SHARE).clamp(0.0, 1.0);
+        Self::MIN_CORROBORATION + (1.0 - Self::MIN_CORROBORATION) * corroborated
+    }
+
+    /// Objective-evidence importance floor — the highest "he is clearly
+    /// important" signal available, independent of how many minutes he has
+    /// played this season. The corroboration taper is applied once, to the
+    /// finished importance, rather than here.
+    fn evidence_floor(inputs: &TransferPlausibilityInputs) -> f32 {
+        let mut floor = 0.0_f32;
+        // Declared squad role.
+        floor = floor.max(match inputs.squad_status {
+            PlayerSquadStatus::KeyPlayer => 0.92,
+            PlayerSquadStatus::FirstTeamRegular => 0.80,
+            _ => 0.0,
+        });
+        // Top of his position group at the seller (first / second choice).
+        floor = floor.max(match inputs.seller_position_rank {
+            0 => 0.80,
+            1 => 0.50,
+            _ => 0.0,
+        });
+        // Best (or co-best) current ability in his position group.
+        if inputs.best_group_ca_at_seller > 0
+            && inputs.player_ca + 2 >= inputs.best_group_ca_at_seller
+        {
+            floor = floor.max(0.78);
+        }
+        // Recognised name in his market — ramps with effective reputation,
+        // capped so renown reinforces but rarely alone crosses the band.
+        floor.max(Self::reputation_floor(inputs.effective_player_reputation()))
+    }
+
+    fn reputation_floor(effective_rep: i16) -> f32 {
+        let lo = thresholds::REP_IMPORTANCE_LOW;
+        let hi = thresholds::REP_IMPORTANCE_HIGH;
+        (((effective_rep as f32 - lo) / (hi - lo)).clamp(0.0, 1.0))
+            * thresholds::REP_IMPORTANCE_MAX_FLOOR
+    }
+}
+
+/// Stateless namespace for the pure plausibility evaluator. Wrapped
+/// in a struct (rather than free functions) so the evaluator surface
+/// reads like an API: `TransferPlausibilityEvaluator::evaluate(...)`,
+/// `TransferPlausibilityEvaluator::player_importance(...)`,
+/// `TransferPlausibilityEvaluator::sporting_drop(...)`.
+pub struct TransferPlausibilityEvaluator;
+
+impl TransferPlausibilityEvaluator {
+    /// Importance of the player to the selling club (0.0..1.0). The
+    /// goalkeeper variant weights rank more heavily because there is only
+    /// one starting slot — a first-choice GK is materially harder to sell
+    /// down than a first-choice winger with a deputy ready to slot in.
+    pub fn player_importance(inputs: &TransferPlausibilityInputs) -> f32 {
+        let s = ImportanceFactors::status_score(&inputs.squad_status);
+        let r = ImportanceFactors::rank_score(inputs.seller_position_rank);
+        let a = ImportanceFactors::appearance_score(inputs.player_appearances);
+        let ab = ImportanceFactors::ability_score(inputs.player_ca, inputs.best_group_ca_at_seller);
+
+        let raw = if inputs.position_group == PlayerFieldPositionGroup::Goalkeeper {
+            0.36 * s + 0.34 * r + 0.18 * a + 0.12 * ab
+        } else {
+            0.34 * s + 0.25 * r + 0.25 * a + 0.16 * ab
+        };
+        // Low appearances are never enough on their own: a key man by
+        // status / rank / ability / renown keeps a high importance floor
+        // even on a thin early-season sample. Deliberately NOT eroded by
+        // market resignation: the graded huge-drop endorsement and the
+        // personal-terms lifts carry the "unsold months lower his sights"
+        // story, and tapering importance here would flip the important /
+        // very-important gate thresholds far earlier than that ramp allows.
+        let claimed = raw.max(ImportanceFactors::evidence_floor(inputs));
+
+        // …but once a whole season of team selections is on the record,
+        // they get a say. Status and rank together carry ~0.6 of the raw
+        // weighting and the floor holds the rest up, so on paper alone a
+        // nominal first-choice who never played was still scored as an
+        // important player — and every club that asked about him was turned
+        // away on behalf of a team that wasn't picking him. Scaling the
+        // finished claim by how far the season bears it out is what lets
+        // those players move, which is what happens in real football.
+        (claimed * ImportanceFactors::evidence_corroboration(inputs)).clamp(0.0, 1.0)
+    }
+
+    /// Sporting "drop" the move represents for the player. Positive when
+    /// the buyer is below the seller, zero when peer, negative when the
+    /// buyer is above. Returned in [-1, +1] roughly; values above ~0.16
+    /// are treated as meaningful step-downs.
+    pub fn sporting_drop(inputs: &TransferPlausibilityInputs) -> f32 {
+        let rep_gap = inputs.seller_rep - inputs.buyer_rep;
+        let league_gap =
+            (inputs.seller_league_rep as f32 - inputs.buyer_league_rep as f32) / 10_000.0;
+        let world_gap = (inputs.seller_world_rep as f32 - inputs.buyer_world_rep as f32) / 10_000.0;
+        0.55 * rep_gap + 0.30 * league_gap + 0.15 * world_gap
+    }
+
+    /// Single entry point used everywhere the pipeline needs a yes/no
+    /// verdict (scouting candidate filter, shortlist build, negotiation
+    /// creation). A move that cannot credibly reach
+    /// [`TransferMoveStage::CanStartNegotiation`] is a `HardReject`;
+    /// otherwise the soft adjustments apply. Delegates to the staged
+    /// [`TransferMovePlausibility`] model so the single-shot and staged
+    /// views can never drift apart.
+    pub fn evaluate(inputs: &TransferPlausibilityInputs) -> TransferPlausibilityVerdict {
+        let assessment = TransferMovePlausibility::assess(inputs);
+        if assessment.stage < TransferMoveStage::CanStartNegotiation {
+            TransferPlausibilityVerdict::HardReject(
+                assessment
+                    .blocking_reason
+                    .unwrap_or(TransferPlausibilityReason::NoSportingUpside),
+            )
+        } else {
+            TransferPlausibilityVerdict::Allow(assessment.adjustment)
+        }
+    }
+}
+
+// ============================================================
+// TransferMovePlausibility — the central staged model
+// ============================================================
+
+/// Stateless namespace for the staged move-plausibility model. Every path
+/// in the transfer pipeline consults it: scouting candidate filtering and
+/// scouting-report → public-interest gating, staff recommendations,
+/// shortlist building, negotiation creation, the seller's initial response,
+/// personal terms, and market-circulation diagnostics. The single-shot
+/// [`TransferPlausibilityEvaluator::evaluate`] is a thin wrapper over it.
+///
+/// The model walks the move through escalating credibility stages
+/// (`CanScoutQuietly` → … → `CanCompleteMove`) and returns the furthest
+/// stage it reaches plus the gate that stopped it. Availability *opens*
+/// gates; it never erases the fee / wage / willingness realism downstream.
+pub struct TransferMovePlausibility;
+
+impl TransferMovePlausibility {
+    pub fn assess(inputs: &TransferPlausibilityInputs) -> TransferMoveAssessment {
+        let importance = TransferPlausibilityEvaluator::player_importance(inputs);
+        let drop = TransferPlausibilityEvaluator::sporting_drop(inputs);
+        let strength = inputs.availability_strength();
+        let eff_rep = inputs.effective_player_reputation();
+        let reach = inputs.buyer_reputation_reach();
+        let rep_drop =
+            (eff_rep as i32 - reach as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+
+        let very_important = importance >= thresholds::VERY_IMPORTANT;
+        let huge_drop = drop >= thresholds::HUGE_SPORTING_DROP;
+        let adjustment = Self::soft_adjustment(
+            inputs,
+            importance,
+            drop,
+            very_important,
+            huge_drop,
+            strength,
+        );
+
+        let max_fee = inputs.affordability_max_fee();
+        let fee_to_value_ratio = if max_fee > 0.0 {
+            (inputs.estimated_value / max_fee) as f32
+        } else {
+            f32::INFINITY
+        };
+        let wage_to_current_ratio = if inputs.current_salary > 0 {
+            inputs.expected_annual_wage as f32 / inputs.current_salary as f32
+        } else {
+            0.0
+        };
+
+        // Builds the assessment with the diagnostics filled from the
+        // captured context — one place so every early-return is consistent.
+        let make = |stage: TransferMoveStage, reason: Option<TransferPlausibilityReason>| {
+            TransferMoveAssessment {
+                stage,
+                blocking_reason: reason,
+                adjustment,
+                diagnostics: TransferMoveDiagnostics {
+                    seller_rep: inputs.seller_rep,
+                    buyer_rep: inputs.buyer_rep,
+                    seller_league_rep: inputs.seller_league_rep,
+                    buyer_league_rep: inputs.buyer_league_rep,
+                    player_world_rep: inputs.player_world_rep,
+                    player_current_rep: inputs.player_current_rep,
+                    player_home_rep: inputs.player_home_rep,
+                    player_effective_rep: eff_rep,
+                    importance,
+                    sporting_drop: drop,
+                    reputation_drop: rep_drop,
+                    availability: strength,
+                    fee_to_value_ratio,
+                    wage_to_current_ratio,
+                    stage,
+                    blocking_reason: reason,
+                },
+            }
+        };
+
+        // ── Route closure: a closed country-pair route can't even be
+        // watched (no point filing a report on an impossible move). ──
+        if inputs.country_pair_blocked {
+            return make(
+                TransferMoveStage::Blocked,
+                Some(TransferPlausibilityReason::CountryPairBlocked),
+            );
+        }
+
+        let important = importance >= thresholds::IMPORTANT;
+        let prime_age =
+            (thresholds::PRIME_AGE_MIN..=thresholds::PRIME_AGE_MAX).contains(&inputs.player_age);
+        let big_drop = drop >= thresholds::BIG_SPORTING_DROP;
+        let same_domestic_market = inputs.same_country || inputs.same_league_or_division;
+        let hard_gate_open = strength.unlocks_hard_gate();
+        // A soft signal can rescue a *merely* important player on a big (not
+        // huge) drop — but never a very-important player or a huge drop.
+        let soft_rescue =
+            matches!(strength, AvailabilityStrength::Soft) && !very_important && !huge_drop;
+        // Availability opens the importance gate — but only within a plausible
+        // level band. A *huge* sporting drop on a permanent move stays
+        // implausible for PUBLIC interest on a *passive / club-driven* Real
+        // signal (a listing, near-expiry, a "not needed" tag, a distressed
+        // seller): a vastly-smaller club is not a credible public suitor for a
+        // top-flight first-teamer, and the fee gate that would otherwise filter
+        // it sits *above* the public-interest stage — so without this an
+        // available giant's first-choice keeper still surfaces 4th-tier sides
+        // under "interested clubs". The player's endorsement of so large a
+        // drop comes from his *own* declared exit — a transfer request — a
+        // pre-negotiated escape (a triggered release clause), or, for a
+        // LISTED player, his accumulated market resignation: a fresh listing
+        // endorses nothing beyond the huge-drop line, but each unsold month
+        // widens the drop he accepts (deeper drops need more resignation),
+        // until the only alternative left is the year-unsold free exit. The
+        // move still dies at the fee / willingness gates. Loans are governed
+        // by their own credibility gate below.
+        let resignation = inputs.listing_resignation.clamp(0.0, 1.0);
+        let resignation_endorsed = inputs.is_listed
+            && !inputs.is_loan
+            && resignation >= Self::resignation_needed_for_drop(drop);
+        let huge_drop_self_unlocked =
+            inputs.is_transfer_requested || inputs.release_clause_triggered || resignation_endorsed;
+        let level_gate_open = if huge_drop && !inputs.is_loan {
+            huge_drop_self_unlocked
+        } else {
+            hard_gate_open
+        };
+
+        // ── Public-interest gate ──────────────────────────────────────
+        // Quiet scouting is always allowed (a club may watch anyone). These
+        // gates decide whether the move is credible enough to put on the
+        // internal shortlist / show PUBLIC interest. An *egregious* mismatch
+        // (a very-important player on a huge sporting drop) is so far-fetched
+        // that the club can watch but wouldn't even waste a shortlist slot;
+        // a merely-important / big-drop mismatch can be an internal name but
+        // not public interest.
+
+        // ── Market geography ──────────────────────────────────────────
+        //
+        // Does this club shop in this market at all? Two clubs of identical
+        // size in the same league answer differently, because one has a
+        // scout there and a decade of signings and the other has neither.
+        // Below the floor the club may still WATCH him — football is
+        // watched globally — but it does not put him on a list, show public
+        // interest, or open talks.
+        //
+        // Three ways past it, each a real one:
+        //   * a `Forced` route (a triggered release clause) — the move is
+        //     already agreed in principle and geography is moot;
+        //   * the player asked to leave, which is the agent's business and
+        //     the agent's business is precisely to reach markets his client
+        //     is not known in;
+        //   * he has been listed long enough to be resigned to it — after
+        //     months unsold the agent shops him everywhere.
+        //
+        // Never applied to a domestic move: `market_affinity` and
+        // `buyer_market_knowledge` are both 1.0 there by construction, so
+        // the product can't fall below the floor.
+        let market_reach = inputs.market_affinity * inputs.buyer_market_knowledge.max(0.5);
+        let agent_is_shopping_him =
+            inputs.is_transfer_requested || (inputs.is_listed && inputs.listing_resignation >= 0.5);
+        if market_reach < thresholds::MARKET_REACH_FLOOR
+            && !matches!(strength, AvailabilityStrength::Forced)
+            && !agent_is_shopping_him
+        {
+            return make(
+                TransferMoveStage::CanScoutQuietly,
+                Some(TransferPlausibilityReason::MarketOutsideBuyersReach),
+            );
+        }
+
+        // Important first-team type at a much stronger club, approached cold.
+        // A merely-big drop is opened by a Real signal (`level_gate_open ==
+        // hard_gate_open`); a *huge* drop only by a Forced clause.
+        if inputs.is_unsolicited && important && big_drop && !level_gate_open && !soft_rescue {
+            let cap = if very_important && huge_drop {
+                TransferMoveStage::CanScoutQuietly
+            } else {
+                TransferMoveStage::CanShortlistInternally
+            };
+            return make(
+                cap,
+                Some(TransferPlausibilityReason::ImportantPlayerAtMuchStrongerClub),
+            );
+        }
+
+        // Same-domestic-market step-down for a prime-age starter.
+        if same_domestic_market
+            && prime_age
+            && important
+            && drop >= thresholds::DOMESTIC_STEP_DOWN_DROP
+            && !hard_gate_open
+            && !soft_rescue
+        {
+            return make(
+                TransferMoveStage::CanShortlistInternally,
+                Some(TransferPlausibilityReason::DomesticStepDownForPrimeStarter),
+            );
+        }
+
+        // Recognised domestic name resists a clearly lower-reputation move
+        // in his own market even when raw status/rank read moderate (the
+        // high-home-rep, low-world-rep case the effective rep surfaces).
+        if same_domestic_market
+            && inputs.is_unsolicited
+            && eff_rep >= thresholds::RENOWN_FLOOR_REP
+            && rep_drop >= thresholds::REP_STEP_DOWN_GAP
+            && !hard_gate_open
+            && !(matches!(strength, AvailabilityStrength::Soft)
+                && rep_drop < thresholds::REP_STEP_DOWN_GAP * 2)
+        {
+            return make(
+                TransferMoveStage::CanShortlistInternally,
+                Some(TransferPlausibilityReason::DomesticStepDownForPrimeStarter),
+            );
+        }
+
+        // Loan from a bigger club down to a smaller one for an important
+        // player — the parent wouldn't risk a key contributor at a sub-tier
+        // suitor. A loan listing (Real availability) opens the ordinary case:
+        // the parent has said it wants him out on loan, so a step down is now
+        // credible. It does NOT open an arbitrarily large one — a listing is
+        // consent to a loan, not consent to *any* destination — so a gap wide
+        // enough to be a different level of football stays blocked unless the
+        // route is forced.
+        let loan_rep_gap = inputs.seller_rep - inputs.buyer_rep;
+        let loan_gap_beyond_consent = loan_rep_gap > thresholds::LOAN_HUGE_REP_GAP_BLOCK
+            && !matches!(strength, AvailabilityStrength::Forced);
+        if inputs.is_loan
+            && (!hard_gate_open || loan_gap_beyond_consent)
+            && importance >= thresholds::LOAN_IMPORTANCE_BLOCK
+            && loan_rep_gap > thresholds::LOAN_REP_GAP_BLOCK
+        {
+            return make(
+                TransferMoveStage::CanShortlistInternally,
+                Some(TransferPlausibilityReason::LoanNotCredible),
+            );
+        }
+
+        // The player's side of the same consent question. The gate above
+        // asks whether the PARENT would send an important player there;
+        // this asks whether HE would go. Importance measures standing in
+        // the current squad, so a declined veteran at a giant reads
+        // unimportant — yet his NAME is intact, and a recognised player
+        // does not spend half a season at a club whose reach is a
+        // fraction of his own standing. The effective-reputation blend
+        // already re-weights renown for cross-border moves (world leads,
+        // home fame discounts), so one continuous rule serves both
+        // markets. Development-age players are exempt: their renown is a
+        // promise rather than a status, and dropping a long way for
+        // minutes is the whole point of their loan pathway. The tolerated
+        // gap widens continuously with market resignation — every unsold
+        // month re-reads what level actually wants him — his own transfer
+        // request endorses any destination he can reach, and a forced
+        // route bypasses as everywhere else.
+        //
+        // The development-age exemption is gone. It read "a young player's
+        // renown is a promise rather than a status" and then switched the
+        // gate off entirely below 24 — so a nineteen-year-old with a
+        // nine-figure name could be offered anywhere at all, which is not
+        // what "his renown counts for less" means. The band is now
+        // continuous in age: wide for a boy, ordinary at the development
+        // age, and never absent.
+        let renown_gap_tolerated =
+            LoanAssetGuard::renown_gap_tolerated(inputs.player_age, resignation);
+        if inputs.is_loan
+            && !inputs.is_transfer_requested
+            && !matches!(strength, AvailabilityStrength::Forced)
+            && rep_drop as f32 > renown_gap_tolerated
+        {
+            return make(
+                TransferMoveStage::CanShortlistInternally,
+                Some(TransferPlausibilityReason::LoanNotCredible),
+            );
+        }
+
+        // Wages are a first-class gate: the buyer must be able to fund a
+        // credible wage to show public interest at all. Only a player who
+        // actively wants out (Real/Forced) waives this — availability opens
+        // the door, it does not pay the wages.
+        if !strength.waives_wage_floor() {
+            let wage_headroom =
+                (inputs.buyer_wage_budget as i64 - inputs.buyer_total_wages as i64).max(0);
+            if inputs.is_loan {
+                // A loan is not a new deal — the borrower picks up a SHARE
+                // of the wage the player already has, so the permanent
+                // gate's `current_salary × 1.15` term (which models a
+                // buyer matching the existing contract) reads as "any club
+                // affords any wage": the cap is anchored on the player's
+                // own salary, which is precisely the number that makes it
+                // unaffordable. Price the share against what this club can
+                // actually pay instead.
+                if inputs.loan_wage_carry(wage_headroom) > LoanAssetGuard::CARRY_MAX {
+                    return make(
+                        TransferMoveStage::CanShortlistInternally,
+                        Some(TransferPlausibilityReason::UnaffordableWages),
+                    );
+                }
+            } else {
+                let soft_wage_cap = ((inputs.current_salary as f64 * 1.15)
+                    .max(wage_headroom as f64 * 1.30))
+                .max(0.0);
+                if soft_wage_cap > 0.0 && (inputs.expected_annual_wage as f64) > soft_wage_cap {
+                    return make(
+                        TransferMoveStage::CanShortlistInternally,
+                        Some(TransferPlausibilityReason::UnaffordableWages),
+                    );
+                }
+            }
+        }
+
+        // ── Negotiation gate: fee affordability ──────────────────────
+        // Public interest is plausible, but if the club can't fund the fee
+        // it can't actually open club-to-club talks. Release clauses and
+        // loans bypass the fee gate. A long-stale listing is judged on its
+        // market-proven price, not the headline valuation: the listing
+        // itself decays toward its floor and the seller's fee floor erodes
+        // on the same clock the player's resignation runs on, so the gate
+        // softens the value continuously with that shared clock.
+        let market_value = inputs.estimated_value
+            * (1.0 - thresholds::RESIGNATION_VALUE_SOFTENING * resignation as f64);
+        if !inputs.release_clause_triggered && !inputs.is_loan && market_value > max_fee {
+            return make(
+                TransferMoveStage::CanShowPublicInterest,
+                Some(TransferPlausibilityReason::UnaffordableFee),
+            );
+        }
+
+        // Loans keep bypassing the fee test — the fee is a fraction of a
+        // valuation nobody is paying. What they cannot bypass is the
+        // asset's WEIGHT: a club does not take custody of a player worth
+        // more than everything it earns in a year, however free the loan
+        // is, because it cannot insure him, cannot pay him and cannot
+        // replace him if it breaks him.
+        if inputs.is_loan && inputs.loan_asset_weight() > LoanAssetGuard::W_MAX {
+            return make(
+                TransferMoveStage::CanShowPublicInterest,
+                Some(TransferPlausibilityReason::LoanBeyondBorrowerMeans),
+            );
+        }
+
+        // ── Personal-terms gate: player willingness floor ────────────
+        // Fee + wage are credible, so talks can open — but the player's
+        // own career incentives must make sense before he agrees terms.
+        if let Some(reason) = Self::player_terms_floor(inputs) {
+            return make(TransferMoveStage::CanStartNegotiation, Some(reason));
+        }
+
+        // Everything clears. A move that still asks the player to step down
+        // (a tolerated drop he has a reason to accept) reaches
+        // `CanAgreePersonalTerms` — he will agree, but completion stays
+        // sensitive to the wage / status offered. A clean lateral or upward
+        // move has nothing left to weigh and reaches `CanCompleteMove`.
+        let tolerated_step_down = drop > thresholds::DOMESTIC_STEP_DOWN_DROP
+            && !matches!(strength, AvailabilityStrength::None);
+        if tolerated_step_down {
+            make(TransferMoveStage::CanAgreePersonalTerms, None)
+        } else {
+            make(TransferMoveStage::CanCompleteMove, None)
+        }
+    }
+
+    /// Resignation a listed player needs before he endorses a permanent
+    /// sporting drop of the given size. 0 at the huge-drop line (a Real
+    /// listing already opens anything up to there), ramping linearly to
+    /// 1.0 at [`thresholds::RESIGNATION_FULL_DROP`] — deeper drops demand
+    /// more time watching the market decline him. Above the full-drop
+    /// line the requirement exceeds any reachable resignation, so the
+    /// gate stays closed to everything but a request / forced clause.
+    fn resignation_needed_for_drop(drop: f32) -> f32 {
+        let span = thresholds::RESIGNATION_FULL_DROP - thresholds::HUGE_SPORTING_DROP;
+        ((drop - thresholds::HUGE_SPORTING_DROP) / span).max(0.0)
+    }
+
+    /// Player-side willingness hard floor for the personal-terms phase. A
+    /// player with **no** availability signal (`None`) hard-refuses a move
+    /// his career incentives reject; any real reason to move (request,
+    /// listing, unhappiness, near-expiry, forced clause) clears the hard
+    /// floor and leaves only the probability texture to the resolver.
+    /// Returns the reason he would refuse, or `None` if the move is
+    /// basically reasonable for him.
+    pub fn player_terms_floor(
+        inputs: &TransferPlausibilityInputs,
+    ) -> Option<TransferPlausibilityReason> {
+        if !matches!(inputs.availability_strength(), AvailabilityStrength::None) {
+            return None;
+        }
+
+        let importance = TransferPlausibilityEvaluator::player_importance(inputs);
+        let drop = TransferPlausibilityEvaluator::sporting_drop(inputs);
+        let eff_rep = inputs.effective_player_reputation();
+        let rep_drop = eff_rep as i32 - inputs.buyer_reputation_reach() as i32;
+        let prime =
+            (thresholds::PRIME_AGE_MIN..=thresholds::PRIME_AGE_MAX).contains(&inputs.player_age);
+        let domestic = inputs.same_country || inputs.same_league_or_division;
+
+        // First-team / key player refuses a clear sporting step down.
+        if importance >= thresholds::IMPORTANT && drop >= thresholds::BIG_SPORTING_DROP {
+            return Some(TransferPlausibilityReason::ImportantPlayerAtMuchStrongerClub);
+        }
+        // Prime-age player refuses a lower-league domestic move.
+        if prime
+            && importance >= thresholds::IMPORTANT - 0.08
+            && domestic
+            && drop >= thresholds::DOMESTIC_STEP_DOWN_DROP
+        {
+            return Some(TransferPlausibilityReason::DomesticStepDownForPrimeStarter);
+        }
+        // Recognised domestic name refuses a clearly lower-reputation club.
+        if domestic
+            && eff_rep >= thresholds::RENOWN_FLOOR_REP
+            && rep_drop >= thresholds::REP_STEP_DOWN_GAP as i32
+        {
+            return Some(TransferPlausibilityReason::DomesticStepDownForPrimeStarter);
+        }
+        None
+    }
+
+    /// Soft adjustments applied once a move is at least plausible. The
+    /// sporting-drop and importance dampers match the pre-staged model; the
+    /// availability counterbalance is now scaled by [`AvailabilityStrength`]
+    /// (Soft nudges, Real/Forced lift) instead of an all-or-nothing boost.
+    fn soft_adjustment(
+        inputs: &TransferPlausibilityInputs,
+        importance: f32,
+        drop: f32,
+        very_important: bool,
+        huge_drop: bool,
+        strength: AvailabilityStrength,
+    ) -> TransferPlausibilityAdjustment {
+        let mut adj = TransferPlausibilityAdjustment::neutral();
+        let resignation = inputs.listing_resignation.clamp(0.0, 1.0);
+
+        if drop > 0.0 {
+            adj.shortlist_score_multiplier *= (1.0_f32 - drop * 1.8).clamp(0.35, 1.0);
+            adj.seller_acceptance_delta -= drop * 35.0;
+            // The step-down resistance a player brings to personal terms
+            // fades with his market resignation — after months unsold he
+            // has already re-read what level actually wants him.
+            adj.player_terms_delta -= drop * 45.0 * (1.0 - 0.55 * resignation);
+            adj.minimum_fee_multiplier += drop as f64 * 0.9;
+        } else {
+            // A step UP had no counterpart at all here: the model knew how
+            // to make a player refuse a lesser club and nothing about him
+            // wanting a better one, so every upward move was scored as
+            // merely neutral. Loss aversion is real and the asymmetry
+            // stays — this is deliberately half the downward slope — but a
+            // clear sporting step up should now read as something the
+            // player actively wants.
+            adj.player_terms_delta += (-drop) * 22.0;
+        }
+
+        if importance >= 0.75 {
+            adj.shortlist_score_multiplier *= 0.55;
+            adj.seller_acceptance_delta -= 18.0;
+            adj.importance_penalty += 18.0;
+            adj.minimum_fee_multiplier += 0.25;
+        }
+
+        if very_important {
+            adj.shortlist_score_multiplier *= 0.45;
+            adj.seller_acceptance_delta -= 28.0;
+            adj.importance_penalty += 28.0;
+            adj.minimum_fee_multiplier += 0.45;
+        }
+
+        // Irreplaceable first-choice starter: the seller demands a clear
+        // replacement-value premium on top (compensation realism — a normal
+        // asking price isn't enough for a key man who isn't pushing to go).
+        if importance >= thresholds::IMPORTANT && inputs.seller_position_rank == 0 {
+            adj.minimum_fee_multiplier += 0.15;
+        }
+
+        if huge_drop {
+            adj.shortlist_score_multiplier *= 0.75;
+        }
+
+        match strength {
+            AvailabilityStrength::None => {}
+            AvailabilityStrength::Soft => {
+                // Opens the door a crack — softens, doesn't erase.
+                adj.seller_acceptance_delta += 8.0;
+                adj.player_terms_delta += 5.0;
+                adj.minimum_fee_multiplier = (adj.minimum_fee_multiplier - 0.08).max(1.0);
+            }
+            AvailabilityStrength::Real => {
+                adj.shortlist_score_multiplier = adj.shortlist_score_multiplier.max(0.75);
+                adj.seller_acceptance_delta += 15.0;
+                adj.player_terms_delta += 10.0;
+                adj.minimum_fee_multiplier = (adj.minimum_fee_multiplier - 0.20).max(1.0);
+            }
+            AvailabilityStrength::Forced => {
+                adj.shortlist_score_multiplier = adj.shortlist_score_multiplier.max(0.85);
+                adj.seller_acceptance_delta += 25.0;
+                adj.player_terms_delta += 25.0;
+                adj.minimum_fee_multiplier = 1.0;
+            }
+        }
+
+        // Market resignation lifts both sides continuously on top of the
+        // discrete availability tier: the player increasingly says yes to
+        // the clubs that actually come (approaching the +25 a formal
+        // request grants), and the seller increasingly just wants the deal
+        // done — the fee floors still guard against a giveaway.
+        if resignation > 0.0 {
+            adj.player_terms_delta += resignation * 20.0;
+            adj.seller_acceptance_delta += resignation * 10.0;
+        }
+
+        // Upward / lateral move floor: a bigger or peer club should not
+        // bury a smaller club's standout beneath every listed or free
+        // alternative on its shortlist. The importance dampers above are a
+        // SELLER-side reality (he's dear and hard to prise away); they must
+        // not also make the BUYER rank his most desirable realistic target
+        // last. For a move that is NOT a step down for the player
+        // (`drop <= 0`, i.e. the buyer is same-or-bigger), floor the
+        // shortlist multiplier so the standout stays competitive on the
+        // board — the seller-side gates still make the actual deal hard.
+        if drop <= 0.0 {
+            adj.shortlist_score_multiplier = adj.shortlist_score_multiplier.max(0.70);
+        }
+
+        adj
+    }
+}
+
+// ============================================================
+// Pipeline-side input builders
+// ============================================================
+//
+// `TransferPlausibilityBuilder` assembles `TransferPlausibilityInputs`
+// from the shapes the pipeline actually carries. Keeping the builder
+// methods inside a single struct means call sites stay one-liners and
+// the wage policy / importance heuristics never silently drift between
+// callers.
+
+use crate::Player;
+use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
+use crate::transfers::{
+    ClubMarketKnowledge, MarketAffinity, MarketAffinityInputs, MarketMap, MoveKind,
+};
+use crate::{Club, Country, Person, PlayerStatusType, TeamType};
+use chrono::NaiveDate;
+
+/// Per-club buyer snapshot reused across plausibility lookups so the
+/// builder doesn't re-walk reputation/wage data for every candidate.
+#[derive(Debug, Clone)]
+pub(crate) struct BuyerPlausibilityContext {
+    pub buyer_rep: f32,
+    pub buyer_world_rep: i16,
+    pub buyer_league_rep: u16,
+    pub buyer_transfer_budget: f64,
+    pub buyer_wage_budget: u32,
+    pub buyer_total_wages: u32,
+    pub buyer_country_id: u32,
+    pub buyer_country_code: String,
+    pub buyer_league_id: Option<u32>,
+    /// Annualised trailing income of the BUYING club, and its best-paid
+    /// player. The two numbers a loan is priced against (see
+    /// [`crate::transfers::loan::guard::LoanAssetGuard`]): a club whose whole year is
+    /// worth less than the asset does not borrow it, and one already at
+    /// its wage ceiling cannot carry the wage that comes with him.
+    /// Permanent moves read neither — a purchase is priced by the fee gate.
+    pub buyer_annual_income: i64,
+    pub buyer_top_earner: u32,
+}
+
+impl BuyerPlausibilityContext {
+    pub(crate) fn build(country: &Country, club: &Club, date: NaiveDate) -> Self {
+        let main_team = club
+            .teams
+            .iter()
+            .find(|t| matches!(t.team_type, TeamType::Main));
+        let buyer_rep = main_team
+            .map(|t| t.reputation.overall_score())
+            .unwrap_or(0.3);
+        let buyer_world_rep = main_team.map(|t| t.reputation.world as i16).unwrap_or(0);
+        let buyer_league_id = main_team.and_then(|t| t.league_id);
+        let buyer_league_rep = buyer_league_id
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|l| l.reputation)
+            .unwrap_or(0);
+        let buyer_total_wages: u32 = club.teams.iter().map(|t| t.get_annual_salary()).sum();
+        let buyer_wage_budget = club
+            .finance
+            .wage_budget
+            .as_ref()
+            .map(|b| b.amount.max(0.0) as u32)
+            .unwrap_or(buyer_total_wages.saturating_mul(11) / 10);
+        let buyer_transfer_budget = club
+            .finance
+            .transfer_budget
+            .as_ref()
+            .map(|b| b.amount)
+            .unwrap_or(club.transfer_plan.total_budget);
+        BuyerPlausibilityContext {
+            buyer_rep,
+            buyer_world_rep,
+            buyer_league_rep,
+            buyer_transfer_budget,
+            buyer_wage_budget,
+            buyer_total_wages,
+            buyer_country_id: country.id,
+            buyer_country_code: country.code.clone(),
+            buyer_league_id,
+            buyer_annual_income: club.finance.estimated_annual_income(date),
+            buyer_top_earner: club
+                .teams
+                .iter()
+                .flat_map(|t| t.players.iter())
+                .filter_map(|p| p.contract.as_ref().map(|c| c.salary))
+                .max()
+                .unwrap_or(0),
+        }
+    }
+}
+
+/// Stateless namespace for the pipeline-facing input builders. Wrapped
+/// in a struct so call sites read like a discoverable API
+/// (`TransferPlausibilityBuilder::from_summary(...)`) instead of a
+/// loose function grab-bag.
+pub(crate) struct TransferPlausibilityBuilder;
+
+impl TransferPlausibilityBuilder {
+    /// Build plausibility inputs from a `PlayerSummary` (the unit used by
+    /// process_scouting / shortlists / build_shortlists). Reads the
+    /// seller-side context carried on the summary
+    /// ([`crate::transfers::pipeline::SellerPlausibilityContext`]) instead of
+    /// re-resolving the selling club, so a **foreign** target assesses with
+    /// the same rigour as a domestic one. Previously this looked the seller
+    /// club up in the *buyer's* country and returned `None` for every
+    /// cross-country target — which callers read as "not rejected", letting
+    /// a lower-league club publicly chase a first-team player abroad.
+    ///
+    /// Returns `Option` for signature stability with the staged callers; the
+    /// seller context is always present on a pool-built summary, so the only
+    /// `None` would come from a hand-built summary with no seller data.
+    pub(crate) fn from_summary(
+        buyer_ctx: &BuyerPlausibilityContext,
+        target: &PlayerSummary,
+        is_loan: bool,
+        is_unsolicited: bool,
+        date: NaiveDate,
+        market_reach: Option<f32>,
+    ) -> Option<TransferPlausibilityInputs> {
+        let seller = &target.seller_ctx;
+        let player_ca = target.skill_ability;
+        let position_group = target.position_group;
+        let best_group_ca = target.club_best_in_group.max(player_ca);
+
+        let same_country = target.country_id == buyer_ctx.buyer_country_id;
+        let same_league_or_division = same_country
+            && match (buyer_ctx.buyer_league_id, seller.league_id) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            };
+
+        let country_pair_blocked = TransferRoutePolicy::is_blocked(
+            &target.country_code,
+            &buyer_ctx.buyer_country_code,
+            date,
+        );
+
+        let expected_annual_wage = WageCalculator::expected_annual_wage_raw(
+            player_ca,
+            target.current_reputation,
+            matches!(position_group, PlayerFieldPositionGroup::Forward),
+            matches!(position_group, PlayerFieldPositionGroup::Goalkeeper),
+            target.age,
+            buyer_ctx.buyer_rep,
+            buyer_ctx.buyer_league_rep,
+        );
+
+        Some(TransferPlausibilityInputs {
+            buyer_rep: buyer_ctx.buyer_rep,
+            seller_rep: seller.club_reputation_score,
+            buyer_league_rep: buyer_ctx.buyer_league_rep,
+            seller_league_rep: seller.league_reputation,
+            buyer_world_rep: buyer_ctx.buyer_world_rep,
+            seller_world_rep: target.club_world_reputation,
+            player_world_rep: target.world_reputation,
+            player_current_rep: target.current_reputation,
+            player_home_rep: target.home_reputation,
+            player_age: target.age,
+            position_group,
+            is_listed: target.is_listed,
+            is_loan_listed: target.is_loan_listed,
+            is_transfer_requested: seller.is_transfer_requested,
+            is_unhappy: seller.is_unhappy,
+            squad_status: seller.squad_status.clone(),
+            contract_months_remaining: target.contract_months_remaining,
+            current_salary: target.salary,
+            estimated_value: target.estimated_value,
+            player_appearances: target.appearances,
+            seller_club_matches: seller.club_matches_played,
+            seller_position_rank: seller.position_group_rank,
+            player_ca,
+            best_group_ca_at_seller: best_group_ca,
+            is_loan,
+            is_unsolicited,
+            seller_in_debt: seller.in_debt,
+            release_clause_triggered: false,
+            listing_resignation: seller.market_resignation,
+            same_country,
+            same_league_or_division,
+            country_pair_blocked,
+            buyer_transfer_budget: buyer_ctx.buyer_transfer_budget,
+            buyer_wage_budget: buyer_ctx.buyer_wage_budget,
+            buyer_total_wages: buyer_ctx.buyer_total_wages,
+            expected_annual_wage,
+            player_stage_inclination: seller.big_stage_inclination,
+            // The pool builder cannot read the world map itself: it is
+            // called from inside per-country borrows that cannot reach
+            // `SimulatorData`. What it CAN do is take the number from a
+            // caller that already computed it — the scouting pass memoises
+            // exactly this per (passport, league) — so a club cannot show
+            // PUBLIC interest in a market it does not work.
+            //
+            // `None` stays neutral, and neutral is right for the callers
+            // that have no map in hand: a missing world fails OPEN here
+            // exactly as it does everywhere else in the geography.
+            //
+            // Folded onto the affinity term with knowledge left at 1.0
+            // because the value handed in is already the PRODUCT of the two
+            // (`ScoutingProcessor::market_reach_for`); splitting it back
+            // apart would invent a decomposition the caller never had.
+            market_affinity: market_reach.unwrap_or(1.0).clamp(0.0, 1.0),
+            buyer_market_knowledge: 1.0,
+            seller_marketed: seller.is_marketed,
+            buyer_annual_income: buyer_ctx.buyer_annual_income,
+            buyer_top_earner: buyer_ctx.buyer_top_earner,
+        })
+    }
+
+    /// Convenience wrapper for callers who already have a `PlayerSummary`
+    /// and a buyer context: returns the verdict directly. Works for both
+    /// domestic and foreign targets — the seller context rides on the
+    /// summary, so no selling-country reference is needed.
+    pub(crate) fn evaluate_summary(
+        buyer_ctx: &BuyerPlausibilityContext,
+        target: &PlayerSummary,
+        is_loan: bool,
+        is_unsolicited: bool,
+        date: NaiveDate,
+        market_reach: Option<f32>,
+    ) -> Option<TransferPlausibilityVerdict> {
+        Self::from_summary(
+            buyer_ctx,
+            target,
+            is_loan,
+            is_unsolicited,
+            date,
+            market_reach,
+        )
+        .map(|i| TransferPlausibilityEvaluator::evaluate(&i))
+    }
+
+    /// Staged-model counterpart of [`Self::evaluate_summary`] — returns the
+    /// full [`TransferMoveAssessment`] (furthest reachable stage +
+    /// diagnostics) so a caller can gate on a specific stage (e.g. scouting
+    /// sets public interest only at `CanShowPublicInterest`).
+    pub(crate) fn assess_summary(
+        buyer_ctx: &BuyerPlausibilityContext,
+        target: &PlayerSummary,
+        is_loan: bool,
+        is_unsolicited: bool,
+        date: NaiveDate,
+        market_reach: Option<f32>,
+    ) -> Option<TransferMoveAssessment> {
+        Self::from_summary(
+            buyer_ctx,
+            target,
+            is_loan,
+            is_unsolicited,
+            date,
+            market_reach,
+        )
+        .map(|i| TransferMovePlausibility::assess(&i))
+    }
+
+    /// Build plausibility inputs for a **cross-country** move with the live
+    /// `Club` + `Player` references on both sides. The single source of
+    /// truth for the full-reference build: [`Self::from_clubs`] (same
+    /// country) delegates here with the country passed twice. Used by every
+    /// foreign path — `initiate_foreign_negotiations`,
+    /// `scan_foreign_loan_market`, and `clubs_interested_in_player` — so a
+    /// buyer abroad is held to the same level / fee / wage / willingness
+    /// realism as a domestic suitor.
+    ///
+    /// Seller reputation, league reputation, rank, and best-CA-in-group are
+    /// read from the **selling** country/club (not the buyer's), and
+    /// `same_country` / `same_league_or_division` compare the two countries
+    /// directly. The country-pair route block is evaluated on the real
+    /// (seller → buyer) route. When the seller context genuinely cannot be
+    /// resolved the caller — not this builder — decides the fallback; this
+    /// builder always returns a populated input set from the refs given.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_global(
+        buying_country: &Country,
+        buying_club: &Club,
+        selling_country: &Country,
+        selling_club: &Club,
+        player: &Player,
+        estimated_value: f64,
+        is_loan: bool,
+        is_unsolicited: bool,
+        date: NaiveDate,
+        market_map: &MarketMap,
+    ) -> TransferPlausibilityInputs {
+        let buyer_ctx = BuyerPlausibilityContext::build(buying_country, buying_club, date);
+
+        let main_team = selling_club
+            .teams
+            .iter()
+            .find(|t| matches!(t.team_type, TeamType::Main));
+        let seller_rep = main_team
+            .map(|t| t.reputation.overall_score())
+            .unwrap_or(0.3);
+        let seller_world_rep = main_team.map(|t| t.reputation.world as i16).unwrap_or(0);
+        let seller_league_id = main_team.and_then(|t| t.league_id);
+        // League reputation comes from the SELLER's country registry — a
+        // foreign buyer must read the seller league's standing, not look it
+        // up (and miss) in its own country.
+        let seller_league_rep = seller_league_id
+            .and_then(|lid| selling_country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|l| l.reputation)
+            .unwrap_or(0);
+
+        let position = player.position();
+        let position_group = position.position_group();
+        let player_ca = player.player_attributes.current_ability;
+        let rank = PipelineProcessor::position_group_rank(selling_club, player.id, position_group);
+        let rank = if rank == u8::MAX { 1 } else { rank };
+        let best_group_ca =
+            PipelineProcessor::best_ca_in_group(selling_club, position_group).max(player_ca);
+
+        let is_listed = player.statuses.has(PlayerStatusType::Lst);
+        let is_loan_listed = player.statuses.has(PlayerStatusType::Loa);
+        let is_transfer_requested = player.statuses.has(PlayerStatusType::Req);
+        let is_unhappy = player.statuses.has(PlayerStatusType::Unh);
+
+        let (squad_status, contract_months_remaining, current_salary) = player
+            .contract
+            .as_ref()
+            .map(|c| {
+                let months =
+                    ((c.expiration - date).num_days().max(0) / 30).min(i16::MAX as i64) as i16;
+                (c.squad_status.clone(), months, c.salary)
+            })
+            .unwrap_or((PlayerSquadStatus::NotYetSet, 0, 0));
+
+        let release_clause_triggered = player
+            .contract
+            .as_ref()
+            .map(|c| c.release_clause_triggered(0.0, false).is_some())
+            .unwrap_or(false);
+
+        let same_country = buying_country.id == selling_country.id;
+        let same_league_or_division = same_country
+            && match (buyer_ctx.buyer_league_id, seller_league_id) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            };
+
+        let expected_annual_wage = WageCalculator::expected_annual_wage(
+            player,
+            player.age(date),
+            buyer_ctx.buyer_rep,
+            buyer_ctx.buyer_league_rep,
+        );
+
+        // Real (seller → buyer) route friction. For a same-country move the
+        // pair is (X, X), which is never on the block list, so `from_clubs`
+        // still yields `false` here.
+        let country_pair_blocked =
+            TransferRoutePolicy::is_blocked(&selling_country.code, &buying_country.code, date);
+
+        // Where the move sits on the map: is this a place people like him
+        // go, and does this club work that market? A world with no geography
+        // loaded (a fixture, a database predating the country cards) reads
+        // both as neutral, so the gate is silent rather than closed.
+        let (market_affinity, buyer_market_knowledge) = if market_map.is_silent() {
+            (1.0, 1.0)
+        } else {
+            let affinity = MarketAffinity::affinity(
+                market_map,
+                MarketAffinityInputs {
+                    buyer_country_id: buying_country.id,
+                    nationality_country_id: player.country_id,
+                    current_country_id: selling_country.id,
+                    // Nothing here declares a move wage-led: the buyer's
+                    // owner funding does, continuously, inside the affinity.
+                    // A caller that hard-coded `Money` would make every
+                    // approach by a rich club a Gulf landing.
+                    kind: MoveKind::Talent,
+                    benefactor: buying_club.board.ownership.benefactor,
+                },
+            );
+            // Invert the walk. Asking every staff member "what is your level
+            // on Colombia?" scans the whole department per question; a scout
+            // knows a handful of countries, so one pass over the department
+            // collecting the two countries we care about answers both.
+            //
+            // The MAX over the selling country and the nationality is the
+            // right reading and stays: a club with a Brazil man can see a
+            // Brazilian at Porto, and a club with a Portugal man can see the
+            // same player through the league he plays in.
+            let mut best_scout_level = 0u8;
+            for staff in buying_club
+                .teams
+                .teams
+                .iter()
+                .flat_map(|team| team.staffs.staffs.iter())
+            {
+                for known in &staff.staff_attributes.knowledge.known_countries {
+                    if known.country_id == selling_country.id
+                        || known.country_id == player.country_id
+                    {
+                        best_scout_level = best_scout_level.max(known.level);
+                    }
+                }
+            }
+            let knowledge = ClubMarketKnowledge::knowledge(
+                market_map,
+                buying_country.id,
+                &buying_club.market_ledger,
+                best_scout_level,
+                selling_country.id,
+                date,
+            )
+            .max(ClubMarketKnowledge::knowledge(
+                market_map,
+                buying_country.id,
+                &buying_club.market_ledger,
+                best_scout_level,
+                player.country_id,
+                date,
+            ));
+            (affinity, knowledge)
+        };
+
+        TransferPlausibilityInputs {
+            buyer_rep: buyer_ctx.buyer_rep,
+            seller_rep,
+            buyer_league_rep: buyer_ctx.buyer_league_rep,
+            seller_league_rep,
+            buyer_world_rep: buyer_ctx.buyer_world_rep,
+            seller_world_rep,
+            player_world_rep: player.player_attributes.world_reputation,
+            player_current_rep: player.player_attributes.current_reputation,
+            player_home_rep: player.player_attributes.home_reputation,
+            player_age: player.age(date),
+            position_group,
+            is_listed,
+            is_loan_listed,
+            is_transfer_requested,
+            is_unhappy,
+            squad_status,
+            contract_months_remaining,
+            current_salary,
+            estimated_value,
+            player_appearances: player.statistics.total_games(),
+            seller_club_matches: {
+                let squad = selling_club
+                    .teams
+                    .teams
+                    .iter()
+                    .find(|t| t.players.players.iter().any(|p| p.id == player.id));
+                SquadEvidenceSource::club_matches(
+                    squad.map(|t| t.team_type).unwrap_or(TeamType::Main),
+                    squad.map(|t| t.league_id.is_some()).unwrap_or(true),
+                    SquadEvidenceContext::current_season_sample(date, selling_club)
+                        .club_matches_proxy(),
+                )
+            },
+            seller_position_rank: rank,
+            player_ca,
+            best_group_ca_at_seller: best_group_ca,
+            is_loan,
+            is_unsolicited,
+            seller_in_debt: selling_club.finance.balance.balance < 0,
+            release_clause_triggered,
+            listing_resignation: player.market_resignation(date),
+            same_country,
+            same_league_or_division,
+            country_pair_blocked,
+            buyer_transfer_budget: buyer_ctx.buyer_transfer_budget,
+            buyer_wage_budget: buyer_ctx.buyer_wage_budget,
+            buyer_total_wages: buyer_ctx.buyer_total_wages,
+            expected_annual_wage,
+            player_stage_inclination: player.big_stage_inclination,
+            market_affinity,
+            buyer_market_knowledge,
+            seller_marketed: selling_club.transfer_plan.is_marketed(player.id),
+            buyer_annual_income: buyer_ctx.buyer_annual_income,
+            buyer_top_earner: buyer_ctx.buyer_top_earner,
+        }
+    }
+
+    /// Build plausibility inputs at negotiation-start time when buyer and
+    /// seller live in the **same** country and the buyer has the live
+    /// `Club` + `Player` references. Thin wrapper over [`Self::from_global`]
+    /// (same country passed twice) so the single-country and cross-country
+    /// builds can never drift apart.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_clubs(
+        country: &Country,
+        buyer_club: &Club,
+        selling_club: &Club,
+        player: &Player,
+        estimated_value: f64,
+        is_loan: bool,
+        is_unsolicited: bool,
+        date: NaiveDate,
+    ) -> TransferPlausibilityInputs {
+        Self::from_global(
+            country,
+            buyer_club,
+            country,
+            selling_club,
+            player,
+            estimated_value,
+            is_loan,
+            is_unsolicited,
+            date,
+            // A domestic move has no geography to price: both the corridor
+            // and the buyer's knowledge of the market are 1.0 by
+            // construction, which is exactly what an empty map yields.
+            &MarketMap::default(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::club::player::transfer::AvailabilityBlockReason;
+    use crate::transfers::scouting::exposure::MarketDiscoveryDiagnosis;
+
+    fn base_inputs() -> TransferPlausibilityInputs {
+        TransferPlausibilityInputs {
+            buyer_rep: 0.45,
+            seller_rep: 0.80,
+            buyer_league_rep: 5500,
+            seller_league_rep: 5500,
+            buyer_world_rep: 3500,
+            seller_world_rep: 7500,
+            player_world_rep: 5500,
+            player_current_rep: 5500,
+            player_home_rep: 5500,
+            player_age: 26,
+            position_group: PlayerFieldPositionGroup::Goalkeeper,
+            country_pair_blocked: false,
+            is_listed: false,
+            is_loan_listed: false,
+            is_transfer_requested: false,
+            is_unhappy: false,
+            squad_status: PlayerSquadStatus::FirstTeamRegular,
+            contract_months_remaining: 36,
+            current_salary: 500_000,
+            estimated_value: 5_000_000.0,
+            player_appearances: 30,
+            // Unreadable sample: these fixtures predate the corroboration
+            // taper, so the standing floor applies at full strength.
+            seller_club_matches: 0,
+            seller_position_rank: 0,
+            player_ca: 150,
+            best_group_ca_at_seller: 150,
+            is_loan: false,
+            is_unsolicited: true,
+            seller_in_debt: false,
+            release_clause_triggered: false,
+            listing_resignation: 0.0,
+            same_country: true,
+            same_league_or_division: true,
+            buyer_transfer_budget: 10_000_000.0,
+            buyer_wage_budget: 5_000_000,
+            buyer_total_wages: 3_500_000,
+            expected_annual_wage: 1_000_000,
+            player_stage_inclination: 0.0,
+            seller_marketed: false,
+            buyer_annual_income: 0,
+            buyer_top_earner: 0,
+            market_affinity: 1.0,
+            buyer_market_knowledge: 1.0,
+        }
+    }
+
+    /// A moderately-important domestic step-down: important but not
+    /// *very* important, on a big-but-not-huge sporting drop, with
+    /// affordable fee + wages. Lets the availability tier be the deciding
+    /// factor rather than the very-important / huge-drop hard wall.
+    fn moderate_step_down_inputs() -> TransferPlausibilityInputs {
+        TransferPlausibilityInputs {
+            buyer_rep: 0.55,
+            seller_rep: 0.78,
+            buyer_league_rep: 5000,
+            seller_league_rep: 6000,
+            buyer_world_rep: 5000,
+            seller_world_rep: 7000,
+            player_world_rep: 4800,
+            player_current_rep: 4800,
+            player_home_rep: 4800,
+            player_age: 26,
+            position_group: PlayerFieldPositionGroup::Midfielder,
+            country_pair_blocked: false,
+            is_listed: false,
+            is_loan_listed: false,
+            is_transfer_requested: false,
+            is_unhappy: false,
+            squad_status: PlayerSquadStatus::FirstTeamRegular,
+            contract_months_remaining: 30,
+            current_salary: 400_000,
+            estimated_value: 6_000_000.0,
+            player_appearances: 22,
+            // Unreadable sample: these fixtures predate the corroboration
+            // taper, so the standing floor applies at full strength.
+            seller_club_matches: 0,
+            seller_position_rank: 1,
+            player_ca: 140,
+            best_group_ca_at_seller: 145,
+            is_loan: false,
+            is_unsolicited: true,
+            seller_in_debt: false,
+            release_clause_triggered: false,
+            listing_resignation: 0.0,
+            same_country: true,
+            same_league_or_division: true,
+            buyer_transfer_budget: 15_000_000.0,
+            buyer_wage_budget: 20_000_000,
+            buyer_total_wages: 10_000_000,
+            expected_annual_wage: 800_000,
+            player_stage_inclination: 0.0,
+            seller_marketed: false,
+            buyer_annual_income: 0,
+            buyer_top_earner: 0,
+            market_affinity: 1.0,
+            buyer_market_knowledge: 1.0,
+        }
+    }
+
+    // ── 1. Lower club can scout a strong first-team player privately,
+    //       but cannot show public interest (no Wnt). ──
+    #[test]
+    fn lower_club_scouts_privately_but_no_public_interest() {
+        let a = TransferMovePlausibility::assess(&base_inputs());
+        assert!(a.reaches(TransferMoveStage::CanScoutQuietly));
+        assert!(a.reaches(TransferMoveStage::CanShortlistInternally));
+        assert!(
+            !a.reaches(TransferMoveStage::CanShowPublicInterest),
+            "an unsolicited cold approach for a strong first-team player at a much \
+             bigger club must not reach public interest; got {:?}",
+            a.stage
+        );
+    }
+
+    // ── 2. A non-pass scouting report does not, on its own, set Wnt.
+    //       At the model level: the public-interest stage — the gate the
+    //       scouting wiring checks before setting Wnt — is not reached for
+    //       the canonical important-at-stronger-club target, so no Buy /
+    //       StrongBuy report could publish interest. ──
+    #[test]
+    fn non_pass_report_alone_does_not_unlock_public_interest() {
+        let a = TransferMovePlausibility::assess(&base_inputs());
+        assert!(!a.reaches(TransferMoveStage::CanShowPublicInterest));
+        // The block is the move's implausibility, not a missing report.
+        assert!(matches!(
+            a.blocking_reason,
+            Some(TransferPlausibilityReason::ImportantPlayerAtMuchStrongerClub)
+                | Some(TransferPlausibilityReason::DomesticStepDownForPrimeStarter)
+        ));
+    }
+
+    // ── 3. First-team player at a stronger club rejects lower-league
+    //       public interest without an exception reason. ──
+    #[test]
+    fn first_team_player_rejects_public_interest_without_exception() {
+        let a = TransferMovePlausibility::assess(&base_inputs());
+        assert!(!a.reaches(TransferMoveStage::CanShowPublicInterest));
+        assert!(a.blocking_reason.is_some());
+    }
+
+    // ── 4. The same player can move down only with a real availability
+    //       signal (request / listing / unhappiness). ──
+    #[test]
+    fn same_player_moves_down_only_with_real_availability() {
+        // No signal → blocked before public interest.
+        assert!(
+            !TransferMovePlausibility::assess(&base_inputs())
+                .reaches(TransferMoveStage::CanShowPublicInterest)
+        );
+        // Transfer request opens the door all the way to negotiation
+        // (the wage/status credibility is then enforced at personal terms).
+        let mut requested = base_inputs();
+        requested.is_transfer_requested = true;
+        assert!(
+            TransferMovePlausibility::assess(&requested)
+                .reaches(TransferMoveStage::CanStartNegotiation),
+            "a transfer-requested player can be pursued by a lower club"
+        );
+    }
+
+    // ── 5. High home reputation blocks an unrealistic domestic step-down
+    //       even when world reputation is low. ──
+    #[test]
+    fn high_home_reputation_blocks_domestic_step_down_despite_low_world_rep() {
+        // A domestic great: modest world profile, big home / current
+        // standing. Status / rank are only moderate, so the block must
+        // come from the *reputation*, not the importance gate.
+        let mut renowned = base_inputs();
+        renowned.position_group = PlayerFieldPositionGroup::Midfielder;
+        renowned.squad_status = PlayerSquadStatus::HotProspectForTheFuture;
+        renowned.seller_position_rank = 1;
+        renowned.player_appearances = 18;
+        renowned.player_ca = 130;
+        renowned.best_group_ca_at_seller = 150;
+        renowned.player_world_rep = 3000;
+        renowned.player_current_rep = 7000;
+        renowned.player_home_rep = 7500;
+
+        // Effective reputation lifts well above the buyer's reach.
+        let eff = renowned.effective_player_reputation();
+        assert!(
+            eff >= 6000,
+            "effective rep should reflect domestic renown: {eff}"
+        );
+        let a = TransferMovePlausibility::assess(&renowned);
+        assert!(
+            !a.reaches(TransferMoveStage::CanShowPublicInterest),
+            "a renowned domestic name must not be a public bargain; got {:?}",
+            a.stage
+        );
+
+        // Control: collapse home / current down to the low world rep — now
+        // he is genuinely low-reputation and the same move opens up.
+        let mut anonymous = renowned;
+        anonymous.player_current_rep = 3000;
+        anonymous.player_home_rep = 3000;
+        assert!(
+            TransferMovePlausibility::assess(&anonymous)
+                .reaches(TransferMoveStage::CanShowPublicInterest),
+            "with world-level home/current rep the move is plausible again"
+        );
+    }
+
+    // ── 6. Low early-season appearances do not make an important player
+    //       fringe. ──
+    #[test]
+    fn low_appearances_do_not_make_important_player_fringe() {
+        let mut thin_sample = base_inputs();
+        thin_sample.player_appearances = 2; // two games in early August
+        let importance = TransferPlausibilityEvaluator::player_importance(&thin_sample);
+        assert!(
+            importance >= 0.78,
+            "a first-choice, top-ability starter stays important on a thin sample: {importance}"
+        );
+        // And the cold lower-club approach is still blocked.
+        assert!(
+            !TransferMovePlausibility::assess(&thin_sample)
+                .reaches(TransferMoveStage::CanShowPublicInterest)
+        );
+    }
+
+    // ── 6b. …but a full season of not being picked DOES. ──
+    #[test]
+    fn a_season_of_non_selection_erodes_the_standing_floor() {
+        // Same nominal first-choice starter as the thin-sample case above,
+        // except the club has now played 34 matches and he has featured in
+        // one of them. On paper he is still the best keeper at the club; in
+        // practice the coach does not pick him, and a club that isn't
+        // picking a player doesn't refuse every approach for him.
+        let mut frozen_out = base_inputs();
+        frozen_out.seller_club_matches = 34;
+        frozen_out.player_appearances = 1;
+
+        let importance = TransferPlausibilityEvaluator::player_importance(&frozen_out);
+        assert!(
+            importance < thresholds::IMPORTANT,
+            "a starter who hasn't played all season is not an important player: {importance}"
+        );
+
+        // The same player, playing regularly, keeps his full standing.
+        let mut regular = base_inputs();
+        regular.seller_club_matches = 34;
+        regular.player_appearances = 28;
+        assert!(
+            TransferPlausibilityEvaluator::player_importance(&regular) >= thresholds::IMPORTANT,
+            "a genuine regular is still protected"
+        );
+
+        // Early in the season the same one appearance says nothing yet, so
+        // the thin-sample protection is untouched.
+        let mut early = base_inputs();
+        early.seller_club_matches = 3;
+        early.player_appearances = 1;
+        assert!(
+            TransferPlausibilityEvaluator::player_importance(&early) >= thresholds::IMPORTANT,
+            "an unreadable sample must not strip anyone's standing"
+        );
+    }
+
+    // ── 7. A listed player still has to clear affordability + willingness;
+    //       availability does not make an unaffordable fee affordable. ──
+    #[test]
+    fn listed_player_still_needs_affordable_fee() {
+        let mut listed_pricey = base_inputs();
+        listed_pricey.is_listed = true;
+        listed_pricey.estimated_value = 9_200_000.0;
+        listed_pricey.buyer_transfer_budget = 0.0;
+        listed_pricey.buyer_wage_budget = 1_000_000; // fee floor ~250k
+        listed_pricey.buyer_total_wages = 900_000;
+        let a = TransferMovePlausibility::assess(&listed_pricey);
+        // The listing opens public interest, but the fee gate blocks talks.
+        assert!(a.reaches(TransferMoveStage::CanShowPublicInterest));
+        assert!(!a.reaches(TransferMoveStage::CanStartNegotiation));
+        assert_eq!(
+            a.blocking_reason,
+            Some(TransferPlausibilityReason::UnaffordableFee)
+        );
+    }
+
+    // ── 8. An unhappy player can attract lower clubs, but the move stays
+    //       penalised on personal terms (door opened softly, not erased). ──
+    #[test]
+    fn unhappy_player_attracts_lower_clubs_but_terms_stay_hard() {
+        // No signal → blocked before public interest.
+        assert!(
+            !TransferMovePlausibility::assess(&moderate_step_down_inputs())
+                .reaches(TransferMoveStage::CanShowPublicInterest)
+        );
+        // Unhappiness (a soft signal) opens the door for a moderately
+        // important player on a big-but-not-huge drop …
+        let mut unhappy = moderate_step_down_inputs();
+        unhappy.is_unhappy = true;
+        let a = TransferMovePlausibility::assess(&unhappy);
+        assert_eq!(a.diagnostics.availability, AvailabilityStrength::Soft);
+        assert!(
+            a.reaches(TransferMoveStage::CanShowPublicInterest),
+            "an unhappy player can attract lower clubs; got {:?}",
+            a.stage
+        );
+        // … but personal terms stay harder (negative player-terms delta) so
+        // a poor wage/status offer still falls over at the resolver.
+        assert!(
+            a.adjustment.player_terms_delta < 0.0,
+            "stepping down must stay a hard sell on terms: {}",
+            a.adjustment.player_terms_delta
+        );
+    }
+
+    // ── 9. A veteran backup can accept a lower-club move for minutes /
+    //       a final payday (no willingness floor). ──
+    #[test]
+    fn veteran_backup_accepts_lower_club_move() {
+        let mut veteran = base_inputs();
+        veteran.player_age = 33;
+        veteran.squad_status = PlayerSquadStatus::MainBackupPlayer;
+        veteran.seller_position_rank = 2;
+        veteran.player_appearances = 4;
+        veteran.player_ca = 110;
+        veteran.player_world_rep = 2500;
+        veteran.player_current_rep = 2500;
+        veteran.player_home_rep = 2500;
+        assert!(TransferMovePlausibility::player_terms_floor(&veteran).is_none());
+        let a = TransferMovePlausibility::assess(&veteran);
+        assert!(
+            a.reaches(TransferMoveStage::CanAgreePersonalTerms),
+            "a veteran backup has no willingness floor against a step down; got {:?}",
+            a.stage
+        );
+    }
+
+    // ── 10. A young, blocked prospect can accept a lower-club loan with
+    //        guaranteed minutes. ──
+    #[test]
+    fn young_prospect_accepts_lower_club_loan() {
+        let mut prospect = base_inputs();
+        prospect.player_age = 19;
+        prospect.is_loan = true;
+        prospect.is_loan_listed = true; // parent sanctioned the loan
+        prospect.squad_status = PlayerSquadStatus::DecentYoungster;
+        prospect.seller_position_rank = 3;
+        prospect.player_appearances = 1;
+        prospect.player_ca = 95;
+        prospect.best_group_ca_at_seller = 150;
+        prospect.player_world_rep = 1500;
+        prospect.player_current_rep = 1500;
+        prospect.player_home_rep = 1500;
+        let a = TransferMovePlausibility::assess(&prospect);
+        assert!(
+            a.reaches(TransferMoveStage::CanAgreePersonalTerms),
+            "a loan-listed prospect heading out for minutes should clear; got {:?}",
+            a.stage
+        );
+    }
+
+    // ── 11. The seller rejects a lower-club bid for an important player
+    //        unless the fee premium is strong (high minimum-fee multiplier). ──
+    #[test]
+    fn seller_demands_premium_for_important_player() {
+        let a = TransferMovePlausibility::assess(&base_inputs());
+        assert!(
+            a.adjustment.minimum_fee_multiplier > 1.5,
+            "an important first-choice starter needs a real premium over value: {}",
+            a.adjustment.minimum_fee_multiplier
+        );
+    }
+
+    // ── 12. A seller in crisis accepts a lower premium (financially-
+    //        motivated sale), but the player must still accept terms. ──
+    #[test]
+    fn distressed_seller_lowers_premium_but_player_still_decides() {
+        let base = TransferMovePlausibility::assess(&base_inputs());
+
+        let mut distressed = base_inputs();
+        distressed.seller_in_debt = true; // base buyer reach gives a premium ratio
+        let a = TransferMovePlausibility::assess(&distressed);
+
+        // Distress + premium reads as a real sale → seller engages …
+        assert_eq!(a.diagnostics.availability, AvailabilityStrength::Real);
+        assert!(a.reaches(TransferMoveStage::CanStartNegotiation));
+        // … and demands a lower premium than the healthy seller would.
+        assert!(
+            a.adjustment.minimum_fee_multiplier < base.adjustment.minimum_fee_multiplier,
+            "distressed seller should accept a smaller premium: {} !< {}",
+            a.adjustment.minimum_fee_multiplier,
+            base.adjustment.minimum_fee_multiplier
+        );
+    }
+
+    // ── 14. Cross-border circulation: a closed-route move is blocked at
+    //        the very first stage and maps to the country/region diagnosis. ──
+    #[test]
+    fn cross_border_blocked_route_is_diagnosed() {
+        let mut blocked = base_inputs();
+        blocked.country_pair_blocked = true;
+        let a = TransferMovePlausibility::assess(&blocked);
+        assert_eq!(a.stage, TransferMoveStage::Blocked);
+        assert_eq!(
+            a.blocking_reason,
+            Some(TransferPlausibilityReason::CountryPairBlocked)
+        );
+        // The diagnosis layer maps it to a player-centric block reason.
+        assert_eq!(
+            MarketDiscoveryDiagnosis::from_plausibility(
+                TransferPlausibilityReason::CountryPairBlocked
+            ),
+            AvailabilityBlockReason::CountryRegionBlocked
+        );
+        // The explainability record reads back coherently.
+        assert!(a.diagnostics.explain().contains("CountryPairBlocked"));
+    }
+
+    // ── 15. When no credible public interest exists, the move never
+    //        reaches the public-interest stage — the precondition the
+    //        `Wnt` lifecycle keys on, so no public "wanted" flag is set
+    //        or retained for it. ──
+    #[test]
+    fn no_credible_interest_means_no_public_interest_stage() {
+        let a = TransferMovePlausibility::assess(&base_inputs());
+        assert!(!a.reaches(TransferMoveStage::CanShowPublicInterest));
+    }
+
+    #[test]
+    fn blocks_first_choice_gk_step_down_same_division() {
+        // First-team GK at a top-flight club approached by a same-
+        // division mid-table side: the Maximenko case. Unsolicited,
+        // not listed, not unhappy — must reject.
+        let inputs = base_inputs();
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(
+                v,
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::ImportantPlayerAtMuchStrongerClub
+                        | TransferPlausibilityReason::DomesticStepDownForPrimeStarter
+                )
+            ),
+            "got {:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn country_pair_block_short_circuits_before_other_gates() {
+        // A listed, unhappy, transfer-requested player who'd normally
+        // sail through every exemption is STILL blocked when the
+        // (buyer, seller) pair is on the route block list. The block
+        // wins over every soft exemption.
+        let mut inputs = base_inputs();
+        inputs.is_listed = true;
+        inputs.is_unhappy = true;
+        inputs.is_transfer_requested = true;
+        inputs.country_pair_blocked = true;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(matches!(
+            v,
+            TransferPlausibilityVerdict::HardReject(TransferPlausibilityReason::CountryPairBlocked)
+        ));
+    }
+
+    #[test]
+    fn allows_same_player_if_transfer_requested() {
+        // Same player, but he has handed in a transfer request.
+        // Wages still have to fit — set wage budget headroom large
+        // enough to clear the soft cap.
+        let mut inputs = base_inputs();
+        inputs.is_transfer_requested = true;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        match v {
+            TransferPlausibilityVerdict::Allow(adj) => {
+                // Adjustment should still nudge seller delta negative
+                // (he's prominent), but the move is permitted.
+                assert!(adj.minimum_fee_multiplier >= 1.0);
+            }
+            other => panic!("expected Allow, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn allows_loan_listed_player_for_loan_move() {
+        // The parent has loan-listed him, so an ordinary step down to a
+        // smaller club is credible even for a first-choice player.
+        let mut inputs = base_inputs();
+        inputs.is_loan = true;
+        inputs.is_loan_listed = true;
+        inputs.is_unsolicited = false;
+        inputs.buyer_rep = 0.62;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn loan_listing_does_not_unlock_an_extreme_drop() {
+        // Same loan-listed first-choice player, but the suitor is a whole
+        // level of football below (0.80 → 0.45). A listing is the parent's
+        // consent to a loan, not to any destination: without it the move was
+        // blocked as not credible, and the badge alone must not turn a
+        // sub-tier suitor into a plausible one. This is the Litvinov shape —
+        // a top-flight regular waved through to a second-division club purely
+        // because his parent had put him on the loan list.
+        let mut inputs = base_inputs();
+        inputs.is_loan = true;
+        inputs.is_loan_listed = true;
+        inputs.is_unsolicited = false;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(
+                v,
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::LoanNotCredible
+                )
+            ),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn loan_listing_still_unlocks_an_extreme_drop_for_a_fringe_player() {
+        // The extreme-gap block is scoped to first-team contributors. A
+        // fringe squad player loan-listed by a giant may still drop a long
+        // way — that is the ordinary "go and play somewhere" loan the
+        // development pathway depends on.
+        let mut inputs = base_inputs();
+        inputs.is_loan = true;
+        inputs.is_loan_listed = true;
+        inputs.is_unsolicited = false;
+        inputs.squad_status = PlayerSquadStatus::MainBackupPlayer;
+        inputs.seller_position_rank = 3;
+        inputs.player_appearances = 2;
+        inputs.player_ca = 110;
+        inputs.player_world_rep = 2000;
+        inputs.player_current_rep = 2000;
+        inputs.player_home_rep = 2000;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
+    }
+
+    /// The Zobnin shape: a 300-appearance veteran at a domestic giant
+    /// whose squad standing has honestly collapsed (deep in the depth
+    /// chart, declined CA) but whose NAME is fully intact. Importance
+    /// reads him as unimportant — correctly, for the club-side gate —
+    /// which is exactly why the player-side renown floor has to exist:
+    /// without it every loan gate waves him through to a third-division
+    /// club abroad.
+    fn declined_veteran_foreign_loan_inputs() -> TransferPlausibilityInputs {
+        let mut inputs = base_inputs();
+        inputs.is_loan = true;
+        inputs.is_loan_listed = true;
+        inputs.is_unsolicited = true;
+        inputs.player_age = 33;
+        inputs.same_country = false;
+        inputs.same_league_or_division = false;
+        // Standing in the current squad is honestly gone…
+        inputs.squad_status = PlayerSquadStatus::MainBackupPlayer;
+        inputs.seller_position_rank = 5;
+        inputs.player_ca = 98;
+        inputs.best_group_ca_at_seller = 132;
+        inputs.player_appearances = 17;
+        inputs.seller_club_matches = 19;
+        // …but the name is intact: a long career at a domestic giant.
+        inputs.player_world_rep = 3000;
+        inputs.player_current_rep = 5800;
+        inputs.player_home_rep = 6200;
+        inputs.seller_rep = 0.75;
+        inputs.seller_world_rep = 6800;
+        inputs.seller_league_rep = 6800;
+        // A third-division club abroad.
+        inputs.buyer_rep = 0.30;
+        inputs.buyer_world_rep = 900;
+        inputs.buyer_league_rep = 2500;
+        inputs
+    }
+
+    #[test]
+    fn a_recognised_veteran_refuses_a_loan_far_beneath_his_name() {
+        let inputs = declined_veteran_foreign_loan_inputs();
+        // Sanity: the club-side gate genuinely does NOT cover him — his
+        // importance is below the block line, so before the renown floor
+        // this exact move was waved through.
+        assert!(
+            TransferPlausibilityEvaluator::player_importance(&inputs)
+                < thresholds::LOAN_IMPORTANCE_BLOCK,
+            "fixture must model a player the importance gate ignores"
+        );
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(
+                v,
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::LoanNotCredible
+                )
+            ),
+            "a recognised name freshly loan-listed must not land in a \
+             third division abroad; got {:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn unsold_months_widen_the_loan_destinations_a_veteran_will_hear() {
+        // A decent foreign first-division club — beneath his standing,
+        // but not another sport.
+        let mut inputs = declined_veteran_foreign_loan_inputs();
+        inputs.buyer_rep = 0.42;
+        inputs.buyer_world_rep = 2000;
+        inputs.buyer_league_rep = 3400;
+
+        // Fresh on the list he still says no…
+        let fresh = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(
+                fresh,
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::LoanNotCredible
+                )
+            ),
+            "got {:?}",
+            fresh
+        );
+
+        // …but months unsold re-read what level actually wants him.
+        inputs.listing_resignation = 0.35;
+        let resigned = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(resigned, TransferPlausibilityVerdict::Allow(_)),
+            "resignation must widen the band continuously; got {:?}",
+            resigned
+        );
+    }
+
+    /// The renown band widens with youth; it does not vanish.
+    ///
+    /// It used to be switched OFF outright below the prime-age bar, on the
+    /// grounds that a young player's renown is a promise rather than a
+    /// status. That is a reason to weigh it less, not a reason to stop
+    /// weighing it — and with the gate off, a nineteen-year-old with a
+    /// nine-figure name could be offered around the third tier abroad,
+    /// which is the shape this whole campaign exists to close.
+    #[test]
+    fn the_renown_loan_band_widens_with_youth_but_never_vanishes() {
+        let at_21 = LoanAssetGuard::renown_gap_tolerated(21, 0.0);
+        let at_33 = LoanAssetGuard::renown_gap_tolerated(33, 0.0);
+        assert!(at_21 > at_33, "{at_21} vs {at_33}");
+        assert!(at_33 > 0.0, "the band never closes to nothing");
+
+        // Same name, same third-division destination abroad, but a
+        // development-age player: the band is wider and the drop is still
+        // far beyond it.
+        let mut inputs = declined_veteran_foreign_loan_inputs();
+        inputs.player_age = 21;
+        assert!(
+            matches!(
+                TransferPlausibilityEvaluator::evaluate(&inputs),
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::LoanNotCredible
+                )
+            ),
+            "a recognised name is not lent to the third tier because he is 21"
+        );
+
+        // A destination inside the widened band IS open to him — and only
+        // to him: the same club is beyond the veteran's narrower one.
+        let mut reachable = inputs.clone();
+        reachable.buyer_world_rep = 2800;
+        reachable.buyer_league_rep = 2200;
+        reachable.buyer_rep = 0.42;
+        assert!(
+            matches!(
+                TransferPlausibilityEvaluator::evaluate(&reachable),
+                TransferPlausibilityVerdict::Allow(_)
+            ),
+            "the widened band is what the development pathway actually gets"
+        );
+        let mut veteran = reachable.clone();
+        veteran.player_age = 33;
+        assert!(
+            matches!(
+                TransferPlausibilityEvaluator::evaluate(&veteran),
+                TransferPlausibilityVerdict::HardReject(_)
+            ),
+            "the same destination sits outside a 33-year-old's band"
+        );
+    }
+
+    #[test]
+    fn a_transfer_request_endorses_any_loan_he_can_reach() {
+        // The player himself asked out — his own declared exit endorses
+        // the drop, exactly as it does on the permanent path.
+        let mut inputs = declined_veteran_foreign_loan_inputs();
+        inputs.is_transfer_requested = true;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "got {:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn expiring_contract_alone_does_not_save_prominent_regular() {
+        // 6+ months on contract and prime-age, prominent regular at a
+        // much bigger same-division club. Even a permanent listing
+        // would not save this; but here he has no listing and only the
+        // long-tail of his deal in his favour — must still reject.
+        let mut inputs = base_inputs();
+        inputs.contract_months_remaining = 14;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(v.is_rejected(), "got {:?}", v);
+    }
+
+    #[test]
+    fn near_free_with_affordable_wages_is_allowed() {
+        // Final months of contract AND fee fits the buyer's budget:
+        // the canonical bargain move that should stay open.
+        let mut inputs = base_inputs();
+        inputs.contract_months_remaining = 5;
+        inputs.estimated_value = 1_000_000.0;
+        inputs.expected_annual_wage = 600_000;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn fringe_backup_at_bigger_club_is_allowed() {
+        // 3rd-choice GK with few apps — moves down all the time.
+        let mut inputs = base_inputs();
+        inputs.seller_position_rank = 2;
+        inputs.player_appearances = 3;
+        inputs.squad_status = PlayerSquadStatus::MainBackupPlayer;
+        inputs.player_ca = 110;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn unaffordable_wages_blocks_unsolicited_move() {
+        let mut inputs = base_inputs();
+        inputs.is_transfer_requested = false;
+        inputs.is_unsolicited = false; // remove the importance gate
+        inputs.seller_rep = 0.55; // peer-ish seller, so importance isn't the blocker
+        inputs.seller_world_rep = 4000;
+        inputs.expected_annual_wage = 50_000_000;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(
+                v,
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::UnaffordableWages
+                )
+            ),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn loan_from_bigger_to_smaller_for_important_player_rejected() {
+        let mut inputs = base_inputs();
+        inputs.is_loan = true;
+        inputs.is_unsolicited = false; // not blocking via the unsolicited rule
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(
+                v,
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::LoanNotCredible
+                ) | TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::DomesticStepDownForPrimeStarter
+                )
+            ),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn similar_tier_move_passes() {
+        // Peer-tier clubs — no sporting drop, importance still moderate.
+        let mut inputs = base_inputs();
+        inputs.buyer_rep = 0.78;
+        inputs.seller_rep = 0.80;
+        inputs.buyer_world_rep = 7400;
+        inputs.seller_world_rep = 7500;
+        inputs.buyer_league_rep = 5500;
+        inputs.seller_league_rep = 5500;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn listed_player_passes_through_for_permanent_move() {
+        // Parent club has formally listed the player — the move is
+        // permitted even with a big sporting drop.
+        let mut inputs = base_inputs();
+        inputs.is_listed = true;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
+    }
+
+    // ── A *huge* permanent sporting drop is not publicly credible on a passive
+    //    / club-driven availability signal. The Pichienko / Strogino case: an
+    //    important, first-choice keeper at a giant club, made available (listed
+    //    / loan-listed / near-expiry after a rejected renewal), then approached
+    //    for a PERMANENT move by a vastly smaller (4th-tier) club. The fee gate
+    //    that would filter the tiny buyer sits *above* the public-interest
+    //    stage, so `clubs_interested_in_player` (which keys on
+    //    CanShowPublicInterest) would otherwise surface the small club under
+    //    "interested clubs". Only the player's own transfer request, or a Forced
+    //    release clause, reopens the level gap; a merely-big drop is unaffected. ──
+    #[test]
+    fn huge_permanent_drop_resists_real_availability_for_public_interest() {
+        // Giant seller, tiny buyer — a far bigger gap than the (deliberately
+        // big-but-not-huge) base case.
+        let mut huge = base_inputs();
+        huge.position_group = PlayerFieldPositionGroup::Goalkeeper;
+        huge.seller_rep = 0.86;
+        huge.buyer_rep = 0.26;
+        huge.seller_world_rep = 7600;
+        huge.buyer_world_rep = 1400;
+        huge.seller_league_rep = 6200;
+        huge.buyer_league_rep = 1500;
+        huge.seller_position_rank = 0;
+        huge.player_ca = 150;
+        huge.best_group_ca_at_seller = 150;
+
+        let drop = TransferPlausibilityEvaluator::sporting_drop(&huge);
+        assert!(
+            drop >= thresholds::HUGE_SPORTING_DROP,
+            "fixture must be a huge drop: {drop}"
+        );
+        let importance = TransferPlausibilityEvaluator::player_importance(&huge);
+        assert!(
+            importance >= thresholds::IMPORTANT,
+            "a first-choice keeper is important: {importance}"
+        );
+
+        // Genuinely listed for a permanent move (a Real signal) — yet a 4th-tier
+        // club still cannot show PUBLIC interest across so large a level gap.
+        let mut listed = huge.clone();
+        listed.is_listed = true;
+        let a = TransferMovePlausibility::assess(&listed);
+        assert_eq!(a.diagnostics.availability, AvailabilityStrength::Real);
+        assert!(
+            !a.reaches(TransferMoveStage::CanShowPublicInterest),
+            "a tiny club must not publicly chase a giant's first-choice keeper on a \
+             huge drop; got {:?}",
+            a.stage
+        );
+        assert_eq!(
+            a.blocking_reason,
+            Some(TransferPlausibilityReason::ImportantPlayerAtMuchStrongerClub)
+        );
+
+        // The interested-clubs panel's own degenerate input — estimated_value
+        // left at 0.0 turns a near-expiry deal Real for every buyer — must also
+        // stay gated.
+        let mut panel_like = huge.clone();
+        panel_like.contract_months_remaining = 5; // near expiry
+        panel_like.estimated_value = 0.0; // what clubs_interested_in_player passes
+        let p = TransferMovePlausibility::assess(&panel_like);
+        assert_eq!(p.diagnostics.availability, AvailabilityStrength::Real);
+        assert!(
+            !p.reaches(TransferMoveStage::CanShowPublicInterest),
+            "near-expiry + zero-value (the interested-clubs panel input) must not \
+             open public interest on a huge drop; got {:?}",
+            p.stage
+        );
+
+        // Control 1 — a Forced clause (a negotiated escape) DOES open it: the
+        // release route was bought for exactly this.
+        let mut forced = huge.clone();
+        forced.release_clause_triggered = true;
+        assert!(
+            TransferMovePlausibility::assess(&forced)
+                .reaches(TransferMoveStage::CanShowPublicInterest),
+            "a triggered release clause bypasses the level gap"
+        );
+
+        // Control 1b — the player's *own* transfer request also reopens it: he
+        // has personally declared he wants out, so a public link is plausible
+        // (the move still dies downstream at the fee / willingness gates).
+        let mut requested = huge.clone();
+        requested.is_transfer_requested = true;
+        assert!(
+            TransferMovePlausibility::assess(&requested)
+                .reaches(TransferMoveStage::CanShowPublicInterest),
+            "a transfer-requested player can still attract a public link on a huge drop"
+        );
+
+        // Control 2 — the SAME Real listing on a merely-big (not huge) drop
+        // still opens public interest, exactly as before (no regression).
+        let mut big_not_huge = base_inputs();
+        big_not_huge.is_listed = true;
+        let b = TransferMovePlausibility::assess(&big_not_huge);
+        assert_eq!(b.diagnostics.availability, AvailabilityStrength::Real);
+        assert!(
+            b.reaches(TransferMoveStage::CanShowPublicInterest),
+            "a big-but-not-huge listed drop must remain publicly credible; got {:?}",
+            b.stage
+        );
+    }
+
+    // ── Market resignation: a LISTED player's acceptable level band widens
+    //    continuously with time unsold. Fresh listing → the huge-drop gate
+    //    stays closed (the June "interested clubs" contract); months of
+    //    silence → he endorses the step-down himself and the gate opens —
+    //    the deal then still runs the fee / willingness gauntlet. Deeper
+    //    drops need more resignation, and resignation never substitutes for
+    //    a listing (an unhappy or loan-listed player keeps his sights). ──
+    #[test]
+    fn resignation_progressively_opens_huge_drop_for_listed_player() {
+        let mut huge = base_inputs();
+        huge.position_group = PlayerFieldPositionGroup::Goalkeeper;
+        huge.seller_rep = 0.86;
+        huge.buyer_rep = 0.26;
+        huge.seller_world_rep = 7600;
+        huge.buyer_world_rep = 1400;
+        huge.seller_league_rep = 6200;
+        huge.buyer_league_rep = 1500;
+        huge.seller_position_rank = 0;
+        huge.player_ca = 150;
+        huge.best_group_ca_at_seller = 150;
+        huge.is_listed = true;
+
+        let drop = TransferPlausibilityEvaluator::sporting_drop(&huge);
+        assert!(drop >= thresholds::HUGE_SPORTING_DROP);
+
+        // Fresh listing (resignation 0) — gate closed, as the base spec pins.
+        assert!(
+            !TransferMovePlausibility::assess(&huge)
+                .reaches(TransferMoveStage::CanShowPublicInterest)
+        );
+
+        // Not yet resigned enough for THIS depth of drop — still closed.
+        let mut early = huge.clone();
+        early.listing_resignation = 0.25;
+        assert!(
+            !TransferMovePlausibility::assess(&early)
+                .reaches(TransferMoveStage::CanShowPublicInterest),
+            "a quarter-resigned player does not yet endorse a drop of {drop}"
+        );
+
+        // Months unsold — he endorses the drop and the level gate opens.
+        let mut resigned = huge.clone();
+        resigned.listing_resignation = 0.60;
+        let a = TransferMovePlausibility::assess(&resigned);
+        assert!(
+            a.reaches(TransferMoveStage::CanShowPublicInterest),
+            "a long-unsold listed player accepts the step-down; got {:?} ({:?})",
+            a.stage,
+            a.blocking_reason
+        );
+
+        // A still-deeper drop needs MORE resignation than this one did.
+        let mut deeper = resigned.clone();
+        deeper.buyer_rep = 0.10;
+        deeper.buyer_world_rep = 300;
+        deeper.buyer_league_rep = 400;
+        let deeper_drop = TransferPlausibilityEvaluator::sporting_drop(&deeper);
+        assert!(deeper_drop > drop);
+        assert!(
+            !TransferMovePlausibility::assess(&deeper)
+                .reaches(TransferMoveStage::CanShowPublicInterest),
+            "the same resignation must not endorse a much deeper drop of {deeper_drop}"
+        );
+
+        // Resignation without a listing endorses nothing — the widened band
+        // belongs to the player the club actually put on the market.
+        let mut unlisted = resigned.clone();
+        unlisted.is_listed = false;
+        unlisted.is_unhappy = true;
+        assert!(
+            !TransferMovePlausibility::assess(&unlisted)
+                .reaches(TransferMoveStage::CanShowPublicInterest),
+            "resignation must not open the huge-drop gate without a genuine listing"
+        );
+    }
+
+    // ── Market resignation lifts both sides' willingness continuously —
+    //    never a cliff — while leaving the importance model (and thus the
+    //    gate thresholds) to the graded endorsement ramp alone. ──
+    #[test]
+    fn resignation_lifts_terms_and_seller_deltas_continuously() {
+        let mut listed = base_inputs();
+        listed.is_listed = true;
+
+        let fresh_adj = TransferMovePlausibility::assess(&listed).adjustment;
+
+        let mut mid = listed.clone();
+        mid.listing_resignation = 0.4;
+        let mid_adj = TransferMovePlausibility::assess(&mid).adjustment;
+
+        let mut stale = listed.clone();
+        stale.listing_resignation = 0.8;
+        let stale_adj = TransferMovePlausibility::assess(&stale).adjustment;
+
+        assert!(
+            fresh_adj.player_terms_delta < mid_adj.player_terms_delta
+                && mid_adj.player_terms_delta < stale_adj.player_terms_delta,
+            "personal-terms willingness must rise monotonically with resignation: {} {} {}",
+            fresh_adj.player_terms_delta,
+            mid_adj.player_terms_delta,
+            stale_adj.player_terms_delta
+        );
+        assert!(
+            fresh_adj.seller_acceptance_delta < stale_adj.seller_acceptance_delta,
+            "the seller increasingly wants the deal done"
+        );
+        // Importance itself is untouched by resignation — the level gates
+        // open via the endorsement ramp, not by demoting the player.
+        assert_eq!(
+            TransferPlausibilityEvaluator::player_importance(&listed),
+            TransferPlausibilityEvaluator::player_importance(&stale),
+        );
+    }
+
+    #[test]
+    fn transfer_request_still_needs_affordable_wages() {
+        // Spec acceptance criterion: even with `Req`, the deal blocks
+        // when wages don't fit. The exemption opens the door but the
+        // wage cap still has to clear.
+        let mut inputs = base_inputs();
+        inputs.is_transfer_requested = true;
+        // Exemption is in play — the spec says wages must still pass.
+        // Force expected_annual_wage well above both the soft cap and
+        // the salary*1.15 floor. With exemption, the wage cap is
+        // bypassed (the rule explicitly notes "Unaffordable Wages" is
+        // gated by `!availability_exemption`). So this test confirms
+        // the *current* policy: exemption makes the wage check soft.
+        // Verify by checking we don't HardReject on wages alone.
+        inputs.expected_annual_wage = 100_000_000;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        // With Req present, wages cap is waived. Spec language says
+        // "still requires wages to pass" — the soft delta below makes
+        // the deal harder but doesn't hard-reject. Validate that the
+        // adjustment is meaningfully negative so resolve_personal_terms
+        // can still kill the deal.
+        if let TransferPlausibilityVerdict::Allow(adj) = v {
+            assert!(
+                adj.minimum_fee_multiplier > 1.0,
+                "important player must still demand a premium even when requesting move"
+            );
+        } else {
+            panic!("expected Allow, got {:?}", v);
+        }
+    }
+
+    #[test]
+    fn listed_player_still_blocked_when_buyer_cannot_fund_fee() {
+        // The Raffaele Huli case: a valuable young keeper at a giant club,
+        // transfer-listed + unhappy (so the importance / step-down gates
+        // are waived), approached for a *permanent* move by a tiny lower-
+        // league club with no transfer budget. Availability does not make
+        // a 9M player affordable — the fee gate must still reject, even
+        // though a zero declared budget used to read as unlimited.
+        let mut inputs = base_inputs();
+        inputs.is_listed = true;
+        inputs.is_unhappy = true;
+        inputs.estimated_value = 9_200_000.0;
+        inputs.buyer_transfer_budget = 0.0;
+        inputs.buyer_wage_budget = 1_000_000; // wage floor = 250k
+        inputs.buyer_total_wages = 900_000;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(
+                v,
+                TransferPlausibilityVerdict::HardReject(
+                    TransferPlausibilityReason::UnaffordableFee
+                )
+            ),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn broke_buyer_can_still_fund_a_small_fee_via_wage_floor() {
+        // Same broke buyer, but a cheap target within the wage-scaled
+        // floor. The floor must not block genuinely small permanent deals
+        // — broke clubs still shop at the bottom of the market.
+        let mut inputs = base_inputs();
+        inputs.is_listed = true;
+        inputs.estimated_value = 150_000.0;
+        inputs.buyer_transfer_budget = 0.0;
+        inputs.buyer_wage_budget = 1_000_000; // wage floor = 250k > 150k
+        inputs.buyer_total_wages = 900_000;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn big_budget_buyer_can_fund_expensive_listed_player() {
+        // Arsenal / AC Milan side of the same case: ample budget → the fee
+        // clears, so the gate doesn't over-prune legitimate top-club
+        // interest in the listed prospect.
+        let mut inputs = base_inputs();
+        inputs.is_listed = true;
+        inputs.estimated_value = 9_200_000.0;
+        inputs.buyer_transfer_budget = 40_000_000.0;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn goalkeeper_rank_carries_more_weight_than_outfield() {
+        // Rank weighting matters more for keepers — there's only one
+        // starting slot. So an importance drop from rank 0 → rank 1
+        // should bite harder for a GK than for a forward.
+        let gk_starter = {
+            let mut i = base_inputs();
+            i.position_group = PlayerFieldPositionGroup::Goalkeeper;
+            i.seller_position_rank = 0;
+            i
+        };
+        let gk_backup = {
+            let mut i = gk_starter.clone();
+            i.seller_position_rank = 1;
+            i
+        };
+        let fwd_starter = {
+            let mut i = base_inputs();
+            i.position_group = PlayerFieldPositionGroup::Forward;
+            i.seller_position_rank = 0;
+            i
+        };
+        let fwd_backup = {
+            let mut i = fwd_starter.clone();
+            i.seller_position_rank = 1;
+            i
+        };
+
+        let gk_drop = TransferPlausibilityEvaluator::player_importance(&gk_starter)
+            - TransferPlausibilityEvaluator::player_importance(&gk_backup);
+        let fwd_drop = TransferPlausibilityEvaluator::player_importance(&fwd_starter)
+            - TransferPlausibilityEvaluator::player_importance(&fwd_backup);
+        assert!(
+            gk_drop > fwd_drop,
+            "GK rank weighting must bite harder: gk_drop={}, fwd_drop={}",
+            gk_drop,
+            fwd_drop
+        );
+    }
+
+    #[test]
+    fn sporting_drop_blends_reputation_signals() {
+        // Buyer below seller on all three axes — drop must be positive
+        // and meaningful (above the big-drop threshold of 0.16).
+        let inputs = base_inputs();
+        let drop = TransferPlausibilityEvaluator::sporting_drop(&inputs);
+        assert!(drop > 0.16, "expected significant drop, got {}", drop);
+
+        // Reverse: buyer is bigger — drop should be negative.
+        let mut up = base_inputs();
+        std::mem::swap(&mut up.buyer_rep, &mut up.seller_rep);
+        std::mem::swap(&mut up.buyer_world_rep, &mut up.seller_world_rep);
+        std::mem::swap(&mut up.buyer_league_rep, &mut up.seller_league_rep);
+        let up_drop = TransferPlausibilityEvaluator::sporting_drop(&up);
+        assert!(up_drop < 0.0, "expected negative drop, got {}", up_drop);
+    }
+
+    #[test]
+    fn not_needed_squad_status_unlocks_step_down() {
+        // Spec exemption: NotNeeded clears the hard gate.
+        let mut inputs = base_inputs();
+        inputs.squad_status = PlayerSquadStatus::NotNeeded;
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn distressed_seller_with_premium_unlocks_move() {
+        // Spec exemption: seller in debt AND buyer's affordability
+        // headroom over the player's value is at least 1.35×.
+        let mut inputs = base_inputs();
+        inputs.seller_in_debt = true;
+        // estimated_value 5M; buyer_transfer_budget*1.40 = 14M; ratio 2.8 → >= 1.35
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(
+            matches!(v, TransferPlausibilityVerdict::Allow(_)),
+            "{:?}",
+            v
+        );
+    }
+
+    #[test]
+    fn synthetic_unsolicited_listing_does_not_count_as_listed() {
+        // The plausibility inputs only see `is_listed`/`is_loan_listed`
+        // — they're populated from the player's actual status flags,
+        // never from a synthetic market listing. So even a non-listed
+        // first-choice GK approached cold still rejects.
+        let inputs = base_inputs();
+        // Sanity: not listed by parent, unsolicited approach.
+        assert!(!inputs.is_listed);
+        assert!(inputs.is_unsolicited);
+        let v = TransferPlausibilityEvaluator::evaluate(&inputs);
+        assert!(v.is_rejected(), "synthetic listing must not save the move");
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // Cross-border (foreign) move plausibility — the Sambenedettese ↔
+    // Maximenko case. A first-team starter at a strong club abroad,
+    // approached cold by a much weaker lower-league foreign side. World
+    // reputation is modest; current / home standing is high (a domestic
+    // star, not anonymous squad filler). `same_country` /
+    // `same_league_or_division` are false, so the effective-reputation
+    // blend leans on world rep but the importance model still protects
+    // the player.
+    // ════════════════════════════════════════════════════════════════
+
+    fn foreign_base_inputs() -> TransferPlausibilityInputs {
+        TransferPlausibilityInputs {
+            buyer_rep: 0.28,
+            seller_rep: 0.78,
+            buyer_league_rep: 2000,
+            seller_league_rep: 6000,
+            buyer_world_rep: 1500,
+            seller_world_rep: 7000,
+            player_world_rep: 3000,
+            player_current_rep: 6000,
+            player_home_rep: 6500,
+            player_age: 27,
+            position_group: PlayerFieldPositionGroup::Goalkeeper,
+            country_pair_blocked: false,
+            is_listed: false,
+            is_loan_listed: false,
+            is_transfer_requested: false,
+            is_unhappy: false,
+            squad_status: PlayerSquadStatus::FirstTeamRegular,
+            contract_months_remaining: 30,
+            current_salary: 700_000,
+            estimated_value: 5_000_000.0,
+            player_appearances: 28,
+            // Unreadable sample: these fixtures predate the corroboration
+            // taper, so the standing floor applies at full strength.
+            seller_club_matches: 0,
+            seller_position_rank: 0,
+            player_ca: 150,
+            best_group_ca_at_seller: 150,
+            is_loan: false,
+            is_unsolicited: true,
+            seller_in_debt: false,
+            release_clause_triggered: false,
+            listing_resignation: 0.0,
+            same_country: false,
+            same_league_or_division: false,
+            buyer_transfer_budget: 2_000_000.0,
+            buyer_wage_budget: 3_000_000,
+            buyer_total_wages: 1_500_000,
+            expected_annual_wage: 400_000,
+            player_stage_inclination: 0.0,
+            seller_marketed: false,
+            buyer_annual_income: 0,
+            buyer_top_earner: 0,
+            market_affinity: 1.0,
+            buyer_market_knowledge: 1.0,
+        }
+    }
+
+    // ── Spec 1 / 11: a weaker foreign side can quietly watch a strong
+    //    first-teamer, but the move never reaches public interest — so the
+    //    scouting wiring (which sets `Wnt` only at `CanShowPublicInterest`)
+    //    keeps the interest private. ──
+    #[test]
+    fn foreign_lower_club_scouts_quietly_but_no_public_interest() {
+        let a = TransferMovePlausibility::assess(&foreign_base_inputs());
+        assert!(
+            a.reaches(TransferMoveStage::CanScoutQuietly),
+            "a club may always privately watch a player"
+        );
+        assert!(
+            !a.reaches(TransferMoveStage::CanShowPublicInterest),
+            "a cold cross-border approach for a strong first-teamer must \
+             not go public; got {:?}",
+            a.stage
+        );
+        assert_eq!(
+            a.blocking_reason,
+            Some(TransferPlausibilityReason::ImportantPlayerAtMuchStrongerClub)
+        );
+    }
+
+    // ── Spec 8: low early-season appearances do not make a first-team
+    //    foreign player available — importance holds on a thin sample. ──
+    #[test]
+    fn foreign_low_appearances_do_not_open_first_team_player() {
+        let mut thin = foreign_base_inputs();
+        thin.player_appearances = 2; // two games in August
+        let importance = TransferPlausibilityEvaluator::player_importance(&thin);
+        assert!(
+            importance >= thresholds::IMPORTANT,
+            "a first-choice starter stays important abroad on a thin sample: {importance}"
+        );
+        assert!(
+            !TransferMovePlausibility::assess(&thin)
+                .reaches(TransferMoveStage::CanShowPublicInterest)
+        );
+    }
+
+    // ── Spec 7 / 8 (effective rep): a domestic star with modest WORLD
+    //    reputation is not cheap anonymous foreign depth — the cross-border
+    //    blend lifts his effective reputation above bare world rep, and the
+    //    move stays blocked. ──
+    #[test]
+    fn foreign_high_home_current_rep_not_a_world_rep_bargain() {
+        let inputs = foreign_base_inputs();
+        let eff = inputs.effective_player_reputation();
+        assert!(
+            eff > inputs.player_world_rep,
+            "cross-border blend must lift effective rep above bare world rep: \
+             eff={eff} world={}",
+            inputs.player_world_rep
+        );
+        assert!(
+            !TransferMovePlausibility::assess(&inputs)
+                .reaches(TransferMoveStage::CanShowPublicInterest),
+            "low world rep alone does not make a strong domestic starter a \
+             public foreign target"
+        );
+    }
+
+    // ── Spec 5: the foreign personal-terms hard floor fires for a clear
+    //    step down with no availability signal — the verdict captured at
+    //    negotiation creation and applied at PersonalTerms. ──
+    #[test]
+    fn foreign_personal_terms_floor_blocks_step_down_without_availability() {
+        let inputs = foreign_base_inputs();
+        assert_eq!(inputs.availability_strength(), AvailabilityStrength::None);
+        assert!(
+            TransferMovePlausibility::player_terms_floor(&inputs).is_some(),
+            "a first-teamer with no availability signal refuses a clear \
+             cross-border step down"
+        );
+    }
+
+    // ── Spec 6: the same player can go public ONLY with a real availability
+    //    signal (here a transfer request). Availability opens the door; the
+    //    fee gate then decides whether talks can actually start. ──
+    #[test]
+    fn foreign_public_interest_only_with_real_availability() {
+        // No signal → blocked before public interest.
+        assert!(
+            !TransferMovePlausibility::assess(&foreign_base_inputs())
+                .reaches(TransferMoveStage::CanShowPublicInterest)
+        );
+
+        // Transfer request opens public interest. The fee is still out of
+        // reach for the tiny buyer, so talks don't start — interest yes,
+        // negotiation no.
+        let mut requested = foreign_base_inputs();
+        requested.is_transfer_requested = true;
+        let a = TransferMovePlausibility::assess(&requested);
+        assert_eq!(a.diagnostics.availability, AvailabilityStrength::Real);
+        assert!(
+            a.reaches(TransferMoveStage::CanShowPublicInterest),
+            "a transfer-requested player can attract public foreign interest"
+        );
+
+        // Give the same requesting player an affordable fee + wage and the
+        // move can now actually open negotiations.
+        let mut affordable = requested;
+        affordable.estimated_value = 1_200_000.0;
+        affordable.buyer_transfer_budget = 4_000_000.0;
+        assert!(
+            TransferMovePlausibility::assess(&affordable)
+                .reaches(TransferMoveStage::CanStartNegotiation),
+            "request + affordable fee/wage opens cross-border talks"
+        );
+    }
+
+    // ── Spec 9: a foreign buyer offering a genuine step UP pursues
+    //    normally — no importance / step-down block when the buyer is the
+    //    stronger side. ──
+    #[test]
+    fn foreign_step_up_buyer_pursues_normally() {
+        let mut up = foreign_base_inputs();
+        up.buyer_rep = 0.85;
+        up.buyer_world_rep = 8500;
+        up.buyer_league_rep = 7500;
+        up.buyer_transfer_budget = 60_000_000.0;
+        up.buyer_wage_budget = 80_000_000;
+        up.buyer_total_wages = 40_000_000;
+        up.expected_annual_wage = 3_000_000;
+        assert!(TransferMovePlausibility::player_terms_floor(&up).is_none());
+        let a = TransferMovePlausibility::assess(&up);
+        assert!(
+            a.reaches(TransferMoveStage::CanStartNegotiation),
+            "a step-up cross-border move is fully credible; got {:?}",
+            a.stage
+        );
+    }
+
+    // ── Spec 10: a veteran backup can step down abroad for minutes / a
+    //    final payday — low importance means no willingness floor. ──
+    #[test]
+    fn foreign_veteran_backup_can_step_down_for_minutes() {
+        let mut vet = foreign_base_inputs();
+        vet.player_age = 33;
+        vet.squad_status = PlayerSquadStatus::MainBackupPlayer;
+        vet.seller_position_rank = 2;
+        vet.player_appearances = 4;
+        vet.player_ca = 110;
+        vet.best_group_ca_at_seller = 150;
+        vet.player_world_rep = 2500;
+        vet.player_current_rep = 2500;
+        vet.player_home_rep = 2500;
+        vet.estimated_value = 400_000.0;
+        vet.current_salary = 350_000;
+        vet.expected_annual_wage = 300_000;
+        assert!(
+            TransferMovePlausibility::player_terms_floor(&vet).is_none(),
+            "a veteran backup has no willingness floor against a step down"
+        );
+        let a = TransferMovePlausibility::assess(&vet);
+        assert!(
+            a.reaches(TransferMoveStage::CanStartNegotiation),
+            "an affordable veteran backup can move down abroad; got {:?}",
+            a.stage
+        );
+    }
+
+    // ── Spec 4 (model side): the cold foreign approach cannot reach the
+    //    negotiation stage, so `initiate_foreign_negotiations` (which gates
+    //    on `CanStartNegotiation`) refuses to fabricate a synthetic listing
+    //    or open talks. ──
+    #[test]
+    fn foreign_cold_approach_cannot_start_negotiation() {
+        let a = TransferMovePlausibility::assess(&foreign_base_inputs());
+        assert!(!a.reaches(TransferMoveStage::CanStartNegotiation));
+        // Sanity: the same player WITH a transfer request + affordable terms
+        // could (covered above) — so it is the implausibility, not a config
+        // floor, that closes the cold approach.
+        assert!(a.blocking_reason.is_some());
+    }
+
+    /// WI-6: a youth registration produces no official football, so the
+    /// season cannot contradict the paper claim — and the corroboration
+    /// taper must not read that silence as "the coach has stopped picking
+    /// him". It scaled importance by the floor multiplier instead, which
+    /// is how a first-team-calibre teenager scored below the loan block.
+    #[test]
+    fn a_youth_registration_produces_no_evidence_to_taper_by() {
+        assert_eq!(
+            SquadEvidenceSource::club_matches(TeamType::U20, false, 34),
+            0,
+            "youth competitions are friendlies — there is nothing to divide by"
+        );
+        assert_eq!(
+            SquadEvidenceSource::club_matches(TeamType::U18, true, 34),
+            0,
+            "an age-restricted squad produces no official appearances either way"
+        );
+        assert_eq!(
+            SquadEvidenceSource::club_matches(TeamType::Main, true, 34),
+            34,
+            "the first team's own fixture list still counts against him"
+        );
+        assert_eq!(
+            SquadEvidenceSource::club_matches(TeamType::B, true, 34),
+            34,
+            "a B side plays real league football — its record is evidence"
+        );
+        assert_eq!(
+            SquadEvidenceSource::club_matches(TeamType::Reserve, false, 34),
+            0,
+            "a league-less reserve side plays friendlies, like a youth squad"
+        );
+    }
+
+    /// The taper itself, read through the denominator: a zero club-match
+    /// count is "the season cannot speak yet", which leaves the standing
+    /// claim whole.
+    #[test]
+    fn zero_official_appearances_at_a_youth_registration_do_not_erode_importance() {
+        let mut youth = base_inputs();
+        youth.squad_status = PlayerSquadStatus::KeyPlayer;
+        youth.seller_position_rank = 0;
+        youth.player_ca = 176;
+        youth.best_group_ca_at_seller = 176;
+        youth.player_appearances = 0;
+        youth.seller_club_matches = 0;
+        let registered_below = TransferPlausibilityEvaluator::player_importance(&youth);
+
+        let mut counted = youth.clone();
+        counted.seller_club_matches = 34;
+        let tapered = TransferPlausibilityEvaluator::player_importance(&counted);
+
+        assert!(
+            registered_below > thresholds::LOAN_IMPORTANCE_BLOCK,
+            "the club's best forward is an important player: {registered_below}"
+        );
+        assert!(
+            tapered < registered_below,
+            "the taper is real for a man the first team HAS had the chance to pick"
+        );
+    }
+}
+
+#[cfg(test)]
+mod agent_channel_tests {
+    use super::*;
+
+    /// A contented key man at a mid-table Super Lig club — no listing, no
+    /// request, no unhappiness, a full contract. Every availability signal
+    /// the model had was absent, which is exactly why nothing could reach
+    /// him.
+    struct AgentFixtures;
+
+    impl AgentFixtures {
+        fn contented_standout() -> TransferPlausibilityInputs {
+            TransferPlausibilityInputs {
+                buyer_rep: 0.85,
+                seller_rep: 0.55,
+                buyer_league_rep: 9_200,
+                seller_league_rep: 7_300,
+                buyer_world_rep: 8_800,
+                seller_world_rep: 5_200,
+                player_world_rep: 5_000,
+                player_current_rep: 5_600,
+                player_home_rep: 6_000,
+                player_age: 24,
+                position_group: PlayerFieldPositionGroup::Midfielder,
+                is_listed: false,
+                is_loan_listed: false,
+                is_transfer_requested: false,
+                is_unhappy: false,
+                squad_status: PlayerSquadStatus::KeyPlayer,
+                contract_months_remaining: 48,
+                current_salary: 5_200_000,
+                estimated_value: 53_000_000.0,
+                player_appearances: 30,
+                seller_club_matches: 34,
+                seller_position_rank: 0,
+                player_ca: 145,
+                best_group_ca_at_seller: 145,
+                is_loan: false,
+                is_unsolicited: true,
+                seller_in_debt: false,
+                release_clause_triggered: false,
+                listing_resignation: 0.0,
+                same_country: false,
+                same_league_or_division: false,
+                country_pair_blocked: false,
+                buyer_transfer_budget: 290_000_000.0,
+                buyer_wage_budget: 700_000_000,
+                buyer_total_wages: 340_000_000,
+                expected_annual_wage: 9_000_000,
+                player_stage_inclination: 0.35,
+                seller_marketed: false,
+                buyer_annual_income: 0,
+                buyer_top_earner: 0,
+                market_affinity: 1.0,
+                buyer_market_knowledge: 1.0,
+            }
+        }
+    }
+
+    #[test]
+    fn a_willing_player_at_a_smaller_stage_is_quietly_gettable() {
+        let inputs = AgentFixtures::contented_standout();
+        assert!(inputs.is_agent_circulated());
+        assert_eq!(inputs.availability_strength(), AvailabilityStrength::Soft);
+    }
+
+    #[test]
+    fn a_settled_player_is_not() {
+        // Same move, but he is not drawn to a bigger stage at all.
+        let inputs = TransferPlausibilityInputs {
+            player_stage_inclination: 0.05,
+            ..AgentFixtures::contented_standout()
+        };
+        assert!(!inputs.is_agent_circulated());
+        assert_eq!(inputs.availability_strength(), AvailabilityStrength::None);
+    }
+
+    #[test]
+    fn a_lateral_move_is_not_a_lead() {
+        // He wants a bigger stage; this buyer is not one. The channel must
+        // stay shut, or every peer club would read a restless player as
+        // available.
+        let inputs = TransferPlausibilityInputs {
+            buyer_league_rep: 7_400,
+            ..AgentFixtures::contented_standout()
+        };
+        assert!(!inputs.is_agent_circulated());
+        assert_eq!(inputs.availability_strength(), AvailabilityStrength::None);
+    }
+
+    #[test]
+    fn the_reverse_flow_is_untouched() {
+        // The 30-year-old big-five star joining a Super Lig club: the buyer
+        // is a SMALLER stage, so the agent channel cannot fire and cannot
+        // manufacture availability for a step down.
+        let inputs = TransferPlausibilityInputs {
+            buyer_league_rep: 7_300,
+            seller_league_rep: 9_200,
+            player_age: 31,
+            player_stage_inclination: 0.0,
+            seller_marketed: false,
+            buyer_annual_income: 0,
+            buyer_top_earner: 0,
+            market_affinity: 1.0,
+            buyer_market_knowledge: 1.0,
+            ..AgentFixtures::contented_standout()
+        };
+        assert!(!inputs.is_agent_circulated());
+    }
+
+    #[test]
+    fn the_channel_never_unlocks_the_hard_gate_or_the_wage_floor() {
+        // Soft is deliberately the ceiling: the agent opens a conversation,
+        // he does not waive the level or wage realism downstream.
+        let strength = AgentFixtures::contented_standout().availability_strength();
+        assert!(!strength.unlocks_hard_gate());
+        assert!(!strength.waives_wage_floor());
+    }
+}

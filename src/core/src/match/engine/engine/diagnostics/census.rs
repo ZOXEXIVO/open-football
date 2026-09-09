@@ -716,7 +716,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut best: Option<(f32, f32, &MatchPlayer)> = None;
         let mut bodies = 0u32;
         for p in field.players.iter() {
-            if p.side != Some(defending_side) || p.tactical_position.current_position.is_goalkeeper()
+            if p.side != Some(defending_side)
+                || p.tactical_position.current_position.is_goalkeeper()
             {
                 continue;
             }

@@ -1,4 +1,4 @@
-use super::types::{DeferredTransfer, can_club_accept_player};
+use super::types::DeferredTransfer;
 use crate::club::Person;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::mind::verdict::MindOption;
@@ -10,12 +10,13 @@ use crate::simulator::SimulatorData;
 use crate::transfers::MarketLedgerUpdate;
 use crate::transfers::TransferRoutePolicy;
 use crate::transfers::TransferWindowManager;
+use crate::transfers::deal::negotiation::NegotiationStatus;
+use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
 use crate::transfers::market::{ClauseTrigger, TransferMarket};
-use crate::transfers::negotiation::NegotiationStatus;
-use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
 use crate::transfers::pipeline::{
     LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus, PipelineProcessor,
 };
+use crate::transfers::view::club::ClubView;
 use crate::{
     ChangeType, Club, ClubDirectionContext, ClubDirectionEvidence, ClubDirectionKind, ClubFinances,
     ClubPhilosophy, Country, NewSigningThreatContext, NewSigningThreatReason, Player,
@@ -950,7 +951,7 @@ pub(crate) fn execute_transfer_within_country(
         let can_accept = buying_club_index
             .map(|idx| {
                 let club = &country.clubs[idx];
-                can_club_accept_player(club) && club.finance.can_afford_transfer(upfront)
+                ClubView::can_accept_player(club) && club.finance.can_afford_transfer(upfront)
             })
             .unwrap_or(false);
 
@@ -1236,7 +1237,7 @@ fn execute_loan_within_country(
         // so the insert below cannot miss and drop him.
         let buying_club_index = country.clubs.iter().position(|c| c.id == buying_club_id);
         let can_accept = buying_club_index
-            .map(|idx| can_club_accept_player(&country.clubs[idx]))
+            .map(|idx| ClubView::can_accept_player(&country.clubs[idx]))
             .unwrap_or(false);
 
         if !can_accept {
@@ -1494,7 +1495,7 @@ fn execute_transfer_across_countries(
     let can_accept = data
         .country(buying_country_id)
         .and_then(|c| c.clubs.iter().find(|club| club.id == buying_club_id))
-        .map(|club| can_club_accept_player(club) && club.finance.can_afford_transfer(upfront))
+        .map(|club| ClubView::can_accept_player(club) && club.finance.can_afford_transfer(upfront))
         .unwrap_or(false);
     if !can_accept {
         debug!(
@@ -1842,7 +1843,7 @@ fn execute_loan_across_countries(
     let can_accept = data
         .country(buying_country_id)
         .and_then(|c| c.clubs.iter().find(|club| club.id == buying_club_id))
-        .map(can_club_accept_player)
+        .map(ClubView::can_accept_player)
         .unwrap_or(false);
     if !can_accept {
         debug!(
@@ -2686,7 +2687,7 @@ mod country_pair_execution_tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
-    use crate::transfers::offer::PersonalTermsOffer;
+    use crate::transfers::deal::offer::PersonalTermsOffer;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
         PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
@@ -3022,8 +3023,8 @@ mod development_pathway_tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
+    use crate::transfers::deal::negotiation::NegotiationStatus;
     use crate::transfers::market::{TransferListingStatus, TransferListingType};
-    use crate::transfers::negotiation::NegotiationStatus;
     use crate::transfers::pipeline::LoanOutReason as PipelineLoanOutReason;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes,
@@ -3916,7 +3917,7 @@ mod loan_history_source_tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
-    use crate::transfers::offer::PersonalTermsOffer;
+    use crate::transfers::deal::offer::PersonalTermsOffer;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes,
         PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,

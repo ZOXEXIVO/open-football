@@ -528,7 +528,11 @@ impl SaveModel {
     /// thing they share is the flight time. Gravity alone; the drag the
     /// physics applies on top is a couple of per cent over a flight this
     /// short and is inside the clearance.
-    pub(crate) fn tip_over_velocity(contact: Vector3<f32>, exit_x: f32, spray: f32) -> Vector3<f32> {
+    pub(crate) fn tip_over_velocity(
+        contact: Vector3<f32>,
+        exit_x: f32,
+        spray: f32,
+    ) -> Vector3<f32> {
         let along = exit_x - contact.x;
         let dist = along.abs().max(1.0);
         let ticks = (dist / Self::TIP_OUT_SPEED).max(Self::TIP_MIN_TICKS);
@@ -1836,8 +1840,8 @@ impl Ball {
             if SaveModel::tip_over_armed() && SaveModel::tips_over(contact_z, frame_z) {
                 #[cfg(feature = "match-logs")]
                 crate::mid_run_diag::KeeperActionDiag::note(17);
-                let share = ((outcome_roll - p_catch) / (p_safe - p_catch).max(1e-3))
-                    .clamp(0.0, 1.0);
+                let share =
+                    ((outcome_roll - p_catch) / (p_safe - p_catch).max(1e-3)).clamp(0.0, 1.0);
                 let spray = (share - 0.5) * 2.0 * SaveModel::TIP_SPRAY;
                 self.velocity = SaveModel::tip_over_velocity(self.position, exit_x, spray);
                 self.position.z = contact_z;

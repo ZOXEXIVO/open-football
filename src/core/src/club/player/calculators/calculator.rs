@@ -686,7 +686,7 @@ mod tests {
         // (window.rs). Verify the wrapper does what the calculator
         // doesn't, and that the discounts compound when both flags
         // are set.
-        use crate::transfers::window::PlayerValuationCalculator as Vp;
+        use crate::transfers::value::PlayerValuationCalculator as Vp;
         let now = d(2025);
         let mut player =
             make_valuation_player(now, 130, 135, 26, PlayerPositionType::MidfielderCenter);

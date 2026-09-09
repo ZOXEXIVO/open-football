@@ -607,7 +607,12 @@ mod tests {
     #[test]
     fn the_table_is_not_a_story_in_august() {
         let mut out = Vec::new();
-        TableDesk::file(&mut out, Some(Fixture::table(1, 20, 4, 38)), 1, Fixture::day());
+        TableDesk::file(
+            &mut out,
+            Some(Fixture::table(1, 20, 4, 38)),
+            1,
+            Fixture::day(),
+        );
 
         assert!(
             out.is_empty(),
@@ -1535,7 +1540,12 @@ mod tests {
     #[test]
     fn first_place_is_told_as_first() {
         let mut out = Vec::new();
-        TableDesk::file(&mut out, Some(Fixture::table(1, 20, 24, 38)), 1, Fixture::day());
+        TableDesk::file(
+            &mut out,
+            Some(Fixture::table(1, 20, 24, 38)),
+            1,
+            Fixture::day(),
+        );
         assert_eq!(Fixture::kinds(&out), vec![NewsStoryKind::TopOfTheTable]);
 
         let mut second = Vec::new();

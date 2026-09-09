@@ -17,7 +17,7 @@ use crate::r#match::Match;
 use crate::r#match::MatchResult;
 use crate::simulator::PerformanceProfiler;
 use crate::transfers::market::TransferMarket;
-use crate::transfers::market_map::CountryTransferProfile;
+use crate::transfers::market::map::CountryTransferProfile;
 use crate::transfers::pipeline::PipelineProcessor;
 use crate::{Club, ClubResult, Player, PlayerResult};
 use chrono::{Datelike, NaiveDate};

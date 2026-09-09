@@ -31,8 +31,8 @@ use crate::club::{
 };
 use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
+use crate::transfers::HomePull;
 use crate::transfers::ScoutingRegion;
-use crate::transfers::pipeline::HomePull;
 use crate::utils::DateUtils;
 use crate::{
     CompetitionStatistics, IndividualTrainingPlan, InternationalStatistics, NationalTeamLevel,

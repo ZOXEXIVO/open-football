@@ -870,12 +870,12 @@ impl Player {
     /// Runway above which a homesick player asks for a loan rather than a
     /// transfer. 0.7 is roughly age 25 — the top of the population Part I.3
     /// describes, and the same bar
-    /// [`crate::transfers::pipeline::UnsettledAbroadScan`] uses.
+    /// [`crate::transfers::UnsettledAbroadScan`] uses.
     const HOME_LOAN_RUNWAY_BAR: f32 = 0.7;
 
     /// Pressure a freshly formed `GoHome` is seeded at.
     ///
-    /// Just above [`crate::transfers::pipeline::HomeLoanGates`]'
+    /// Just above [`crate::transfers::HomeLoanGates`]'
     /// `WANTS_HOME_BAR` of 0.4, so the want the mind has just formed can
     /// carry the pathway by itself within a tick instead of waiting on
     /// the legacy `WantsReturnHome` mood's recency to do it. It is not
@@ -896,14 +896,14 @@ impl Player {
     /// Writes the two wants and stops. No `Req`, no listing, no status.
     /// Two channels read them and neither needs a badge: the parent's own
     /// loan sweep, through
-    /// [`crate::transfers::pipeline::UnsettledAbroadScan`], and the
+    /// [`crate::transfers::UnsettledAbroadScan`], and the
     /// manager-talk route's home check, which reads
     /// [`crate::Player::home_pull`] and the `GoOutOnLoan` pressure written
     /// here. So the ask reaches the club through the channels a loan
     /// actually travels.
     ///
     /// The home want is seeded ABOVE
-    /// [`crate::transfers::pipeline::HomeLoanGates::WANTS_HOME_BAR`] on
+    /// [`crate::transfers::HomeLoanGates::WANTS_HOME_BAR`] on
     /// purpose. It is written only when the pressure model has already
     /// found real evidence, and a seed below the bar left the pathway
     /// carried entirely by the legacy `WantsReturnHome` mood's recency —

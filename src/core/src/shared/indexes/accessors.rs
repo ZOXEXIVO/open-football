@@ -3,13 +3,14 @@ use crate::continent::Continent;
 use crate::country::Country;
 use crate::league::League;
 use crate::transfers::ScoutingRegion;
-use crate::transfers::negotiation::NegotiationStatus;
-use crate::transfers::pipeline::plausibility::{
+use crate::transfers::deal::negotiation::NegotiationStatus;
+use crate::transfers::gate::{
     TransferMovePlausibility, TransferMoveStage, TransferPlausibilityBuilder,
 };
-use crate::transfers::pipeline::scouting_config::{RealismTarget, ScoutingConfig};
-use crate::transfers::pipeline::{ClubTransferPlan, ScoutPlayerMonitoring};
-use crate::transfers::window::PlayerValuationCalculator;
+use crate::transfers::pipeline::ClubTransferPlan;
+use crate::transfers::scouting::config::{RealismTarget, ScoutingConfig};
+use crate::transfers::scouting::recruitment::ScoutPlayerMonitoring;
+use crate::transfers::value::PlayerValuationCalculator;
 use crate::{
     Club, Person, Player, PlayerSquadStatus, PlayerStatusType, SimulatorData, Staff, Team,
 };
@@ -1399,8 +1400,10 @@ impl SimulatorData {
 use crate::StaffPosition;
 use crate::TeamType;
 use crate::transfers::pipeline::{
-    DetailedScoutingReport, RecruitmentDecisionType, ScoutMonitoringStatus, ScoutVoteChoice,
-    ScoutingAssignment, ShortlistCandidateStatus, TransferRequest,
+    DetailedScoutingReport, ScoutingAssignment, ShortlistCandidateStatus, TransferRequest,
+};
+use crate::transfers::scouting::recruitment::{
+    RecruitmentDecisionType, ScoutMonitoringStatus, ScoutVoteChoice,
 };
 use crate::utils::DateUtils;
 use std::collections::HashMap;
@@ -2166,12 +2169,13 @@ mod interested_clubs_tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};
-    use crate::transfers::negotiation::TransferNegotiation;
-    use crate::transfers::offer::TransferOffer;
+    use crate::transfers::deal::negotiation::TransferNegotiation;
+    use crate::transfers::deal::offer::TransferOffer;
     use crate::transfers::pipeline::{
-        DetailedScoutingReport, ScoutMonitoringSource, ScoutingRecommendation, ShortlistCandidate,
+        DetailedScoutingReport, ScoutingRecommendation, ShortlistCandidate,
         ShortlistCandidateStatus, TransferShortlist,
     };
+    use crate::transfers::scouting::recruitment::ScoutMonitoringSource;
     use crate::{
         ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
         PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,

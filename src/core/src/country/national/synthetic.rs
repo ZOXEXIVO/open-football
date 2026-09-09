@@ -11,7 +11,7 @@ use crate::club::player::load::PlayerLoad;
 use crate::club::player::mind::PlayerMind;
 use crate::club::player::rapport::PlayerRapport;
 use crate::shared::FullName;
-use crate::transfers::pipeline::HomePull;
+use crate::transfers::HomePull;
 use crate::utils::IntegerUtils;
 use crate::{
     Mental, PersonAttributes, PersonBehaviour, PersonBehaviourState, Physical, Player,
@@ -246,7 +246,8 @@ impl NationalTeam {
                 international_apps: 0,
                 international_goals: 0,
                 under_21_international_apps: 0,
-                under_21_international_goals: 0,                injury_days_remaining: 0,
+                under_21_international_goals: 0,
+                injury_days_remaining: 0,
                 injury_type: None,
                 injury_proneness: 10,
                 recovery_days_remaining: 0,

@@ -18,32 +18,30 @@ use crate::transfers::TransferListingStatus;
 use crate::transfers::TransferListingType;
 use crate::transfers::TransferRoutePolicy;
 use crate::transfers::TransferWindowManager;
-use crate::transfers::market::TransferListingOrigin;
-use crate::transfers::negotiation::{
+use crate::transfers::deal::auction::AuctionState;
+use crate::transfers::deal::negotiation::{
     NegotiationPhase, NegotiationRejectionReason, TransferNegotiation,
 };
-use crate::transfers::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
-use crate::transfers::pipeline::appraisal::{
+use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
+use crate::transfers::gate::appraisal::{
     AppraisalConfig, OfferKind, OfferView, PlayerDisposition, PlayerOfferAppraisal, PlayerStance,
     TermsRefusalCause,
 };
-use crate::transfers::pipeline::appraisal_inputs::{
+use crate::transfers::gate::stance::{
     AvailabilityView, OfferViewBuilder, PlayerStanceBuilder, StanceInputs,
 };
-use crate::transfers::pipeline::loan_guard::{LoanBorrowerProfile, LoanGuardVerdict};
-use crate::transfers::pipeline::asset_ledger::ReplacementScarcity;
-use crate::transfers::pipeline::auction::AuctionState;
-use crate::transfers::pipeline::planning::{BriefTier, PlanningCadence};
-use crate::transfers::pipeline::plausibility::{
+use crate::transfers::gate::{
     TransferPlausibilityBuilder, TransferPlausibilityEvaluator, TransferPlausibilityInputs,
     TransferPlausibilityVerdict,
 };
+use crate::transfers::loan::guard::{LoanBorrowerProfile, LoanGuardVerdict};
+use crate::transfers::market::TransferListingOrigin;
 use crate::transfers::pipeline::trace::TransferTrace;
-use crate::transfers::pipeline::wage_power::{
-    BuyerLevelWage, OwnerEnvelopeReservations, WagePower,
-};
 use crate::transfers::pipeline::{LoanOutReason, PipelineProcessor};
-use crate::transfers::window::PlayerValuationCalculator;
+use crate::transfers::squad::ledger::ReplacementScarcity;
+use crate::transfers::squad::plan::{BriefTier, PlanningCadence};
+use crate::transfers::value::PlayerValuationCalculator;
+use crate::transfers::value::wage::{BuyerLevelWage, OwnerEnvelopeReservations, WagePower};
 use crate::utils::{FloatUtils, FormattingUtils};
 use crate::{
     Club, Country, Player, PlayerSquadStatus, PlayerStatusType, PlayerValueCalculator,
@@ -550,7 +548,7 @@ impl CountryResult {
 
     /// League-reputation gain that makes a buyer a genuine step up, and so
     /// someone the player's agent has already been talking to. Mirrors
-    /// [`crate::transfers::pipeline::plausibility::TransferPlausibilityInputs::AGENT_MIN_STAGE_GAIN`]
+    /// [`crate::transfers::gate::TransferPlausibilityInputs::AGENT_MIN_STAGE_GAIN`]
     /// — the discovery side and the approach side must agree about what
     /// counts as a bigger stage.
     const AGENT_MIN_STAGE_GAIN: u16 = 1200;
@@ -708,11 +706,10 @@ impl CountryResult {
             .iter()
             .find(|c| c.id == neg_data.buying_club_id)?;
         let borrower_league_rep = PipelineProcessor::club_league_reputation(country, borrower);
-        let profile = LoanBorrowerProfile::of(borrower, date, borrower_league_rep)?
-            .with_best_in_group(PipelineProcessor::best_ca_in_group(
-                borrower,
-                player.position().position_group(),
-            ));
+        let profile =
+            LoanBorrowerProfile::of(borrower, date, borrower_league_rep)?.with_best_in_group(
+                PipelineProcessor::best_ca_in_group(borrower, player.position().position_group()),
+            );
         Some(guard.assess(&profile))
     }
 
@@ -3334,8 +3331,8 @@ mod deadline_urgency_tests {
 mod seller_bid_valuation_tests {
     use super::*;
     use crate::shared::{Currency, CurrencyValue};
-    use crate::transfers::negotiation::TransferNegotiation;
-    use crate::transfers::offer::{TransferClause, TransferOffer};
+    use crate::transfers::deal::negotiation::TransferNegotiation;
+    use crate::transfers::deal::offer::{TransferClause, TransferOffer};
     use chrono::NaiveDate;
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
@@ -3400,7 +3397,7 @@ mod development_pathway_protection_tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};
-    use crate::transfers::offer::TransferOffer;
+    use crate::transfers::deal::offer::TransferOffer;
     use crate::transfers::pipeline::{LoanDestinationPreference, LoanOutCandidate, LoanOutStatus};
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
@@ -3681,8 +3678,8 @@ mod seller_fee_floor_tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings, Season};
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};
-    use crate::transfers::negotiation::TransferNegotiation;
-    use crate::transfers::offer::TransferOffer;
+    use crate::transfers::deal::negotiation::TransferNegotiation;
+    use crate::transfers::deal::offer::TransferOffer;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
         PlayerAttributes, PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType,
@@ -4297,8 +4294,8 @@ mod saga_visibility_tests {
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};
-    use crate::transfers::negotiation::TransferNegotiation;
-    use crate::transfers::offer::TransferOffer;
+    use crate::transfers::deal::negotiation::TransferNegotiation;
+    use crate::transfers::deal::offer::TransferOffer;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, HappinessEventType,
         PersonAttributes, Player, PlayerAttributes, PlayerClubContract, PlayerCollection,

@@ -27,15 +27,15 @@ use super::free_agents::EmergencySignedTerms;
 use crate::Country;
 use crate::PlayerFieldPositionGroup;
 use crate::shared::{Currency, CurrencyValue};
+use crate::transfers::deal::offer::TransferOffer;
+use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::market::{TransferListing, TransferListingType};
-use crate::transfers::offer::TransferOffer;
 use crate::transfers::pipeline::{
     PipelineProcessor, ShortlistCandidate, ShortlistCandidateStatus, TransferNeedPriority,
     TransferNeedReason, TransferRequest, TransferRequestSource, TransferRequestStatus,
     TransferShortlist,
 };
-use crate::transfers::reason::TransferReason;
-use crate::transfers::squad_needs::EmergencyGroupSlot;
+use crate::transfers::squad::needs::EmergencyGroupSlot;
 use chrono::NaiveDate;
 use log::debug;
 

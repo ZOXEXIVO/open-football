@@ -166,7 +166,8 @@ fn a_shot_tipped_over_the_bar_is_a_corner() {
 
     // Off the keeper's fingertips.
     let (mut field, mut context) = kickoff();
-    let (keeper, keeper_team) = keeper_at(&mut field, PlayerSide::Left, Vector3::new(6.0, 272.0, 0.0));
+    let (keeper, keeper_team) =
+        keeper_at(&mut field, PlayerSide::Left, Vector3::new(6.0, 272.0, 0.0));
     let (shooter, _) = outfielder(&field, PlayerSide::Right);
     over_the_left_bar(&mut field);
     field.ball.previous_owner = Some(shooter);
@@ -246,7 +247,11 @@ fn a_high_shot_the_keeper_cannot_hold_is_tipped_over_the_bar() {
         context.rng = MatchRng::from_seed(seed);
         // Right-hand keeper a stride off his line, dead in line with the
         // shot; the ball at head height and above, arriving at pace.
-        let (keeper, _) = keeper_at(&mut field, PlayerSide::Right, Vector3::new(832.0, goal_y, 0.0));
+        let (keeper, _) = keeper_at(
+            &mut field,
+            PlayerSide::Right,
+            Vector3::new(832.0, goal_y, 0.0),
+        );
         let (shooter, _) = outfielder(&field, PlayerSide::Left);
         for player in field.players.iter_mut() {
             if player.id != keeper {

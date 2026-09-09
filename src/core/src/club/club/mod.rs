@@ -19,7 +19,7 @@ use crate::club::status::ClubStatus;
 use crate::club::{ClubFinances, ClubResult, StaffPosition};
 use crate::context::GlobalContext;
 use crate::shared::{Currency, CurrencyValue, Location};
-use crate::transfers::market_knowledge::ClubMarketLedger;
+use crate::transfers::market::knowledge::ClubMarketLedger;
 use crate::transfers::pipeline::ClubTransferPlan;
 use crate::utils::DateUtils;
 use crate::{ReputationLevel, TeamCollection, TeamType};

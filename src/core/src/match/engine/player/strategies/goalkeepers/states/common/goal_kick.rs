@@ -126,9 +126,8 @@ impl KeeperGoalKick {
         let short_skill = ((gk.passing + gk.first_touch) / 40.0).clamp(0.0, 1.0);
         let composure = (taker.skills.mental.composure / 20.0).clamp(0.0, 1.0);
         let on_pitch = |p: &&MatchPlayer| p.side.is_some() && !p.is_sent_off && p.id != taker.id;
-        let flat = |a: Vector3<f32>, b: Vector3<f32>| {
-            Vector3::new(a.x - b.x, a.y - b.y, 0.0).norm()
-        };
+        let flat =
+            |a: Vector3<f32>, b: Vector3<f32>| Vector3::new(a.x - b.x, a.y - b.y, 0.0).norm();
         let squeezing = players
             .iter()
             .filter(on_pitch)
@@ -198,7 +197,11 @@ impl KeeperGoalKick {
     /// and a little toward the middle of the pitch.
     pub fn mark(spot: Vector3<f32>, side: Option<PlayerSide>, field_height: f32) -> Vector3<f32> {
         let back = -side.map_or(1.0, |s| s.forward_dir_x());
-        let inward = if spot.y > field_height * 0.5 { -1.0 } else { 1.0 };
+        let inward = if spot.y > field_height * 0.5 {
+            -1.0
+        } else {
+            1.0
+        };
         Vector3::new(
             spot.x + back * Self::RUN_UP_DEPTH,
             spot.y + inward * Self::RUN_UP_SIDE,

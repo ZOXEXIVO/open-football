@@ -16,14 +16,13 @@ use crate::country::result::transfers::free_agent_market_calc::FreeAgentMarketCa
 use crate::league::{LeagueTable, MatchStorage};
 use crate::shared::SimulatorDataIndexes;
 use crate::transfers::ScoutingRegion;
-use crate::transfers::TransferPool;
 use std::sync::Arc;
 
-use crate::transfers::market_map::{
+use crate::transfers::market::map::{
     CountryTransferProfile, MarketCountryFacts, MarketMap, RegionPrestigeTable,
 };
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
-use crate::transfers::scout_market::StaffIdSequence;
+use crate::transfers::scouting::desk::StaffIdSequence;
 use crate::utils::IntegerUtils;
 use crate::utils::random::engine as rng_engine;
 use crate::{Person, Player, Staff};
@@ -37,8 +36,6 @@ pub struct SimulatorData {
     pub continents: Vec<Continent>,
 
     pub date: NaiveDateTime,
-
-    pub transfer_pool: TransferPool<Player>,
 
     pub indexes: Option<SimulatorDataIndexes>,
 
@@ -211,7 +208,6 @@ impl SimulatorData {
         let mut data = SimulatorData {
             continents,
             date,
-            transfer_pool: TransferPool::new(),
             indexes: None,
             dirty_player_index: false,
             free_agents: Vec::new(),
@@ -643,7 +639,7 @@ impl SimulatorData {
         use crate::PlayerStatusType;
         use crate::club::player::transfer::ReleaseContext;
         use crate::shared::{Currency, CurrencyValue};
-        use crate::transfers::reason::TransferReason;
+        use crate::transfers::deal::reason::TransferReason;
         use crate::transfers::{CompletedTransfer, TransferType};
 
         let date = self.date.date();

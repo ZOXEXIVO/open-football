@@ -108,37 +108,6 @@ impl DeferredTransferOps {
     }
 }
 
-/// World-wide aggregate of free-agent market bumps, collected from every
-/// country's `DeferredTransferOps` before the serial Phase-C drain.
-///
-/// Each per-country `apply_deferred_transfer_ops` used to walk the ENTIRE
-/// `data.free_agents` pool twice (offer/reject bump + block-reason stamp),
-/// once for every country — `O(countries × pool)`. The orchestrator now
-/// concatenates every country's bump ids into one of these and runs a
-/// SINGLE pass over the pool via
-/// [`PipelineProcessor::apply_free_agent_market_bumps_batch`], matching the
-/// documented "one bump per player per tick" intent across the whole world
-/// (the previous per-country dedup still allowed a player pursued by two
-/// countries to be bumped twice).
-#[derive(Default)]
-pub struct FreeAgentBumpBatch {
-    /// Pool players that fielded an offer this tick (any country).
-    pub offered_ids: Vec<u32>,
-    /// Pool players whose acceptance roll failed this tick (any country).
-    pub rejected_ids: Vec<u32>,
-    /// Per-player skip reasons from every country's matcher; merged to the
-    /// highest-ranked reason per player before stamping.
-    pub block_reasons: Vec<(u32, FreeAgentBlockReason)>,
-}
-
-impl FreeAgentBumpBatch {
-    /// True when no country recorded any free-agent market activity this
-    /// tick — lets the orchestrator skip the pool pass entirely.
-    pub fn is_empty(&self) -> bool {
-        self.offered_ids.is_empty() && self.rejected_ids.is_empty() && self.block_reasons.is_empty()
-    }
-}
-
 impl CountryResult {
     /// Phase-A entry: runs the country-local transfer market pipeline
     /// (negotiations, free agents, listings, scouting, recruitment
@@ -695,6 +664,7 @@ mod side_channel_tests {
     use crate::continent::Continent;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::fullname::FullName;
+    use crate::transfers::pool::FreeAgentBumpBatch;
     use crate::{
         Country, PersonAttributes, Player, PlayerAttributes, PlayerPosition, PlayerPositionType,
         PlayerPositions, PlayerSkills,

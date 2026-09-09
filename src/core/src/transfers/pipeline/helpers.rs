@@ -1,3 +1,5 @@
+use crate::club::team::squad::SquadEvidenceContext;
+use crate::transfers::scouting::config::ScoutingConfig;
 use chrono::{Datelike, NaiveDate};
 use rustc_hash::FxHashMap;
 
@@ -7,16 +9,17 @@ use crate::club::player::mind::GoalKind;
 use crate::club::player::statistics::StuckCareerScan;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::ScoutingRegion;
+use crate::transfers::deal::reason::{ScoutVerdict, TransferReason};
+use crate::transfers::loan::home::HomeLoanGates;
+use crate::transfers::market::window::TransferCalendar;
 use crate::transfers::pipeline::LoanDestinationPreference;
-use crate::transfers::pipeline::breakout::{BreakoutPerformanceSignal, LeaguePerformanceLookup};
-use crate::transfers::pipeline::loan_home::HomeLoanGates;
 use crate::transfers::pipeline::processor::{
     PipelineProcessor, PlayerSummary, SellerPlausibilityContext,
 };
-use crate::transfers::pipeline::standing::CareerRecordSnapshot;
 use crate::transfers::pipeline::{DetailedScoutingReport, ReportRiskFlag, TransferRequest};
-use crate::transfers::reason::{ScoutVerdict, TransferReason};
-use crate::transfers::window::{PlayerValuationCalculator, TransferCalendar};
+use crate::transfers::scouting::breakout::{BreakoutPerformanceSignal, LeaguePerformanceLookup};
+use crate::transfers::squad::standing::CareerRecordSnapshot;
+use crate::transfers::value::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
 use crate::{
     Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType,
@@ -30,7 +33,7 @@ impl PipelineProcessor {
     /// only for the pure decision fns that carry no country context
     /// (`resolve_initial_approach`); every country-holding caller uses
     /// [`Self::is_mid_season_window_for`] instead.
-    pub(super) fn is_january_window(date: NaiveDate) -> bool {
+    pub(in crate::transfers) fn is_january_window(date: NaiveDate) -> bool {
         date.month() == 1
     }
 
@@ -39,7 +42,10 @@ impl PipelineProcessor {
     /// calendars, June for Latam. Drives the "prefer loans, quick
     /// fixes" mid-season bias, which the raw month==1 check applied to
     /// the wrong month everywhere outside Europe.
-    pub(super) fn is_mid_season_window_for(country: &Country, date: NaiveDate) -> bool {
+    pub(in crate::transfers) fn is_mid_season_window_for(
+        country: &Country,
+        date: NaiveDate,
+    ) -> bool {
         let w = TransferCalendar::for_country(&country.code, date);
         let (s_start, s_end) = w.summer_window;
         let (w_start, w_end) = w.winter_window;
@@ -62,7 +68,7 @@ impl PipelineProcessor {
     /// shortlists, and the spent/reserved ledger halfway through their
     /// market) and never reset MLS-style calendars at their real
     /// openings at all.
-    pub(super) fn is_window_start_for(country: &Country, date: NaiveDate) -> bool {
+    pub(in crate::transfers) fn is_window_start_for(country: &Country, date: NaiveDate) -> bool {
         let tomorrow = date
             .checked_add_signed(chrono::Duration::days(1))
             .unwrap_or(date);
@@ -86,7 +92,7 @@ impl PipelineProcessor {
     /// old hard-coded June/January cadence starved every non-European
     /// calendar: an MLS-style Feb–Apr window got no evaluation ticks
     /// (and no staff recommendations) for its entire duration.
-    pub(super) fn should_evaluate_for(country: &Country, date: NaiveDate) -> bool {
+    pub(in crate::transfers) fn should_evaluate_for(country: &Country, date: NaiveDate) -> bool {
         let w = TransferCalendar::for_country(&country.code, date);
         for (start, end) in [w.summer_window, w.winter_window] {
             if date >= start && date <= end {
@@ -101,7 +107,7 @@ impl PipelineProcessor {
     /// and optional scout report. Both halves travel as data — the motive
     /// as an i18n key, the verdict as the numbers the scout filed — so the
     /// history row can be phrased in whatever language the reader picked.
-    pub(super) fn build_transfer_reason(
+    pub(in crate::transfers) fn build_transfer_reason(
         request: Option<&TransferRequest>,
         report: Option<&DetailedScoutingReport>,
     ) -> TransferReason {
@@ -119,7 +125,7 @@ impl PipelineProcessor {
         TransferReason::key(key).with_scout(scout)
     }
 
-    pub(super) fn find_player_in_country<'a>(
+    pub(in crate::transfers) fn find_player_in_country<'a>(
         country: &'a Country,
         player_id: u32,
     ) -> Option<&'a Player> {
@@ -199,7 +205,7 @@ impl PipelineProcessor {
     }
 
     /// Resolve player full name and selling club name from the country data.
-    pub(super) fn resolve_player_and_club_name(
+    pub(in crate::transfers) fn resolve_player_and_club_name(
         country: &Country,
         player_id: u32,
         club_id: u32,
@@ -222,7 +228,10 @@ impl PipelineProcessor {
         (player_name, club_name)
     }
 
-    pub(super) fn find_player_in_club<'a>(club: &'a Club, player_id: u32) -> Option<&'a Player> {
+    pub(in crate::transfers) fn find_player_in_club<'a>(
+        club: &'a Club,
+        player_id: u32,
+    ) -> Option<&'a Player> {
         for team in &club.teams.teams {
             if let Some(player) = team.players.find(player_id) {
                 return Some(player);
@@ -231,7 +240,7 @@ impl PipelineProcessor {
         None
     }
 
-    pub(super) fn find_player_summary_in_country(
+    pub(in crate::transfers) fn find_player_summary_in_country(
         country: &Country,
         player_id: u32,
         date: NaiveDate,
@@ -250,7 +259,7 @@ impl PipelineProcessor {
     /// Shared by the country-wide scan above, the per-pass
     /// [`CountryPlayerLookup`] fast path, and callers that walk rosters
     /// directly (breakout watch) and therefore never need the scan.
-    pub(super) fn build_player_summary(
+    pub(in crate::transfers) fn build_player_summary(
         country: &Country,
         club: &Club,
         player: &Player,
@@ -265,7 +274,7 @@ impl PipelineProcessor {
     /// passes that resolve many candidates per club (shortlists,
     /// recommendation re-checks) hand the batched snapshot in instead —
     /// same values by construction (see `ClubGroupRanks`).
-    pub(super) fn build_player_summary_ranked(
+    pub(in crate::transfers) fn build_player_summary_ranked(
         country: &Country,
         club: &Club,
         player: &Player,
@@ -335,9 +344,8 @@ impl PipelineProcessor {
             in_debt: club.finance.balance.balance < 0,
             days_on_market: player.days_available(date).min(i16::MAX as i64) as i16,
             market_resignation: player.market_resignation(date),
-            club_matches_played:
-                crate::club::team::squad::SquadEvidenceContext::current_season_sample(date, club)
-                    .club_matches_proxy(),
+            club_matches_played: SquadEvidenceContext::current_season_sample(date, club)
+                .club_matches_proxy(),
             big_stage_inclination: player.big_stage_inclination,
             is_marketed: club.transfer_plan.is_marketed(player.id),
         };
@@ -433,7 +441,7 @@ impl PipelineProcessor {
     /// Buyer rep is passed in so we can flag wage demands that blow the budget.
     /// Thresholds (determination floor, age cutoff, contract-month window,
     /// rep gap) live in `ScoutingConfig::risk_flags`.
-    pub(super) fn evaluate_risk_flags(
+    pub(in crate::transfers) fn evaluate_risk_flags(
         is_injured: bool,
         determination: f32,
         age: u8,
@@ -441,7 +449,7 @@ impl PipelineProcessor {
         player_world_rep: i16,
         buyer_world_rep: i16,
     ) -> Vec<ReportRiskFlag> {
-        super::scouting_config::ScoutingConfig::default().risk_flags_for(
+        ScoutingConfig::default().risk_flags_for(
             is_injured,
             determination,
             age,
@@ -451,7 +459,7 @@ impl PipelineProcessor {
         )
     }
 
-    pub(super) fn club_world_reputation(club: &Club) -> i16 {
+    pub(in crate::transfers) fn club_world_reputation(club: &Club) -> i16 {
         club.teams
             .iter()
             .find(|t| matches!(t.team_type, TeamType::Main))
@@ -473,7 +481,7 @@ impl PipelineProcessor {
     /// first-team-calibre teenager score `seller_position_rank = unknown`
     /// (importance 0.62 at best), which is the number the loan gates then
     /// judged him unimportant on.
-    pub(super) fn ranks_with_first_team(team_type: TeamType) -> bool {
+    pub(in crate::transfers) fn ranks_with_first_team(team_type: TeamType) -> bool {
         matches!(team_type, TeamType::Main) || team_type.is_youth()
     }
 
@@ -526,10 +534,8 @@ impl PipelineProcessor {
     /// Drives how aggressively the data department narrows the scout pool.
     /// Defaults from `ScoutingConfig::data_prefilter::default_data_skill`
     /// when the club has no scouts at all.
-    pub(super) fn club_data_analysis_skill(club: &Club) -> u8 {
-        let default_skill = super::scouting_config::ScoutingConfig::default()
-            .data_prefilter
-            .default_data_skill;
+    pub(in crate::transfers) fn club_data_analysis_skill(club: &Club) -> u8 {
+        let default_skill = ScoutingConfig::default().data_prefilter.default_data_skill;
         club.teams
             .iter()
             .flat_map(|t| t.staffs.iter())
@@ -554,7 +560,10 @@ impl PipelineProcessor {
     /// higher-ability names. The breakout term is league-reputation
     /// discounted inside the signal, so a flat-track scorer in a weak
     /// division doesn't leapfrog proven quality.
-    pub(super) fn player_data_score(p: &PlayerSummary, perf: &LeaguePerformanceLookup) -> f32 {
+    pub(in crate::transfers) fn player_data_score(
+        p: &PlayerSummary,
+        perf: &LeaguePerformanceLookup,
+    ) -> f32 {
         let ability = p.skill_ability as f32 * 0.4;
         let form = p.average_rating * (p.appearances.min(40) as f32 / 4.0);
         let output = ((p.goals + p.assists).min(30)) as f32 * 0.3;
@@ -571,7 +580,7 @@ impl PipelineProcessor {
         ability + form + output + breakout.score * 0.2
     }
 
-    pub(super) fn get_scout_skills(club: &Club, scout_id: u32) -> (u8, u8) {
+    pub(in crate::transfers) fn get_scout_skills(club: &Club, scout_id: u32) -> (u8, u8) {
         for team in &club.teams.teams {
             if let Some(staff) = team.staffs.find(scout_id) {
                 return (
@@ -583,7 +592,7 @@ impl PipelineProcessor {
         // Pointer is stale (staff was removed mid-tick or assignment was
         // never tied to a real scout). Use the configured "missing staff"
         // defaults rather than panic — quality silently downgrades.
-        let cfg = super::scouting_config::ScoutingConfig::default();
+        let cfg = ScoutingConfig::default();
         (
             cfg.observation.default_judging_when_staff_missing,
             cfg.observation.default_judging_when_staff_missing,
@@ -593,7 +602,7 @@ impl PipelineProcessor {
     /// Estimate a player's growth potential from observable attributes.
     /// Scouts can't see PA — they judge ceiling from age, character, and current skill level.
     /// Young players with strong determination, work rate, composure show higher ceiling.
-    pub(super) fn estimate_growth_potential(
+    pub(in crate::transfers) fn estimate_growth_potential(
         age: u8,
         determination: f32,
         work_rate: f32,
@@ -633,7 +642,7 @@ impl PipelineProcessor {
         (base_growth * mental_factor * ceiling_factor) as u8
     }
 
-    pub(super) fn calculate_asking_price(
+    pub(in crate::transfers) fn calculate_asking_price(
         player: &Player,
         country: &Country,
         club: &Club,
@@ -678,7 +687,7 @@ impl PipelineProcessor {
         }
     }
 
-    pub(super) fn get_club_reputation(country: &Country, club_id: u32) -> f32 {
+    pub(in crate::transfers) fn get_club_reputation(country: &Country, club_id: u32) -> f32 {
         country
             .clubs
             .iter()
@@ -688,7 +697,10 @@ impl PipelineProcessor {
             .unwrap_or(0.3)
     }
 
-    pub(super) fn get_club_reputation_level(country: &Country, club_id: u32) -> ReputationLevel {
+    pub(in crate::transfers) fn get_club_reputation_level(
+        country: &Country,
+        club_id: u32,
+    ) -> ReputationLevel {
         country
             .clubs
             .iter()
@@ -698,7 +710,7 @@ impl PipelineProcessor {
             .unwrap_or(ReputationLevel::Amateur)
     }
 
-    pub(super) fn get_player_negotiation_data(
+    pub(in crate::transfers) fn get_player_negotiation_data(
         country: &Country,
         player_id: u32,
         date: NaiveDate,
@@ -708,7 +720,7 @@ impl PipelineProcessor {
             .unwrap_or((25, 0.5))
     }
 
-    pub(super) fn rep_level_value(level: &ReputationLevel) -> u8 {
+    pub(in crate::transfers) fn rep_level_value(level: &ReputationLevel) -> u8 {
         match level {
             ReputationLevel::Elite => 5,
             ReputationLevel::Continental => 4,
@@ -855,7 +867,7 @@ impl PipelineProcessor {
 /// back to the authoritative scan, so results are identical to the scan —
 /// the index is built at pass start and rosters don't move mid-pass, the
 /// fallback is a pure safety net.
-pub(super) struct CountryPlayerLookup {
+pub(in crate::transfers) struct CountryPlayerLookup {
     club_idx_by_player: FxHashMap<u32, u32>,
     /// Per-club [`ClubGroupRanks`], indexed like `Country::clubs`.
     /// Pre-built for every club (one group sort per club — trivial next
@@ -867,7 +879,7 @@ pub(super) struct CountryPlayerLookup {
 }
 
 impl CountryPlayerLookup {
-    pub(super) fn build(country: &Country) -> Self {
+    pub(in crate::transfers) fn build(country: &Country) -> Self {
         let mut club_idx_by_player = FxHashMap::default();
         let mut ranks_by_club = Vec::with_capacity(country.clubs.len());
         for (club_idx, club) in country.clubs.iter().enumerate() {
@@ -884,7 +896,7 @@ impl CountryPlayerLookup {
         }
     }
 
-    pub(super) fn find_summary(
+    pub(in crate::transfers) fn find_summary(
         &self,
         country: &Country,
         player_id: u32,
@@ -909,7 +921,7 @@ impl CountryPlayerLookup {
     /// Indexed counterpart of [`PipelineProcessor::find_player_in_country`],
     /// with the same verified-hit / scan-fallback contract as
     /// [`Self::find_summary`].
-    pub(super) fn find_player<'a>(
+    pub(in crate::transfers) fn find_player<'a>(
         &self,
         country: &'a Country,
         player_id: u32,
@@ -934,14 +946,14 @@ impl CountryPlayerLookup {
 /// identical roster sequence (stable sort keeps roster order on CA ties),
 /// `u8::MAX` for anyone not on the main team, `0` best for a missing group
 /// or missing main team.
-pub(super) struct ClubGroupRanks {
+pub(in crate::transfers) struct ClubGroupRanks {
     rank_by_player: FxHashMap<u32, u8>,
     best_by_group: [u8; PlayerFieldPositionGroup::COUNT],
     size_by_group: [u8; PlayerFieldPositionGroup::COUNT],
 }
 
 impl ClubGroupRanks {
-    pub(super) fn build(club: &Club) -> Self {
+    pub(in crate::transfers) fn build(club: &Club) -> Self {
         let mut rank_by_player = FxHashMap::default();
         let mut best_by_group = [0u8; PlayerFieldPositionGroup::COUNT];
         let mut size_by_group = [0u8; PlayerFieldPositionGroup::COUNT];
@@ -983,7 +995,7 @@ impl ClubGroupRanks {
     /// Rank of the player inside his main-team position group (0 = best),
     /// `u8::MAX` when he isn't on the main team — same contract as
     /// [`PipelineProcessor::position_group_rank`].
-    pub(super) fn rank(&self, player_id: u32) -> u8 {
+    pub(in crate::transfers) fn rank(&self, player_id: u32) -> u8 {
         self.rank_by_player
             .get(&player_id)
             .copied()
@@ -992,2029 +1004,25 @@ impl ClubGroupRanks {
 
     /// Best main-team CA in the group — same contract as
     /// [`PipelineProcessor::best_ca_in_group`].
-    pub(super) fn best(&self, group: PlayerFieldPositionGroup) -> u8 {
+    pub(in crate::transfers) fn best(&self, group: PlayerFieldPositionGroup) -> u8 {
         self.best_by_group[group.index()]
     }
 
     /// How many first-team players occupy this position group. Lets a
     /// caller place someone who isn't in the main-team depth chart at all
     /// BEHIND it, rather than folding him into it at an invented rank.
-    pub(super) fn group_size(&self, group: PlayerFieldPositionGroup) -> u8 {
+    pub(in crate::transfers) fn group_size(&self, group: PlayerFieldPositionGroup) -> u8 {
         self.size_by_group[group.index()]
     }
 }
 
 #[cfg(test)]
-mod tier_helper_tests {
-    use crate::transfers::pipeline::PipelineProcessor;
-    use crate::{PlayerFieldPositionGroup, ReputationLevel};
-
-    const TIERS: [ReputationLevel; 6] = [
-        ReputationLevel::Elite,
-        ReputationLevel::Continental,
-        ReputationLevel::National,
-        ReputationLevel::Regional,
-        ReputationLevel::Local,
-        ReputationLevel::Amateur,
-    ];
-
-    const GROUPS: [PlayerFieldPositionGroup; 4] = [
-        PlayerFieldPositionGroup::Goalkeeper,
-        PlayerFieldPositionGroup::Defender,
-        PlayerFieldPositionGroup::Midfielder,
-        PlayerFieldPositionGroup::Forward,
-    ];
-
-    /// Tier midpoint reputation score — used to validate that the
-    /// continuous curve hits the calibrated values at the centre of
-    /// each enum band.
-    fn level_midpoint_score(level: &ReputationLevel) -> f32 {
-        match level {
-            ReputationLevel::Elite => 0.900,
-            ReputationLevel::Continental => 0.725,
-            ReputationLevel::National => 0.575,
-            ReputationLevel::Regional => 0.400,
-            ReputationLevel::Local => 0.225,
-            ReputationLevel::Amateur => 0.075,
-        }
-    }
-
-    fn baseline(level: &ReputationLevel, group: PlayerFieldPositionGroup) -> u8 {
-        PipelineProcessor::tier_starter_ca_score(level_midpoint_score(level), group)
-    }
-
-    fn ceiling(level: &ReputationLevel, group: PlayerFieldPositionGroup) -> u8 {
-        PipelineProcessor::tier_target_ceiling_score(level_midpoint_score(level), group)
-    }
-
-    #[test]
-    fn baseline_is_strictly_decreasing_by_tier_within_each_group() {
-        for group in GROUPS {
-            let baselines: Vec<u8> = TIERS.iter().map(|t| baseline(t, group)).collect();
-            for window in baselines.windows(2) {
-                assert!(
-                    window[0] > window[1],
-                    "tier baselines must be strictly decreasing for {:?}: {:?}",
-                    group,
-                    baselines
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn ceiling_is_at_least_baseline_for_every_tier_and_group() {
-        for tier in &TIERS {
-            for group in GROUPS {
-                let b = baseline(tier, group);
-                let c = ceiling(tier, group);
-                assert!(
-                    c >= b,
-                    "ceiling {} below baseline {} for {:?}/{:?}",
-                    c,
-                    b,
-                    tier,
-                    group
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn elite_continental_can_reach_world_class() {
-        // Elite-tier scouts must be allowed to recommend genuine
-        // world-class players (180+); Continental at minimum top-bracket
-        // (~155+). Calibration regression guard.
-        let elite_fwd_ceiling = ceiling(&ReputationLevel::Elite, PlayerFieldPositionGroup::Forward);
-        assert!(
-            elite_fwd_ceiling >= 180,
-            "elite forward ceiling = {}",
-            elite_fwd_ceiling
-        );
-
-        let cont_fwd_ceiling = ceiling(
-            &ReputationLevel::Continental,
-            PlayerFieldPositionGroup::Forward,
-        );
-        assert!(
-            cont_fwd_ceiling >= 155,
-            "continental forward ceiling = {}",
-            cont_fwd_ceiling
-        );
-    }
-
-    #[test]
-    fn small_clubs_disciplined_below_world_class() {
-        // Local / Amateur clubs should never reach top-class players
-        // through the tier window — ensures the listed-star sweep won't
-        // route Mbappé to a Sunday-league suitor.
-        let local_ceiling = ceiling(&ReputationLevel::Local, PlayerFieldPositionGroup::Forward);
-        let amateur_ceiling = ceiling(&ReputationLevel::Amateur, PlayerFieldPositionGroup::Forward);
-        assert!(
-            local_ceiling < 100,
-            "local forward ceiling = {}",
-            local_ceiling
-        );
-        assert!(
-            amateur_ceiling < 80,
-            "amateur forward ceiling = {}",
-            amateur_ceiling
-        );
-    }
-
-    #[test]
-    fn goalkeepers_score_below_outfield_at_same_tier() {
-        for tier in &TIERS {
-            let gk = baseline(tier, PlayerFieldPositionGroup::Goalkeeper);
-            let mid = baseline(tier, PlayerFieldPositionGroup::Midfielder);
-            assert!(
-                gk < mid,
-                "GK baseline {} not below MID baseline {} at {:?}",
-                gk,
-                mid,
-                tier
-            );
-        }
-    }
-
-    #[test]
-    fn quality_tolerance_decreases_with_reputation() {
-        // Top clubs upgrade aggressively (small tolerance); small clubs
-        // patient (large tolerance). Monotonic in score.
-        let mut prev = PipelineProcessor::tier_quality_tolerance_score(0.0);
-        for step in 1..=10 {
-            let s = step as f32 / 10.0;
-            let cur = PipelineProcessor::tier_quality_tolerance_score(s);
-            assert!(
-                cur <= prev,
-                "tolerance must be non-increasing as reputation rises (s={}: {} > prev {})",
-                s,
-                cur,
-                prev
-            );
-            prev = cur;
-        }
-        let elite = PipelineProcessor::tier_quality_tolerance_score(0.95);
-        let amateur = PipelineProcessor::tier_quality_tolerance_score(0.05);
-        assert!(
-            amateur > elite,
-            "amateur {} should exceed elite {}",
-            amateur,
-            elite
-        );
-    }
-
-    #[test]
-    fn baseline_score_curve_pins_tier_anchors() {
-        // Anchor calibration regression guard: midpoint of each tier
-        // returns the calibrated value the rest of the pipeline assumes.
-        let cases = [
-            (ReputationLevel::Elite, 145i16),
-            (ReputationLevel::Continental, 130),
-            (ReputationLevel::National, 110),
-            (ReputationLevel::Regional, 88),
-            (ReputationLevel::Local, 70),
-            (ReputationLevel::Amateur, 55),
-        ];
-        for (tier, expected_mid_baseline) in &cases {
-            let s = level_midpoint_score(tier);
-            // Midfielder offset is 0 — direct calibration check.
-            let baseline =
-                PipelineProcessor::tier_starter_ca_score(s, PlayerFieldPositionGroup::Midfielder);
-            assert_eq!(
-                baseline as i16, *expected_mid_baseline,
-                "midpoint baseline for {:?}: expected {}, got {}",
-                tier, expected_mid_baseline, baseline
-            );
-        }
-    }
-
-    #[test]
-    fn baseline_score_curve_is_monotonic_in_score() {
-        for group in GROUPS {
-            let mut prev = PipelineProcessor::tier_starter_ca_score(0.0, group);
-            for step in 1..=20 {
-                let s = step as f32 / 20.0;
-                let cur = PipelineProcessor::tier_starter_ca_score(s, group);
-                assert!(
-                    cur >= prev,
-                    "score baseline not monotonic at {}/{:?}: {} < {}",
-                    s,
-                    group,
-                    cur,
-                    prev
-                );
-                prev = cur;
-            }
-        }
-    }
-
-    #[test]
-    fn position_evaluation_ability_is_canonical_alias() {
-        // The helper must return exactly what
-        // `skills.calculate_ability_for_position(player.position())`
-        // produces — it's a naming alias, not a separate calculation.
-        // Construction goes through `PlayerGenerator::generate` (the
-        // single source of truth for Player init), then we assert the
-        // helper agrees with the direct call.
-        use crate::club::player::generators::PlayerGenerator;
-        use crate::{PeopleNameGeneratorData, PlayerPositionType};
-        use chrono::NaiveDate;
-
-        let names = PeopleNameGeneratorData {
-            first_names: vec!["Tier".to_string()],
-            last_names: vec!["Tester".to_string()],
-            nicknames: Vec::new(),
-        };
-        let bd = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
-        let player =
-            PlayerGenerator::generate(1, bd, PlayerPositionType::MidfielderCenter, 150, &names);
-        let direct = player
-            .skills
-            .calculate_ability_for_position(player.position());
-        let via_helper = PipelineProcessor::position_evaluation_ability(&player);
-        assert_eq!(
-            via_helper, direct,
-            "position_evaluation_ability must mirror calculate_ability_for_position"
-        );
-    }
-
-    #[test]
-    fn continental_weak_gk_clears_quality_upgrade_threshold() {
-        // A Continental-tier club with a 110-CA starting goalkeeper
-        // should fall below `baseline - tolerance` and so be flagged
-        // for QualityUpgrade. Calibration regression guard for the
-        // Spartak-style scenario.
-        let cont_score = level_midpoint_score(&ReputationLevel::Continental);
-        let baseline = PipelineProcessor::tier_starter_ca_score(
-            cont_score,
-            PlayerFieldPositionGroup::Goalkeeper,
-        );
-        let tolerance = PipelineProcessor::tier_quality_tolerance_score(cont_score);
-        let threshold = baseline as i16 - tolerance;
-
-        assert!(
-            (110_i16) < threshold,
-            "weak GK (CA=110) must be below upgrade threshold {} for Continental tier (baseline={}, tolerance={})",
-            threshold,
-            baseline,
-            tolerance
-        );
-
-        // Symmetrically, a tier-fit GK at baseline must NOT trigger.
-        assert!(
-            (baseline as i16) >= threshold,
-            "at-tier GK (CA={}) must clear threshold {}",
-            baseline,
-            threshold
-        );
-    }
-
-    #[test]
-    fn local_ceiling_cannot_reach_world_class_targets() {
-        // Local / Amateur clubs must not have CA windows wide enough
-        // to chase 160+ players via the listed-sweep tier window.
-        // Prevents impossible signings being shortlisted.
-        for tier in &[ReputationLevel::Local, ReputationLevel::Amateur] {
-            for group in GROUPS {
-                let c = ceiling(tier, group);
-                assert!(
-                    c < 110,
-                    "{:?} {:?} ceiling {} would let CA-160 stars through the gate",
-                    tier,
-                    group,
-                    c
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn continental_window_admits_realistic_targets_blocks_unattainable() {
-        // Continental tier should comfortably absorb a 130-CA listed
-        // player (i.e. Mikhailov-class), but reject a 175-CA superstar
-        // through the ceiling.
-        let cont_score = level_midpoint_score(&ReputationLevel::Continental);
-        let ceiling_fwd = PipelineProcessor::tier_target_ceiling_score(
-            cont_score,
-            PlayerFieldPositionGroup::Forward,
-        );
-        let baseline_fwd =
-            PipelineProcessor::tier_starter_ca_score(cont_score, PlayerFieldPositionGroup::Forward);
-        let floor_fwd = baseline_fwd.saturating_sub(20);
-
-        assert!(
-            130 >= floor_fwd && 130 <= ceiling_fwd,
-            "Continental window [{}..={}] must contain CA 130",
-            floor_fwd,
-            ceiling_fwd
-        );
-        assert!(
-            175 > ceiling_fwd,
-            "Continental ceiling {} must reject CA 175 (out-of-tier)",
-            ceiling_fwd
-        );
-    }
-
-    #[test]
-    fn elite_window_reaches_world_class_targets() {
-        // Elite clubs must be able to chase 175+ targets via the
-        // tier window — the original bug masked these from elite
-        // scouts because the squad-mean cap was too low.
-        let elite_score = level_midpoint_score(&ReputationLevel::Elite);
-        let ceiling_fwd = PipelineProcessor::tier_target_ceiling_score(
-            elite_score,
-            PlayerFieldPositionGroup::Forward,
-        );
-        assert!(
-            175 <= ceiling_fwd,
-            "Elite ceiling {} must admit CA 175 world-class forward",
-            ceiling_fwd
-        );
-    }
-
-    #[test]
-    fn within_tier_continuous_score_differentiates_clubs() {
-        // Mid-Continental and top-of-Continental clubs should NOT get
-        // the same baseline — that's the whole point of the score
-        // path. Tests the continuous calibration is genuinely
-        // differentiating, not silently snapping to enum buckets.
-        let mid_cont =
-            PipelineProcessor::tier_starter_ca_score(0.68, PlayerFieldPositionGroup::Midfielder);
-        let top_cont =
-            PipelineProcessor::tier_starter_ca_score(0.79, PlayerFieldPositionGroup::Midfielder);
-        assert!(
-            top_cont > mid_cont,
-            "top-of-Continental baseline ({}) must exceed mid-Continental ({})",
-            top_cont,
-            mid_cont
-        );
-    }
-}
-
+mod breakout;
 #[cfg(test)]
-mod group_need_tests {
-    use crate::club::team::squad::SquadAssetClass;
-    use crate::transfers::pipeline::evaluation::{
-        GroupNeed, NeedKind, SuccessionAudit, SuccessionUrgency, compute_group_needs,
-        group_depth_requirement,
-    };
-    use crate::transfers::pipeline::processor::SquadPlayerInfo;
-    use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
-    use crate::{MatchTacticType, PlayerFieldPositionGroup, PlayerPositionType, TACTICS_POSITIONS};
-    use std::collections::HashMap;
-
-    fn t442_positions() -> &'static [PlayerPositionType; 11] {
-        let (_, positions) = TACTICS_POSITIONS
-            .iter()
-            .find(|(t, _)| *t == MatchTacticType::T442)
-            .expect("T442 tactic must exist");
-        positions
-    }
-
-    fn squad_player(id: u32, primary: PlayerPositionType, ca: u8) -> SquadPlayerInfo {
-        let mut levels: HashMap<PlayerPositionType, u8> = HashMap::new();
-        levels.insert(primary, 20);
-        SquadPlayerInfo {
-            player_id: id,
-            primary_position: primary,
-            current_ability: ca,
-            estimated_potential: ca,
-            potential_confidence: 0.5,
-            age: 26,
-            position_levels: levels,
-            appearances: 10,
-            official_appearances: 10,
-            is_injured: false,
-            recovery_days: 0,
-            injury_days: 0,
-            asset_class: SquadAssetClass::UnknownNeedsEvaluation,
-            contract_months_remaining: Some(24),
-        }
-    }
-
-    /// Build position_coverage with each formation slot covered by the
-    /// best-fit squad player. Mirrors the production logic enough to
-    /// drive the detector deterministically.
-    fn coverage_from_squad(
-        squad: &[SquadPlayerInfo],
-        formation: &[PlayerPositionType; 11],
-    ) -> Vec<(PlayerPositionType, Option<u32>, u8)> {
-        let mut used: Vec<u32> = Vec::new();
-        let mut out = Vec::new();
-        for &slot in formation.iter() {
-            let pick = squad
-                .iter()
-                .filter(|p| !used.contains(&p.player_id))
-                .filter(|p| p.primary_position.position_group() == slot.position_group())
-                .max_by_key(|p| p.current_ability);
-            match pick {
-                Some(p) => {
-                    used.push(p.player_id);
-                    out.push((slot, Some(p.player_id), p.current_ability));
-                }
-                None => out.push((slot, None, 0)),
-            }
-        }
-        out
-    }
-
-    fn continental_score() -> f32 {
-        0.725
-    }
-
-    fn continental_tolerance() -> i16 {
-        crate::transfers::pipeline::PipelineProcessor::tier_quality_tolerance_score(
-            continental_score(),
-        )
-    }
-
-    fn aged_player(
-        id: u32,
-        primary: PlayerPositionType,
-        ca: u8,
-        age: u8,
-        potential: u8,
-    ) -> SquadPlayerInfo {
-        let mut p = squad_player(id, primary, ca);
-        p.age = age;
-        p.estimated_potential = potential;
-        p
-    }
-
-    // ── Succession audit ────────────────────────────────────────
-
-    #[test]
-    fn succession_career_end_is_position_aware() {
-        assert!(
-            SuccessionAudit::career_end_age(PlayerFieldPositionGroup::Forward)
-                < SuccessionAudit::career_end_age(PlayerFieldPositionGroup::Goalkeeper),
-            "keeper careers run longer, so their succession horizon starts later"
-        );
-    }
-
-    /// The horizon escalates instead of latching. A keeper who sails past
-    /// the old fixed trigger age and keeps playing used to read exactly
-    /// like one who had just reached it; now the club's urgency grows as
-    /// the career it depends on runs out.
-    #[test]
-    fn succession_urgency_escalates_with_the_years_left() {
-        let keeper = |age: u8| aged_player(9, PlayerPositionType::Goalkeeper, 130, age, 130);
-        assert_eq!(SuccessionAudit::urgency(&keeper(30)), None);
-        assert_eq!(
-            SuccessionAudit::urgency(&keeper(33)),
-            Some(SuccessionUrgency::Watch)
-        );
-        assert_eq!(
-            SuccessionAudit::urgency(&keeper(35)),
-            Some(SuccessionUrgency::Pressing)
-        );
-        assert_eq!(
-            SuccessionAudit::urgency(&keeper(40)),
-            Some(SuccessionUrgency::Critical),
-            "a forty-year-old first choice is the most urgent succession a club can have"
-        );
-    }
-
-    /// The test that matters for the Juventus case: two career deputies
-    /// four years younger than a forty-year-old incumbent are not a
-    /// succession plan, and must not cancel the search.
-    #[test]
-    fn ageing_deputies_do_not_count_as_the_heir() {
-        let squad = vec![
-            aged_player(1, PlayerPositionType::Goalkeeper, 130, 40, 130),
-            aged_player(2, PlayerPositionType::Goalkeeper, 120, 29, 122),
-            aged_player(3, PlayerPositionType::Goalkeeper, 118, 29, 120),
-        ];
-        let incumbent = aged_player(1, PlayerPositionType::Goalkeeper, 130, 40, 130);
-        assert!(
-            !SuccessionAudit::heir_in_place(&squad, &incumbent),
-            "peers who will retire alongside him are not successors"
-        );
-    }
-
-    #[test]
-    fn a_genuine_young_heir_still_blocks_the_search() {
-        let squad = vec![
-            aged_player(1, PlayerPositionType::Goalkeeper, 130, 38, 130),
-            aged_player(2, PlayerPositionType::Goalkeeper, 108, 21, 132),
-        ];
-        let incumbent = aged_player(1, PlayerPositionType::Goalkeeper, 130, 38, 130);
-        assert!(
-            SuccessionAudit::heir_in_place(&squad, &incumbent),
-            "a 21-year-old assessed to reach the incumbent's level is exactly the heir"
-        );
-    }
-
-    fn aging_incumbent() -> SquadPlayerInfo {
-        aged_player(1, PlayerPositionType::DefenderCenterLeft, 140, 32, 140)
-    }
-
-    #[test]
-    fn heir_already_at_level_blocks_succession_shopping() {
-        let squad = vec![
-            aging_incumbent(),
-            // A 24-year-old already within touching distance of the level.
-            aged_player(2, PlayerPositionType::DefenderCenterRight, 130, 24, 138),
-        ];
-        assert!(SuccessionAudit::heir_in_place(&squad, &aging_incumbent()));
-    }
-
-    #[test]
-    fn heir_by_assessed_potential_counts() {
-        let squad = vec![
-            aging_incumbent(),
-            // Raw today, but the scouts assess him as growing into it.
-            aged_player(2, PlayerPositionType::DefenderCenterRight, 118, 22, 145),
-        ];
-        assert!(SuccessionAudit::heir_in_place(&squad, &aging_incumbent()));
-    }
-
-    #[test]
-    fn no_heir_when_cover_is_old_or_below_level() {
-        let squad = vec![
-            aging_incumbent(),
-            // Same age band — a peer, not a successor.
-            aged_player(2, PlayerPositionType::DefenderCenterRight, 138, 30, 138),
-            // Young but nowhere near the level, and not assessed to reach it.
-            aged_player(3, PlayerPositionType::DefenderCenterLeft, 100, 21, 120),
-        ];
-        assert!(!SuccessionAudit::heir_in_place(&squad, &aging_incumbent()));
-    }
-
-    #[test]
-    fn weak_gk_at_continental_club_triggers_quality_upgrade() {
-        // Continental tier squad: every outfield slot at-baseline,
-        // GK well below tier baseline. Detector must produce exactly
-        // one QualityUpgrade need targeting the goalkeeper group.
-        let formation = t442_positions();
-        let mut squad = Vec::new();
-        squad.push(squad_player(1, PlayerPositionType::Goalkeeper, 110));
-        squad.push(squad_player(2, PlayerPositionType::Goalkeeper, 95));
-        // Outfield: at-tier defenders / mids / forwards
-        let outfield_positions = [
-            PlayerPositionType::DefenderLeft,
-            PlayerPositionType::DefenderCenterLeft,
-            PlayerPositionType::DefenderCenterRight,
-            PlayerPositionType::DefenderRight,
-            PlayerPositionType::MidfielderLeft,
-            PlayerPositionType::MidfielderCenterLeft,
-            PlayerPositionType::MidfielderCenterRight,
-            PlayerPositionType::MidfielderRight,
-            PlayerPositionType::ForwardLeft,
-            PlayerPositionType::ForwardRight,
-        ];
-        for (i, pos) in outfield_positions.iter().enumerate() {
-            squad.push(squad_player(10 + i as u32, *pos, 132));
-        }
-        // Add a couple of bench outfielders so depth checks pass
-        squad.push(squad_player(
-            50,
-            PlayerPositionType::DefenderCenterLeft,
-            120,
-        ));
-        squad.push(squad_player(
-            51,
-            PlayerPositionType::DefenderCenterRight,
-            120,
-        ));
-        squad.push(squad_player(
-            52,
-            PlayerPositionType::MidfielderCenterLeft,
-            120,
-        ));
-        squad.push(squad_player(
-            53,
-            PlayerPositionType::MidfielderCenterRight,
-            120,
-        ));
-        squad.push(squad_player(54, PlayerPositionType::ForwardLeft, 118));
-
-        let coverage = coverage_from_squad(&squad, formation);
-        let needs: Vec<GroupNeed> = compute_group_needs(
-            &squad,
-            &coverage,
-            formation,
-            continental_score(),
-            continental_tolerance(),
-        );
-
-        let gk_needs: Vec<&GroupNeed> = needs
-            .iter()
-            .filter(|n| n.group == PlayerFieldPositionGroup::Goalkeeper)
-            .collect();
-        assert_eq!(
-            gk_needs.len(),
-            1,
-            "expected exactly one GK need, got {:?}",
-            needs
-        );
-        assert_eq!(
-            gk_needs[0].kind,
-            NeedKind::QualityUpgrade,
-            "expected QualityUpgrade for weak GK, got {:?}",
-            gk_needs[0].kind
-        );
-    }
-
-    #[test]
-    fn duplicate_formation_slots_emit_one_group_need() {
-        // 4-back formation has four defender slots — if all are gaps,
-        // detector must collapse to ONE FormationGap defender entry,
-        // not four. This is the budget-distortion bug being pinned.
-        let formation = t442_positions();
-        let mut squad = Vec::new();
-        squad.push(squad_player(1, PlayerPositionType::Goalkeeper, 130));
-        squad.push(squad_player(2, PlayerPositionType::Goalkeeper, 125));
-        // No defenders at all
-        // At-tier mids / fwds
-        for (i, pos) in [
-            PlayerPositionType::MidfielderLeft,
-            PlayerPositionType::MidfielderCenterLeft,
-            PlayerPositionType::MidfielderCenterRight,
-            PlayerPositionType::MidfielderRight,
-            PlayerPositionType::ForwardLeft,
-            PlayerPositionType::ForwardRight,
-        ]
-        .iter()
-        .enumerate()
-        {
-            squad.push(squad_player(20 + i as u32, *pos, 135));
-        }
-
-        let coverage = coverage_from_squad(&squad, formation);
-        let needs = compute_group_needs(
-            &squad,
-            &coverage,
-            formation,
-            continental_score(),
-            continental_tolerance(),
-        );
-
-        let defender_needs: Vec<&GroupNeed> = needs
-            .iter()
-            .filter(|n| n.group == PlayerFieldPositionGroup::Defender)
-            .collect();
-        assert_eq!(
-            defender_needs.len(),
-            1,
-            "four empty defender slots must collapse to one need (got {})",
-            defender_needs.len()
-        );
-        assert_eq!(defender_needs[0].kind, NeedKind::FormationGap);
-    }
-
-    #[test]
-    fn long_term_injury_stops_counting_toward_depth() {
-        // Six healthy defenders exactly meet the 4-4-2 defender depth
-        // requirement (4 slots + 2) → no need. Put one out long-term and the
-        // club is genuinely short right now, so a defender need must appear.
-        let formation = t442_positions();
-        let make = |injure: bool| -> Vec<GroupNeed> {
-            let mut squad = vec![
-                squad_player(1, PlayerPositionType::Goalkeeper, 138),
-                squad_player(2, PlayerPositionType::Goalkeeper, 130),
-            ];
-            let defs = [
-                PlayerPositionType::DefenderLeft,
-                PlayerPositionType::DefenderCenterLeft,
-                PlayerPositionType::DefenderCenterRight,
-                PlayerPositionType::DefenderRight,
-                PlayerPositionType::DefenderCenterLeft,
-                PlayerPositionType::DefenderCenterRight,
-            ];
-            for (i, pos) in defs.iter().enumerate() {
-                let mut p = squad_player(10 + i as u32, *pos, 138);
-                if injure && i == 0 {
-                    p.is_injured = true;
-                    p.recovery_days = 60;
-                }
-                squad.push(p);
-            }
-            let mids = [
-                PlayerPositionType::MidfielderLeft,
-                PlayerPositionType::MidfielderCenterLeft,
-                PlayerPositionType::MidfielderCenterRight,
-                PlayerPositionType::MidfielderRight,
-                PlayerPositionType::MidfielderCenterLeft,
-                PlayerPositionType::MidfielderCenterRight,
-            ];
-            for (i, pos) in mids.iter().enumerate() {
-                squad.push(squad_player(30 + i as u32, *pos, 138));
-            }
-            for (i, pos) in [
-                PlayerPositionType::ForwardLeft,
-                PlayerPositionType::ForwardRight,
-                PlayerPositionType::Striker,
-            ]
-            .iter()
-            .enumerate()
-            {
-                squad.push(squad_player(50 + i as u32, *pos, 138));
-            }
-            let coverage = coverage_from_squad(&squad, formation);
-            compute_group_needs(
-                &squad,
-                &coverage,
-                formation,
-                continental_score(),
-                continental_tolerance(),
-            )
-        };
-        let has_def_need = |needs: &[GroupNeed]| {
-            needs
-                .iter()
-                .any(|n| n.group == PlayerFieldPositionGroup::Defender)
-        };
-        assert!(
-            !has_def_need(&make(false)),
-            "six healthy defenders → no need"
-        );
-        assert!(
-            has_def_need(&make(true)),
-            "a long-term-injured defender drops available depth below requirement"
-        );
-    }
-
-    #[test]
-    fn fully_at_tier_squad_yields_no_needs() {
-        // A balanced squad at-tier in every group: no FormationGap,
-        // no QualityUpgrade, no DepthCover. Universal calibration
-        // sanity — over-firing here would create phantom requests.
-        let formation = t442_positions();
-        let mut squad = Vec::new();
-        squad.push(squad_player(1, PlayerPositionType::Goalkeeper, 130));
-        squad.push(squad_player(2, PlayerPositionType::Goalkeeper, 125));
-        let outfield = [
-            PlayerPositionType::DefenderLeft,
-            PlayerPositionType::DefenderCenterLeft,
-            PlayerPositionType::DefenderCenterRight,
-            PlayerPositionType::DefenderRight,
-            PlayerPositionType::MidfielderLeft,
-            PlayerPositionType::MidfielderCenterLeft,
-            PlayerPositionType::MidfielderCenterRight,
-            PlayerPositionType::MidfielderRight,
-            PlayerPositionType::ForwardLeft,
-            PlayerPositionType::ForwardRight,
-        ];
-        for (i, pos) in outfield.iter().enumerate() {
-            squad.push(squad_player(10 + i as u32, *pos, 138));
-        }
-        // Bench depth so depth-cover doesn't fire
-        squad.push(squad_player(
-            40,
-            PlayerPositionType::DefenderCenterLeft,
-            130,
-        ));
-        squad.push(squad_player(
-            41,
-            PlayerPositionType::DefenderCenterRight,
-            130,
-        ));
-        squad.push(squad_player(
-            42,
-            PlayerPositionType::MidfielderCenterLeft,
-            130,
-        ));
-        squad.push(squad_player(
-            43,
-            PlayerPositionType::MidfielderCenterRight,
-            130,
-        ));
-        squad.push(squad_player(44, PlayerPositionType::ForwardLeft, 128));
-
-        let coverage = coverage_from_squad(&squad, formation);
-        let needs = compute_group_needs(
-            &squad,
-            &coverage,
-            formation,
-            continental_score(),
-            continental_tolerance(),
-        );
-
-        assert!(
-            needs.is_empty(),
-            "balanced at-tier squad should not generate any need (got {:?})",
-            needs
-        );
-    }
-
-    #[test]
-    fn sweep_realistic_continental_acceptance_and_realism_gates() {
-        use crate::PlayerFieldPositionGroup;
-        use crate::transfers::pipeline::recommendations::{
-            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
-            evaluate_listed_target,
-        };
-
-        // Continental club — Spartak-like context.
-        let buyer = |open_request: bool, weak_group: bool| BuyerContext {
-            buyer_rep_score: 0.72,
-            buyer_world_rep: 5800,
-            buyer_league_reputation: 5500,
-            buyer_total_wages: 30_000_000,
-            buyer_wage_budget: 60_000_000,
-            plan_total_budget: 30_000_000.0,
-            max_recommend_value: 60_000_000.0,
-            // Weak group: starter at 105 (under tier baseline).
-            // Otherwise: starter at 130 (tier baseline).
-            buyer_best_in_group: if weak_group { 105 } else { 130 },
-            has_open_request: open_request,
-            has_aging_starter: false,
-            form_discovery_mode: false,
-            fit: SquadFitSnapshot::disabled(),
-        };
-
-        // Mikhailov-class candidate: 14M, CA 130, listed, age 25.
-        let mikhailov_class = ListedTargetView {
-            nationality_country_id: 0,
-            ability: 130,
-            estimated_potential: 138,
-            age: 25,
-            estimated_value: 14_000_000.0,
-            position_group: PlayerFieldPositionGroup::Forward,
-            is_listed: false,
-            is_transfer_requested: true,
-            is_unhappy: true,
-            world_reputation: 5200,
-            current_reputation: 5000,
-            ambition: 0.7,
-            parent_club_score: 0.40, // smaller club
-            parent_club_in_debt: false,
-            days_available: 5,
-            contract_months_remaining: 24,
-            low_usage: false,
-            recent_interest_count: 0,
-            failed_scans: 0,
-            last_block: None,
-            is_loan_listed: false,
-            breakout_score: 0.0,
-        };
-
-        // Acceptance: weak group + an actual upgrade
-        let v = evaluate_listed_target(&mikhailov_class, &buyer(false, true));
-        match v {
-            ListedTargetVerdict::Accept(score) => {
-                assert!(score > 10.0, "expected meaningful score, got {}", score);
-            }
-            ListedTargetVerdict::Reject(r) => panic!("expected Accept, got Reject({:?})", r),
-        }
-
-        // Open request also unlocks the path even when group is at-tier
-        let v2 = evaluate_listed_target(&mikhailov_class, &buyer(true, false));
-        assert!(matches!(v2, ListedTargetVerdict::Accept(_)));
-
-        // No need + only a marginal upgrade → NotAnUpgrade reject
-        let mut marginal = mikhailov_class;
-        marginal.ability = 132;
-        let buyer_no_need = buyer(false, false); // best=130
-        let v3 = evaluate_listed_target(&marginal, &buyer_no_need);
-        assert_eq!(
-            v3,
-            ListedTargetVerdict::Reject(ListedRejectReason::NotAnUpgrade)
-        );
-
-        // Squad-fit gate: the same otherwise-acceptable candidate is
-        // rejected when the buyer's own surplus maths would list him —
-        // well below the squad average (155 avg, gap 20 → bar 135) even
-        // though the position group itself is weak.
-        let mut surplus_buyer = buyer(false, true);
-        surplus_buyer.fit = SquadFitSnapshot {
-            foreign_slots_free: None,
-            club_country_id: 0,
-            squad_avg_ability: 155,
-            quality_gap: 20,
-            group_size: 0,
-            group_cap: usize::MAX,
-            group_cap_bar: 0,
-            prospect_desk_full: false,
-        };
-        let v4 = evaluate_listed_target(&mikhailov_class, &surplus_buyer);
-        assert_eq!(
-            v4,
-            ListedTargetVerdict::Reject(ListedRejectReason::WouldBeSurplus)
-        );
-
-        // Depth-cap arm: a full group whose cap-th best (140) outranks the
-        // candidate (130) → he'd be demoted by the weekly rebalance.
-        let mut full_group_buyer = buyer(false, true);
-        full_group_buyer.fit = SquadFitSnapshot {
-            foreign_slots_free: None,
-            club_country_id: 0,
-            squad_avg_ability: 0,
-            quality_gap: 0,
-            group_size: 6,
-            group_cap: 6,
-            group_cap_bar: 140,
-            prospect_desk_full: false,
-        };
-        let v5 = evaluate_listed_target(&mikhailov_class, &full_group_buyer);
-        assert_eq!(
-            v5,
-            ListedTargetVerdict::Reject(ListedRejectReason::WouldBeSurplus)
-        );
-    }
-
-    #[test]
-    fn sweep_rejects_unaffordable_fee() {
-        use crate::PlayerFieldPositionGroup;
-        use crate::transfers::pipeline::recommendations::{
-            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
-            evaluate_listed_target,
-        };
-
-        let small_buyer = BuyerContext {
-            buyer_rep_score: 0.40,
-            buyer_world_rep: 2400,
-            buyer_league_reputation: 3000,
-            buyer_total_wages: 1_000_000,
-            buyer_wage_budget: 1_500_000,
-            plan_total_budget: 500_000.0,
-            max_recommend_value: 1_000_000.0,
-            buyer_best_in_group: 75,
-            has_open_request: true,
-            has_aging_starter: false,
-            form_discovery_mode: false,
-            fit: SquadFitSnapshot::disabled(),
-        };
-
-        // Asking 5M when budget allows ~700k → UnaffordableFee
-        let pricey = ListedTargetView {
-            nationality_country_id: 0,
-            ability: 95,
-            estimated_potential: 100,
-            age: 26,
-            estimated_value: 5_000_000.0,
-            position_group: PlayerFieldPositionGroup::Midfielder,
-            is_listed: true,
-            is_transfer_requested: false,
-            is_unhappy: false,
-            world_reputation: 2500,
-            current_reputation: 1500,
-            ambition: 0.5,
-            parent_club_score: 0.55,
-            parent_club_in_debt: false,
-            days_available: 5,
-            contract_months_remaining: 24,
-            low_usage: false,
-            recent_interest_count: 0,
-            failed_scans: 0,
-            last_block: None,
-            is_loan_listed: false,
-            breakout_score: 0.0,
-        };
-        assert_eq!(
-            evaluate_listed_target(&pricey, &small_buyer),
-            ListedTargetVerdict::Reject(ListedRejectReason::UnaffordableFee)
-        );
-    }
-
-    #[test]
-    fn sweep_rejects_unaffordable_wage_when_headroom_is_exhausted() {
-        use crate::PlayerFieldPositionGroup;
-        use crate::transfers::pipeline::recommendations::{
-            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
-            evaluate_listed_target,
-        };
-
-        // Wage budget barely above current spend → almost no headroom.
-        // Even an at-tier player at this club would exceed the wage cap.
-        let cap_strapped = BuyerContext {
-            buyer_rep_score: 0.40,
-            buyer_world_rep: 2400,
-            buyer_league_reputation: 3000,
-            buyer_total_wages: 1_000_000,
-            buyer_wage_budget: 1_010_000, // 10k headroom × 1.3 = 13k cap
-            plan_total_budget: 5_000_000.0,
-            max_recommend_value: 10_000_000.0,
-            buyer_best_in_group: 75,
-            has_open_request: true,
-            has_aging_starter: false,
-            form_discovery_mode: false,
-            fit: SquadFitSnapshot::disabled(),
-        };
-
-        let in_tier_listed = ListedTargetView {
-            nationality_country_id: 0,
-            ability: 90,
-            estimated_potential: 95,
-            age: 27,
-            estimated_value: 200_000.0, // fee comfortably affordable
-            position_group: PlayerFieldPositionGroup::Midfielder,
-            is_listed: true,
-            is_transfer_requested: false,
-            is_unhappy: false,
-            world_reputation: 2200,
-            current_reputation: 800,
-            ambition: 0.5,
-            parent_club_score: 0.55,
-            parent_club_in_debt: false,
-            days_available: 5,
-            contract_months_remaining: 24,
-            low_usage: false,
-            recent_interest_count: 0,
-            failed_scans: 0,
-            last_block: None,
-            is_loan_listed: false,
-            breakout_score: 0.0,
-        };
-
-        assert_eq!(
-            evaluate_listed_target(&in_tier_listed, &cap_strapped),
-            ListedTargetVerdict::Reject(ListedRejectReason::UnaffordableWage)
-        );
-    }
-
-    #[test]
-    fn sweep_rejects_world_class_target_for_local_club() {
-        use crate::PlayerFieldPositionGroup;
-        use crate::transfers::pipeline::recommendations::{
-            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
-            evaluate_listed_target,
-        };
-
-        let local_buyer = BuyerContext {
-            buyer_rep_score: 0.20,
-            buyer_world_rep: 1500,
-            buyer_league_reputation: 2000,
-            buyer_total_wages: 200_000,
-            buyer_wage_budget: 600_000,
-            plan_total_budget: 300_000.0,
-            max_recommend_value: 600_000.0,
-            buyer_best_in_group: 60,
-            has_open_request: true, // even with explicit demand, world-class is out of reach
-            has_aging_starter: false,
-            form_discovery_mode: false,
-            fit: SquadFitSnapshot::disabled(),
-        };
-
-        let world_class = ListedTargetView {
-            nationality_country_id: 0,
-            ability: 175,
-            estimated_potential: 180,
-            age: 28,
-            estimated_value: 200_000.0, // dirt-cheap to bypass fee gate
-            position_group: PlayerFieldPositionGroup::Forward,
-            is_listed: true,
-            is_transfer_requested: false,
-            is_unhappy: false,
-            world_reputation: 9500,
-            current_reputation: 9000,
-            ambition: 0.7,
-            parent_club_score: 0.85,
-            parent_club_in_debt: false,
-            days_available: 5,
-            contract_months_remaining: 24,
-            low_usage: false,
-            recent_interest_count: 0,
-            failed_scans: 0,
-            last_block: None,
-            is_loan_listed: false,
-            breakout_score: 0.0,
-        };
-
-        let v = evaluate_listed_target(&world_class, &local_buyer);
-        // Tier window or reputation gap blocks well before scoring.
-        match v {
-            ListedTargetVerdict::Reject(
-                ListedRejectReason::OutOfTierWindow | ListedRejectReason::ReputationGapTooLarge,
-            ) => {}
-            other => panic!("expected window / rep-gap reject, got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn sweep_rejects_when_no_need_and_no_request() {
-        use crate::PlayerFieldPositionGroup;
-        use crate::transfers::pipeline::recommendations::{
-            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
-            evaluate_listed_target,
-        };
-
-        // Continental club, perfectly fine in this group, no aging
-        // starter, no open request — sweep must NOT add filler.
-        let buyer = BuyerContext {
-            buyer_rep_score: 0.72,
-            buyer_world_rep: 5500,
-            buyer_league_reputation: 5500,
-            buyer_total_wages: 20_000_000,
-            buyer_wage_budget: 50_000_000,
-            plan_total_budget: 25_000_000.0,
-            max_recommend_value: 50_000_000.0,
-            buyer_best_in_group: 135, // above tier baseline
-            has_open_request: false,
-            has_aging_starter: false,
-            form_discovery_mode: false,
-            fit: SquadFitSnapshot::disabled(),
-        };
-
-        let modest_listed = ListedTargetView {
-            nationality_country_id: 0,
-            ability: 128,
-            estimated_potential: 130,
-            age: 26,
-            estimated_value: 8_000_000.0,
-            position_group: PlayerFieldPositionGroup::Midfielder,
-            is_listed: true,
-            is_transfer_requested: false,
-            is_unhappy: false,
-            world_reputation: 4500,
-            current_reputation: 4000,
-            ambition: 0.5,
-            parent_club_score: 0.55,
-            parent_club_in_debt: false,
-            days_available: 5,
-            contract_months_remaining: 24,
-            low_usage: false,
-            recent_interest_count: 0,
-            failed_scans: 0,
-            last_block: None,
-            is_loan_listed: false,
-            breakout_score: 0.0,
-        };
-
-        let v = evaluate_listed_target(&modest_listed, &buyer);
-        assert_eq!(
-            v,
-            ListedTargetVerdict::Reject(ListedRejectReason::NoSquadNeed),
-            "club with no need must not add filler — got {:?}",
-            v
-        );
-    }
-
-    #[test]
-    fn sweep_rejects_player_without_listing_status() {
-        use crate::PlayerFieldPositionGroup;
-        use crate::transfers::pipeline::recommendations::{
-            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
-            evaluate_listed_target,
-        };
-
-        let buyer = BuyerContext {
-            buyer_rep_score: 0.72,
-            buyer_world_rep: 5500,
-            buyer_league_reputation: 5500,
-            buyer_total_wages: 20_000_000,
-            buyer_wage_budget: 50_000_000,
-            plan_total_budget: 25_000_000.0,
-            max_recommend_value: 50_000_000.0,
-            buyer_best_in_group: 105,
-            has_open_request: true,
-            has_aging_starter: false,
-            form_discovery_mode: false,
-            fit: SquadFitSnapshot::disabled(),
-        };
-
-        let happy_player = ListedTargetView {
-            nationality_country_id: 0,
-            ability: 130,
-            estimated_potential: 135,
-            age: 25,
-            estimated_value: 8_000_000.0,
-            position_group: PlayerFieldPositionGroup::Forward,
-            is_listed: false,
-            is_transfer_requested: false,
-            is_unhappy: false,
-            world_reputation: 5000,
-            current_reputation: 4500,
-            ambition: 0.5,
-            parent_club_score: 0.50,
-            parent_club_in_debt: false,
-            days_available: 5,
-            contract_months_remaining: 24,
-            low_usage: false,
-            recent_interest_count: 0,
-            failed_scans: 0,
-            last_block: None,
-            is_loan_listed: false,
-            breakout_score: 0.0,
-        };
-
-        // The sweep is the listed-star path — players without any
-        // public listing flag aren't routed through it.
-        assert_eq!(
-            evaluate_listed_target(&happy_player, &buyer),
-            ListedTargetVerdict::Reject(ListedRejectReason::NotListed)
-        );
-    }
-
-    #[test]
-    fn depth_requirement_scales_with_formation_footprint() {
-        // The bench-depth helper is pure and used by the detector.
-        // Pin its calibration so behaviour stays stable.
-        let t442 = t442_positions();
-        assert_eq!(
-            group_depth_requirement(t442, PlayerFieldPositionGroup::Goalkeeper),
-            2,
-            "GK depth is fixed at 2 regardless of formation"
-        );
-        // 4-4-2 has 4 defenders → 4+2 = 6
-        assert_eq!(
-            group_depth_requirement(t442, PlayerFieldPositionGroup::Defender),
-            6
-        );
-        // 4-4-2 has 4 mids → 4+1 = 5
-        assert_eq!(
-            group_depth_requirement(t442, PlayerFieldPositionGroup::Midfielder),
-            5
-        );
-        // 4-4-2 has 2 forwards → 2+1 = 3
-        assert_eq!(
-            group_depth_requirement(t442, PlayerFieldPositionGroup::Forward),
-            3
-        );
-    }
-
-    #[test]
-    fn stale_market_opportunity_unlocks_signing_without_open_request() {
-        use crate::PlayerFieldPositionGroup;
-        use crate::transfers::pipeline::recommendations::{
-            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
-            evaluate_listed_target,
-        };
-
-        // Continental club, well-stocked at the position (best above the
-        // tier baseline → not weak), no open request, no aging starter —
-        // so there is no conventional squad need. A FRESH listing here is
-        // correctly rejected as filler.
-        let buyer = BuyerContext {
-            buyer_rep_score: 0.72,
-            buyer_world_rep: 5800,
-            buyer_league_reputation: 5500,
-            buyer_total_wages: 20_000_000,
-            buyer_wage_budget: 60_000_000,
-            plan_total_budget: 40_000_000.0,
-            max_recommend_value: 0.0,
-            buyer_best_in_group: 135,
-            has_open_request: false,
-            has_aging_starter: false,
-            form_discovery_mode: false,
-            fit: SquadFitSnapshot::disabled(),
-        };
-
-        let mut player = ListedTargetView {
-            nationality_country_id: 0,
-            ability: 130,
-            estimated_potential: 138,
-            age: 25,
-            estimated_value: 8_000_000.0,
-            position_group: PlayerFieldPositionGroup::Forward,
-            is_listed: false,
-            is_transfer_requested: true,
-            is_unhappy: true,
-            world_reputation: 5200,
-            current_reputation: 5000,
-            ambition: 0.6,
-            parent_club_score: 0.40,
-            parent_club_in_debt: false,
-            days_available: 5,
-            contract_months_remaining: 24,
-            low_usage: false,
-            recent_interest_count: 0,
-            failed_scans: 0,
-            last_block: None,
-            is_loan_listed: false,
-            breakout_score: 0.0,
-        };
-
-        // Fresh: no need + only a sideways move → rejected. The
-        // opportunity route is gated on staleness, so a brand-new listing
-        // never bypasses the need check (existing behaviour preserved).
-        assert_eq!(
-            evaluate_listed_target(&player, &buyer),
-            ListedTargetVerdict::Reject(ListedRejectReason::NoSquadNeed)
-        );
-
-        // After months on the market, barely featuring, with dry scans
-        // behind him, the same affordable, in-tier player becomes a
-        // genuine depth/resale opportunity even without an open request.
-        player.days_available = 120;
-        player.low_usage = true;
-        player.failed_scans = 4;
-        assert!(
-            matches!(
-                evaluate_listed_target(&player, &buyer),
-                ListedTargetVerdict::Accept(_)
-            ),
-            "a stale, affordable, in-tier available player must become a market opportunity"
-        );
-    }
-
-    #[test]
-    fn staleness_softening_makes_borderline_fee_reachable() {
-        use crate::PlayerFieldPositionGroup;
-        use crate::transfers::pipeline::recommendations::{
-            BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
-            evaluate_listed_target,
-        };
-
-        // Open request so the need / upgrade gates pass — we want to
-        // isolate the FEE gate and its staleness-driven softening.
-        let buyer = BuyerContext {
-            buyer_rep_score: 0.72,
-            buyer_world_rep: 5800,
-            buyer_league_reputation: 5500,
-            buyer_total_wages: 10_000_000,
-            buyer_wage_budget: 100_000_000,
-            plan_total_budget: 10_000_000.0, // reach = 14M
-            max_recommend_value: 0.0,
-            buyer_best_in_group: 110,
-            has_open_request: true,
-            has_aging_starter: false,
-            form_discovery_mode: false,
-            fit: SquadFitSnapshot::disabled(),
-        };
-
-        let mut player = ListedTargetView {
-            nationality_country_id: 0,
-            ability: 128,
-            estimated_potential: 132,
-            age: 27,
-            estimated_value: 17_000_000.0, // just beyond the fresh reach
-            position_group: PlayerFieldPositionGroup::Forward,
-            is_listed: true,
-            is_transfer_requested: false,
-            is_unhappy: false,
-            world_reputation: 4800,
-            current_reputation: 4500,
-            ambition: 0.5,
-            parent_club_score: 0.55,
-            parent_club_in_debt: false,
-            days_available: 5,
-            contract_months_remaining: 24,
-            low_usage: false,
-            recent_interest_count: 0,
-            failed_scans: 0,
-            last_block: None,
-            is_loan_listed: false,
-            breakout_score: 0.0,
-        };
-
-        // Fresh: a 17M asking sits above the ~14M reach → unaffordable.
-        assert_eq!(
-            evaluate_listed_target(&player, &buyer),
-            ListedTargetVerdict::Reject(ListedRejectReason::UnaffordableFee)
-        );
-
-        // A year unsold with a dozen dry scans: the seller has quietly
-        // dropped the asking enough to bring the deal into reach — but the
-        // softening stays bounded, so it never becomes a giveaway.
-        player.days_available = 365;
-        player.failed_scans = 12;
-        assert!(
-            matches!(
-                evaluate_listed_target(&player, &buyer),
-                ListedTargetVerdict::Accept(_)
-            ),
-            "asking-price softening after a long market failure must bring a borderline fee into reach"
-        );
-    }
-}
-
+mod group;
 #[cfg(test)]
-mod breakout_sweep_tests {
-    //! The performance-breakout discovery path through
-    //! [`evaluate_listed_target`]: a loan-listed (or, in form-discovery
-    //! mode, an unlisted) high-form player becomes a target for stronger
-    //! clubs — without the breakout ever relaxing the affordability, tier,
-    //! reputation, or squad-need gates. Mirrors the reported Arseny Filev
-    //! case: a 22-y-o striker top-scoring a second division, loan-listed
-    //! over a contract dispute, who should still draw realistic interest.
-
-    use crate::PlayerFieldPositionGroup;
-    use crate::transfers::pipeline::breakout::BreakoutPerformanceSignal;
-    use crate::transfers::pipeline::recommendations::{
-        BuyerContext, ListedRejectReason, ListedTargetVerdict, ListedTargetView,
-        evaluate_listed_target,
-    };
-    use crate::transfers::pipeline::squad_fit::SquadFitSnapshot;
-
-    /// Fixtures wrapped in a unit struct per the no-free-helpers
-    /// convention. Each accessor returns a baseline the test tweaks.
-    struct BreakoutFixtures;
-
-    impl BreakoutFixtures {
-        /// A strong top-flight domestic club (Continental-ish). `weak_group`
-        /// forces a positional need; otherwise the group is well-stocked.
-        fn top_domestic_buyer(weak_group: bool) -> BuyerContext {
-            BuyerContext {
-                buyer_rep_score: 0.72,
-                buyer_world_rep: 5800,
-                buyer_league_reputation: 5500,
-                buyer_total_wages: 20_000_000,
-                buyer_wage_budget: 60_000_000,
-                plan_total_budget: 30_000_000.0,
-                max_recommend_value: 60_000_000.0,
-                buyer_best_in_group: if weak_group { 118 } else { 135 },
-                has_open_request: false,
-                has_aging_starter: false,
-                form_discovery_mode: false,
-                fit: SquadFitSnapshot::disabled(),
-            }
-        }
-
-        /// The reported player: 22-y-o striker, loan-listed (not transfer
-        /// listed / requested / unhappy), a genuine breakout, with resale
-        /// upside, comfortably affordable, in a smaller club.
-        fn loan_listed_breakout_striker() -> ListedTargetView {
-            ListedTargetView {
-                nationality_country_id: 0,
-                ability: 130,
-                estimated_potential: 142,
-                age: 22,
-                estimated_value: 5_000_000.0,
-                position_group: PlayerFieldPositionGroup::Forward,
-                is_listed: false,
-                is_transfer_requested: false,
-                is_unhappy: false,
-                is_loan_listed: true,
-                breakout_score: 55.0,
-                world_reputation: 5000,
-                current_reputation: 4800,
-                ambition: 0.7,
-                parent_club_score: 0.40,
-                parent_club_in_debt: false,
-                days_available: 5,
-                contract_months_remaining: 24,
-                low_usage: false,
-                recent_interest_count: 0,
-                failed_scans: 0,
-                last_block: None,
-            }
-        }
-    }
-
-    #[test]
-    fn loan_listed_breakout_striker_is_visible_to_a_top_domestic_club() {
-        // Req: a loan-listed breakout striker at a lower-rep club is visible
-        // to top domestic clubs. No open positional need — admission and the
-        // opportunity route ride entirely on the loan-listing + breakout +
-        // resale upside. This is also the "window open" case: the in-window
-        // listed sweep (form_discovery_mode = false) admits him.
-        let target = BreakoutFixtures::loan_listed_breakout_striker();
-        let buyer = BreakoutFixtures::top_domestic_buyer(false);
-        match evaluate_listed_target(&target, &buyer) {
-            ListedTargetVerdict::Accept(score) => {
-                assert!(score > 10.0, "expected a meaningful score, got {}", score)
-            }
-            other => panic!(
-                "expected Accept for a loan-listed breakout, got {:?}",
-                other
-            ),
-        }
-    }
-
-    #[test]
-    fn mediocre_loan_listed_player_without_breakout_is_ignored() {
-        // Req: a mediocre loan-listed player with no goals / awards stays
-        // ignored — loan-listing alone routes to the loan market, not the
-        // permanent-interest path.
-        let mut target = BreakoutFixtures::loan_listed_breakout_striker();
-        target.breakout_score = 0.0; // no output, no recognition
-        target.estimated_potential = 128; // no resale upside either
-        let buyer = BreakoutFixtures::top_domestic_buyer(true);
-        assert_eq!(
-            evaluate_listed_target(&target, &buyer),
-            ListedTargetVerdict::Reject(ListedRejectReason::NotListed),
-            "a loan-listed player without breakout must not enter the permanent path"
-        );
-    }
-
-    #[test]
-    fn elite_club_skips_breakout_player_who_is_no_upgrade_no_resale_no_need() {
-        // Req: an elite club does NOT pursue even a high-breakout player when
-        // he is not an upgrade, has no resale value, and fills no squad need.
-        // The breakout score does not manufacture a reason to buy.
-        let elite = BuyerContext {
-            buyer_rep_score: 0.90,
-            buyer_world_rep: 8500,
-            buyer_league_reputation: 9000,
-            buyer_total_wages: 120_000_000,
-            buyer_wage_budget: 250_000_000,
-            plan_total_budget: 150_000_000.0,
-            max_recommend_value: 300_000_000.0,
-            buyer_best_in_group: 165, // well-stocked
-            has_open_request: false,
-            has_aging_starter: false,
-            form_discovery_mode: false,
-            fit: SquadFitSnapshot::disabled(),
-        };
-        // In the elite tier window, publicly listed, but a 28-y-o who is no
-        // upgrade (135 < 165) and no resale prospect (age > 23).
-        let mut target = BreakoutFixtures::loan_listed_breakout_striker();
-        target.ability = 135;
-        target.age = 28;
-        target.estimated_potential = 137;
-        target.is_listed = true;
-        target.is_loan_listed = false;
-        target.world_reputation = 6000;
-        target.current_reputation = 6000;
-        target.breakout_score = 55.0;
-        assert_eq!(
-            evaluate_listed_target(&target, &elite),
-            ListedTargetVerdict::Reject(ListedRejectReason::NoSquadNeed),
-            "breakout must not bypass the upgrade / resale / need requirement"
-        );
-    }
-
-    #[test]
-    fn breakout_does_not_bypass_affordability() {
-        // Req: the breakout signal affects discovery but never the hard
-        // affordability gate. A strong breakout with an out-of-budget fee is
-        // still rejected as unaffordable.
-        let modest_buyer = BuyerContext {
-            buyer_rep_score: 0.55,
-            buyer_world_rep: 3800,
-            buyer_league_reputation: 4000,
-            buyer_total_wages: 3_000_000,
-            buyer_wage_budget: 6_000_000,
-            plan_total_budget: 500_000.0, // reach ≈ 700k
-            max_recommend_value: 1_000_000.0,
-            buyer_best_in_group: 95,
-            has_open_request: true,
-            has_aging_starter: false,
-            form_discovery_mode: false,
-            fit: SquadFitSnapshot::disabled(),
-        };
-        let mut target = BreakoutFixtures::loan_listed_breakout_striker();
-        target.ability = 110; // inside this tier's window
-        target.estimated_value = 5_000_000.0; // far beyond the buyer's reach
-        target.breakout_score = 60.0;
-        assert_eq!(
-            evaluate_listed_target(&target, &modest_buyer),
-            ListedTargetVerdict::Reject(ListedRejectReason::UnaffordableFee),
-            "a high breakout score must not rescue an unaffordable fee"
-        );
-    }
-
-    #[test]
-    fn availability_sweep_admits_unlisted_breakout_only_for_a_clearly_bigger_buyer() {
-        // P1c: a not-yet-listed breakout (parent_club_score 0.40) is pursued
-        // by the in-window availability sweep (form_discovery_mode = false)
-        // ONLY when the buyer clearly outranks the parent club — the
-        // realistic "giant comes for the smaller club's breakout star". This
-        // converts the year-round breakout monitoring into an actual approach
-        // instead of a row that sits until the selling club lists an asset it
-        // has no reason to list. A peer/smaller buyer still can't pursue an
-        // unlisted player on form alone, and form-discovery mode admits him
-        // for monitoring regardless.
-        let mut target = BreakoutFixtures::loan_listed_breakout_striker();
-        target.is_loan_listed = false; // not on any list at all
-        target.breakout_score = 60.0;
-
-        // Clearly bigger buyer (0.72 vs parent 0.40): now pursued in-window.
-        let big_buyer = BreakoutFixtures::top_domestic_buyer(true);
-        assert!(
-            matches!(
-                evaluate_listed_target(&target, &big_buyer),
-                ListedTargetVerdict::Accept(_)
-            ),
-            "a clearly bigger club must be able to pursue an unlisted breakout star"
-        );
-
-        // A buyer that does NOT clearly outrank the parent: still out. The
-        // availability gate is checked before the tier window, so this is a
-        // clean NotListed regardless of his tier fit.
-        let mut peer_buyer = BreakoutFixtures::top_domestic_buyer(true);
-        peer_buyer.buyer_rep_score = 0.45; // below parent 0.40 + 0.10 gap
-        assert_eq!(
-            evaluate_listed_target(&target, &peer_buyer),
-            ListedTargetVerdict::Reject(ListedRejectReason::NotListed),
-            "a peer/smaller club still can't pursue an unlisted player on form alone"
-        );
-
-        // Form-discovery mode (year-round watch): admitted for monitoring on
-        // form, independent of the rep gap.
-        let mut watch_buyer = BreakoutFixtures::top_domestic_buyer(true);
-        watch_buyer.form_discovery_mode = true;
-        assert!(
-            matches!(
-                evaluate_listed_target(&target, &watch_buyer),
-                ListedTargetVerdict::Accept(_)
-            ),
-            "form-discovery mode must admit an unlisted breakout for monitoring"
-        );
-    }
-
-    #[test]
-    fn breakout_threshold_governs_loan_listed_admission() {
-        // The admission bar is exactly the breakout threshold: a loan-listed
-        // player just below it stays loan-only; at/above it he enters the
-        // permanent-interest path.
-        let buyer = BreakoutFixtures::top_domestic_buyer(true);
-
-        let mut below = BreakoutFixtures::loan_listed_breakout_striker();
-        below.breakout_score = BreakoutPerformanceSignal::BREAKOUT_THRESHOLD - 0.1;
-        assert_eq!(
-            evaluate_listed_target(&below, &buyer),
-            ListedTargetVerdict::Reject(ListedRejectReason::NotListed),
-            "just below the breakout bar a loan-listed player stays loan-only"
-        );
-
-        let mut at_bar = BreakoutFixtures::loan_listed_breakout_striker();
-        at_bar.breakout_score = BreakoutPerformanceSignal::BREAKOUT_THRESHOLD;
-        assert!(
-            matches!(
-                evaluate_listed_target(&at_bar, &buyer),
-                ListedTargetVerdict::Accept(_)
-            ),
-            "at the breakout bar a loan-listed player enters the permanent path"
-        );
-    }
-}
-
-/// The slot-level need calculus and the depth floors that go with it.
+mod role;
 #[cfg(test)]
-mod slot_need_tests {
-    use crate::club::team::squad::SquadAssetClass;
-    use crate::transfers::pipeline::PipelineProcessor;
-    use crate::transfers::pipeline::evaluation::{
-        GroupNeed, NeedKind, compute_group_needs, group_depth_requirement,
-    };
-    use crate::transfers::pipeline::processor::SquadPlayerInfo;
-    use crate::{
-        MatchTacticType, PlayerFieldPositionGroup, PlayerPositionType, RoleFamiliarity,
-        TACTICS_POSITIONS,
-    };
-    use std::collections::HashMap;
-
-    struct SlotFx;
-
-    impl SlotFx {
-        /// Continental tier — the band the calibration tests already use.
-        const REP_SCORE: f32 = 0.725;
-
-        fn formation(tactic: MatchTacticType) -> &'static [PlayerPositionType; 11] {
-            let (_, positions) = TACTICS_POSITIONS
-                .iter()
-                .find(|(t, _)| *t == tactic)
-                .expect("tactic must exist");
-            positions
-        }
-
-        fn tolerance() -> i16 {
-            PipelineProcessor::tier_quality_tolerance_score(Self::REP_SCORE)
-        }
-
-        fn baseline(group: PlayerFieldPositionGroup) -> u8 {
-            PipelineProcessor::tier_starter_ca_score(Self::REP_SCORE, group)
-        }
-
-        fn player(id: u32, roles: &[PlayerPositionType], ca: u8) -> SquadPlayerInfo {
-            let mut levels: HashMap<PlayerPositionType, u8> = HashMap::new();
-            for role in roles {
-                levels.insert(*role, 20);
-            }
-            SquadPlayerInfo {
-                player_id: id,
-                primary_position: roles[0],
-                current_ability: ca,
-                estimated_potential: ca,
-                potential_confidence: 0.5,
-                age: 26,
-                position_levels: levels,
-                appearances: 10,
-                official_appearances: 10,
-                is_injured: false,
-                recovery_days: 0,
-                injury_days: 0,
-                asset_class: SquadAssetClass::UnknownNeedsEvaluation,
-                contract_months_remaining: Some(24),
-            }
-        }
-
-        /// Production's slot assignment: best remaining man per shirt, graded
-        /// on the strongest role he holds inside that shirt's group.
-        fn coverage(
-            squad: &[SquadPlayerInfo],
-            formation: &[PlayerPositionType; 11],
-        ) -> Vec<(PlayerPositionType, Option<u32>, u8)> {
-            let mut used: Vec<u32> = Vec::new();
-            let mut out = Vec::new();
-            for &slot in formation.iter() {
-                let group = slot.position_group();
-                let pick = squad
-                    .iter()
-                    .filter(|p| !used.contains(&p.player_id))
-                    .filter_map(|p| {
-                        let in_group = p
-                            .position_levels
-                            .iter()
-                            .filter(|(pos, _)| pos.position_group() == group)
-                            .map(|(_, level)| *level)
-                            .max()
-                            .unwrap_or(0);
-                        if in_group == 0 {
-                            return None;
-                        }
-                        let effective =
-                            RoleFamiliarity::effective_ability(p.current_ability, in_group);
-                        Some((p.player_id, effective))
-                    })
-                    .max_by_key(|&(_, effective)| effective);
-                match pick {
-                    Some((id, quality)) => {
-                        used.push(id);
-                        out.push((slot, Some(id), quality));
-                    }
-                    None => out.push((slot, None, 0)),
-                }
-            }
-            out
-        }
-
-        /// A squad comfortably at tier standard everywhere except the forward
-        /// line, which carries one very good man and two who are nowhere near
-        /// it — the shape a `max` over the group cannot see.
-        fn lopsided_front_two() -> Vec<SquadPlayerInfo> {
-            let at_tier = Self::baseline(PlayerFieldPositionGroup::Midfielder) + 40;
-            let mut squad = vec![
-                Self::player(1, &[PlayerPositionType::Goalkeeper], at_tier),
-                Self::player(2, &[PlayerPositionType::Goalkeeper], at_tier),
-            ];
-            for i in 0..6u32 {
-                squad.push(Self::player(
-                    10 + i,
-                    &[PlayerPositionType::DefenderCenter],
-                    at_tier,
-                ));
-            }
-            for i in 0..6u32 {
-                squad.push(Self::player(
-                    20 + i,
-                    &[PlayerPositionType::MidfielderCenter],
-                    at_tier,
-                ));
-            }
-            squad.push(Self::player(30, &[PlayerPositionType::Striker], at_tier));
-            squad.push(Self::player(31, &[PlayerPositionType::Striker], 90));
-            squad.push(Self::player(32, &[PlayerPositionType::Striker], 88));
-            squad
-        }
-
-        fn needs(squad: &[SquadPlayerInfo], tactic: MatchTacticType) -> Vec<GroupNeed> {
-            let formation = Self::formation(tactic);
-            compute_group_needs(
-                squad,
-                &Self::coverage(squad, formation),
-                formation,
-                Self::REP_SCORE,
-                Self::tolerance(),
-            )
-        }
-    }
-
-    /// The bug this replaced: a group's quality was `max(CA)` over everyone
-    /// wearing its label, so one outstanding forward answered the question for
-    /// a whole front two and the shirt nobody could fill stayed invisible.
-    #[test]
-    fn one_star_forward_no_longer_hides_the_other_shirt() {
-        let squad = SlotFx::lopsided_front_two();
-
-        let forward_best = squad
-            .iter()
-            .filter(|p| p.primary_position.position_group() == PlayerFieldPositionGroup::Forward)
-            .map(|p| p.current_ability)
-            .max()
-            .unwrap();
-        assert!(
-            (forward_best as i16)
-                >= SlotFx::baseline(PlayerFieldPositionGroup::Forward) as i16 - SlotFx::tolerance(),
-            "precondition: the OLD max-over-the-group rule saw no need here"
-        );
-
-        let needs = SlotFx::needs(&squad, MatchTacticType::T442);
-        let forward: Vec<&GroupNeed> = needs
-            .iter()
-            .filter(|n| n.group == PlayerFieldPositionGroup::Forward)
-            .collect();
-        assert_eq!(forward.len(), 1, "expected one forward need, got {needs:?}");
-        assert_eq!(forward[0].kind, NeedKind::QualityUpgrade);
-        assert!(
-            forward[0].representative_pos.is_forward(),
-            "the request must name the shirt that is short"
-        );
-    }
-
-    /// …and it does not simply fire everywhere: a front two both at tier
-    /// standard is a front two the club is entitled to be happy with.
-    #[test]
-    fn a_front_line_at_tier_standard_raises_nothing() {
-        let mut squad = SlotFx::lopsided_front_two();
-        let at_tier = SlotFx::baseline(PlayerFieldPositionGroup::Forward) + 40;
-        for player in squad.iter_mut() {
-            if player.primary_position.is_forward() {
-                player.current_ability = at_tier;
-            }
-        }
-
-        let needs = SlotFx::needs(&squad, MatchTacticType::T442);
-        assert!(
-            !needs
-                .iter()
-                .any(|n| n.group == PlayerFieldPositionGroup::Forward),
-            "no forward need expected, got {needs:?}"
-        );
-    }
-
-    /// A man filling a neighbouring shirt inside his own group is still the
-    /// player the club has. Reading him as out of position would have every
-    /// side in the world shopping to fix its own formation.
-    #[test]
-    fn covering_a_neighbouring_shirt_is_not_a_recruitment_problem() {
-        // Six central midfielders in a 4-4-2, which asks for two wide ones.
-        let at_tier = SlotFx::baseline(PlayerFieldPositionGroup::Midfielder) + 40;
-        let mut squad = SlotFx::lopsided_front_two();
-        squad.retain(|p| !p.primary_position.is_midfielder());
-        for i in 0..6u32 {
-            squad.push(SlotFx::player(
-                40 + i,
-                &[PlayerPositionType::MidfielderCenter],
-                at_tier,
-            ));
-        }
-
-        let needs = SlotFx::needs(&squad, MatchTacticType::T442);
-        assert!(
-            !needs
-                .iter()
-                .any(|n| n.group == PlayerFieldPositionGroup::Midfielder),
-            "central midfielders covering the flanks are not a shortage, got {needs:?}"
-        );
-    }
-
-    /// A nominal second position must not paper over a missing role: a
-    /// midfielder who lists centre-forward at an unconvincing familiarity is
-    /// not the centre-forward the club is short of.
-    #[test]
-    fn a_nominal_forward_does_not_fill_the_forward_shirt() {
-        let at_tier = SlotFx::baseline(PlayerFieldPositionGroup::Midfielder) + 40;
-        let mut squad = SlotFx::lopsided_front_two();
-        squad.retain(|p| !p.primary_position.is_forward());
-        // Two midfielders who "can play up front" — on paper. A shade below
-        // their pure-midfield team-mates so the four midfield shirts go to
-        // those, leaving these two as the only bodies for the front line:
-        // otherwise the side has literally nobody up front and the need is
-        // raised as an outright formation gap instead.
-        for i in 0..2u32 {
-            let mut dabbler =
-                SlotFx::player(50 + i, &[PlayerPositionType::MidfielderCenter], at_tier - 2);
-            dabbler
-                .position_levels
-                .insert(PlayerPositionType::Striker, 8);
-            squad.push(dabbler);
-        }
-
-        let needs = SlotFx::needs(&squad, MatchTacticType::T442);
-        assert!(
-            needs
-                .iter()
-                .any(|n| n.group == PlayerFieldPositionGroup::Forward
-                    && n.kind == NeedKind::QualityUpgrade),
-            "a squad with no real forward must be shopping for one, got {needs:?}"
-        );
-    }
-
-    /// Forward used to be the one group a loan-out could strip back to the
-    /// bare formation count, on the mistaken grounds that the wide forwards
-    /// were counted in it — they group under Midfielder. The floors are now
-    /// consistent for every group.
-    #[test]
-    fn every_group_keeps_a_rotation_cushion_over_its_formation_footprint() {
-        for tactic in [
-            MatchTacticType::T442,
-            MatchTacticType::T433,
-            MatchTacticType::T4231,
-            MatchTacticType::T451,
-        ] {
-            let formation = SlotFx::formation(tactic);
-            for group in PlayerFieldPositionGroup::ALL {
-                let slots = formation
-                    .iter()
-                    .filter(|p| p.position_group() == group)
-                    .count();
-                let floor = PipelineProcessor::group_min_needed(group, formation);
-                assert!(
-                    floor > slots,
-                    "{tactic:?}/{group:?}: floor {floor} leaves no cover for {slots} shirts"
-                );
-                assert!(
-                    floor <= group_depth_requirement(formation, group),
-                    "{tactic:?}/{group:?}: the loan-out floor must not exceed the depth target"
-                );
-            }
-        }
-    }
-
-    /// The specific regression: a lone-striker shape must still keep a deputy.
-    #[test]
-    fn a_lone_striker_shape_keeps_a_deputy_centre_forward() {
-        let formation = SlotFx::formation(MatchTacticType::T4231);
-        assert_eq!(
-            PipelineProcessor::group_min_needed(PlayerFieldPositionGroup::Forward, formation),
-            2,
-            "one striker on the teamsheet still means two on the roster"
-        );
-    }
-}
-
-/// Which of a versatile candidate's roles a buyer is judged to be shopping for.
+mod slot;
 #[cfg(test)]
-mod buyer_role_match_tests {
-    use crate::transfers::pipeline::recommendations::BuyerNeedPicture;
-    use crate::{
-        PlayerFieldPositionGroup, PlayerPosition, PlayerPositionType, PlayerPositions,
-        PositionCoverage,
-    };
-
-    struct RoleMatchFx;
-
-    impl RoleMatchFx {
-        /// A wide forward: filed under Midfielder because his record leads
-        /// with a wing, a natural centre-forward all the same.
-        fn wide_forward() -> PositionCoverage {
-            PositionCoverage::of(&PlayerPositions {
-                positions: vec![
-                    PlayerPosition {
-                        position: PlayerPositionType::AttackingMidfielderRight,
-                        level: 20,
-                    },
-                    PlayerPosition {
-                        position: PlayerPositionType::Striker,
-                        level: 20,
-                    },
-                ],
-            })
-        }
-
-        /// A club stacked in midfield and short up front — Spartak's shape.
-        fn stacked_midfield_thin_attack() -> BuyerNeedPicture {
-            let mut picture = BuyerNeedPicture::default();
-            picture.best_in_group[PlayerFieldPositionGroup::Midfielder.index()] = 150;
-            picture.best_in_group[PlayerFieldPositionGroup::Forward.index()] = 92;
-            picture
-        }
-    }
-
-    /// The gap this closed: judged by his label a wide forward was measured
-    /// against the buyer's MIDFIELD — no request, no room, a very high
-    /// best-in-group — and rejected as no upgrade, while the centre-forward
-    /// shirt he would have filled went on unaddressed.
-    #[test]
-    fn a_versatile_attacker_is_judged_where_the_club_is_short() {
-        let picture = RoleMatchFx::stacked_midfield_thin_attack();
-        assert_eq!(
-            picture.role_for(
-                RoleMatchFx::wide_forward(),
-                PlayerFieldPositionGroup::Midfielder
-            ),
-            PlayerFieldPositionGroup::Forward,
-            "the weaker of the two lines he can play is where he does most good"
-        );
-    }
-
-    /// An open request outranks the raw quality picture: what the club has
-    /// actually asked for wins.
-    #[test]
-    fn an_open_request_wins_over_the_weakest_line() {
-        let mut picture = RoleMatchFx::stacked_midfield_thin_attack();
-        picture.open_request[PlayerFieldPositionGroup::Midfielder.index()] = true;
-        assert_eq!(
-            picture.role_for(
-                RoleMatchFx::wide_forward(),
-                PlayerFieldPositionGroup::Midfielder
-            ),
-            PlayerFieldPositionGroup::Midfielder
-        );
-    }
-
-    /// …and an ageing starter to succeed comes next.
-    #[test]
-    fn an_ageing_starter_outranks_a_merely_weaker_line() {
-        let mut picture = BuyerNeedPicture::default();
-        picture.best_in_group[PlayerFieldPositionGroup::Midfielder.index()] = 150;
-        picture.best_in_group[PlayerFieldPositionGroup::Forward.index()] = 149;
-        picture.aging_starter[PlayerFieldPositionGroup::Midfielder.index()] = true;
-        assert_eq!(
-            picture.role_for(
-                RoleMatchFx::wide_forward(),
-                PlayerFieldPositionGroup::Midfielder
-            ),
-            PlayerFieldPositionGroup::Midfielder
-        );
-    }
-
-    /// A player who covers one group only is judged exactly as he always was.
-    #[test]
-    fn a_single_group_player_is_unaffected() {
-        let picture = RoleMatchFx::stacked_midfield_thin_attack();
-        for position in PlayerPositionType::ALL {
-            let group = position.position_group();
-            assert_eq!(
-                picture.role_for(PositionCoverage::single(position), group),
-                group,
-                "{position:?} covers nothing else, so nothing changes for him"
-            );
-        }
-    }
-}
+mod tier;

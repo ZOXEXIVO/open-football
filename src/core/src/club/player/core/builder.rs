@@ -9,7 +9,7 @@ use crate::club::{
     PlayerTraining,
 };
 use crate::shared::fullname::FullName;
-use crate::transfers::pipeline::HomePull;
+use crate::transfers::HomePull;
 use crate::{
     PersonAttributes, Player, PlayerDecisionHistory, PlayerFoots, PlayerHappiness, PlayerPositions,
     PlayerPreferredFoot, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,

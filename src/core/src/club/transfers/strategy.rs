@@ -1,15 +1,15 @@
 use crate::club::board::{ClubVision, FinancialStance, SigningPreference, VisionYouthFocus};
 use crate::club::staff::perception::PotentialEstimator;
 use crate::shared::{Currency, CurrencyValue};
-use crate::transfers::offer::{
+use crate::transfers::deal::offer::{
     PersonalTermsOffer, PromisedSquadStatus, TransferClause, TransferOffer,
 };
-use crate::transfers::pipeline::wage_power::BuyerLevelWage;
 use crate::transfers::pipeline::{
-    BoardRecruitmentDossier, TransferApproach, TransferNeedPriority, TransferNeedReason,
-    TransferRequest,
+    TransferApproach, TransferNeedPriority, TransferNeedReason, TransferRequest,
 };
-use crate::transfers::window::PlayerValuationCalculator;
+use crate::transfers::scouting::recruitment::BoardRecruitmentDossier;
+use crate::transfers::value::PlayerValuationCalculator;
+use crate::transfers::value::wage::BuyerLevelWage;
 use crate::utils::FormattingUtils;
 use crate::{
     ClubPhilosophy, Person, Player, PlayerPositionType, PlayerSquadStatus, PlayerStatusType,
@@ -106,120 +106,6 @@ impl Default for NegotiationPolicy {
     }
 }
 
-/// Where the club sits in its build cycle. Drives urgency
-/// and which profiles are attractive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SquadPhase {
-    Rebuild,
-    TitlePush,
-    Survival,
-    Consolidation,
-    YouthCycle,
-}
-
-#[derive(Debug, Clone)]
-pub struct SquadBuildingPolicy {
-    pub phase: SquadPhase,
-    /// 0..1. How aggressively the club acts to plug short-term needs.
-    pub short_term_urgency: f32,
-}
-
-impl Default for SquadBuildingPolicy {
-    fn default() -> Self {
-        SquadBuildingPolicy {
-            phase: SquadPhase::Consolidation,
-            short_term_urgency: 0.5,
-        }
-    }
-}
-
-/// Sell-side policy. Cleanly separated so seller acceptance
-/// and asking-price logic can use the same dials a buying
-/// strategy exposes for purchases.
-#[derive(Debug, Clone)]
-pub struct SellingPolicy {
-    /// 0..1. Baseline willingness to entertain offers.
-    pub willingness_baseline: f32,
-    /// 0..1. How much the club resists selling home-grown players.
-    pub keep_homegrown_bias: f32,
-    /// 0..1. How much cash pressure pushes the club to sell.
-    pub cash_pressure: f32,
-    /// 0..1. How willing to sell aging players the club is
-    /// rotating out of the squad.
-    pub sell_aging_bias: f32,
-    /// 0..1. How willing to let surplus depth go.
-    pub sell_surplus_bias: f32,
-    /// 0..1. Resistance to selling to direct rivals.
-    pub rival_resistance: f32,
-}
-
-impl Default for SellingPolicy {
-    fn default() -> Self {
-        SellingPolicy {
-            willingness_baseline: 0.5,
-            keep_homegrown_bias: 0.4,
-            cash_pressure: 0.2,
-            sell_aging_bias: 0.55,
-            sell_surplus_bias: 0.6,
-            rival_resistance: 0.7,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SellingDecision {
-    Reject,
-    Listen,
-    Encourage,
-}
-
-// ============================================================
-// Interest scoring
-// ============================================================
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransferInterestDecision {
-    Pursue,
-    Consider,
-    Pass,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransferInterestReason {
-    PositionNeed,
-    RoleFit,
-    AgeFitsPolicy,
-    HighPotential,
-    StrongScoutSupport,
-    BoardSupport,
-    ExpiringContract,
-    PriorityRequest,
-    Affordable,
-    DomesticBonus,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransferInterestRisk {
-    AgeRisk,
-    PoorAttitude,
-    WageDemands,
-    InjuryConcern,
-    LowScoutingConfidence,
-    OverBudget,
-    OverAgePolicy,
-    UnderQuality,
-    ContractExpiringRisk,
-    RivalSeller,
-}
-
-#[derive(Debug, Clone)]
-pub struct TransferInterestScore {
-    pub score: f32,
-    pub decision: TransferInterestDecision,
-    pub reasons: Vec<TransferInterestReason>,
-    pub risks: Vec<TransferInterestRisk>,
-}
-
 // ============================================================
 // Strategy context — every input that should bend offer
 // construction and interest evaluation, in one struct so the
@@ -292,10 +178,6 @@ impl<'a> TransferStrategyContext<'a> {
     pub fn is_loan(&self) -> bool {
         !matches!(self.approach, TransferApproach::PermanentTransfer)
     }
-
-    pub fn has_option_to_buy(&self) -> bool {
-        matches!(self.approach, TransferApproach::LoanWithOption)
-    }
 }
 
 // ============================================================
@@ -332,8 +214,6 @@ pub struct ClubTransferStrategy {
 
     pub recruitment: RecruitmentPolicy,
     pub negotiation: NegotiationPolicy,
-    pub squad_building: SquadBuildingPolicy,
-    pub selling: SellingPolicy,
 }
 
 impl ClubTransferStrategy {
@@ -349,8 +229,6 @@ impl ClubTransferStrategy {
             target_positions: Vec::new(),
             recruitment: RecruitmentPolicy::default(),
             negotiation: NegotiationPolicy::default(),
-            squad_building: SquadBuildingPolicy::default(),
-            selling: SellingPolicy::default(),
         }
     }
 
@@ -369,8 +247,6 @@ impl ClubTransferStrategy {
         let recruitment = RecruitmentPolicy::from_vision(philosophy, vision);
         let mut negotiation = NegotiationPolicy::from_vision(vision, philosophy);
         negotiation.buying_aggressiveness = buying_aggressiveness.clamp(0.05, 0.95);
-        let squad_building = SquadBuildingPolicy::from_vision(vision);
-        let selling = SellingPolicy::from_vision(vision, philosophy);
 
         ClubTransferStrategy {
             club_id,
@@ -384,8 +260,6 @@ impl ClubTransferStrategy {
             target_positions,
             recruitment,
             negotiation,
-            squad_building,
-            selling,
         }
     }
 
@@ -401,221 +275,6 @@ impl ClubTransferStrategy {
     // ---- Back-compat shims ----------------------------------
 
     /// Coarse boolean interest used by old code paths. Delegates
-    /// to the richer scoring function and turns Pursue/Consider
-    /// into `true`.
-    pub fn decide_player_interest(&self, player: &Player, date: NaiveDate) -> bool {
-        let ctx = TransferStrategyContext::minimal(date);
-        match self.evaluate_interest(player, &ctx).decision {
-            TransferInterestDecision::Pursue | TransferInterestDecision::Consider => true,
-            TransferInterestDecision::Pass => false,
-        }
-    }
-
-    /// Back-compat entry point. Builds a minimal context and
-    /// delegates to the policy-aware variant so behaviour stays
-    /// in one place.
-    pub fn calculate_initial_offer(
-        &self,
-        player: &Player,
-        asking_price: &CurrencyValue,
-        current_date: NaiveDate,
-    ) -> TransferOffer {
-        let mut ctx = TransferStrategyContext::minimal(current_date);
-        ctx.available_budget = self.budget.as_ref().map(|b| b.amount).unwrap_or(0.0);
-        ctx.allocated_budget = ctx.available_budget;
-        self.calculate_initial_offer_with_context(player, asking_price, &ctx)
-    }
-
-    // ---- Richer entry points --------------------------------
-
-    /// Score a player as a recruitment target. Uses assessed
-    /// scouting values where present and falls back to public
-    /// `current_ability` (never hidden potential_ability) where
-    /// not. Caller can read `decision`, `reasons`, `risks` to
-    /// drive UI and downstream filters.
-    pub fn evaluate_interest(
-        &self,
-        player: &Player,
-        ctx: &TransferStrategyContext,
-    ) -> TransferInterestScore {
-        let mut score: f32 = 0.0;
-        let mut reasons: Vec<TransferInterestReason> = Vec::new();
-        let mut risks: Vec<TransferInterestRisk> = Vec::new();
-
-        let age = player.age(ctx.date);
-
-        // Position fit. Empty target list = generic interest.
-        let position_open = self.target_positions.is_empty();
-        let position_match = position_open || self.target_positions.contains(&player.position());
-        if position_match {
-            score += 1.0;
-            if !position_open {
-                reasons.push(TransferInterestReason::PositionNeed);
-            }
-        } else {
-            score -= 1.5;
-        }
-
-        // Request priority lifts the floor.
-        if let Some(req) = ctx.request {
-            match req.priority {
-                TransferNeedPriority::Critical => {
-                    score += 1.0;
-                    reasons.push(TransferInterestReason::PriorityRequest);
-                }
-                TransferNeedPriority::Important => score += 0.5,
-                TransferNeedPriority::Optional => {}
-            }
-            if (req.preferred_age_min..=req.preferred_age_max).contains(&age) {
-                score += 0.4;
-                reasons.push(TransferInterestReason::AgeFitsPolicy);
-            } else {
-                score -= 0.3;
-                risks.push(TransferInterestRisk::OverAgePolicy);
-            }
-        }
-
-        // Age vs club policy.
-        match self.recruitment.age_preference {
-            AgePreference::Youth if age <= 23 => score += 0.5,
-            AgePreference::Prime if (24..=29).contains(&age) => score += 0.5,
-            AgePreference::Veteran if age >= 28 => score += 0.3,
-            AgePreference::Balanced => {}
-            _ => {}
-        }
-        if matches!(self.recruitment.youth_focus, VisionYouthFocus::DevelopYouth) && age <= 23 {
-            score += 0.3;
-            reasons.push(TransferInterestReason::AgeFitsPolicy);
-        }
-        if matches!(self.recruitment.philosophy, ClubPhilosophy::DevelopAndSell) && age >= 30 {
-            score -= 0.5;
-            risks.push(TransferInterestRisk::AgeRisk);
-        }
-
-        // Quality bar. Prefer scout-assessed ability over hidden CA
-        // when present — keeps AI honest about what it knows.
-        let assessed_ability =
-            ctx.scout_assessed_ability
-                .unwrap_or(player.player_attributes.current_ability) as u16;
-        if assessed_ability < self.reputation_level / 2 {
-            score -= 1.0;
-            risks.push(TransferInterestRisk::UnderQuality);
-        }
-        if assessed_ability > self.reputation_level * 2
-            && self.negotiation.buying_aggressiveness < 0.8
-        {
-            // Out-of-tier target — only an aggressive buyer chases.
-            score -= 1.0;
-        }
-
-        // Potential — use assessed potential whenever scouting context exists.
-        if let Some(pot) = ctx.scout_assessed_potential {
-            let gap = pot as i16 - assessed_ability as i16;
-            if gap >= 15 {
-                score += 0.6;
-                reasons.push(TransferInterestReason::HighPotential);
-            }
-        }
-
-        // Scout / board support.
-        if let Some(conf) = ctx.scout_confidence {
-            if conf < self.recruitment.min_scouting_confidence {
-                score -= 0.8;
-                risks.push(TransferInterestRisk::LowScoutingConfidence);
-            } else if conf > 0.7 {
-                score += 0.4;
-                reasons.push(TransferInterestReason::StrongScoutSupport);
-            }
-        }
-        if let Some(dossier) = ctx.board_dossier {
-            if dossier.chief_scout_support {
-                score += 0.4;
-                reasons.push(TransferInterestReason::BoardSupport);
-            }
-            if dossier.avg_confidence < self.recruitment.min_scouting_confidence {
-                score -= 0.5;
-                risks.push(TransferInterestRisk::LowScoutingConfidence);
-            }
-            if dossier.risk_flag_count >= 3 && self.negotiation.risk_appetite < 0.4 {
-                score -= 0.6;
-            }
-            score += dossier.consensus_score * 0.3;
-            if dossier.budget_fit > 1.3 {
-                score -= 0.5;
-                risks.push(TransferInterestRisk::OverBudget);
-            } else if dossier.budget_fit < 0.8 {
-                reasons.push(TransferInterestReason::Affordable);
-            }
-        }
-
-        // Contract expiry — bargain potential & risk together.
-        if let Some(contract) = player.contract.as_ref() {
-            let months_remaining = ContractTiming::months_between(ctx.date, contract.expiration);
-            if months_remaining <= 6 {
-                score += 0.5;
-                reasons.push(TransferInterestReason::ExpiringContract);
-            } else if months_remaining <= 12 {
-                score += 0.2;
-                reasons.push(TransferInterestReason::ExpiringContract);
-            }
-        }
-
-        // Status hints.
-        if player.statuses.has(PlayerStatusType::Lst) {
-            score += 0.4;
-        }
-        if player.statuses.has(PlayerStatusType::Req) || player.statuses.has(PlayerStatusType::Unh)
-        {
-            score += 0.3;
-        }
-        if player.statuses.has(PlayerStatusType::Inj) {
-            risks.push(TransferInterestRisk::InjuryConcern);
-            score -= 0.3;
-        }
-
-        // Personality concerns are character risk if low and we
-        // are risk-averse. Determination is a stable proxy.
-        if player.skills.mental.determination < 8.0 {
-            risks.push(TransferInterestRisk::PoorAttitude);
-            if self.negotiation.risk_appetite < 0.4 {
-                score -= 0.4;
-            }
-        }
-
-        // Rival sellers shave score because the political cost is
-        // non-trivial even when the deal otherwise stacks up.
-        if ctx.seller_is_rival {
-            score -= 0.2;
-            risks.push(TransferInterestRisk::RivalSeller);
-        }
-
-        // Domestic / signing-preference fit. Without nationality
-        // context plumbed in we apply the bias as a small lift
-        // when the policy actively prefers domestic — exact
-        // matching is the caller's job once nationality is wired.
-        if self.recruitment.domestic_bias > 0.5 {
-            reasons.push(TransferInterestReason::DomesticBonus);
-            score += self.recruitment.domestic_bias * 0.2;
-        }
-
-        let decision = if score >= 1.5 {
-            TransferInterestDecision::Pursue
-        } else if score >= 0.3 {
-            TransferInterestDecision::Consider
-        } else {
-            TransferInterestDecision::Pass
-        };
-
-        TransferInterestScore {
-            score,
-            decision,
-            reasons,
-            risks,
-        }
-    }
-
-    /// Policy-aware offer construction. The old method is a
-    /// thin wrapper over this with a minimal context.
     pub fn calculate_initial_offer_with_context(
         &self,
         player: &Player,
@@ -886,80 +545,6 @@ impl ClubTransferStrategy {
         }
         offer
     }
-
-    // ---- Selling side ---------------------------------------
-
-    /// Lightweight selling-side hook. Returns the club's
-    /// disposition toward an incoming approach for one of its
-    /// players, taking player status, age, contract, depth
-    /// pressure, and rivalry into account. Negotiation /
-    /// acceptance logic in the pipeline can use this as one
-    /// signal among many.
-    pub fn evaluate_sale(
-        &self,
-        player: &Player,
-        date: NaiveDate,
-        is_rival_buyer: bool,
-        position_depth: u8,
-    ) -> SellingDecision {
-        let mut score = self.selling.willingness_baseline;
-
-        if player.statuses.has(PlayerStatusType::Lst) {
-            score += 0.4;
-        }
-        if player.statuses.has(PlayerStatusType::Req) {
-            score += 0.35;
-        }
-        if player.statuses.has(PlayerStatusType::Unh) {
-            score += 0.2;
-        }
-        if player.statuses.has(PlayerStatusType::Frt) {
-            score += 0.3;
-        }
-
-        if let Some(contract) = player.contract.as_ref() {
-            let months_remaining = ContractTiming::months_between(date, contract.expiration);
-            if months_remaining <= 6 {
-                score += 0.35;
-            } else if months_remaining <= 12 {
-                score += 0.15;
-            }
-        }
-
-        let age = player.age(date);
-        if age >= 31 {
-            score += self.selling.sell_aging_bias * 0.3;
-        }
-        if position_depth >= 3 {
-            score += self.selling.sell_surplus_bias * 0.25;
-        }
-
-        score += self.selling.cash_pressure * 0.3;
-
-        if player.statuses.has(PlayerStatusType::HG) {
-            score -= self.selling.keep_homegrown_bias * 0.4;
-        }
-        if is_rival_buyer {
-            score -= self.selling.rival_resistance * 0.5;
-        }
-
-        if matches!(self.recruitment.philosophy, ClubPhilosophy::DevelopAndSell)
-            && age < 24
-            && score < 0.9
-        {
-            // Develop-and-sell clubs hold the line on young
-            // assets unless the bid is otherwise compelling.
-            score -= 0.1;
-        }
-
-        if score >= 0.85 {
-            SellingDecision::Encourage
-        } else if score >= 0.4 {
-            SellingDecision::Listen
-        } else {
-            SellingDecision::Reject
-        }
-    }
 }
 
 // ============================================================
@@ -1073,70 +658,6 @@ impl NegotiationPolicy {
             sell_on_preference,
             loan_preference,
             risk_appetite,
-        }
-    }
-}
-
-impl SquadBuildingPolicy {
-    pub fn from_vision(vision: &ClubVision) -> Self {
-        use crate::club::board::board::LongTermGoal;
-
-        let phase = match vision.long_term_goal {
-            Some(LongTermGoal::WinLeague) | Some(LongTermGoal::WinContinental) => {
-                SquadPhase::TitlePush
-            }
-            Some(LongTermGoal::PromotionToTopFlight) => SquadPhase::Rebuild,
-            Some(LongTermGoal::Survive) => SquadPhase::Survival,
-            Some(LongTermGoal::EstablishTopHalf) | Some(LongTermGoal::WinDomesticCup) => {
-                SquadPhase::Consolidation
-            }
-            None => SquadPhase::Consolidation,
-        };
-
-        let short_term_urgency = match phase {
-            SquadPhase::TitlePush => 0.85,
-            SquadPhase::Survival => 0.8,
-            SquadPhase::Rebuild => 0.55,
-            SquadPhase::Consolidation => 0.5,
-            SquadPhase::YouthCycle => 0.35,
-        };
-
-        SquadBuildingPolicy {
-            phase,
-            short_term_urgency,
-        }
-    }
-}
-
-impl SellingPolicy {
-    pub fn from_vision(vision: &ClubVision, philosophy: &ClubPhilosophy) -> Self {
-        let (willingness_baseline, cash_pressure) = match vision.financial_stance {
-            FinancialStance::Austerity => (0.75, 0.85),
-            FinancialStance::Conservative => (0.55, 0.45),
-            FinancialStance::Balanced => (0.45, 0.25),
-            FinancialStance::Ambitious => (0.35, 0.15),
-        };
-
-        let keep_homegrown_bias = match vision.youth_focus {
-            VisionYouthFocus::DevelopYouth => 0.7,
-            VisionYouthFocus::Balanced => 0.4,
-            VisionYouthFocus::SignExperienced => 0.2,
-        };
-
-        let sell_aging_bias = match philosophy {
-            ClubPhilosophy::DevelopAndSell => 0.75,
-            ClubPhilosophy::LoanFocused => 0.6,
-            ClubPhilosophy::Balanced => 0.55,
-            ClubPhilosophy::SignToCompete => 0.45,
-        };
-
-        SellingPolicy {
-            willingness_baseline,
-            keep_homegrown_bias,
-            cash_pressure,
-            sell_aging_bias,
-            sell_surplus_bias: 0.6,
-            rival_resistance: 0.7,
         }
     }
 }

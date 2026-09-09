@@ -169,7 +169,7 @@ impl TransferTrace {
 /// CLOSED — an unset or unparseable variable leaves the arm on, which is
 /// production. Set to `1` to disarm:
 ///
-/// * `OF_HOME_REACH_OFF` — [`super::loan_home::HomeLoanGates::reach_ok`]
+/// * `OF_HOME_REACH_OFF` — [`crate::transfers::loan::home::HomeLoanGates::reach_ok`]
 ///   answers with the scout's own map alone, so no club sees a compatriot
 ///   it could not otherwise scout.
 /// * `OF_COMPATRIOT_SWEEP_OFF` — an Elite / Continental club never runs
@@ -231,7 +231,7 @@ impl MarketSwitches {
     }
 
     /// The loan asset guard and every gate it re-shapes: the
-    /// destination pricing ([`super::loan_guard::LoanAssetGuard`]), the
+    /// destination pricing ([`crate::transfers::loan::guard::LoanAssetGuard`]), the
     /// readiness-continuous destination floors, the overqualified-minutes
     /// bound, the renown band on a loan, the wage carry, the seller's
     /// refusal delta and the broadcast cascade floor.

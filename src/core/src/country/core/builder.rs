@@ -2,7 +2,7 @@ use crate::context::{HomeLeagueTable, TournamentClocks};
 use crate::country::national::{NationalTeam, NationalTeamLevel};
 use crate::league::{DomesticCup, LeagueCollection, LeaguePlayoff};
 use crate::transfers::market::TransferMarket;
-use crate::transfers::market_map::CountryTransferProfile;
+use crate::transfers::market::map::CountryTransferProfile;
 use crate::{
     Club, Country, CountryEconomicFactors, CountryGeneratorData, CountryRegulations,
     CountrySettings, InternationalCompetition, MediaCoverage,

@@ -1098,7 +1098,14 @@ impl Ball {
         }
 
         if is_corner
-            && self.award_corner(side, attacking_side, outside_posts, context, players, events)
+            && self.award_corner(
+                side,
+                attacking_side,
+                outside_posts,
+                context,
+                players,
+                events,
+            )
         {
             return;
         }

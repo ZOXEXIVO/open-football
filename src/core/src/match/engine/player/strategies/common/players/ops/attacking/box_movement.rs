@@ -288,7 +288,8 @@ impl BoxMovement {
         // …and the arrival leg, which only exists once the ball is deep
         // enough that a delivery would beat any reaction. See
         // [`Self::ARRIVAL`].
-        let arrival_leg = ((progress - strike) / (Self::ARRIVAL - strike).max(0.01)).clamp(0.0, 1.0)
+        let arrival_leg = ((progress - strike) / (Self::ARRIVAL - strike).max(0.01))
+            .clamp(0.0, 1.0)
             * (Self::ARRIVAL_STAGE - Self::HOLD);
         approach_leg + arrival_leg
     }

@@ -1,76 +1,46 @@
-pub mod appraisal;
-pub mod appraisal_inputs;
-pub mod asset_ledger;
-pub(crate) mod auction;
-mod breakout;
-mod breakout_watch;
-mod circulation;
-mod evaluation;
-mod exposure;
-mod helpers;
-pub mod loan_guard;
-mod loan_home;
-mod loan_interest;
-mod loan_market;
-mod negotiations;
-pub mod planning;
-pub(crate) mod plausibility;
-pub mod playing_time;
-pub(crate) mod recommendations;
-pub(crate) mod recruitment;
-mod recruitment_meeting;
-mod scouting;
-pub(crate) mod scouting_config;
-mod shortlists;
-pub(crate) mod squad_fit;
-pub mod standing;
+//! The passes that run each tick, and the plan they write into.
+//!
+//! [`ClubTransferPlan`] is the club's own transfer file — its requests,
+//! shortlists, watchlist, sell list, scouting reports and monitoring rows.
+//! Everything else here is a pass over it: [`shortlist`] turns the brief
+//! into names, [`approach`] opens negotiations, [`advice`] is what the
+//! staff put forward, [`circulation`] records who is being looked at, and
+//! [`trace`] is the diagnostic stream.
+//!
+//! The domain each pass reasons with lives in its own folder — see
+//! [`crate::transfers`].
+
+pub mod advice;
+pub mod approach;
+pub(in crate::transfers) mod circulation;
+pub(in crate::transfers) mod helpers;
+pub mod shortlist;
 pub mod trace;
-pub mod upgrade_math;
-pub mod wage_power;
-pub mod watchlist;
 
 use crate::club::player::contract::PlayerSquadStatus;
 use crate::transfers::ScoutingRegion;
-use crate::transfers::pipeline::planning::{BriefTier, RecruitmentBrief};
+use crate::transfers::loan::interest::LoanApproachMemory;
+use crate::transfers::scouting::config::ScoutingConfig;
+use crate::transfers::scouting::recruitment::{
+    RecruitmentMeeting, ScoutMonitoringSource, ScoutMonitoringStatus, ScoutPlayerMonitoring,
+};
+use crate::transfers::squad::ledger::SellListEntry;
+use crate::transfers::squad::plan::{BriefSlot, BriefTier, RecruitmentBrief};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType, ReputationLevel};
 use chrono::NaiveDate;
 use std::collections::HashMap;
 
-// Re-export PipelineProcessor and PlayerSummary for external use
-pub use self::appraisal::{
-    Appraisal, AppraisalConfig, OfferKind, OfferView, PlayerDisposition, PlayerOfferAppraisal,
-    PlayerStance, TermsRefusalCause,
-};
-pub use self::appraisal_inputs::{
-    AvailabilityView, OfferViewBuilder, PlayerStanceBuilder, StanceInputs,
-};
-pub use self::asset_ledger::{AssetLedger, SellListEntry, SellMotive};
-pub use self::loan_guard::{LoanAssetGuard, LoanBorrowerProfile, LoanGuardVerdict, LoanReach};
-pub use self::loan_home::{
-    HomeLoanGates, HomeLoanPull, HomePull, SquadHomeContext, UnsettledAbroadScan,
-};
-pub use self::planning::{BriefSlot, MoneySlack, SquadPlanner};
 pub use self::processor::PipelineProcessor;
 pub use self::processor::{PlayerSummary, SellerPlausibilityContext};
-pub use self::standing::CareerRecordSnapshot;
 pub use self::trace::TransferTrace;
-pub use self::upgrade_math::{DealValue, MoneyUtility, UpgradeMath};
-pub use self::wage_power::{BuyerLevelWage, OwnerEnvelopes, WagePower};
-pub use self::watchlist::MarketKnowledge;
-// Recruitment department types — meetings, votes, monitoring rows.
-pub use self::recruitment::{
-    BoardRecruitmentDossier, RecruitmentDecision, RecruitmentDecisionType, RecruitmentMeeting,
-    ScoutMonitoringSource, ScoutMonitoringStatus, ScoutPlayerMonitoring, ScoutVote,
-    ScoutVoteChoice, ScoutVoteReason,
-};
 use chrono::Duration;
 use std::cmp::Ordering;
 
-mod processor {
+pub(in crate::transfers) mod processor {
     use crate::club::player::language::LanguageProfile;
     use crate::club::team::squad::SquadAssetClass;
     use crate::transfers::ScoutingRegion;
-    use crate::transfers::pipeline::standing::CareerRecordSnapshot;
+    use crate::transfers::squad::standing::CareerRecordSnapshot;
     use crate::{
         PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, PositionCoverage,
     };
@@ -87,7 +57,7 @@ mod processor {
     /// mentals, training trend) plus the coach's judging skills, so two
     /// players with identical observable attributes look identical to
     /// the same coach regardless of their hidden PA.
-    pub(in crate::transfers::pipeline) struct SquadPlayerInfo {
+    pub(in crate::transfers) struct SquadPlayerInfo {
         pub player_id: u32,
         pub primary_position: PlayerPositionType,
         pub current_ability: u8,
@@ -1446,7 +1416,7 @@ pub struct ClubTransferPlan {
     /// when the approach is made rather than when it fails, because that is
     /// where the calendar date is in hand and because a club that has just
     /// made its move does not reopen the file the following Monday either way.
-    /// See [`LoanStandoff`] and [`loan_interest::LoanApproachMemory`].
+    /// See [`LoanStandoff`] and [`LoanApproachMemory`].
     pub loan_approach_standoffs: Vec<LoanStandoff>,
 
     /// Where this club has recently offered players on loan —
@@ -1454,7 +1424,7 @@ pub struct ClubTransferPlan {
     /// seller-side push so a parent spreads its loanees around instead of
     /// turning the single highest-reputation club that will take them into a
     /// farm team. Pruned past
-    /// [`loan_interest::LoanApproachMemory::PLACEMENT_MEMORY_DAYS`].
+    /// [`LoanApproachMemory::PLACEMENT_MEMORY_DAYS`].
     pub loan_placements: Vec<(u32, NaiveDate)>,
 
     /// Reports carried over between transfer windows — a persistent shadow
@@ -1469,12 +1439,12 @@ pub struct ClubTransferPlan {
     /// resets when active — only signed/lost/rejected entries are
     /// archived. Drives the "who's watching whom" UI surfaces and the
     /// recruitment meeting agenda.
-    pub scout_monitoring: Vec<recruitment::ScoutPlayerMonitoring>,
+    pub scout_monitoring: Vec<ScoutPlayerMonitoring>,
 
     /// Recruitment-meeting history. Capped at
     /// `RecruitmentMeeting::HISTORY_CAP` per club; older entries are
     /// dropped on archive so memory stays bounded.
-    pub recruitment_meetings: Vec<recruitment::RecruitmentMeeting>,
+    pub recruitment_meetings: Vec<RecruitmentMeeting>,
 
     /// Monotonic id allocator for `ScoutPlayerMonitoring`.
     pub next_monitoring_id: u32,
@@ -1696,11 +1666,10 @@ impl ClubTransferPlan {
         // Standoff rows outlive their own deadline so the approach tally
         // survives to escalate the next look; they go once the club has
         // genuinely forgotten the pursuit.
-        self.loan_approach_standoffs.retain(|s| {
-            (date - s.until).num_days() <= loan_interest::LoanApproachMemory::FORGET_DAYS
-        });
+        self.loan_approach_standoffs
+            .retain(|s| (date - s.until).num_days() <= LoanApproachMemory::FORGET_DAYS);
         self.loan_placements.retain(|(_, when)| {
-            (date - *when).num_days() <= loan_interest::LoanApproachMemory::PLACEMENT_MEMORY_DAYS
+            (date - *when).num_days() <= LoanApproachMemory::PLACEMENT_MEMORY_DAYS
         });
     }
 
@@ -1722,15 +1691,13 @@ impl ClubTransferPlan {
         {
             Some(existing) => {
                 existing.approaches = existing.approaches.saturating_add(1);
-                let until = date
-                    + Duration::days(loan_interest::LoanApproachMemory::rebuff_days(
-                        existing.approaches,
-                    ));
+                let until =
+                    date + Duration::days(LoanApproachMemory::rebuff_days(existing.approaches));
                 existing.until = until.max(existing.until);
             }
             None => self.loan_approach_standoffs.push(LoanStandoff {
                 player_id,
-                until: date + Duration::days(loan_interest::LoanApproachMemory::rebuff_days(1)),
+                until: date + Duration::days(LoanApproachMemory::rebuff_days(1)),
                 approaches: 1,
             }),
         }
@@ -1759,12 +1726,6 @@ impl ClubTransferPlan {
 
     pub fn can_start_negotiation(&self) -> bool {
         self.active_negotiation_count < self.max_concurrent_negotiations
-    }
-
-    pub fn has_pending_requests(&self) -> bool {
-        self.transfer_requests
-            .iter()
-            .any(|r| r.status == TransferRequestStatus::Pending)
     }
 
     /// What the club has learned about this need so far, faded for the time
@@ -1881,20 +1842,16 @@ impl ClubTransferPlan {
             // Demote ReportReady → Active so the new window's meeting
             // re-evaluates the player against fresh requests rather than
             // rubber-stamping a stale dossier.
-            if matches!(
-                monitoring.status,
-                recruitment::ScoutMonitoringStatus::ReportReady
-            ) {
-                monitoring.status = recruitment::ScoutMonitoringStatus::Active;
+            if matches!(monitoring.status, ScoutMonitoringStatus::ReportReady) {
+                monitoring.status = ScoutMonitoringStatus::Active;
             }
             // PromotedToShortlist / Negotiating without follow-through:
             // window closed, so drop them back to Active for the next pass.
             if matches!(
                 monitoring.status,
-                recruitment::ScoutMonitoringStatus::PromotedToShortlist
-                    | recruitment::ScoutMonitoringStatus::Negotiating
+                ScoutMonitoringStatus::PromotedToShortlist | ScoutMonitoringStatus::Negotiating
             ) {
-                monitoring.status = recruitment::ScoutMonitoringStatus::Active;
+                monitoring.status = ScoutMonitoringStatus::Active;
             }
         }
     }
@@ -1907,9 +1864,9 @@ impl ClubTransferPlan {
         self.scout_monitoring.retain(|m| {
             !matches!(
                 m.status,
-                recruitment::ScoutMonitoringStatus::Signed
-                    | recruitment::ScoutMonitoringStatus::Lost
-                    | recruitment::ScoutMonitoringStatus::Rejected
+                ScoutMonitoringStatus::Signed
+                    | ScoutMonitoringStatus::Lost
+                    | ScoutMonitoringStatus::Rejected
             )
         });
     }
@@ -1927,11 +1884,10 @@ impl ClubTransferPlan {
     }
 
     /// Append a meeting and trim the history to `RecruitmentMeeting::HISTORY_CAP`.
-    pub fn push_recruitment_meeting(&mut self, meeting: recruitment::RecruitmentMeeting) {
+    pub fn push_recruitment_meeting(&mut self, meeting: RecruitmentMeeting) {
         self.recruitment_meetings.push(meeting);
-        if self.recruitment_meetings.len() > recruitment::RecruitmentMeeting::HISTORY_CAP {
-            let drop_count =
-                self.recruitment_meetings.len() - recruitment::RecruitmentMeeting::HISTORY_CAP;
+        if self.recruitment_meetings.len() > RecruitmentMeeting::HISTORY_CAP {
+            let drop_count = self.recruitment_meetings.len() - RecruitmentMeeting::HISTORY_CAP;
             self.recruitment_meetings.drain(0..drop_count);
         }
     }
@@ -1944,7 +1900,7 @@ impl ClubTransferPlan {
         &mut self,
         scout_staff_id: u32,
         player_id: u32,
-    ) -> Option<&mut recruitment::ScoutPlayerMonitoring> {
+    ) -> Option<&mut ScoutPlayerMonitoring> {
         self.scout_monitoring.iter_mut().find(|m| {
             m.scout_staff_id == scout_staff_id && m.player_id == player_id && m.is_active_interest()
         })
@@ -1957,7 +1913,7 @@ impl ClubTransferPlan {
         &self,
         scout_staff_id: u32,
         player_id: u32,
-    ) -> Option<&recruitment::ScoutPlayerMonitoring> {
+    ) -> Option<&ScoutPlayerMonitoring> {
         self.scout_monitoring.iter().find(|m| {
             m.scout_staff_id == scout_staff_id && m.player_id == player_id && m.is_active_interest()
         })
@@ -1975,7 +1931,7 @@ impl ClubTransferPlan {
         &mut self,
         scout_staff_id: u32,
         player_id: u32,
-        source: recruitment::ScoutMonitoringSource,
+        source: ScoutMonitoringSource,
         transfer_request_id: Option<u32>,
         origin_assignment_id: Option<u32>,
         region: Option<ScoutingRegion>,
@@ -2013,13 +1969,7 @@ impl ClubTransferPlan {
             );
         } else {
             let id = self.next_monitoring_id();
-            let mut row = recruitment::ScoutPlayerMonitoring::new(
-                id,
-                scout_staff_id,
-                player_id,
-                source,
-                date,
-            );
+            let mut row = ScoutPlayerMonitoring::new(id, scout_staff_id, player_id, source, date);
             row.transfer_request_id = transfer_request_id;
             row.origin_assignment_id = origin_assignment_id;
             row.region = region;
@@ -2039,10 +1989,7 @@ impl ClubTransferPlan {
 
     /// All active monitoring rows for a given player across the club.
     /// Used by accessors and the recruitment meeting agenda.
-    pub fn monitorings_for_player(
-        &self,
-        player_id: u32,
-    ) -> Vec<&recruitment::ScoutPlayerMonitoring> {
+    pub fn monitorings_for_player(&self, player_id: u32) -> Vec<&ScoutPlayerMonitoring> {
         self.scout_monitoring
             .iter()
             .filter(|m| m.player_id == player_id && m.is_active_interest())
@@ -2055,7 +2002,7 @@ impl ClubTransferPlan {
     pub fn set_monitoring_status_for_player(
         &mut self,
         player_id: u32,
-        status: recruitment::ScoutMonitoringStatus,
+        status: ScoutMonitoringStatus,
     ) {
         for m in self.scout_monitoring.iter_mut() {
             if m.player_id == player_id && m.is_active_interest() {
@@ -2068,9 +2015,7 @@ impl ClubTransferPlan {
     /// squad. Keeps only the strongest N per position group to bound growth.
     pub fn archive_reports_to_shadow(&mut self) {
         use std::collections::HashMap;
-        let shadow_cap_per_group = super::scouting_config::ScoutingConfig::default()
-            .shadow
-            .cap_per_group;
+        let shadow_cap_per_group = ScoutingConfig::default().shadow.cap_per_group;
 
         if self.scouting_reports.is_empty() {
             return;
@@ -2177,17 +2122,15 @@ impl ClubTransferPlan {
                 // Shadow confidence decays with age — a 12-month-old report is
                 // meaningfully less sharp than a fresh one. Decay rate and
                 // floor/ceiling live in `ScoutingConfig::shadow`.
-                seeded.confidence = super::scouting_config::ScoutingConfig::default()
-                    .seeded_shadow_confidence(seeded.confidence);
+                seeded.confidence =
+                    ScoutingConfig::default().seeded_shadow_confidence(seeded.confidence);
                 self.scouting_reports.push(seeded);
             }
         }
     }
 
     pub fn remember_known_player(&mut self, memory: KnownPlayerMemory) {
-        let known_cap = super::scouting_config::ScoutingConfig::default()
-            .shadow
-            .known_player_cap;
+        let known_cap = ScoutingConfig::default().shadow.known_player_cap;
 
         if let Some(existing) = self
             .known_players
@@ -2246,7 +2189,7 @@ impl Default for ClubTransferPlan {
 #[cfg(test)]
 mod monitoring_lifecycle_tests {
     use super::*;
-    use crate::transfers::pipeline::recruitment::{ScoutMonitoringSource, ScoutMonitoringStatus};
+    use crate::transfers::scouting::recruitment::{ScoutMonitoringSource, ScoutMonitoringStatus};
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
@@ -2259,7 +2202,7 @@ mod monitoring_lifecycle_tests {
         status: ScoutMonitoringStatus,
     ) {
         let id = plan.next_monitoring_id();
-        let mut row = recruitment::ScoutPlayerMonitoring::new(
+        let mut row = ScoutPlayerMonitoring::new(
             id,
             scout_id,
             player_id,
@@ -2317,20 +2260,20 @@ mod monitoring_lifecycle_tests {
     #[test]
     fn meeting_history_capped_to_constant() {
         let mut plan = ClubTransferPlan::new();
-        for i in 0..(recruitment::RecruitmentMeeting::HISTORY_CAP + 5) {
+        for i in 0..(RecruitmentMeeting::HISTORY_CAP + 5) {
             let id = plan.next_meeting_id();
-            plan.push_recruitment_meeting(recruitment::RecruitmentMeeting::new(
+            plan.push_recruitment_meeting(RecruitmentMeeting::new(
                 id,
                 d(2026, 6, 1) + chrono::Duration::days(i as i64 * 7),
             ));
         }
         assert_eq!(
             plan.recruitment_meetings.len(),
-            recruitment::RecruitmentMeeting::HISTORY_CAP
+            RecruitmentMeeting::HISTORY_CAP
         );
         // Newest meeting should be at the end.
         let last = plan.recruitment_meetings.last().unwrap();
-        assert!(last.id >= recruitment::RecruitmentMeeting::HISTORY_CAP as u32);
+        assert!(last.id >= RecruitmentMeeting::HISTORY_CAP as u32);
     }
 
     #[test]

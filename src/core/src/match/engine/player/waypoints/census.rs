@@ -119,7 +119,11 @@ impl WaypointCensus {
             return;
         }
 
-        let idx = ctx.player.waypoint_manager.current_index.min(route.len() - 1);
+        let idx = ctx
+            .player
+            .waypoint_manager
+            .current_index
+            .min(route.len() - 1);
         let target = route[idx];
         let pos = ctx.player.position;
         let anchor = ctx.team().my_anchor();

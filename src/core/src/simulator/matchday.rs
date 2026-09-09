@@ -41,9 +41,9 @@ use crate::MatchRuntime;
 use crate::SimulationResult;
 use crate::SimulatorData;
 use crate::continent::{Continent, ContinentBuildOutput, ContinentBuildState, ContinentResult};
-use crate::country::result::transfers::FreeAgentBumpBatch;
 use crate::league::result::WorldSnapshot;
 use crate::r#match::{Match, MatchResult};
+use crate::transfers::pool::FreeAgentBumpBatch;
 
 use super::{ContinentPanicMetrics, PerformanceProfiler, panic_message};
 

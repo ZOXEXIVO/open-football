@@ -375,15 +375,6 @@ impl BigStagePull {
     }
 }
 
-impl PlayerAttributes {
-    /// Convenience for the market side: the ability figure the big-stage
-    /// model measures a player by. Kept here so the pull and the market
-    /// never disagree about what "how good is he" means.
-    pub fn stage_ability(&self) -> f32 {
-        self.current_ability as f32
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

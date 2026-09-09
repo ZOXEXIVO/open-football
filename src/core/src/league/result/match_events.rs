@@ -30,7 +30,7 @@ use crate::r#match::engine::result::MatchResultRaw;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{FieldSquad, MatchResult};
 use crate::transfers::pipeline::KnownPlayerMemory;
-use crate::transfers::window::PlayerValuationCalculator;
+use crate::transfers::value::PlayerValuationCalculator;
 use crate::{MatchSelectionContext, SelectionOmissionReason};
 use chrono::Datelike;
 use chrono::NaiveDate;

@@ -8,8 +8,9 @@ use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection, SquadEvide
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
-use crate::transfers::pipeline::{LoanAssetGuard, LoanOutReason, PipelineProcessor, TransferTrace};
-use crate::transfers::window::PlayerValuationCalculator;
+use crate::transfers::loan::guard::LoanAssetGuard;
+use crate::transfers::pipeline::{LoanOutReason, PipelineProcessor, TransferTrace};
+use crate::transfers::value::PlayerValuationCalculator;
 use crate::transfers::{
     NegotiationStatus, TransferListing, TransferListingOrigin, TransferListingStatus,
     TransferListingType, TransferMarket,

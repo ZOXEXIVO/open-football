@@ -303,7 +303,10 @@ mod tests {
         assert!(CoachEye::width(0.5, 17, 0.6, 0) > CoachEye::width(0.5, 17, 1.0, 0));
         // A middling judge reads a 17-year-old to about a star (40 points).
         let middling = CoachEye::width(0.5, 17, 1.0, 20);
-        assert!((25.0..45.0).contains(&middling), "middling width {middling}");
+        assert!(
+            (25.0..45.0).contains(&middling),
+            "middling width {middling}"
+        );
     }
 
     /// The read never drops below where the man already plays, whatever

@@ -15,9 +15,9 @@ use crate::r#match::ball::events::BallEvent;
 use crate::r#match::engine::ball::ball::runoff::ExitAxis;
 use crate::r#match::engine::ball::ball::{AwaitedRestart, Ball, GoalKickRunUp, RunOff, RunUpPhase};
 use crate::r#match::engine::corner_shape::CornerShape;
-use crate::r#match::goalkeepers::states::common::KeeperGoalKick;
 use crate::r#match::engine::set_pieces::ThrowAppetite;
 use crate::r#match::events::EventCollection;
+use crate::r#match::goalkeepers::states::common::KeeperGoalKick;
 use crate::r#match::{MatchContext, MatchPlayer, PlayerSide};
 #[cfg(feature = "match-logs")]
 use crate::mid_run_diag::RestartCensus;
@@ -493,9 +493,7 @@ impl Ball {
             let now = context.current_tick();
             match self.goal_kick_run_up {
                 None if arrived && KeeperGoalKick::is_keeper(taker) => {
-                    let patience = context
-                        .tactical_for_team(taker.team_id)
-                        .build_up_patience;
+                    let patience = context.tactical_for_team(taker.team_id).build_up_patience;
                     if KeeperGoalKick::goes_long_at_spot(taker, await_state.spot, players, patience)
                     {
                         #[cfg(feature = "match-logs")]
@@ -527,8 +525,8 @@ impl Ball {
                     RunUpPhase::Backing => {
                         let on_mark = (taker.position - run_up.mark).magnitude()
                             <= KeeperGoalKick::MARK_REACH;
-                        let overdue = now.saturating_sub(run_up.since)
-                            > KeeperGoalKick::BACKING_CEILING;
+                        let overdue =
+                            now.saturating_sub(run_up.since) > KeeperGoalKick::BACKING_CEILING;
                         if on_mark || overdue {
                             self.goal_kick_run_up = Some(GoalKickRunUp {
                                 phase: RunUpPhase::Set,

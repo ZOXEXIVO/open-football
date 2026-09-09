@@ -84,6 +84,7 @@ pub use club::{
     ClubFinances,
     ClubFinancialBalance,
     ClubFinancialBalanceHistory,
+    ClubLevelAnchor,
     ClubMood,
     ClubPhilosophy,
     ClubResult,
@@ -229,7 +230,6 @@ pub use club::{
     PlayerRelationshipChangeResult,
     PlayerResult,
     PlayerSkills,
-    ClubLevelAnchor,
     PlayerSquadStatus,
     PlayerStatCompetitionKind,
     PlayerStatLedgerEntry,
@@ -288,15 +288,11 @@ pub use club::{
     SelectionRole,
     SelectionScoreFactor,
     SellOnObligation,
-    SellingDecision,
-    SellingPolicy,
     SkillType,
     SpecialInstruction,
     SponsorPerformance,
     SponsorRenewalContext,
     SquadAnalysis,
-    SquadBuildingPolicy,
-    SquadPhase,
     // Staff exports
     Staff,
     StaffAttributes,
@@ -377,13 +373,9 @@ pub use club::{
     TrainingSession,
     TrainingType,
     TransferInterestContext,
-    TransferInterestDecision,
     TransferInterestEvidence,
     TransferInterestKind,
     TransferInterestReaction,
-    TransferInterestReason,
-    TransferInterestRisk,
-    TransferInterestScore,
     TransferInterestSource,
     TransferInterestStage,
     TransferItem,
@@ -458,19 +450,19 @@ pub use crate::r#match::engine::player::strategies::forwarders::states::running:
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::engine::player::strategies::processor::chase_diag;
 #[cfg(feature = "match-logs")]
+pub use crate::r#match::heatmap as heatmap_diag;
+#[cfg(feature = "match-logs")]
 pub use crate::r#match::midfielders::states::common::onball_diag as mid_onball_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::player::motion_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::player::strategies::players::ops::forward_shot_decision::helper_diag;
 #[cfg(feature = "match-logs")]
-pub use crate::r#match::player::waypoints::census as waypoint_census;
-#[cfg(feature = "match-logs")]
 pub use crate::r#match::player::strategies::players::ops::forward_shot_decision::mid_run_diag;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::player::strategies::players::ops::forward_shot_decision::time_band_diag;
 #[cfg(feature = "match-logs")]
-pub use crate::r#match::heatmap as heatmap_diag;
+pub use crate::r#match::player::waypoints::census as waypoint_census;
 #[cfg(feature = "match-logs")]
 pub use crate::r#match::spacing as spacing_diag;
 

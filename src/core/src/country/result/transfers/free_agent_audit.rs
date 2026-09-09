@@ -10,13 +10,13 @@
 //! per 12-month-plus free agent when debug logging is enabled.
 
 use super::free_agent_market_calc::FreeAgentMarketCalculator;
-use super::types::can_club_accept_player;
 use crate::Person;
 use crate::Player;
 use crate::club::player::transfer::{FreeAgentBlockReason, FreeAgentStatusCategory, MarketStage};
 use crate::simulator::{FreeAgentFlowCounters, SimulatorData};
+use crate::transfers::market::region::ScoutingRegion;
 use crate::transfers::pipeline::TransferRequestStatus;
-use crate::transfers::scouting_region::ScoutingRegion;
+use crate::transfers::view::club::ClubView;
 use chrono::NaiveDate;
 use log::debug;
 use std::collections::HashMap;
@@ -234,7 +234,7 @@ impl FreeAgentMarketAuditor {
                 eligible_country_count += 1;
 
                 for club in &country.clubs {
-                    if club.teams.teams.is_empty() || !can_club_accept_player(club) {
+                    if club.teams.teams.is_empty() || !ClubView::can_accept_player(club) {
                         continue;
                     }
                     let club_score = club

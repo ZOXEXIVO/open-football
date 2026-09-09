@@ -8,7 +8,7 @@ use chrono::NaiveDate;
 use crate::TeamInfo;
 use crate::club::PlayerClubContract;
 use crate::r#match::PlayerMatchEndStats;
-use crate::transfers::offer::PersonalTermsOffer;
+use crate::transfers::deal::offer::PersonalTermsOffer;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MatchParticipation {

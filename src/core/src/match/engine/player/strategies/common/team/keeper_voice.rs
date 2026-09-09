@@ -318,7 +318,11 @@ impl KeeperVoice {
 
     /// Where a team's own goal is. Shared so the callers cannot disagree
     /// about which end they are defending — sides swap at half time.
-    pub fn own_goal(field: &MatchField, context: &MatchContext, team_id: u32) -> Option<Vector3<f32>> {
+    pub fn own_goal(
+        field: &MatchField,
+        context: &MatchContext,
+        team_id: u32,
+    ) -> Option<Vector3<f32>> {
         let side = field
             .players
             .iter()

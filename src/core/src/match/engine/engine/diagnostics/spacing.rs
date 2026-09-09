@@ -200,7 +200,9 @@ impl SpacingCensus {
         bucket
             .swarm_defending_x10
             .fetch_add(s.swarm_defending as u64 * 10, Ordering::Relaxed);
-        bucket.free_x10.fetch_add(s.free as u64 * 10, Ordering::Relaxed);
+        bucket
+            .free_x10
+            .fetch_add(s.free as u64 * 10, Ordering::Relaxed);
         bucket
             .free_ahead_x10
             .fetch_add(s.free_ahead as u64 * 10, Ordering::Relaxed);

@@ -1865,8 +1865,7 @@ impl NewsStoryKind {
             | NewsStoryKind::TargetSaysNo
             | NewsStoryKind::MedicalFailed
             | NewsStoryKind::DealDiesAtDeadline => NewsDesk::Targets,
-            NewsStoryKind::WindowOpens
-            | NewsStoryKind::WindowShuts => NewsDesk::Boardroom,
+            NewsStoryKind::WindowOpens | NewsStoryKind::WindowShuts => NewsDesk::Boardroom,
         }
     }
 
