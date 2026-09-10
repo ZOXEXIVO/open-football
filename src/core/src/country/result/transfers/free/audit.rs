@@ -440,6 +440,7 @@ impl FreeAgentMarketAuditor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PlayerSquadStatus;
     use crate::club::academy::ClubAcademy;
     use crate::club::player::builder::PlayerBuilder;
     use crate::competitions::global::GlobalCompetitions;
@@ -697,7 +698,7 @@ mod tests {
                 last_league_reputation: 4000,
                 last_club_reputation_score: 0.4,
                 last_salary: 50_000,
-                last_squad_status: crate::PlayerSquadStatus::FirstTeamSquadRotation,
+                last_squad_status: PlayerSquadStatus::FirstTeamSquadRotation,
             });
             if let Some(r) = reason {
                 p.on_market_blocked(today, r);

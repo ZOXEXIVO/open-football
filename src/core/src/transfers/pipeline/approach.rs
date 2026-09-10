@@ -1,10 +1,8 @@
 use chrono::NaiveDate;
-use log::debug;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::sync::Arc;
 
 use crate::SimulatorData;
 use crate::club::player::transfer::FreeAgentBlockReason;
@@ -21,14 +19,16 @@ use crate::transfers::gate::{
     TransferMovePlausibility, TransferMoveStage, TransferPlausibilityBuilder,
     TransferPlausibilityEvaluator, TransferPlausibilityVerdict,
 };
+mod domestic;
+mod foreign;
+
+use crate::transfers::MarketMap;
 use crate::transfers::market::{
     TransferListing, TransferListingOrigin, TransferListingStatus, TransferListingType,
 };
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::trace::TransferTrace;
-use crate::transfers::pipeline::{
-    ClubTransferPlan, DetailedScoutingReport, ShortlistCandidate, TransferShortlist,
-};
+use crate::transfers::pipeline::{ClubTransferPlan, DetailedScoutingReport};
 use crate::transfers::pipeline::{
     ShortlistCandidateStatus, TransferApproach, TransferNeedPriority, TransferNeedReason,
     TransferRequest, TransferRequestStatus,
@@ -45,6 +45,8 @@ use crate::{
     PlayerStatusType, ReputationLevel, StaffPosition, Team, TransferStrategyContext,
     WageCalculator,
 };
+use domestic::DomesticApproachPass;
+use foreign::ForeignApproachPass;
 
 /// How close to the asking price a buyer is willing to push.
 ///
@@ -87,7 +89,6 @@ pub(in crate::transfers) struct ApproachBuyer<'a> {
     /// values targets against.
     pub avg_ability: u8,
     pub budget: f64,
-    pub price_level: f32,
 }
 
 /// The target and the club he is being bought from, however the pass found
@@ -119,14 +120,61 @@ pub(in crate::transfers) enum ApproachOutcome {
 
 /// The tick-level facts an approach is made against.
 pub(in crate::transfers) struct ApproachContext<'a> {
-    pub country: &'a Country,
+    /// The BUYER's country: its calendar, its deadline, its market.
+    pub buy_country: &'a Country,
+    /// The SELLER's. The same object as `buy_country` for a domestic move —
+    /// which is exactly why this used to be one field and two functions.
+    pub sell_country: &'a Country,
+    /// Geography between the two. `MarketMap::default()` for a domestic move:
+    /// both the corridor and the buyer's knowledge of the market are 1.0 by
+    /// construction, which is what an empty map yields.
+    pub market_map: &'a MarketMap,
+    /// The SELLING country's price level — what an asking price is quoted in.
+    pub price_level: f32,
     pub date: NaiveDate,
-    pub candidate: &'a ShortlistCandidate,
+    pub shortlist_request_id: u32,
     /// Buy, loan, or loan-with-option — the DoF's call, made upstream.
     pub approach: TransferApproach,
     pub is_loan: bool,
     pub has_option_to_buy: bool,
     pub is_prospect_purchase: bool,
+}
+
+/// The inputs on which the two reaches genuinely still differ.
+///
+/// Everything else about an approach is one implementation now. These are not
+/// preferences — they are drift between two copies written months apart, and
+/// **every one of them moves money**, so each is spelled out at both call sites
+/// rather than quietly unified by the merge. Reconcile them one at a time, each
+/// with its own census run; that is the whole reason they are a struct with
+/// names instead of a diff nobody will read.
+pub(in crate::transfers) struct ApproachDrift {
+    /// Domestic caps the strategy and the opening fee at the shortlist's own
+    /// allocation; the cross-border pass has always spent against the whole
+    /// transfer budget.
+    pub allocated_budget: f64,
+    /// Domestic reads the buying team's market-value score straight; the
+    /// cross-border pass substitutes `avg_ability × 100` when that score is 0.
+    pub valuation_reputation: u16,
+    /// Where the target sits on the shortlist. `None` cross-border, though
+    /// the cross-border pass has had the shortlist in hand all along.
+    pub shortlist_rank: Option<u8>,
+    /// How many rivals are already bidding. `None` cross-border.
+    pub competition_count: Option<u8>,
+    /// A loan from a big seller carries a 30 % / 10-appearance fee
+    /// domestically and has never carried one cross-border. See
+    /// [`OfferClauses::attach_loan_appearance_fee`].
+    pub loan_appearance_fee: bool,
+    /// Cross-border falls back to a generic "Loan signing" / "Transfer
+    /// signing" when neither a request motive nor a scout note exists;
+    /// domestic lets the empty reason stand.
+    pub generic_reason_fallback: bool,
+    /// The shortlist's own fee estimate, which runs the staged realism model
+    /// once here at the moment the offer is complete. `None` cross-border: that
+    /// pass runs a STRICTER gate earlier — it has to, because the same
+    /// assessment is where the seller-side facts it stages come from — so a
+    /// second, weaker one here would only be able to disagree.
+    pub final_gate_fee: Option<f64>,
 }
 
 /// Turning an agreed target into an offer.
@@ -146,9 +194,9 @@ impl ApproachBuilder {
     pub(in crate::transfers) fn build(
         buyer: &ApproachBuyer<'_>,
         target: &ApproachTarget<'_>,
-        shortlist: &TransferShortlist,
         request: Option<&TransferRequest>,
         ctx: &ApproachContext<'_>,
+        drift: &ApproachDrift,
     ) -> ApproachOutcome {
         let club = buyer.club;
         let team = buyer.team;
@@ -157,7 +205,7 @@ impl ApproachBuilder {
         let buying_league_reputation = buyer.league_reputation;
         let avg_ability = buyer.avg_ability;
         let budget = buyer.budget;
-        let price_level = buyer.price_level;
+        let price_level = ctx.price_level;
 
         let player = target.player;
         let selling_club = target.selling_club;
@@ -169,9 +217,9 @@ impl ApproachBuilder {
         let monitoring = target.monitoring;
         let scouting_report = target.scouting_report;
 
-        let country = ctx.country;
+        let buy_country = ctx.buy_country;
+        let sell_country = ctx.sell_country;
         let date = ctx.date;
-        let candidate = ctx.candidate;
         let approach = &ctx.approach;
         let is_loan = ctx.is_loan;
         let has_option_to_buy = ctx.has_option_to_buy;
@@ -180,7 +228,7 @@ impl ApproachBuilder {
         let buying_aggressiveness =
             BuyingAggressiveness::from_rep(buying_rep_score, selling_rep_score);
 
-        let allocated_for_move = shortlist.allocated_budget.min(budget);
+        let allocated_for_move = drift.allocated_budget;
         let strategy = ClubTransferStrategy::from_club_context(
             club.id,
             Some(CurrencyValue {
@@ -193,11 +241,11 @@ impl ApproachBuilder {
             &club.board.vision,
             buying_aggressiveness,
         )
-        .with_valuation_reputation(team.reputation.market_value_score());
+        .with_valuation_reputation(drift.valuation_reputation);
 
         let asking_price = PipelineProcessor::calculate_asking_price(
             player,
-            country,
+            sell_country,
             selling_club,
             date,
             price_level,
@@ -229,15 +277,11 @@ impl ApproachBuilder {
             Some(PipelineProcessor::build_board_dossier(
                 plan,
                 player_id,
-                shortlist.transfer_request_id,
+                ctx.shortlist_request_id,
             ))
         } else {
             None
         };
-        // Active rival bidders on this player at the moment.
-        let competition_count = country
-            .transfer_market
-            .active_rival_bids(player_id, club.id);
         let strategy_ctx = TransferStrategyContext {
             date,
             request,
@@ -250,14 +294,10 @@ impl ApproachBuilder {
             allocated_budget: allocated_for_move,
             wage_budget_headroom: None,
             buying_club_balance: club.finance.balance.balance,
-            is_january: PipelineProcessor::is_mid_season_window_for(country, date),
+            is_january: PipelineProcessor::is_mid_season_window_for(buy_country, date),
             price_level,
-            shortlist_rank: shortlist
-                .candidates
-                .iter()
-                .position(|c| c.player_id == player_id)
-                .map(|p| p as u8),
-            competition_count: Some(competition_count.min(u8::MAX as u32) as u8),
+            shortlist_rank: drift.shortlist_rank,
+            competition_count: drift.competition_count,
             scout_assessed_ability: monitoring
                 .map(|m| m.current_assessed_ability)
                 .or_else(|| scouting_report.map(|r| r.assessed_ability)),
@@ -374,7 +414,7 @@ impl ApproachBuilder {
         // request under negotiation is by definition still
         // unfilled, so the deadline premium reads the tier alone.
         if let Some(deal) = deal.as_ref() {
-            let deadline = PlanningCadence::deadline_window(country, date);
+            let deadline = PlanningCadence::deadline_window(buy_country, date);
             let open_ratio = UpgradeMath::open_ratio(tier, deadline.days_left_fraction());
             let premium = deadline.premium_for(tier, true);
             let opening = actual_asking.amount * (open_ratio + premium);
@@ -395,8 +435,8 @@ impl ApproachBuilder {
         OfferClauses::attach_loan_option(&mut offer, has_option_to_buy, &asking_price);
         OfferClauses::attach_loan_appearance_fee(
             &mut offer,
-            is_loan,
-            PipelineProcessor::get_club_reputation_level(country, selling_club_id),
+            is_loan && drift.loan_appearance_fee,
+            PipelineProcessor::get_club_reputation_level(sell_country, selling_club_id),
         );
 
         // Resolve negotiator staff and build reason
@@ -407,27 +447,40 @@ impl ApproachBuilder {
             .iter()
             .find(|r| r.player_id == player_id);
 
-        let reason = PipelineProcessor::build_transfer_reason(request, scout_report);
+        let need_and_scout = PipelineProcessor::build_transfer_reason(request, scout_report);
+        let reason = if drift.generic_reason_fallback && need_and_scout.is_empty() {
+            if is_loan {
+                TransferReason::key("signing_reason_loan")
+            } else {
+                TransferReason::key("signing_reason_transfer")
+            }
+        } else {
+            need_and_scout
+        };
 
         // Final plausibility check immediately before creating
         // the negotiation action. Rejected candidates are
         // marked unavailable here and a synthetic listing is
         // never created downstream — see Pass 2 for the
         // matching skip.
-        let plausibility_inputs = TransferPlausibilityBuilder::from_clubs(
-            country,
-            club,
-            selling_club,
-            player,
-            candidate.estimated_fee,
-            is_loan,
-            true, // unsolicited at the negotiation-entry point
-            date,
-        );
-        if let TransferPlausibilityVerdict::HardReject(_reason) =
-            TransferPlausibilityEvaluator::evaluate(&plausibility_inputs)
-        {
-            return ApproachOutcome::Refused;
+        if let Some(estimated_fee) = drift.final_gate_fee {
+            let plausibility_inputs = TransferPlausibilityBuilder::from_global(
+                buy_country,
+                club,
+                sell_country,
+                selling_club,
+                player,
+                estimated_fee,
+                is_loan,
+                true, // unsolicited at the negotiation-entry point
+                date,
+                ctx.market_map,
+            );
+            if let TransferPlausibilityVerdict::HardReject(_reason) =
+                TransferPlausibilityEvaluator::evaluate(&plausibility_inputs)
+            {
+                return ApproachOutcome::Refused;
+            }
         }
 
         ApproachOutcome::Approach(Box::new(NegotiationAction {
@@ -438,7 +491,7 @@ impl ApproachBuilder {
             is_loan,
             has_option_to_buy,
             is_prospect_purchase,
-            shortlist_request_id: shortlist.transfer_request_id,
+            shortlist_request_id: ctx.shortlist_request_id,
             negotiator_staff_id,
             reason,
             player_name: player.full_name.to_string(),
@@ -708,530 +761,7 @@ impl ForeignRegistrationGuard {
 
 impl PipelineProcessor {
     pub fn initiate_negotiations(country: &mut Country, date: NaiveDate) {
-        let mut actions: Vec<NegotiationAction> = Vec::new();
-        let mut plausibility_rejected: Vec<PlausibilityReject> = Vec::new();
-        let price_level = country.settings.pricing.price_level;
-        let window_mgr = TransferWindowManager::for_country(country, date);
-        let current_window = window_mgr.current_window_dates(country.id, date);
-
-        for club in &country.clubs {
-            let plan = &club.transfer_plan;
-
-            if !plan.initialized || !plan.can_start_negotiation() {
-                continue;
-            }
-
-            // Skip clubs that have reached their squad cap. Use the same
-            // `ClubView::can_accept_player` predicate the executor enforces: it
-            // resolves the Main team by TeamType, not `teams[0]`. The old
-            // `teams.first()` count gated against whatever team happened to
-            // sit first (often a reserve/B roster), so a club whose Main was
-            // already full kept agreeing deals the executor then refused —
-            // re-pursuing the same target every evaluation cycle.
-            if !ClubView::can_accept_player(club) {
-                continue;
-            }
-
-            let actual_active = country
-                .transfer_market
-                .active_negotiation_count_for_club(club.id);
-            if actual_active >= plan.max_concurrent_negotiations {
-                continue;
-            }
-
-            // Same FFP discipline the evaluation pass applies when it
-            // sizes allocations — the raw read here fed the offer /
-            // escalation strategy full spending power while the plan
-            // itself was operating on half, so the two layers disagreed
-            // about the same sanction.
-            let raw_budget = club
-                .finance
-                .transfer_budget
-                .as_ref()
-                .map(|b| b.amount)
-                .unwrap_or_else(|| (club.finance.balance.balance.max(0) as f64) * 0.3);
-            let budget = if club.finance.is_ffp_breach(date) {
-                raw_budget * 0.5
-            } else {
-                raw_budget
-            };
-
-            if club.teams.teams.is_empty() {
-                continue;
-            }
-
-            let team = &club.teams.teams[0];
-            let rep_level = team.reputation.level();
-            let buying_rep_score = team.reputation.overall_score();
-            let buying_league_reputation = team
-                .league_id
-                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                .map(|l| l.reputation)
-                .unwrap_or(0);
-
-            let avg_ability = {
-                let avg = team.players.current_ability_avg();
-                if avg == 0 { 50 } else { avg }
-            };
-
-            // Board wage mandate headroom — annual wages committed across
-            // all squads vs the season wage budget. None when no mandate
-            // has been set (fresh worlds, test fixtures).
-            let committed_wages: f64 = club
-                .teams
-                .iter()
-                .map(|t| t.get_annual_salary() as f64)
-                .sum();
-            let wage_headroom = club
-                .board
-                .season_targets
-                .as_ref()
-                .map(|t| (t.wage_budget.max(0) as f64 - committed_wages).max(0.0));
-
-            let slots_available = plan
-                .max_concurrent_negotiations
-                .saturating_sub(actual_active) as usize;
-            let mut negotiations_this_club = 0usize;
-
-            for shortlist in &plan.shortlists {
-                if negotiations_this_club >= slots_available {
-                    break;
-                }
-
-                if shortlist.has_pursuing_candidate() {
-                    continue;
-                }
-
-                if shortlist.all_exhausted() {
-                    continue;
-                }
-
-                // The owning request must still be live. A board veto
-                // stamps `board_approved = Some(false)` + Abandoned; a
-                // need already filled elsewhere (FA instant signing, a
-                // won race) stamps Fulfilled. This loop used to ignore
-                // both — vetoed targets were approached the same tick
-                // the chairman blocked them, and the negotiation open
-                // then overwrote the veto's Abandoned back to
-                // Negotiating.
-                let request = plan
-                    .transfer_requests
-                    .iter()
-                    .find(|r| r.id == shortlist.transfer_request_id);
-                let request_live = request
-                    .map(|r| {
-                        r.status != TransferRequestStatus::Abandoned
-                            && r.status != TransferRequestStatus::Fulfilled
-                            && r.board_approved != Some(false)
-                    })
-                    .unwrap_or(true);
-                if !request_live {
-                    continue;
-                }
-
-                let candidate = match shortlist.current_candidate() {
-                    Some(c) if c.status == ShortlistCandidateStatus::Available => c,
-                    _ => continue,
-                };
-
-                let player_id = candidate.player_id;
-
-                if country
-                    .transfer_market
-                    .has_active_negotiation_for(player_id, club.id)
-                {
-                    continue;
-                }
-
-                // Skip players on loan contracts — they belong to another club
-                // Skip recently signed players — their club has a plan for them
-                let (is_on_loan, is_protected) = Self::find_player_in_country(country, player_id)
-                    .map(|p| {
-                        (
-                            p.is_on_loan(),
-                            p.is_transfer_protected(date, current_window),
-                        )
-                    })
-                    .unwrap_or((false, false));
-                if is_on_loan || is_protected {
-                    continue;
-                }
-
-                let selling_club_id = country
-                    .clubs
-                    .iter()
-                    .find(|c| c.teams.contains_player(player_id))
-                    .map(|c| c.id);
-
-                let selling_club_id = match selling_club_id {
-                    Some(id) if id != club.id => id,
-                    _ => continue, // Foreign players handled by initiate_foreign_negotiations
-                };
-
-                // Rivalry is a deal friction, not an absolute block. A weaker
-                // rival approaching a giant has essentially no chance; a club
-                // at parity or above can still force the move through by
-                // paying a premium or on a reputation-gap flinch. The penalty
-                // is applied during resolve_initial_approach via is_rival flag.
-                let is_rival = club.is_rival(selling_club_id);
-
-                // ──────────────────────────────────────────────────
-                // SMART BUY/LOAN DECISION
-                // The DoF decides the approach based on context:
-                // - Club reputation tier
-                // - Budget vs player value
-                // - Transfer request reason
-                // - Whether the player is loan-listed
-                // - Player age and potential
-                // ──────────────────────────────────────────────────
-
-                // Scout-side context for this candidate — believed
-                // ability/potential from monitoring rows or reports.
-                // Drives both the buy/loan decision and (further down)
-                // the offer strategy. Hidden PA is never consulted.
-                let monitoring = plan
-                    .scout_monitoring
-                    .iter()
-                    .find(|m| m.player_id == player_id);
-                let scouting_report = plan
-                    .scouting_reports
-                    .iter()
-                    .find(|r| r.player_id == player_id);
-                let scout_assessed = monitoring
-                    .map(|m| (m.current_assessed_ability, m.current_assessed_potential))
-                    .or_else(|| {
-                        scouting_report.map(|r| (r.assessed_ability, r.assessed_potential))
-                    });
-                let scout_confidence = monitoring
-                    .map(|m| m.confidence)
-                    .or_else(|| scouting_report.map(|r| r.confidence));
-
-                let target = Self::find_player_in_country(country, player_id);
-                let player_age = target.map(|p| p.age(date)).unwrap_or(25);
-
-                // Stale-row guard: a candidate outside the request's age
-                // band (inserted before the shortlist-side band gates
-                // existed, or aged across a window boundary) must not
-                // carry the request's motive into a deal — the
-                // "32-year-old signed as a young prospect" reason bug.
-                // Same relaxed band as every insertion path: min strict,
-                // max + 3. Staged as a reject so the cursor advances to
-                // the next candidate instead of stalling.
-                if let Some(req) = request {
-                    if player_age < req.preferred_age_min
-                        || player_age > req.preferred_age_max.saturating_add(3)
-                    {
-                        plausibility_rejected.push(PlausibilityReject {
-                            club_id: club.id,
-                            player_id,
-                            shortlist_request_id: shortlist.transfer_request_id,
-                        });
-                        continue;
-                    }
-                }
-                // "Gettable" signals: a peer/bigger seller only parts with
-                // a prospect who is listed, wants out, or barely plays.
-                let target_available = target
-                    .map(|p| {
-                        p.statuses.has(PlayerStatusType::Lst)
-                            || p.statuses.has(PlayerStatusType::Loa)
-                            || p.statuses.has(PlayerStatusType::Req)
-                            || p.statuses.has(PlayerStatusType::Unh)
-                            || (p.statistics.played + p.statistics.played_subs) < 10
-                    })
-                    .unwrap_or(false);
-                let expected_wage = target
-                    .map(|p| {
-                        WageCalculator::expected_annual_wage(
-                            p,
-                            player_age,
-                            buying_rep_score,
-                            buying_league_reputation,
-                        )
-                    })
-                    .unwrap_or(0);
-                let selling_rep_score = country
-                    .clubs
-                    .iter()
-                    .find(|c| c.id == selling_club_id)
-                    .and_then(|c| c.teams.teams.first())
-                    .map(|t| t.reputation.overall_score())
-                    .unwrap_or(0.3);
-                let selling_league_reputation = country
-                    .clubs
-                    .iter()
-                    .find(|c| c.id == selling_club_id)
-                    .and_then(|c| c.teams.teams.first())
-                    .and_then(|t| t.league_id)
-                    .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                    .map(|l| l.reputation)
-                    .unwrap_or(0);
-
-                let prospect_ctx = ProspectSigningContext {
-                    scout_assessed,
-                    scout_confidence,
-                    prospect_slots_used: plan
-                        .prospect_buys_this_window
-                        .saturating_add(plan.prospect_pursuits_active),
-                    seller_rep_score: selling_rep_score,
-                    buyer_rep_score: buying_rep_score,
-                    target_available,
-                    wage_headroom,
-                    expected_wage,
-                };
-
-                let approach = Self::determine_transfer_approach(
-                    &rep_level,
-                    budget,
-                    candidate.estimated_fee,
-                    request,
-                    player_age,
-                    date,
-                    club.finance.balance.balance,
-                    &club.philosophy,
-                    &prospect_ctx,
-                );
-
-                let is_loan = !matches!(approach, TransferApproach::PermanentTransfer);
-                let has_option_to_buy = matches!(approach, TransferApproach::LoanWithOption);
-                let is_prospect_purchase = !is_loan
-                    && matches!(
-                        request.map(|r| &r.reason),
-                        Some(TransferNeedReason::DevelopmentSigning)
-                    );
-
-                if let Some(player) = Self::find_player_in_country(country, player_id) {
-                    let Some(selling_club) = country.clubs.iter().find(|c| c.id == selling_club_id)
-                    else {
-                        continue;
-                    };
-
-                    let outcome = ApproachBuilder::build(
-                        &ApproachBuyer {
-                            club,
-                            team,
-                            plan,
-                            rep_score: buying_rep_score,
-                            league_reputation: buying_league_reputation,
-                            avg_ability,
-                            budget,
-                            price_level,
-                        },
-                        &ApproachTarget {
-                            player,
-                            selling_club,
-                            selling_club_id,
-                            selling_rep_score,
-                            selling_league_reputation,
-                            is_rival,
-                            monitoring,
-                            scouting_report,
-                        },
-                        shortlist,
-                        request,
-                        &ApproachContext {
-                            country,
-                            date,
-                            candidate,
-                            approach: approach.clone(),
-                            is_loan,
-                            has_option_to_buy,
-                            is_prospect_purchase,
-                        },
-                    );
-
-                    match outcome {
-                        ApproachOutcome::Refused => {
-                            plausibility_rejected.push(PlausibilityReject {
-                                club_id: club.id,
-                                player_id,
-                                shortlist_request_id: shortlist.transfer_request_id,
-                            });
-                            continue;
-                        }
-                        ApproachOutcome::Approach(action) => actions.push(*action),
-                    }
-
-                    negotiations_this_club += 1;
-                }
-            }
-
-            // Loan-out candidates are handled by process_loan_out_listings()
-        }
-
-        // Pass 2: Start negotiations
-        for action in actions {
-            let selling_rep = Self::get_club_reputation(country, action.selling_club_id);
-            let buying_rep = Self::get_club_reputation(country, action.club_id);
-            let (p_age, p_ambition) =
-                Self::get_player_negotiation_data(country, action.player_id, date);
-
-            let has_listing = country
-                .transfer_market
-                .get_listing_by_player(action.player_id)
-                .is_some();
-
-            if !has_listing {
-                let listing_type = if action.is_loan {
-                    TransferListingType::Loan
-                } else {
-                    TransferListingType::Transfer
-                };
-
-                let selling_team_id = country
-                    .clubs
-                    .iter()
-                    .find(|c| c.id == action.selling_club_id)
-                    .and_then(|c| c.teams.teams.first())
-                    .map(|t| t.id)
-                    .unwrap_or(0);
-
-                // The synthetic listing advertises the SELLER's asking price,
-                // not the buyer's budget-capped offer. Pricing it off the
-                // offer let a cash-poor club define the seller's valuation and
-                // walk away with a first-team player for a fraction of his
-                // worth; the seller's own asking keeps the acceptance ratio
-                // honest (an unaffordable bid now reads as the lowball it is).
-                let asking = SyntheticListingPrice::for_unsolicited(&action.seller_asking);
-
-                // Tag this as synthetic — the parent club did not list
-                // the player; the negotiation resolver must not grant
-                // the "is_listed" acceptance bonus to bids backed by it.
-                let listing = TransferListing::new_with_origin(
-                    action.player_id,
-                    action.selling_club_id,
-                    selling_team_id,
-                    asking,
-                    date,
-                    listing_type,
-                    TransferListingOrigin::SyntheticUnsolicited,
-                );
-                country.transfer_market.add_listing(listing);
-            }
-
-            if let Some(neg_id) = country.transfer_market.start_negotiation(
-                action.player_id,
-                action.club_id,
-                action.offer,
-                date,
-                selling_rep,
-                buying_rep,
-                p_age,
-                p_ambition,
-            ) {
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation.is_loan = action.is_loan;
-                    negotiation.has_option_to_buy = action.has_option_to_buy;
-                    negotiation.is_unsolicited = !has_listing;
-                    negotiation.negotiator_staff_id = action.negotiator_staff_id;
-                    negotiation.reason = action.reason.clone();
-                    negotiation.player_name = action.player_name.clone();
-                    negotiation.selling_club_name = action.selling_club_name.clone();
-                    negotiation.player_sold_from = action.player_sold_from.clone();
-                    negotiation.open_salary_at(action.offered_annual_wage);
-                    negotiation.buying_league_reputation = action.buying_league_reputation;
-                    negotiation.selling_league_reputation = action.selling_league_reputation;
-                    negotiation.player_stage_inclination = action.player_stage_inclination;
-                    negotiation.buyer_ceiling_fee = action.buyer_ceiling_fee;
-                    negotiation.brief_tier = action.brief_tier;
-                    negotiation.reason.rival = action.is_rival;
-                }
-
-                if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
-                    let plan = &mut club.transfer_plan;
-
-                    if let Some(shortlist) = plan
-                        .shortlists
-                        .iter_mut()
-                        .find(|s| s.transfer_request_id == action.shortlist_request_id)
-                    {
-                        if let Some(candidate) = shortlist.current_candidate_mut() {
-                            if candidate.player_id == action.player_id {
-                                candidate.status = ShortlistCandidateStatus::CurrentlyPursuing;
-                            }
-                        }
-                    }
-
-                    if let Some(req) = plan
-                        .transfer_requests
-                        .iter_mut()
-                        .find(|r| r.id == action.shortlist_request_id)
-                    {
-                        req.status = TransferRequestStatus::Negotiating;
-                    }
-
-                    plan.active_negotiation_count += 1;
-                    if action.is_prospect_purchase {
-                        // Pursuit slot taken; converted into a completed
-                        // buy (or released) in on_negotiation_resolved.
-                        plan.prospect_pursuits_active =
-                            plan.prospect_pursuits_active.saturating_add(1);
-                    }
-                }
-
-                debug!(
-                    "Pipeline: Club {} started negotiation for player {} ({})",
-                    action.club_id,
-                    action.player_id,
-                    if action.is_loan { "loan" } else { "transfer" }
-                );
-            }
-        }
-
-        // Apply plausibility/band rejects: mark each shortlist candidate
-        // as unavailable, advance the shortlist past the dud ONCE, and
-        // update monitoring + request status inline. These never opened a
-        // negotiation, so routing them through `on_negotiation_resolved`
-        // was wrong on three counts: it advanced the cursor a second time
-        // (silently skipping the next viable candidate), decremented the
-        // active-negotiation slot counter for a slot never taken, and
-        // charged the manager a failed-bid morale hit for a bid that was
-        // never made.
-        for reject in plausibility_rejected {
-            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == reject.club_id) {
-                let plan = &mut club.transfer_plan;
-                plan.set_monitoring_status_for_player(
-                    reject.player_id,
-                    ScoutMonitoringStatus::Lost,
-                );
-                if let Some(shortlist) = plan
-                    .shortlists
-                    .iter_mut()
-                    .find(|s| s.transfer_request_id == reject.shortlist_request_id)
-                {
-                    if let Some(candidate) = shortlist
-                        .candidates
-                        .iter_mut()
-                        .find(|c| c.player_id == reject.player_id)
-                    {
-                        candidate.status = ShortlistCandidateStatus::Unavailable;
-                    }
-                    shortlist.advance_to_next();
-                    let exhausted = shortlist.all_exhausted();
-                    if let Some(req) = plan
-                        .transfer_requests
-                        .iter_mut()
-                        .find(|r| r.id == reject.shortlist_request_id)
-                    {
-                        // Never resurrect a need that was filled or
-                        // vetoed while this candidate sat on the list.
-                        let request_live = req.status != TransferRequestStatus::Fulfilled
-                            && req.status != TransferRequestStatus::Abandoned;
-                        if request_live {
-                            req.status = if !exhausted {
-                                TransferRequestStatus::Shortlisted
-                            } else if req.priority == TransferNeedPriority::Critical {
-                                TransferRequestStatus::Pending
-                            } else {
-                                TransferRequestStatus::Abandoned
-                            };
-                        }
-                    }
-                }
-            }
-        }
-
-        Self::process_loan_out_listings(country, date);
+        DomesticApproachPass::run(country, date);
     }
 
     /// Determine whether to buy or loan a player.
@@ -2213,894 +1743,7 @@ impl PipelineProcessor {
         country_id: u32,
         date: NaiveDate,
     ) {
-        // Pass 1: Read — collect foreign candidates from shortlists
-        struct ForeignCandidate {
-            buying_club_id: u32,
-            player_id: u32,
-            shortlist_request_id: u32,
-        }
-
-        let mut candidates: Vec<ForeignCandidate> = Vec::new();
-
-        if let Some(country) = data.country(country_id) {
-            for club in &country.clubs {
-                let plan = &club.transfer_plan;
-                if !plan.initialized || !plan.can_start_negotiation() {
-                    continue;
-                }
-
-                // Same squad-cap gate as the domestic path: a club whose
-                // Main roster is full keeps agreeing cross-border deals the
-                // executor then refuses, holding slots and budget for the
-                // whole multi-phase lifetime each time.
-                if !ClubView::can_accept_player(club) {
-                    continue;
-                }
-
-                let actual_active = country
-                    .transfer_market
-                    .active_negotiation_count_for_club(club.id);
-                if actual_active >= plan.max_concurrent_negotiations {
-                    continue;
-                }
-
-                // Per-tick slot budget, mirroring the domestic pass — the
-                // one-shot cap check above let a club with N shortlists
-                // open N foreign negotiations in a single tick, blowing
-                // past `max_concurrent_negotiations`.
-                let slots_available = plan
-                    .max_concurrent_negotiations
-                    .saturating_sub(actual_active) as usize;
-                let mut negotiations_this_club = 0usize;
-
-                for shortlist in &plan.shortlists {
-                    if negotiations_this_club >= slots_available {
-                        break;
-                    }
-                    if shortlist.has_pursuing_candidate() || shortlist.all_exhausted() {
-                        continue;
-                    }
-
-                    // Mirror the domestic request-liveness gate: vetoed
-                    // (board_approved == false / Abandoned) and Fulfilled
-                    // requests must not be pursued abroad either.
-                    let request_live = plan
-                        .transfer_requests
-                        .iter()
-                        .find(|r| r.id == shortlist.transfer_request_id)
-                        .map(|r| {
-                            r.status != TransferRequestStatus::Abandoned
-                                && r.status != TransferRequestStatus::Fulfilled
-                                && r.board_approved != Some(false)
-                        })
-                        .unwrap_or(true);
-                    if !request_live {
-                        continue;
-                    }
-
-                    let candidate = match shortlist.current_candidate() {
-                        Some(c) if c.status == ShortlistCandidateStatus::Available => c,
-                        _ => continue,
-                    };
-
-                    // Only process if player is NOT in the local country
-                    let is_local =
-                        Self::find_player_in_country(country, candidate.player_id).is_some();
-                    if is_local {
-                        continue;
-                    }
-
-                    if country
-                        .transfer_market
-                        .has_active_negotiation_for(candidate.player_id, club.id)
-                    {
-                        continue;
-                    }
-
-                    candidates.push(ForeignCandidate {
-                        buying_club_id: club.id,
-                        player_id: candidate.player_id,
-                        shortlist_request_id: shortlist.transfer_request_id,
-                    });
-                    negotiations_this_club += 1;
-                }
-            }
-        }
-
-        if candidates.is_empty() {
-            return;
-        }
-
-        // Pass 2: Resolve — find each player globally, compute offers
-        struct ResolvedNeg {
-            buying_club_id: u32,
-            selling_country_id: u32,
-            selling_continent_id: u32,
-            selling_country_code: String,
-            selling_club_id: u32,
-            player_id: u32,
-            is_loan: bool,
-            has_option_to_buy: bool,
-            is_prospect_purchase: bool,
-            offer: TransferOffer,
-            reason: TransferReason,
-            shortlist_request_id: u32,
-            selling_rep: f32,
-            buying_rep: f32,
-            player_age: u8,
-            player_ambition: f32,
-            asking_price: CurrencyValue,
-            player_name: String,
-            selling_club_name: String,
-            player_sold_from: Option<(u32, f64)>,
-            offered_annual_wage: u32,
-            buying_league_reputation: u16,
-            /// The SELLER's league reputation — see the domestic action.
-            selling_league_reputation: u16,
-            /// The player's big-stage pull, staged for the resolver.
-            player_stage_inclination: f32,
-            /// Cold cross-border approach (target not seller-advertised).
-            /// Stamped on the negotiation so the resolver applies the
-            /// unsolicited base chance — the foreign path used to leave
-            /// the flag unset and cold calls abroad engaged at the easier
-            /// solicited baseline.
-            is_unsolicited: bool,
-            /// Captured at creation from the full cross-border assessment:
-            /// the player would refuse this move on willingness grounds
-            /// (a clear step down with no availability signal). Applied as
-            /// the foreign personal-terms hard floor — the buyer's country
-            /// no longer holds the seller-side data to recompute it.
-            foreign_terms_floor_blocked: bool,
-            /// Seller-side player importance captured at creation (same 0..1
-            /// scale as the domestic resolver computes). Rides into the
-            /// foreign club-fee resolver so a foreign deal faces the same
-            /// importance-driven seller reservation as a domestic one,
-            /// instead of a flat mid-range constant.
-            foreign_seller_importance: f32,
-            /// The buyer's own ceiling for this deal and the tier of the
-            /// request it answers — see the domestic action.
-            buyer_ceiling_fee: Option<f64>,
-            brief_tier: Option<BriefTier>,
-            /// Selling club's `(annual income, wage bill, wage budget)` — see
-            /// the staged field on the negotiation.
-            foreign_seller_finances: (i64, i64, i64),
-            /// The player's own side of the appraisal, captured here
-            /// because this is the last moment his country is in scope.
-            /// See [`crate::transfers::gate::appraisal::PlayerStance`].
-            staged_stance: PlayerStance,
-            /// Sporting distance of the move — needs both clubs, so it is
-            /// read here rather than guessed at resolution.
-            staged_sporting_drop: f32,
-        }
-
-        let mut resolved: Vec<ResolvedNeg> = Vec::new();
-        // Foreign candidates the final cross-border gate refuses — marked
-        // unavailable after the write pass so the shortlist advances instead
-        // of re-picking an impossible target (mirrors the domestic gate).
-        let mut foreign_rejected: Vec<PlausibilityReject> = Vec::new();
-        // The world map, taken once outside the loop: the geography gate
-        // below reads it for every candidate, and this pass is the ONE place
-        // in the cross-border flow that holds both clubs, both countries and
-        // the map at the same time.
-        //
-        // Cloned rather than borrowed because the resolve pass below needs
-        // `&mut data` and a shared borrow cannot span it. Sits AFTER the
-        // empty-candidates early return, so it costs nothing on the ticks
-        // (most of them) where no club is looking abroad.
-        let market_map = Arc::clone(&data.market_map);
-        // Foreigner-quota room per buying club, counted lazily and once.
-        let mut foreign_registration = ForeignRegistrationGuard::default();
-
-        for cand in candidates {
-            // Resolve the player's current foreign club via the O(1)
-            // global index (verified, with a full-scan fallback for a
-            // stale entry) instead of re-walking the whole world per
-            // candidate.
-            let found = Self::resolve_foreign_player_club(data, country_id, cand.player_id);
-
-            let (
-                sell_country_id,
-                sell_club_id,
-                sell_price_level,
-                sell_continent_id,
-                sell_country_code,
-            ) = match found {
-                Some(v) => v,
-                None => continue,
-            };
-
-            let sell_country = match data.country(sell_country_id) {
-                Some(c) => c,
-                None => continue,
-            };
-            let player = match Self::find_player_in_country(sell_country, cand.player_id) {
-                Some(p) => p,
-                None => continue,
-            };
-            if player.is_on_loan() {
-                continue;
-            }
-            // Use the selling-side country reference (already in scope as
-            // `sell_country`) so its country-specific calendar is honoured
-            // — the buyer-side window doesn't apply when the player sits
-            // in a different country's market.
-            let sell_window = TransferWindowManager::for_country(sell_country, date)
-                .current_window_dates(sell_country_id, date);
-            if player.is_transfer_protected(date, sell_window) {
-                continue;
-            }
-
-            let sell_club = match sell_country.clubs.iter().find(|c| c.id == sell_club_id) {
-                Some(c) => c,
-                None => continue,
-            };
-            let asking_price = Self::calculate_asking_price(
-                player,
-                sell_country,
-                sell_club,
-                date,
-                sell_price_level,
-            );
-            let player_age = player.age(date);
-            let player_ambition = player.skills.mental.determination;
-            let player_name = player.full_name.to_string();
-            let selling_club_name = sell_club.name.clone();
-
-            let selling_rep = sell_club
-                .teams
-                .teams
-                .first()
-                .map(|t| t.reputation.world as f32 / 10000.0)
-                .unwrap_or(0.3);
-            let selling_league_reputation = sell_club
-                .teams
-                .teams
-                .first()
-                .and_then(|t| t.league_id)
-                .and_then(|lid| sell_country.leagues.leagues.iter().find(|l| l.id == lid))
-                .map(|l| l.reputation)
-                .unwrap_or(0);
-
-            let buy_country = match data.country(country_id) {
-                Some(c) => c,
-                None => continue,
-            };
-            let buy_club = match buy_country
-                .clubs
-                .iter()
-                .find(|c| c.id == cand.buying_club_id)
-            {
-                Some(c) => c,
-                None => continue,
-            };
-
-            let buying_rep = buy_club
-                .teams
-                .teams
-                .first()
-                .map(|t| t.reputation.world as f32 / 10000.0)
-                .unwrap_or(0.3);
-            let rep_level = buy_club
-                .teams
-                .teams
-                .first()
-                .map(|t| t.reputation.level())
-                .unwrap_or(ReputationLevel::Amateur);
-            let budget = buy_club
-                .finance
-                .transfer_budget
-                .as_ref()
-                .map(|b| b.amount)
-                .unwrap_or_else(|| (buy_club.finance.balance.balance.max(0) as f64) * 0.3);
-
-            let request = buy_club
-                .transfer_plan
-                .transfer_requests
-                .iter()
-                .find(|r| r.id == cand.shortlist_request_id);
-
-            // Scout-side context for the foreign target. Monitoring rows
-            // live with the buying club's plan; believed ability/potential
-            // feeds the buy/loan decision and the offer strategy — hidden
-            // PA is never consulted.
-            let monitoring = buy_club
-                .transfer_plan
-                .scout_monitoring
-                .iter()
-                .find(|m| m.player_id == cand.player_id);
-            let scouting_report = buy_club
-                .transfer_plan
-                .scouting_reports
-                .iter()
-                .find(|r| r.player_id == cand.player_id);
-            let scout_assessed = monitoring
-                .map(|m| (m.current_assessed_ability, m.current_assessed_potential))
-                .or_else(|| scouting_report.map(|r| (r.assessed_ability, r.assessed_potential)));
-            let scout_confidence = monitoring
-                .map(|m| m.confidence)
-                .or_else(|| scouting_report.map(|r| r.confidence));
-
-            let buying_league_reputation = buy_club
-                .teams
-                .teams
-                .first()
-                .and_then(|t| t.league_id)
-                .and_then(|lid| buy_country.leagues.leagues.iter().find(|l| l.id == lid))
-                .map(|l| l.reputation)
-                .unwrap_or(0);
-
-            // Same "gettable" / wage-room signals as the domestic path.
-            let target_available = player.statuses.has(PlayerStatusType::Lst)
-                || player.statuses.has(PlayerStatusType::Loa)
-                || player.statuses.has(PlayerStatusType::Req)
-                || player.statuses.has(PlayerStatusType::Unh)
-                || (player.statistics.played + player.statistics.played_subs) < 10;
-            let committed_wages: f64 = buy_club
-                .teams
-                .iter()
-                .map(|t| t.get_annual_salary() as f64)
-                .sum();
-            let wage_headroom = buy_club
-                .board
-                .season_targets
-                .as_ref()
-                .map(|t| (t.wage_budget.max(0) as f64 - committed_wages).max(0.0));
-            let expected_wage = WageCalculator::expected_annual_wage(
-                player,
-                player_age,
-                buying_rep,
-                buying_league_reputation,
-            );
-
-            let prospect_ctx = ProspectSigningContext {
-                scout_assessed,
-                scout_confidence,
-                prospect_slots_used: buy_club
-                    .transfer_plan
-                    .prospect_buys_this_window
-                    .saturating_add(buy_club.transfer_plan.prospect_pursuits_active),
-                seller_rep_score: selling_rep,
-                buyer_rep_score: buying_rep,
-                target_available,
-                wage_headroom,
-                expected_wage,
-            };
-
-            let approach = Self::determine_transfer_approach(
-                &rep_level,
-                budget,
-                asking_price.amount,
-                request,
-                player_age,
-                date,
-                buy_club.finance.balance.balance,
-                &buy_club.philosophy,
-                &prospect_ctx,
-            );
-
-            let is_loan = !matches!(approach, TransferApproach::PermanentTransfer);
-            let has_option_to_buy = matches!(approach, TransferApproach::LoanWithOption);
-            let is_prospect_purchase = !is_loan
-                && matches!(
-                    request.map(|r| &r.reason),
-                    Some(TransferNeedReason::DevelopmentSigning)
-                );
-
-            // ── Registration gate ────────────────────────────────────────
-            // Counted per (club, group) and memoised for this pass: this is
-            // the one buy path that reached `from_global` with no squad-fit
-            // snapshot at all, so a club at its foreigner quota could open
-            // talks for a foreigner it could never register. Its candidates
-            // are normally gated upstream by the shortlist, but a
-            // `KnownPlayerMemory` or staff-recommendation candidate arrives
-            // without one.
-            //
-            // Read as a gate, not a preference: the registration rule is
-            // TRUTH about the buyer, and truth is what gates read.
-            if foreign_registration.would_block(buy_country, cand.buying_club_id, player.country_id)
-            {
-                debug!(
-                    "Foreign negotiation suppressed: club {} has no registration slot for {} ({})",
-                    cand.buying_club_id, cand.player_id, player_name
-                );
-                foreign_rejected.push(PlausibilityReject {
-                    club_id: cand.buying_club_id,
-                    player_id: cand.player_id,
-                    shortlist_request_id: cand.shortlist_request_id,
-                });
-                continue;
-            }
-
-            // ── Final foreign plausibility gate ──────────────────────────
-            // Mirror the domestic gate in `initiate_negotiations`: before
-            // fabricating a SyntheticUnsolicited listing or opening talks,
-            // assess the FULL cross-border move with both clubs/countries in
-            // hand. A lower-league side abroad chasing an important
-            // first-teamer at a much stronger club cannot credibly reach
-            // negotiation — refuse it here so no synthetic listing is created
-            // and the shortlist advances past the dud. This is the gate that
-            // stops Sambenedettese opening talks for a Spartak first-teamer.
-            let plausibility_inputs = TransferPlausibilityBuilder::from_global(
-                buy_country,
-                buy_club,
-                sell_country,
-                sell_club,
-                player,
-                asking_price.amount,
-                is_loan,
-                true, // unsolicited — the buyer is reaching out abroad
-                date,
-                &market_map,
-            );
-            let assessment = TransferMovePlausibility::assess(&plausibility_inputs);
-            if TransferTrace::is(cand.player_id) {
-                TransferTrace::line(
-                    cand.player_id,
-                    "plaus",
-                    format!(
-                        "buyer={} ({}) seller={} stage={:?} asking={:.0} budget={:.0} \
-                         agent_channel={} — {}",
-                        buy_club.name,
-                        buy_club.id,
-                        selling_club_name,
-                        assessment.stage,
-                        asking_price.amount,
-                        budget,
-                        plausibility_inputs.is_agent_circulated(),
-                        assessment.diagnostics.explain(),
-                    ),
-                );
-            }
-            if !assessment.reaches(TransferMoveStage::CanStartNegotiation) {
-                debug!(
-                    "Foreign negotiation suppressed: club {} won't pursue {} ({}) from {} — {}",
-                    cand.buying_club_id,
-                    cand.player_id,
-                    player_name,
-                    selling_club_name,
-                    assessment.diagnostics.explain()
-                );
-                foreign_rejected.push(PlausibilityReject {
-                    club_id: cand.buying_club_id,
-                    player_id: cand.player_id,
-                    shortlist_request_id: cand.shortlist_request_id,
-                });
-                continue;
-            }
-            // Personal-terms willingness floor, captured now (full seller
-            // context in scope) for application at the PersonalTerms phase —
-            // the buyer's country won't hold the seller-side data then.
-            let foreign_terms_floor_blocked =
-                TransferMovePlausibility::player_terms_floor(&plausibility_inputs).is_some();
-            // Capture seller-side importance now (full cross-border context
-            // in scope) so the foreign club-fee resolver applies the same
-            // importance-driven reservation a domestic seller would, instead
-            // of a flat constant that made foreign buys too easy. The
-            // assessment already derived it from the seller's squad-status
-            // and position rank.
-            let foreign_seller_importance = assessment.diagnostics.importance;
-            // The seller's books, staged now: at resolution time this club
-            // sits inside another country's borrow, so the windfall model
-            // could not otherwise ask what the fee is worth to him.
-            // The player's own side of the decision, captured while his
-            // country is still in scope. Personal terms are resolved by the
-            // BUYING country's pass, where he is unreachable — so without
-            // this the cross-border path could only fall back to a bare
-            // prestige wall, which is precisely what refused every money
-            // move before the money was looked at (L1).
-            let staged_sporting_drop =
-                TransferPlausibilityEvaluator::sporting_drop(&plausibility_inputs);
-            // No listing is bound to a cross-border approach — the buyer
-            // reads his badges, not a row in its own market.
-            let availability = AvailabilityView::read(player, is_loan, None);
-            let staged_stance = PlayerStanceBuilder::build(&StanceInputs {
-                player,
-                seller_country: sell_country,
-                seller_club: sell_club,
-                buyer_club_id: cand.buying_club_id,
-                rep_diff: buying_rep - selling_rep,
-                importance: foreign_seller_importance,
-                // The ONE availability reading, type-matched to the deal
-                // on the table ([`AvailabilityView`]): a loan-listed man
-                // was collecting the seller's-advert push toward a
-                // PERMANENT move abroad and not toward the same move at
-                // home.
-                listed_by_club: availability.listed_by_club,
-                available: availability.available_soft,
-                months_to_tournament: sell_country
-                    .months_to_tournament_for(player.nationality_continent_id),
-                date,
-            });
-
-            let foreign_seller_finances = (
-                sell_club.finance.estimated_annual_income(date),
-                sell_club
-                    .teams
-                    .iter()
-                    .map(|t| t.get_annual_salary() as i64)
-                    .sum::<i64>(),
-                sell_club
-                    .board
-                    .season_targets
-                    .as_ref()
-                    .map(|t| t.wage_budget.max(0) as i64)
-                    .unwrap_or(0),
-            );
-
-            let actual_asking = if is_loan {
-                let salary_proxy = player
-                    .contract
-                    .as_ref()
-                    .map(|c| c.salary as f64 * 0.35)
-                    .unwrap_or(0.0);
-                let loan_fee_rate = if has_option_to_buy { 0.04 } else { 0.07 };
-                CurrencyValue {
-                    amount: FormattingUtils::round_fee(
-                        (asking_price.amount * loan_fee_rate).max(salary_proxy),
-                    ),
-                    currency: asking_price.currency.clone(),
-                }
-            } else {
-                asking_price.clone()
-            };
-
-            let avg_ability: u8 = buy_club
-                .teams
-                .teams
-                .first()
-                .map(|t| {
-                    let avg = t.players.current_ability_avg();
-                    if avg == 0 { 50 } else { avg }
-                })
-                .unwrap_or(50);
-
-            let buyer_valuation_rep = buy_club
-                .teams
-                .teams
-                .first()
-                .map(|t| t.reputation.market_value_score())
-                .filter(|&s| s > 0)
-                .unwrap_or_else(|| (avg_ability as u16).saturating_mul(100).min(10_000));
-
-            let strategy = ClubTransferStrategy::from_club_context(
-                cand.buying_club_id,
-                Some(CurrencyValue {
-                    amount: budget,
-                    currency: Currency::Usd,
-                }),
-                avg_ability as u16,
-                vec![player.position()],
-                &buy_club.philosophy,
-                &buy_club.board.vision,
-                BuyingAggressiveness::from_rep(buying_rep, selling_rep),
-            )
-            .with_valuation_reputation(buyer_valuation_rep);
-
-            // Dossier built from the scout context hoisted above — the
-            // dossier helper resolves the rest from the same plan.
-            let dossier = if monitoring.is_some() || scouting_report.is_some() {
-                Some(Self::build_board_dossier(
-                    &buy_club.transfer_plan,
-                    cand.player_id,
-                    cand.shortlist_request_id,
-                ))
-            } else {
-                None
-            };
-            let strategy_ctx = TransferStrategyContext {
-                date,
-                request,
-                board_dossier: dossier.as_ref(),
-                approach: approach.clone(),
-                buyer_reputation_score: buying_rep,
-                seller_reputation_score: selling_rep,
-                league_reputation: buying_league_reputation,
-                available_budget: budget,
-                allocated_budget: budget,
-                wage_budget_headroom: None,
-                buying_club_balance: buy_club.finance.balance.balance,
-                is_january: Self::is_mid_season_window_for(buy_country, date),
-                price_level: sell_price_level,
-                shortlist_rank: None,
-                competition_count: None,
-                scout_assessed_ability: monitoring
-                    .map(|m| m.current_assessed_ability)
-                    .or_else(|| scouting_report.map(|r| r.assessed_ability)),
-                scout_assessed_potential: monitoring
-                    .map(|m| m.current_assessed_potential)
-                    .or_else(|| scouting_report.map(|r| r.assessed_potential)),
-                scout_confidence: monitoring
-                    .map(|m| m.confidence)
-                    .or_else(|| scouting_report.map(|r| r.confidence)),
-                seller_is_rival: false,
-            };
-
-            let mut offer = strategy.calculate_initial_offer_with_context(
-                player,
-                &actual_asking,
-                &strategy_ctx,
-            );
-
-            // The buyer's own ceiling and opening ratio — same model as the
-            // domestic path (see `initiate_negotiations`). A cross-border
-            // step-up is precisely where the marginal-value-of-money
-            // asymmetry does its work: the buyer's dollar is worth a
-            // fraction of the seller's, which is what makes the fee
-            // clearable at all.
-            //
-            // Wage first — the deal valuation needs it. Same role-aware
-            // curve as the domestic path ([`BuyerLevelWage`]) so offer and
-            // player demand can't diverge on the squad-status premium, and
-            // the package's own figure when it carries one, so the
-            // contract installs the wage he said yes to.
-            let offered_annual_wage = offer
-                .personal_terms
-                .as_ref()
-                .and_then(|t| t.annual_wage)
-                .filter(|w| *w > 0)
-                .unwrap_or_else(|| {
-                    BuyerLevelWage::evaluate(
-                        player,
-                        player_age,
-                        buying_rep,
-                        buying_league_reputation,
-                        offer
-                            .personal_terms
-                            .as_ref()
-                            .and_then(|t| t.squad_status_promise),
-                    )
-                });
-
-            let tier = request.map(|r| r.tier).unwrap_or(BriefTier::B);
-            let deal = if is_loan {
-                None
-            } else {
-                let group = player.position().position_group();
-                let believed_level = monitoring
-                    .map(|m| m.current_assessed_ability)
-                    .or_else(|| scouting_report.map(|r| r.assessed_ability))
-                    .unwrap_or_else(|| Self::position_evaluation_ability(player))
-                    as f32;
-                let believed_ceiling = monitoring
-                    .map(|m| m.current_assessed_potential)
-                    .or_else(|| scouting_report.map(|r| r.assessed_potential))
-                    .unwrap_or(believed_level as u8) as f32;
-                // The man he would replace — the brief's own read of the
-                // shirt — with the group's best only as a fallback. See the
-                // domestic path for why the fallback alone froze deals.
-                let incumbent_level = request
-                    .and_then(|r| buy_club.transfer_plan.brief.as_ref()?.slot_for(r.position))
-                    .map(|s| s.incumbent_level as f32)
-                    .unwrap_or_else(|| UpgradeMath::incumbent_level(buy_club, group));
-                UpgradeMath::priced(
-                    buy_club,
-                    date,
-                    &TargetBelief {
-                        group,
-                        tier,
-                        believed_level,
-                        incumbent_level,
-                        believed_ceiling,
-                        age: player_age,
-                        annual_wage: offered_annual_wage as f64,
-                    },
-                )
-            };
-            if let Some(deal) = deal.as_ref() {
-                let deadline = PlanningCadence::deadline_window(buy_country, date);
-                let open_ratio = UpgradeMath::open_ratio(tier, deadline.days_left_fraction());
-                let premium = deadline.premium_for(tier, true);
-                let opening = actual_asking.amount * (open_ratio + premium);
-                let capped = opening.min(deal.ceiling_fee).min(budget);
-                if capped > offer.base_fee.amount {
-                    offer.base_fee.amount = FormattingUtils::round_fee(capped);
-                }
-            }
-
-            // The same three clause rules the domestic approach applies —
-            // now literally the same code rather than a copy of it. The
-            // fourth, the appearance fee on a loan from a big seller, is
-            // deliberately NOT called here: this path has never attached it
-            // and closing that gap moves money. See
-            // [`OfferClauses::attach_loan_appearance_fee`].
-            OfferClauses::attach_prospect_sell_on(
-                &mut offer,
-                is_prospect_purchase,
-                selling_rep,
-                buying_rep,
-            );
-            OfferClauses::attach_loan_option(&mut offer, has_option_to_buy, &asking_price);
-            OfferClauses::attach_loan_duration(&mut offer, is_loan);
-
-            // Same reason construction as the domestic path — the request
-            // motive and scout context were in scope all along, yet every
-            // cross-border move used to reach history as a bare
-            // "Loan signing" / "Transfer signing".
-            let need_and_scout = Self::build_transfer_reason(request, scouting_report);
-            let reason = if need_and_scout.is_empty() {
-                if is_loan {
-                    TransferReason::key("signing_reason_loan")
-                } else {
-                    TransferReason::key("signing_reason_transfer")
-                }
-            } else {
-                need_and_scout
-            };
-
-            // A seller-advertised player (transfer- or loan-listed) makes
-            // this a solicited approach; anyone else is a cold call. The
-            // domestic path derives the same flag from the listing table;
-            // the player's own status flags are the cross-border proxy.
-            let is_unsolicited = !player.statuses.has(PlayerStatusType::Lst)
-                && !player.statuses.has(PlayerStatusType::Loa);
-
-            resolved.push(ResolvedNeg {
-                buying_club_id: cand.buying_club_id,
-                selling_country_id: sell_country_id,
-                selling_continent_id: sell_continent_id,
-                selling_country_code: sell_country_code,
-                selling_club_id: sell_club_id,
-                player_id: cand.player_id,
-                is_loan,
-                has_option_to_buy,
-                is_prospect_purchase,
-                offer,
-                reason,
-                shortlist_request_id: cand.shortlist_request_id,
-                selling_rep,
-                buying_rep,
-                player_age,
-                player_ambition,
-                asking_price,
-                player_name,
-                selling_club_name,
-                player_sold_from: player.sold_from.clone(),
-                offered_annual_wage,
-                buying_league_reputation,
-                selling_league_reputation,
-                player_stage_inclination: player.big_stage_inclination,
-                buyer_ceiling_fee: deal.as_ref().map(|d| d.ceiling_fee),
-                brief_tier: Some(tier),
-                is_unsolicited,
-                foreign_terms_floor_blocked,
-                foreign_seller_importance,
-                foreign_seller_finances,
-                staged_stance,
-                staged_sporting_drop,
-            });
-        }
-
-        // Pass 3: Write — create listings and negotiations
-        for action in resolved {
-            let country = match data.country_mut(country_id) {
-                Some(c) => c,
-                None => continue,
-            };
-
-            let listing = TransferListing::new_with_origin(
-                action.player_id,
-                action.selling_club_id,
-                0,
-                action.asking_price,
-                date,
-                if action.is_loan {
-                    TransferListingType::Loan
-                } else {
-                    TransferListingType::Transfer
-                },
-                TransferListingOrigin::SyntheticUnsolicited,
-            );
-            country.transfer_market.add_listing(listing);
-
-            if let Some(neg_id) = country.transfer_market.start_negotiation(
-                action.player_id,
-                action.buying_club_id,
-                action.offer,
-                date,
-                action.selling_rep,
-                action.buying_rep,
-                action.player_age,
-                action.player_ambition,
-            ) {
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation.is_loan = action.is_loan;
-                    negotiation.has_option_to_buy = action.has_option_to_buy;
-                    negotiation.is_unsolicited = action.is_unsolicited;
-                    negotiation.reason = action.reason;
-                    negotiation.selling_country_id = Some(action.selling_country_id);
-                    negotiation.selling_continent_id = Some(action.selling_continent_id);
-                    negotiation.selling_country_code = action.selling_country_code;
-                    negotiation.player_sold_from = action.player_sold_from;
-                    negotiation.player_name = action.player_name;
-                    negotiation.selling_club_name = action.selling_club_name;
-                    negotiation.open_salary_at(action.offered_annual_wage);
-                    // The player's resolution-time reservation for a
-                    // cross-border move: his expected wage at the buyer
-                    // plus a ~10% relocation premium. The opening offer
-                    // sits below it on purpose — that gap is what the
-                    // personal-terms wage rounds close when the deal
-                    // stalls on money instead of dying outright.
-                    negotiation.staged_reservation_wage =
-                        Some(((action.offered_annual_wage as f64) * 1.10) as u32);
-                    negotiation.buying_league_reputation = action.buying_league_reputation;
-                    negotiation.selling_league_reputation = action.selling_league_reputation;
-                    negotiation.player_stage_inclination = action.player_stage_inclination;
-                    negotiation.foreign_terms_floor_blocked = action.foreign_terms_floor_blocked;
-                    negotiation.foreign_seller_importance = Some(action.foreign_seller_importance);
-                    negotiation.foreign_seller_finances = Some(action.foreign_seller_finances);
-                    negotiation.staged_stance = Some(action.staged_stance);
-                    negotiation.staged_sporting_drop = Some(action.staged_sporting_drop);
-                    negotiation.buyer_ceiling_fee = action.buyer_ceiling_fee;
-                    negotiation.brief_tier = action.brief_tier;
-                }
-
-                if let Some(club) = country
-                    .clubs
-                    .iter_mut()
-                    .find(|c| c.id == action.buying_club_id)
-                {
-                    let plan = &mut club.transfer_plan;
-                    if let Some(shortlist) = plan
-                        .shortlists
-                        .iter_mut()
-                        .find(|s| s.transfer_request_id == action.shortlist_request_id)
-                    {
-                        if let Some(candidate) = shortlist.current_candidate_mut() {
-                            if candidate.player_id == action.player_id {
-                                candidate.status = ShortlistCandidateStatus::CurrentlyPursuing;
-                            }
-                        }
-                    }
-                    if let Some(req) = plan
-                        .transfer_requests
-                        .iter_mut()
-                        .find(|r| r.id == action.shortlist_request_id)
-                    {
-                        req.status = TransferRequestStatus::Negotiating;
-                    }
-                    plan.active_negotiation_count += 1;
-                    if action.is_prospect_purchase {
-                        // Pursuit slot taken; converted into a completed
-                        // buy (or released) in on_negotiation_resolved.
-                        plan.prospect_pursuits_active =
-                            plan.prospect_pursuits_active.saturating_add(1);
-                    }
-                }
-
-                debug!(
-                    "Foreign negotiation: Club {} started negotiation for player {} from country {}",
-                    action.buying_club_id, action.player_id, action.selling_country_id
-                );
-            }
-        }
-
-        // Apply the foreign plausibility rejects: mark each shortlist
-        // candidate unavailable and advance the shortlist so the next
-        // pursuit cycle skips the impossible move instead of retrying it.
-        if !foreign_rejected.is_empty() {
-            if let Some(country) = data.country_mut(country_id) {
-                for reject in foreign_rejected {
-                    if let Some(club) = country.clubs.iter_mut().find(|c| c.id == reject.club_id) {
-                        if let Some(shortlist) = club
-                            .transfer_plan
-                            .shortlists
-                            .iter_mut()
-                            .find(|s| s.transfer_request_id == reject.shortlist_request_id)
-                        {
-                            if let Some(candidate) = shortlist
-                                .candidates
-                                .iter_mut()
-                                .find(|c| c.player_id == reject.player_id)
-                            {
-                                candidate.status = ShortlistCandidateStatus::Unavailable;
-                            }
-                            shortlist.advance_to_next();
-                        }
-                    }
-                    Self::on_negotiation_resolved(country, reject.club_id, reject.player_id, false);
-                }
-            }
-        }
+        ForeignApproachPass::run(data, country_id, date);
     }
 }
 

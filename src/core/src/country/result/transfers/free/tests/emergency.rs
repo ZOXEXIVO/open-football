@@ -2000,14 +2000,18 @@ impl DepthPipelineFixtures {
             let signings = CountryResult::handle_free_agents(
                 country,
                 date,
-                &mut summary,
-                pool,
-                &MarketMap::default(),
-                &config,
-                &mut domestic,
-                &mut offered,
-                &mut rejected,
-                &mut blocked,
+                &FreeAgentWorld {
+                    global_pool: pool,
+                    market_map: &MarketMap::default(),
+                    config: &config,
+                },
+                &mut FreeAgentLedger {
+                    summary: &mut summary,
+                    domestic_signed_ids: &mut domestic,
+                    global_offered_ids: &mut offered,
+                    global_rejected_ids: &mut rejected,
+                    global_blocked: &mut blocked,
+                },
             );
             all_signings.extend(signings);
             if !country.transfer_market.negotiations.is_empty() {
@@ -2462,14 +2466,18 @@ fn unmarked_depth_cover_request_keeps_legacy_instant_signing() {
         signings = CountryResult::handle_free_agents(
             &mut country,
             date,
-            &mut summary,
-            &pool,
-            &MarketMap::default(),
-            &config,
-            &mut domestic,
-            &mut offered,
-            &mut rejected,
-            &mut blocked,
+            &FreeAgentWorld {
+                global_pool: &pool,
+                market_map: &MarketMap::default(),
+                config: &config,
+            },
+            &mut FreeAgentLedger {
+                summary: &mut summary,
+                domestic_signed_ids: &mut domestic,
+                global_offered_ids: &mut offered,
+                global_rejected_ids: &mut rejected,
+                global_blocked: &mut blocked,
+            },
         );
         if !signings.is_empty() {
             break;
@@ -2737,14 +2745,18 @@ fn request_matcher_tries_fallback_candidates_past_rejecting_top_quality() {
         let signings = CountryResult::handle_free_agents(
             &mut country,
             date,
-            &mut summary,
-            &pool,
-            &MarketMap::default(),
-            &config,
-            &mut domestic,
-            &mut offered,
-            &mut rejected,
-            &mut blocked,
+            &FreeAgentWorld {
+                global_pool: &pool,
+                market_map: &MarketMap::default(),
+                config: &config,
+            },
+            &mut FreeAgentLedger {
+                summary: &mut summary,
+                domestic_signed_ids: &mut domestic,
+                global_offered_ids: &mut offered,
+                global_rejected_ids: &mut rejected,
+                global_blocked: &mut blocked,
+            },
         );
         star_offered |= offered.contains(&8100);
         journeyman_offered |= offered.contains(&8101);

@@ -9,6 +9,7 @@ pub(crate) mod types;
 use super::CountryResult;
 use crate::club::player::events::transfer_social::TransferInterestSignal;
 use crate::club::player::transfer::FreeAgentBlockReason;
+use crate::country::result::transfers::free::{FreeAgentLedger, FreeAgentWorld};
 use crate::simulator::{PerformanceProfiler, SimulatorData};
 use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferWindowManager;
@@ -221,14 +222,18 @@ impl CountryResult {
                 Self::handle_free_agents(
                     country,
                     current_date,
-                    &mut summary,
-                    global_free_agents,
-                    market_map,
-                    &config,
-                    &mut ops.domestic_signed_ids,
-                    &mut ops.global_offered_ids,
-                    &mut ops.global_rejected_ids,
-                    &mut ops.global_block_reasons,
+                    &FreeAgentWorld {
+                        global_pool: global_free_agents,
+                        market_map,
+                        config: &config,
+                    },
+                    &mut FreeAgentLedger {
+                        summary: &mut summary,
+                        domestic_signed_ids: &mut ops.domestic_signed_ids,
+                        global_offered_ids: &mut ops.global_offered_ids,
+                        global_rejected_ids: &mut ops.global_rejected_ids,
+                        global_blocked: &mut ops.global_block_reasons,
+                    },
                 )
             },
         );
@@ -787,6 +792,7 @@ mod pending_signal_delivery_tests {
         PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection, Team, TeamCollection,
         TeamReputation, TeamType, TrainingSchedule, TransferInterestSource, TransferInterestStage,
     };
+    use crate::{PlayerClubContract, PlayerSquadStatus};
     use chrono::NaiveTime;
 
     fn d(y: i32, m: u32, day: u32) -> chrono::NaiveDate {
@@ -797,8 +803,8 @@ mod pending_signal_delivery_tests {
         let mut attrs = PlayerAttributes::default();
         attrs.current_ability = 120;
         attrs.current_reputation = 2000;
-        let mut contract = crate::PlayerClubContract::new(50_000, d(2029, 6, 30));
-        contract.squad_status = crate::PlayerSquadStatus::FirstTeamRegular;
+        let mut contract = PlayerClubContract::new(50_000, d(2029, 6, 30));
+        contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
         PlayerBuilder::new()
             .id(id)
             .full_name(FullName::new("Foreign".to_string(), format!("P{id}")))

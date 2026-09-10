@@ -4287,6 +4287,7 @@ mod saga_visibility_tests {
     //! being dropped.
 
     use super::*;
+    use crate::PlayerSquadStatus;
     use crate::academy::ClubAcademy;
     use crate::club::player::core::builder::PlayerBuilder;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
@@ -4320,7 +4321,7 @@ mod saga_visibility_tests {
             attrs.current_reputation = 2000;
             let mut contract =
                 PlayerClubContract::new(50_000, NaiveDate::from_ymd_opt(2029, 6, 30).unwrap());
-            contract.squad_status = crate::PlayerSquadStatus::FirstTeamRegular;
+            contract.squad_status = PlayerSquadStatus::FirstTeamRegular;
             PlayerBuilder::new()
                 .id(id)
                 .full_name(FullName::new("Saga".to_string(), format!("P{id}")))

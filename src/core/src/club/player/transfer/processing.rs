@@ -7,6 +7,7 @@ use crate::club::player::transfer::stage::{BigStagePull, BigStagePullContext};
 use crate::club::player::{RestlessnessInputs, StuckCareerScan};
 use crate::club::{PlayerMailbox, PlayerResult, PlayerStatusType};
 use crate::context::GlobalContext;
+use crate::transfers::TransferRoutePolicy;
 use crate::utils::DateUtils;
 use crate::{
     CareerDesireEventContext, CareerDesireEvidence, CareerDesireKind, HappinessEventCause,
@@ -172,10 +173,8 @@ impl TransferDesireContext {
         // UEFA-suspension flag (Russia after 2022-02-28). Treated as a
         // first-class continental ban so the elite-reputation shortcut
         // cannot paper over a real federation suspension.
-        let country_uefa_suspended = crate::transfers::TransferRoutePolicy::is_uefa_suspended(
-            &country_code,
-            gc.simulation.date.date(),
-        );
+        let country_uefa_suspended =
+            TransferRoutePolicy::is_uefa_suspended(&country_code, gc.simulation.date.date());
 
         // Continental-access picture — see
         // [`ContinentalPathHeuristic::is_on_path`] for the realism rules.
@@ -1922,10 +1921,15 @@ mod career_desire_tests {
     use super::*;
     use crate::club::player::adaptation::AdaptationFailureSignals;
     use crate::club::player::builder::PlayerBuilder;
+    use crate::club::player::language::{Language, PlayerLanguage};
     use crate::shared::fullname::FullName;
     use crate::{
         PersonAttributes, PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType,
         PlayerPositions, PlayerSkills,
+    };
+    use crate::{
+        PlayerStatCompetitionKind, TransferInterestEvidence, TransferInterestSource,
+        TransferInterestStage,
     };
     use chrono::NaiveDate;
 
@@ -2029,7 +2033,7 @@ mod career_desire_tests {
             team_reputation: 8_000,
             league_slug: "l".into(),
             league_name: "L".into(),
-            competition_kind: crate::PlayerStatCompetitionKind::League,
+            competition_kind: PlayerStatCompetitionKind::League,
             competition_slug: "l".into(),
             is_loan,
             transfer_fee: None,
@@ -2330,12 +2334,11 @@ mod career_desire_tests {
         let mut p = build(27, 12.0, 16.0, 10.0, 14.0, 30, 130, 4500, 90, today);
         // Add the player's native language at a level that counts as
         // local-language fluent for the test country code.
-        p.languages
-            .push(crate::club::player::language::PlayerLanguage {
-                language: crate::club::player::language::Language::English,
-                proficiency: 100,
-                is_native: true,
-            });
+        p.languages.push(PlayerLanguage {
+            language: Language::English,
+            proficiency: 100,
+            is_native: true,
+        });
         p.happiness.morale = 60.0;
         p.happiness.factors.club_fit = 1.0;
 
@@ -3195,12 +3198,11 @@ mod career_desire_tests {
         let mut p = build(27, 12.0, 14.0, 14.0, 14.0, 30, 130, 4500, 90, today);
         // Mark player as native English speaker so speaks_local("gb") is true
         // (removes the !speaks_local penalty).
-        p.languages
-            .push(crate::club::player::language::PlayerLanguage {
-                language: crate::club::player::language::Language::English,
-                proficiency: 100,
-                is_native: true,
-            });
+        p.languages.push(PlayerLanguage {
+            language: Language::English,
+            proficiency: 100,
+            is_native: true,
+        });
         p.happiness.morale = 60.0;
         p.happiness.factors.club_fit = 0.0;
         // Inject ONE companion FeelingIsolated with the
@@ -3312,8 +3314,8 @@ mod career_desire_tests {
             seller_rep: 0.75,
             buyer_league_rep: 9000,
             seller_league_rep: 5000,
-            stage: crate::TransferInterestStage::ConcreteInterest,
-            source: crate::TransferInterestSource::ConfirmedApproach,
+            stage: TransferInterestStage::ConcreteInterest,
+            source: TransferInterestSource::ConfirmedApproach,
             repeated_attention: false,
             is_rival: false,
             is_home_country: false,
@@ -3334,10 +3336,7 @@ mod career_desire_tests {
             if let Some(ctx) = ev.context.as_ref() {
                 if let Some(tic) = ctx.transfer_interest_context.as_ref() {
                     if tic.evidence.iter().any(|e| {
-                        matches!(
-                            e,
-                            crate::TransferInterestEvidence::EuropeanCompetitionOpportunity
-                        )
+                        matches!(e, TransferInterestEvidence::EuropeanCompetitionOpportunity)
                     }) {
                         found = true;
                         break;

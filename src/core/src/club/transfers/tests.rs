@@ -19,81 +19,87 @@ use chrono::NaiveDate;
 // Test fixtures
 // ============================================================
 
-fn d(y: i32, m: u32, day: u32) -> NaiveDate {
-    NaiveDate::from_ymd_opt(y, m, day).unwrap()
-}
+/// Fixtures for the strategy tests: a date, a player, a board vision, a
+/// strategy context, and a way to pull one clause off an offer.
+struct Fx;
 
-/// Build a single-position player with the given age, CA/PA, and
-/// optional contract expiration. Everything else is default so
-/// tests stay focused on the strategy layer.
-fn make_player(
-    id: u32,
-    birth: NaiveDate,
-    position: PlayerPositionType,
-    current_ability: u8,
-    potential_ability: u8,
-    contract_expiry: Option<NaiveDate>,
-) -> Player {
-    let mut player_attributes = PlayerAttributes::default();
-    player_attributes.current_ability = current_ability;
-    player_attributes.potential_ability = potential_ability;
-
-    let mut p = PlayerBuilder::new()
-        .id(id)
-        .full_name(FullName::new("Test".into(), format!("P{}", id)))
-        .birth_date(birth)
-        .country_id(1)
-        .attributes(PersonAttributes::default())
-        .skills(PlayerSkills::default())
-        .positions(PlayerPositions {
-            positions: vec![PlayerPosition {
-                position,
-                level: 20,
-            }],
-        })
-        .player_attributes(player_attributes)
-        .build()
-        .unwrap();
-    p.contract = contract_expiry.map(|exp| PlayerClubContract::new(50_000, exp));
-    p
-}
-
-fn vision(financial_stance: FinancialStance) -> ClubVision {
-    ClubVision {
-        playing_style: VisionPlayingStyle::Balanced,
-        youth_focus: VisionYouthFocus::Balanced,
-        signing_preference: SigningPreference::Anyone,
-        financial_stance,
-        long_term_goal: None,
-        long_term_horizon_seasons: 3,
-        ..Default::default()
+impl Fx {
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
     }
-}
 
-fn ctx_for(date: NaiveDate, allocated: f64) -> TransferStrategyContext<'static> {
-    let mut c = TransferStrategyContext::minimal(date);
-    c.allocated_budget = allocated;
-    c.available_budget = allocated;
-    c
-}
+    /// Build a single-position player with the given age, CA/PA, and
+    /// optional contract expiration. Everything else is default so
+    /// tests stay focused on the strategy layer.
+    fn make_player(
+        id: u32,
+        birth: NaiveDate,
+        position: PlayerPositionType,
+        current_ability: u8,
+        potential_ability: u8,
+        contract_expiry: Option<NaiveDate>,
+    ) -> Player {
+        let mut player_attributes = PlayerAttributes::default();
+        player_attributes.current_ability = current_ability;
+        player_attributes.potential_ability = potential_ability;
 
-fn money_amount(c: &CurrencyValue) -> f64 {
-    c.amount
-}
+        let mut p = PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("Test".into(), format!("P{}", id)))
+            .birth_date(birth)
+            .country_id(1)
+            .attributes(PersonAttributes::default())
+            .skills(PlayerSkills::default())
+            .positions(PlayerPositions {
+                positions: vec![PlayerPosition {
+                    position,
+                    level: 20,
+                }],
+            })
+            .player_attributes(player_attributes)
+            .build()
+            .unwrap();
+        p.contract = contract_expiry.map(|exp| PlayerClubContract::new(50_000, exp));
+        p
+    }
 
-// Pull the first matching clause off an offer so a test can
-// inspect its payload (e.g. installment years, addon fee).
-fn find_clause<'a>(offer: &'a TransferOffer, tag: &str) -> Option<&'a TransferClause> {
-    offer.clauses.iter().find(|c| match (c, tag) {
-        (TransferClause::SellOnClause(_), "sell_on") => true,
-        (TransferClause::AppearanceFee(_, _), "appearance") => true,
-        (TransferClause::GoalBonus(_, _), "goals") => true,
-        (TransferClause::PromotionBonus(_), "promotion") => true,
-        (TransferClause::Installments(_, _), "installments") => true,
-        (TransferClause::LoanOptionToBuy(_), "loan_option") => true,
-        (TransferClause::LoanObligationToBuy(_), "loan_obligation") => true,
-        _ => false,
-    })
+    fn vision(financial_stance: FinancialStance) -> ClubVision {
+        ClubVision {
+            playing_style: VisionPlayingStyle::Balanced,
+            youth_focus: VisionYouthFocus::Balanced,
+            signing_preference: SigningPreference::Anyone,
+            financial_stance,
+            long_term_goal: None,
+            long_term_horizon_seasons: 3,
+            ..Default::default()
+        }
+    }
+
+    fn ctx_for(date: NaiveDate, allocated: f64) -> TransferStrategyContext<'static> {
+        let mut c = TransferStrategyContext::minimal(date);
+        c.allocated_budget = allocated;
+        c.available_budget = allocated;
+        c
+    }
+
+    fn money_amount(c: &CurrencyValue) -> f64 {
+        c.amount
+    }
+
+    // Pull the first matching clause off an offer so a test can
+    // inspect its payload (e.g. installment years, addon fee).
+    fn find_clause<'a>(offer: &'a TransferOffer, tag: &str) -> Option<&'a TransferClause> {
+        offer.clauses.iter().find(|c| match (c, tag) {
+            (TransferClause::SellOnClause(_), "sell_on") => true,
+            (TransferClause::AppearanceFee(_, _), "appearance") => true,
+            (TransferClause::GoalBonus(_, _), "goals") => true,
+            (TransferClause::PromotionBonus(_), "promotion") => true,
+            (TransferClause::Installments(_, _), "installments") => true,
+            (TransferClause::LoanOptionToBuy(_), "loan_option") => true,
+            (TransferClause::LoanObligationToBuy(_), "loan_obligation") => true,
+            _ => false,
+        })
+    }
 }
 
 // ============================================================
@@ -105,14 +111,14 @@ fn cash_rich_elite_club_offers_more_upfront_with_fewer_clauses() {
     // Same player, same asking price; an ambitious elite buyer
     // should put more cash on the table and attach fewer
     // installment-style clauses than an austerity buyer.
-    let date = d(2026, 7, 1);
-    let player = make_player(
+    let date = Fx::d(2026, 7, 1);
+    let player = Fx::make_player(
         1,
-        d(2000, 1, 1),
+        Fx::d(2000, 1, 1),
         PlayerPositionType::MidfielderCenter,
         140,
         150,
-        Some(d(2029, 6, 30)),
+        Some(Fx::d(2029, 6, 30)),
     );
     let asking = CurrencyValue {
         amount: 10_000_000.0,
@@ -128,7 +134,7 @@ fn cash_rich_elite_club_offers_more_upfront_with_fewer_clauses() {
         90,
         vec![PlayerPositionType::MidfielderCenter],
         &ClubPhilosophy::SignToCompete,
-        &vision(FinancialStance::Ambitious),
+        &Fx::vision(FinancialStance::Ambitious),
         0.85,
     );
     let austerity = ClubTransferStrategy::from_club_context(
@@ -140,18 +146,18 @@ fn cash_rich_elite_club_offers_more_upfront_with_fewer_clauses() {
         90,
         vec![PlayerPositionType::MidfielderCenter],
         &ClubPhilosophy::Balanced,
-        &vision(FinancialStance::Austerity),
+        &Fx::vision(FinancialStance::Austerity),
         0.35,
     );
 
-    let mut ctx = ctx_for(date, 50_000_000.0);
+    let mut ctx = Fx::ctx_for(date, 50_000_000.0);
     ctx.available_budget = 100_000_000.0;
 
     let amb_offer = ambitious.calculate_initial_offer_with_context(&player, &asking, &ctx);
     let aus_offer = austerity.calculate_initial_offer_with_context(&player, &asking, &ctx);
 
     assert!(
-        money_amount(&amb_offer.base_fee) > money_amount(&aus_offer.base_fee),
+        Fx::money_amount(&amb_offer.base_fee) > Fx::money_amount(&aus_offer.base_fee),
         "ambitious offer ({:?}) should be larger than austerity ({:?})",
         amb_offer.base_fee,
         aus_offer.base_fee
@@ -159,33 +165,33 @@ fn cash_rich_elite_club_offers_more_upfront_with_fewer_clauses() {
     // Austerity attaches an installments clause when fee ≥ 1.5M
     // and installment_preference is high; ambitious club skips it.
     assert!(
-        find_clause(&aus_offer, "installments").is_some(),
+        Fx::find_clause(&aus_offer, "installments").is_some(),
         "austerity club should propose installments"
     );
     assert!(
-        find_clause(&amb_offer, "installments").is_none(),
+        Fx::find_clause(&amb_offer, "installments").is_none(),
         "ambitious club should not propose installments"
     );
 }
 
 #[test]
 fn develop_and_sell_attaches_sell_on_for_young_high_upside() {
-    let date = d(2026, 7, 1);
+    let date = Fx::d(2026, 7, 1);
     // 20yo prospect with 50pt potential gap.
-    let player = make_player(
+    let player = Fx::make_player(
         3,
-        d(2006, 1, 1),
+        Fx::d(2006, 1, 1),
         PlayerPositionType::MidfielderCenter,
         110,
         160,
-        Some(d(2029, 6, 30)),
+        Some(Fx::d(2029, 6, 30)),
     );
     let asking = CurrencyValue {
         amount: 5_000_000.0,
         currency: Currency::Usd,
     };
 
-    let mut v = vision(FinancialStance::Balanced);
+    let mut v = Fx::vision(FinancialStance::Balanced);
     v.youth_focus = VisionYouthFocus::DevelopYouth;
     let s = ClubTransferStrategy::from_club_context(
         1,
@@ -200,7 +206,7 @@ fn develop_and_sell_attaches_sell_on_for_young_high_upside() {
         0.6,
     );
 
-    let mut ctx = ctx_for(date, 10_000_000.0);
+    let mut ctx = Fx::ctx_for(date, 10_000_000.0);
     // The upside is the SCOUTS' belief — clubs can't read hidden PA, so
     // the pursuing club knows about the 50pt gap via its dossier.
     ctx.scout_assessed_ability = Some(110);
@@ -208,7 +214,7 @@ fn develop_and_sell_attaches_sell_on_for_young_high_upside() {
     let offer = s.calculate_initial_offer_with_context(&player, &asking, &ctx);
 
     assert!(
-        find_clause(&offer, "sell_on").is_some(),
+        Fx::find_clause(&offer, "sell_on").is_some(),
         "develop-and-sell club should attach sell-on clause"
     );
     // Young prospect → 5-year contract for resale-value protection.
@@ -217,14 +223,14 @@ fn develop_and_sell_attaches_sell_on_for_young_high_upside() {
 
 #[test]
 fn loan_focused_club_skips_long_contract_under_loan_approach() {
-    let date = d(2026, 7, 1);
-    let player = make_player(
+    let date = Fx::d(2026, 7, 1);
+    let player = Fx::make_player(
         4,
-        d(2002, 1, 1),
+        Fx::d(2002, 1, 1),
         PlayerPositionType::MidfielderCenter,
         130,
         140,
-        Some(d(2029, 6, 30)),
+        Some(Fx::d(2029, 6, 30)),
     );
     let asking = CurrencyValue {
         amount: 500_000.0,
@@ -240,11 +246,11 @@ fn loan_focused_club_skips_long_contract_under_loan_approach() {
         45,
         vec![PlayerPositionType::MidfielderCenter],
         &ClubPhilosophy::LoanFocused,
-        &vision(FinancialStance::Conservative),
+        &Fx::vision(FinancialStance::Conservative),
         0.4,
     );
 
-    let mut ctx = ctx_for(date, 500_000.0);
+    let mut ctx = Fx::ctx_for(date, 500_000.0);
     ctx.approach = TransferApproach::LoanWithOption;
     let offer = s.calculate_initial_offer_with_context(&player, &asking, &ctx);
 
@@ -255,15 +261,15 @@ fn loan_focused_club_skips_long_contract_under_loan_approach() {
 
 #[test]
 fn loan_fee_stays_far_below_permanent_price() {
-    let date = d(2026, 7, 1);
+    let date = Fx::d(2026, 7, 1);
     // A valuable midfielder in his prime.
-    let player = make_player(
+    let player = Fx::make_player(
         7,
-        d(2000, 1, 1),
+        Fx::d(2000, 1, 1),
         PlayerPositionType::MidfielderCenter,
         150,
         160,
-        Some(d(2029, 6, 30)),
+        Some(Fx::d(2029, 6, 30)),
     );
 
     let s = ClubTransferStrategy::from_club_context(
@@ -275,7 +281,7 @@ fn loan_fee_stays_far_below_permanent_price() {
         85,
         vec![PlayerPositionType::MidfielderCenter],
         &ClubPhilosophy::Balanced,
-        &vision(FinancialStance::Balanced),
+        &Fx::vision(FinancialStance::Balanced),
         0.6,
     );
 
@@ -284,7 +290,7 @@ fn loan_fee_stays_far_below_permanent_price() {
         amount: 40_000_000.0,
         currency: Currency::Usd,
     };
-    let perm_ctx = ctx_for(date, 100_000_000.0);
+    let perm_ctx = Fx::ctx_for(date, 100_000_000.0);
     let permanent = s.calculate_initial_offer_with_context(&player, &permanent_asking, &perm_ctx);
 
     // Loan move: the pipeline hands the strategy a loan FEE (a few percent
@@ -295,36 +301,36 @@ fn loan_fee_stays_far_below_permanent_price() {
         amount: permanent_asking.amount * 0.06,
         currency: Currency::Usd,
     };
-    let mut loan_ctx = ctx_for(date, 100_000_000.0);
+    let mut loan_ctx = Fx::ctx_for(date, 100_000_000.0);
     loan_ctx.approach = TransferApproach::Loan;
     let loan = s.calculate_initial_offer_with_context(&player, &loan_fee_asking, &loan_ctx);
 
     assert!(
-        money_amount(&loan.base_fee) < money_amount(&permanent.base_fee) * 0.25,
+        Fx::money_amount(&loan.base_fee) < Fx::money_amount(&permanent.base_fee) * 0.25,
         "loan fee {} must stay far below the permanent fee {}",
-        money_amount(&loan.base_fee),
-        money_amount(&permanent.base_fee),
+        Fx::money_amount(&loan.base_fee),
+        Fx::money_amount(&permanent.base_fee),
     );
     // And it should track the advertised loan fee, not re-inflate past it.
     assert!(
-        money_amount(&loan.base_fee) <= loan_fee_asking.amount * 1.1,
+        Fx::money_amount(&loan.base_fee) <= loan_fee_asking.amount * 1.1,
         "loan fee {} must stay near the advertised loan fee {}",
-        money_amount(&loan.base_fee),
+        Fx::money_amount(&loan.base_fee),
         loan_fee_asking.amount,
     );
 }
 
 #[test]
 fn older_player_gets_shorter_contract_and_appearance_clause() {
-    let date = d(2026, 7, 1);
+    let date = Fx::d(2026, 7, 1);
     // 32-year-old veteran with a few goals.
-    let mut player = make_player(
+    let mut player = Fx::make_player(
         5,
-        d(1994, 1, 1),
+        Fx::d(1994, 1, 1),
         PlayerPositionType::Striker,
         140,
         140,
-        Some(d(2027, 6, 30)),
+        Some(Fx::d(2027, 6, 30)),
     );
     player.statistics.goals = 12;
     let asking = CurrencyValue {
@@ -341,21 +347,21 @@ fn older_player_gets_shorter_contract_and_appearance_clause() {
         80,
         vec![PlayerPositionType::Striker],
         &ClubPhilosophy::Balanced,
-        &vision(FinancialStance::Balanced),
+        &Fx::vision(FinancialStance::Balanced),
         0.6,
     );
 
-    let ctx = ctx_for(date, 10_000_000.0);
+    let ctx = Fx::ctx_for(date, 10_000_000.0);
     let offer = s.calculate_initial_offer_with_context(&player, &asking, &ctx);
 
     // 32yo → short contract.
     assert_eq!(offer.contract_length_years, Some(1));
     assert!(
-        find_clause(&offer, "appearance").is_some(),
+        Fx::find_clause(&offer, "appearance").is_some(),
         "veteran should get an appearance-fee clause"
     );
     assert!(
-        find_clause(&offer, "goals").is_some(),
+        Fx::find_clause(&offer, "goals").is_some(),
         "scoring forward should get a goal-bonus clause"
     );
 }
@@ -365,14 +371,14 @@ fn critical_request_pushes_offer_higher_than_optional() {
     // Same strategy, same player, same asking price — only the
     // request priority differs. Critical request should produce
     // a meaningfully larger offer.
-    let date = d(2026, 7, 1);
-    let player = make_player(
+    let date = Fx::d(2026, 7, 1);
+    let player = Fx::make_player(
         6,
-        d(2000, 1, 1),
+        Fx::d(2000, 1, 1),
         PlayerPositionType::DefenderCenter,
         135,
         140,
-        Some(d(2029, 6, 30)),
+        Some(Fx::d(2029, 6, 30)),
     );
     let asking = CurrencyValue {
         amount: 8_000_000.0,
@@ -388,7 +394,7 @@ fn critical_request_pushes_offer_higher_than_optional() {
         80,
         vec![PlayerPositionType::DefenderCenter],
         &ClubPhilosophy::Balanced,
-        &vision(FinancialStance::Balanced),
+        &Fx::vision(FinancialStance::Balanced),
         0.6,
     );
 
@@ -411,32 +417,32 @@ fn critical_request_pushes_offer_higher_than_optional() {
         20_000_000.0,
     );
 
-    let mut critical_ctx = ctx_for(date, 20_000_000.0);
+    let mut critical_ctx = Fx::ctx_for(date, 20_000_000.0);
     critical_ctx.request = Some(&critical_req);
-    let mut optional_ctx = ctx_for(date, 20_000_000.0);
+    let mut optional_ctx = Fx::ctx_for(date, 20_000_000.0);
     optional_ctx.request = Some(&optional_req);
 
     let critical_offer = s.calculate_initial_offer_with_context(&player, &asking, &critical_ctx);
     let optional_offer = s.calculate_initial_offer_with_context(&player, &asking, &optional_ctx);
 
     assert!(
-        money_amount(&critical_offer.base_fee) > money_amount(&optional_offer.base_fee),
+        Fx::money_amount(&critical_offer.base_fee) > Fx::money_amount(&optional_offer.base_fee),
         "critical request ({}) should outbid optional ({})",
-        money_amount(&critical_offer.base_fee),
-        money_amount(&optional_offer.base_fee),
+        Fx::money_amount(&critical_offer.base_fee),
+        Fx::money_amount(&optional_offer.base_fee),
     );
 }
 
 #[test]
 fn low_scout_confidence_reduces_offer_amount() {
-    let date = d(2026, 7, 1);
-    let player = make_player(
+    let date = Fx::d(2026, 7, 1);
+    let player = Fx::make_player(
         7,
-        d(2000, 1, 1),
+        Fx::d(2000, 1, 1),
         PlayerPositionType::MidfielderCenter,
         135,
         145,
-        Some(d(2029, 6, 30)),
+        Some(Fx::d(2029, 6, 30)),
     );
     let asking = CurrencyValue {
         amount: 5_000_000.0,
@@ -452,51 +458,51 @@ fn low_scout_confidence_reduces_offer_amount() {
         70,
         vec![PlayerPositionType::MidfielderCenter],
         &ClubPhilosophy::Balanced,
-        &vision(FinancialStance::Balanced),
+        &Fx::vision(FinancialStance::Balanced),
         0.5,
     );
 
-    let mut high_ctx = ctx_for(date, 6_000_000.0);
+    let mut high_ctx = Fx::ctx_for(date, 6_000_000.0);
     high_ctx.scout_confidence = Some(0.85);
-    let mut low_ctx = ctx_for(date, 6_000_000.0);
+    let mut low_ctx = Fx::ctx_for(date, 6_000_000.0);
     low_ctx.scout_confidence = Some(0.15);
 
     let high_offer = s.calculate_initial_offer_with_context(&player, &asking, &high_ctx);
     let low_offer = s.calculate_initial_offer_with_context(&player, &asking, &low_ctx);
 
     assert!(
-        money_amount(&low_offer.base_fee) < money_amount(&high_offer.base_fee),
+        Fx::money_amount(&low_offer.base_fee) < Fx::money_amount(&high_offer.base_fee),
         "low scout confidence should reduce offer; high={}, low={}",
-        money_amount(&high_offer.base_fee),
-        money_amount(&low_offer.base_fee),
+        Fx::money_amount(&high_offer.base_fee),
+        Fx::money_amount(&low_offer.base_fee),
     );
 }
 
 #[test]
 fn expiring_contract_and_listed_status_lower_offer() {
-    let date = d(2026, 7, 1);
+    let date = Fx::d(2026, 7, 1);
     let asking = CurrencyValue {
         amount: 6_000_000.0,
         currency: Currency::Usd,
     };
 
     // Baseline: long contract, not listed.
-    let baseline_player = make_player(
+    let baseline_player = Fx::make_player(
         8,
-        d(2000, 1, 1),
+        Fx::d(2000, 1, 1),
         PlayerPositionType::MidfielderCenter,
         135,
         140,
-        Some(d(2029, 6, 30)),
+        Some(Fx::d(2029, 6, 30)),
     );
     // Distressed: 5 months left + transfer-listed.
-    let mut distressed_player = make_player(
+    let mut distressed_player = Fx::make_player(
         9,
-        d(2000, 1, 1),
+        Fx::d(2000, 1, 1),
         PlayerPositionType::MidfielderCenter,
         135,
         140,
-        Some(d(2026, 12, 1)),
+        Some(Fx::d(2026, 12, 1)),
     );
     distressed_player.statuses.add(date, PlayerStatusType::Lst);
 
@@ -509,19 +515,19 @@ fn expiring_contract_and_listed_status_lower_offer() {
         75,
         vec![PlayerPositionType::MidfielderCenter],
         &ClubPhilosophy::Balanced,
-        &vision(FinancialStance::Balanced),
+        &Fx::vision(FinancialStance::Balanced),
         0.55,
     );
 
-    let ctx = ctx_for(date, 10_000_000.0);
+    let ctx = Fx::ctx_for(date, 10_000_000.0);
     let baseline_offer = s.calculate_initial_offer_with_context(&baseline_player, &asking, &ctx);
     let distressed_offer =
         s.calculate_initial_offer_with_context(&distressed_player, &asking, &ctx);
 
     assert!(
-        money_amount(&distressed_offer.base_fee) < money_amount(&baseline_offer.base_fee),
+        Fx::money_amount(&distressed_offer.base_fee) < Fx::money_amount(&baseline_offer.base_fee),
         "distressed seller ({}) should fetch less than baseline ({})",
-        money_amount(&distressed_offer.base_fee),
-        money_amount(&baseline_offer.base_fee),
+        Fx::money_amount(&distressed_offer.base_fee),
+        Fx::money_amount(&baseline_offer.base_fee),
     );
 }

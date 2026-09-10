@@ -89,14 +89,18 @@ impl ExpiryRenewalFixtures {
         CountryResult::handle_free_agents(
             country,
             date,
-            &mut summary,
-            &[],
-            &MarketMap::default(),
-            &config,
-            &mut domestic_signed_ids,
-            &mut global_offered_ids,
-            &mut global_rejected_ids,
-            &mut global_blocked,
+            &FreeAgentWorld {
+                global_pool: &[],
+                market_map: &MarketMap::default(),
+                config: &config,
+            },
+            &mut FreeAgentLedger {
+                summary: &mut summary,
+                domestic_signed_ids: &mut domestic_signed_ids,
+                global_offered_ids: &mut global_offered_ids,
+                global_rejected_ids: &mut global_rejected_ids,
+                global_blocked: &mut global_blocked,
+            },
         )
     }
 

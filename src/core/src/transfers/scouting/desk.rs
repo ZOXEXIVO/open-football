@@ -20,6 +20,7 @@
 
 use chrono::{Datelike, Duration, NaiveDate};
 
+use crate::TeamType;
 use crate::club::staff::model::attributes::{
     StaffAttributes, StaffCoaching, StaffDataAnalysis, StaffGoalkeeperCoaching, StaffKnowledge,
     StaffMedical, StaffMental,
@@ -217,7 +218,7 @@ impl ScoutMarketDesk {
                 .teams
                 .teams
                 .iter_mut()
-                .find(|t| t.team_type == crate::TeamType::Main)
+                .find(|t| t.team_type == TeamType::Main)
             {
                 // Through the collection, not the bare Vec: it owns whatever
                 // bookkeeping a staff insert carries.

@@ -421,6 +421,7 @@ mod tests {
     //! Spec test #4: the pre-contract flow must STAGE a future free
     //! transfer without moving the player before his contract expires, and
     //! then route the move to the agreed club once it does lapse.
+    use crate::country::result::transfers::free::{FreeAgentLedger, FreeAgentWorld};
 
     use super::*;
     use crate::PlayerContractProposal;
@@ -654,14 +655,18 @@ mod tests {
         let _ = CountryResult::handle_free_agents(
             &mut country,
             today,
-            &mut summary,
-            &[],
-            &MarketMap::default(),
-            &config,
-            &mut domestic,
-            &mut offered,
-            &mut rejected,
-            &mut blocked,
+            &FreeAgentWorld {
+                global_pool: &[],
+                market_map: &MarketMap::default(),
+                config: &config,
+            },
+            &mut FreeAgentLedger {
+                summary: &mut summary,
+                domestic_signed_ids: &mut domestic,
+                global_offered_ids: &mut offered,
+                global_rejected_ids: &mut rejected,
+                global_blocked: &mut blocked,
+            },
         );
 
         let (club_id, player) = PreContractFixtures::find_player(&country, 1)
@@ -742,14 +747,18 @@ mod tests {
             let _ = CountryResult::handle_free_agents(
                 country,
                 today,
-                &mut summary,
-                &[],
-                &MarketMap::default(),
-                &config,
-                &mut domestic,
-                &mut offered,
-                &mut rejected,
-                &mut blocked,
+                &FreeAgentWorld {
+                    global_pool: &[],
+                    market_map: &MarketMap::default(),
+                    config: &config,
+                },
+                &mut FreeAgentLedger {
+                    summary: &mut summary,
+                    domestic_signed_ids: &mut domestic,
+                    global_offered_ids: &mut offered,
+                    global_rejected_ids: &mut rejected,
+                    global_blocked: &mut blocked,
+                },
             );
         }
 
