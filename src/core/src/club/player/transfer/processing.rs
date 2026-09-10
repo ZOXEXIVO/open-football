@@ -3,7 +3,7 @@ use crate::club::player::behaviour_config::HappinessConfig;
 use crate::club::player::core::player::TransferRequestReason;
 use crate::club::player::mind::{GoalBridge, GoalEvidence, GoalKind, GoalOrigin, MindClock};
 use crate::club::player::player::Player;
-use crate::club::player::transfer::big_stage_pull::{BigStagePull, BigStagePullContext};
+use crate::club::player::transfer::stage::{BigStagePull, BigStagePullContext};
 use crate::club::player::{RestlessnessInputs, StuckCareerScan};
 use crate::club::{PlayerMailbox, PlayerResult, PlayerStatusType};
 use crate::context::GlobalContext;

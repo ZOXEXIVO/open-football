@@ -75,21 +75,21 @@ use core::club::board::ownership::{ClubBenefactor, OwnershipType};
 use core::club::player::core::player::TransferRequestReason;
 use core::club::player::mind::GoalKind;
 use core::club::player::statistics::StuckCareerScan;
+use core::club::player::transfer::MarketStage;
 use core::club::player::transfer::{BigStagePull, BigStagePullContext};
 use core::club::staff::perception::AbilityEstimator;
 use core::club::team::squad::{SquadAssetClass, SquadAssetContext};
-use core::country::result::transfers::free_agent_audit::FreeAgentMarketAuditor;
-use core::transfers::pipeline::appraisal::TermsRefusalCause;
-use core::transfers::pipeline::planning::BriefTier;
+use core::country::result::transfers::free::audit::FreeAgentMarketAuditor;
+use core::country::result::transfers::free::pricing::FreeAgentMarketCalculator;
+use core::transfers::gate::appraisal::TermsRefusalCause;
 use core::transfers::pipeline::{LoanDestinationPreference, LoanOutReason};
-use core::club::player::transfer::MarketStage;
-use core::country::result::transfers::free_agent_market_calc::FreeAgentMarketCalculator;
+use core::transfers::squad::plan::BriefTier;
+use core::transfers::value::PlayerValuationCalculator;
 use core::transfers::{ClubMarketKnowledge, ScoutingRegion};
 use core::transfers::{MarketAffinity, MarketAffinityInputs, MoveKind as GeographyMoveKind};
 use core::transfers::{
     TransferListingOrigin, TransferListingStatus, TransferListingType, TransferType,
 };
-use core::transfers::window::PlayerValuationCalculator;
 use core::utils::DateUtils;
 use core::{
     Club, ClubLevelAnchor, FootballSimulator, Person, Player, PlayerFieldPositionGroup,
@@ -2508,12 +2508,7 @@ impl PlayerSideCensus {
     }
 
     /// One player's contribution to the posting funnel (C4).
-    fn fold_funnel(
-        funnel: &mut HomeFunnel,
-        player: &Player,
-        club: &Club,
-        club_country_id: u32,
-    ) {
+    fn fold_funnel(funnel: &mut HomeFunnel, player: &Player, club: &Club, club_country_id: u32) {
         // "Abroad" by PASSPORT — the same test the mind now makes.
         if player.country_id == 0 || player.country_id == club_country_id {
             return;
@@ -2707,11 +2702,7 @@ impl CensusFacts {
     /// `marketed` is the club's sell list, hoisted once per club — asking
     /// `ClubTransferPlan::is_marketed` per player is a linear scan of that
     /// list, and this runs for every player in the world every day.
-    fn availability_of(
-        player: &Player,
-        marketed: &HashSet<u32>,
-        date: NaiveDate,
-    ) -> Availability {
+    fn availability_of(player: &Player, marketed: &HashSet<u32>, date: NaiveDate) -> Availability {
         if player.statuses.has(PlayerStatusType::Req) {
             Availability::Requested
         } else if player.statuses.has(PlayerStatusType::Unh) {
@@ -3446,9 +3437,7 @@ impl LoanAssetCensus {
                     let floors: Vec<(PlayerFieldPositionGroup, u8)> = first_team
                         .into_iter()
                         .flat_map(|first_team| {
-                            PlayerFieldPositionGroup::ALL
-                            .iter()
-                            .map(move |&group| {
+                            PlayerFieldPositionGroup::ALL.iter().map(move |&group| {
                                 let levels: Vec<u8> = first_team
                                     .players
                                     .iter()
@@ -3474,17 +3463,12 @@ impl LoanAssetCensus {
                             let group = player.position().position_group();
                             // No first team, no floor — nothing to be
                             // trapped out of.
-                            let Some(floor) = floors
-                                .iter()
-                                .find(|(g, _)| *g == group)
-                                .map(|(_, f)| *f)
+                            let Some(floor) =
+                                floors.iter().find(|(g, _)| *g == group).map(|(_, f)| *f)
                             else {
                                 continue;
                             };
-                            let level =
-                                AbilityEstimator::observable_level(
-                                    player,
-                                );
+                            let level = AbilityEstimator::observable_level(player);
                             if level < floor.saturating_add(Self::TRAP_MARGIN) {
                                 self.trap_since.remove(&player.id);
                                 continue;
@@ -3540,14 +3524,10 @@ impl LoanAssetCensus {
                                 .unwrap_or(0);
                             let parent = club_index.get(&parent_id).copied();
                             let (parent_league_rep, parent_club_rep) = parent
-                                .map(|c| {
-                                    PlayerValuationCalculator::seller_context(
-                                        country, c,
-                                    )
-                                })
+                                .map(|c| PlayerValuationCalculator::seller_context(country, c))
                                 .unwrap_or((0, 0));
-                            let parent_main =
-                                parent.and_then(|c| c.teams.main().or_else(|| c.teams.teams.first()));
+                            let parent_main = parent
+                                .and_then(|c| c.teams.main().or_else(|| c.teams.teams.first()));
                             let parent_anchor = parent_main.map(|t| {
                                 ClubLevelAnchor::for_reputation(t.reputation.overall_score())
                             });
@@ -3868,8 +3848,7 @@ impl LoanAssetPrinter {
                 row.weight,
                 row.wage_share,
                 row.over_borrower_best,
-                row
-                    .over_parent_key_floor
+                row.over_parent_key_floor
                     .map(|v| format!("{v:+}"))
                     .unwrap_or_else(|| "?".to_string()),
                 row.label,
@@ -3931,8 +3910,7 @@ impl PlacementCensus {
                     // world: the club's own record where it is deep enough
                     // to state a bar, its divisional rotation band where it
                     // is not.
-                    let anchor =
-                        ClubLevelAnchor::for_reputation(main.reputation.overall_score());
+                    let anchor = ClubLevelAnchor::for_reputation(main.reputation.overall_score());
                     let floors: Vec<(PlayerFieldPositionGroup, i16, usize, i16)> =
                         PlayerFieldPositionGroup::ALL
                             .iter()
@@ -4628,7 +4606,11 @@ impl CorridorCensus {
                 .iter()
                 .take(Self::TOP_DESTINATIONS)
                 .map(|(id, count)| {
-                    let marker = if card.contains(id) || **id == *nat { "" } else { "*" };
+                    let marker = if card.contains(id) || **id == *nat {
+                        ""
+                    } else {
+                        "*"
+                    };
                     format!("{}{marker}:{count}", Self::code(countries, **id))
                 })
                 .collect();
@@ -4895,9 +4877,7 @@ impl CorridorCensus {
             let stage = MarketStage::from_days_free(days_free);
             let bar = FreeAgentMarketCalculator::visibility_bar(stage);
             let nationality = player.country_id;
-            let last_country = state
-                .and_then(|s| s.last_country_id)
-                .unwrap_or(nationality);
+            let last_country = state.and_then(|s| s.last_country_id).unwrap_or(nationality);
             let side = usize::from(on_card.contains(&nationality));
             let name_reach = FreeAgentMarketCalculator::name_reach(
                 player.reference_reputation(
@@ -4994,7 +4974,10 @@ impl CorridorCensus {
                 .iter()
                 .take(6)
                 .map(|(reason, count)| {
-                    format!("{reason}={count} ({:.0}%)", Self::share(**count, total) * 100.0)
+                    format!(
+                        "{reason}={count} ({:.0}%)",
+                        Self::share(**count, total) * 100.0
+                    )
                 })
                 .collect();
             println!("  {label} n={total}  {}", listed.join("  "));

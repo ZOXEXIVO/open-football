@@ -23,7 +23,7 @@
 //! completes (pool players via `NegotiationOutcomes.free_agent_signings`,
 //! in-country players via the deferred-transfer queue).
 
-use super::free_agents::EmergencySignedTerms;
+use super::EmergencySignedTerms;
 use crate::Country;
 use crate::PlayerFieldPositionGroup;
 use crate::shared::{Currency, CurrencyValue};
@@ -44,7 +44,7 @@ use log::debug;
 /// via [`EmergencyDepthRequestPlanner::stage_requests`] so the need is
 /// serviced through candidate filtering, staged negotiation, personal
 /// terms, and medical like any other recruitment target.
-pub(super) struct EmergencyDepthRequestIntent {
+pub(in crate::country::result::transfers) struct EmergencyDepthRequestIntent {
     pub club_id: u32,
     pub group: PlayerFieldPositionGroup,
 }

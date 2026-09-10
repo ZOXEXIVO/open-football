@@ -1,6 +1,6 @@
 //! Moved verbatim out of `free_agents.rs` — see that file's `mod emergency_fill_tests`.
 
-use super::*;
+use super::super::*;
 use crate::club::academy::ClubAcademy;
 use crate::club::player::builder::PlayerBuilder;
 use crate::competitions::global::GlobalCompetitions;
@@ -13,6 +13,7 @@ use crate::transfers::market::TransferListingStatus;
 use crate::transfers::market::map::{CorridorWeight, CountryTransferProfile, MarketCountryFacts};
 use crate::transfers::pipeline::{ShortlistCandidateStatus, TransferNeedPriority};
 use crate::transfers::squad::needs::EmergencyContractTermsPolicy;
+use crate::utils::random::engine::RandomEngine;
 use crate::{
     Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, Country, PersonAttributes, Player,
     PlayerAttributes, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
@@ -245,7 +246,7 @@ fn empty_main_team_generates_emergency_signings_for_each_group() {
     // weighted cluster pick + acceptance roll sequence is independent
     // of how many RNG draws preceding tests consumed (mirrors the
     // seeded sibling tests in this block).
-    crate::utils::random::engine::RandomEngine::set_seed(0xE11E_C7AB_u64);
+    RandomEngine::set_seed(0xE11E_C7AB_u64);
     // Empty squad → urgent flag. Emergency pass should produce at
     // least one signing per missing group (GK/DEF/MID/FWD) up to
     // the per-club cap, before the normal request-driven matcher
@@ -316,7 +317,7 @@ fn club_short_one_gk_signs_a_gk_first() {
     // acceptance roll is deterministic regardless of how many RNG draws
     // preceding tests consumed (mirrors the seeded sibling tests above).
     // Without this the outcome is execution-order dependent.
-    crate::utils::random::engine::RandomEngine::set_seed(0xE11E_C7AB_u64);
+    RandomEngine::set_seed(0xE11E_C7AB_u64);
     // Squad has 0 GK and a handful of outfield bodies — emergency
     // pass must reach for the goalkeeper before anything else.
     let players: Vec<Player> = (0..8)
@@ -431,7 +432,7 @@ fn underfilled_club_signs_multiple_despite_normal_daily_cap() {
     // weighted cluster pick + acceptance roll sequence stays
     // deterministic regardless of suite position (the cluster pick
     // now draws RNG for multi-candidate slots).
-    crate::utils::random::engine::RandomEngine::set_seed(0xE11E_C7AB_u64);
+    RandomEngine::set_seed(0xE11E_C7AB_u64);
     // Squad of 9 (urgent < 11). Normal max_free_agent_signings_per_day
     // is 2; the emergency pass uses a separate per-club cap (5
     // by default) so the underfilled club must be able to sign
@@ -499,7 +500,7 @@ fn zero_transfer_budget_does_not_block_emergency_fill() {
     // independence, not the acceptance roll — with cp 0.6 each
     // candidate accepted only ~40% of the time and all five could
     // decline on an unlucky stream.
-    crate::utils::random::engine::RandomEngine::set_seed(0x0B0D_6E70);
+    RandomEngine::set_seed(0x0B0D_6E70);
     // Construct a club whose finance balance is zero / negative —
     // emergency fill should still proceed because free-agent fee
     // is 0 and the emergency pass doesn't gate on transfer budget.
@@ -691,7 +692,7 @@ fn urgent_club_reaches_eleven_in_one_tick_with_plausible_pool() {
     // mercy of whatever earlier tests in the suite drained from
     // the thread-local stream, and one or two unlucky rejects
     // tip the signings count under the 11 floor.
-    crate::utils::random::engine::RandomEngine::set_seed(0xE11E_C7AB_u64);
+    RandomEngine::set_seed(0xE11E_C7AB_u64);
 
     // Empty squad + plenty of plausible candidates → adaptive cap
     // lifts to the playable-size floor. The signing budget is
@@ -2148,7 +2149,7 @@ fn depth_slot_stages_pipeline_request_instead_of_direct_signing() {
 
 #[test]
 fn depth_request_creates_pending_personal_terms_negotiation() {
-    crate::utils::random::engine::RandomEngine::set_seed(0xDE91_07F1);
+    RandomEngine::set_seed(0xDE91_07F1);
     let (mut country, pool) = DepthPipelineFixtures::staged_depth_country();
 
     let (signings, offered, _rejected) =
@@ -2215,7 +2216,7 @@ fn depth_request_creates_pending_personal_terms_negotiation() {
 
 #[test]
 fn low_rep_club_cannot_depth_sign_high_rep_foreign_free_agent() {
-    crate::utils::random::engine::RandomEngine::set_seed(0x10F_FA11);
+    RandomEngine::set_seed(0x10F_FA11);
     // 800-rep country, routine pressure, CA-165 foreign star with a
     // 7500 reference reputation: the strict depth gates (tier CA
     // ceiling without overreach + pressure-scaled rep drop) must
@@ -2258,7 +2259,7 @@ fn low_rep_club_cannot_depth_sign_high_rep_foreign_free_agent() {
 
 #[test]
 fn depth_personal_terms_rejection_updates_request_and_shortlist() {
-    crate::utils::random::engine::RandomEngine::set_seed(0xBAD_7E55);
+    RandomEngine::set_seed(0xBAD_7E55);
     let (mut country, pool) = DepthPipelineFixtures::staged_depth_country();
     DepthPipelineFixtures::run_until_negotiation(&mut country, &pool, 400);
     assert!(!country.transfer_market.negotiations.is_empty());
@@ -2300,7 +2301,7 @@ fn pool_depth_medical_completion_defers_global_signing_without_direct_history() 
     // a genuine completion-path regression fails every attempt,
     // while the 1% artifact cannot survive eight (P ≈ 1e-16).
     for attempt in 0..8u64 {
-        crate::utils::random::engine::RandomEngine::set_seed(0xD0C7_0001 + attempt);
+        RandomEngine::set_seed(0xD0C7_0001 + attempt);
         let (mut country, pool) = DepthPipelineFixtures::staged_depth_country();
         DepthPipelineFixtures::run_until_negotiation(&mut country, &pool, 400);
         let neg_id = *country
@@ -2340,7 +2341,7 @@ fn pool_depth_medical_completion_defers_global_signing_without_direct_history() 
             ),
         );
 
-        crate::utils::random::engine::RandomEngine::set_seed(42 + attempt);
+        RandomEngine::set_seed(42 + attempt);
         let mut summary = TransferActivitySummary::new();
         let outcomes = CountryResult::resolve_pending_negotiations(
             &mut country,
@@ -2417,7 +2418,7 @@ fn pool_depth_medical_completion_defers_global_signing_without_direct_history() 
 
 #[test]
 fn unmarked_depth_cover_request_keeps_legacy_instant_signing() {
-    crate::utils::random::engine::RandomEngine::set_seed(0x1E6A_C001);
+    RandomEngine::set_seed(0x1E6A_C001);
     // A DepthCover request from the weekly evaluation (no
     // EmergencyFreeAgentDepth marker) must keep the legacy instant
     // free-agent path — the staged-negotiation flow is reserved
@@ -2511,7 +2512,7 @@ fn pool_executor_writes_single_history_row_on_success() {
         terms: None,
     };
     let executed =
-        execute_global_free_agent_signing(&mut data, &signing, date, &TransferConfig::default());
+        GlobalFreeAgentPool::execute_signing(&mut data, &signing, date, &TransferConfig::default());
 
     assert!(executed, "unclaimed pool player must be signable");
     assert!(data.free_agents.is_empty(), "player leaves the pool");
@@ -2564,7 +2565,7 @@ fn pool_executor_writes_no_history_when_player_already_claimed() {
         terms: None,
     };
     let executed =
-        execute_global_free_agent_signing(&mut data, &signing, date, &TransferConfig::default());
+        GlobalFreeAgentPool::execute_signing(&mut data, &signing, date, &TransferConfig::default());
 
     assert!(!executed, "claimed player cannot be signed twice");
     assert!(

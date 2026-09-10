@@ -982,7 +982,7 @@ impl CountryResult {
                 })
                 .unwrap_or(0);
 
-            let min_to_keep = min_squad_for_group(group);
+            let min_to_keep = ListingBars::min_squad(group);
             let slots_after_min = current_count.saturating_sub(min_to_keep);
             let max_can_list = slots_after_min
                 .saturating_sub(exempt_in_group)
@@ -1418,7 +1418,7 @@ impl CountryResult {
         // their careers: loyalty, shorter shopping lists, a 35-year-old
         // stalwart at a regional club is a feature, not a problem.
         if rep_level.cycles_aging_squad() {
-            let aging_threshold = aging_listing_threshold(player.position().position_group());
+            let aging_threshold = ListingBars::aging(player.position().position_group());
             if age >= aging_threshold && ca_i < avg + 5 {
                 return ListingDecision::Transfer {
                     reason: "dec_reason_aging_declining".to_string(),
@@ -1521,8 +1521,7 @@ impl CountryResult {
         // winger. Requires both conditions — the previous OR labelled any
         // 27-year-old who'd reached his potential as "peaked or declining",
         // which is simply a mature player, not a selling point.
-        let peaked_age =
-            aging_listing_threshold(player.position().position_group()).saturating_sub(2);
+        let peaked_age = ListingBars::aging(player.position().position_group()).saturating_sub(2);
         if age >= peaked_age && pa <= ca {
             return ListingDecision::Transfer {
                 reason: "dec_reason_peaked_declining".to_string(),
@@ -1838,28 +1837,36 @@ impl CountryResult {
     }
 }
 
-/// Age at which a mid-tier player at or below squad average is considered
-/// "past his prime" for transfer-listing purposes. Mirrors real-world
-/// career lengths: keepers last longest, forwards (speed-dependent)
-/// decline first, defenders and holding midfielders sit in between.
-fn aging_listing_threshold(group: PlayerFieldPositionGroup) -> u8 {
-    match group {
-        PlayerFieldPositionGroup::Goalkeeper => 37,
-        PlayerFieldPositionGroup::Defender => 34,
-        PlayerFieldPositionGroup::Midfielder => 33,
-        PlayerFieldPositionGroup::Forward => 32,
-    }
-}
+/// The two per-group bars the listing pass is written against: when a
+/// player is old enough to be let go, and how thin a group may get before
+/// the club stops letting anyone go at all.
+struct ListingBars;
 
-/// Minimum number of main-team players a club must retain per position
-/// group after any club-decided transfer/loan listings in a single pass.
-/// Player-initiated listings (REQ/UNH) bypass this cap.
-fn min_squad_for_group(group: PlayerFieldPositionGroup) -> usize {
-    match group {
-        PlayerFieldPositionGroup::Goalkeeper => 2,
-        PlayerFieldPositionGroup::Defender => 6,
-        PlayerFieldPositionGroup::Midfielder => 6,
-        PlayerFieldPositionGroup::Forward => 3,
+impl ListingBars {
+    /// Age at which a mid-tier player at or below squad average is
+    /// considered "past his prime" for transfer-listing purposes. Mirrors
+    /// real-world career lengths: keepers last longest, forwards
+    /// (speed-dependent) decline first, defenders and holding midfielders
+    /// sit in between.
+    fn aging(group: PlayerFieldPositionGroup) -> u8 {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => 37,
+            PlayerFieldPositionGroup::Defender => 34,
+            PlayerFieldPositionGroup::Midfielder => 33,
+            PlayerFieldPositionGroup::Forward => 32,
+        }
+    }
+
+    /// Minimum number of main-team players a club must retain per position
+    /// group after any club-decided transfer/loan listings in a single
+    /// pass. Player-initiated listings (REQ/UNH) bypass this cap.
+    fn min_squad(group: PlayerFieldPositionGroup) -> usize {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => 2,
+            PlayerFieldPositionGroup::Defender => 6,
+            PlayerFieldPositionGroup::Midfielder => 6,
+            PlayerFieldPositionGroup::Forward => 3,
+        }
     }
 }
 

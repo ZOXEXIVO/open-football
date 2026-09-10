@@ -1,9 +1,8 @@
 use super::execution::TransferExecution;
-use super::free_agent_market_calc::BuyerRoleFit;
-use super::free_agents::{EmergencySignedTerms, GlobalFreeAgentSigning};
+use super::free::pricing::BuyerRoleFit;
+use super::free::{EmergencySignedTerms, GlobalFreeAgentSigning};
 use super::types::{
-    DeferredTransfer, NegotiationData, PendingPlayerSignal, TransferActivitySummary,
-    find_player_in_country, find_player_in_country_mut,
+    CountryRoster, DeferredTransfer, NegotiationData, PendingPlayerSignal, TransferActivitySummary,
 };
 use crate::club::WageReliefSale;
 use crate::club::board::ownership::ClubBenefactor;
@@ -231,11 +230,10 @@ impl CountryResult {
                     // listings created to back unsolicited approaches
                     // are explicitly excluded so that the bonuses
                     // downstream don't reward stale plumbing.
-                    let player_is_available =
-                        super::types::find_player_in_country(country, n.player_id)
-                            .map(|p| AvailabilityView::read(p, n.is_loan, listing_origin))
-                            .map(|v| v.available_soft)
-                            .unwrap_or(false);
+                    let player_is_available = CountryRoster::find(country, n.player_id)
+                        .map(|p| AvailabilityView::read(p, n.is_loan, listing_origin))
+                        .map(|v| v.available_soft)
+                        .unwrap_or(false);
 
                     let sell_on_percentage = n.current_offer.clauses.iter().find_map(|c| {
                         if let TransferClause::SellOnClause(pct) = c {
@@ -341,7 +339,7 @@ impl CountryResult {
         source: TransferInterestSource,
         repeated_attention: bool,
     ) -> Option<TransferInterestSignal> {
-        let player = find_player_in_country(country, neg_data.player_id)?;
+        let player = CountryRoster::find(country, neg_data.player_id)?;
         let selling_club = country
             .clubs
             .iter()
@@ -430,7 +428,7 @@ impl CountryResult {
                     repeated_attention,
                 );
                 if let Some(sig) = signal {
-                    if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
+                    if let Some(player) = CountryRoster::find_mut(country, neg_data.player_id) {
                         player.on_transfer_interest_signal(&sig);
                     }
                 }
@@ -480,7 +478,7 @@ impl CountryResult {
         if neg_data.selling_country_id.is_some() || neg_data.selling_club_id == 0 {
             return;
         }
-        if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
+        if let Some(player) = CountryRoster::find_mut(country, neg_data.player_id) {
             if status == PlayerStatusType::Trn {
                 player.statuses.remove(PlayerStatusType::Bid);
             }
@@ -510,7 +508,7 @@ impl CountryResult {
         if another_live {
             return;
         }
-        if let Some(player) = find_player_in_country_mut(country, player_id) {
+        if let Some(player) = CountryRoster::find_mut(country, player_id) {
             player.statuses.remove(PlayerStatusType::Bid);
             player.statuses.remove(PlayerStatusType::Trn);
         }
@@ -699,7 +697,7 @@ impl CountryResult {
             .clubs
             .iter()
             .find(|c| c.id == neg_data.selling_club_id)?;
-        let player = find_player_in_country(country, neg_data.player_id)?;
+        let player = CountryRoster::find(country, neg_data.player_id)?;
         let guard = PipelineProcessor::loan_guard_for(country, selling_club, player, date)?;
         let borrower = country
             .clubs
@@ -743,7 +741,7 @@ impl CountryResult {
                         })
                     })
                     .unwrap_or(false);
-            if let Some(player) = find_player_in_country(country, neg_data.player_id) {
+            if let Some(player) = CountryRoster::find(country, neg_data.player_id) {
                 if !development_loan_listed && player.is_transfer_protected(date, current_window) {
                     if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id)
                     {
@@ -896,7 +894,7 @@ impl CountryResult {
                 .iter()
                 .find(|c| c.id == neg_data.selling_club_id)
                 .map(|club| {
-                    let asset = find_player_in_country(country, neg_data.player_id)
+                    let asset = CountryRoster::find(country, neg_data.player_id)
                         .map(|p| SquadAssetProtection::classify(p, club, date))
                         .map(|c| c.label())
                         .unwrap_or("unknown");
@@ -1865,7 +1863,7 @@ impl CountryResult {
             .clubs
             .iter()
             .find(|c| c.id == neg_data.selling_club_id)?;
-        let player = find_player_in_country(country, neg_data.player_id)?;
+        let player = CountryRoster::find(country, neg_data.player_id)?;
         // The ONE importance formula, from the staged plausibility model —
         // the domestic and foreign paths must not disagree about what a
         // player is to his club (Part VIII, "two importance formulas").
@@ -2026,7 +2024,7 @@ impl CountryResult {
     /// when the player is not reachable from this country — a cross-border
     /// deal, which always stages its wage at creation anyway.
     fn buyer_level_wage(country: &Country, neg_data: &NegotiationData) -> Option<u32> {
-        let player = find_player_in_country(country, neg_data.player_id)?;
+        let player = CountryRoster::find(country, neg_data.player_id)?;
         let promised = neg_data
             .personal_terms
             .as_ref()
@@ -2253,7 +2251,7 @@ impl CountryResult {
         let is_injured = if is_foreign {
             false
         } else {
-            find_player_in_country(country, neg_data.player_id)
+            CountryRoster::find(country, neg_data.player_id)
                 .map(|p| p.player_attributes.is_injured)
                 .unwrap_or(false)
         };
@@ -2456,7 +2454,7 @@ impl CountryResult {
             let player_name = if is_foreign {
                 neg_data.player_name.clone()
             } else {
-                find_player_in_country(country, neg_data.player_id)
+                CountryRoster::find(country, neg_data.player_id)
                     .map(|p| p.full_name.to_string())
                     .unwrap_or_default()
             };
@@ -2667,7 +2665,7 @@ impl CountryResult {
     /// current contract. Caller must only consult this for domestic
     /// transfers — we don't carry the foreign contract into NegotiationData.
     fn clause_triggers_sale(country: &Country, neg_data: &NegotiationData) -> bool {
-        let player = match find_player_in_country(country, neg_data.player_id) {
+        let player = match CountryRoster::find(country, neg_data.player_id) {
             Some(p) => p,
             None => return false,
         };
@@ -2731,7 +2729,7 @@ impl CountryResult {
             .clubs
             .iter()
             .find(|c| c.id == neg_data.selling_club_id)?;
-        let player = find_player_in_country(country, neg_data.player_id)?;
+        let player = CountryRoster::find(country, neg_data.player_id)?;
         let inputs = TransferPlausibilityBuilder::from_clubs(
             country,
             buyer,
@@ -2892,7 +2890,7 @@ impl SellerFeeFloor {
             .clubs
             .iter()
             .find(|c| c.id == neg_data.selling_club_id)?;
-        let player = find_player_in_country(country, neg_data.player_id)?;
+        let player = CountryRoster::find(country, neg_data.player_id)?;
 
         let asset_class = SquadAssetProtection::classify(player, seller, date);
         let distress = Self::distress_for(player, seller, date);
@@ -4475,7 +4473,7 @@ mod saga_visibility_tests {
         }
 
         fn target(country: &Country) -> &Player {
-            find_player_in_country(country, Self::PLAYER_ID).expect("target present")
+            CountryRoster::find(country, Self::PLAYER_ID).expect("target present")
         }
 
         fn has_event(player: &Player, kind: HappinessEventType) -> bool {

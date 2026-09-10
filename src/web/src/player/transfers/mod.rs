@@ -9,7 +9,7 @@ use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
-use core::transfers::reason::TransferReason;
+use core::transfers::deal::reason::TransferReason;
 use core::transfers::{
     NegotiationPhase, NegotiationStatus, TransferListingStatus, TransferListingType,
 };
@@ -556,8 +556,8 @@ fn get_neighbor_teams(
 mod tests {
     use super::*;
     use core::club::player::calculators::FreeAgentReleaseReason;
+    use core::transfers::deal::reason::{AbilityBand, ScoutVerdict};
     use core::transfers::pipeline::{ScoutingRecommendation, TransferNeedReason};
-    use core::transfers::reason::{AbilityBand, ScoutVerdict};
     use std::collections::HashMap;
 
     fn en_map() -> HashMap<String, String> {

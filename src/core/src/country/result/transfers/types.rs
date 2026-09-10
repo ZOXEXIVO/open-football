@@ -177,29 +177,38 @@ pub struct DeferredTransfer {
     pub(crate) offer_clauses: Vec<TransferClause>,
 }
 
-pub(crate) fn find_player_in_country(country: &Country, player_id: u32) -> Option<&Player> {
-    for club in &country.clubs {
-        for team in &club.teams.teams {
-            if let Some(player) = team.players.find(player_id) {
-                return Some(player);
-            }
-        }
-    }
-    None
-}
+/// Finding a player inside one country's rosters.
+///
+/// The transfer passes hold a `&Country` and know only a player id — the
+/// negotiation, the listing and the saga beat all carry ids, not references.
+/// Every one of them needs the same walk: clubs, then teams, then the
+/// squad.
+pub(crate) struct CountryRoster;
 
-pub(crate) fn find_player_in_country_mut(
-    country: &mut Country,
-    player_id: u32,
-) -> Option<&mut Player> {
-    for club in &mut country.clubs {
-        for team in club.teams.iter_mut() {
-            if let Some(player) = team.players.find_mut(player_id) {
-                return Some(player);
+impl CountryRoster {
+    /// The player, wherever in the country he is registered.
+    pub(crate) fn find(country: &Country, player_id: u32) -> Option<&Player> {
+        for club in &country.clubs {
+            for team in &club.teams.teams {
+                if let Some(player) = team.players.find(player_id) {
+                    return Some(player);
+                }
             }
         }
+        None
     }
-    None
+
+    /// The same walk, for a pass that needs to write to him.
+    pub(crate) fn find_mut(country: &mut Country, player_id: u32) -> Option<&mut Player> {
+        for club in &mut country.clubs {
+            for team in club.teams.iter_mut() {
+                if let Some(player) = team.players.find_mut(player_id) {
+                    return Some(player);
+                }
+            }
+        }
+        None
+    }
 }
 
 /// A player-visible saga beat that could not be delivered inside the

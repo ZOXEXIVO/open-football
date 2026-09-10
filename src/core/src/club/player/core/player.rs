@@ -19,10 +19,8 @@ use crate::club::player::mind::{
 use crate::club::player::plan::PlayerPlan;
 use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::PlayerTrait;
-use crate::club::player::transfer::availability_market::AvailabilityMarketState;
-use crate::club::player::transfer::free_agent_market::{
-    FreeAgentMarketState, PreContractAgreement,
-};
+use crate::club::player::transfer::availability::AvailabilityMarketState;
+use crate::club::player::transfer::free::{FreeAgentMarketState, PreContractAgreement};
 use crate::club::player::transfer::processing::TransferDesireContext;
 use crate::club::player::utils::PlayerUtils;
 use crate::club::{
@@ -362,7 +360,7 @@ pub struct Player {
     /// Durable market-state snapshot kept while the player is a free
     /// agent. Read via `Player::free_agent_state()`. Mutation is owner-
     /// side via `on_release` / `on_offer_received` / `clear_free_agent_state`
-    /// — defined in `crate::club::player::transfer::free_agent_market`.
+    /// — defined in `crate::club::player::transfer::free`.
     pub(crate) free_agent_state: Option<FreeAgentMarketState>,
 
     /// Durable market-discovery state kept while the player is a *signed*
@@ -371,7 +369,7 @@ pub struct Player {
     /// Mutation is owner-side via `ensure_availability_state` /
     /// `on_availability_interest` / `on_availability_blocked` /
     /// `clear_availability_state`, defined in
-    /// `crate::club::player::transfer::availability_market`. The
+    /// `crate::club::player::transfer::availability`. The
     /// signed-side mirror of `free_agent_state`.
     pub(crate) availability_market: Option<AvailabilityMarketState>,
 

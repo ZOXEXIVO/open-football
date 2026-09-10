@@ -17,6 +17,7 @@ use crate::transfers::pipeline::{
     LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus, PipelineProcessor,
 };
 use crate::transfers::view::club::ClubView;
+use crate::transfers::view::world::MarketWorld;
 use crate::{
     ChangeType, Club, ClubDirectionContext, ClubDirectionEvidence, ClubDirectionKind, ClubFinances,
     ClubPhilosophy, Country, NewSigningThreatContext, NewSigningThreatReason, Player,
@@ -59,7 +60,8 @@ impl TransferExecution {
             Some(team) if team.team_type.is_own_team() => team,
             _ => club.teams.main().or_else(|| club.teams.teams.first())?,
         };
-        let (league_name, league_slug) = resolve_selling_league_labels(country, target.league_id);
+        let (league_name, league_slug) =
+            ExecutionLookup::selling_league_labels(country, target.league_id);
         Some(TeamInfo {
             name: target.name.clone(),
             slug: target.slug.clone(),
@@ -280,7 +282,7 @@ impl SquadReactionPass {
                     continue;
                 }
                 compatriot_present = true;
-                let lacks_lang = !speaks_local_language(existing, club_country_code);
+                let lacks_lang = !Self::speaks_local_language(existing, club_country_code);
                 existing.on_compatriot_joined(player_id, club_country_id, lacks_lang);
             }
         }
@@ -300,7 +302,7 @@ impl SquadReactionPass {
             if let Some(compatriot_id) = a_compatriot_id {
                 for team in &mut buying_club.teams.teams {
                     if let Some(arrival) = team.players.iter_mut().find(|p| p.id == player_id) {
-                        let lacks_lang = !speaks_local_language(arrival, club_country_code);
+                        let lacks_lang = !Self::speaks_local_language(arrival, club_country_code);
                         arrival.on_compatriot_joined(compatriot_id, club_country_id, lacks_lang);
                         break;
                     }
@@ -527,472 +529,542 @@ impl SquadReactionPass {
             }
         }
     }
-}
 
-/// True if the country's primary language(s) are met at functional fluency
-/// (proficiency >= 70). Used to gate CompatriotJoined: an integration boost
-/// from a same-nationality teammate matters most when the new arrival is
-/// linguistically isolated.
-fn speaks_local_language(player: &Player, country_code: &str) -> bool {
-    let langs = Language::from_country_code(country_code);
-    if langs.is_empty() {
-        return true;
+    /// True if the country's primary language(s) are met at functional fluency
+    /// (proficiency >= 70). Used to gate CompatriotJoined: an integration boost
+    /// from a same-nationality teammate matters most when the new arrival is
+    /// linguistically isolated.
+    fn speaks_local_language(player: &Player, country_code: &str) -> bool {
+        let langs = Language::from_country_code(country_code);
+        if langs.is_empty() {
+            return true;
+        }
+        langs.iter().any(|l| {
+            player
+                .languages
+                .iter()
+                .any(|pl| pl.language == *l && (pl.is_native || pl.proficiency >= 70))
+        })
     }
-    langs.iter().any(|l| {
-        player
-            .languages
-            .iter()
-            .any(|pl| pl.language == *l && (pl.is_native || pl.proficiency >= 70))
-    })
 }
 
-/// Unified transfer execution — handles both domestic and cross-country.
-/// When selling_country_id == buying_country_id it's domestic (single country).
-/// When different, the player moves between countries.
-/// Returns true if the player was successfully placed at the buying club.
-fn execute_transfer_move(
-    data: &mut SimulatorData,
-    transfer: &DeferredTransfer,
-    date: NaiveDate,
-) -> (bool, bool) {
-    let player_id = transfer.player_id;
-    let selling_country_id = transfer.selling_country_id;
-    let selling_club_id = transfer.selling_club_id;
-    let buying_country_id = transfer.buying_country_id;
-    let buying_club_id = transfer.buying_club_id;
-    let is_loan = transfer.is_loan;
+/// Moving a player, once both sides have agreed.
+///
+/// One executor per product — [`Self::permanent`] and [`Self::loan`] —
+/// each generic over
+/// [`MarketWorld`](crate::transfers::view::world::MarketWorld), so the
+/// same code runs whether the caller holds one country (Phase A) or the
+/// whole world (Phase C). There used to be two of each, one per scope,
+/// and they drifted.
+pub(crate) struct TransferExecutor;
 
-    // The fee was reserved against the buyer's transfer budget when the deal
-    // was agreed (see `resolve_medical`). Release that reservation up front
-    // so the real purchase accounting below runs against the restored
-    // budget — and so ANY early-out here (self-transfer, route block, squad
-    // full, lost race) leaves the budget intact instead of leaking the
-    // set-aside money. Loans never reserved, so they're skipped.
-    if !is_loan {
-        if let Some(buying_country) = data.country_mut(buying_country_id) {
-            if let Some(buying_club) = buying_country
-                .clubs
-                .iter_mut()
-                .find(|c| c.id == buying_club_id)
-            {
-                // The reservation only set aside the upfront portion
-                // (installment tranches settle from future cash), so the
-                // release must match it — refunding the full headline here
-                // handed every structured deal free budget equal to the
-                // deferred portion.
-                let upfront = TransferExecution::upfront_fee(transfer);
-                buying_club.finance.refund_transfer_budget(upfront);
-                buying_club.transfer_plan.reserved =
-                    (buying_club.transfer_plan.reserved - upfront).max(0.0);
+impl TransferExecutor {
+    /// Unified transfer execution — handles both domestic and cross-country.
+    /// When selling_country_id == buying_country_id it's domestic (single country).
+    /// When different, the player moves between countries.
+    /// Returns true if the player was successfully placed at the buying club.
+    fn move_player(
+        data: &mut SimulatorData,
+        transfer: &DeferredTransfer,
+        date: NaiveDate,
+    ) -> (bool, bool) {
+        let player_id = transfer.player_id;
+        let selling_country_id = transfer.selling_country_id;
+        let selling_club_id = transfer.selling_club_id;
+        let buying_country_id = transfer.buying_country_id;
+        let buying_club_id = transfer.buying_club_id;
+        let is_loan = transfer.is_loan;
+
+        // The fee was reserved against the buyer's transfer budget when the deal
+        // was agreed (see `resolve_medical`). Release that reservation up front
+        // so the real purchase accounting below runs against the restored
+        // budget — and so ANY early-out here (self-transfer, route block, squad
+        // full, lost race) leaves the budget intact instead of leaking the
+        // set-aside money. Loans never reserved, so they're skipped.
+        if !is_loan {
+            if let Some(buying_country) = data.country_mut(buying_country_id) {
+                if let Some(buying_club) = buying_country
+                    .clubs
+                    .iter_mut()
+                    .find(|c| c.id == buying_club_id)
+                {
+                    // The reservation only set aside the upfront portion
+                    // (installment tranches settle from future cash), so the
+                    // release must match it — refunding the full headline here
+                    // handed every structured deal free budget equal to the
+                    // deferred portion.
+                    let upfront = TransferExecution::upfront_fee(transfer);
+                    buying_club.finance.refund_transfer_budget(upfront);
+                    buying_club.transfer_plan.reserved =
+                        (buying_club.transfer_plan.reserved - upfront).max(0.0);
+                }
             }
         }
-    }
 
-    // Safety: never transfer/loan a player to their own club
-    if selling_club_id == buying_club_id {
-        debug!(
-            "Blocked self-transfer: club {} tried to {} player {} to itself",
-            selling_club_id,
-            if is_loan { "loan" } else { "transfer" },
-            player_id
-        );
-        return (false, false);
-    }
-
-    // Safety: can't loan a player who is already on loan
-    if is_loan {
-        let already_on_loan = data
-            .player(player_id)
-            .map(|p| p.is_on_loan())
-            .unwrap_or(false);
-        if already_on_loan {
-            debug!("Blocked re-loan: player {} is already on loan", player_id);
-            return (false, false);
-        }
-    }
-
-    // Country-pair route policy: this is the final chokepoint every AI
-    // and stale-negotiation path flows through, so a closed route
-    // (Russia ↔ Ukraine from 2022-02-24 onwards) is refused here even
-    // if a prior gate let the transfer reach DeferredTransfer staging.
-    // Domestic moves resolve into the same code path with
-    // `selling_country_id == buying_country_id`, but the route policy
-    // is symmetric and only matches cross-country pairs, so the
-    // domestic case is automatically inert.
-    if selling_country_id != buying_country_id {
-        let selling_country_code = data
-            .country(selling_country_id)
-            .map(|c| c.code.clone())
-            .unwrap_or_default();
-        let buying_country_code = data
-            .country(buying_country_id)
-            .map(|c| c.code.clone())
-            .unwrap_or_default();
-        if !selling_country_code.is_empty()
-            && !buying_country_code.is_empty()
-            && TransferRoutePolicy::is_blocked(&selling_country_code, &buying_country_code, date)
-        {
+        // Safety: never transfer/loan a player to their own club
+        if selling_club_id == buying_club_id {
             debug!(
-                "Blocked by country-pair route policy: player {} from country {} ({}) to country {} ({}) on {} (is_loan={})",
-                player_id,
-                selling_country_id,
-                selling_country_code,
-                buying_country_id,
-                buying_country_code,
-                date,
-                is_loan
+                "Blocked self-transfer: club {} tried to {} player {} to itself",
+                selling_club_id,
+                if is_loan { "loan" } else { "transfer" },
+                player_id
             );
             return (false, false);
         }
-    }
-    // Sell-on payouts whose beneficiary lives outside the transacting
-    // country (the player was originally bought from abroad, then resold
-    // domestically). The within-country executor debits the seller and
-    // hands the credit up here, where the global lookup is possible.
-    let mut foreign_sell_on_credits: Vec<(u32, f64)> = Vec::new();
-    let success = if selling_country_id == buying_country_id {
-        // Domestic — work within a single country
-        if let Some(country) = data.country_mut(selling_country_id) {
-            if is_loan {
-                execute_loan_within_country(country, transfer, date)
-            } else {
-                execute_transfer_within_country(
-                    country,
-                    transfer,
-                    date,
-                    &mut foreign_sell_on_credits,
-                )
-            }
-        } else {
-            false
-        }
-    } else {
-        // Cross-country — take from one country, place in another
+
+        // Safety: can't loan a player who is already on loan
         if is_loan {
-            execute_loan_across_countries(data, transfer, date)
-        } else {
-            execute_transfer_across_countries(data, transfer, date)
-        }
-    };
-
-    // Once the player has actually moved, sweep stale transfer interest
-    // (scouting, shortlists, monitoring, listings, pending negotiations)
-    // across every country — not just the buying country. The negotiation
-    // acceptance path already calls `clear_player_interest` on the owning
-    // country, but clubs elsewhere keep stale rows until this cleanup.
-    if success {
-        // Sell-on shares owed to beneficiaries abroad — the seller was
-        // debited inside the country borrow; credit the foreign club now.
-        for (club_id, amount) in &foreign_sell_on_credits {
-            TransferExecution::credit_club_globally(data, *club_id, *amount);
-        }
-    }
-    (success, !is_loan)
-}
-
-/// Execute one deferred transfer end to end. The single-move entry point:
-/// it moves the player, sweeps the world for stale interest in him, and
-/// stages the development loan. `execute_transfers` is the batched form the
-/// tick actually uses — same three steps, one sweep for everybody.
-#[allow(dead_code)] // single-move form; the tick uses `execute_transfers`
-pub(crate) fn execute_transfer(
-    data: &mut SimulatorData,
-    transfer: &DeferredTransfer,
-    date: NaiveDate,
-) -> bool {
-    let (success, stage_pathway) = execute_transfer_move(data, transfer, date);
-    if success {
-        PipelineProcessor::cleanup_player_transfer_interest(data, transfer.player_id);
-        if stage_pathway {
-            stage_development_loan(data, transfer, date);
-        }
-    }
-    success
-}
-
-/// Execute a tick's worth of deferred transfers for one country.
-///
-/// Same three steps as [`execute_transfer`] and the same order between
-/// them — move, sweep, stage — but the sweep walks the world ONCE for
-/// everyone who moved instead of once per move, which is what it used to
-/// do. The order matters and is why the phases are separated rather than
-/// interleaved: the sweep completes every open listing for a player it is
-/// given, so a development loan listed before it ran would be cancelled by
-/// it. Returns one flag per input, in order.
-pub(crate) fn execute_transfers(
-    data: &mut SimulatorData,
-    transfers: &[DeferredTransfer],
-    date: NaiveDate,
-) -> Vec<bool> {
-    let mut results = Vec::with_capacity(transfers.len());
-    let mut moved: Vec<u32> = Vec::new();
-    let mut pathways: Vec<usize> = Vec::new();
-    for (index, transfer) in transfers.iter().enumerate() {
-        let (success, stage_pathway) = execute_transfer_move(data, transfer, date);
-        results.push(success);
-        if success {
-            moved.push(transfer.player_id);
-            if stage_pathway {
-                pathways.push(index);
+            let already_on_loan = data
+                .player(player_id)
+                .map(|p| p.is_on_loan())
+                .unwrap_or(false);
+            if already_on_loan {
+                debug!("Blocked re-loan: player {} is already on loan", player_id);
+                return (false, false);
             }
         }
-    }
-    PipelineProcessor::cleanup_player_transfer_interest_batch(data, &moved);
-    for index in pathways {
-        stage_development_loan(data, &transfers[index], date);
-    }
-    results
-}
 
-/// Development pathway: a young Development-plan signing at a big club may
-/// go straight onto the loan list for first-team minutes. Data-level so the
-/// hoarding cap also counts the buyer's cross-country loanees.
-fn stage_development_loan(data: &mut SimulatorData, transfer: &DeferredTransfer, date: NaiveDate) {
-    {
-        let player_id = transfer.player_id;
-        let buying_country_id = transfer.buying_country_id;
-        let buying_club_id = transfer.buying_club_id;
-        DevelopmentLoanPathway::stage_after_purchase_global(
-            data,
-            buying_country_id,
-            buying_club_id,
-            player_id,
-            transfer.personal_terms.as_ref(),
-            date,
-        );
-    }
-}
-
-/// Undo the buyer/seller bookkeeping an agreed deal left behind when its
-/// execution then failed (squad full, lost race, route block at the final
-/// step). `resolve_medical` optimistically finalises both sides — listing
-/// Completed, request Fulfilled, candidate Signed, interest cleared — before
-/// the deferred executor runs; on failure that state must be rolled back or
-/// the player silently vanishes from the market and the buyer's need reads as
-/// met. The player himself is already back at his club (the roster move is
-/// reversed inside the executor), so this restores the surrounding market
-/// state to mirror a normal rejection.
-pub(crate) fn compensate_failed_execution(data: &mut SimulatorData, transfer: &DeferredTransfer) {
-    let player_id = transfer.player_id;
-
-    // Seller side: the listing lives in the SELLING country. Reopen it so the
-    // listed-player pipeline re-engages instead of dropping him.
-    if let Some(seller_country) = data.country_mut(transfer.selling_country_id) {
-        seller_country
-            .transfer_market
-            .reopen_after_failed_execution(player_id, transfer.selling_club_id);
-    }
-
-    // Buyer side: the negotiation lives in the BUYING country (a foreign deal
-    // is stored in the buyer's market). Flag the agreed-but-unexecuted deal
-    // failed so scans and the prune stop treating it as live, then undo the
-    // premature signed/fulfilled bookkeeping so the club keeps looking —
-    // exactly the cleanup a normal rejection performs.
-    if let Some(buying_country) = data.country_mut(transfer.buying_country_id) {
-        for n in buying_country.transfer_market.negotiations.values_mut() {
-            if n.player_id == player_id
-                && n.buying_club_id == transfer.buying_club_id
-                && n.status == NegotiationStatus::Accepted
+        // Country-pair route policy: this is the final chokepoint every AI
+        // and stale-negotiation path flows through, so a closed route
+        // (Russia ↔ Ukraine from 2022-02-24 onwards) is refused here even
+        // if a prior gate let the transfer reach DeferredTransfer staging.
+        // Domestic moves resolve into the same code path with
+        // `selling_country_id == buying_country_id`, but the route policy
+        // is symmetric and only matches cross-country pairs, so the
+        // domestic case is automatically inert.
+        if selling_country_id != buying_country_id {
+            let selling_country_code = data
+                .country(selling_country_id)
+                .map(|c| c.code.clone())
+                .unwrap_or_default();
+            let buying_country_code = data
+                .country(buying_country_id)
+                .map(|c| c.code.clone())
+                .unwrap_or_default();
+            if !selling_country_code.is_empty()
+                && !buying_country_code.is_empty()
+                && TransferRoutePolicy::is_blocked(
+                    &selling_country_code,
+                    &buying_country_code,
+                    date,
+                )
             {
-                n.status = NegotiationStatus::Rejected;
+                debug!(
+                    "Blocked by country-pair route policy: player {} from country {} ({}) to country {} ({}) on {} (is_loan={})",
+                    player_id,
+                    selling_country_id,
+                    selling_country_code,
+                    buying_country_id,
+                    buying_country_code,
+                    date,
+                    is_loan
+                );
+                return (false, false);
             }
         }
-        PipelineProcessor::on_negotiation_resolved(
-            buying_country,
-            transfer.buying_club_id,
-            player_id,
-            false,
-        );
+        // One executor per product, whatever the reach.
+        //
+        // There used to be two of each — a `_within_country` pair taking `&mut
+        // Country` and an `_across_countries` pair taking `&mut SimulatorData`
+        // — and the fork was never load-bearing: this function already holds
+        // `&mut SimulatorData` on both branches and merely narrowed it for the
+        // domestic case. What the fork did buy was drift. The domestic pair
+        // removed the player, credited the seller and fired the leaving
+        // squad's reactions BEFORE testing whether the buyer could actually
+        // take him, then rolled the roster and the cash back when it could
+        // not — leaving the dressing room having grieved a departure that
+        // never happened. The surviving executors test first and touch
+        // nothing until the answer is yes.
+        let success = if is_loan {
+            Self::loan(data, transfer, date)
+        } else {
+            Self::permanent(data, transfer, date)
+        };
+
+        (success, !is_loan)
     }
-}
 
-// ============================================================
-// Internal: domestic (single country)
-// ============================================================
+    /// Execute one deferred transfer end to end. The single-move entry point:
+    /// it moves the player, sweeps the world for stale interest in him, and
+    /// stages the development loan. `execute_transfers` is the batched form the
+    /// tick actually uses — same three steps, one sweep for everybody.
+    #[allow(dead_code)] // single-move form; the tick uses `execute_transfers`
+    pub(crate) fn one(
+        data: &mut SimulatorData,
+        transfer: &DeferredTransfer,
+        date: NaiveDate,
+    ) -> bool {
+        let (success, stage_pathway) = Self::move_player(data, transfer, date);
+        if success {
+            PipelineProcessor::cleanup_player_transfer_interest(data, transfer.player_id);
+            if stage_pathway {
+                Self::stage_development_loan(data, transfer, date);
+            }
+        }
+        success
+    }
 
-pub(crate) fn execute_transfer_within_country(
-    country: &mut Country,
-    transfer: &DeferredTransfer,
-    date: NaiveDate,
-    foreign_sell_on_credits: &mut Vec<(u32, f64)>,
-) -> bool {
-    let player_id = transfer.player_id;
-    let selling_club_id = transfer.selling_club_id;
-    let buying_club_id = transfer.buying_club_id;
-    let fee = transfer.fee;
-    // Only the upfront portion moves at completion; any installment tranches
-    // are paid over time by the settlement walk (see `upfront_fee`).
-    let upfront = TransferExecution::upfront_fee(transfer);
-    let mut player = None;
-    let mut from_info: Option<TeamInfo> = None;
-    let mut selling_league_id = None;
+    /// Execute a tick's worth of deferred transfers for one country.
+    ///
+    /// Same three steps as [`execute_transfer`] and the same order between
+    /// them — move, sweep, stage — but the sweep walks the world ONCE for
+    /// everyone who moved instead of once per move, which is what it used to
+    /// do. The order matters and is why the phases are separated rather than
+    /// interleaved: the sweep completes every open listing for a player it is
+    /// given, so a development loan listed before it ran would be cancelled by
+    /// it. Returns one flag per input, in order.
+    pub(crate) fn batch(
+        data: &mut SimulatorData,
+        transfers: &[DeferredTransfer],
+        date: NaiveDate,
+    ) -> Vec<bool> {
+        let mut results = Vec::with_capacity(transfers.len());
+        let mut moved: Vec<u32> = Vec::new();
+        let mut pathways: Vec<usize> = Vec::new();
+        for (index, transfer) in transfers.iter().enumerate() {
+            let (success, stage_pathway) = Self::move_player(data, transfer, date);
+            results.push(success);
+            if success {
+                moved.push(transfer.player_id);
+                if stage_pathway {
+                    pathways.push(index);
+                }
+            }
+        }
+        PipelineProcessor::cleanup_player_transfer_interest_batch(data, &moved);
+        for index in pathways {
+            Self::stage_development_loan(data, &transfers[index], date);
+        }
+        results
+    }
 
-    // Capture departing player's social traits BEFORE removal. Used by
-    // the post-move pass to emit per-teammate CloseFriendSold /
-    // MentorDeparted events on the leftover squad.
-    let departing: Option<DepartingPlayerInfo> = country
-        .clubs
-        .iter()
-        .find(|c| c.id == selling_club_id)
-        .and_then(|club| {
-            club.teams.iter().find_map(|t| {
-                t.players.iter().find(|p| p.id == player_id).map(|p| {
-                    DepartingPlayerInfo {
-                        id: p.id,
-                        age: p.age(date),
-                        country_id: p.country_id,
-                        // 7000+ world rep is a "household name" threshold.
-                        high_reputation: p.player_attributes.world_reputation >= 7000,
-                    }
-                })
-            })
-        });
+    /// Development pathway: a young Development-plan signing at a big club may
+    /// go straight onto the loan list for first-team minutes. Data-level so the
+    /// hoarding cap also counts the buyer's cross-country loanees.
+    fn stage_development_loan(
+        data: &mut SimulatorData,
+        transfer: &DeferredTransfer,
+        date: NaiveDate,
+    ) {
+        {
+            let player_id = transfer.player_id;
+            let buying_country_id = transfer.buying_country_id;
+            let buying_club_id = transfer.buying_club_id;
+            DevelopmentLoanPathway::stage_after_purchase_global(
+                data,
+                buying_country_id,
+                buying_club_id,
+                player_id,
+                transfer.personal_terms.as_ref(),
+                date,
+            );
+        }
+    }
 
-    // History identity of the squad the player actually occupies — must
-    // resolve BEFORE the roster removal below, exactly like the loan
-    // paths. Departing the club-Main spell for a B/Second-squad sale
-    // left the real spell active and drained the live season stats into
-    // a phantom Main row.
-    let history_source_info =
-        TransferExecution::resolve_history_source_info(country, selling_club_id, player_id);
+    /// Undo the buyer/seller bookkeeping an agreed deal left behind when its
+    /// execution then failed (squad full, lost race, route block at the final
+    /// step). `resolve_medical` optimistically finalises both sides — listing
+    /// Completed, request Fulfilled, candidate Signed, interest cleared — before
+    /// the deferred executor runs; on failure that state must be rolled back or
+    /// the player silently vanishes from the market and the buyer's need reads as
+    /// met. The player himself is already back at his club (the roster move is
+    /// reversed inside the executor), so this restores the surrounding market
+    /// state to mirror a normal rejection.
+    pub(crate) fn compensate_failure(data: &mut SimulatorData, transfer: &DeferredTransfer) {
+        let player_id = transfer.player_id;
 
-    if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-        if let Some(main_team) = selling_club.teams.main() {
-            selling_league_id = main_team.league_id;
-            from_info = Some(TeamInfo {
-                name: selling_club.name.clone(),
-                slug: main_team.slug.clone(),
-                reputation: main_team.reputation.world,
-                league_name: String::new(),
-                league_slug: String::new(),
-            });
+        // Seller side: the listing lives in the SELLING country. Reopen it so the
+        // listed-player pipeline re-engages instead of dropping him.
+        if let Some(seller_country) = data.country_mut(transfer.selling_country_id) {
+            seller_country
+                .transfer_market
+                .reopen_after_failed_execution(player_id, transfer.selling_club_id);
         }
 
+        // Buyer side: the negotiation lives in the BUYING country (a foreign deal
+        // is stored in the buyer's market). Flag the agreed-but-unexecuted deal
+        // failed so scans and the prune stop treating it as live, then undo the
+        // premature signed/fulfilled bookkeeping so the club keeps looking —
+        // exactly the cleanup a normal rejection performs.
+        if let Some(buying_country) = data.country_mut(transfer.buying_country_id) {
+            for n in buying_country.transfer_market.negotiations.values_mut() {
+                if n.player_id == player_id
+                    && n.buying_club_id == transfer.buying_club_id
+                    && n.status == NegotiationStatus::Accepted
+                {
+                    n.status = NegotiationStatus::Rejected;
+                }
+            }
+            PipelineProcessor::on_negotiation_resolved(
+                buying_country,
+                transfer.buying_club_id,
+                player_id,
+                false,
+            );
+        }
+    }
+
+    // ============================================================
+    // The executors — one per product, either reach
+    // ============================================================
+
+    fn take_from_seller<W: MarketWorld>(
+        data: &mut W,
+        player_id: u32,
+        selling_country_id: u32,
+        selling_club_id: u32,
+        fee: f64,
+        is_loan: bool,
+    ) -> Option<(Player, TeamInfo, Option<u32>, u32)> {
+        let country = data.country_mut(selling_country_id)?;
+
+        let selling_club = country.clubs.iter_mut().find(|c| c.id == selling_club_id)?;
+
+        let league_id = selling_club.teams.main().and_then(|t| t.league_id);
+
+        let from_info = selling_club.teams.main().map(|main_team| TeamInfo {
+            name: selling_club.name.clone(),
+            slug: main_team.slug.clone(),
+            reputation: main_team.reputation.world,
+            league_name: String::new(),
+            league_slug: String::new(),
+        })?;
+
+        // For loans: move to reserve first
+        if is_loan {
+            let main_idx = selling_club.teams.main_index();
+            let reserve_idx = selling_club
+                .teams
+                .index_of_type(TeamType::Reserve)
+                .or_else(|| selling_club.teams.index_of_type(TeamType::B))
+                .or_else(|| selling_club.teams.index_of_type(TeamType::Second));
+            if let (Some(mi), Some(ri)) = (main_idx, reserve_idx) {
+                if mi != ri {
+                    if let Some(p) = selling_club.teams.teams[mi].players.take_player(&player_id) {
+                        selling_club.teams.teams[ri].players.add(p);
+                    }
+                }
+            }
+        }
+
+        let mut player = None;
+        let mut parent_team_id: u32 = 0;
         for team in &mut selling_club.teams.teams {
             if let Some(p) = team.players.take_player(&player_id) {
+                parent_team_id = team.id;
                 player = Some(p);
                 team.transfer_list.remove(player_id);
                 break;
             }
         }
 
-        // Only credit income when player was actually found and taken.
-        // Credit the upfront portion now; deferred installment tranches
-        // arrive over time via the settlement walk.
+        // Only credit income when player was actually found and taken
         if player.is_some() {
-            // Sale proceeds recycle into buying power at a rate that is a
-            // property of the CLUB, not of the money: a develop-and-sell
-            // side turns a sale straight back into the market, a club
-            // selling to balance its books banks most of it.
-            let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
-            selling_club.finance.add_transfer_income_at(upfront, share);
-        }
-
-        // Emit per-teammate dressing-room events on the leftover squad.
-        // Done while we still hold the selling_club mut-borrow but after
-        // the departing player has been removed — so we're iterating
-        // remaining teammates only.
-        if let Some(info) = &departing {
-            for team in &mut selling_club.teams.teams {
-                for teammate in team.players.iter_mut() {
-                    let bond = match teammate.relations.get_player(info.id) {
-                        Some(rel) => rel.friendship,
-                        None => continue,
-                    };
-                    let same_nat = teammate.country_id == info.country_id;
-                    let teammate_age = teammate.age(date);
-
-                    // Mentor departure: a veteran (30+) leaving a young
-                    // (<= 23) teammate with a strong bond. Single event,
-                    // not also CloseFriendSold — mentorship is the more
-                    // specific framing.
-                    let is_mentor_break = info.age >= 30 && teammate_age <= 23 && bond >= 55.0;
-
-                    if is_mentor_break {
-                        teammate.on_mentor_departed(info.id, bond, same_nat);
-                    } else if bond >= 65.0 {
-                        teammate.on_close_friend_sold(
-                            info.id,
-                            bond,
-                            same_nat,
-                            info.high_reputation,
-                        );
-                    }
-                }
+            if is_loan {
+                selling_club.finance.receive_loan_fee(fee);
+            } else {
+                let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
+                selling_club.finance.add_transfer_income_at(fee, share);
             }
-            // Squad-direction concern: a high-reputation player leaving
-            // the squad reads as a worrying signal for ambitious /
-            // senior teammates. Cooldowned 120d so a fire-sale doesn't
-            // emit a row per outgoing player.
-            SquadReactionPass::squad_concern_signal(selling_club, info);
         }
+
+        // Resolve league name
+        let mut from_info = from_info;
+        let (league_name, league_slug) = ExecutionLookup::selling_league_labels(country, league_id);
+        from_info.league_name = league_name;
+        from_info.league_slug = league_slug;
+
+        player.map(|p| (p, from_info, league_id, parent_team_id))
     }
 
-    if let Some(mut player) = player {
-        if let Some(ref mut from) = from_info {
-            let (league_name, league_slug) =
-                resolve_selling_league_labels(country, selling_league_id);
-            from.league_name = league_name;
-            from.league_slug = league_slug;
-        }
+    pub(super) fn permanent<W: MarketWorld>(
+        data: &mut W,
+        transfer: &DeferredTransfer,
+        date: NaiveDate,
+    ) -> bool {
+        let player_id = transfer.player_id;
+        let selling_country_id = transfer.selling_country_id;
+        let selling_club_id = transfer.selling_club_id;
+        let buying_country_id = transfer.buying_country_id;
+        let buying_club_id = transfer.buying_club_id;
+        let fee = transfer.fee;
+        // Installments defer part of the fee; only the upfront portion is paid
+        // (and gated for affordability) at completion. See `upfront_fee` —
+        // cross-country deals collapse to the full fee upfront.
+        let upfront = TransferExecution::upfront_fee(transfer);
 
-        // Check squad capacity AND affordability BEFORE recording history —
-        // otherwise a rejected transfer creates a phantom career entry with no
-        // matching transfer record, or (worse) a player moves with the fee
-        // never debited because the budget couldn't cover it.
-        let to_info = resolve_buying_club_info(country, buying_club_id);
-        // Resolve the destination slot BEFORE the irreversible half of the
-        // move runs. `complete_transfer` below installs the new contract,
-        // rewrites career history and wipes transient state — none of it
-        // undoable — so the roster the player lands on has to be known to
-        // exist first. Carrying the index forward also means the insert
-        // cannot silently miss and drop an owned `Player` on the floor.
-        let buying_club_index = country.clubs.iter().position(|c| c.id == buying_club_id);
-        let can_accept = buying_club_index
-            .map(|idx| {
-                let club = &country.clubs[idx];
+        let can_accept = data
+            .country(buying_country_id)
+            .and_then(|c| c.clubs.iter().find(|club| club.id == buying_club_id))
+            .map(|club| {
                 ClubView::can_accept_player(club) && club.finance.can_afford_transfer(upfront)
             })
             .unwrap_or(false);
-
         if !can_accept {
             debug!(
-                "Transfer rejected: club {} squad full or unaffordable, returning player {}",
+                "Transfer rejected before mutation: club {} cannot accept player {}",
                 buying_club_id, player_id
             );
-            if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-                TransferExecution::add_to_main_team(selling_club, player);
-                // Reverse the upfront credit booked above.
-                // At the SAME recycle share it was booked at, or the
-                // budget keeps a slice of a sale that never happened.
-                let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
-                selling_club.finance.add_transfer_income_at(-upfront, share);
-            }
             return false;
         }
 
-        // Always record history — use fallback TeamInfo if club info couldn't be resolved
-        let from = from_info.unwrap_or_else(empty_team_info);
-        let to = to_info.unwrap_or_else(empty_team_info);
+        // Snapshot the departing player's social traits BEFORE removal so the
+        // selling-country teammates can be ticked with CloseFriendSold /
+        // MentorDeparted. Same shape as the within-country path, just routed
+        // via SimulatorData since the player's home country is foreign here.
+        let departing: Option<DepartingPlayerInfo> = data
+            .country(selling_country_id)
+            .and_then(|c| c.clubs.iter().find(|club| club.id == selling_club_id))
+            .and_then(|club| {
+                club.teams.iter().find_map(|t| {
+                    t.players
+                        .iter()
+                        .find(|p| p.id == player_id)
+                        .map(|p| DepartingPlayerInfo {
+                            id: p.id,
+                            age: p.age(date),
+                            country_id: p.country_id,
+                            high_reputation: p.player_attributes.world_reputation >= 7000,
+                        })
+                })
+            });
+
+        // Squad the player physically occupies — the sale must depart THIS
+        // spell, not the club Main team. Resolved before the take mutates the
+        // roster; the shock still anchors on the seller Main via `from_info`.
+        let history_source_info = data.country(selling_country_id).and_then(|c| {
+            TransferExecution::resolve_history_source_info(c, selling_club_id, player_id)
+        });
+
+        let taken = Self::take_from_seller(
+            data,
+            player_id,
+            selling_country_id,
+            selling_club_id,
+            upfront,
+            false,
+        );
+
+        let (mut player, from_info, selling_league_id, _) = match taken {
+            Some(v) => v,
+            None => {
+                debug!(
+                    "Transfer failed: player {} not found in country {}",
+                    player_id, selling_country_id
+                );
+                return false;
+            }
+        };
         // Depart the player's actual squad spell; fall back to the seller
-        // Main identity when the squad couldn't be resolved — mirrors the
-        // loan paths.
-        let history_source = history_source_info.unwrap_or_else(|| from.clone());
-        // Drain existing sell-on obligations now — they pay previous
-        // beneficiaries out of the selling club's proceeds on this sale.
+        // Main identity when the squad couldn't be resolved.
+        let history_source = history_source_info.unwrap_or_else(|| from_info.clone());
+
+        // Resolve the source league rep BEFORE crossing into the buyer's
+        // borrow — needed for the TransferEnvironmentProfile in
+        // `process_transfer_shock`.
+        let selling_league_reputation = data
+            .country(selling_country_id)
+            .map(|c| ExecutionLookup::selling_league_reputation(c, selling_league_id))
+            .unwrap_or(0);
+
+        // Selling-side dressing-room pass: the player has been taken out of
+        // the squad, the remaining teammates feel the departure.
+        if let Some(info) = &departing {
+            if let Some(country) = data.country_mut(selling_country_id) {
+                if let Some(selling_club) =
+                    country.clubs.iter_mut().find(|c| c.id == selling_club_id)
+                {
+                    for team in &mut selling_club.teams.teams {
+                        for teammate in team.players.iter_mut() {
+                            let bond = match teammate.relations.get_player(info.id) {
+                                Some(rel) => rel.friendship,
+                                None => continue,
+                            };
+                            let same_nat = teammate.country_id == info.country_id;
+                            let teammate_age = teammate.age(date);
+                            let is_mentor_break =
+                                info.age >= 30 && teammate_age <= 23 && bond >= 55.0;
+                            if is_mentor_break {
+                                teammate.on_mentor_departed(info.id, bond, same_nat);
+                            } else if bond >= 65.0 {
+                                teammate.on_close_friend_sold(
+                                    info.id,
+                                    bond,
+                                    same_nat,
+                                    info.high_reputation,
+                                );
+                            }
+                        }
+                    }
+                    SquadReactionPass::squad_concern_signal(selling_club, info);
+                }
+            }
+        }
+
+        // Resolve the destination roster slot BEFORE anything irreversible
+        // runs. `complete_transfer` below installs the new contract, rewrites
+        // career history and wipes transient state; if the buying club turned
+        // out not to exist after that, the owned `Player` would fall out of
+        // scope at the end of the function — deleting him from the world while
+        // the seller kept the fee. Resolving first means the failure is a
+        // clean return-to-seller, which is also what lets the orchestrator's
+        // `compensate_failed_execution` reopen the listing.
+        let buying_club_index = match data
+            .country(buying_country_id)
+            .and_then(|c| c.clubs.iter().position(|club| club.id == buying_club_id))
+        {
+            Some(idx) => idx,
+            None => {
+                debug!(
+                    "Transfer failed: buying club {} not found in country {}",
+                    buying_club_id, buying_country_id
+                );
+                ExecutionLookup::return_player(
+                    data,
+                    selling_country_id,
+                    selling_club_id,
+                    player,
+                    upfront,
+                    false,
+                );
+                return false;
+            }
+        };
+
+        let buying_country = match data.country_mut(buying_country_id) {
+            Some(c) => c,
+            None => {
+                ExecutionLookup::return_player(
+                    data,
+                    selling_country_id,
+                    selling_club_id,
+                    player,
+                    upfront,
+                    false,
+                );
+                return false;
+            }
+        };
+
+        let to_info = ExecutionLookup::buying_club_info(buying_country, buying_club_id);
+
+        let to = to_info.unwrap_or_else(ExecutionLookup::empty_team_info);
+        // Drain sell-on obligations for cross-country. The beneficiaries may
+        // live in a different country from the current seller, so we hold the
+        // drained list and settle after returning the player into the buyer
+        // country — routing goes via `data.country_mut` lookups.
         let obligations = player.drain_sell_on_obligations();
-        let selling_league_reputation =
-            resolve_selling_league_reputation(country, selling_league_id);
-        // Crossing the rivalry line is staged here — only the executor
-        // holds the buying club's rivals list; the player never does.
-        let source_is_rival = country
+        // Cross-country moves can still cross a rivalry line (continental
+        // rivals live in different leagues) — same staging read as the
+        // within-country path.
+        let source_is_rival = buying_country
             .clubs
             .iter()
             .find(|c| c.id == buying_club_id)
             .map(|c| c.is_rival(selling_club_id))
             .unwrap_or(false);
         player.complete_transfer(TransferCompletion {
-            from: &from,
+            from: &from_info,
             history_source: &history_source,
             to: &to,
             fee,
@@ -1004,290 +1076,249 @@ pub(crate) fn execute_transfer_within_country(
             selling_league_reputation,
             record_sell_on: transfer.sell_on_percentage,
             personal_terms: transfer.personal_terms.clone(),
-            record_decision: true,
             source_is_rival,
+            record_decision: true,
             loan_buyout: false,
         });
 
+        let arrival_country_id = player.country_id;
+        let buying_country_code = buying_country.code.clone();
+        let buying_country_id_local = buying_country.id;
+        // Capture profile before `players.add(player)` moves ownership in.
+        let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
+
+        {
+            // Indexed rather than re-searched: the slot was resolved before
+            // `complete_transfer` ran (see `buying_club_index`), and nothing
+            // between there and here resizes `clubs`. A fallible lookup at
+            // this point could drop the owned `player` on the floor.
+            let buying_club = &mut buying_country.clubs[buying_club_index];
+            // Only the upfront portion leaves now; deferred installment tranches
+            // are paid over time by the settlement walk. Affordability was
+            // pre-checked above, so this debit always succeeds.
+            buying_club
+                .finance
+                .register_transfer_purchase(upfront, DEFAULT_AMORTIZATION_YEARS);
+            buying_club.transfer_plan.spent += upfront;
+            // Agent fee — a pure cash movement (not sale income), so it must not
+            // perturb the transfer budget.
+            if let Some(terms) = transfer.personal_terms.as_ref() {
+                if let Some(amount) = terms.agent_fee {
+                    if amount > 0 {
+                        buying_club.finance.adjust_cash(-(amount as f64));
+                    }
+                }
+            }
+            TransferExecution::sign_into_main_team(buying_club, player, date);
+            // The club now has a relationship with this market. Both halves
+            // count and for different reasons: buying FROM a league puts you in
+            // touch with its clubs and agents, and buying a NATIONALITY puts you
+            // in touch with the people who represent it. See
+            // [`crate::transfers::ClubMarketLedger`].
+            MarketLedgerUpdate::on_signing(
+                buying_club,
+                buying_country_id,
+                selling_country_id,
+                arrival_country_id,
+                date,
+            );
+
+            // Compatriot integration, direct-competition threats and the
+            // squad-investment signal — one pass, the same one the domestic
+            // path runs. It used to be inlined here verbatim; two copies of a
+            // fifty-line reception is how the two reaches drift.
+            SquadReactionPass::arrival_reception(
+                buying_club,
+                player_id,
+                arrival_country_id,
+                buying_country_id_local,
+                &buying_country_code,
+                &arrival_threat,
+                fee,
+                date,
+            );
+        }
+
+        // Development-pathway staging runs at the `execute_transfer` level
+        // (after the global interest sweep) so the hoarding cap can count
+        // cross-country loanees too.
+
+        // Settle obligations across countries: locate each beneficiary globally
+        // and credit them. The seller's finance was already incremented by the
+        // full fee in `take_player_from_selling_country`, so we debit the share
+        // from the seller too.
         for obligation in &obligations {
             let payout = fee * obligation.percentage as f64;
             if payout <= 0.0 {
                 continue;
             }
-            // A beneficiary outside this country (player originally bought
-            // from abroad, resold domestically) is credited by the caller
-            // via the global lookup — debiting the seller while silently
-            // dropping the credit destroyed the payout. The loan-buyout
-            // path already routes globally; this mirrors it.
-            if let Some(beneficiary) = country
-                .clubs
-                .iter_mut()
-                .find(|c| c.id == obligation.beneficiary_club_id)
-            {
-                beneficiary.finance.adjust_cash(payout);
-            } else {
-                foreign_sell_on_credits.push((obligation.beneficiary_club_id, payout));
-            }
-            if let Some(seller) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-                seller.finance.adjust_cash(-payout);
-            }
+            TransferExecutor::credit_club(data, obligation.beneficiary_club_id, payout);
+            TransferExecutor::credit_club(data, selling_club_id, -payout);
         }
 
-        // The arriving player's nationality is needed for the post-move
-        // CompatriotJoined pass; capture before move-out borrows.
-        let arrival_country_id = player.country_id;
-        let club_country_id = country.id;
-        let club_country_code = country.code.clone();
-        // Snapshot the arrival's positional / status / wage profile so
-        // the post-move `ThreatenedByNewSigning` pass can compare each
-        // existing teammate without needing a second &mut on the new
-        // arrival's row (which still lives inside the same Vec).
-        let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
-
-        // `buying_club_index` was resolved above and `country.clubs` is
-        // never resized in between, so this can only be `None` if that
-        // invariant is broken. Handle it as a failed execution rather than
-        // letting the owned `player` fall out of scope: dropping him here
-        // would delete him from the world while the seller kept the fee,
-        // and the `true` return would stop the orchestrator's
-        // `compensate_failed_execution` from ever running.
-        let buying_club = buying_club_index
-            .filter(|idx| country.clubs[*idx].id == buying_club_id)
-            .map(|idx| &mut country.clubs[idx]);
-
-        let Some(buying_club) = buying_club else {
-            debug!(
-                "Transfer aborted at commit: buying club {} vanished between check and insert, \
-                 returning player {} to club {}",
-                buying_club_id, player_id, selling_club_id
+        // Schedule future clauses on the BUYER's country market (where the
+        // daily settlement walk runs against the buyer's club). Cross-
+        // country sells still route payouts via `TransferExecutor::credit_club`
+        // when the time comes, so the seller's country doesn't matter for
+        // bookkeeping — only the buyer's does.
+        if let Some(buying_country) = data.country_mut(buying_country_id) {
+            TransferClauseScheduler::schedule_for_transfer(
+                &mut buying_country.transfer_market,
+                transfer,
+                date,
             );
-            if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-                TransferExecution::add_to_main_team(selling_club, player);
-                let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
-                selling_club.finance.add_transfer_income_at(-upfront, share);
-            }
-            return false;
-        };
-
-        // Only the upfront portion leaves now; deferred installment
-        // tranches are paid over time by the settlement walk. P&L spread
-        // across DEFAULT_AMORTIZATION_YEARS. Affordability was pre-checked
-        // above, so this debit always succeeds.
-        buying_club
-            .finance
-            .register_transfer_purchase(upfront, DEFAULT_AMORTIZATION_YEARS);
-        buying_club.transfer_plan.spent += upfront;
-        // Agent fee — separate one-off cash cost on top of the headline
-        // fee. A pure cash movement (not sale income), so it must not
-        // perturb the transfer budget.
-        if let Some(terms) = transfer.personal_terms.as_ref() {
-            if let Some(amount) = terms.agent_fee {
-                if amount > 0 {
-                    buying_club.finance.adjust_cash(-(amount as f64));
-                }
-            }
         }
-        TransferExecution::sign_into_main_team(buying_club, player, date);
-        // The club now has a relationship with this market. Both halves
-        // count and for different reasons: buying FROM a league puts you in
-        // touch with its clubs and agents, and buying a nationality puts
-        // you in touch with the people who represent it. See
-        // [`crate::transfers::ClubMarketLedger`].
-        MarketLedgerUpdate::on_signing(
-            buying_club,
-            club_country_id,
-            club_country_id,
-            arrival_country_id,
-            date,
-        );
-
-        SquadReactionPass::arrival_reception(
-            buying_club,
-            player_id,
-            arrival_country_id,
-            club_country_id,
-            &club_country_code,
-            &arrival_threat,
-            fee,
-            date,
-        );
-
-        country
-            .transfer_market
-            .complete_listings_for_player(player_id);
-        if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-            selling_club
-                .transfer_plan
-                .loan_out_candidates
-                .retain(|c| c.player_id != player_id);
-        }
-        // Development-pathway staging runs at the `execute_transfer`
-        // level (after the global interest sweep) so the hoarding cap
-        // can count cross-country loanees too.
-        //
-        // Schedule any installment / performance / promotion clauses
-        // so the buyer pays the seller over time as the events fire.
-        TransferClauseScheduler::schedule_for_transfer(
-            &mut country.transfer_market,
-            transfer,
-            date,
-        );
 
         debug!(
-            "Transfer completed: player {} from club {} to club {} for {}",
-            player_id, selling_club_id, buying_club_id, fee
+            "Transfer completed: player {} from country {} to country {} (fee: {})",
+            player_id, selling_country_id, buying_country_id, fee
         );
         true
-    } else {
-        debug!(
-            "Transfer failed: player {} not found at club {}",
-            player_id, selling_club_id
-        );
-        false
     }
-}
 
-fn execute_loan_within_country(
-    country: &mut Country,
-    transfer: &DeferredTransfer,
-    date: NaiveDate,
-) -> bool {
-    let player_id = transfer.player_id;
-    let selling_club_id = transfer.selling_club_id;
-    let buying_club_id = transfer.buying_club_id;
-    let loan_fee = transfer.fee;
-    let mut player = None;
-    let mut from_info: Option<TeamInfo> = None;
-    let mut selling_league_id = None;
-    let mut from_team_id = 0u32;
-
-    // History identity of the squad the player physically occupies —
-    // own slug + league for Main/B/Second, Main alias for Reserve/youth.
-    // Resolved up-front (immutable borrow, before the move-to-reserve and
-    // take below) so the loan departs the player's REAL active spell
-    // instead of the club Main team; otherwise the History projection
-    // phantom-drops the new loan club. The shock still anchors on the
-    // parent Main team via `from_info`.
-    let history_source_info =
-        TransferExecution::resolve_history_source_info(country, selling_club_id, player_id);
-
-    if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-        if let Some(main_team) = selling_club.teams.main() {
-            selling_league_id = main_team.league_id;
-            from_info = Some(TeamInfo {
-                name: selling_club.name.clone(),
-                slug: main_team.slug.clone(),
-                reputation: main_team.reputation.world,
-                league_name: String::new(),
-                league_slug: String::new(),
-            });
-        }
-
-        from_team_id = selling_club
-            .teams
-            .find_team_with_player(player_id)
-            .map(|t| t.id)
-            .unwrap_or(0);
-
-        // Move to reserve before loaning
-        let main_idx = selling_club.teams.main_index();
-        let reserve_idx = selling_club
-            .teams
-            .index_of_type(TeamType::Reserve)
-            .or_else(|| selling_club.teams.index_of_type(TeamType::B))
-            .or_else(|| selling_club.teams.index_of_type(TeamType::Second));
-
-        if let (Some(mi), Some(ri)) = (main_idx, reserve_idx) {
-            if mi != ri {
-                if let Some(p) = selling_club.teams.teams[mi].players.take_player(&player_id) {
-                    selling_club.teams.teams[ri].players.add(p);
-                }
-            }
-        }
-
-        for team in &mut selling_club.teams.teams {
-            if let Some(p) = team.players.take_player(&player_id) {
-                player = Some(p);
-                team.transfer_list.remove(player_id);
-                break;
-            }
-        }
-
-        // Only credit income when player was actually found and taken
-        if player.is_some() {
-            selling_club.finance.receive_loan_fee(loan_fee);
+    /// Locate a club anywhere in this world and add `amount` to its finance
+    /// balance. Used for sell-on routing where the beneficiary sits in a
+    /// different country from the seller, and by the Phase-C drain of
+    /// cross-border clause settlements.
+    pub(crate) fn credit_club<W: MarketWorld>(world: &mut W, club_id: u32, amount: f64) {
+        if let Some(club) = world.club_mut(club_id) {
+            club.finance.adjust_cash(amount);
         }
     }
 
-    if let Some(mut player) = player {
-        if let Some(ref mut from) = from_info {
-            let (league_name, league_slug) =
-                resolve_selling_league_labels(country, selling_league_id);
-            from.league_name = league_name;
-            from.league_slug = league_slug;
-        }
+    fn loan<W: MarketWorld>(data: &mut W, transfer: &DeferredTransfer, date: NaiveDate) -> bool {
+        let player_id = transfer.player_id;
+        let selling_country_id = transfer.selling_country_id;
+        let selling_club_id = transfer.selling_club_id;
+        let buying_country_id = transfer.buying_country_id;
+        let buying_club_id = transfer.buying_club_id;
+        let loan_fee = transfer.fee;
 
-        let loan_end = compute_loan_end(selling_league_id, country, date);
-
-        // Check squad capacity BEFORE recording history — otherwise a rejected
-        // loan creates a phantom career entry with no matching transfer record
-        let to_info = resolve_buying_club_info(country, buying_club_id);
-        // Same commit-ordering rule as the permanent path: resolve the
-        // borrowing roster slot before `complete_loan` mutates the player,
-        // so the insert below cannot miss and drop him.
-        let buying_club_index = country.clubs.iter().position(|c| c.id == buying_club_id);
-        let can_accept = buying_club_index
-            .map(|idx| ClubView::can_accept_player(&country.clubs[idx]))
+        let can_accept = data
+            .country(buying_country_id)
+            .and_then(|c| c.clubs.iter().find(|club| club.id == buying_club_id))
+            .map(ClubView::can_accept_player)
             .unwrap_or(false);
-
         if !can_accept {
             debug!(
-                "Loan rejected: club {} squad full, returning player {}",
+                "Loan rejected before mutation: club {} cannot accept player {}",
                 buying_club_id, player_id
             );
-            if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-                TransferExecution::add_to_main_team(selling_club, player);
-                selling_club.finance.refund_loan_fee(loan_fee);
-            }
             return false;
         }
 
-        // Extend the parent contract only once the loan is certain —
-        // running this before the can_accept gate left a REJECTED loan's
-        // player with 1+ extra contract years from a deal that never
-        // happened, suppressing his renewal/free-agency flow.
+        // Get loan end date from selling country's league before taking the player
+        let selling_league_id = data
+            .country(selling_country_id)
+            .and_then(|c| c.clubs.iter().find(|cl| cl.id == selling_club_id))
+            .and_then(|cl| cl.teams.main())
+            .and_then(|t| t.league_id);
+
+        let loan_end = data
+            .country(selling_country_id)
+            .map(|c| ExecutionLookup::loan_end(selling_league_id, c, date))
+            .unwrap_or_else(|| {
+                let year = if date.month() >= 6 {
+                    date.year() + 1
+                } else {
+                    date.year()
+                };
+                NaiveDate::from_ymd_opt(year, 5, 31).unwrap_or(date)
+            });
+
+        // Snapshot the parent's league rep BEFORE `take_player_from_selling_country`
+        // grabs the mut-borrow — the rep feeds `LoanCompletion` so the
+        // transfer-environment profile in `process_transfer_shock` can score
+        // the cross-country move.
+        let parent_league_reputation = data
+            .country(selling_country_id)
+            .map(|c| ExecutionLookup::selling_league_reputation(c, selling_league_id))
+            .unwrap_or(0);
+
+        // Squad the player physically occupies — the loan must depart THIS
+        // spell, not the club Main team. Resolved before the take mutates the
+        // roster; the shock still anchors on the parent Main team via `from_info`.
+        let history_source_info = data.country(selling_country_id).and_then(|c| {
+            TransferExecution::resolve_history_source_info(c, selling_club_id, player_id)
+        });
+
+        let taken = Self::take_from_seller(
+            data,
+            player_id,
+            selling_country_id,
+            selling_club_id,
+            loan_fee,
+            true,
+        );
+
+        let (mut player, from_info, _, parent_team_id) = match taken {
+            Some(v) => v,
+            None => {
+                debug!(
+                    "Loan failed: player {} not found in country {}",
+                    player_id, selling_country_id
+                );
+                return false;
+            }
+        };
+
+        // Resolve the borrowing roster slot before `complete_loan` mutates the
+        // player, so a missing club is a clean return-to-parent rather than a
+        // silently dropped `Player`. See the permanent cross-country path.
+        let buying_club_index = match data
+            .country(buying_country_id)
+            .and_then(|c| c.clubs.iter().position(|club| club.id == buying_club_id))
+        {
+            Some(idx) => idx,
+            None => {
+                debug!(
+                    "Loan failed: borrowing club {} not found in country {}",
+                    buying_club_id, buying_country_id
+                );
+                ExecutionLookup::return_player(
+                    data,
+                    selling_country_id,
+                    selling_club_id,
+                    player,
+                    loan_fee,
+                    true,
+                );
+                return false;
+            }
+        };
+
+        let buying_country = match data.country_mut(buying_country_id) {
+            Some(c) => c,
+            None => {
+                ExecutionLookup::return_player(
+                    data,
+                    selling_country_id,
+                    selling_club_id,
+                    player,
+                    loan_fee,
+                    true,
+                );
+                return false;
+            }
+        };
+
+        // Extend the parent contract only once the destination has resolved —
+        // a collapsed placement must not leave extra contract years behind.
         player.ensure_contract_covers_loan_end(loan_end);
 
-        // Always record history — use fallback TeamInfo if club info couldn't be resolved
-        let from = from_info.unwrap_or_else(empty_team_info);
-        let to = to_info.unwrap_or_else(empty_team_info);
-        // Depart the player's actual squad spell; fall back to the parent
-        // Main identity when the squad couldn't be resolved.
-        let history_source = history_source_info.unwrap_or_else(|| from.clone());
-        let borrower_score = country
+        let to_info = ExecutionLookup::buying_club_info(buying_country, buying_club_id);
+
+        let to = to_info.unwrap_or_else(ExecutionLookup::empty_team_info);
+        let borrower_score = buying_country
             .clubs
             .iter()
             .find(|c| c.id == buying_club_id)
             .and_then(|c| c.teams.main())
             .map(|t| t.reputation.world as f32 / 10_000.0)
             .unwrap_or(0.4);
-        // Parent develops loanees more aggressively if the player is
-        // young or was signed as a development project. The plan role is
-        // the club's own stated intent — clubs can't see biological PA.
-        //
-        // "Young" alone is not the club's intent: a twenty-year-old who
-        // already starts is not on a development pathway, and subsidising
-        // his wage to get him lent out is the parent paying to weaken
-        // itself. The standing read decides — below his club's own level,
-        // or an explicit development plan.
-        let below_own_level = country
-            .clubs
-            .iter()
-            .find(|c| c.id == selling_club_id)
-            .and_then(|c| PipelineProcessor::loan_guard_for(country, c, &player, date))
-            .map(|guard| guard.is_development())
-            .unwrap_or(player.age(date) <= 22);
-        let parent_desire = if below_own_level
+        // Same observable rule as the within-country path: plan role and
+        // age, never hidden PA.
+        let parent_desire = if player.age(date) <= 22
             || player
                 .plan
                 .as_ref()
@@ -1298,12 +1329,12 @@ fn execute_loan_within_country(
         } else {
             0.3
         };
-        let loan_contract = build_loan_contract(
+        let loan_contract = ExecutionLookup::loan_contract(
             loan_fee,
             loan_end,
             date,
             selling_club_id,
-            from_team_id,
+            parent_team_id,
             buying_club_id,
             &player,
             transfer.has_option_to_buy,
@@ -1312,10 +1343,11 @@ fn execute_loan_within_country(
             borrower_score,
             parent_desire,
         );
-        let parent_league_reputation =
-            resolve_selling_league_reputation(country, selling_league_id);
+        // Depart the player's actual squad spell; fall back to the parent
+        // Main identity when the squad couldn't be resolved.
+        let history_source = history_source_info.unwrap_or_else(|| from_info.clone());
         player.complete_loan(LoanCompletion {
-            from: &from,
+            from: &from_info,
             history_source: &history_source,
             to: &to,
             loan_fee,
@@ -1326,939 +1358,272 @@ fn execute_loan_within_country(
         });
 
         let arrival_country_id = player.country_id;
-        let club_country_id = country.id;
-        let club_country_code = country.code.clone();
+        let club_country_id = buying_country.id;
+        let club_country_code = buying_country.code.clone();
         let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
-        let buying_club = buying_club_index
-            .filter(|idx| country.clubs[*idx].id == buying_club_id)
-            .map(|idx| &mut country.clubs[idx]);
-
-        let Some(buying_club) = buying_club else {
-            debug!(
-                "Loan aborted at commit: borrowing club {} vanished between check and insert, \
-                 returning player {} to club {}",
-                buying_club_id, player_id, selling_club_id
-            );
-            if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-                TransferExecution::add_to_main_team(selling_club, player);
-                selling_club.finance.refund_loan_fee(loan_fee);
-            }
-            return false;
-        };
-
-        buying_club.finance.pay_loan_fee(loan_fee);
-        TransferExecution::sign_into_main_team(buying_club, player, date);
-        // A loan is a signing too — the relationship with the market is
-        // the same one, whoever holds the registration.
-        MarketLedgerUpdate::on_signing(
-            buying_club,
-            club_country_id,
-            club_country_id,
-            arrival_country_id,
-            date,
-        );
-        // The borrowing dressing room reacts to a loan arrival like
-        // any other signing — this path used to install him silently.
-        SquadReactionPass::arrival_reception(
-            buying_club,
-            player_id,
-            arrival_country_id,
-            club_country_id,
-            &club_country_code,
-            &arrival_threat,
-            0.0,
-            date,
-        );
-
-        // Remove listing and loan-out candidate so the player can't be loaned again
-        country
-            .transfer_market
-            .complete_listings_for_player(player_id);
-        if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-            selling_club
-                .transfer_plan
-                .loan_out_candidates
-                .retain(|c| c.player_id != player_id);
-        }
-
-        // Loan bids can carry appearance/goal add-ons (borrower → parent);
-        // schedule them so the promised money actually exists to pay.
-        TransferClauseScheduler::schedule_for_transfer(
-            &mut country.transfer_market,
-            transfer,
-            date,
-        );
-
-        debug!(
-            "Loan completed: player {} from club {} to club {}",
-            player_id, selling_club_id, buying_club_id
-        );
-        true
-    } else {
-        debug!(
-            "Loan failed: player {} not found at club {}",
-            player_id, selling_club_id
-        );
-        false
-    }
-}
-
-// ============================================================
-// Internal: cross-country (player moves between countries)
-// ============================================================
-
-fn take_player_from_selling_country(
-    data: &mut SimulatorData,
-    player_id: u32,
-    selling_country_id: u32,
-    selling_club_id: u32,
-    fee: f64,
-    is_loan: bool,
-) -> Option<(Player, TeamInfo, Option<u32>, u32)> {
-    let country = data.country_mut(selling_country_id)?;
-
-    let selling_club = country.clubs.iter_mut().find(|c| c.id == selling_club_id)?;
-
-    let league_id = selling_club.teams.main().and_then(|t| t.league_id);
-
-    let from_info = selling_club.teams.main().map(|main_team| TeamInfo {
-        name: selling_club.name.clone(),
-        slug: main_team.slug.clone(),
-        reputation: main_team.reputation.world,
-        league_name: String::new(),
-        league_slug: String::new(),
-    })?;
-
-    // For loans: move to reserve first
-    if is_loan {
-        let main_idx = selling_club.teams.main_index();
-        let reserve_idx = selling_club
-            .teams
-            .index_of_type(TeamType::Reserve)
-            .or_else(|| selling_club.teams.index_of_type(TeamType::B))
-            .or_else(|| selling_club.teams.index_of_type(TeamType::Second));
-        if let (Some(mi), Some(ri)) = (main_idx, reserve_idx) {
-            if mi != ri {
-                if let Some(p) = selling_club.teams.teams[mi].players.take_player(&player_id) {
-                    selling_club.teams.teams[ri].players.add(p);
-                }
-            }
-        }
-    }
-
-    let mut player = None;
-    let mut parent_team_id: u32 = 0;
-    for team in &mut selling_club.teams.teams {
-        if let Some(p) = team.players.take_player(&player_id) {
-            parent_team_id = team.id;
-            player = Some(p);
-            team.transfer_list.remove(player_id);
-            break;
-        }
-    }
-
-    // Only credit income when player was actually found and taken
-    if player.is_some() {
-        if is_loan {
-            selling_club.finance.receive_loan_fee(fee);
-        } else {
-            let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
-            selling_club.finance.add_transfer_income_at(fee, share);
-        }
-    }
-
-    // Resolve league name
-    let mut from_info = from_info;
-    let (league_name, league_slug) = resolve_selling_league_labels(country, league_id);
-    from_info.league_name = league_name;
-    from_info.league_slug = league_slug;
-
-    player.map(|p| (p, from_info, league_id, parent_team_id))
-}
-
-fn execute_transfer_across_countries(
-    data: &mut SimulatorData,
-    transfer: &DeferredTransfer,
-    date: NaiveDate,
-) -> bool {
-    let player_id = transfer.player_id;
-    let selling_country_id = transfer.selling_country_id;
-    let selling_club_id = transfer.selling_club_id;
-    let buying_country_id = transfer.buying_country_id;
-    let buying_club_id = transfer.buying_club_id;
-    let fee = transfer.fee;
-    // Installments defer part of the fee; only the upfront portion is paid
-    // (and gated for affordability) at completion. See `upfront_fee` —
-    // cross-country deals collapse to the full fee upfront.
-    let upfront = TransferExecution::upfront_fee(transfer);
-
-    let can_accept = data
-        .country(buying_country_id)
-        .and_then(|c| c.clubs.iter().find(|club| club.id == buying_club_id))
-        .map(|club| ClubView::can_accept_player(club) && club.finance.can_afford_transfer(upfront))
-        .unwrap_or(false);
-    if !can_accept {
-        debug!(
-            "Transfer rejected before mutation: club {} cannot accept player {}",
-            buying_club_id, player_id
-        );
-        return false;
-    }
-
-    // Snapshot the departing player's social traits BEFORE removal so the
-    // selling-country teammates can be ticked with CloseFriendSold /
-    // MentorDeparted. Same shape as the within-country path, just routed
-    // via SimulatorData since the player's home country is foreign here.
-    let departing: Option<DepartingPlayerInfo> = data
-        .country(selling_country_id)
-        .and_then(|c| c.clubs.iter().find(|club| club.id == selling_club_id))
-        .and_then(|club| {
-            club.teams.iter().find_map(|t| {
-                t.players
-                    .iter()
-                    .find(|p| p.id == player_id)
-                    .map(|p| DepartingPlayerInfo {
-                        id: p.id,
-                        age: p.age(date),
-                        country_id: p.country_id,
-                        high_reputation: p.player_attributes.world_reputation >= 7000,
-                    })
-            })
-        });
-
-    // Squad the player physically occupies — the sale must depart THIS
-    // spell, not the club Main team. Resolved before the take mutates the
-    // roster; the shock still anchors on the seller Main via `from_info`.
-    let history_source_info = data.country(selling_country_id).and_then(|c| {
-        TransferExecution::resolve_history_source_info(c, selling_club_id, player_id)
-    });
-
-    let taken = take_player_from_selling_country(
-        data,
-        player_id,
-        selling_country_id,
-        selling_club_id,
-        upfront,
-        false,
-    );
-
-    let (mut player, from_info, selling_league_id, _) = match taken {
-        Some(v) => v,
-        None => {
-            debug!(
-                "Transfer failed: player {} not found in country {}",
-                player_id, selling_country_id
-            );
-            return false;
-        }
-    };
-    // Depart the player's actual squad spell; fall back to the seller
-    // Main identity when the squad couldn't be resolved.
-    let history_source = history_source_info.unwrap_or_else(|| from_info.clone());
-
-    // Resolve the source league rep BEFORE crossing into the buyer's
-    // borrow — needed for the TransferEnvironmentProfile in
-    // `process_transfer_shock`.
-    let selling_league_reputation = data
-        .country(selling_country_id)
-        .map(|c| resolve_selling_league_reputation(c, selling_league_id))
-        .unwrap_or(0);
-
-    // Selling-side dressing-room pass: the player has been taken out of
-    // the squad, the remaining teammates feel the departure.
-    if let Some(info) = &departing {
-        if let Some(country) = data.country_mut(selling_country_id) {
-            if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-                for team in &mut selling_club.teams.teams {
-                    for teammate in team.players.iter_mut() {
-                        let bond = match teammate.relations.get_player(info.id) {
-                            Some(rel) => rel.friendship,
-                            None => continue,
-                        };
-                        let same_nat = teammate.country_id == info.country_id;
-                        let teammate_age = teammate.age(date);
-                        let is_mentor_break = info.age >= 30 && teammate_age <= 23 && bond >= 55.0;
-                        if is_mentor_break {
-                            teammate.on_mentor_departed(info.id, bond, same_nat);
-                        } else if bond >= 65.0 {
-                            teammate.on_close_friend_sold(
-                                info.id,
-                                bond,
-                                same_nat,
-                                info.high_reputation,
-                            );
-                        }
-                    }
-                }
-                SquadReactionPass::squad_concern_signal(selling_club, info);
-            }
-        }
-    }
-
-    // Resolve the destination roster slot BEFORE anything irreversible
-    // runs. `complete_transfer` below installs the new contract, rewrites
-    // career history and wipes transient state; if the buying club turned
-    // out not to exist after that, the owned `Player` would fall out of
-    // scope at the end of the function — deleting him from the world while
-    // the seller kept the fee. Resolving first means the failure is a
-    // clean return-to-seller, which is also what lets the orchestrator's
-    // `compensate_failed_execution` reopen the listing.
-    let buying_club_index = match data
-        .country(buying_country_id)
-        .and_then(|c| c.clubs.iter().position(|club| club.id == buying_club_id))
-    {
-        Some(idx) => idx,
-        None => {
-            debug!(
-                "Transfer failed: buying club {} not found in country {}",
-                buying_club_id, buying_country_id
-            );
-            return_player_to_selling_country(
-                data,
+        {
+            // Indexed, not re-searched — the slot was resolved before
+            // `complete_loan` ran and nothing since resizes `clubs`.
+            let buying_club = &mut buying_country.clubs[buying_club_index];
+            buying_club.finance.pay_loan_fee(loan_fee);
+            TransferExecution::sign_into_main_team(buying_club, player, date);
+            // A loan is a signing too — the relationship with the market is the
+            // same one, whoever holds the registration.
+            MarketLedgerUpdate::on_signing(
+                buying_club,
+                club_country_id,
                 selling_country_id,
-                selling_club_id,
-                player,
-                upfront,
-                false,
+                arrival_country_id,
+                date,
             );
-            return false;
-        }
-    };
-
-    let buying_country = match data.country_mut(buying_country_id) {
-        Some(c) => c,
-        None => {
-            return_player_to_selling_country(
-                data,
-                selling_country_id,
-                selling_club_id,
-                player,
-                upfront,
-                false,
+            // A foreign loanee's new dressing room reacts too — compatriot
+            // integration matters MOST on a cross-border loan.
+            SquadReactionPass::arrival_reception(
+                buying_club,
+                player_id,
+                arrival_country_id,
+                club_country_id,
+                &club_country_code,
+                &arrival_threat,
+                0.0,
+                date,
             );
-            return false;
-        }
-    };
-
-    let to_info = resolve_buying_club_info(buying_country, buying_club_id);
-
-    let to = to_info.unwrap_or_else(empty_team_info);
-    // Drain sell-on obligations for cross-country. The beneficiaries may
-    // live in a different country from the current seller, so we hold the
-    // drained list and settle after returning the player into the buyer
-    // country — routing goes via `data.country_mut` lookups.
-    let obligations = player.drain_sell_on_obligations();
-    // Cross-country moves can still cross a rivalry line (continental
-    // rivals live in different leagues) — same staging read as the
-    // within-country path.
-    let source_is_rival = buying_country
-        .clubs
-        .iter()
-        .find(|c| c.id == buying_club_id)
-        .map(|c| c.is_rival(selling_club_id))
-        .unwrap_or(false);
-    player.complete_transfer(TransferCompletion {
-        from: &from_info,
-        history_source: &history_source,
-        to: &to,
-        fee,
-        date,
-        selling_club_id,
-        buying_club_id,
-        agreed_wage: transfer.agreed_annual_wage,
-        buying_league_reputation: transfer.buying_league_reputation,
-        selling_league_reputation,
-        record_sell_on: transfer.sell_on_percentage,
-        personal_terms: transfer.personal_terms.clone(),
-        source_is_rival,
-        record_decision: true,
-        loan_buyout: false,
-    });
-
-    let arrival_country_id = player.country_id;
-    let buying_country_code = buying_country.code.clone();
-    let buying_country_id_local = buying_country.id;
-    // Capture profile before `players.add(player)` moves ownership in.
-    let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
-
-    {
-        // Indexed rather than re-searched: the slot was resolved before
-        // `complete_transfer` ran (see `buying_club_index`), and nothing
-        // between there and here resizes `clubs`. A fallible lookup at
-        // this point could drop the owned `player` on the floor.
-        let buying_club = &mut buying_country.clubs[buying_club_index];
-        // Only the upfront portion leaves now; deferred installment tranches
-        // are paid over time by the settlement walk. Affordability was
-        // pre-checked above, so this debit always succeeds.
-        buying_club
-            .finance
-            .register_transfer_purchase(upfront, DEFAULT_AMORTIZATION_YEARS);
-        buying_club.transfer_plan.spent += upfront;
-        // Agent fee — a pure cash movement (not sale income), so it must not
-        // perturb the transfer budget.
-        if let Some(terms) = transfer.personal_terms.as_ref() {
-            if let Some(amount) = terms.agent_fee {
-                if amount > 0 {
-                    buying_club.finance.adjust_cash(-(amount as f64));
-                }
-            }
-        }
-        TransferExecution::sign_into_main_team(buying_club, player, date);
-        // The club now has a relationship with this market. Both halves
-        // count and for different reasons: buying FROM a league puts you in
-        // touch with its clubs and agents, and buying a NATIONALITY puts you
-        // in touch with the people who represent it. See
-        // [`crate::transfers::ClubMarketLedger`].
-        MarketLedgerUpdate::on_signing(
-            buying_club,
-            buying_country_id,
-            selling_country_id,
-            arrival_country_id,
-            date,
-        );
-
-        // Compatriot integration pass — same shape as the within-country
-        // path, but the player has just stepped off a flight rather than
-        // a coach across town. Existing same-nationality teammates feel
-        // the lift; the arriving player gets the reciprocal boost if at
-        // least one compatriot already plays here.
-        let mut compatriot_present = false;
-        for team in &mut buying_club.teams.teams {
-            for existing in team.players.iter_mut() {
-                if existing.id == player_id {
-                    continue;
-                }
-                if existing.country_id != arrival_country_id {
-                    continue;
-                }
-                compatriot_present = true;
-                let lacks_lang = !speaks_local_language(existing, &buying_country_code);
-                existing.on_compatriot_joined(player_id, buying_country_id_local, lacks_lang);
-            }
-        }
-        if compatriot_present {
-            // Tag the arrival's reciprocal event with one of the existing
-            // compatriots so the link in the events page resolves to a
-            // real teammate.
-            let mut a_compatriot_id: Option<u32> = None;
-            for team in &buying_club.teams.teams {
-                if let Some(found) = team
-                    .players
-                    .players
-                    .iter()
-                    .find(|p| p.id != player_id && p.country_id == arrival_country_id)
-                {
-                    a_compatriot_id = Some(found.id);
-                    break;
-                }
-            }
-            if let Some(compatriot_id) = a_compatriot_id {
-                for team in &mut buying_club.teams.teams {
-                    if let Some(arrival) = team.players.iter_mut().find(|p| p.id == player_id) {
-                        let lacks_lang = !speaks_local_language(arrival, &buying_country_code);
-                        arrival.on_compatriot_joined(
-                            compatriot_id,
-                            buying_country_id_local,
-                            lacks_lang,
-                        );
-                        break;
-                    }
-                }
-            }
         }
 
-        // Direct-competition pass — same emit shape as the within-
-        // country path; the existing teammates feel the threat from
-        // the new arrival's positional / status / wage profile.
-        SquadReactionPass::new_signing_threats(buying_club, &arrival_threat, date);
-        SquadReactionPass::squad_investment_signal(buying_club, &arrival_threat, fee);
-    }
-
-    // Development-pathway staging runs at the `execute_transfer` level
-    // (after the global interest sweep) so the hoarding cap can count
-    // cross-country loanees too.
-
-    // Settle obligations across countries: locate each beneficiary globally
-    // and credit them. The seller's finance was already incremented by the
-    // full fee in `take_player_from_selling_country`, so we debit the share
-    // from the seller too.
-    for obligation in &obligations {
-        let payout = fee * obligation.percentage as f64;
-        if payout <= 0.0 {
-            continue;
-        }
-        TransferExecution::credit_club_globally(data, obligation.beneficiary_club_id, payout);
-        TransferExecution::credit_club_globally(data, selling_club_id, -payout);
-    }
-
-    // Schedule future clauses on the BUYER's country market (where the
-    // daily settlement walk runs against the buyer's club). Cross-
-    // country sells still route payouts via `credit_club_globally`
-    // when the time comes, so the seller's country doesn't matter for
-    // bookkeeping — only the buyer's does.
-    if let Some(buying_country) = data.country_mut(buying_country_id) {
+        // Loan add-ons live on the borrower's (buying) market; the parent
+        // sits abroad, so fired payouts route via the Phase-C global drain.
         TransferClauseScheduler::schedule_for_transfer(
             &mut buying_country.transfer_market,
             transfer,
             date,
         );
-    }
 
-    debug!(
-        "Transfer completed: player {} from country {} to country {} (fee: {})",
-        player_id, selling_country_id, buying_country_id, fee
-    );
-    true
-}
-
-impl TransferExecution {
-    /// Locate a club anywhere in the simulator and add `amount` to their
-    /// finance balance. Used for cross-country sell-on routing where the
-    /// beneficiary sits in a different country from the selling club, and
-    /// by the Phase-C drain of cross-border clause settlements.
-    pub(crate) fn credit_club_globally(data: &mut SimulatorData, club_id: u32, amount: f64) {
-        for continent in data.continents.iter_mut() {
-            for country in continent.countries.iter_mut() {
-                if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
-                    club.finance.adjust_cash(amount);
-                    return;
-                }
-            }
-        }
-    }
-}
-
-fn execute_loan_across_countries(
-    data: &mut SimulatorData,
-    transfer: &DeferredTransfer,
-    date: NaiveDate,
-) -> bool {
-    let player_id = transfer.player_id;
-    let selling_country_id = transfer.selling_country_id;
-    let selling_club_id = transfer.selling_club_id;
-    let buying_country_id = transfer.buying_country_id;
-    let buying_club_id = transfer.buying_club_id;
-    let loan_fee = transfer.fee;
-
-    let can_accept = data
-        .country(buying_country_id)
-        .and_then(|c| c.clubs.iter().find(|club| club.id == buying_club_id))
-        .map(ClubView::can_accept_player)
-        .unwrap_or(false);
-    if !can_accept {
         debug!(
-            "Loan rejected before mutation: club {} cannot accept player {}",
-            buying_club_id, player_id
+            "Loan completed: player {} from country {} to country {} (fee: {})",
+            player_id, selling_country_id, buying_country_id, loan_fee
         );
-        return false;
+        true
     }
-
-    // Get loan end date from selling country's league before taking the player
-    let selling_league_id = data
-        .country(selling_country_id)
-        .and_then(|c| c.clubs.iter().find(|cl| cl.id == selling_club_id))
-        .and_then(|cl| cl.teams.main())
-        .and_then(|t| t.league_id);
-
-    let loan_end = data
-        .country(selling_country_id)
-        .map(|c| compute_loan_end(selling_league_id, c, date))
-        .unwrap_or_else(|| {
-            let year = if date.month() >= 6 {
-                date.year() + 1
-            } else {
-                date.year()
-            };
-            NaiveDate::from_ymd_opt(year, 5, 31).unwrap_or(date)
-        });
-
-    // Snapshot the parent's league rep BEFORE `take_player_from_selling_country`
-    // grabs the mut-borrow — the rep feeds `LoanCompletion` so the
-    // transfer-environment profile in `process_transfer_shock` can score
-    // the cross-country move.
-    let parent_league_reputation = data
-        .country(selling_country_id)
-        .map(|c| resolve_selling_league_reputation(c, selling_league_id))
-        .unwrap_or(0);
-
-    // Squad the player physically occupies — the loan must depart THIS
-    // spell, not the club Main team. Resolved before the take mutates the
-    // roster; the shock still anchors on the parent Main team via `from_info`.
-    let history_source_info = data.country(selling_country_id).and_then(|c| {
-        TransferExecution::resolve_history_source_info(c, selling_club_id, player_id)
-    });
-
-    let taken = take_player_from_selling_country(
-        data,
-        player_id,
-        selling_country_id,
-        selling_club_id,
-        loan_fee,
-        true,
-    );
-
-    let (mut player, from_info, _, parent_team_id) = match taken {
-        Some(v) => v,
-        None => {
-            debug!(
-                "Loan failed: player {} not found in country {}",
-                player_id, selling_country_id
-            );
-            return false;
-        }
-    };
-
-    // Resolve the borrowing roster slot before `complete_loan` mutates the
-    // player, so a missing club is a clean return-to-parent rather than a
-    // silently dropped `Player`. See the permanent cross-country path.
-    let buying_club_index = match data
-        .country(buying_country_id)
-        .and_then(|c| c.clubs.iter().position(|club| club.id == buying_club_id))
-    {
-        Some(idx) => idx,
-        None => {
-            debug!(
-                "Loan failed: borrowing club {} not found in country {}",
-                buying_club_id, buying_country_id
-            );
-            return_player_to_selling_country(
-                data,
-                selling_country_id,
-                selling_club_id,
-                player,
-                loan_fee,
-                true,
-            );
-            return false;
-        }
-    };
-
-    let buying_country = match data.country_mut(buying_country_id) {
-        Some(c) => c,
-        None => {
-            return_player_to_selling_country(
-                data,
-                selling_country_id,
-                selling_club_id,
-                player,
-                loan_fee,
-                true,
-            );
-            return false;
-        }
-    };
-
-    // Extend the parent contract only once the destination has resolved —
-    // a collapsed placement must not leave extra contract years behind.
-    player.ensure_contract_covers_loan_end(loan_end);
-
-    let to_info = resolve_buying_club_info(buying_country, buying_club_id);
-
-    let to = to_info.unwrap_or_else(empty_team_info);
-    let borrower_score = buying_country
-        .clubs
-        .iter()
-        .find(|c| c.id == buying_club_id)
-        .and_then(|c| c.teams.main())
-        .map(|t| t.reputation.world as f32 / 10_000.0)
-        .unwrap_or(0.4);
-    // Same observable rule as the within-country path: plan role and
-    // age, never hidden PA.
-    let parent_desire = if player.age(date) <= 22
-        || player
-            .plan
-            .as_ref()
-            .map(|p| p.role == PlayerPlanRole::Development)
-            .unwrap_or(false)
-    {
-        0.7
-    } else {
-        0.3
-    };
-    let loan_contract = build_loan_contract(
-        loan_fee,
-        loan_end,
-        date,
-        selling_club_id,
-        parent_team_id,
-        buying_club_id,
-        &player,
-        transfer.has_option_to_buy,
-        transfer.agreed_annual_wage,
-        transfer.loan_future_fee,
-        borrower_score,
-        parent_desire,
-    );
-    // Depart the player's actual squad spell; fall back to the parent
-    // Main identity when the squad couldn't be resolved.
-    let history_source = history_source_info.unwrap_or_else(|| from_info.clone());
-    player.complete_loan(LoanCompletion {
-        from: &from_info,
-        history_source: &history_source,
-        to: &to,
-        loan_fee,
-        date,
-        loan_contract,
-        borrowing_club_id: buying_club_id,
-        parent_league_reputation,
-    });
-
-    let arrival_country_id = player.country_id;
-    let club_country_id = buying_country.id;
-    let club_country_code = buying_country.code.clone();
-    let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
-    {
-        // Indexed, not re-searched — the slot was resolved before
-        // `complete_loan` ran and nothing since resizes `clubs`.
-        let buying_club = &mut buying_country.clubs[buying_club_index];
-        buying_club.finance.pay_loan_fee(loan_fee);
-        TransferExecution::sign_into_main_team(buying_club, player, date);
-        // A loan is a signing too — the relationship with the market is the
-        // same one, whoever holds the registration.
-        MarketLedgerUpdate::on_signing(
-            buying_club,
-            club_country_id,
-            selling_country_id,
-            arrival_country_id,
-            date,
-        );
-        // A foreign loanee's new dressing room reacts too — compatriot
-        // integration matters MOST on a cross-border loan.
-        SquadReactionPass::arrival_reception(
-            buying_club,
-            player_id,
-            arrival_country_id,
-            club_country_id,
-            &club_country_code,
-            &arrival_threat,
-            0.0,
-            date,
-        );
-    }
-
-    // Loan add-ons live on the borrower's (buying) market; the parent
-    // sits abroad, so fired payouts route via the Phase-C global drain.
-    TransferClauseScheduler::schedule_for_transfer(
-        &mut buying_country.transfer_market,
-        transfer,
-        date,
-    );
-
-    debug!(
-        "Loan completed: player {} from country {} to country {} (fee: {})",
-        player_id, selling_country_id, buying_country_id, loan_fee
-    );
-    true
 }
 
 // ============================================================
 // Shared helpers
 // ============================================================
 
-/// Empty `TeamInfo` placeholder used as a fallback when club / league
-/// lookup fails partway through execution. Centralised so changes to
-/// `TeamInfo`'s shape don't have to be mirrored across four call sites.
-fn empty_team_info() -> TeamInfo {
-    TeamInfo {
-        name: String::new(),
-        slug: String::new(),
-        reputation: 0,
-        league_name: String::new(),
-        league_slug: String::new(),
+/// The lookups every execution path shares: who the player is
+/// leaving, what league that was, who is taking him, and — for a loan
+/// — the contract and the date it runs to.
+struct ExecutionLookup;
+
+impl ExecutionLookup {
+    /// Empty `TeamInfo` placeholder used as a fallback when club / league
+    /// lookup fails partway through execution. Centralised so changes to
+    /// `TeamInfo`'s shape don't have to be mirrored across four call sites.
+    fn empty_team_info() -> TeamInfo {
+        TeamInfo {
+            name: String::new(),
+            slug: String::new(),
+            reputation: 0,
+            league_name: String::new(),
+            league_slug: String::new(),
+        }
     }
-}
 
-/// Look up the league reputation (0–10000) for the selling side.
-/// Friendly leagues are ignored — the player's competitive league is
-/// the one that defines their tier. Returns 0 when unresolved.
-fn resolve_selling_league_reputation(country: &Country, selling_league_id: Option<u32>) -> u16 {
-    selling_league_id
-        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-        .and_then(|l| {
-            if l.friendly {
-                country.leagues.leagues.iter().find(|ml| !ml.friendly)
-            } else {
-                Some(l)
-            }
-        })
-        .map(|l| l.reputation)
-        .unwrap_or(0)
-}
-
-/// Resolve `(league_name, league_slug)` for the selling side of a transfer.
-/// Friendly leagues (preseason / exhibition fixtures) don't represent the
-/// player's actual competitive context, so we fall back to the country's
-/// first non-friendly league instead. Used to populate the `from.league_*`
-/// fields on `TeamInfo` once the player has been taken.
-fn resolve_selling_league_labels(
-    country: &Country,
-    selling_league_id: Option<u32>,
-) -> (String, String) {
-    selling_league_id
-        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-        .and_then(|l| {
-            if l.friendly {
-                country.leagues.leagues.iter().find(|ml| !ml.friendly)
-            } else {
-                Some(l)
-            }
-        })
-        .map(|l| (l.name.clone(), l.slug.clone()))
-        .unwrap_or_default()
-}
-
-fn resolve_buying_club_info(country: &Country, buying_club_id: u32) -> Option<TeamInfo> {
-    country
-        .clubs
-        .iter()
-        .find(|c| c.id == buying_club_id)
-        .and_then(|c| {
-            let main_team = c.teams.main().or(c.teams.teams.first())?;
-            let (league_name, league_slug) = main_team
-                .league_id
-                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                .map(|l| (l.name.clone(), l.slug.clone()))
-                .unwrap_or_default();
-            Some(TeamInfo {
-                name: main_team.name.clone(),
-                slug: main_team.slug.clone(),
-                reputation: main_team.reputation.world,
-                league_name,
-                league_slug,
+    /// Look up the league reputation (0–10000) for the selling side.
+    /// Friendly leagues are ignored — the player's competitive league is
+    /// the one that defines their tier. Returns 0 when unresolved.
+    fn selling_league_reputation(country: &Country, selling_league_id: Option<u32>) -> u16 {
+        selling_league_id
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .and_then(|l| {
+                if l.friendly {
+                    country.leagues.leagues.iter().find(|ml| !ml.friendly)
+                } else {
+                    Some(l)
+                }
             })
-        })
-}
-
-fn build_loan_contract(
-    _loan_fee: f64,
-    loan_end: NaiveDate,
-    signing_date: NaiveDate,
-    parent_club_id: u32,
-    parent_team_id: u32,
-    buying_club_id: u32,
-    player: &Player,
-    _has_option_to_buy: bool,
-    agreed_parent_wage: Option<u32>,
-    loan_future_fee: Option<(u32, bool)>,
-    borrower_score: f32,
-    parent_desire_to_develop: f32,
-) -> PlayerClubContract {
-    // Parent wage drives the loan split: borrower covers the majority,
-    // parent keeps paying the rest. Falls back to the player's current
-    // contract salary when the pipeline didn't stage an explicit wage.
-    let parent_wage = agreed_parent_wage
-        .or_else(|| player.contract.as_ref().map(|c| c.salary))
-        .unwrap_or(1_000);
-    // V2 split scales borrower share with their reputation/appetite and
-    // softens it when the parent is loaning the player out for development
-    // (a small parent club won't subsidise a Premier League borrower).
-    let (borrower_wage, match_fee) =
-        WageCalculator::loan_wage_split_v2(parent_wage, borrower_score, parent_desire_to_develop);
-
-    // Wage-contribution percentage = borrower share of total. Computed
-    // back from borrower_wage / parent_wage so it stays consistent with
-    // the split helper. Capped at 100; floored at 0.
-    let contribution_pct = ((borrower_wage as f64 / parent_wage.max(1) as f64) * 100.0)
-        .round()
-        .clamp(0.0, 100.0) as u8;
-
-    // Minimum-appearances scales with borrower size AND with how much of the
-    // season the loan actually covers. Bigger borrowers promise the parent
-    // more minutes; small borrowers can't commit. A January (half-season)
-    // loan can't demand a full campaign's appearances, so the base figure is
-    // pro-rated by the fraction of a ~10-month season still to play from the
-    // signing date: a summer loan keeps the full bar, a winter loan ~half.
-    let base_min_apps: u16 = if borrower_score >= 0.7 {
-        15
-    } else if borrower_score >= 0.4 {
-        10
-    } else {
-        6
-    };
-    let months_remaining = (loan_end - signing_date).num_days().max(0) as f32 / 30.0;
-    let season_fraction = (months_remaining / 10.0).clamp(0.4, 1.0);
-    let min_apps = ((base_min_apps as f32 * season_fraction).round() as u16).max(1);
-
-    let mut contract = PlayerClubContract::new_loan(
-        borrower_wage,
-        loan_end,
-        parent_club_id,
-        parent_team_id,
-        buying_club_id,
-    )
-    // Stamp the day the spell began. Everything that judges a loan
-    // reasons from elapsed time — the monthly playing-time audit gates
-    // on `started` being present and silently skipped every real loan
-    // while this was left `None`, and the club paper's loan column has
-    // no way to say "two appearances in fourteen fixtures" without it.
-    .starting_on(signing_date)
-    .with_loan_match_fee(match_fee)
-    .with_loan_wage_contribution(contribution_pct)
-    .with_loan_recall(
-        loan_end
-            .checked_sub_signed(Duration::days(90))
-            .unwrap_or(loan_end),
-    )
-    .with_loan_min_appearances(min_apps);
-
-    if let Some((future_fee, obligation)) = loan_future_fee {
-        contract = contract.with_loan_future_fee(future_fee, obligation);
+            .map(|l| l.reputation)
+            .unwrap_or(0)
     }
 
-    contract
-}
+    /// Resolve `(league_name, league_slug)` for the selling side of a transfer.
+    /// Friendly leagues (preseason / exhibition fixtures) don't represent the
+    /// player's actual competitive context, so we fall back to the country's
+    /// first non-friendly league instead. Used to populate the `from.league_*`
+    /// fields on `TeamInfo` once the player has been taken.
+    fn selling_league_labels(
+        country: &Country,
+        selling_league_id: Option<u32>,
+    ) -> (String, String) {
+        selling_league_id
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .and_then(|l| {
+                if l.friendly {
+                    country.leagues.leagues.iter().find(|ml| !ml.friendly)
+                } else {
+                    Some(l)
+                }
+            })
+            .map(|l| (l.name.clone(), l.slug.clone()))
+            .unwrap_or_default()
+    }
 
-fn return_player_to_selling_country(
-    data: &mut SimulatorData,
-    selling_country_id: u32,
-    selling_club_id: u32,
-    player: Player,
-    credited_fee: f64,
-    is_loan: bool,
-) {
-    if let Some(selling_country) = data.country_mut(selling_country_id) {
-        if let Some(selling_club) = selling_country
+    fn buying_club_info(country: &Country, buying_club_id: u32) -> Option<TeamInfo> {
+        country
             .clubs
-            .iter_mut()
-            .find(|c| c.id == selling_club_id)
-        {
-            TransferExecution::add_to_main_team(selling_club, player);
-            if is_loan {
-                selling_club.finance.refund_loan_fee(credited_fee);
-            } else {
-                let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
-                selling_club
-                    .finance
-                    .add_transfer_income_at(-credited_fee, share);
+            .iter()
+            .find(|c| c.id == buying_club_id)
+            .and_then(|c| {
+                let main_team = c.teams.main().or(c.teams.teams.first())?;
+                let (league_name, league_slug) = main_team
+                    .league_id
+                    .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                    .map(|l| (l.name.clone(), l.slug.clone()))
+                    .unwrap_or_default();
+                Some(TeamInfo {
+                    name: main_team.name.clone(),
+                    slug: main_team.slug.clone(),
+                    reputation: main_team.reputation.world,
+                    league_name,
+                    league_slug,
+                })
+            })
+    }
+
+    fn loan_contract(
+        _loan_fee: f64,
+        loan_end: NaiveDate,
+        signing_date: NaiveDate,
+        parent_club_id: u32,
+        parent_team_id: u32,
+        buying_club_id: u32,
+        player: &Player,
+        _has_option_to_buy: bool,
+        agreed_parent_wage: Option<u32>,
+        loan_future_fee: Option<(u32, bool)>,
+        borrower_score: f32,
+        parent_desire_to_develop: f32,
+    ) -> PlayerClubContract {
+        // Parent wage drives the loan split: borrower covers the majority,
+        // parent keeps paying the rest. Falls back to the player's current
+        // contract salary when the pipeline didn't stage an explicit wage.
+        let parent_wage = agreed_parent_wage
+            .or_else(|| player.contract.as_ref().map(|c| c.salary))
+            .unwrap_or(1_000);
+        // V2 split scales borrower share with their reputation/appetite and
+        // softens it when the parent is loaning the player out for development
+        // (a small parent club won't subsidise a Premier League borrower).
+        let (borrower_wage, match_fee) = WageCalculator::loan_wage_split_v2(
+            parent_wage,
+            borrower_score,
+            parent_desire_to_develop,
+        );
+
+        // Wage-contribution percentage = borrower share of total. Computed
+        // back from borrower_wage / parent_wage so it stays consistent with
+        // the split helper. Capped at 100; floored at 0.
+        let contribution_pct = ((borrower_wage as f64 / parent_wage.max(1) as f64) * 100.0)
+            .round()
+            .clamp(0.0, 100.0) as u8;
+
+        // Minimum-appearances scales with borrower size AND with how much of the
+        // season the loan actually covers. Bigger borrowers promise the parent
+        // more minutes; small borrowers can't commit. A January (half-season)
+        // loan can't demand a full campaign's appearances, so the base figure is
+        // pro-rated by the fraction of a ~10-month season still to play from the
+        // signing date: a summer loan keeps the full bar, a winter loan ~half.
+        let base_min_apps: u16 = if borrower_score >= 0.7 {
+            15
+        } else if borrower_score >= 0.4 {
+            10
+        } else {
+            6
+        };
+        let months_remaining = (loan_end - signing_date).num_days().max(0) as f32 / 30.0;
+        let season_fraction = (months_remaining / 10.0).clamp(0.4, 1.0);
+        let min_apps = ((base_min_apps as f32 * season_fraction).round() as u16).max(1);
+
+        let mut contract = PlayerClubContract::new_loan(
+            borrower_wage,
+            loan_end,
+            parent_club_id,
+            parent_team_id,
+            buying_club_id,
+        )
+        // Stamp the day the spell began. Everything that judges a loan
+        // reasons from elapsed time — the monthly playing-time audit gates
+        // on `started` being present and silently skipped every real loan
+        // while this was left `None`, and the club paper's loan column has
+        // no way to say "two appearances in fourteen fixtures" without it.
+        .starting_on(signing_date)
+        .with_loan_match_fee(match_fee)
+        .with_loan_wage_contribution(contribution_pct)
+        .with_loan_recall(
+            loan_end
+                .checked_sub_signed(Duration::days(90))
+                .unwrap_or(loan_end),
+        )
+        .with_loan_min_appearances(min_apps);
+
+        if let Some((future_fee, obligation)) = loan_future_fee {
+            contract = contract.with_loan_future_fee(future_fee, obligation);
+        }
+
+        contract
+    }
+
+    fn return_player<W: MarketWorld>(
+        data: &mut W,
+        selling_country_id: u32,
+        selling_club_id: u32,
+        player: Player,
+        credited_fee: f64,
+        is_loan: bool,
+    ) {
+        if let Some(selling_country) = data.country_mut(selling_country_id) {
+            if let Some(selling_club) = selling_country
+                .clubs
+                .iter_mut()
+                .find(|c| c.id == selling_club_id)
+            {
+                TransferExecution::add_to_main_team(selling_club, player);
+                if is_loan {
+                    selling_club.finance.refund_loan_fee(credited_fee);
+                } else {
+                    let share = ClubFinances::reinvest_share_for(&selling_club.philosophy);
+                    selling_club
+                        .finance
+                        .add_transfer_income_at(-credited_fee, share);
+                }
             }
         }
     }
-}
 
-fn compute_loan_end(league_id: Option<u32>, country: &Country, date: NaiveDate) -> NaiveDate {
-    league_id
-        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-        .map(|league| {
-            let end = &league.settings.season_ending_half;
-            let end_month = end.to_month as u32;
-            let end_day = end.to_day as u32;
-            let year = if date.month() > end_month
-                || (date.month() == end_month && date.day() > end_day)
-            {
-                date.year() + 1
-            } else {
-                date.year()
-            };
-            NaiveDate::from_ymd_opt(year, end_month, end_day).unwrap_or(date)
-        })
-        .unwrap_or_else(|| {
-            let year = if date.month() >= 6 {
-                date.year() + 1
-            } else {
-                date.year()
-            };
-            NaiveDate::from_ymd_opt(year, 5, 31).unwrap_or(date)
-        })
+    fn loan_end(league_id: Option<u32>, country: &Country, date: NaiveDate) -> NaiveDate {
+        league_id
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|league| {
+                let end = &league.settings.season_ending_half;
+                let end_month = end.to_month as u32;
+                let end_day = end.to_day as u32;
+                let year = if date.month() > end_month
+                    || (date.month() == end_month && date.day() > end_day)
+                {
+                    date.year() + 1
+                } else {
+                    date.year()
+                };
+                NaiveDate::from_ymd_opt(year, end_month, end_day).unwrap_or(date)
+            })
+            .unwrap_or_else(|| {
+                let year = if date.month() >= 6 {
+                    date.year() + 1
+                } else {
+                    date.year()
+                };
+                NaiveDate::from_ymd_opt(year, 5, 31).unwrap_or(date)
+            })
+    }
 }
 
 /// Translates the offer's clause snapshot on a finalized transfer into
@@ -2861,7 +2226,7 @@ mod country_pair_execution_tests {
     fn spartak_loan_to_dynamo_kyiv_after_2022_does_not_complete() {
         let date = CountryPairFixtures::d(2026, 3, 1);
         let (mut data, transfer) = CountryPairFixtures::ru_to_ua_world(date);
-        let success = execute_transfer(&mut data, &transfer, date);
+        let success = TransferExecutor::one(&mut data, &transfer, date);
         assert!(!success, "RU→UA loan must be refused after the 2022 cutoff");
 
         // Player stays at Spartak Moscow.
@@ -2899,7 +2264,7 @@ mod country_pair_execution_tests {
         let (mut data, mut transfer) = CountryPairFixtures::ru_to_ua_world(date);
         transfer.is_loan = false;
         transfer.fee = 5_000_000.0;
-        let success = execute_transfer(&mut data, &transfer, date);
+        let success = TransferExecutor::one(&mut data, &transfer, date);
         assert!(
             !success,
             "RU→UA permanent transfer must be refused after the 2022 cutoff"
@@ -2935,7 +2300,7 @@ mod country_pair_execution_tests {
         transfer.selling_club_id = 200;
         transfer.buying_country_id = 1;
         transfer.buying_club_id = 100;
-        let success = execute_transfer(&mut data, &transfer, date);
+        let success = TransferExecutor::one(&mut data, &transfer, date);
         assert!(
             !success,
             "UA→RU loan must be refused after the 2022 cutoff (symmetric)"
@@ -2949,7 +2314,7 @@ mod country_pair_execution_tests {
     fn ru_to_ua_loan_before_2022_completes() {
         let date = CountryPairFixtures::d(2021, 6, 1);
         let (mut data, transfer) = CountryPairFixtures::ru_to_ua_world(date);
-        let success = execute_transfer(&mut data, &transfer, date);
+        let success = TransferExecutor::one(&mut data, &transfer, date);
         assert!(
             success,
             "RU→UA loan must complete on a pre-2022 simulation date"
@@ -2973,7 +2338,7 @@ mod country_pair_execution_tests {
         let (mut data, mut transfer) = CountryPairFixtures::ru_to_ua_world(date);
         transfer.is_loan = false;
         transfer.fee = 3_000_000.0;
-        let success = execute_transfer(&mut data, &transfer, date);
+        let success = TransferExecutor::one(&mut data, &transfer, date);
         assert!(
             success,
             "RU→UA permanent transfer must complete on a pre-2022 simulation date"
@@ -3005,7 +2370,7 @@ mod country_pair_execution_tests {
         if let Some(country) = data.country_mut(2) {
             country.code = "es".to_string();
         }
-        let success = execute_transfer(&mut data, &transfer, date);
+        let success = TransferExecutor::one(&mut data, &transfer, date);
         assert!(
             success,
             "non-RU/UA cross-country route must complete regardless of the cutoff date"
@@ -3398,7 +2763,7 @@ mod development_pathway_tests {
         let (mut data, transfer) = DevPathwayFixtures::world(8500, 2008, None);
         let date = DevPathwayFixtures::date();
 
-        let success = execute_transfer(&mut data, &transfer, date);
+        let success = TransferExecutor::one(&mut data, &transfer, date);
         assert!(success, "domestic permanent transfer must complete");
 
         let country = data.country(1).unwrap();
@@ -3426,7 +2791,7 @@ mod development_pathway_tests {
         let (mut data, transfer) = DevPathwayFixtures::world(8500, 1999, None);
         let date = DevPathwayFixtures::date();
 
-        assert!(execute_transfer(&mut data, &transfer, date));
+        assert!(TransferExecutor::one(&mut data, &transfer, date));
         assert_eq!(
             DevPathwayFixtures::dev_candidates(&data),
             0,
@@ -3450,7 +2815,7 @@ mod development_pathway_tests {
         let (mut data, transfer) = DevPathwayFixtures::world(8500, 2008, Some(terms));
         let date = DevPathwayFixtures::date();
 
-        assert!(execute_transfer(&mut data, &transfer, date));
+        assert!(TransferExecutor::one(&mut data, &transfer, date));
         assert_eq!(
             DevPathwayFixtures::dev_candidates(&data),
             0,
@@ -3465,7 +2830,7 @@ mod development_pathway_tests {
         let (mut data, transfer) = DevPathwayFixtures::world(3500, 2008, None);
         let date = DevPathwayFixtures::date();
 
-        assert!(execute_transfer(&mut data, &transfer, date));
+        assert!(TransferExecutor::one(&mut data, &transfer, date));
         assert_eq!(
             DevPathwayFixtures::dev_candidates(&data),
             0,
@@ -3479,7 +2844,7 @@ mod development_pathway_tests {
     fn staging_is_deduplicated_per_player() {
         let (mut data, transfer) = DevPathwayFixtures::world(8500, 2008, None);
         let date = DevPathwayFixtures::date();
-        assert!(execute_transfer(&mut data, &transfer, date));
+        assert!(TransferExecutor::one(&mut data, &transfer, date));
         assert_eq!(DevPathwayFixtures::dev_candidates(&data), 1);
 
         let country = data.country_mut(1).unwrap();
@@ -3508,7 +2873,7 @@ mod development_pathway_tests {
         let (mut data, purchase) = DevPathwayFixtures::gk_world(8500, 2008);
         let date = DevPathwayFixtures::date();
 
-        assert!(execute_transfer(&mut data, &purchase, date));
+        assert!(TransferExecutor::one(&mut data, &purchase, date));
 
         let country = data.country(1).unwrap();
         let buyer = country
@@ -3541,7 +2906,7 @@ mod development_pathway_tests {
         let (mut data, transfer) = DevPathwayFixtures::world(8500, 2008, None);
         let date = DevPathwayFixtures::d(2026, 8, 31); // last day of the summer window
 
-        assert!(execute_transfer(&mut data, &transfer, date));
+        assert!(TransferExecutor::one(&mut data, &transfer, date));
 
         let country = data.country(1).unwrap();
         let listing = country
@@ -3588,7 +2953,7 @@ mod development_pathway_tests {
         let (mut data, transfer) = DevPathwayFixtures::world(8500, 2008, None);
         let date = DevPathwayFixtures::d(2026, 9, 10); // between windows
 
-        assert!(execute_transfer(&mut data, &transfer, date));
+        assert!(TransferExecutor::one(&mut data, &transfer, date));
 
         let country = data.country(1).unwrap();
         assert!(
@@ -3622,7 +2987,7 @@ mod development_pathway_tests {
     fn next_pipeline_pass_does_not_duplicate_listing() {
         let (mut data, transfer) = DevPathwayFixtures::world(8500, 2008, None);
         let date = DevPathwayFixtures::d(2026, 8, 31);
-        assert!(execute_transfer(&mut data, &transfer, date));
+        assert!(TransferExecutor::one(&mut data, &transfer, date));
 
         let country = data.country_mut(1).unwrap();
         PipelineProcessor::process_loan_out_listings(country, date);
@@ -3705,7 +3070,7 @@ mod development_pathway_tests {
         }
 
         // 1. Permanent prospect purchase → staged AND listed (window open).
-        assert!(execute_transfer(&mut data, &purchase, date));
+        assert!(TransferExecutor::one(&mut data, &purchase, date));
         assert_eq!(DevPathwayFixtures::dev_candidates(&data), 1);
         assert!(
             data.country(1)
@@ -3760,7 +3125,7 @@ mod development_pathway_tests {
             personal_terms: None,
             offer_clauses: Vec::new(),
         };
-        assert!(execute_transfer(&mut data, &loan, date));
+        assert!(TransferExecutor::one(&mut data, &loan, date));
 
         let country = data.country(1).unwrap();
 
@@ -3882,7 +3247,7 @@ mod development_pathway_tests {
     #[test]
     fn foreign_loanees_count_against_group_loan_cap() {
         let (mut data, transfer) = DevPathwayFixtures::world_with_foreign_loanees(3);
-        assert!(execute_transfer(
+        assert!(TransferExecutor::one(
             &mut data,
             &transfer,
             DevPathwayFixtures::date()
@@ -3894,7 +3259,7 @@ mod development_pathway_tests {
         );
 
         let (mut data, transfer) = DevPathwayFixtures::world_with_foreign_loanees(2);
-        assert!(execute_transfer(
+        assert!(TransferExecutor::one(
             &mut data,
             &transfer,
             DevPathwayFixtures::date()
@@ -4163,7 +3528,7 @@ mod loan_history_source_tests {
         let date = LoanHistoryFixtures::d(2026, 9, 15);
         let (mut data, transfer) = LoanHistoryFixtures::world(true);
         assert!(
-            execute_transfer(&mut data, &transfer, date),
+            TransferExecutor::one(&mut data, &transfer, date),
             "domestic loan must complete"
         );
 
@@ -4197,7 +3562,7 @@ mod loan_history_source_tests {
         let date = LoanHistoryFixtures::d(2026, 9, 15);
         let (mut data, transfer) = LoanHistoryFixtures::world(false);
         assert!(
-            execute_transfer(&mut data, &transfer, date),
+            TransferExecutor::one(&mut data, &transfer, date),
             "domestic loan must complete"
         );
 

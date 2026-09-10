@@ -1,15 +1,18 @@
+pub mod audit;
+mod depth;
+pub mod precontract;
+pub mod pricing;
+
+use self::depth::{
+    DepthNegotiationAction, EmergencyDepthRequestIntent, EmergencyDepthRequestPlanner,
+    FreeAgentNegotiationStager,
+};
+use self::pricing::{BuyerRoleFit, FreeAgentMarketCalculator, FreeAgentOfferPricing};
 use super::config::TransferConfig;
 use super::execution::{
     ArrivalThreatProfile, DevelopmentLoanPathway, SquadReactionPass, TransferExecution,
 };
-use super::free_agent_depth::{
-    DepthNegotiationAction, EmergencyDepthRequestIntent, EmergencyDepthRequestPlanner,
-    FreeAgentNegotiationStager,
-};
-use super::free_agent_market_calc::{
-    BuyerRoleFit, FreeAgentMarketCalculator, FreeAgentOfferPricing,
-};
-use super::types::{TransferActivitySummary, find_player_in_country};
+use super::types::{CountryRoster, TransferActivitySummary};
 use crate::club::player::contract::RENEWAL_OFFERED_LABEL;
 use crate::club::player::mailbox::handlers::contract_proposal::ProcessContractHandler;
 use crate::club::player::transfer::{FreeAgentBlockReason, MarketStage};
@@ -1027,7 +1030,7 @@ impl CountryResult {
                         let player_ambition = if best.is_global_pool {
                             0.5
                         } else {
-                            find_player_in_country(country, best.player_id)
+                            CountryRoster::find(country, best.player_id)
                                 .map(|p| p.attributes.ambition)
                                 .unwrap_or(0.5)
                         };
@@ -1328,15 +1331,12 @@ impl CountryResult {
                 // (no fee, no sell-on, no installments).
                 offer_clauses: Vec::new(),
             };
-            // Free signings carry no fee, hence no sell-on payouts — the
-            // foreign-credit out-param stays empty by construction.
-            let mut no_foreign_credits: Vec<(u32, f64)> = Vec::new();
-            let executed = super::execution::execute_transfer_within_country(
-                country,
-                &deferred,
-                date,
-                &mut no_foreign_credits,
-            );
+            // The country IS the world here: this pass runs inside Phase A
+            // on one country borrow, and a free signing off a domestic
+            // expiry never leaves it. The executor is the same one the
+            // cross-border path uses — see
+            // [`crate::transfers::view::world::MarketWorld`].
+            let executed = super::execution::TransferExecutor::permanent(country, &deferred, date);
 
             if !executed {
                 debug!(
@@ -3498,159 +3498,6 @@ impl MarketClearingBuyer {
     }
 }
 
-/// Build a snapshot of `sim.free_agents` so per-country handlers can match
-/// these players against club needs. Mutating: each free agent gets
-/// `ensure_free_agent_state` called so the career-pressure score we
-/// surface here is read from the player's own durable state. The
-/// snapshot itself holds no Player reference — the simulator can
-/// continue to mutate the pool while signings are being decided.
-pub(crate) fn snapshot_global_free_agents(
-    data: &mut SimulatorData,
-    date: NaiveDate,
-) -> Vec<GlobalFreeAgentSummary> {
-    // Pass 1 (immutable): resolve nationality info per unique country
-    // in parallel. Two-stage resolve mirrors the rest of the transfer
-    // pipeline: an active country (full `Country`) first, then the
-    // lighter `country_info` map. Without the second stage, the gates
-    // fall back to permissive defaults and an Argentinian free agent
-    // slips through to a Mali buyer. Build a cache keyed by country_id
-    // so the mutable pass below doesn't need a SimulatorData borrow.
-    let unique_country_ids: HashSet<u32> = data.free_agents.iter().map(|p| p.country_id).collect();
-    let nationality_cache: HashMap<u32, (u16, u32, String)> = {
-        let data_ref: &SimulatorData = data;
-        unique_country_ids
-            .into_par_iter()
-            .map(|cid| {
-                let resolved = data_ref
-                    .country(cid)
-                    .map(|c| (c.reputation, c.continent_id, c.code.clone()))
-                    .or_else(|| {
-                        data_ref
-                            .country_info
-                            .get(&cid)
-                            .map(|c| (c.reputation, c.continent_id, c.code.clone()))
-                    })
-                    // Truly unknown nationality: fail-closed on the rep
-                    // gate (`u16::MAX` blocks every buyer) and pin the
-                    // region to the most prestigious one so the
-                    // prestige gate also rejects, instead of opening
-                    // every door. Loudly: a player carrying this
-                    // fallback can NEVER be signed, so silent data
-                    // holes would read as "the market ignores him".
-                    .unwrap_or_else(|| {
-                        let first_report = UNKNOWN_NATIONALITY_WARNED
-                            .lock()
-                            .map(|mut seen| seen.insert(cid))
-                            .unwrap_or(true);
-                        if first_report {
-                            warn!(
-                                "free-agent snapshot: unknown nationality country {cid} — \
-                                 affected players are blocked from every buyer until \
-                                 retirement resolves them"
-                            );
-                        } else {
-                            debug!("free-agent snapshot: unknown nationality country {cid}");
-                        }
-                        (u16::MAX, 1, "gb".to_string())
-                    });
-                (cid, resolved)
-            })
-            .collect()
-    };
-
-    // Pass 2 (mutable on the pool only): seed market state for any
-    // free agent who arrived without it (database-only entries that
-    // never came through `on_release`), then build the snapshot row.
-    // Each iteration mutates only its own `Player`, so this runs in
-    // parallel safely.
-    data.free_agents
-        .par_iter_mut()
-        .map(|player| {
-            let (nationality_rep, nationality_continent_id, nationality_country_code) =
-                nationality_cache
-                    .get(&player.country_id)
-                    .cloned()
-                    .unwrap_or_else(|| (u16::MAX, 1, "gb".to_string()));
-            player.ensure_free_agent_state(date, nationality_rep);
-            // Unknown-nationality fallback can never pass the rep gate
-            // — stamp the diagnosis reason so the audit layer reports
-            // the data hole instead of a mysterious endless sit.
-            if nationality_rep == u16::MAX {
-                player.on_market_blocked(date, FreeAgentBlockReason::UnknownNationality);
-            }
-
-            let career_pressure = player.career_pressure(date);
-            let (
-                last_salary,
-                last_country_reputation,
-                last_league_reputation,
-                days_free,
-                last_country_id,
-            ) = player
-                .free_agent_state()
-                .map(|s| {
-                    (
-                        s.last_salary,
-                        s.last_country_reputation,
-                        s.last_league_reputation,
-                        (date - s.free_since).num_days().max(0),
-                        // A database free agent who never held a modelled
-                        // contract has no last league; his own country is
-                        // the only market he is known in, which is the
-                        // truth about him rather than a fallback.
-                        s.last_country_id.unwrap_or(player.country_id),
-                    )
-                })
-                .unwrap_or((
-                    0,
-                    nationality_rep,
-                    ((nationality_rep as f32) * 0.75) as u16,
-                    0,
-                    player.country_id,
-                ));
-            // Time on the market erodes the old-league prestige the
-            // country/region gates key on — see
-            // `decayed_reference_reputation`. (The unknown-nationality
-            // u16::MAX sentinel survives the decay: 55% of MAX still
-            // out-reps every buyer, so the fail-closed block holds.)
-            let reference_reputation = FreeAgentMarketCalculator::decayed_reference_reputation(
-                player.reference_reputation(nationality_rep),
-                days_free,
-            );
-            let failed_approach_streak = player
-                .free_agent_state()
-                .map(|s| s.failed_approach_streak)
-                .unwrap_or(0);
-
-            GlobalFreeAgentSummary {
-                player_id: player.id,
-                player_name: player.full_name.to_string(),
-                ability: player.player_attributes.current_ability,
-                // Observable ceiling — pool matchers are club decisions
-                // and must not see hidden biological PA.
-                potential: PotentialEstimator::observable_ceiling(player, date),
-                age: player.age(date),
-                position_group: player.position().position_group(),
-                nationality_country_reputation: nationality_rep,
-                nationality_continent_id,
-                nationality_country_code,
-                nationality_country_id: player.country_id,
-                career_pressure,
-                days_free,
-                reference_reputation,
-                last_salary,
-                last_country_reputation,
-                last_league_reputation,
-                world_reputation: player.player_attributes.world_reputation,
-                current_reputation: player.player_attributes.current_reputation,
-                professionalism_norm: (player.attributes.professionalism / 20.0).clamp(0.0, 1.0),
-                failed_approach_streak,
-                last_country_id,
-            }
-        })
-        .collect()
-}
-
 /// Snapshot of the buying side captured *before* we take a mutable borrow
 /// on `SimulatorData` to remove the player from the global pool. Holds
 /// everything `Player::complete_free_agent_signing` needs to install the
@@ -3660,229 +3507,392 @@ struct BuyingClubSnapshot {
     league_reputation: u16,
 }
 
-/// Resolve the buying club's `TeamInfo` and league reputation from a
-/// read-only borrow. Returns `None` if the country/club/main team chain
-/// is incomplete or if the club is at squad capacity.
-fn snapshot_buying_club(
-    data: &SimulatorData,
-    buying_country_id: u32,
-    buying_club_id: u32,
-) -> Option<BuyingClubSnapshot> {
-    let country = data.country(buying_country_id)?;
-    let club = country.clubs.iter().find(|c| c.id == buying_club_id)?;
-    if club.teams.teams.is_empty() || !ClubView::can_accept_player(club) {
-        return None;
-    }
-    let main_team = club.teams.main().or_else(|| club.teams.teams.first())?;
-    let (league_name, league_slug, league_reputation) = main_team
-        .league_id
-        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-        .map(|l| (l.name.clone(), l.slug.clone(), l.reputation))
-        .unwrap_or_default();
-    Some(BuyingClubSnapshot {
-        to_info: TeamInfo {
-            name: club.name.clone(),
-            slug: main_team.slug.clone(),
-            reputation: main_team.reputation.world,
-            league_name,
-            league_slug,
-        },
-        league_reputation,
-    })
-}
-
-/// Execute a deferred global free-agent signing produced by
-/// `handle_free_agents`. Returns true if the player was placed at the
-/// buying club. First-come-first-served deduplication: if another country
-/// already claimed the player earlier in the same tick, the lookup misses
-/// and we return false silently.
+/// The world free-agent pool, as the transfer tick reads and writes it.
 ///
-/// The signing flows through `Player::complete_free_agent_signing` — the
-/// no-source-club mirror of `complete_transfer`. Career history goes
-/// through `record_free_agent_signing`, which only pushes the destination
-/// row, so games the player accumulated at their previous club stay
-/// attributed to that club rather than to a synthetic "Free Agent" entry.
-/// The "Free Agent" string survives only on the country-level
-/// `CompletedTransfer` log written below, where it is the correct label.
-pub(crate) fn execute_global_free_agent_signing(
-    data: &mut SimulatorData,
-    signing: &GlobalFreeAgentSigning,
-    date: NaiveDate,
-    _config: &TransferConfig,
-) -> bool {
-    // Pre-check 1: is the player still in the global pool?
-    let player_idx = match data
-        .free_agents
-        .iter()
-        .position(|p| p.id == signing.player_id)
-    {
-        Some(i) => i,
-        None => return false,
-    };
+/// Snapshotting it, resolving a buyer against it and executing a signing
+/// out of it are one subject: the pool lives on `SimulatorData`, so every
+/// one of them has to reach past the country borrow the rest of the pass
+/// works inside.
+pub(crate) struct GlobalFreeAgentPool;
 
-    // Pre-check 2: buying club exists, has a team to place into, and can
-    // still accept a player. Capture the destination snapshot now while
-    // we hold the read borrow; we'll need it after we mutate the pool.
-    let snapshot =
-        match snapshot_buying_club(data, signing.buying_country_id, signing.buying_club_id) {
-            Some(s) => s,
+impl GlobalFreeAgentPool {
+    /// Build a snapshot of `sim.free_agents` so per-country handlers can match
+    /// these players against club needs. Mutating: each free agent gets
+    /// `ensure_free_agent_state` called so the career-pressure score we
+    /// surface here is read from the player's own durable state. The
+    /// snapshot itself holds no Player reference — the simulator can
+    /// continue to mutate the pool while signings are being decided.
+    pub(crate) fn snapshot(
+        data: &mut SimulatorData,
+        date: NaiveDate,
+    ) -> Vec<GlobalFreeAgentSummary> {
+        // Pass 1 (immutable): resolve nationality info per unique country
+        // in parallel. Two-stage resolve mirrors the rest of the transfer
+        // pipeline: an active country (full `Country`) first, then the
+        // lighter `country_info` map. Without the second stage, the gates
+        // fall back to permissive defaults and an Argentinian free agent
+        // slips through to a Mali buyer. Build a cache keyed by country_id
+        // so the mutable pass below doesn't need a SimulatorData borrow.
+        let unique_country_ids: HashSet<u32> =
+            data.free_agents.iter().map(|p| p.country_id).collect();
+        let nationality_cache: HashMap<u32, (u16, u32, String)> = {
+            let data_ref: &SimulatorData = data;
+            unique_country_ids
+                .into_par_iter()
+                .map(|cid| {
+                    let resolved = data_ref
+                        .country(cid)
+                        .map(|c| (c.reputation, c.continent_id, c.code.clone()))
+                        .or_else(|| {
+                            data_ref
+                                .country_info
+                                .get(&cid)
+                                .map(|c| (c.reputation, c.continent_id, c.code.clone()))
+                        })
+                        // Truly unknown nationality: fail-closed on the rep
+                        // gate (`u16::MAX` blocks every buyer) and pin the
+                        // region to the most prestigious one so the
+                        // prestige gate also rejects, instead of opening
+                        // every door. Loudly: a player carrying this
+                        // fallback can NEVER be signed, so silent data
+                        // holes would read as "the market ignores him".
+                        .unwrap_or_else(|| {
+                            let first_report = UNKNOWN_NATIONALITY_WARNED
+                                .lock()
+                                .map(|mut seen| seen.insert(cid))
+                                .unwrap_or(true);
+                            if first_report {
+                                warn!(
+                                    "free-agent snapshot: unknown nationality country {cid} — \
+                                     affected players are blocked from every buyer until \
+                                     retirement resolves them"
+                                );
+                            } else {
+                                debug!("free-agent snapshot: unknown nationality country {cid}");
+                            }
+                            (u16::MAX, 1, "gb".to_string())
+                        });
+                    (cid, resolved)
+                })
+                .collect()
+        };
+
+        // Pass 2 (mutable on the pool only): seed market state for any
+        // free agent who arrived without it (database-only entries that
+        // never came through `on_release`), then build the snapshot row.
+        // Each iteration mutates only its own `Player`, so this runs in
+        // parallel safely.
+        data.free_agents
+            .par_iter_mut()
+            .map(|player| {
+                let (nationality_rep, nationality_continent_id, nationality_country_code) =
+                    nationality_cache
+                        .get(&player.country_id)
+                        .cloned()
+                        .unwrap_or_else(|| (u16::MAX, 1, "gb".to_string()));
+                player.ensure_free_agent_state(date, nationality_rep);
+                // Unknown-nationality fallback can never pass the rep gate
+                // — stamp the diagnosis reason so the audit layer reports
+                // the data hole instead of a mysterious endless sit.
+                if nationality_rep == u16::MAX {
+                    player.on_market_blocked(date, FreeAgentBlockReason::UnknownNationality);
+                }
+
+                let career_pressure = player.career_pressure(date);
+                let (
+                    last_salary,
+                    last_country_reputation,
+                    last_league_reputation,
+                    days_free,
+                    last_country_id,
+                ) = player
+                    .free_agent_state()
+                    .map(|s| {
+                        (
+                            s.last_salary,
+                            s.last_country_reputation,
+                            s.last_league_reputation,
+                            (date - s.free_since).num_days().max(0),
+                            // A database free agent who never held a modelled
+                            // contract has no last league; his own country is
+                            // the only market he is known in, which is the
+                            // truth about him rather than a fallback.
+                            s.last_country_id.unwrap_or(player.country_id),
+                        )
+                    })
+                    .unwrap_or((
+                        0,
+                        nationality_rep,
+                        ((nationality_rep as f32) * 0.75) as u16,
+                        0,
+                        player.country_id,
+                    ));
+                // Time on the market erodes the old-league prestige the
+                // country/region gates key on — see
+                // `decayed_reference_reputation`. (The unknown-nationality
+                // u16::MAX sentinel survives the decay: 55% of MAX still
+                // out-reps every buyer, so the fail-closed block holds.)
+                let reference_reputation = FreeAgentMarketCalculator::decayed_reference_reputation(
+                    player.reference_reputation(nationality_rep),
+                    days_free,
+                );
+                let failed_approach_streak = player
+                    .free_agent_state()
+                    .map(|s| s.failed_approach_streak)
+                    .unwrap_or(0);
+
+                GlobalFreeAgentSummary {
+                    player_id: player.id,
+                    player_name: player.full_name.to_string(),
+                    ability: player.player_attributes.current_ability,
+                    // Observable ceiling — pool matchers are club decisions
+                    // and must not see hidden biological PA.
+                    potential: PotentialEstimator::observable_ceiling(player, date),
+                    age: player.age(date),
+                    position_group: player.position().position_group(),
+                    nationality_country_reputation: nationality_rep,
+                    nationality_continent_id,
+                    nationality_country_code,
+                    nationality_country_id: player.country_id,
+                    career_pressure,
+                    days_free,
+                    reference_reputation,
+                    last_salary,
+                    last_country_reputation,
+                    last_league_reputation,
+                    world_reputation: player.player_attributes.world_reputation,
+                    current_reputation: player.player_attributes.current_reputation,
+                    professionalism_norm: (player.attributes.professionalism / 20.0)
+                        .clamp(0.0, 1.0),
+                    failed_approach_streak,
+                    last_country_id,
+                }
+            })
+            .collect()
+    }
+
+    /// Resolve the buying club's `TeamInfo` and league reputation from a
+    /// read-only borrow. Returns `None` if the country/club/main team chain
+    /// is incomplete or if the club is at squad capacity.
+    fn buying_club(
+        data: &SimulatorData,
+        buying_country_id: u32,
+        buying_club_id: u32,
+    ) -> Option<BuyingClubSnapshot> {
+        let country = data.country(buying_country_id)?;
+        let club = country.clubs.iter().find(|c| c.id == buying_club_id)?;
+        if club.teams.teams.is_empty() || !ClubView::can_accept_player(club) {
+            return None;
+        }
+        let main_team = club.teams.main().or_else(|| club.teams.teams.first())?;
+        let (league_name, league_slug, league_reputation) = main_team
+            .league_id
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|l| (l.name.clone(), l.slug.clone(), l.reputation))
+            .unwrap_or_default();
+        Some(BuyingClubSnapshot {
+            to_info: TeamInfo {
+                name: club.name.clone(),
+                slug: main_team.slug.clone(),
+                reputation: main_team.reputation.world,
+                league_name,
+                league_slug,
+            },
+            league_reputation,
+        })
+    }
+
+    /// Execute a deferred global free-agent signing produced by
+    /// `handle_free_agents`. Returns true if the player was placed at the
+    /// buying club. First-come-first-served deduplication: if another country
+    /// already claimed the player earlier in the same tick, the lookup misses
+    /// and we return false silently.
+    ///
+    /// The signing flows through `Player::complete_free_agent_signing` — the
+    /// no-source-club mirror of `complete_transfer`. Career history goes
+    /// through `record_free_agent_signing`, which only pushes the destination
+    /// row, so games the player accumulated at their previous club stay
+    /// attributed to that club rather than to a synthetic "Free Agent" entry.
+    /// The "Free Agent" string survives only on the country-level
+    /// `CompletedTransfer` log written below, where it is the correct label.
+    pub(crate) fn execute_signing(
+        data: &mut SimulatorData,
+        signing: &GlobalFreeAgentSigning,
+        date: NaiveDate,
+        _config: &TransferConfig,
+    ) -> bool {
+        // Pre-check 1: is the player still in the global pool?
+        let player_idx = match data
+            .free_agents
+            .iter()
+            .position(|p| p.id == signing.player_id)
+        {
+            Some(i) => i,
             None => return false,
         };
 
-    // All pre-checks passed — take the player out of the pool.
-    let mut player = data.free_agents.swap_remove(player_idx);
+        // Pre-check 2: buying club exists, has a team to place into, and can
+        // still accept a player. Capture the destination snapshot now while
+        // we hold the read borrow; we'll need it after we mutate the pool.
+        let snapshot =
+            match Self::buying_club(data, signing.buying_country_id, signing.buying_club_id) {
+                Some(s) => s,
+                None => return false,
+            };
 
-    // Where he came FROM, read before the signing clears his market state.
-    // A pool signing writes `from_club_id: 0`, so this is the only record
-    // the world keeps of which league released him — and the free-agent
-    // corridor is a real corridor: a released man signs where he is known.
-    let origin_country_id = player
-        .free_agent_state()
-        .and_then(|state| state.last_country_id)
-        .unwrap_or(0);
+        // All pre-checks passed — take the player out of the pool.
+        let mut player = data.free_agents.swap_remove(player_idx);
 
-    // Use the no-source-club completion path: contract install, signing
-    // plan, and pending-signing run identically to a paid transfer, but
-    // career history goes through `on_free_agent_signing` so we don't
-    // fabricate a "Free Agent" career row for games that were actually
-    // played at the player's previous club.
-    let agreed_wage = signing.terms.map(|t| t.annual_wage);
-    player.complete_free_agent_signing(
-        &snapshot.to_info,
-        date,
-        signing.buying_club_id,
-        snapshot.league_reputation,
-        agreed_wage,
-    );
-    // Honour staged emergency contract terms (length, role promise).
-    // `complete_free_agent_signing` installs the wage above via
-    // `install_permanent_contract`; rewriting the contract here with
-    // the term-aware installer makes the contract length, role
-    // promise, and signing bonus stick. Without this the global-pool
-    // path silently gives every emergency signing a 4–5 year
-    // calculator-default deal and the in-country / global flows
-    // drift apart.
-    if let Some(terms) = signing.terms {
-        let personal_terms = terms.to_personal_terms();
-        player.install_permanent_contract_with_terms(
+        // Where he came FROM, read before the signing clears his market state.
+        // A pool signing writes `from_club_id: 0`, so this is the only record
+        // the world keeps of which league released him — and the free-agent
+        // corridor is a real corridor: a released man signs where he is known.
+        let origin_country_id = player
+            .free_agent_state()
+            .and_then(|state| state.last_country_id)
+            .unwrap_or(0);
+
+        // Use the no-source-club completion path: contract install, signing
+        // plan, and pending-signing run identically to a paid transfer, but
+        // career history goes through `on_free_agent_signing` so we don't
+        // fabricate a "Free Agent" career row for games that were actually
+        // played at the player's previous club.
+        let agreed_wage = signing.terms.map(|t| t.annual_wage);
+        player.complete_free_agent_signing(
+            &snapshot.to_info,
             date,
-            snapshot.to_info.reputation,
-            snapshot.league_reputation,
-            Some(terms.annual_wage),
-            Some(&personal_terms),
-        );
-    }
-
-    // Now place the player at the buying club and write the country-level
-    // market history entry. Re-borrow mutably; pre-checks above guarantee
-    // the country/club lookup will succeed, but we still bail safely if
-    // they don't (and restore the player to the pool).
-    let buying_country = match data.country_mut(signing.buying_country_id) {
-        Some(c) => c,
-        None => {
-            data.free_agents.push(player);
-            return false;
-        }
-    };
-
-    let buying_club_idx = match buying_country
-        .clubs
-        .iter()
-        .position(|c| c.id == signing.buying_club_id)
-    {
-        Some(i) => i,
-        None => {
-            let _ = buying_country;
-            data.free_agents.push(player);
-            return false;
-        }
-    };
-
-    let buying_club_name = buying_country.clubs[buying_club_idx].name.clone();
-
-    // Reception ingredients — captured before `player` moves into the
-    // roster and before the club goes mutably borrowed.
-    let arrival_country_id = player.country_id;
-    let club_country_id = buying_country.id;
-    let club_country_code = buying_country.code.clone();
-    let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
-
-    // Main team by TYPE — `teams[0]` is not guaranteed to be the Main
-    // squad, and the contract/history identity and squad-cap check above
-    // were already keyed to it. The historical first-team insert rostered
-    // pool signings on whatever squad happened to sit first.
-    TransferExecution::add_to_main_team(&mut buying_country.clubs[buying_club_idx], player);
-
-    // A pool signing is business in a market, exactly like a paid one: the
-    // four paid executors write the ledger and this door did not, so a club
-    // that signed three released Colombians learned nothing about Colombia
-    // and its knowledge of the market never moved.
-    MarketLedgerUpdate::on_signing(
-        &mut buying_country.clubs[buying_club_idx],
-        club_country_id,
-        origin_country_id,
-        arrival_country_id,
-        date,
-    );
-
-    // A pool signing walks into a dressing room like any other arrival —
-    // this path used to install him with no compatriot / competition /
-    // investment reaction at all.
-    SquadReactionPass::arrival_reception(
-        &mut buying_country.clubs[buying_club_idx],
-        signing.player_id,
-        arrival_country_id,
-        club_country_id,
-        &club_country_code,
-        &arrival_threat,
-        0.0,
-        date,
-    );
-
-    // Country-level market log (separate from the player's career history
-    // populated above by `complete_free_agent_signing`).
-    buying_country.transfer_market.transfer_history.push(
-        CompletedTransfer::new(
-            signing.player_id,
-            signing.player_name.clone(),
-            0,
-            0,
-            "Free Agent".to_string(),
             signing.buying_club_id,
-            buying_club_name,
+            snapshot.league_reputation,
+            agreed_wage,
+        );
+        // Honour staged emergency contract terms (length, role promise).
+        // `complete_free_agent_signing` installs the wage above via
+        // `install_permanent_contract`; rewriting the contract here with
+        // the term-aware installer makes the contract length, role
+        // promise, and signing bonus stick. Without this the global-pool
+        // path silently gives every emergency signing a 4–5 year
+        // calculator-default deal and the in-country / global flows
+        // drift apart.
+        if let Some(terms) = signing.terms {
+            let personal_terms = terms.to_personal_terms();
+            player.install_permanent_contract_with_terms(
+                date,
+                snapshot.to_info.reputation,
+                snapshot.league_reputation,
+                Some(terms.annual_wage),
+                Some(&personal_terms),
+            );
+        }
+
+        // Now place the player at the buying club and write the country-level
+        // market history entry. Re-borrow mutably; pre-checks above guarantee
+        // the country/club lookup will succeed, but we still bail safely if
+        // they don't (and restore the player to the pool).
+        let buying_country = match data.country_mut(signing.buying_country_id) {
+            Some(c) => c,
+            None => {
+                data.free_agents.push(player);
+                return false;
+            }
+        };
+
+        let buying_club_idx = match buying_country
+            .clubs
+            .iter()
+            .position(|c| c.id == signing.buying_club_id)
+        {
+            Some(i) => i,
+            None => {
+                let _ = buying_country;
+                data.free_agents.push(player);
+                return false;
+            }
+        };
+
+        let buying_club_name = buying_country.clubs[buying_club_idx].name.clone();
+
+        // Reception ingredients — captured before `player` moves into the
+        // roster and before the club goes mutably borrowed.
+        let arrival_country_id = player.country_id;
+        let club_country_id = buying_country.id;
+        let club_country_code = buying_country.code.clone();
+        let arrival_threat = ArrivalThreatProfile::from_player(&player, date);
+
+        // Main team by TYPE — `teams[0]` is not guaranteed to be the Main
+        // squad, and the contract/history identity and squad-cap check above
+        // were already keyed to it. The historical first-team insert rostered
+        // pool signings on whatever squad happened to sit first.
+        TransferExecution::add_to_main_team(&mut buying_country.clubs[buying_club_idx], player);
+
+        // A pool signing is business in a market, exactly like a paid one: the
+        // four paid executors write the ledger and this door did not, so a club
+        // that signed three released Colombians learned nothing about Colombia
+        // and its knowledge of the market never moved.
+        MarketLedgerUpdate::on_signing(
+            &mut buying_country.clubs[buying_club_idx],
+            club_country_id,
+            origin_country_id,
+            arrival_country_id,
             date,
-            CurrencyValue::new(0.0, Currency::Usd),
-            TransferType::Free,
-        )
-        .with_reason(signing.reason.clone())
-        .with_origin_country(origin_country_id),
-    );
+        );
 
-    PipelineProcessor::clear_player_interest(buying_country, signing.player_id);
+        // A pool signing walks into a dressing room like any other arrival —
+        // this path used to install him with no compatriot / competition /
+        // investment reaction at all.
+        SquadReactionPass::arrival_reception(
+            &mut buying_country.clubs[buying_club_idx],
+            signing.player_id,
+            arrival_country_id,
+            club_country_id,
+            &club_country_code,
+            &arrival_threat,
+            0.0,
+            date,
+        );
 
-    // Stale interest in OTHER countries — monitoring or shortlist rows
-    // that survived the local clear — is swept by the caller. That sweep
-    // walks the whole world and costs the same whether it strips one
-    // player or a hundred, so firing it per signing made the drain
-    // O(signings x world); the caller batches every id it just placed and
-    // sweeps once, before it initiates any foreign negotiation.
+        // Country-level market log (separate from the player's career history
+        // populated above by `complete_free_agent_signing`).
+        buying_country.transfer_market.transfer_history.push(
+            CompletedTransfer::new(
+                signing.player_id,
+                signing.player_name.clone(),
+                0,
+                0,
+                "Free Agent".to_string(),
+                signing.buying_club_id,
+                buying_club_name,
+                date,
+                CurrencyValue::new(0.0, Currency::Usd),
+                TransferType::Free,
+            )
+            .with_reason(signing.reason.clone())
+            .with_origin_country(origin_country_id),
+        );
 
-    // Monthly diagnostics flow counter — a player just left the global
-    // pool for a club, which a later point-in-time scan can't recover.
-    data.free_agent_flow.signed_from_global_pool = data
-        .free_agent_flow
-        .signed_from_global_pool
-        .saturating_add(1);
+        PipelineProcessor::clear_player_interest(buying_country, signing.player_id);
 
-    debug!(
-        "Free agent signing (global pool): player {} → club {} in country {}",
-        signing.player_id, signing.buying_club_id, signing.buying_country_id
-    );
+        // Stale interest in OTHER countries — monitoring or shortlist rows
+        // that survived the local clear — is swept by the caller. That sweep
+        // walks the whole world and costs the same whether it strips one
+        // player or a hundred, so firing it per signing made the drain
+        // O(signings x world); the caller batches every id it just placed and
+        // sweeps once, before it initiates any foreign negotiation.
 
-    true
+        // Monthly diagnostics flow counter — a player just left the global
+        // pool for a club, which a later point-in-time scan can't recover.
+        data.free_agent_flow.signed_from_global_pool = data
+            .free_agent_flow
+            .signed_from_global_pool
+            .saturating_add(1);
+
+        debug!(
+            "Free agent signing (global pool): player {} → club {} in country {}",
+            signing.player_id, signing.buying_club_id, signing.buying_country_id
+        );
+
+        true
+    }
 }
 
 #[cfg(test)]
-mod emergency;
-#[cfg(test)]
-mod expiry;
+mod tests;

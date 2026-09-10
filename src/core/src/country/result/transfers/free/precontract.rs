@@ -19,11 +19,11 @@
 //! cross-border Bosman would need the deferred cross-country queue and is
 //! left for later.
 
-use super::config::TransferConfig;
-use super::free_agent_market_calc::{BuyerRoleFit, FreeAgentMarketCalculator};
+use super::pricing::{BuyerRoleFit, FreeAgentMarketCalculator};
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::contract::RENEWAL_REJECTED_LABEL;
 use crate::club::player::transfer::{MarketStage, PreContractAgreement};
+use crate::country::result::transfers::config::TransferConfig;
 use crate::transfers::pipeline::TransferRequestStatus;
 use crate::transfers::view::club::ClubView;
 use crate::utils::IntegerUtils;
@@ -61,13 +61,17 @@ struct LeavingPlayer {
     days_to_expiry: i64,
 }
 
-pub(super) struct PreContractManager;
+pub(in crate::country::result::transfers) struct PreContractManager;
 
 impl PreContractManager {
     /// Stage pre-contracts for the country. Runs year-round (a Bosman is
     /// window-independent) and is capped hard so most expiring players
     /// still run their deal down and reach the open market.
-    pub(super) fn stage(country: &mut Country, date: NaiveDate, config: &TransferConfig) {
+    pub(in crate::country::result::transfers) fn stage(
+        country: &mut Country,
+        date: NaiveDate,
+        config: &TransferConfig,
+    ) {
         let cap = config.max_pre_contracts_per_country_per_day;
         if cap == 0 {
             return;
@@ -971,7 +975,7 @@ mod pre_contract_badge_tests {
         let today = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
         let mut player = player_with_contract(NaiveDate::from_ymd_opt(2026, 6, 30).unwrap());
         player.stage_pre_contract(
-            crate::club::player::transfer::PreContractAgreement {
+            PreContractAgreement {
                 to_club_id: 200,
                 to_country_id: 1,
                 annual_wage: 70_000,

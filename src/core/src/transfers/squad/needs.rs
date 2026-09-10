@@ -14,7 +14,7 @@
 //!    critically short.
 //!
 //! Sits as a sibling of `pipeline` so both the per-country emergency
-//! signing path (`country::result::transfers::free_agents`) and the
+//! signing path (`country::result::transfers::free`) and the
 //! transfer-pipeline squad evaluation can import the helpers without
 //! crossing the driver / framework layering.
 //!

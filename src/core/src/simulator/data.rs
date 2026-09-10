@@ -12,7 +12,7 @@ use crate::club::staff::perception::PotentialEstimator;
 use crate::competitions::GlobalCompetitions;
 use crate::continent::Continent;
 use crate::country::result::transfers::GlobalFreeAgentSummary;
-use crate::country::result::transfers::free_agent_market_calc::FreeAgentMarketCalculator;
+use crate::country::result::transfers::free::pricing::FreeAgentMarketCalculator;
 use crate::league::{LeagueTable, MatchStorage};
 use crate::shared::SimulatorDataIndexes;
 use crate::transfers::ScoutingRegion;
@@ -1364,7 +1364,7 @@ mod free_agent_release_reason_tests {
     /// snapshot.)
     #[test]
     fn newly_expired_player_is_visible_in_post_sweep_global_snapshot() {
-        use crate::country::result::transfers::snapshot_global_free_agents;
+        use crate::country::result::transfers::GlobalFreeAgentPool;
 
         let date = SweepFx::date();
         // A contractless senior awaiting the sweep (contract already
@@ -1374,7 +1374,7 @@ mod free_agent_release_reason_tests {
 
         // Before the sweep he is still on his club roster, NOT in the pool,
         // so the global snapshot can't see him yet.
-        let pre = snapshot_global_free_agents(&mut data, date);
+        let pre = GlobalFreeAgentPool::snapshot(&mut data, date);
         assert!(
             !pre.iter().any(|s| s.player_id == 7),
             "an un-swept player must not yet appear in the global snapshot"
@@ -1388,7 +1388,7 @@ mod free_agent_release_reason_tests {
         // rebuilds this snapshot at the START of the next tick (before its
         // matching phase), so cross-country clubs first act on him one tick
         // after the sweep — never the same tick he was swept.
-        let post = snapshot_global_free_agents(&mut data, date);
+        let post = GlobalFreeAgentPool::snapshot(&mut data, date);
         let row = post
             .iter()
             .find(|s| s.player_id == 7)

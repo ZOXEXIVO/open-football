@@ -37,7 +37,6 @@ use crate::transfers::pipeline::{
 };
 use crate::transfers::scouting::breakout::{BreakoutInputs, BreakoutPerformanceSignal};
 use crate::transfers::scouting::recruitment::{ScoutMonitoringSource, ScoutPlayerMonitoring};
-use crate::transfers::squad::plan::BriefTier;
 use crate::transfers::squad::standing::{StandingInputs, StandingSignal};
 use crate::{Club, Country, PlayerFieldPositionGroup};
 
@@ -649,6 +648,7 @@ mod watchlist_tests {
     use super::*;
     use crate::PlayerPositionType;
     use crate::transfers::squad::ledger::{SellListEntry, SellMotive};
+    use crate::transfers::squad::plan::BriefTier;
 
     struct Fx;
 

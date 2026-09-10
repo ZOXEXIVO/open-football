@@ -10,3 +10,4 @@
 //! [`squad`]: crate::transfers::squad
 
 pub mod club;
+pub mod world;

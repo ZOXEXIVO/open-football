@@ -25,8 +25,8 @@ use crate::continent::ContinentBuildOutput;
 use crate::continent::ContinentResult;
 use crate::continent::national::world as national_world;
 use crate::country::CountryResult;
-use crate::country::result::transfers::free_agent_audit::FreeAgentMarketAuditor;
-use crate::country::result::transfers::{GlobalFreeAgentSummary, snapshot_global_free_agents};
+use crate::country::result::transfers::free::audit::FreeAgentMarketAuditor;
+use crate::country::result::transfers::{GlobalFreeAgentPool, GlobalFreeAgentSummary};
 use crate::league::result::WorldSnapshot;
 use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
 use crate::utils::DateUtils;
@@ -218,7 +218,7 @@ impl FootballSimulator {
             .flat_map_iter(|c| PipelineProcessor::collect_player_pool(c, pool_date))
             .collect();
         let global_fa_snapshot: Vec<GlobalFreeAgentSummary> =
-            snapshot_global_free_agents(data, pool_date);
+            GlobalFreeAgentPool::snapshot(data, pool_date);
         // At the window boundaries the wage world has moved enough that the
         // money axis of `import_capacity` is stale — the Gulf got richer, a
         // league collapsed. The corridor cards are shipped data and never

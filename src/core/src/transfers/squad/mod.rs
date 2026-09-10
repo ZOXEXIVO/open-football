@@ -1026,7 +1026,7 @@ impl PipelineProcessor {
         if players.is_empty() {
             // Empty main team: emit group-aware FormationGap requests
             // for every position group so the emergency free-agent pass
-            // (in `country::result::transfers::free_agents`) has a
+            // (in `country::result::transfers::free`) has a
             // signal to react to, and the request-driven matcher has
             // open requests once the squad gets a few bodies. Without
             // these, the pipeline used to return zero requests for a

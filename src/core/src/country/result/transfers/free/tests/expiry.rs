@@ -8,7 +8,7 @@
 //! module is actually about — the personality that decides the answer and
 //! the decision-history it leaves — is spelled out here.
 
-use super::*;
+use super::super::*;
 use crate::club::player::contract::RENEWAL_REJECTED_LABEL;
 use crate::transfers::tests::kit::{TestClub, TestCountry, TestDate, TestPlayer, TestTeam};
 use crate::{

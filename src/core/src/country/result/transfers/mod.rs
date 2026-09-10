@@ -1,12 +1,8 @@
 pub(crate) mod config;
 pub(crate) mod execution;
-pub mod free_agent_audit;
-mod free_agent_depth;
-pub mod free_agent_market_calc;
-mod free_agents;
+pub mod free;
 mod listings;
 mod negotiations;
-mod pre_contract;
 pub(crate) mod settlement;
 pub(crate) mod types;
 
@@ -21,15 +17,15 @@ use crate::transfers::{MarketMap, ScoutMarketDesk};
 use crate::{Country, PlayerStatusType};
 use chrono::NaiveDate;
 use config::TransferConfig;
-use execution::TransferExecution;
-use free_agents::{GlobalFreeAgentSigning, execute_global_free_agent_signing};
-pub(crate) use free_agents::{GlobalFreeAgentSummary, snapshot_global_free_agents};
+use execution::TransferExecutor;
+use free::GlobalFreeAgentSigning;
+use free::precontract::PreContractManager;
+pub(crate) use free::{GlobalFreeAgentPool, GlobalFreeAgentSummary};
 use log::debug;
-use pre_contract::PreContractManager;
 use settlement::TransferClauseSettler;
 use types::DeferredTransfer;
 use types::TransferActivitySummary;
-use types::{PendingPlayerSignal, find_player_in_country_mut};
+use types::{CountryRoster, PendingPlayerSignal};
 
 /// Cross-country tail of the transfer market — populated by
 /// `simulate_transfer_market_local` running on `&mut Country` inside
@@ -77,7 +73,7 @@ pub struct DeferredTransferOps {
     pub pre_contract_signed: u32,
     /// Clause payouts owed to sellers that don't live in this country —
     /// `(club_id, amount)` pairs the settler couldn't route locally.
-    /// Drained serially in Phase C via `credit_club_globally` so a
+    /// Drained serially in Phase C via `TransferExecutor::credit_club` so a
     /// cross-country performance add-on actually reaches the foreign
     /// seller instead of vanishing (the buyer was already debited).
     pub cross_country_clause_credits: Vec<(u32, f64)>,
@@ -192,7 +188,7 @@ impl CountryResult {
                     )
             });
             if !saga_still_live {
-                if let Some(player) = find_player_in_country_mut(country, player_id) {
+                if let Some(player) = CountryRoster::find_mut(country, player_id) {
                     player.statuses.remove(PlayerStatusType::Bid);
                     player.statuses.remove(PlayerStatusType::Trn);
                 }
@@ -501,7 +497,7 @@ impl CountryResult {
         // destroyed.
         let stage = PerformanceProfiler::stage_scope("drain_clause_credits", 3);
         for (club_id, amount) in &ops.cross_country_clause_credits {
-            TransferExecution::credit_club_globally(data, *club_id, *amount);
+            TransferExecutor::credit_club(data, *club_id, *amount);
         }
         drop(stage);
 
@@ -521,7 +517,7 @@ impl CountryResult {
         let stage = PerformanceProfiler::stage_scope("drain_free_agent_signings", 3);
         let mut placed_from_pool: Vec<u32> = Vec::new();
         for signing in &ops.global_signings {
-            if execute_global_free_agent_signing(data, signing, current_date, &config) {
+            if GlobalFreeAgentPool::execute_signing(data, signing, current_date, &config) {
                 completed += 1;
                 placed_from_pool.push(signing.player_id);
             }
@@ -561,7 +557,8 @@ impl CountryResult {
         // development loans — the same order a per-transfer call keeps, at
         // one world walk instead of one per transfer.
         let stage = PerformanceProfiler::stage_scope("drain_execute_transfers", 3);
-        let outcomes = execution::execute_transfers(data, &ops.deferred_transfers, current_date);
+        let outcomes =
+            execution::TransferExecutor::batch(data, &ops.deferred_transfers, current_date);
         for (transfer, success) in ops.deferred_transfers.iter().zip(outcomes) {
             if success {
                 data.dirty_player_index = true;
@@ -577,7 +574,7 @@ impl CountryResult {
             // The deal was optimistically finalised at medical stage but
             // never executed — roll the market state back so the player
             // stays visible and the buyer keeps looking.
-            execution::compensate_failed_execution(data, transfer);
+            execution::TransferExecutor::compensate_failure(data, transfer);
         }
         drop(stage);
 
@@ -616,7 +613,7 @@ impl CountryResult {
                     (club.is_rival(pending.interested_club_id), league_rep)
                 })
                 .unwrap_or((false, 0));
-            let Some(player) = find_player_in_country_mut(country, pending.player_id) else {
+            let Some(player) = CountryRoster::find_mut(country, pending.player_id) else {
                 continue;
             };
             let sig = TransferInterestSignal {

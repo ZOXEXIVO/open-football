@@ -27,18 +27,23 @@ use crate::transfers::market::{
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::pipeline::{
+    ClubTransferPlan, DetailedScoutingReport, ShortlistCandidate, TransferShortlist,
+};
+use crate::transfers::pipeline::{
     ShortlistCandidateStatus, TransferApproach, TransferNeedPriority, TransferNeedReason,
     TransferRequest, TransferRequestStatus,
 };
 use crate::transfers::pool::FreeAgentBumpBatch;
+use crate::transfers::scouting::recruitment::ScoutPlayerMonitoring;
 use crate::transfers::squad::plan::{BriefTier, PlanningCadence};
 use crate::transfers::value::upgrade::{TargetBelief, UpgradeMath};
 use crate::transfers::value::wage::BuyerLevelWage;
 use crate::transfers::view::club::ClubView;
 use crate::utils::FormattingUtils;
 use crate::{
-    ClubPhilosophy, ClubTransferStrategy, Country, Person, PlayerFieldPositionGroup,
-    PlayerStatusType, ReputationLevel, StaffPosition, TransferStrategyContext, WageCalculator,
+    Club, ClubPhilosophy, ClubTransferStrategy, Country, Person, Player, PlayerFieldPositionGroup,
+    PlayerStatusType, ReputationLevel, StaffPosition, Team, TransferStrategyContext,
+    WageCalculator,
 };
 
 /// How close to the asking price a buyer is willing to push.
@@ -62,6 +67,509 @@ impl BuyingAggressiveness {
         };
         let ratio_adj = (ratio - 1.0) * 0.06;
         (base + ratio_adj).clamp(0.25, 0.90)
+    }
+}
+
+/// The buying club, as an approach reads it.
+///
+/// Half of the seam between "who is this deal for" and "what is the deal".
+/// The offer construction below needs a dozen facts about the buyer and a
+/// dozen about the target; passing them loose was what kept the decision
+/// welded into an 800-line loop, and welded into the DOMESTIC one at that.
+pub(in crate::transfers) struct ApproachBuyer<'a> {
+    pub club: &'a Club,
+    pub team: &'a Team,
+    pub plan: &'a ClubTransferPlan,
+    /// Continuous 0..1 standing — what the aggressiveness curve reads.
+    pub rep_score: f32,
+    pub league_reputation: u16,
+    /// Squad-average current ability, the coarse quality bar the strategy
+    /// values targets against.
+    pub avg_ability: u8,
+    pub budget: f64,
+    pub price_level: f32,
+}
+
+/// The target and the club he is being bought from, however the pass found
+/// them — off the local roster, or resolved across a border.
+///
+/// This is the half that differs by reach, and the reason the decision can
+/// be shared: once a target is described this way, the offer does not care
+/// which country he was standing in.
+pub(in crate::transfers) struct ApproachTarget<'a> {
+    pub player: &'a Player,
+    pub selling_club: &'a Club,
+    pub selling_club_id: u32,
+    pub selling_rep_score: f32,
+    pub selling_league_reputation: u16,
+    pub is_rival: bool,
+    pub monitoring: Option<&'a ScoutPlayerMonitoring>,
+    pub scouting_report: Option<&'a DetailedScoutingReport>,
+}
+
+/// What the buyer decided to do about this target.
+pub(in crate::transfers) enum ApproachOutcome {
+    /// Open a negotiation on these terms.
+    Approach(Box<NegotiationAction>),
+    /// The staged plausibility model refused at the last gate. The caller
+    /// marks the shortlist candidate so the cursor advances instead of
+    /// stalling on him.
+    Refused,
+}
+
+/// The tick-level facts an approach is made against.
+pub(in crate::transfers) struct ApproachContext<'a> {
+    pub country: &'a Country,
+    pub date: NaiveDate,
+    pub candidate: &'a ShortlistCandidate,
+    /// Buy, loan, or loan-with-option — the DoF's call, made upstream.
+    pub approach: TransferApproach,
+    pub is_loan: bool,
+    pub has_option_to_buy: bool,
+    pub is_prospect_purchase: bool,
+}
+
+/// Turning an agreed target into an offer.
+///
+/// This is the ~280 lines both reaches share: strategy, asking price, wage,
+/// deal valuation, the man he would replace, the opening ratio, clauses,
+/// reason, and the last plausibility gate. It used to live welded inside
+/// the DOMESTIC loop, with the cross-border pass carrying its own copy and
+/// a dozen comments saying "mirror the domestic path".
+///
+/// The body is unchanged from that original — the context structs are read
+/// straight back into the names it already used, so the move carries no
+/// rename risk.
+pub(in crate::transfers) struct ApproachBuilder;
+
+impl ApproachBuilder {
+    pub(in crate::transfers) fn build(
+        buyer: &ApproachBuyer<'_>,
+        target: &ApproachTarget<'_>,
+        shortlist: &TransferShortlist,
+        request: Option<&TransferRequest>,
+        ctx: &ApproachContext<'_>,
+    ) -> ApproachOutcome {
+        let club = buyer.club;
+        let team = buyer.team;
+        let plan = buyer.plan;
+        let buying_rep_score = buyer.rep_score;
+        let buying_league_reputation = buyer.league_reputation;
+        let avg_ability = buyer.avg_ability;
+        let budget = buyer.budget;
+        let price_level = buyer.price_level;
+
+        let player = target.player;
+        let selling_club = target.selling_club;
+        let selling_club_id = target.selling_club_id;
+        let selling_rep_score = target.selling_rep_score;
+        let selling_league_reputation = target.selling_league_reputation;
+        let player_id = player.id;
+        let is_rival = target.is_rival;
+        let monitoring = target.monitoring;
+        let scouting_report = target.scouting_report;
+
+        let country = ctx.country;
+        let date = ctx.date;
+        let candidate = ctx.candidate;
+        let approach = &ctx.approach;
+        let is_loan = ctx.is_loan;
+        let has_option_to_buy = ctx.has_option_to_buy;
+        let is_prospect_purchase = ctx.is_prospect_purchase;
+
+        let buying_aggressiveness =
+            BuyingAggressiveness::from_rep(buying_rep_score, selling_rep_score);
+
+        let allocated_for_move = shortlist.allocated_budget.min(budget);
+        let strategy = ClubTransferStrategy::from_club_context(
+            club.id,
+            Some(CurrencyValue {
+                amount: allocated_for_move,
+                currency: Currency::Usd,
+            }),
+            avg_ability as u16,
+            vec![player.position()],
+            &club.philosophy,
+            &club.board.vision,
+            buying_aggressiveness,
+        )
+        .with_valuation_reputation(team.reputation.market_value_score());
+
+        let asking_price = PipelineProcessor::calculate_asking_price(
+            player,
+            country,
+            selling_club,
+            date,
+            price_level,
+        );
+
+        let actual_asking = if is_loan {
+            let salary_proxy = player
+                .contract
+                .as_ref()
+                .map(|c| c.salary as f64 * 0.35)
+                .unwrap_or(0.0);
+            let loan_fee_rate = if has_option_to_buy { 0.04 } else { 0.07 };
+            CurrencyValue {
+                amount: FormattingUtils::round_fee(
+                    (asking_price.amount * loan_fee_rate).max(salary_proxy),
+                ),
+                currency: asking_price.currency.clone(),
+            }
+        } else {
+            asking_price.clone()
+        };
+
+        // Dossier built from the scout context hoisted above
+        // — strategy uses assessed potential instead of
+        // hidden PA, and respects dossier risk flags. Both
+        // sources are optional — minimal context falls back
+        // to the previous behaviour.
+        let dossier = if monitoring.is_some() || scouting_report.is_some() {
+            Some(PipelineProcessor::build_board_dossier(
+                plan,
+                player_id,
+                shortlist.transfer_request_id,
+            ))
+        } else {
+            None
+        };
+        // Active rival bidders on this player at the moment.
+        let competition_count = country
+            .transfer_market
+            .active_rival_bids(player_id, club.id);
+        let strategy_ctx = TransferStrategyContext {
+            date,
+            request,
+            board_dossier: dossier.as_ref(),
+            approach: approach.clone(),
+            buyer_reputation_score: buying_rep_score,
+            seller_reputation_score: selling_rep_score,
+            league_reputation: buying_league_reputation,
+            available_budget: budget,
+            allocated_budget: allocated_for_move,
+            wage_budget_headroom: None,
+            buying_club_balance: club.finance.balance.balance,
+            is_january: PipelineProcessor::is_mid_season_window_for(country, date),
+            price_level,
+            shortlist_rank: shortlist
+                .candidates
+                .iter()
+                .position(|c| c.player_id == player_id)
+                .map(|p| p as u8),
+            competition_count: Some(competition_count.min(u8::MAX as u32) as u8),
+            scout_assessed_ability: monitoring
+                .map(|m| m.current_assessed_ability)
+                .or_else(|| scouting_report.map(|r| r.assessed_ability)),
+            scout_assessed_potential: monitoring
+                .map(|m| m.current_assessed_potential)
+                .or_else(|| scouting_report.map(|r| r.assessed_potential)),
+            scout_confidence: monitoring
+                .map(|m| m.confidence)
+                .or_else(|| scouting_report.map(|r| r.confidence)),
+            seller_is_rival: is_rival,
+        };
+
+        let mut offer =
+            strategy.calculate_initial_offer_with_context(player, &actual_asking, &strategy_ctx);
+
+        // ── What this deal is worth to THIS buyer ───────────
+        //
+        // The strategy above prices the offer off the asking
+        // price and the budget; it has no way to say that the
+        // same player is worth three times as much to a club
+        // sitting on years of income as to a break-even one, and
+        // that asymmetry is the whole reason a market has
+        // ladders. `UpgradeMath` supplies the buyer's own
+        // ceiling — the fee at which the deal stops being worth
+        // doing — and the tier supplies how boldly it opens.
+        //
+        // Loans are left alone: a loan fee is a rental, not an
+        // asset purchase, and the upgrade model prices assets.
+        //
+        // The wage is priced first because the deal valuation
+        // needs it: a fee is only half of what the buyer pays.
+        // It reflects the ROLE the buyer signs the player into —
+        // the same `ContractValuation` the player's personal-terms
+        // reservation uses, so offer and demand share one wage
+        // curve. The plain market wage (no squad-status premium)
+        // sat structurally below a KeyPlayer/FirstTeamRegular
+        // demand (market × 1.45 / 1.15), so personal terms opened
+        // −18 to −5 and seldom converged. His current standing is
+        // the best proxy for the role a suitor is buying — it
+        // mirrors the reservation side's assumed status.
+        //
+        // The package the buyer built already carries this
+        // figure (`PersonalTermsPackager` prices the same
+        // curve for the same promise), and it is the one the
+        // contract is installed on — so take it when it is
+        // there rather than computing a second number that
+        // can differ from the one he says yes to.
+        let offered_annual_wage = offer
+            .personal_terms
+            .as_ref()
+            .and_then(|t| t.annual_wage)
+            .filter(|w| *w > 0)
+            .unwrap_or_else(|| {
+                BuyerLevelWage::evaluate(
+                    player,
+                    player.age(date),
+                    buying_rep_score,
+                    buying_league_reputation,
+                    offer
+                        .personal_terms
+                        .as_ref()
+                        .and_then(|t| t.squad_status_promise),
+                )
+            });
+
+        let tier = request.map(|r| r.tier).unwrap_or(BriefTier::B);
+        let deal = if is_loan {
+            None
+        } else {
+            let group = player.position().position_group();
+            let believed_level = monitoring
+                .map(|m| m.current_assessed_ability)
+                .or_else(|| scouting_report.map(|r| r.assessed_ability))
+                .unwrap_or_else(|| PipelineProcessor::position_evaluation_ability(player))
+                as f32;
+            let believed_ceiling = monitoring
+                .map(|m| m.current_assessed_potential)
+                .or_else(|| scouting_report.map(|r| r.assessed_potential))
+                .unwrap_or(believed_level as u8) as f32;
+            // The man he would REPLACE, not the best man in the
+            // group. The brief knows which shirt this search is
+            // for and who wears it; a club buying a second
+            // centre-back measures him against its second
+            // centre-back. Measured against the group's best,
+            // every depth, succession and cover signing read as
+            // a downgrade, was priced at nothing, and never had
+            // its bid improved — the first census showed a
+            // window's worth of ordinary business frozen at its
+            // opening offers because of exactly that.
+            let incumbent_level = request
+                .and_then(|r| plan.brief.as_ref()?.slot_for(r.position))
+                .map(|s| s.incumbent_level as f32)
+                .unwrap_or_else(|| UpgradeMath::incumbent_level(club, group));
+            UpgradeMath::priced(
+                club,
+                date,
+                &TargetBelief {
+                    group,
+                    tier,
+                    believed_level,
+                    incumbent_level,
+                    believed_ceiling,
+                    age: player.age(date),
+                    annual_wage: offered_annual_wage as f64,
+                },
+            )
+        };
+
+        // Open where the tier and the calendar say, not where
+        // the budget alone does — and never above what the deal
+        // is worth or what the club can fund. A club that opens
+        // at 60 % of the ask for the signing meant to change its
+        // season is not negotiating, it is wasting a window. A
+        // request under negotiation is by definition still
+        // unfilled, so the deadline premium reads the tier alone.
+        if let Some(deal) = deal.as_ref() {
+            let deadline = PlanningCadence::deadline_window(country, date);
+            let open_ratio = UpgradeMath::open_ratio(tier, deadline.days_left_fraction());
+            let premium = deadline.premium_for(tier, true);
+            let opening = actual_asking.amount * (open_ratio + premium);
+            let capped = opening.min(deal.ceiling_fee).min(allocated_for_move);
+            if capped > offer.base_fee.amount {
+                offer.base_fee.amount = FormattingUtils::round_fee(capped);
+            }
+        }
+
+        OfferClauses::attach_prospect_sell_on(
+            &mut offer,
+            is_prospect_purchase,
+            selling_rep_score,
+            buying_rep_score,
+        );
+
+        OfferClauses::attach_loan_duration(&mut offer, is_loan);
+        OfferClauses::attach_loan_option(&mut offer, has_option_to_buy, &asking_price);
+        OfferClauses::attach_loan_appearance_fee(
+            &mut offer,
+            is_loan,
+            PipelineProcessor::get_club_reputation_level(country, selling_club_id),
+        );
+
+        // Resolve negotiator staff and build reason
+        let negotiator_staff_id = team.staffs.find_negotiator().map(|s| s.id);
+
+        let scout_report = plan
+            .scouting_reports
+            .iter()
+            .find(|r| r.player_id == player_id);
+
+        let reason = PipelineProcessor::build_transfer_reason(request, scout_report);
+
+        // Final plausibility check immediately before creating
+        // the negotiation action. Rejected candidates are
+        // marked unavailable here and a synthetic listing is
+        // never created downstream — see Pass 2 for the
+        // matching skip.
+        let plausibility_inputs = TransferPlausibilityBuilder::from_clubs(
+            country,
+            club,
+            selling_club,
+            player,
+            candidate.estimated_fee,
+            is_loan,
+            true, // unsolicited at the negotiation-entry point
+            date,
+        );
+        if let TransferPlausibilityVerdict::HardReject(_reason) =
+            TransferPlausibilityEvaluator::evaluate(&plausibility_inputs)
+        {
+            return ApproachOutcome::Refused;
+        }
+
+        ApproachOutcome::Approach(Box::new(NegotiationAction {
+            club_id: club.id,
+            player_id,
+            selling_club_id,
+            offer,
+            is_loan,
+            has_option_to_buy,
+            is_prospect_purchase,
+            shortlist_request_id: shortlist.transfer_request_id,
+            negotiator_staff_id,
+            reason,
+            player_name: player.full_name.to_string(),
+            selling_club_name: selling_club.name.clone(),
+            player_sold_from: player.sold_from.clone(),
+            offered_annual_wage,
+            buying_league_reputation,
+            selling_league_reputation,
+            player_stage_inclination: player.big_stage_inclination,
+            buyer_ceiling_fee: deal.as_ref().map(|d| d.ceiling_fee),
+            brief_tier: Some(tier),
+            is_rival,
+            seller_asking: actual_asking.clone(),
+        }))
+    }
+}
+
+/// The clauses an offer carries beyond its headline fee.
+///
+/// A loan from a big seller is priced partly in appearances — the parent
+/// wants its prospect played, not parked — and a loan-with-option carries
+/// the price the borrower may buy him at. A prospect bought outright
+/// compensates the club that developed him with a share of the next sale.
+/// Each is gated on the approach the buyer actually chose.
+pub(in crate::transfers) struct OfferClauses;
+
+impl OfferClauses {
+    /// Sell-on share pledged to a clearly smaller selling side.
+    const SELL_ON_SMALLER_SELLER: f32 = 0.15;
+    /// The same when the seller is a peer rather than a feeder.
+    const SELL_ON_PEER: f32 = 0.10;
+    /// Below this share of the buyer's standing, the seller reads as the
+    /// development side of the deal rather than a peer.
+    const SMALLER_SELLER_BAR: f32 = 0.75;
+    /// Months a loan runs for when the offer does not say otherwise.
+    const DEFAULT_LOAN_MONTHS: u8 = 10;
+
+    /// A prospect purchase compensates the development club with a sell-on
+    /// share — bigger when the seller is clearly the smaller side. Skipped
+    /// when the buyer's own strategy already pledged one.
+    pub(in crate::transfers) fn attach_prospect_sell_on(
+        offer: &mut TransferOffer,
+        is_prospect_purchase: bool,
+        seller_rep_score: f32,
+        buyer_rep_score: f32,
+    ) {
+        let already_pledged = offer
+            .clauses
+            .iter()
+            .any(|c| matches!(c, TransferClause::SellOnClause(_)));
+        if !is_prospect_purchase || already_pledged {
+            return;
+        }
+        let pct = if seller_rep_score < buyer_rep_score * Self::SMALLER_SELLER_BAR {
+            Self::SELL_ON_SMALLER_SELLER
+        } else {
+            Self::SELL_ON_PEER
+        };
+        offer.clauses.push(TransferClause::SellOnClause(pct));
+    }
+
+    /// Share of the fee an Elite seller takes as an appearance fee, and the
+    /// appearances it is measured over.
+    const ELITE: (f64, u32) = (0.30, 10);
+    /// The same for a Continental seller — a smaller cut over a longer run.
+    const CONTINENTAL: (f64, u32) = (0.20, 15);
+    /// What a loan option prices the eventual purchase at, against the
+    /// seller's asking price.
+    const OPTION_OF_ASKING: f64 = 0.7;
+
+    /// How long a loan runs. The market reads it both for the history
+    /// record and to bind the negotiation to a LOAN listing when the player
+    /// is also transfer-listed — a loan bid anchored on the permanent
+    /// asking price escalated toward the full valuation.
+    pub(in crate::transfers) fn attach_loan_duration(offer: &mut TransferOffer, is_loan: bool) {
+        if is_loan && offer.loan_duration_months.is_none() {
+            offer.loan_duration_months = Some(Self::DEFAULT_LOAN_MONTHS);
+        }
+    }
+
+    /// The price a loan-with-option lets the borrower buy him at.
+    pub(in crate::transfers) fn attach_loan_option(
+        offer: &mut TransferOffer,
+        has_option_to_buy: bool,
+        asking_price: &CurrencyValue,
+    ) {
+        if !has_option_to_buy {
+            return;
+        }
+        let option_price = FormattingUtils::round_fee(asking_price.amount * Self::OPTION_OF_ASKING);
+        offer
+            .clauses
+            .push(TransferClause::LoanOptionToBuy(CurrencyValue {
+                amount: option_price,
+                currency: Currency::Usd,
+            }));
+    }
+
+    /// A big seller prices part of a loan in appearances — it wants its
+    /// prospect played, not parked.
+    ///
+    /// **Domestic approaches only, today.** The cross-border pass attaches
+    /// the sell-on, the option and the duration but has never attached
+    /// this, so a foreign loan from an Elite seller carries no appearance
+    /// fee where the identical domestic loan does. That asymmetry looks
+    /// like drift rather than intent — the cross-border comments say
+    /// "mirrors the domestic path" for every neighbouring clause — but
+    /// closing it moves money, so it is recorded here and left for a
+    /// census-gated commit of its own rather than folded into a move.
+    pub(in crate::transfers) fn attach_loan_appearance_fee(
+        offer: &mut TransferOffer,
+        is_loan: bool,
+        seller_level: ReputationLevel,
+    ) {
+        if !is_loan {
+            return;
+        }
+        let terms = match seller_level {
+            ReputationLevel::Elite => Some(Self::ELITE),
+            ReputationLevel::Continental => Some(Self::CONTINENTAL),
+            _ => None,
+        };
+        if let Some((share, appearances)) = terms {
+            offer.clauses.push(TransferClause::AppearanceFee(
+                CurrencyValue {
+                    amount: FormattingUtils::round_fee(offer.base_fee.amount * share),
+                    currency: Currency::Usd,
+                },
+                appearances,
+            ));
+        }
     }
 }
 
@@ -92,7 +600,7 @@ pub(in crate::transfers) struct ProspectSigningContext {
     pub expected_wage: u32,
 }
 
-struct NegotiationAction {
+pub(in crate::transfers) struct NegotiationAction {
     club_id: u32,
     player_id: u32,
     selling_club_id: u32,
@@ -493,364 +1001,56 @@ impl PipelineProcessor {
                     );
 
                 if let Some(player) = Self::find_player_in_country(country, player_id) {
-                    let selling_club = country
-                        .clubs
-                        .iter()
-                        .find(|c| c.id == selling_club_id)
-                        .unwrap();
-
-                    let buying_aggressiveness =
-                        BuyingAggressiveness::from_rep(buying_rep_score, selling_rep_score);
-
-                    let allocated_for_move = shortlist.allocated_budget.min(budget);
-                    let strategy = ClubTransferStrategy::from_club_context(
-                        club.id,
-                        Some(CurrencyValue {
-                            amount: allocated_for_move,
-                            currency: Currency::Usd,
-                        }),
-                        avg_ability as u16,
-                        vec![player.position()],
-                        &club.philosophy,
-                        &club.board.vision,
-                        buying_aggressiveness,
-                    )
-                    .with_valuation_reputation(team.reputation.market_value_score());
-
-                    let asking_price = Self::calculate_asking_price(
-                        player,
-                        country,
-                        selling_club,
-                        date,
-                        price_level,
-                    );
-
-                    let actual_asking = if is_loan {
-                        let salary_proxy = player
-                            .contract
-                            .as_ref()
-                            .map(|c| c.salary as f64 * 0.35)
-                            .unwrap_or(0.0);
-                        let loan_fee_rate = if has_option_to_buy { 0.04 } else { 0.07 };
-                        CurrencyValue {
-                            amount: FormattingUtils::round_fee(
-                                (asking_price.amount * loan_fee_rate).max(salary_proxy),
-                            ),
-                            currency: asking_price.currency.clone(),
-                        }
-                    } else {
-                        asking_price.clone()
-                    };
-
-                    // Dossier built from the scout context hoisted above
-                    // — strategy uses assessed potential instead of
-                    // hidden PA, and respects dossier risk flags. Both
-                    // sources are optional — minimal context falls back
-                    // to the previous behaviour.
-                    let dossier = if monitoring.is_some() || scouting_report.is_some() {
-                        Some(Self::build_board_dossier(
-                            plan,
-                            player_id,
-                            shortlist.transfer_request_id,
-                        ))
-                    } else {
-                        None
-                    };
-                    // Active rival bidders on this player at the
-                    // moment. Read once so we don't walk the
-                    // negotiation map twice during offer construction.
-                    let competition_count: u32 = country
-                        .transfer_market
-                        .negotiations
-                        .values()
-                        .filter(|n| {
-                            n.player_id == player_id
-                                && n.buying_club_id != club.id
-                                && matches!(
-                                    n.status,
-                                    NegotiationStatus::Pending | NegotiationStatus::Countered
-                                )
-                        })
-                        .count() as u32;
-                    let strategy_ctx = TransferStrategyContext {
-                        date,
-                        request,
-                        board_dossier: dossier.as_ref(),
-                        approach: approach.clone(),
-                        buyer_reputation_score: buying_rep_score,
-                        seller_reputation_score: selling_rep_score,
-                        league_reputation: buying_league_reputation,
-                        available_budget: budget,
-                        allocated_budget: allocated_for_move,
-                        wage_budget_headroom: None,
-                        buying_club_balance: club.finance.balance.balance,
-                        is_january: Self::is_mid_season_window_for(country, date),
-                        price_level,
-                        shortlist_rank: shortlist
-                            .candidates
-                            .iter()
-                            .position(|c| c.player_id == player_id)
-                            .map(|p| p as u8),
-                        competition_count: Some(competition_count.min(u8::MAX as u32) as u8),
-                        scout_assessed_ability: monitoring
-                            .map(|m| m.current_assessed_ability)
-                            .or_else(|| scouting_report.map(|r| r.assessed_ability)),
-                        scout_assessed_potential: monitoring
-                            .map(|m| m.current_assessed_potential)
-                            .or_else(|| scouting_report.map(|r| r.assessed_potential)),
-                        scout_confidence: monitoring
-                            .map(|m| m.confidence)
-                            .or_else(|| scouting_report.map(|r| r.confidence)),
-                        seller_is_rival: is_rival,
-                    };
-
-                    let mut offer = strategy.calculate_initial_offer_with_context(
-                        player,
-                        &actual_asking,
-                        &strategy_ctx,
-                    );
-
-                    // ── What this deal is worth to THIS buyer ───────────
-                    //
-                    // The strategy above prices the offer off the asking
-                    // price and the budget; it has no way to say that the
-                    // same player is worth three times as much to a club
-                    // sitting on years of income as to a break-even one, and
-                    // that asymmetry is the whole reason a market has
-                    // ladders. `UpgradeMath` supplies the buyer's own
-                    // ceiling — the fee at which the deal stops being worth
-                    // doing — and the tier supplies how boldly it opens.
-                    //
-                    // Loans are left alone: a loan fee is a rental, not an
-                    // asset purchase, and the upgrade model prices assets.
-                    //
-                    // The wage is priced first because the deal valuation
-                    // needs it: a fee is only half of what the buyer pays.
-                    // It reflects the ROLE the buyer signs the player into —
-                    // the same `ContractValuation` the player's personal-terms
-                    // reservation uses, so offer and demand share one wage
-                    // curve. The plain market wage (no squad-status premium)
-                    // sat structurally below a KeyPlayer/FirstTeamRegular
-                    // demand (market × 1.45 / 1.15), so personal terms opened
-                    // −18 to −5 and seldom converged. His current standing is
-                    // the best proxy for the role a suitor is buying — it
-                    // mirrors the reservation side's assumed status.
-                    //
-                    // The package the buyer built already carries this
-                    // figure (`PersonalTermsPackager` prices the same
-                    // curve for the same promise), and it is the one the
-                    // contract is installed on — so take it when it is
-                    // there rather than computing a second number that
-                    // can differ from the one he says yes to.
-                    let offered_annual_wage = offer
-                        .personal_terms
-                        .as_ref()
-                        .and_then(|t| t.annual_wage)
-                        .filter(|w| *w > 0)
-                        .unwrap_or_else(|| {
-                            BuyerLevelWage::evaluate(
-                                player,
-                                player.age(date),
-                                buying_rep_score,
-                                buying_league_reputation,
-                                offer
-                                    .personal_terms
-                                    .as_ref()
-                                    .and_then(|t| t.squad_status_promise),
-                            )
-                        });
-
-                    let tier = request.map(|r| r.tier).unwrap_or(BriefTier::B);
-                    let deal = if is_loan {
-                        None
-                    } else {
-                        let group = player.position().position_group();
-                        let believed_level = monitoring
-                            .map(|m| m.current_assessed_ability)
-                            .or_else(|| scouting_report.map(|r| r.assessed_ability))
-                            .unwrap_or_else(|| Self::position_evaluation_ability(player))
-                            as f32;
-                        let believed_ceiling = monitoring
-                            .map(|m| m.current_assessed_potential)
-                            .or_else(|| scouting_report.map(|r| r.assessed_potential))
-                            .unwrap_or(believed_level as u8)
-                            as f32;
-                        // The man he would REPLACE, not the best man in the
-                        // group. The brief knows which shirt this search is
-                        // for and who wears it; a club buying a second
-                        // centre-back measures him against its second
-                        // centre-back. Measured against the group's best,
-                        // every depth, succession and cover signing read as
-                        // a downgrade, was priced at nothing, and never had
-                        // its bid improved — the first census showed a
-                        // window's worth of ordinary business frozen at its
-                        // opening offers because of exactly that.
-                        let incumbent_level = request
-                            .and_then(|r| plan.brief.as_ref()?.slot_for(r.position))
-                            .map(|s| s.incumbent_level as f32)
-                            .unwrap_or_else(|| UpgradeMath::incumbent_level(club, group));
-                        UpgradeMath::priced(
-                            club,
-                            date,
-                            &TargetBelief {
-                                group,
-                                tier,
-                                believed_level,
-                                incumbent_level,
-                                believed_ceiling,
-                                age: player.age(date),
-                                annual_wage: offered_annual_wage as f64,
-                            },
-                        )
-                    };
-
-                    // Open where the tier and the calendar say, not where
-                    // the budget alone does — and never above what the deal
-                    // is worth or what the club can fund. A club that opens
-                    // at 60 % of the ask for the signing meant to change its
-                    // season is not negotiating, it is wasting a window. A
-                    // request under negotiation is by definition still
-                    // unfilled, so the deadline premium reads the tier alone.
-                    if let Some(deal) = deal.as_ref() {
-                        let deadline = PlanningCadence::deadline_window(country, date);
-                        let open_ratio =
-                            UpgradeMath::open_ratio(tier, deadline.days_left_fraction());
-                        let premium = deadline.premium_for(tier, true);
-                        let opening = actual_asking.amount * (open_ratio + premium);
-                        let capped = opening.min(deal.ceiling_fee).min(allocated_for_move);
-                        if capped > offer.base_fee.amount {
-                            offer.base_fee.amount = FormattingUtils::round_fee(capped);
-                        }
-                    }
-
-                    // Prospect purchases compensate the development club
-                    // with a sell-on share — bigger when the seller is
-                    // clearly the smaller selling/development side of the
-                    // deal. Skipped when the strategy already pledged one.
-                    if is_prospect_purchase
-                        && !offer
-                            .clauses
-                            .iter()
-                            .any(|c| matches!(c, TransferClause::SellOnClause(_)))
-                    {
-                        let pct = if selling_rep_score < buying_rep_score * 0.75 {
-                            0.15
-                        } else {
-                            0.10
-                        };
-                        offer.clauses.push(TransferClause::SellOnClause(pct));
-                    }
-
-                    // Loans carry an explicit duration on the offer — the
-                    // market uses it both for the history record and to
-                    // bind the negotiation to a LOAN listing when the
-                    // player is also transfer-listed (a loan bid anchored
-                    // on the permanent asking price escalated toward the
-                    // full valuation).
-                    if is_loan && offer.loan_duration_months.is_none() {
-                        offer.loan_duration_months = Some(10);
-                    }
-
-                    // Add appearance fee clause for loans from high-reputation sellers
-                    if is_loan {
-                        let selling_rep_level =
-                            Self::get_club_reputation_level(country, selling_club_id);
-                        match selling_rep_level {
-                            ReputationLevel::Elite => {
-                                offer.clauses.push(TransferClause::AppearanceFee(
-                                    CurrencyValue {
-                                        amount: FormattingUtils::round_fee(
-                                            offer.base_fee.amount * 0.30,
-                                        ),
-                                        currency: Currency::Usd,
-                                    },
-                                    10,
-                                ));
-                            }
-                            ReputationLevel::Continental => {
-                                offer.clauses.push(TransferClause::AppearanceFee(
-                                    CurrencyValue {
-                                        amount: FormattingUtils::round_fee(
-                                            offer.base_fee.amount * 0.20,
-                                        ),
-                                        currency: Currency::Usd,
-                                    },
-                                    15,
-                                ));
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    if has_option_to_buy {
-                        let option_price = FormattingUtils::round_fee(asking_price.amount * 0.7);
-                        offer
-                            .clauses
-                            .push(TransferClause::LoanOptionToBuy(CurrencyValue {
-                                amount: option_price,
-                                currency: Currency::Usd,
-                            }));
-                    }
-
-                    // Resolve negotiator staff and build reason
-                    let negotiator_staff_id = team.staffs.find_negotiator().map(|s| s.id);
-
-                    let scout_report = plan
-                        .scouting_reports
-                        .iter()
-                        .find(|r| r.player_id == player_id);
-
-                    let reason = Self::build_transfer_reason(request, scout_report);
-
-                    // Final plausibility check immediately before creating
-                    // the negotiation action. Rejected candidates are
-                    // marked unavailable here and a synthetic listing is
-                    // never created downstream — see Pass 2 for the
-                    // matching skip.
-                    let plausibility_inputs = TransferPlausibilityBuilder::from_clubs(
-                        country,
-                        club,
-                        selling_club,
-                        player,
-                        candidate.estimated_fee,
-                        is_loan,
-                        true, // unsolicited at the negotiation-entry point
-                        date,
-                    );
-                    if let TransferPlausibilityVerdict::HardReject(_reason) =
-                        TransferPlausibilityEvaluator::evaluate(&plausibility_inputs)
-                    {
-                        plausibility_rejected.push(PlausibilityReject {
-                            club_id: club.id,
-                            player_id,
-                            shortlist_request_id: shortlist.transfer_request_id,
-                        });
+                    let Some(selling_club) = country.clubs.iter().find(|c| c.id == selling_club_id)
+                    else {
                         continue;
-                    }
+                    };
 
-                    actions.push(NegotiationAction {
-                        club_id: club.id,
-                        player_id,
-                        selling_club_id,
-                        offer,
-                        is_loan,
-                        has_option_to_buy,
-                        is_prospect_purchase,
-                        shortlist_request_id: shortlist.transfer_request_id,
-                        negotiator_staff_id,
-                        reason,
-                        player_name: player.full_name.to_string(),
-                        selling_club_name: selling_club.name.clone(),
-                        player_sold_from: player.sold_from.clone(),
-                        offered_annual_wage,
-                        buying_league_reputation,
-                        selling_league_reputation,
-                        player_stage_inclination: player.big_stage_inclination,
-                        buyer_ceiling_fee: deal.as_ref().map(|d| d.ceiling_fee),
-                        brief_tier: Some(tier),
-                        is_rival,
-                        seller_asking: actual_asking.clone(),
-                    });
+                    let outcome = ApproachBuilder::build(
+                        &ApproachBuyer {
+                            club,
+                            team,
+                            plan,
+                            rep_score: buying_rep_score,
+                            league_reputation: buying_league_reputation,
+                            avg_ability,
+                            budget,
+                            price_level,
+                        },
+                        &ApproachTarget {
+                            player,
+                            selling_club,
+                            selling_club_id,
+                            selling_rep_score,
+                            selling_league_reputation,
+                            is_rival,
+                            monitoring,
+                            scouting_report,
+                        },
+                        shortlist,
+                        request,
+                        &ApproachContext {
+                            country,
+                            date,
+                            candidate,
+                            approach: approach.clone(),
+                            is_loan,
+                            has_option_to_buy,
+                            is_prospect_purchase,
+                        },
+                    );
+
+                    match outcome {
+                        ApproachOutcome::Refused => {
+                            plausibility_rejected.push(PlausibilityReject {
+                                club_id: club.id,
+                                player_id,
+                                shortlist_request_id: shortlist.transfer_request_id,
+                            });
+                            continue;
+                        }
+                        ApproachOutcome::Approach(action) => actions.push(*action),
+                    }
 
                     negotiations_this_club += 1;
                 }
@@ -2697,38 +2897,20 @@ impl PipelineProcessor {
                 }
             }
 
-            // Foreign prospect purchases carry the same sell-on
-            // compensation as domestic ones — see initiate_negotiations.
-            if is_prospect_purchase
-                && !offer
-                    .clauses
-                    .iter()
-                    .any(|c| matches!(c, TransferClause::SellOnClause(_)))
-            {
-                let pct = if selling_rep < buying_rep * 0.75 {
-                    0.15
-                } else {
-                    0.10
-                };
-                offer.clauses.push(TransferClause::SellOnClause(pct));
-            }
-
-            if has_option_to_buy {
-                let option_price = FormattingUtils::round_fee(asking_price.amount * 0.7);
-                offer
-                    .clauses
-                    .push(TransferClause::LoanOptionToBuy(CurrencyValue {
-                        amount: option_price,
-                        currency: Currency::Usd,
-                    }));
-            }
-
-            // Loans carry an explicit duration so the market binds the
-            // negotiation to a Loan listing and the history row records a
-            // real length — mirrors the domestic path.
-            if is_loan && offer.loan_duration_months.is_none() {
-                offer.loan_duration_months = Some(10);
-            }
+            // The same three clause rules the domestic approach applies —
+            // now literally the same code rather than a copy of it. The
+            // fourth, the appearance fee on a loan from a big seller, is
+            // deliberately NOT called here: this path has never attached it
+            // and closing that gap moves money. See
+            // [`OfferClauses::attach_loan_appearance_fee`].
+            OfferClauses::attach_prospect_sell_on(
+                &mut offer,
+                is_prospect_purchase,
+                selling_rep,
+                buying_rep,
+            );
+            OfferClauses::attach_loan_option(&mut offer, has_option_to_buy, &asking_price);
+            OfferClauses::attach_loan_duration(&mut offer, is_loan);
 
             // Same reason construction as the domestic path — the request
             // motive and scout context were in scope all along, yet every

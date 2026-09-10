@@ -7,7 +7,7 @@
 //! see one namespace rather than free `fn`s scattered through the
 //! transfer module — the project convention is "no global helpers".
 
-use super::free_agents::{EmergencySignedTerms, FreeAgentCandidate};
+use super::{EmergencySignedTerms, FreeAgentCandidate};
 use crate::PlayerFieldPositionGroup;
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::transfer::MarketStage;

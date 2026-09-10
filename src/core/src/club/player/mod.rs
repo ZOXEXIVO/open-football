@@ -35,7 +35,7 @@ pub use mind::{
 };
 pub use personality::{adaptation, behaviour_config, decisions, interaction, language, rapport};
 pub use squad::{plan, status};
-pub use transfer::free_agent_market;
+pub use transfer::free;
 
 pub use attributes::*;
 pub use builder::*;

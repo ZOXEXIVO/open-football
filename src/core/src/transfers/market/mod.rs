@@ -819,6 +819,25 @@ impl TransferMarket {
         })
     }
 
+    /// How many OTHER clubs are live on this player right now.
+    ///
+    /// What a bidding war is made of: the offer a buyer opens with, and how
+    /// hard it will push later, both read the room. Asked once per approach
+    /// so offer construction does not walk the negotiation map twice.
+    pub fn active_rival_bids(&self, player_id: u32, excluding_club_id: u32) -> u32 {
+        self.negotiations
+            .values()
+            .filter(|n| {
+                n.player_id == player_id
+                    && n.buying_club_id != excluding_club_id
+                    && matches!(
+                        n.status,
+                        NegotiationStatus::Pending | NegotiationStatus::Countered
+                    )
+            })
+            .count() as u32
+    }
+
     /// Count how many active negotiations a specific club currently has as a buyer.
     pub fn active_negotiation_count_for_club(&self, club_id: u32) -> u32 {
         self.negotiations

@@ -6,7 +6,7 @@ use chrono::{Datelike, Utc};
 use core::club::academy::ClubAcademy;
 use core::context::NaiveTime;
 use core::shared::Location;
-use core::transfers::market_knowledge::ClubMarketLedger;
+use core::transfers::market::knowledge::ClubMarketLedger;
 use core::transfers::pipeline::{ClubTransferPlan, TransferTrace};
 use core::{
     Club, ClubAffairLog, ClubBoard, ClubColors, ClubFacilities, ClubFinances, ClubLevelAnchor,

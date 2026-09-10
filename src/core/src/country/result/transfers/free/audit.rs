@@ -9,7 +9,7 @@
 //! `log_long_term` hook gives the simulation log one explanatory line
 //! per 12-month-plus free agent when debug logging is enabled.
 
-use super::free_agent_market_calc::FreeAgentMarketCalculator;
+use super::pricing::FreeAgentMarketCalculator;
 use crate::Person;
 use crate::Player;
 use crate::club::player::transfer::{FreeAgentBlockReason, FreeAgentStatusCategory, MarketStage};
@@ -444,7 +444,7 @@ mod tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::competitions::global::GlobalCompetitions;
     use crate::continent::Continent;
-    use crate::country::result::transfers::snapshot_global_free_agents;
+    use crate::country::result::transfers::free::GlobalFreeAgentPool;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::Location;
     use crate::shared::fullname::FullName;
@@ -579,7 +579,7 @@ mod tests {
         let player = AuditFixtures::pool_player(700, 99_999, today);
         let mut data = AuditFixtures::simulator(today, Vec::new(), vec![player]);
 
-        let snapshot = snapshot_global_free_agents(&mut data, today);
+        let snapshot = GlobalFreeAgentPool::snapshot(&mut data, today);
         assert_eq!(snapshot.len(), 1);
 
         let diag = FreeAgentMarketAuditor::diagnose(&data, 700, today)
@@ -602,7 +602,7 @@ mod tests {
         let today = AuditFixtures::d(2026, 6, 13);
         let player = AuditFixtures::pool_player(701, 1, today);
         let mut data = AuditFixtures::simulator(today, Vec::new(), vec![player]);
-        snapshot_global_free_agents(&mut data, today);
+        GlobalFreeAgentPool::snapshot(&mut data, today);
 
         let diag = FreeAgentMarketAuditor::diagnose(&data, 701, today).unwrap();
         assert!(
@@ -637,7 +637,7 @@ mod tests {
                 0.0,
             ));
         let mut data = AuditFixtures::simulator(today, vec![club], vec![player]);
-        snapshot_global_free_agents(&mut data, today);
+        GlobalFreeAgentPool::snapshot(&mut data, today);
 
         let diag = FreeAgentMarketAuditor::diagnose(&data, 702, today).unwrap();
         assert_eq!(diag.eligible_country_count, 1);
@@ -669,7 +669,7 @@ mod tests {
         let today = AuditFixtures::d(2026, 6, 13);
         let player = AuditFixtures::pool_player(703, 99_999, today);
         let mut data = AuditFixtures::simulator(today, Vec::new(), vec![player]);
-        snapshot_global_free_agents(&mut data, today);
+        GlobalFreeAgentPool::snapshot(&mut data, today);
 
         let diag = FreeAgentMarketAuditor::diagnose(&data, 703, today).unwrap();
         assert_eq!(diag.category(), FreeAgentStatusCategory::DataUnknown);

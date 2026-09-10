@@ -1,5 +1,8 @@
-pub mod free_pool;
-pub mod transfer_resolution;
+//! Recruitment staff: the free pool they are drawn from, and how a
+//! transfer they were assigned to resolves.
 
-pub use free_pool::*;
-pub use transfer_resolution::*;
+pub mod pool;
+pub mod resolution;
+
+pub use pool::*;
+pub use resolution::*;

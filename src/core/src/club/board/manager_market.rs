@@ -26,7 +26,7 @@ use crate::club::board::ClubBoard;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind};
 use crate::club::mind::verdict::MindOption;
 use crate::club::news::ClubAffair;
-use crate::club::staff::free_pool;
+use crate::club::staff::pool;
 use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
 use crate::shared::fullname::FullName;
 use crate::utils::DateUtils;
@@ -336,7 +336,7 @@ pub struct ManagerSeatRepair;
 
 impl ManagerSeatRepair {
     /// Walk every club with a main team and enforce the seat invariant.
-    /// Serial mutable walk — mirrors `free_pool::harvest_expired_staff`; the
+    /// Serial mutable walk — mirrors `pool::harvest_expired_staff`; the
     /// work is a couple of position scans per club plus, in the rare vacant
     /// case, an interim promotion.
     pub fn run(data: &mut SimulatorData, today: NaiveDate) {
@@ -888,8 +888,8 @@ impl ManagerMarketTick {
     /// a further step now means editing one place rather than several
     /// call sites scattered around the orchestrator.
     pub fn run(data: &mut SimulatorData, today: NaiveDate) {
-        free_pool::harvest_expired_staff(data, today);
-        free_pool::tick_free_agent_staff_pool(&mut data.free_agent_staff, today);
+        pool::StaffPool::harvest_expired(data, today);
+        pool::StaffPool::tick(&mut data.free_agent_staff, today);
         ManagerSeatRepair::run(data, today);
         Self::refresh_shortlists(data);
         Self::initiate_approaches(data);

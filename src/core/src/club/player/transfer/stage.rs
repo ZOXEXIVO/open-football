@@ -34,9 +34,9 @@
 //! league suddenly starts or stops exporting players — a stronger league
 //! simply sheds fewer of them.
 
+use crate::TeamType;
 use crate::club::player::player::Player;
 use crate::utils::DateUtils;
-use crate::{PlayerAttributes, TeamType};
 use chrono::NaiveDate;
 
 /// Tunables for [`BigStagePull`]. Every value is a shape parameter of a
@@ -381,7 +381,8 @@ mod tests {
     use crate::club::player::builder::PlayerBuilder;
     use crate::shared::fullname::FullName;
     use crate::{
-        PersonAttributes, PlayerPosition, PlayerPositionType, PlayerPositions, PlayerSkills,
+        PersonAttributes, PlayerAttributes, PlayerPosition, PlayerPositionType, PlayerPositions,
+        PlayerSkills,
     };
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
