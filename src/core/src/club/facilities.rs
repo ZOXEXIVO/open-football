@@ -223,3 +223,40 @@ impl ClubFacilities {
         (1.0 + form + position).clamp(0.65, 1.30)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::club::facilities::ClubFacilities;
+
+    #[test]
+    fn capacity_is_grossed_up_from_the_recorded_gate() {
+        // The database records a typical attendance, not a capacity, so a
+        // ground that averages 60,000 must model as bigger than that.
+        let capacity = ClubFacilities::seed_capacity(60_000, 0.85);
+        assert!(
+            capacity > 60_000 && capacity < 80_000,
+            "implausible capacity {capacity} from a 60,000 gate"
+        );
+    }
+
+    #[test]
+    fn capacity_falls_back_to_reputation_without_attendance_data() {
+        let big = ClubFacilities::seed_capacity(0, 0.85);
+        let small = ClubFacilities::seed_capacity(0, 0.20);
+        assert!(big > small);
+        // Never zero — a zero capacity silently erases matchday income.
+        assert!(small > 0);
+    }
+
+    #[test]
+    fn capacity_does_not_track_current_reputation() {
+        // Anfield does not shrink when the team gets relegated. Once a club
+        // carries a real capacity, the reputation argument is ignored.
+        let facilities = ClubFacilities {
+            stadium_capacity: 61_000,
+            ..ClubFacilities::default()
+        };
+        assert_eq!(facilities.capacity_or_estimate(0.85), 61_000);
+        assert_eq!(facilities.capacity_or_estimate(0.30), 61_000);
+    }
+}

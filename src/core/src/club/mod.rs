@@ -1,7 +1,7 @@
 pub mod academy;
 pub mod board;
-pub mod club;
 pub mod context;
+pub mod core;
 pub mod facilities;
 pub mod finance;
 pub mod mind;
@@ -17,12 +17,12 @@ pub mod team;
 pub mod transfers;
 
 // Re-export all simple modules
+pub use self::core::*;
 pub use academy::{
     AcademyDevelopmentIdentity, AcademyPathwayPolicy, AcademyPipelineHealth, AcademyPlayerPhase,
     AcademyReadinessScorer, AcademyTier, AcademyTuning, ClubAcademy,
 };
 pub use board::*;
-pub use club::*;
 pub use context::*;
 pub use facilities::*;
 pub use mood::*;

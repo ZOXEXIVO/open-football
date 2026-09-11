@@ -5,10 +5,11 @@
 //! person reads the file. Prose in `CLAUDE.md` states them; this asserts
 //! them, because a rule with no test is a preference.
 //!
-//! Scoped to the transfer system — `src/transfers` (the market's own model)
-//! and `src/country/result/transfers` (the per-country pass that drives it),
-//! both of which have been brought to the rules. Widen the roots as other
-//! subsystems are cleaned up.
+//! Scoped to the subsystems that have been brought to the rules: the transfer
+//! system — `src/transfers` (the market's own model) and
+//! `src/country/result/transfers` (the per-country pass that drives it) — and
+//! `src/club/core` (the club aggregate and its ticks). Widen the roots as
+//! other subsystems are cleaned up.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,7 +23,11 @@ impl ShapeScan {
     const SELF: &'static str = "shape.rs";
 
     /// Roots the scan covers, relative to the crate.
-    const ROOTS: [&'static str; 2] = ["src/transfers", "src/country/result/transfers"];
+    const ROOTS: [&'static str; 3] = [
+        "src/transfers",
+        "src/country/result/transfers",
+        "src/club/core",
+    ];
 
     fn sources() -> Vec<PathBuf> {
         let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));

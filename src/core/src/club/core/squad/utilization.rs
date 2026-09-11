@@ -1,34 +1,36 @@
-use super::Club;
-use super::WageReliefSale;
-use crate::club::player::statistics::StuckCareerScan;
-use crate::club::staff::goalkeeping::{KeeperAdvice, KeeperRoomPlan};
+//! The monthly utilization audit: who the club is not using.
+//!
+//! One sweep, every squad. It reads minutes where minutes exist, positional
+//! surplus where they do not, squad size against the board's ceiling, and —
+//! the only branch that reads the bank rather than the pitch — the wage bill
+//! against the mandate. Everything it concludes lands as a
+//! [`SquadDecision`]; [`Club::process_underutilized_players`] is the single
+//! place those become statuses, listings and loan candidates.
+
 use crate::club::staff::perception::{AbilityEstimator, PotentialEstimator};
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext, SquadEvidenceContext};
-use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::loan::guard::LoanAssetGuard;
-use crate::transfers::pipeline::TransferTrace;
-use crate::transfers::pipeline::{
-    LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
-};
-use crate::transfers::value::PlayerValuationCalculator;
-use crate::utils::FormattingUtils;
 use crate::{
-    ContractType, Person, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel, Team,
-    TransferItem,
+    Club, ContractType, Person, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel,
 };
 use chrono::NaiveDate;
-use log::debug;
 use std::collections::{HashMap, HashSet};
 
-/// Days after a permanent / loan move during which a player's idle days are
-/// not yet read as underutilization — he hasn't had a fair chance to break
-/// into the squad. Mirrors the post-transfer settling window the happiness
-/// model uses for playing-time grievances.
-const RECENT_TRANSFER_GRACE_DAYS: i64 = 30;
+use super::super::treasury::WageReliefSale;
+use super::decision::SquadDecision;
+use super::depth::{KeeperLoanView, MainPromotionFloor};
+use super::loans::LoanSweep;
 
 impl Club {
-    /// Monthly audit: identify underutilized players in non-main teams and list them for loan/transfer.
-    pub(super) fn audit_squad_utilization(&mut self, date: NaiveDate) {
+    /// Monthly audit: identify underutilized players in non-main teams and
+    /// list them for loan/transfer.
+    pub(in crate::club::core) fn audit_squad_utilization(&mut self, date: NaiveDate) {
+        // Days after a permanent / loan move during which a player's idle days
+        // are not yet read as underutilization — he hasn't had a fair chance to
+        // break into the squad. Mirrors the post-transfer settling window the
+        // happiness model uses for playing-time grievances.
+        const RECENT_TRANSFER_GRACE_DAYS: i64 = 30;
+
         let main_idx = match self.teams.main_index() {
             Some(idx) => idx,
             None => return,
@@ -66,8 +68,8 @@ impl Club {
         let asset_ctx = SquadAssetContext::build(self, date);
 
         // Collect underutilized player decisions
-        let mut loan_players: Vec<(usize, u32, String)> = Vec::new();
-        let mut transfer_players: Vec<(usize, u32, String)> = Vec::new();
+        let mut loan_players: Vec<SquadDecision> = Vec::new();
+        let mut transfer_players: Vec<SquadDecision> = Vec::new();
 
         // Per-group main-team promotion floor — the current ability at/above
         // which a non-main player is promoted to the first team by the weekly
@@ -111,9 +113,9 @@ impl Club {
             // not stagnate in the youth squad.
             let plays_league_football = team.league_id.is_some() && !team.team_type.is_youth();
             if !plays_league_football {
-                Self::collect_surplus_loans(self, team, ti, date, &keepers, &mut loan_players);
+                LoanSweep::positional_surplus(self, team, ti, date, &keepers, &mut loan_players);
                 if team.team_type.is_youth() {
-                    Self::collect_youth_development_loans(
+                    LoanSweep::youth_development(
                         self,
                         team,
                         ti,
@@ -123,10 +125,10 @@ impl Club {
                         &mut loan_players,
                     );
                 }
-                Self::collect_keeper_department_loans(team, ti, &keepers, &mut loan_players);
+                LoanSweep::keeper_department(team, ti, &keepers, &mut loan_players);
                 continue;
             }
-            Self::collect_keeper_department_loans(team, ti, &keepers, &mut loan_players);
+            LoanSweep::keeper_department(team, ti, &keepers, &mut loan_players);
 
             // A senior reserve side (B / Second / Reserve) plays real league
             // football, so its regulars are never idle and the minutes-based
@@ -259,10 +261,10 @@ impl Club {
                         // reads a nineteen-year-old starter as a loan
                         // asset; standing does not.
                         if !LoanAssetGuard::parent_holds_for(self, player, date) {
-                            loan_players.push((
+                            loan_players.push(SquadDecision::new(
                                 ti,
                                 player.id,
-                                "dec_reason_young_develop".to_string(),
+                                SquadDecision::YOUNG_DEVELOP,
                             ));
                         }
                         continue;
@@ -272,27 +274,39 @@ impl Club {
 
                 // Decision: choose Lst vs Loa based on player profile and club context
                 if age <= 23 && pa > level.saturating_add(5) {
-                    loan_players.push((ti, player.id, "dec_reason_young_develop".to_string()));
-                } else if level < 60 && pa < 70 {
-                    transfer_players.push((
+                    loan_players.push(SquadDecision::new(
                         ti,
                         player.id,
-                        "dec_reason_low_ability_surplus".to_string(),
+                        SquadDecision::YOUNG_DEVELOP,
+                    ));
+                } else if level < 60 && pa < 70 {
+                    transfer_players.push(SquadDecision::new(
+                        ti,
+                        player.id,
+                        SquadDecision::LOW_ABILITY_SURPLUS,
                     ));
                 } else if age >= 34 && level < main_avg_level.saturating_sub(20) {
-                    transfer_players.push((ti, player.id, "dec_reason_aging_surplus".to_string()));
+                    transfer_players.push(SquadDecision::new(
+                        ti,
+                        player.id,
+                        SquadDecision::AGING_SURPLUS,
+                    ));
                 } else if matches!(
                     rep_level,
                     ReputationLevel::Elite | ReputationLevel::Continental
                 ) && age <= 29
                 {
-                    loan_players.push((
+                    loan_players.push(SquadDecision::new(
                         ti,
                         player.id,
-                        "dec_reason_underutilized_top_club".to_string(),
+                        SquadDecision::UNDERUTILIZED_TOP_CLUB,
                     ));
                 } else {
-                    transfer_players.push((ti, player.id, "dec_reason_underutilized".to_string()));
+                    transfer_players.push(SquadDecision::new(
+                        ti,
+                        player.id,
+                        SquadDecision::UNDERUTILIZED,
+                    ));
                 }
             }
         }
@@ -310,7 +324,7 @@ impl Club {
             let already: HashSet<u32> = loan_players
                 .iter()
                 .chain(transfer_players.iter())
-                .map(|(_, id, _)| *id)
+                .map(|d| d.player_id)
                 .collect();
             let excess = total_squad - max_squad;
             // Main-team position-group headcounts. A group at (or below) its
@@ -368,7 +382,7 @@ impl Club {
             }
             surplus.sort_by(|a, b| a.2.cmp(&b.2).then(b.3.cmp(&a.3)));
             for (ti, id, _, _) in surplus.into_iter().take(excess) {
-                transfer_players.push((ti, id, "dec_reason_underutilized".to_string()));
+                transfer_players.push(SquadDecision::new(ti, id, SquadDecision::UNDERUTILIZED));
             }
         }
 
@@ -390,7 +404,7 @@ impl Club {
         &self,
         date: NaiveDate,
         asset_ctx: &SquadAssetContext,
-        transfer_players: &mut Vec<(usize, u32, String)>,
+        transfer_players: &mut Vec<SquadDecision>,
     ) {
         let total_annual_wages: i64 = self
             .teams
@@ -406,7 +420,7 @@ impl Club {
         let standing = self.finance.debt.standing;
         let distress = self.finance.distress_level;
 
-        let already: HashSet<u32> = transfer_players.iter().map(|(_, id, _)| *id).collect();
+        let already: HashSet<u32> = transfer_players.iter().map(|d| d.player_id).collect();
 
         // Wages already committed to leaving: players on the market from a
         // previous pass, plus anyone the sporting sweeps listed earlier in
@@ -491,669 +505,8 @@ impl Club {
             if remaining <= 0 {
                 break;
             }
-            transfer_players.push((ti, id, "dec_reason_wage_relief".to_string()));
+            transfer_players.push(SquadDecision::new(ti, id, SquadDecision::WAGE_RELIEF));
             remaining -= salary;
-        }
-    }
-
-    fn process_underutilized_players(
-        &mut self,
-        date: NaiveDate,
-        main_idx: usize,
-        loan_players: &[(usize, u32, String)],
-        transfer_players: &[(usize, u32, String)],
-    ) {
-        // Reputation-based loan fee multiplier
-        let rep_multiplier = match self.teams.teams[main_idx].reputation.level() {
-            ReputationLevel::Elite => 0.15,
-            ReputationLevel::Continental => 0.10,
-            ReputationLevel::National => 0.05,
-            ReputationLevel::Regional => 0.02,
-            _ => 0.0, // Local/Amateur: free loan
-        };
-
-        // Use the seller's actual blended reputation (not 0/0) so the
-        // board's loan/transfer estimates track the player's true market
-        // price. Country isn't visible here, so the helper approximates
-        // league rep from the club's reputation score.
-        let (seller_league_rep, seller_club_rep) =
-            PlayerValuationCalculator::seller_context_from_club(self);
-
-        // Process loan recommendations
-        for (team_idx, player_id, reason) in loan_players {
-            let team_idx = *team_idx;
-            let player_id = *player_id;
-            let team_name = self.teams.teams[team_idx].name.clone();
-
-            let loan_fee = if rep_multiplier > 0.0 {
-                let player_value = self.teams.teams[team_idx]
-                    .players
-                    .find(player_id)
-                    .map(|p| p.value(date, seller_league_rep, seller_club_rep))
-                    .unwrap_or(0.0);
-                FormattingUtils::round_fee(player_value * rep_multiplier)
-            } else {
-                0.0
-            };
-
-            let player = match self.teams.teams[team_idx].players.find_mut(player_id) {
-                Some(p) => p,
-                None => continue,
-            };
-
-            player.statuses.add(date, PlayerStatusType::Loa);
-            player.decision_history.add(
-                date,
-                "dec_board_loan_listed".to_string(),
-                reason.clone(),
-                "dec_decided_board".to_string(),
-            );
-
-            debug!(
-                "Board loan-listed: {} (age {}, CA={}) from {}, loan fee: {}",
-                player.full_name,
-                player.age(date),
-                player.player_attributes.current_ability,
-                team_name,
-                loan_fee
-            );
-
-            self.transfer_plan
-                .loan_out_candidates
-                .push(LoanOutCandidate {
-                    player_id,
-                    reason: LoanOutReason::LackOfPlayingTime,
-                    status: LoanOutStatus::Listed,
-                    loan_fee,
-                    preferred_destination: LoanDestinationPreference::Any,
-                });
-        }
-
-        // Process transfer recommendations
-        for (team_idx, player_id, reason) in transfer_players {
-            let team_idx = *team_idx;
-            let player_id = *player_id;
-            let team_name = self.teams.teams[team_idx].name.clone();
-
-            let asking_price = {
-                let player = match self.teams.teams[team_idx].players.find(player_id) {
-                    Some(p) => p,
-                    None => continue,
-                };
-                player.value(date, seller_league_rep, seller_club_rep) * 0.5
-            };
-
-            let player = match self.teams.teams[team_idx].players.find_mut(player_id) {
-                Some(p) => p,
-                None => continue,
-            };
-
-            player.statuses.add(date, PlayerStatusType::Lst);
-            // The badge is the visible half of the decision; the contract
-            // flag is the durable half. The flag survives the listing
-            // pass's badge reconciliation, blocks renewal offers, and tells
-            // the pass this is a club decision to materialise without a
-            // second history row. Without it the badge was stripped the
-            // first time the pass ran, the renewal manager saw a clean
-            // player and re-signed him, and this audit listed him again
-            // every window.
-            if let Some(contract) = player.contract.as_mut() {
-                contract.is_transfer_listed = true;
-            }
-            player.decision_history.add(
-                date,
-                "dec_board_transfer_listed".to_string(),
-                reason.clone(),
-                "dec_decided_board".to_string(),
-            );
-            // The board's own listing pass — including the wage-relief sale,
-            // which arrives here tagged `dec_reason_wage_relief`. Every other
-            // listing entry point reports itself to the funnel trace; without
-            // this one, a marquee signing listed for money looked to the
-            // trace like a player nobody had listed at all.
-            TransferTrace::list(player, date, "board_utilization", reason);
-
-            debug!(
-                "Board transfer-listed: {} (age {}, CA={}) from {}, asking {}",
-                player.full_name,
-                player.age(date),
-                player.player_attributes.current_ability,
-                team_name,
-                asking_price
-            );
-
-            self.teams.teams[main_idx]
-                .transfer_list
-                .add(TransferItem::new(
-                    player_id,
-                    CurrencyValue::new(asking_price, Currency::Usd),
-                ));
-        }
-    }
-
-    /// Resolve prime-age professionals parked in a senior reserve squad
-    /// (B / Second / Reserve).
-    ///
-    /// Every other sweep in this file reads MINUTES, and a B-team regular
-    /// has plenty — thirty league starts a season, none of them for the
-    /// team he was signed to play for. He therefore tripped nothing: not
-    /// the idle-days audit (he is never idle), not the release gate (his
-    /// own squad's "key player" label protected him), not the renewal
-    /// cutoff (the ledger said he was playing). He simply stayed, at his
-    /// peak, for as long as his contract kept renewing.
-    ///
-    /// The question this pass asks is the one none of the others could:
-    /// is this adult, past the age where a reserve squad is development,
-    /// ever going to play for the first team? If he is close to the
-    /// promotion bar he is genuine cover and stays. If he is not, he
-    /// leaves — on loan while he is young enough for that to be a career
-    /// step, on the transfer list once he is not.
-    fn collect_parked_prime_resolutions(
-        team: &Team,
-        team_idx: usize,
-        main_floor: &MainPromotionFloor,
-        asset_ctx: &SquadAssetContext,
-        date: NaiveDate,
-        loan_players: &mut Vec<(usize, u32, String)>,
-        transfer_players: &mut Vec<(usize, u32, String)>,
-    ) {
-        /// From this age a senior reserve squad has stopped being a
-        /// development pathway and started being a waiting room. Matches
-        /// the reserve-ambition audit's own prime threshold.
-        const PARKED_PRIME_AGE: u8 = 24;
-        /// Past this age a loan is no longer a career step — the answer is
-        /// a permanent move to a club that will pick him.
-        const LOAN_VIABLE_MAX_AGE: u8 = 27;
-        /// Observable level within this much of the first team's promotion
-        /// bar means he is genuine cover, not a forgotten man.
-        const PROMOTION_REACH: u8 = 6;
-        /// He must have had a full season down there before this fires —
-        /// a player just demoted may yet win his place back.
-        const SETTLED_DAYS: i64 = 300;
-
-        // The reserve side still has to field a team on Saturday. Track
-        // how many uncommitted players each group has left so the pass
-        // stops at a usable XI instead of emptying the squad — the same
-        // fielding footprint the youth development-loan pass respects.
-        let mut group_remaining: HashMap<PlayerFieldPositionGroup, usize> = HashMap::new();
-        for player in team.players.iter() {
-            if player.is_on_loan() || player.contract.is_none() {
-                continue;
-            }
-            if player.statuses.has(PlayerStatusType::Lst)
-                || player.statuses.has(PlayerStatusType::Loa)
-            {
-                continue;
-            }
-            *group_remaining
-                .entry(player.position().position_group())
-                .or_default() += 1;
-        }
-
-        for player in team.players.iter() {
-            let age = player.age(date);
-            if age < PARKED_PRIME_AGE {
-                continue;
-            }
-            if player.is_on_loan() || player.is_force_match_selection {
-                continue;
-            }
-            if player.contract.is_none()
-                || player
-                    .contract
-                    .as_ref()
-                    .is_some_and(|c| c.contract_type == ContractType::Youth || c.is_transfer_listed)
-            {
-                continue;
-            }
-            if player.statuses.has(PlayerStatusType::Lst)
-                || player.statuses.has(PlayerStatusType::Loa)
-                || player.statuses.has(PlayerStatusType::Frt)
-            {
-                continue;
-            }
-            // A recent arrival — or a recent demotion — has not yet had the
-            // season that would make this a verdict rather than a guess.
-            if StuckCareerScan::club_tenure_days(player, date)
-                .is_some_and(|days| days < SETTLED_DAYS)
-            {
-                continue;
-            }
-            if player.signing_protection_active(date) {
-                continue;
-            }
-
-            // Knocking on the first team's door: real cover, and the weekly
-            // rebalance will promote him the moment he clears the bar.
-            let group = player.position().position_group();
-            let level = AbilityEstimator::observable_level(player);
-            if level + PROMOTION_REACH >= main_floor.get(group) {
-                continue;
-            }
-
-            // Never strip the reserve side below a fieldable XI.
-            let remaining = group_remaining.get(&group).copied().unwrap_or(0);
-            if remaining <= YouthDevelopmentLoanPolicy::min_field(group) {
-                continue;
-            }
-
-            // The club's own view of him still gates the exit — a player it
-            // genuinely rates as first-team material is not shipped out on
-            // an age heuristic. Below the first team the labels no longer
-            // shortcut this, so the classification is the inference: how he
-            // actually compares with the senior squad.
-            match asset_ctx.classify_in_squad(player, date, team.team_type) {
-                SquadAssetClass::CorePlayer | SquadAssetClass::FirstTeamUseful => continue,
-                SquadAssetClass::ProspectDevelopment => {
-                    loan_players.push((
-                        team_idx,
-                        player.id,
-                        "dec_reason_needs_first_team_minutes".to_string(),
-                    ));
-                }
-                SquadAssetClass::RotationUseful
-                | SquadAssetClass::UnknownNeedsEvaluation
-                | SquadAssetClass::TrueSurplus => {
-                    if age <= LOAN_VIABLE_MAX_AGE {
-                        loan_players.push((
-                            team_idx,
-                            player.id,
-                            "dec_reason_needs_first_team_minutes".to_string(),
-                        ));
-                    } else {
-                        transfer_players.push((
-                            team_idx,
-                            player.id,
-                            "dec_reason_lack_playing_time".to_string(),
-                        ));
-                    }
-                }
-            }
-            if let Some(count) = group_remaining.get_mut(&group) {
-                *count = count.saturating_sub(1);
-            }
-        }
-    }
-
-    /// Collect development loan-outs for one non-competing squad (a youth
-    /// side, or any non-main team without a league) by positional surplus.
-    /// Such a side fields and rotates roughly one match a week, so it needs
-    /// only so many per position; the rest are blocked depth that develops
-    /// better playing senior football on loan. Keeps the best `keep` by the
-    /// coach-observable level (visible skill + training — youth football
-    /// produces no official ratings) and loans the remainder — a
-    /// manager-pinned player in the surplus simply stays. Players already on
-    /// loan / listed, or without a contract, are left alone. Contract type is
-    /// deliberately not checked: this is the one path that loans both
-    /// full-time and youth-contract prospects out.
-    fn collect_surplus_loans(
-        club: &Club,
-        team: &Team,
-        team_idx: usize,
-        date: NaiveDate,
-        keepers: &KeeperLoanView,
-        loan_players: &mut Vec<(usize, u32, String)>,
-    ) {
-        for group in [
-            PlayerFieldPositionGroup::Goalkeeper,
-            PlayerFieldPositionGroup::Defender,
-            PlayerFieldPositionGroup::Midfielder,
-            PlayerFieldPositionGroup::Forward,
-        ] {
-            let keep = YouthSquadDepth::keep_for(group);
-            let mut active: Vec<(u32, u8, bool)> = team
-                .players
-                .iter()
-                .filter(|p| {
-                    p.position().position_group() == group
-                        && !p.is_on_loan()
-                        && p.contract.is_some()
-                        && !p.statuses.has(PlayerStatusType::Lst)
-                        && !p.statuses.has(PlayerStatusType::Loa)
-                })
-                .map(|p| {
-                    (
-                        p.id,
-                        AbilityEstimator::observable_level(p),
-                        // A first-team-calibre player registered on a youth
-                        // or league-less side is not "surplus depth" there
-                        // — he is the club's own starter, filed in the
-                        // wrong squad, and the weekly rebalance is about to
-                        // promote him. He still COUNTS toward the squad's
-                        // depth (he is on this roster today); he is simply
-                        // never the body that leaves.
-                        p.is_force_match_selection
-                            || LoanAssetGuard::parent_holds_for(club, p, date),
-                    )
-                })
-                .collect();
-            if active.len() <= keep {
-                continue;
-            }
-            // Keep the best `keep` by observable level; the rest are surplus.
-            active.sort_by(|a, b| b.1.cmp(&a.1));
-            for (player_id, _, pinned) in active.into_iter().skip(keep) {
-                // A keeper the goalkeeping department is building around
-                // is not surplus, however many keepers sit on this roster.
-                if !pinned && !keepers.protects(player_id) {
-                    loan_players.push((
-                        team_idx,
-                        player_id,
-                        "dec_reason_young_develop".to_string(),
-                    ));
-                }
-            }
-        }
-    }
-
-    /// Keepers the goalkeeping department has asked to be sent out for
-    /// minutes.
-    ///
-    /// The depth-based passes cannot reach these men. A twenty-one-year-old
-    /// third choice on the reserve side is not positional surplus (the group
-    /// is not over-depth), is not below the promotion floor by enough to be
-    /// a blocked youth-team prospect, and plays league football so the idle
-    /// sweep never sees him — and he is nonetheless a keeper with three men
-    /// in front of him and a career going nowhere. That is the standard
-    /// route in real football and it was the one route the club could not
-    /// choose deliberately.
-    fn collect_keeper_department_loans(
-        team: &Team,
-        team_idx: usize,
-        keepers: &KeeperLoanView,
-        loan_players: &mut Vec<(usize, u32, String)>,
-    ) {
-        for player in team.players.iter() {
-            if !keepers.wants_out(player.id) {
-                continue;
-            }
-            if player.is_on_loan()
-                || player.contract.is_none()
-                || player.is_force_match_selection
-                || player.statuses.has(PlayerStatusType::Lst)
-                || player.statuses.has(PlayerStatusType::Loa)
-                || loan_players.iter().any(|(_, id, _)| *id == player.id)
-            {
-                continue;
-            }
-            loan_players.push((team_idx, player.id, "dec_reason_young_develop".to_string()));
-        }
-    }
-
-    /// Age-based development loans for ONE youth squad: a youngster old enough
-    /// for senior football (>= `YouthDevelopmentLoanPolicy::SENIOR_LOAN_AGE`)
-    /// who won't make the first team (current ability below the main-team
-    /// promotion floor at his position) should go out on loan for minutes
-    /// rather than stagnate in the youth side. Complements
-    /// [`Self::collect_surplus_loans`]: that one loans positional *surplus*
-    /// (deep groups); this one loans *blocked but ready* youngsters even when
-    /// the group is not over-depth. Never strips a group below the minimum it
-    /// needs to field a match, never re-flags a player the surplus pass already
-    /// took, and never touches a promotion-bound prospect (the rebalance
-    /// promotes him) or an on-loan / listed / pinned / contract-less player.
-    fn collect_youth_development_loans(
-        club: &Club,
-        team: &Team,
-        team_idx: usize,
-        main_floor: &MainPromotionFloor,
-        keepers: &KeeperLoanView,
-        date: NaiveDate,
-        loan_players: &mut Vec<(usize, u32, String)>,
-    ) {
-        for group in [
-            PlayerFieldPositionGroup::Goalkeeper,
-            PlayerFieldPositionGroup::Defender,
-            PlayerFieldPositionGroup::Midfielder,
-            PlayerFieldPositionGroup::Forward,
-        ] {
-            let floor = main_floor.get(group);
-            let min_field = YouthDevelopmentLoanPolicy::min_field(group);
-
-            // Stay-eligible players in this group, excluding anyone the
-            // surplus pass already flagged. (id, age, current ability).
-            let active: Vec<(u32, u8, u8, bool)> = team
-                .players
-                .iter()
-                .filter(|p| {
-                    p.position().position_group() == group
-                        && !p.is_on_loan()
-                        && p.contract.is_some()
-                        && !p.is_force_match_selection
-                        && !p.statuses.has(PlayerStatusType::Lst)
-                        && !p.statuses.has(PlayerStatusType::Loa)
-                        && !loan_players.iter().any(|(_, id, _)| *id == p.id)
-                        // The keeper the first team has started travelling
-                        // with is not stagnating in the youth side — he is
-                        // exactly where the club decided to put him.
-                        && !keepers.protects(p.id)
-                })
-                .map(|p| {
-                    (
-                        p.id,
-                        p.age(date),
-                        p.player_attributes.current_ability,
-                        // The boy who is already good enough to start for
-                        // the first team is a promotion, not a development
-                        // loan. He still counts toward the youth side's
-                        // fielding minimum — he is on this roster today.
-                        LoanAssetGuard::parent_holds_for(club, p, date),
-                    )
-                })
-                .collect();
-
-            let mut remaining = active.len();
-            if remaining <= min_field {
-                continue;
-            }
-
-            // Senior-ready youngsters below the first-team bar, oldest first
-            // (most ready for senior football, least served by another year of
-            // youth rotation). Loan them down to the fielding minimum.
-            let mut candidates: Vec<(u32, u8)> = active
-                .iter()
-                .filter(|(_, age, ca, parent_holds)| {
-                    !parent_holds
-                        && *age >= YouthDevelopmentLoanPolicy::SENIOR_LOAN_AGE
-                        && *ca < floor
-                })
-                .map(|(id, age, _, _)| (*id, *age))
-                .collect();
-            candidates.sort_by(|a, b| b.1.cmp(&a.1));
-
-            for (player_id, _age) in candidates {
-                if remaining <= min_field {
-                    break;
-                }
-                loan_players.push((team_idx, player_id, "dec_reason_young_develop".to_string()));
-                remaining -= 1;
-            }
-        }
-    }
-}
-
-/// The goalkeeping department's say over which keepers this audit may move.
-///
-/// Two judgements the audit cannot make for itself, both of them specialist
-/// ones. Which keeper the club is actively building around — he is not
-/// surplus and he is not stagnating, whatever the depth chart says, because
-/// the first team has just started naming him. And which keeper is blocked
-/// badly enough that a season of men's football elsewhere is the only thing
-/// left to give him — a judgement about the whole keeper room, not about
-/// this one squad's depth at a position.
-///
-/// An empty plan protects nobody and asks for nobody, so a club that has
-/// never reviewed its keeper room gets exactly the audit it always had.
-struct KeeperLoanView {
-    protected: HashSet<u32>,
-    wanted_out: HashSet<u32>,
-}
-
-impl KeeperLoanView {
-    fn of(plan: Option<&KeeperRoomPlan>, today: NaiveDate) -> Self {
-        let mut protected: HashSet<u32> = HashSet::new();
-        let mut wanted_out: HashSet<u32> = HashSet::new();
-        let Some(plan) = plan else {
-            return KeeperLoanView {
-                protected,
-                wanted_out,
-            };
-        };
-
-        for (player_id, assignment) in plan.assignments() {
-            if assignment.tier.promises_minutes() || assignment.tier.is_senior_group() {
-                protected.insert(player_id);
-            }
-        }
-        protected.extend(plan.heir());
-        protected.extend(plan.nominated(today));
-
-        for advice in plan.recommendations() {
-            if advice.advice != KeeperAdvice::LoanHimOutForMinutes {
-                continue;
-            }
-            if let Some(id) = advice.player_id {
-                wanted_out.insert(id);
-            }
-        }
-        // A keeper cannot be both. The department's own review never says
-        // both about one man, but a plan read mid-revision could.
-        wanted_out.retain(|id| !protected.contains(id));
-
-        KeeperLoanView {
-            protected,
-            wanted_out,
-        }
-    }
-
-    fn protects(&self, player_id: u32) -> bool {
-        self.protected.contains(&player_id)
-    }
-
-    fn wants_out(&self, player_id: u32) -> bool {
-        self.wanted_out.contains(&player_id)
-    }
-}
-
-/// Per-group main-team promotion floor: the current ability at/above which a
-/// non-main player is promoted to the first team by the weekly
-/// `rebalance_squads`. The youth development-loan pass reads it so a
-/// promotion-bound prospect (at/above the bar) is left for the rebalance to
-/// promote rather than loaned away. Depths mirror `MIN_MAIN_DEPTH` in
-/// squad.rs — keep them in sync.
-///
-/// This bar is deliberately expressed in raw `current_ability`, unlike the
-/// surplus classifier, because it must agree with the promotion engine
-/// (`rebalance_squads`), which promotes on CA. Measuring "would he be
-/// promoted?" in observable-level units while the promoter still reads CA
-/// would let the two disagree and loan away a player the rebalance is about
-/// to call up. It is a coordination bar with that engine, not a surplus /
-/// keep judgement, so it stays CA-based until the promoter itself moves.
-struct MainPromotionFloor {
-    floors: [(PlayerFieldPositionGroup, u8); 4],
-}
-
-impl MainPromotionFloor {
-    /// CA an understrength group falls back to (squad.rs `DEPTH_GAP_FLOOR`):
-    /// when the main is short at a position any decent youth fills the gap, so
-    /// there is no "below the first team" band to loan from.
-    const DEPTH_GAP_FLOOR: u8 = 60;
-
-    /// Below this many players at a group the main team is short there.
-    /// Mirrors squad.rs `MIN_MAIN_DEPTH`.
-    fn min_depth(group: PlayerFieldPositionGroup) -> usize {
-        match group {
-            PlayerFieldPositionGroup::Goalkeeper => 2,
-            PlayerFieldPositionGroup::Defender => 6,
-            PlayerFieldPositionGroup::Midfielder => 6,
-            PlayerFieldPositionGroup::Forward => 4,
-        }
-    }
-
-    fn snapshot(main: &Team) -> Self {
-        MainPromotionFloor {
-            floors: [
-                (
-                    PlayerFieldPositionGroup::Goalkeeper,
-                    Self::for_group(main, PlayerFieldPositionGroup::Goalkeeper),
-                ),
-                (
-                    PlayerFieldPositionGroup::Defender,
-                    Self::for_group(main, PlayerFieldPositionGroup::Defender),
-                ),
-                (
-                    PlayerFieldPositionGroup::Midfielder,
-                    Self::for_group(main, PlayerFieldPositionGroup::Midfielder),
-                ),
-                (
-                    PlayerFieldPositionGroup::Forward,
-                    Self::for_group(main, PlayerFieldPositionGroup::Forward),
-                ),
-            ],
-        }
-    }
-
-    fn for_group(main: &Team, group: PlayerFieldPositionGroup) -> u8 {
-        let (count, worst) = main
-            .players
-            .iter()
-            .filter(|p| p.position().position_group() == group)
-            .map(|p| p.player_attributes.current_ability)
-            .fold((0usize, u8::MAX), |(c, w), a| (c + 1, w.min(a)));
-        if count < Self::min_depth(group) {
-            Self::DEPTH_GAP_FLOOR
-        } else {
-            worst.saturating_add(1)
-        }
-    }
-
-    fn get(&self, group: PlayerFieldPositionGroup) -> u8 {
-        self.floors
-            .iter()
-            .find(|(g, _)| *g == group)
-            .map(|(_, f)| *f)
-            .unwrap_or(u8::MAX)
-    }
-}
-
-/// Per-position depth a single non-competing squad keeps before the remainder
-/// are loaned out for development. Smaller than a senior squad's depth: such a
-/// side plays roughly once a week, so a third keeper or a deep outfield
-/// reserve never sees minutes and develops better on loan.
-struct YouthSquadDepth;
-
-impl YouthSquadDepth {
-    fn keep_for(group: PlayerFieldPositionGroup) -> usize {
-        match group {
-            PlayerFieldPositionGroup::Goalkeeper => 2,
-            PlayerFieldPositionGroup::Defender => 7,
-            PlayerFieldPositionGroup::Midfielder => 7,
-            PlayerFieldPositionGroup::Forward => 5,
-        }
-    }
-}
-
-/// Policy for the age-based youth development-loan pass
-/// ([`Club::collect_youth_development_loans`]).
-struct YouthDevelopmentLoanPolicy;
-
-impl YouthDevelopmentLoanPolicy {
-    /// Age at/above which a youth player is treated as ready for senior loan
-    /// football. Below it he keeps developing in the youth side rather than
-    /// being shipped to a senior club too early.
-    const SENIOR_LOAN_AGE: u8 = 18;
-
-    /// Players a youth squad must retain per group so it can still field a
-    /// match — the development-loan pass never strips a group below this. A
-    /// 4-4-2 fielding-XI footprint; deeper squads loan the senior-ready fringe
-    /// above it. Deliberately below [`YouthSquadDepth::keep_for`]: the surplus
-    /// pass trims to a comfortable rotation depth, this pass then loans the
-    /// blocked-but-ready players down toward a usable XI.
-    fn min_field(group: PlayerFieldPositionGroup) -> usize {
-        match group {
-            PlayerFieldPositionGroup::Goalkeeper => 1,
-            PlayerFieldPositionGroup::Defender => 4,
-            PlayerFieldPositionGroup::Midfielder => 4,
-            PlayerFieldPositionGroup::Forward => 2,
         }
     }
 }

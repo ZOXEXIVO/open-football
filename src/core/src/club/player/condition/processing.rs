@@ -334,6 +334,30 @@ impl ConditionRecoveryModel {
 }
 
 impl Player {
+    /// A new season opens: report to pre-season.
+    ///
+    /// Condition comes back to pre-season fitness, an international
+    /// call-up badge the tournament release should have cleared is dropped,
+    /// and last season's ban expires. Statistics are deliberately left
+    /// alone — `Player::on_season_end` takes them by `mem::take`, so
+    /// zeroing them here would erase the season the snapshot is about to
+    /// file.
+    pub fn on_pre_season(&mut self) {
+        const PRE_SEASON_CONDITION: i16 = 8500;
+
+        if self.player_attributes.condition < PRE_SEASON_CONDITION
+            && !self.player_attributes.is_injured
+        {
+            self.player_attributes.condition = PRE_SEASON_CONDITION;
+        }
+
+        self.statuses.remove(PlayerStatusType::Int);
+        self.statuses.remove(PlayerStatusType::IntU21);
+        self.player_attributes.is_banned = false;
+        // Pre-season training counts as recent work.
+        self.player_attributes.days_since_last_match = 7;
+    }
+
     /// Daily condition processing (rest day — no training scheduled).
     /// Deficit-based, asymptotic recovery toward a per-player target.
     ///
