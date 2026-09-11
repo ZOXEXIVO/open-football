@@ -12,6 +12,11 @@
 //! why they were sequential regions of one function rather than anything
 //! shareable.
 
+use crate::transfers::loan::LoanPipeline;
+use crate::transfers::market::window::MarketCadence;
+use crate::transfers::squad::bands::TierBands;
+use crate::transfers::view::club::ClubView;
+use crate::transfers::view::player::PlayerView;
 use chrono::{Duration, NaiveDate};
 use log::debug;
 
@@ -26,7 +31,6 @@ use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
 use crate::transfers::loan::interest::{DestinationAppeal, InterestDraw, LoanApproachMemory};
 use crate::transfers::market::{TransferListingOrigin, TransferListingStatus, TransferListingType};
-use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::trace::MarketSwitches;
 use crate::transfers::pipeline::{AvailabilityBroadcast, LoanDestinationPreference};
 use crate::transfers::squad::minutes::LoanPromise;
@@ -143,7 +147,7 @@ struct TransferPushAction {
 impl ListingBroadcast {
     /// A parent club that loan-listed somebody and got no answer goes looking.
     pub(in crate::transfers::loan) fn loans(country: &mut Country, date: NaiveDate) {
-        let _is_january = PipelineProcessor::is_mid_season_window_for(country, date);
+        let _is_january = MarketCadence::is_mid_season_window_for(&country.code, date);
         // The region this country plays in — every borrower in this pass
         // is in it, so the home term is derived once.
         let _domestic_region = ScoutingRegion::from_country(country.continent_id, &country.code);
@@ -167,7 +171,7 @@ impl ListingBroadcast {
             })
             .map(|n| n.player_id)
             .collect();
-        let pending_loans = PipelineProcessor::pending_incoming_loans_by_club(country);
+        let pending_loans = LoanPipeline::pending_incoming_loans_by_club(country);
 
         let Some((broadcastable, _keep)) = Self::loan_read(country, date, &in_negotiation) else {
             return;
@@ -234,8 +238,7 @@ impl ListingBroadcast {
             if !parent_tier.runs_loan_broadcast() {
                 continue;
             }
-            let Some(player) =
-                PipelineProcessor::find_player_in_country(country, listing.player_id)
+            let Some(player) = PlayerView::find_player_in_country(country, listing.player_id)
             else {
                 continue;
             };
@@ -259,9 +262,9 @@ impl ListingBroadcast {
                 .map(|p| p.player_attributes.current_ability)
                 .max()
                 .unwrap_or(0);
-            let guard = PipelineProcessor::loan_guard_for(country, parent_club, player, date);
+            let guard = LoanPipeline::loan_guard_for(country, parent_club, player, date);
             let is_development =
-                PipelineProcessor::is_development_loan(guard.as_ref(), player.age(date))
+                LoanPipeline::is_development_loan(guard.as_ref(), player.age(date))
                     || parent_club
                         .transfer_plan
                         .loan_out_candidates
@@ -275,7 +278,7 @@ impl ListingBroadcast {
                 parent_club_id: listing.club_id,
                 parent_tier,
                 parent_rep: parent_team.reputation.world,
-                parent_league_rep: PipelineProcessor::club_league_reputation(country, parent_club),
+                parent_league_rep: LoanPipeline::club_league_reputation(country, parent_club),
                 parent_best_in_group,
                 group,
                 ability: player.player_attributes.current_ability,
@@ -301,7 +304,7 @@ impl ListingBroadcast {
         // even when the list is empty so the map never accumulates. Players
         // whose listing is riding a live negotiation stay in the keep-set —
         // their cascade resumes where it left off if the bid collapses.
-        PipelineProcessor::prune_loan_broadcasts(country, &keep_ids);
+        LoanPipeline::prune_loan_broadcasts(country, &keep_ids);
         if broadcastable.is_empty() {
             return None;
         }
@@ -335,8 +338,7 @@ impl ListingBroadcast {
                     posted_since: date,
                 },
                 Some(prev) => {
-                    if (date - prev.since).num_days() >= PipelineProcessor::BROADCAST_RESPONSE_DAYS
-                    {
+                    if (date - prev.since).num_days() >= LoanPipeline::BROADCAST_RESPONSE_DAYS {
                         // …but only down to the floor the asset's own
                         // standing allows. A listing is consent to a loan,
                         // not consent to any destination: walking a
@@ -374,7 +376,7 @@ impl ListingBroadcast {
         pending_loans: &HashMap<u32, Vec<(PlayerFieldPositionGroup, u8)>>,
         in_negotiation: &HashSet<u32>,
     ) -> Vec<LoanPushAction> {
-        let is_january = PipelineProcessor::is_mid_season_window_for(country, date);
+        let is_january = MarketCadence::is_mid_season_window_for(&country.code, date);
         let domestic_region = ScoutingRegion::from_country(country.continent_id, &country.code);
         let mut actions: Vec<LoanPushAction> = Vec::new();
         // One borrower must not be handed two same-group loans in a single
@@ -413,7 +415,7 @@ impl ListingBroadcast {
                     .and_then(|c| c.transfer_plan.loan_broadcasts.get(&b.player_id))
                     .map(|br| (date - br.posted_since).num_days())
                     .unwrap_or(0);
-                if posted_for < PipelineProcessor::HOME_FIRST_DAYS {
+                if posted_for < LoanPipeline::HOME_FIRST_DAYS {
                     continue;
                 }
             }
@@ -550,7 +552,7 @@ impl ListingBroadcast {
             // that "only shops in January" does not turn down a genuine
             // first-team-level loanee in August, and its refusal was
             // exactly what walked the boy down to the tier below.
-            let borrower_league_rep = PipelineProcessor::club_league_reputation(country, club);
+            let borrower_league_rep = LoanPipeline::club_league_reputation(country, club);
             let borrower_best_here = team
                 .players
                 .iter()
@@ -629,7 +631,7 @@ impl ListingBroadcast {
             {
                 continue;
             }
-            if !PipelineProcessor::loan_guard_allows(
+            if !LoanPipeline::loan_guard_allows(
                 b.guard.as_ref(),
                 borrower_profile.as_ref(),
                 b.player_id,
@@ -674,14 +676,13 @@ impl ListingBroadcast {
         // The interested club's "response". The player already carries an
         // Available loan listing, so `start_negotiation` has its anchor.
         for action in actions {
-            let selling_rep =
-                PipelineProcessor::get_club_reputation(country, action.selling_club_id);
-            let buying_rep = PipelineProcessor::get_club_reputation(country, action.borrower_id);
+            let selling_rep = ClubView::get_club_reputation(country, action.selling_club_id);
+            let buying_rep = ClubView::get_club_reputation(country, action.borrower_id);
             let (p_age, p_ambition) =
-                PipelineProcessor::get_player_negotiation_data(country, action.player_id, date);
+                PlayerView::get_player_negotiation_data(country, action.player_id, date);
 
             let mut clauses = Vec::new();
-            if let Some(option_fee) = PipelineProcessor::loan_option_fee(country, &action, date) {
+            if let Some(option_fee) = LoanPipeline::loan_option_fee(country, &action, date) {
                 clauses.push(TransferClause::LoanOptionToBuy(CurrencyValue {
                     amount: option_fee,
                     currency: Currency::Usd,
@@ -695,7 +696,7 @@ impl ListingBroadcast {
                 },
                 clauses,
                 contract_length_years: None,
-                loan_duration_months: Some(PipelineProcessor::loan_duration_to_season_end(
+                loan_duration_months: Some(LoanPipeline::loan_duration_to_season_end(
                     country,
                     action.borrower_id,
                     date,
@@ -721,7 +722,7 @@ impl ListingBroadcast {
                 p_age,
                 p_ambition,
             ) {
-                let (p_name, sc_name) = PipelineProcessor::resolve_player_and_club_name(
+                let (p_name, sc_name) = PlayerView::resolve_player_and_club_name(
                     country,
                     action.player_id,
                     action.selling_club_id,
@@ -819,8 +820,7 @@ impl ListingBroadcast {
             {
                 continue;
             }
-            if (date - listing.listed_date).num_days()
-                < PipelineProcessor::TRANSFER_BROADCAST_GRACE_DAYS
+            if (date - listing.listed_date).num_days() < LoanPipeline::TRANSFER_BROADCAST_GRACE_DAYS
             {
                 continue;
             }
@@ -834,8 +834,7 @@ impl ListingBroadcast {
             else {
                 continue;
             };
-            let Some(player) =
-                PipelineProcessor::find_player_in_country(country, listing.player_id)
+            let Some(player) = PlayerView::find_player_in_country(country, listing.player_id)
             else {
                 continue;
             };
@@ -860,7 +859,7 @@ impl ListingBroadcast {
             });
         }
 
-        PipelineProcessor::prune_transfer_broadcasts(country, &keep_ids);
+        LoanPipeline::prune_transfer_broadcasts(country, &keep_ids);
         if sellable.is_empty() {
             return None;
         }
@@ -896,7 +895,7 @@ impl ListingBroadcast {
             // cumulative (own tier down to the cascade tier), so a deep
             // resume never skips the levels in between.
             let opened =
-                s.listed_date + Duration::days(PipelineProcessor::TRANSFER_BROADCAST_GRACE_DAYS);
+                s.listed_date + Duration::days(LoanPipeline::TRANSFER_BROADCAST_GRACE_DAYS);
             let first_since = club
                 .transfer_plan
                 .transfer_broadcasts
@@ -911,7 +910,7 @@ impl ListingBroadcast {
                 newly_asking.push(s.player_id);
             }
             let steps_down = ((date - first_since).num_days().max(0)
-                / PipelineProcessor::BROADCAST_RESPONSE_DAYS) as u32;
+                / LoanPipeline::BROADCAST_RESPONSE_DAYS) as u32;
             let tier = s.parent_tier.step_down(steps_down);
             club.transfer_plan.transfer_broadcasts.insert(
                 s.player_id,
@@ -1017,8 +1016,7 @@ impl ListingBroadcast {
             // stale listing IS the bargain-above-your-level that a lower
             // club stretches for in real markets.
             let staleness = (((date - s.listed_date).num_days()
-                - PipelineProcessor::TRANSFER_BROADCAST_GRACE_DAYS)
-                as f32
+                - LoanPipeline::TRANSFER_BROADCAST_GRACE_DAYS) as f32
                 / MarketResignation::RAMP_DAYS)
                 .clamp(0.0, 1.0);
             let ceiling_relax = (staleness * 35.0).round() as u8;
@@ -1067,9 +1065,8 @@ impl ListingBroadcast {
                 // is a level below the tag, and an ambitious lower club
                 // punches up for exactly this kind of deal.
                 let rep_score = team.reputation.overall_score();
-                let floor =
-                    PipelineProcessor::tier_starter_ca_score(rep_score, s.group).saturating_sub(20);
-                let ceiling = PipelineProcessor::tier_target_ceiling_score(rep_score, s.group)
+                let floor = TierBands::tier_starter_ca_score(rep_score, s.group).saturating_sub(20);
+                let ceiling = TierBands::tier_target_ceiling_score(rep_score, s.group)
                     .saturating_add(ceiling_relax);
                 if s.ability < floor || s.ability > ceiling {
                     continue;
@@ -1134,11 +1131,10 @@ impl ListingBroadcast {
         // Available seller listing, so `start_negotiation` has its anchor
         // and the ordinary seller-acceptance path resolves the deal.
         for action in actions {
-            let selling_rep =
-                PipelineProcessor::get_club_reputation(country, action.selling_club_id);
-            let buying_rep = PipelineProcessor::get_club_reputation(country, action.buyer_id);
+            let selling_rep = ClubView::get_club_reputation(country, action.selling_club_id);
+            let buying_rep = ClubView::get_club_reputation(country, action.buyer_id);
             let (p_age, p_ambition) =
-                PipelineProcessor::get_player_negotiation_data(country, action.player_id, date);
+                PlayerView::get_player_negotiation_data(country, action.player_id, date);
 
             let offer = TransferOffer {
                 base_fee: CurrencyValue {
@@ -1163,7 +1159,7 @@ impl ListingBroadcast {
                 p_age,
                 p_ambition,
             ) {
-                let (p_name, sc_name) = PipelineProcessor::resolve_player_and_club_name(
+                let (p_name, sc_name) = PlayerView::resolve_player_and_club_name(
                     country,
                     action.player_id,
                     action.selling_club_id,

@@ -12,6 +12,7 @@
 //! the fourth choice would not.
 
 use super::*;
+use crate::transfers::squad::SquadReviewPass;
 
 /// The loan-out scan.
 pub(in crate::transfers::squad) struct LoanOutScan;
@@ -250,7 +251,7 @@ impl LoanOutScan {
             .count();
 
         // Minimum players needed per group from formation
-        let min_needed = PipelineProcessor::group_min_needed(group, formation_positions);
+        let min_needed = SquadReviewPass::group_min_needed(group, formation_positions);
 
         // Don't loan out if we'd drop below minimum
         if group_count <= min_needed {

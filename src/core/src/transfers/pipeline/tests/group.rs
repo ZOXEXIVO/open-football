@@ -2,8 +2,8 @@
 
 use crate::club::team::squad::SquadAssetClass;
 use crate::transfers::gate::fit::SquadFitSnapshot;
-use crate::transfers::pipeline::PipelineProcessor;
 use crate::transfers::pipeline::processor::SquadPlayerInfo;
+use crate::transfers::squad::bands::TierBands;
 use crate::transfers::squad::{
     GroupNeed, GroupNeedScan, NeedKind, SuccessionAudit, SuccessionUrgency,
 };
@@ -74,7 +74,7 @@ impl GroupFx {
     }
 
     fn continental_tolerance() -> i16 {
-        PipelineProcessor::tier_quality_tolerance_score(Self::continental_score())
+        TierBands::tier_quality_tolerance_score(Self::continental_score())
     }
 
     fn aged_player(

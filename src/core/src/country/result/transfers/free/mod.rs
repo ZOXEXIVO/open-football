@@ -16,14 +16,14 @@ use crate::club::player::mailbox::handlers::contract_proposal::ProcessContractHa
 use crate::club::player::transfer::{FreeAgentBlockReason, MarketStage};
 use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::squad::{ContractRenewalManager, WageStructureSnapshot};
-use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::simulator::SimulatorData;
 use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus};
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::gate::fit::{ForeignSlotCount, SquadRegistrationLimits};
 use crate::transfers::market::region::ScoutingRegion;
-use crate::transfers::pipeline::{PipelineProcessor, TransferRequestStatus};
+use crate::transfers::pipeline::TransferRequestStatus;
+use crate::transfers::pipeline::approach::ApproachPass;
 use crate::transfers::squad::needs::{
     EmergencyBuyerContext, EmergencyCandidateView, EmergencyGroupSlot, EmergencyProjectedSquad,
     EmergencySlotStrictness, EmergencySquadFillStrategy, EmergencyStrictness, FirstTeamSquadNeeds,
@@ -270,7 +270,7 @@ pub(super) struct FreeAgentCandidate {
 /// Visibility is a property of the (market, player) pair, not of the club:
 /// whether Turkish football has heard of a released Russian does not depend
 /// on which Turkish club is asking. So it is built once at the top of
-/// [`CountryResult::handle_free_agents`] and read by every gate below —
+/// [`FreeAgentPass::handle_free_agents`] and read by every gate below —
 /// which also keeps the corridor arithmetic out of a loop that runs
 /// clubs × requests × candidates.
 pub(super) struct FreeAgentMarketVisibility {
@@ -366,8 +366,8 @@ impl FreeAgentMarketVisibility {
                     let from_last_league = 0.5 * profile.import_weight(key.1).unwrap_or(0.0);
                     from_nationality
                         .max(from_last_league)
-                        .max(Self::CAPACITY_REACH * import_capacity)
-                        .max(Self::REACH_FLOOR)
+                        .max(FreeAgentMarketVisibility::CAPACITY_REACH * import_capacity)
+                        .max(FreeAgentMarketVisibility::REACH_FLOOR)
                 };
                 (affinity, reach)
             });
@@ -480,7 +480,10 @@ struct EmergencyClubAnchors {
     foreign_slots: ForeignSlotCount,
 }
 
-impl CountryResult {
+/// The free market: who is out of contract, and who takes them.
+pub struct FreeAgentPass;
+
+impl FreeAgentPass {
     /// Handle expiring contracts and free agent signings.
     ///
     /// Signing probability depends on player quality:
@@ -1692,7 +1695,7 @@ impl CountryResult {
     }
 }
 
-/// Parameters for one market-clearing tier ([`CountryResult::run_market_clearing_tier`]).
+/// Parameters for one market-clearing tier ([`FreeAgentPass::run_market_clearing_tier`]).
 /// The soft tier (early, local, opportunistic) and the hard tier
 /// (long-tail, broad) differ only in these knobs.
 struct MarketClearingTier {
@@ -1768,7 +1771,7 @@ impl EmergencySlotPlanner {
         // group for depth, skipping any that have no candidates left
         // this tick. The caller's outer check on `needs_more_signings`
         // already gates whether we get here at all.
-        let depth_group = Self::depth_group(projected, empty_groups)?;
+        let depth_group = EmergencySlotPlanner::depth_group(projected, empty_groups)?;
         Some(EmergencyGroupSlot {
             group: depth_group,
             missing: 1,
@@ -1795,7 +1798,7 @@ impl EmergencySlotPlanner {
             PlayerFieldPositionGroup::Forward,
             PlayerFieldPositionGroup::Goalkeeper,
         ];
-        candidates.sort_by_key(|g| -Self::gap_for(projected, *g));
+        candidates.sort_by_key(|g| -EmergencySlotPlanner::gap_for(projected, *g));
         candidates.into_iter().find(|g| !empty_groups.contains(g))
     }
 
@@ -1840,7 +1843,7 @@ impl EmergencyRealismGates {
         group: PlayerFieldPositionGroup,
         visibility: &FreeAgentMarketVisibility,
     ) -> Result<(), FreeAgentBlockReason> {
-        if !Self::passes_quality(candidate, buyer, group) {
+        if !EmergencyRealismGates::passes_quality(candidate, buyer, group) {
             // Which SIDE of the band he fell off, read off the band itself
             // rather than guessed from a threshold — the diagnosis layer
             // shows this to the player, and "too good for everyone" and
@@ -1856,13 +1859,13 @@ impl EmergencyRealismGates {
                 FreeAgentBlockReason::AboveMaximumAbility
             });
         }
-        if !Self::passes_reputation(candidate, buyer) {
+        if !EmergencyRealismGates::passes_reputation(candidate, buyer) {
             return Err(FreeAgentBlockReason::CountryReputationGap);
         }
-        if !Self::passes_region(candidate, buyer) {
+        if !EmergencyRealismGates::passes_region(candidate, buyer) {
             return Err(FreeAgentBlockReason::RegionPrestigeGap);
         }
-        if !Self::passes_market(candidate, buyer, visibility) {
+        if !EmergencyRealismGates::passes_market(candidate, buyer, visibility) {
             return Err(FreeAgentBlockReason::MarketUnfamiliar);
         }
         if buyer.would_block_registration(candidate.nationality_country_id) {
@@ -2079,7 +2082,7 @@ impl EmergencyCandidatePicker {
 /// emergency candidate list. The deterministic ordering in
 /// [`EmergencyCandidateOrdering`] leaves a cluster of near-equal
 /// candidates (same locality tier, score within
-/// [`Self::SCORE_EPSILON`]) separated only by the continuous
+/// [`EmergencyTopClusterSelector::SCORE_EPSILON`]) separated only by the continuous
 /// `career_pressure` tiebreak — which always crowned the same player,
 /// so the same club re-signed the same free agent season after season.
 ///
@@ -2114,19 +2117,19 @@ impl EmergencyTopClusterSelector {
     /// Length of the interchangeable prefix of `scored`. The list is
     /// pre-sorted by score(desc) then the locality keys, so the cluster
     /// is a contiguous run from index 0: every member is within
-    /// [`Self::SCORE_EPSILON`] of the leader's score and shares the
+    /// [`EmergencyTopClusterSelector::SCORE_EPSILON`] of the leader's score and shares the
     /// leader's three locality keys (domestic / in-country / continent).
     fn cluster_len(scored: &[(&FreeAgentCandidate, f32)], buyer: &EmergencyBuyerContext) -> usize {
         let Some((leader, leader_score)) = scored.first() else {
             return 0;
         };
-        let leader_keys = Self::locality_keys(leader, buyer);
+        let leader_keys = EmergencyTopClusterSelector::locality_keys(leader, buyer);
         let mut len = 1;
         for (candidate, score) in scored.iter().skip(1) {
-            if (score - leader_score).abs() > Self::SCORE_EPSILON {
+            if (score - leader_score).abs() > EmergencyTopClusterSelector::SCORE_EPSILON {
                 break;
             }
-            if Self::locality_keys(candidate, buyer) != leader_keys {
+            if EmergencyTopClusterSelector::locality_keys(candidate, buyer) != leader_keys {
                 break;
             }
             len += 1;
@@ -2170,8 +2173,8 @@ impl EmergencyTopClusterSelector {
         );
         let ability_fit =
             FreeAgentMarketCalculator::quality_fit_score(candidate.ability, min_ca, max_ca);
-        1.0 + candidate.career_pressure.clamp(0.0, 1.0) * Self::W_PRESSURE
-            + ability_fit.clamp(0.0, 1.0) * Self::W_FIT
+        1.0 + candidate.career_pressure.clamp(0.0, 1.0) * EmergencyTopClusterSelector::W_PRESSURE
+            + ability_fit.clamp(0.0, 1.0) * EmergencyTopClusterSelector::W_FIT
     }
 
     /// Return the chosen candidate. Empty list → `None`; single-member
@@ -2182,7 +2185,7 @@ impl EmergencyTopClusterSelector {
         buyer: &EmergencyBuyerContext,
         group: PlayerFieldPositionGroup,
     ) -> Option<&'a FreeAgentCandidate> {
-        let len = Self::cluster_len(scored, buyer);
+        let len = EmergencyTopClusterSelector::cluster_len(scored, buyer);
         if len == 0 {
             return None;
         }
@@ -2511,11 +2514,11 @@ impl RequestCandidateOrdering {
         } else {
             0.0
         };
-        base + fresh_release + Self::owner_money_nudge(buyer, candidate)
+        base + fresh_release + RequestCandidateOrdering::owner_money_nudge(buyer, candidate)
     }
 
     /// Ordering weight for the buying club's owner money, 0..
-    /// [`Self::OWNER_MONEY_WEIGHT`].
+    /// [`RequestCandidateOrdering::OWNER_MONEY_WEIGHT`].
     ///
     /// The country-grain visibility layer prices a market, and every club in
     /// a league shares it. What it cannot say is that one of those clubs is
@@ -2532,7 +2535,7 @@ impl RequestCandidateOrdering {
         if candidate.nationality_country_id == 0 || !candidate.is_global_pool {
             return 0.0;
         }
-        Self::OWNER_MONEY_WEIGHT * buyer.benefactor.clamp(0.0, 1.0)
+        RequestCandidateOrdering::OWNER_MONEY_WEIGHT * buyer.benefactor.clamp(0.0, 1.0)
     }
 
     /// Small on purpose. The priority score runs 0..1 and this sits an
@@ -2994,11 +2997,14 @@ impl GlobalFreeAgentPool {
         // Pre-check 2: buying club exists, has a team to place into, and can
         // still accept a player. Capture the destination snapshot now while
         // we hold the read borrow; we'll need it after we mutate the pool.
-        let snapshot =
-            match Self::buying_club(data, signing.buying_country_id, signing.buying_club_id) {
-                Some(s) => s,
-                None => return false,
-            };
+        let snapshot = match GlobalFreeAgentPool::buying_club(
+            data,
+            signing.buying_country_id,
+            signing.buying_club_id,
+        ) {
+            Some(s) => s,
+            None => return false,
+        };
 
         // All pre-checks passed — take the player out of the pool.
         let mut player = data.free_agents.swap_remove(player_idx);
@@ -3129,7 +3135,7 @@ impl GlobalFreeAgentPool {
             .with_origin_country(origin_country_id),
         );
 
-        PipelineProcessor::clear_player_interest(buying_country, signing.player_id);
+        ApproachPass::clear_player_interest(buying_country, signing.player_id);
 
         // Stale interest in OTHER countries — monitoring or shortlist rows
         // that survived the local clear — is swept by the caller. That sweep

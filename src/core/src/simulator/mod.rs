@@ -28,7 +28,9 @@ use crate::country::CountryResult;
 use crate::country::result::transfers::free::audit::FreeAgentMarketAuditor;
 use crate::country::result::transfers::{GlobalFreeAgentPool, GlobalFreeAgentSummary};
 use crate::league::result::WorldSnapshot;
-use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
+use crate::transfers::pipeline::PlayerSummary;
+use crate::transfers::pipeline::approach::ApproachPass;
+use crate::transfers::scouting::ScoutingPass;
 use crate::utils::DateUtils;
 use awards::{
     MondayAwardCache, MonthlyAwardsTick, SeasonAwardsTick, TeamOfTheWeekTick, TeamOfTheYearTick,
@@ -215,7 +217,7 @@ impl FootballSimulator {
             .continents
             .par_iter()
             .flat_map(|cont| cont.countries.par_iter())
-            .flat_map_iter(|c| PipelineProcessor::collect_player_pool(c, pool_date))
+            .flat_map_iter(|c| ScoutingPass::collect_player_pool(c, pool_date))
             .collect();
         let global_fa_snapshot: Vec<GlobalFreeAgentSummary> =
             GlobalFreeAgentPool::snapshot(data, pool_date);
@@ -350,7 +352,7 @@ impl FootballSimulator {
             // `cleanup_player_transfer_interest_batch`.
             let phase = PerformanceProfiler::phase_scope("C3_interest_cleanup", 0);
             let all_signed_ids = world_matchday.collect_domestic_signed_ids();
-            PipelineProcessor::cleanup_player_transfer_interest_batch(data, &all_signed_ids);
+            ApproachPass::cleanup_player_transfer_interest_batch(data, &all_signed_ids);
             drop(phase);
 
             // Free-agent market bumps (offer / reject / block-reason)
@@ -360,11 +362,7 @@ impl FootballSimulator {
             // mirroring the interest-cleanup batch above.
             let phase = PerformanceProfiler::phase_scope("C4_free_agent_bumps", 0);
             let fa_bumps = world_matchday.collect_free_agent_bumps();
-            PipelineProcessor::apply_free_agent_market_bumps_batch(
-                data,
-                &fa_bumps,
-                current_date.date(),
-            );
+            ApproachPass::apply_free_agent_market_bumps_batch(data, &fa_bumps, current_date.date());
             drop(phase);
 
             // Unattached players still age. A light weekly development

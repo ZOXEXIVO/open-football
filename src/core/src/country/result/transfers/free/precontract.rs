@@ -428,7 +428,7 @@ mod tests {
     use crate::club::academy::ClubAcademy;
     use crate::club::board::SeasonTargets;
     use crate::club::player::builder::PlayerBuilder;
-    use crate::country::result::CountryResult;
+    use crate::country::result::transfers::free::FreeAgentPass;
     use crate::country::result::transfers::types::TransferActivitySummary;
     use crate::handlers::AcceptContractHandler;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
@@ -652,7 +652,7 @@ mod tests {
         let mut offered = Vec::new();
         let mut rejected = Vec::new();
         let mut blocked = Vec::new();
-        let _ = CountryResult::handle_free_agents(
+        let _ = FreeAgentPass::handle_free_agents(
             &mut country,
             today,
             &FreeAgentWorld {
@@ -744,7 +744,7 @@ mod tests {
             let mut offered = Vec::new();
             let mut rejected = Vec::new();
             let mut blocked = Vec::new();
-            let _ = CountryResult::handle_free_agents(
+            let _ = FreeAgentPass::handle_free_agents(
                 country,
                 today,
                 &FreeAgentWorld {

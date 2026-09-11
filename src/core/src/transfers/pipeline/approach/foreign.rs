@@ -13,6 +13,10 @@
 //! seller-side facts staged here because the buying country's resolver cannot
 //! reach back over the border to recompute them.
 
+use crate::transfers::pipeline::approach::ApproachPass;
+use crate::transfers::value::asking::AskingPrice;
+use crate::transfers::view::club::ClubView;
+use crate::transfers::view::player::PlayerView;
 use chrono::NaiveDate;
 use log::debug;
 use std::sync::Arc;
@@ -20,7 +24,6 @@ use std::sync::Arc;
 use crate::SimulatorData;
 use crate::shared::CurrencyValue;
 use crate::transfers::MarketMap;
-use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::{Club, Country, Player};
 
 use super::*;
@@ -68,12 +71,6 @@ struct ResolvedNeg {
     /// the flag unset and cold calls abroad engaged at the easier
     /// solicited baseline.
     is_unsolicited: bool,
-    /// Captured at creation from the full cross-border assessment:
-    /// the player would refuse this move on willingness grounds
-    /// (a clear step down with no availability signal). Applied as
-    /// the foreign personal-terms hard floor — the buyer's country
-    /// no longer holds the seller-side data to recompute it.
-    foreign_terms_floor_blocked: bool,
     /// Seller-side player importance captured at creation (same 0..1
     /// scale as the domestic resolver computes). Rides into the
     /// foreign club-fee resolver so a foreign deal faces the same
@@ -211,8 +208,7 @@ impl ForeignApproachPass {
 
                     // Only process if player is NOT in the local country
                     let is_local =
-                        PipelineProcessor::find_player_in_country(country, candidate.player_id)
-                            .is_some();
+                        PlayerView::find_player_in_country(country, candidate.player_id).is_some();
                     if is_local {
                         continue;
                     }
@@ -350,11 +346,6 @@ impl ForeignApproachPass {
             });
         }
 
-        // Personal-terms willingness floor, captured now (full seller
-        // context in scope) for application at the PersonalTerms phase —
-        // the buyer's country won't hold the seller-side data then.
-        let foreign_terms_floor_blocked =
-            TransferMovePlausibility::player_terms_floor(&plausibility_inputs).is_some();
         // Capture seller-side importance now (full cross-border context
         // in scope) so the foreign club-fee resolver applies the same
         // importance-driven reservation a domestic seller would, instead
@@ -414,7 +405,6 @@ impl ForeignApproachPass {
             seller,
             buyer,
             StagedSellerFacts {
-                terms_floor_blocked: foreign_terms_floor_blocked,
                 seller_importance: foreign_seller_importance,
                 seller_finances: foreign_seller_finances,
                 stance: staged_stance,
@@ -546,7 +536,7 @@ impl ForeignApproachPass {
             expected_wage,
         };
 
-        let approach = PipelineProcessor::determine_transfer_approach(
+        let approach = ApproachPass::determine_transfer_approach(
             &rep_level,
             budget,
             asking_price.amount,
@@ -624,7 +614,6 @@ impl ForeignApproachPass {
             is_prospect_purchase,
         } = buyer;
         let StagedSellerFacts {
-            terms_floor_blocked: foreign_terms_floor_blocked,
             seller_importance: foreign_seller_importance,
             seller_finances: foreign_seller_finances,
             stance: staged_stance,
@@ -750,7 +739,6 @@ impl ForeignApproachPass {
             buyer_ceiling_fee: action.buyer_ceiling_fee,
             brief_tier: action.brief_tier,
             is_unsolicited,
-            foreign_terms_floor_blocked,
             foreign_seller_importance,
             foreign_seller_finances,
             staged_stance,
@@ -772,7 +760,7 @@ impl ForeignApproachPass {
         // global index (verified, with a full-scan fallback for a
         // stale entry) instead of re-walking the whole world per
         // candidate.
-        let found = PipelineProcessor::resolve_foreign_player_club(data, country_id, player_id);
+        let found = ApproachPass::resolve_foreign_player_club(data, country_id, player_id);
 
         let (sell_country_id, sell_club_id, sell_price_level, sell_continent_id, sell_country_code) =
             match found {
@@ -784,7 +772,7 @@ impl ForeignApproachPass {
             Some(c) => c,
             None => return None,
         };
-        let player = match PipelineProcessor::find_player_in_country(sell_country, player_id) {
+        let player = match PlayerView::find_player_in_country(sell_country, player_id) {
             Some(p) => p,
             None => return None,
         };
@@ -795,8 +783,9 @@ impl ForeignApproachPass {
         // `sell_country`) so its country-specific calendar is honoured
         // — the buyer-side window doesn't apply when the player sits
         // in a different country's market.
-        let sell_window = TransferWindowManager::for_country(sell_country, date)
-            .current_window_dates(sell_country_id, date);
+        let sell_window =
+            TransferWindowManager::for_country(sell_country.id, &sell_country.code, date)
+                .current_window_dates(sell_country_id, date);
         if player.is_transfer_protected(date, sell_window) {
             return None;
         }
@@ -805,7 +794,7 @@ impl ForeignApproachPass {
             Some(c) => c,
             None => return None,
         };
-        let asking_price = PipelineProcessor::calculate_asking_price(
+        let asking_price = AskingPrice::calculate_asking_price(
             player,
             sell_country,
             sell_club,
@@ -913,7 +902,6 @@ impl ForeignApproachPass {
                     negotiation.buying_league_reputation = action.buying_league_reputation;
                     negotiation.selling_league_reputation = action.selling_league_reputation;
                     negotiation.player_stage_inclination = action.player_stage_inclination;
-                    negotiation.foreign_terms_floor_blocked = action.foreign_terms_floor_blocked;
                     negotiation.foreign_seller_importance = Some(action.foreign_seller_importance);
                     negotiation.foreign_seller_finances = Some(action.foreign_seller_finances);
                     negotiation.staged_stance = Some(action.staged_stance);
@@ -992,7 +980,7 @@ impl ForeignApproachPass {
                             shortlist.advance_to_next();
                         }
                     }
-                    PipelineProcessor::on_negotiation_resolved(
+                    ApproachPass::on_negotiation_resolved(
                         country,
                         reject.club_id,
                         reject.player_id,
@@ -1033,7 +1021,6 @@ struct ForeignBuyer<'a> {
 /// the negotiation with no way to reach back for any of it — which is why
 /// these exist at all, and why retiring them is its own step.
 struct StagedSellerFacts {
-    terms_floor_blocked: bool,
     seller_importance: f32,
     seller_finances: (i64, i64, i64),
     stance: PlayerStance,

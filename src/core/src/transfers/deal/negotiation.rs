@@ -122,13 +122,6 @@ pub struct TransferNegotiation {
     pub player_name: String,
     /// Cached selling club name (resolved at negotiation start)
     pub selling_club_name: String,
-    /// Foreign moves only: captured at creation from the full cross-border
-    /// assessment — the player would refuse this move on willingness grounds
-    /// (a clear sporting step down with no availability signal). The
-    /// personal-terms resolver reads it as the foreign hard floor, since the
-    /// buyer's country no longer holds the seller-side data to recompute it.
-    /// `false` for domestic negotiations (their floor recomputes live).
-    pub foreign_terms_floor_blocked: bool,
     /// Foreign moves only: the seller-side player importance captured at
     /// creation (the buyer's country can't recompute it once the deal is in
     /// flight). The club-fee resolver reads this instead of a flat constant
@@ -253,7 +246,6 @@ impl TransferNegotiation {
             player_sold_from: None,
             player_name: String::new(),
             selling_club_name: String::new(),
-            foreign_terms_floor_blocked: false,
             foreign_seller_importance: None,
             foreign_seller_finances: None,
             loan_target_profile: None,

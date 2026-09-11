@@ -13,8 +13,9 @@
 pub mod advice;
 pub mod approach;
 pub(in crate::transfers) mod circulation;
-pub(in crate::transfers) mod helpers;
 pub mod shortlist;
+#[cfg(test)]
+mod tests;
 pub mod trace;
 
 use crate::club::player::contract::PlayerSquadStatus;
@@ -30,7 +31,8 @@ use crate::{PlayerFieldPositionGroup, PlayerPositionType, ReputationLevel};
 use chrono::NaiveDate;
 use std::collections::HashMap;
 
-pub use self::processor::PipelineProcessor;
+pub use self::advice::StaffRecommendations;
+pub use self::circulation::MarketCirculation;
 pub use self::processor::{PlayerSummary, SellerPlausibilityContext};
 pub use self::trace::TransferTrace;
 use chrono::Duration;
@@ -45,10 +47,6 @@ pub(in crate::transfers) mod processor {
         PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, PositionCoverage,
     };
     use std::collections::HashMap;
-
-    /// PipelineProcessor handles all daily transfer pipeline logic.
-    /// Uses a two-pass borrow pattern: immutable read -> collect mutations -> mutable write.
-    pub struct PipelineProcessor;
 
     /// Info about a player in the squad for formation-based analysis.
     /// `estimated_potential` is the **head coach's belief** about the
@@ -277,7 +275,7 @@ pub(in crate::transfers) mod processor {
         pub stay_pressure: f32,
         /// His parent has posted him to the world as a man who would go
         /// home. Set only for LOAN candidates (see
-        /// `PipelineProcessor::broadcast_listed_loans`) so this never
+        /// `LoanPipeline::broadcast_listed_loans`) so this never
         /// becomes a permanent-transfer discovery channel that bypasses
         /// the springboard reach model.
         pub home_return_wanted: bool,

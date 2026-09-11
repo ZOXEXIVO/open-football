@@ -12,6 +12,9 @@
 
 use super::*;
 use crate::StaffKnowledge;
+use crate::transfers::scouting::ScoutingPass;
+use crate::transfers::scouting::judgement::ScoutJudgement;
+use crate::transfers::view::club::ClubView;
 
 /// One club's scouting scan.
 pub(in crate::transfers::scouting) struct ClubScan<'a> {
@@ -64,7 +67,7 @@ impl<'a> ClubScan<'a> {
         // appearing in the candidate pool, while leaving listed,
         // loan-listed, expiring-contract, youth, and fringe players
         // attainable regardless of selling-club tier.
-        let buyer_world_rep = PipelineProcessor::club_world_reputation(club);
+        let buyer_world_rep = ClubView::club_world_reputation(club);
         // Shared plausibility gate: augments `is_target_realistic`
         // with the player-importance + sporting-drop checks so a
         // first-choice prime-age GK at a peer-tier club (where the
@@ -90,7 +93,7 @@ impl<'a> ClubScan<'a> {
             .map(|t| t.reputation.overall_score())
             .unwrap_or(0.0);
         let club_scout_reach: HashSet<ScoutingRegion> =
-            PipelineProcessor::reputation_scout_regions(home_region, club_overall_score)
+            ScoutingPass::reputation_scout_regions(home_region, club_overall_score)
                 .into_iter()
                 .collect();
 
@@ -182,7 +185,7 @@ impl<'a> ClubScan<'a> {
 
         let (judging_ability, judging_potential) = if let Some(scout_id) = assignment.scout_staff_id
         {
-            PipelineProcessor::get_scout_skills(club, scout_id)
+            ClubView::get_scout_skills(club, scout_id)
         } else {
             let d = config.observation.default_judging_when_no_scout;
             (d, d)
@@ -405,13 +408,13 @@ impl<'a> ClubScan<'a> {
         // skill = tighter pool with less noise; low skill ≈ random.
         // This is what real clubs do — Opta/Wyscout shortlists come
         // first, scouts watch the narrowed list in person.
-        let data_skill = PipelineProcessor::club_data_analysis_skill(club);
+        let data_skill = ClubView::club_data_analysis_skill(club);
         if let Some(target_pool) = config.data_prefilter_target(matching.len(), data_skill) {
             let noise = config.data_prefilter_noise(data_skill);
             let mut scored: Vec<(&PlayerSummary, f32)> = matching
                 .iter()
                 .map(|p| {
-                    let score = PipelineProcessor::player_data_score(p, performance_lookup);
+                    let score = ScoutJudgement::player_data_score(p, performance_lookup);
                     let jitter = IntegerUtils::random(-noise, noise) as f32;
                     // Language affinity — a graded preference, not a
                     // gate: a foreign candidate who speaks the club
@@ -508,7 +511,7 @@ impl<'a> ClubScan<'a> {
 
         // Estimate potential from age, mental attributes, and current skill level
         // Young players with strong mentals (determination, work rate) suggest higher ceiling
-        let growth_potential = PipelineProcessor::estimate_growth_potential(
+        let growth_potential = ScoutJudgement::estimate_growth_potential(
             target.age,
             target.determination,
             target.work_rate,
@@ -603,9 +606,9 @@ impl<'a> ClubScan<'a> {
                 .filter(|p| !already_observed_ids.contains(&p.player_id))
                 .collect();
             if !new_players.is_empty() {
-                PipelineProcessor::pick_reputation_weighted(&new_players)
+                ScoutingPass::pick_reputation_weighted(&new_players)
             } else {
-                PipelineProcessor::pick_reputation_weighted(&matching.iter().collect::<Vec<_>>())
+                ScoutingPass::pick_reputation_weighted(&matching.iter().collect::<Vec<_>>())
             }
         };
 
@@ -685,13 +688,13 @@ impl<'a> ClubScan<'a> {
             target.mental_avg,
             target.physical_avg,
         );
-        let risk_flags_now = PipelineProcessor::evaluate_risk_flags(
+        let risk_flags_now = ScoutJudgement::evaluate_risk_flags(
             target.is_injured,
             target.determination,
             target.age,
             target.contract_months_remaining,
             target.world_reputation,
-            PipelineProcessor::club_world_reputation(club),
+            ClubView::club_world_reputation(club),
         );
 
         // Always update the monitoring row when a real scout

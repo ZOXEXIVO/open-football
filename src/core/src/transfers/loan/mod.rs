@@ -17,6 +17,7 @@ mod tests;
 pub use guard::*;
 pub use home::*;
 
+use crate::transfers::view::player::PlayerView;
 use chrono::{Datelike, NaiveDate, Weekday};
 
 use broadcast::ListingBroadcast;
@@ -27,12 +28,10 @@ use crate::club::team::squad::SquadAssetClass;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::MarketMap;
 use crate::transfers::deal::negotiation::NegotiationStatus;
-use crate::transfers::gate::{
-    BuyerPlausibilityContext, EffectivePlayerReputation, TransferPlausibilityBuilder,
-    TransferPlausibilityEvaluator,
-};
+use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
+use crate::transfers::gate::{EffectivePlayerReputation, TransferPlausibilityEvaluator};
 use crate::transfers::market::{TransferListing, TransferListingType};
-use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
+use crate::transfers::pipeline::processor::PlayerSummary;
 use crate::transfers::pipeline::trace::{MarketSwitches, TransferTrace};
 use crate::transfers::pipeline::{LoanDestinationPreference, LoanOutStatus, TransferRequestStatus};
 use crate::transfers::value::PlayerValuationCalculator;
@@ -44,9 +43,9 @@ use crate::{
 use std::collections::HashMap;
 
 #[cfg(test)]
-use crate::transfers::market::TransferListingOrigin;
-#[cfg(test)]
 use crate::HappinessEventType;
+#[cfg(test)]
+use crate::transfers::market::TransferListingOrigin;
 
 // Loans fund short-term development or rotation minutes. Players older
 // than this are signed cheap permanent (or as free agents) rather than
@@ -60,7 +59,7 @@ const FOREIGN_LOAN_VISIBILITY_FLOOR: f32 = 0.04;
 
 const MAX_LOAN_TARGET_AGE: u8 = 34;
 
-/// The three fields [`PipelineProcessor::loan_option_fee`] needs, so the
+/// The three fields [`LoanPipeline::loan_option_fee`] needs, so the
 /// separate per-path action structs (domestic scan, seller broadcast,
 /// foreign scan) can share one option-pricing rule instead of each
 /// growing its own copy.
@@ -70,7 +69,10 @@ trait LoanOptionContext {
     fn is_unsolicited(&self) -> bool;
 }
 
-impl PipelineProcessor {
+/// The loan market: who a club will lend out, who will take him, and on what terms.
+pub struct LoanPipeline;
+
+impl LoanPipeline {
     /// Pending **incoming-loan** targets per borrowing club, resolved to
     /// `(position group, current ability)`. Folded into every borrower
     /// depth snapshot so a loan already in flight counts against the
@@ -104,7 +106,7 @@ impl PipelineProcessor {
                     .or_default()
                     .push(profile);
             } else if let Some(player) =
-                Self::find_player_in_country(country, negotiation.player_id)
+                PlayerView::find_player_in_country(country, negotiation.player_id)
             {
                 map.entry(negotiation.buying_club_id).or_default().push((
                     player.position().position_group(),
@@ -692,7 +694,7 @@ impl PipelineProcessor {
             else {
                 return false;
             };
-            let Some(player) = Self::find_player_in_club(club, player_id) else {
+            let Some(player) = PlayerView::find_player_in_club(club, player_id) else {
                 return false;
             };
             if player.is_on_loan() {
@@ -828,7 +830,7 @@ impl LoanDestinationLevel {
         self.clears_club_standing() && self.clears_division()
     }
 
-    /// Club-standing gate — see [`PipelineProcessor::loan_reputation_drop_ok`],
+    /// Club-standing gate — see [`LoanPipeline::loan_reputation_drop_ok`],
     /// which delegates here.
     fn clears_club_standing(&self) -> bool {
         if self.parent_rep == 0 {
@@ -1098,7 +1100,7 @@ struct LoanBorrowerAppetite {
 
 impl LoanBorrowerAppetite {
     /// Age slack a pushed candidate gets against a request's band — the same
-    /// relaxation [`PipelineProcessor::scan_loan_market`] applies when it
+    /// relaxation [`LoanPipeline::scan_loan_market`] applies when it
     /// matches its own requests against the listed market.
     const REQUEST_AGE_SLACK: u8 = 3;
     /// Ability slack, likewise mirrored from the scan's `relaxed_min`.

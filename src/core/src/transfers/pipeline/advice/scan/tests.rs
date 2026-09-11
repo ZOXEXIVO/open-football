@@ -6,6 +6,7 @@
 //! recommendations back. Extracting them is what pays for the extraction.
 
 use super::*;
+use crate::transfers::pipeline::StaffRecommendations;
 use crate::transfers::tests::kit::{TestClub, TestCountry, TestDate, TestPlayer};
 
 /// Fixtures: a club the guards should let through, the tick it is scanned
@@ -133,7 +134,7 @@ fn the_commit_writes_no_more_than_the_club_rates() {
         .build();
 
     let team = country.clubs[0].teams.teams.first().unwrap();
-    let cap = PipelineProcessor::staff_recommendation_cap_score(
+    let cap = StaffRecommendations::staff_recommendation_cap_score(
         team.reputation.level(),
         team.reputation.overall_score(),
     );

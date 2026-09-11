@@ -13,6 +13,8 @@
 //! reading what the ones before it put in the ledger, so this is an
 //! accumulator and not six independent producers.
 
+use crate::transfers::squad::SquadReviewPass;
+use crate::transfers::squad::bands::TierBands;
 use chrono::NaiveDate;
 use std::collections::HashMap;
 
@@ -20,7 +22,7 @@ use crate::club::staff::Staff;
 use crate::club::staff::perception::{EstimationContext, PotentialEstimator};
 use crate::club::team::squad::{MIN_FIRST_TEAM_SQUAD, SquadAssetContext};
 use crate::transfers::loan::home::SquadHomeContext;
-use crate::transfers::pipeline::processor::{PipelineProcessor, SquadPlayerInfo};
+use crate::transfers::pipeline::processor::SquadPlayerInfo;
 use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::pipeline::{
     LoanOutCandidate, TransferNeedPriority, TransferNeedReason, TransferRequest,
@@ -227,7 +229,7 @@ impl<'a> SquadReview<'a> {
             });
 
         // Get the 11 positions required by this formation
-        let formation_positions = PipelineProcessor::get_formation_positions(formation);
+        let formation_positions = SquadReviewPass::get_formation_positions(formation);
 
         let position_coverage = Self::map_formation(&squad, formation_positions);
 
@@ -458,7 +460,7 @@ impl<'a> SquadReview<'a> {
         // snapping to enum boundaries. A team mid-Continental gets a
         // different threshold from a team top-of-Continental.
         let rep_score = team.reputation.overall_score();
-        let quality_tolerance = PipelineProcessor::tier_quality_tolerance_score(rep_score);
+        let quality_tolerance = TierBands::tier_quality_tolerance_score(rep_score);
         let _ = ability_tolerance; // philosophy-driven tolerance retained
         // elsewhere; tier baselines drive the
         // recruitment thresholds now.
@@ -660,7 +662,7 @@ impl<'a> SquadReview<'a> {
                 // nobody who cost what he was worth.
                 let alloc = target
                     .estimated_fee
-                    .min(available_budget * PipelineProcessor::MAX_INVESTMENT_SHARE)
+                    .min(available_budget * SquadReviewPass::MAX_INVESTMENT_SHARE)
                     .min(available_budget - budget_used);
                 if alloc <= 0.0 {
                     continue;
@@ -853,7 +855,7 @@ impl<'a> SquadReview<'a> {
             if alloc <= 0.0 {
                 break;
             }
-            let baseline = PipelineProcessor::tier_starter_ca_score(rep_score, group);
+            let baseline = TierBands::tier_starter_ca_score(rep_score, group);
             requests.push(TransferRequest::new(
                 next_id,
                 player_info.primary_position,
@@ -1239,7 +1241,7 @@ impl<'a> SquadReview<'a> {
         // STEP 6: Identify loan-out candidates
         // ──────────────────────────────────────────────────────────
 
-        PipelineProcessor::identify_loan_outs(
+        SquadReviewPass::identify_loan_outs(
             club,
             &squad,
             &rep_level,
@@ -1262,13 +1264,13 @@ impl<'a> SquadReview<'a> {
         // worst, not wait for a deficit signal that never fires when
         // the surplus itself is dragging the average down.
         let mut force_transfer_list =
-            PipelineProcessor::identify_position_glut(&squad, date, players, &mut loan_outs);
+            SquadReviewPass::identify_position_glut(&squad, date, players, &mut loan_outs);
 
         // Repeated-loan stagnation sweep: a player already farmed out
         // twice (the loan path refuses a third spell) who still sits
         // below his position-group level is no longer a development
         // asset — sell rather than hold.
-        PipelineProcessor::identify_repeated_loan_stagnation(
+        SquadReviewPass::identify_repeated_loan_stagnation(
             &squad,
             players,
             &mut force_transfer_list,
@@ -1284,7 +1286,7 @@ impl<'a> SquadReview<'a> {
         // listed for sale) regardless of how he compares to the squad
         // average. Runs last and is purely additive — it skips anyone the
         // earlier, calibration-sensitive branches already planned for.
-        PipelineProcessor::identify_stalled_prospects(
+        SquadReviewPass::identify_stalled_prospects(
             &squad,
             date,
             players,
@@ -1303,7 +1305,7 @@ impl<'a> SquadReview<'a> {
         // here lists anybody — an entry is a price and a readiness, and the
         // auto-listing sweeps keep every veto they had.
         let sell_list =
-            PipelineProcessor::price_squad(club, players, &squad, &asset_ctx, &brief, date);
+            SquadReviewPass::price_squad(club, players, &squad, &asset_ctx, &brief, date);
 
         SquadEvaluation {
             club_id: club.id,

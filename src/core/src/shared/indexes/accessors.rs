@@ -4,9 +4,8 @@ use crate::country::Country;
 use crate::league::League;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::deal::negotiation::NegotiationStatus;
-use crate::transfers::gate::{
-    TransferMovePlausibility, TransferMoveStage, TransferPlausibilityBuilder,
-};
+use crate::transfers::gate::build::TransferPlausibilityBuilder;
+use crate::transfers::gate::{TransferMovePlausibility, TransferMoveStage};
 use crate::transfers::pipeline::ClubTransferPlan;
 use crate::transfers::scouting::config::{RealismTarget, ScoutingConfig};
 use crate::transfers::scouting::recruitment::ScoutPlayerMonitoring;

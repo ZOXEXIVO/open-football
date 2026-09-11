@@ -1,6 +1,7 @@
 //! Moved verbatim out of `helpers.rs` — see that file's `mod tier_helper_tests`.
 
-use crate::transfers::pipeline::PipelineProcessor;
+use crate::transfers::squad::bands::TierBands;
+use crate::transfers::view::player::PlayerView;
 use crate::{PlayerFieldPositionGroup, ReputationLevel};
 
 const TIERS: [ReputationLevel; 6] = [
@@ -38,11 +39,11 @@ impl TierFx {
     }
 
     fn baseline(level: &ReputationLevel, group: PlayerFieldPositionGroup) -> u8 {
-        PipelineProcessor::tier_starter_ca_score(Self::level_midpoint_score(level), group)
+        TierBands::tier_starter_ca_score(Self::level_midpoint_score(level), group)
     }
 
     fn ceiling(level: &ReputationLevel, group: PlayerFieldPositionGroup) -> u8 {
-        PipelineProcessor::tier_target_ceiling_score(Self::level_midpoint_score(level), group)
+        TierBands::tier_target_ceiling_score(Self::level_midpoint_score(level), group)
     }
 }
 
@@ -142,10 +143,10 @@ fn goalkeepers_score_below_outfield_at_same_tier() {
 fn quality_tolerance_decreases_with_reputation() {
     // Top clubs upgrade aggressively (small tolerance); small clubs
     // patient (large tolerance). Monotonic in score.
-    let mut prev = PipelineProcessor::tier_quality_tolerance_score(0.0);
+    let mut prev = TierBands::tier_quality_tolerance_score(0.0);
     for step in 1..=10 {
         let s = step as f32 / 10.0;
-        let cur = PipelineProcessor::tier_quality_tolerance_score(s);
+        let cur = TierBands::tier_quality_tolerance_score(s);
         assert!(
             cur <= prev,
             "tolerance must be non-increasing as reputation rises (s={}: {} > prev {})",
@@ -155,8 +156,8 @@ fn quality_tolerance_decreases_with_reputation() {
         );
         prev = cur;
     }
-    let elite = PipelineProcessor::tier_quality_tolerance_score(0.95);
-    let amateur = PipelineProcessor::tier_quality_tolerance_score(0.05);
+    let elite = TierBands::tier_quality_tolerance_score(0.95);
+    let amateur = TierBands::tier_quality_tolerance_score(0.05);
     assert!(
         amateur > elite,
         "amateur {} should exceed elite {}",
@@ -180,8 +181,7 @@ fn baseline_score_curve_pins_tier_anchors() {
     for (tier, expected_mid_baseline) in &cases {
         let s = TierFx::level_midpoint_score(tier);
         // Midfielder offset is 0 — direct calibration check.
-        let baseline =
-            PipelineProcessor::tier_starter_ca_score(s, PlayerFieldPositionGroup::Midfielder);
+        let baseline = TierBands::tier_starter_ca_score(s, PlayerFieldPositionGroup::Midfielder);
         assert_eq!(
             baseline as i16, *expected_mid_baseline,
             "midpoint baseline for {:?}: expected {}, got {}",
@@ -193,10 +193,10 @@ fn baseline_score_curve_pins_tier_anchors() {
 #[test]
 fn baseline_score_curve_is_monotonic_in_score() {
     for group in GROUPS {
-        let mut prev = PipelineProcessor::tier_starter_ca_score(0.0, group);
+        let mut prev = TierBands::tier_starter_ca_score(0.0, group);
         for step in 1..=20 {
             let s = step as f32 / 20.0;
-            let cur = PipelineProcessor::tier_starter_ca_score(s, group);
+            let cur = TierBands::tier_starter_ca_score(s, group);
             assert!(
                 cur >= prev,
                 "score baseline not monotonic at {}/{:?}: {} < {}",
@@ -233,7 +233,7 @@ fn position_evaluation_ability_is_canonical_alias() {
     let direct = player
         .skills
         .calculate_ability_for_position(player.position());
-    let via_helper = PipelineProcessor::position_evaluation_ability(&player);
+    let via_helper = PlayerView::position_evaluation_ability(&player);
     assert_eq!(
         via_helper, direct,
         "position_evaluation_ability must mirror calculate_ability_for_position"
@@ -248,8 +248,8 @@ fn continental_weak_gk_clears_quality_upgrade_threshold() {
     // Spartak-style scenario.
     let cont_score = TierFx::level_midpoint_score(&ReputationLevel::Continental);
     let baseline =
-        PipelineProcessor::tier_starter_ca_score(cont_score, PlayerFieldPositionGroup::Goalkeeper);
-    let tolerance = PipelineProcessor::tier_quality_tolerance_score(cont_score);
+        TierBands::tier_starter_ca_score(cont_score, PlayerFieldPositionGroup::Goalkeeper);
+    let tolerance = TierBands::tier_quality_tolerance_score(cont_score);
     let threshold = baseline as i16 - tolerance;
 
     assert!(
@@ -295,9 +295,9 @@ fn continental_window_admits_realistic_targets_blocks_unattainable() {
     // through the ceiling.
     let cont_score = TierFx::level_midpoint_score(&ReputationLevel::Continental);
     let ceiling_fwd =
-        PipelineProcessor::tier_target_ceiling_score(cont_score, PlayerFieldPositionGroup::Forward);
+        TierBands::tier_target_ceiling_score(cont_score, PlayerFieldPositionGroup::Forward);
     let baseline_fwd =
-        PipelineProcessor::tier_starter_ca_score(cont_score, PlayerFieldPositionGroup::Forward);
+        TierBands::tier_starter_ca_score(cont_score, PlayerFieldPositionGroup::Forward);
     let floor_fwd = baseline_fwd.saturating_sub(20);
 
     assert!(
@@ -319,10 +319,8 @@ fn elite_window_reaches_world_class_targets() {
     // tier window — the original bug masked these from elite
     // scouts because the squad-mean cap was too low.
     let elite_score = TierFx::level_midpoint_score(&ReputationLevel::Elite);
-    let ceiling_fwd = PipelineProcessor::tier_target_ceiling_score(
-        elite_score,
-        PlayerFieldPositionGroup::Forward,
-    );
+    let ceiling_fwd =
+        TierBands::tier_target_ceiling_score(elite_score, PlayerFieldPositionGroup::Forward);
     assert!(
         175 <= ceiling_fwd,
         "Elite ceiling {} must admit CA 175 world-class forward",
@@ -336,10 +334,8 @@ fn within_tier_continuous_score_differentiates_clubs() {
     // the same baseline — that's the whole point of the score
     // path. Tests the continuous calibration is genuinely
     // differentiating, not silently snapping to enum buckets.
-    let mid_cont =
-        PipelineProcessor::tier_starter_ca_score(0.68, PlayerFieldPositionGroup::Midfielder);
-    let top_cont =
-        PipelineProcessor::tier_starter_ca_score(0.79, PlayerFieldPositionGroup::Midfielder);
+    let mid_cont = TierBands::tier_starter_ca_score(0.68, PlayerFieldPositionGroup::Midfielder);
+    let top_cont = TierBands::tier_starter_ca_score(0.79, PlayerFieldPositionGroup::Midfielder);
     assert!(
         top_cont > mid_cont,
         "top-of-Continental baseline ({}) must exceed mid-Continental ({})",

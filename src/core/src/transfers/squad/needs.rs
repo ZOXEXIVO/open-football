@@ -327,7 +327,7 @@ pub struct EmergencyBuyerContext {
     pub region_prestige: f32,
     /// Buyer club's reputation as a 0..1 score, the same tier anchor
     /// every CA-band gate in the project uses
-    /// (`PipelineProcessor::tier_*_score`).
+    /// (`TierBands::tier_*_score`).
     pub club_reputation_score: f32,
     /// Buyer's primary league reputation (0..10000). Feeds the wage
     /// expectation curve used during the acceptance roll.

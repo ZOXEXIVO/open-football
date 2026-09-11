@@ -17,6 +17,7 @@
 //! reason but the order things were written in, while seventeen files read
 //! it. Price is not a date.
 
+pub mod asking;
 pub mod upgrade;
 pub mod wage;
 

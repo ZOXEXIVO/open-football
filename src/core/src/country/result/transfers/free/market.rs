@@ -17,9 +17,9 @@ use super::depth::{
 use super::pricing::{FreeAgentMarketCalculator, FreeAgentOfferPricing};
 use crate::club::player::transfer::FreeAgentBlockReason;
 use crate::club::staff::perception::PotentialEstimator;
-use crate::country::result::CountryResult;
 use crate::country::result::transfers::config::TransferConfig;
 use crate::country::result::transfers::execution::{DevelopmentLoanPathway, TransferExecutor};
+use crate::country::result::transfers::free::FreeAgentPass;
 use crate::country::result::transfers::types::{
     CountryRoster, DeferredTransfer, TransferActivitySummary,
 };
@@ -32,9 +32,8 @@ use crate::transfers::deal::offer::TransferOffer;
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::gate::fit::SquadRegistrationLimits;
 use crate::transfers::market::region::ScoutingRegion;
-use crate::transfers::pipeline::{
-    PipelineProcessor, TransferNeedReason, TransferRequest, TransferRequestStatus,
-};
+use crate::transfers::pipeline::approach::ApproachPass;
+use crate::transfers::pipeline::{TransferNeedReason, TransferRequest, TransferRequestStatus};
 use crate::transfers::view::club::ClubView;
 use crate::transfers::{CompletedTransfer, TransferType};
 use crate::utils::IntegerUtils;
@@ -204,7 +203,7 @@ impl FreeAgentMarketPass {
         // FIRST — pushed ahead of the emergency / request / clearing
         // passes so their `signings.iter().any(...)` dedup leaves him be.
         // Pass 3 executes it through the ordinary in-country path.
-        CountryResult::collect_pre_contract_signings(country, &mut signings);
+        FreeAgentPass::collect_pre_contract_signings(country, &mut signings);
 
         // ── Pass 2a (NEW): Emergency squad fill ─────────────────────
         // Runs BEFORE the request-driven matcher so clubs sitting
@@ -219,7 +218,7 @@ impl FreeAgentMarketPass {
         // below, serviced through the staged-negotiation flow like any
         // other recruitment need. Only the "cannot field a side /
         // group below minimum" rescue slots keep the direct path.
-        let depth_intents = CountryResult::handle_free_agents_emergency_pass(
+        let depth_intents = FreeAgentPass::handle_free_agents_emergency_pass(
             country,
             &candidates,
             config,
@@ -303,7 +302,7 @@ impl FreeAgentMarketPass {
         // lower-tier club with open roster room. Runs last so it only
         // touches the long tail the emergency and request-driven
         // passes left behind.
-        CountryResult::handle_free_agents_market_clearing_pass(
+        FreeAgentPass::handle_free_agents_market_clearing_pass(
             country,
             &candidates,
             config,
@@ -473,7 +472,7 @@ impl FreeAgentMarketPass {
         // leave the free-agent flow entirely; rejected ones continue into
         // the release sweep unchanged.
         let renewed_player_ids =
-            CountryResult::run_expiry_day_renewals(country, date, &expired_player_ids);
+            FreeAgentPass::run_expiry_day_renewals(country, date, &expired_player_ids);
         candidates.retain(|c| !renewed_player_ids.contains(&c.player_id));
 
         (candidates, expired_player_ids, renewed_player_ids)
@@ -557,7 +556,7 @@ impl FreeAgentMarketPass {
             // A freshly-released player is no longer a transfer target at his
             // old club, and he cannot be on any other club's loan-out list —
             // drop shortlist, scouting, and loan-out entries everywhere.
-            PipelineProcessor::clear_player_interest(country, player_id);
+            ApproachPass::clear_player_interest(country, player_id);
         }
     }
 
@@ -1291,7 +1290,7 @@ impl FreeAgentMarketPass {
         .with_origin_country(country.id),
             );
 
-            PipelineProcessor::clear_player_interest(country, signing.player_id);
+            ApproachPass::clear_player_interest(country, signing.player_id);
             // Mirror the global-pool branch above: once a signing
             // actually lands, mark the matching group's open request as
             // fulfilled so the weekly re-evaluation doesn't generate a

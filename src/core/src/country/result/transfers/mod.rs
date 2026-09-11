@@ -3,17 +3,30 @@ pub(crate) mod execution;
 pub mod free;
 mod listings;
 mod negotiations;
+
+pub use listings::ListingPass;
+pub use negotiations::NegotiationPass;
 pub(crate) mod settlement;
 pub(crate) mod types;
 
-use super::CountryResult;
 use crate::club::player::events::transfer_social::TransferInterestSignal;
 use crate::club::player::transfer::FreeAgentBlockReason;
+use crate::country::result::transfers::free::FreeAgentPass;
 use crate::country::result::transfers::free::{FreeAgentLedger, FreeAgentWorld};
 use crate::simulator::{PerformanceProfiler, SimulatorData};
 use crate::transfers::NegotiationStatus;
 use crate::transfers::TransferWindowManager;
-use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
+use crate::transfers::loan::LoanPipeline;
+use crate::transfers::pipeline::MarketCirculation;
+use crate::transfers::pipeline::PlayerSummary;
+use crate::transfers::pipeline::StaffRecommendations;
+use crate::transfers::pipeline::approach::ApproachPass;
+use crate::transfers::pipeline::shortlist::ShortlistPass;
+use crate::transfers::scouting::ScoutingPass;
+use crate::transfers::scouting::recruitment::meeting::MeetingPass;
+use crate::transfers::scouting::watch::FormWatch;
+use crate::transfers::scouting::watchlist::Watchlist;
+use crate::transfers::squad::SquadReviewPass;
 use crate::transfers::{MarketMap, ScoutMarketDesk};
 use crate::{Country, PlayerStatusType};
 use chrono::NaiveDate;
@@ -105,7 +118,10 @@ impl DeferredTransferOps {
     }
 }
 
-impl CountryResult {
+/// One country's transfer day: what it settles, what it plans, and what it defers to the world.
+pub struct TransferTick;
+
+impl TransferTick {
     /// Phase-A entry: runs the country-local transfer market pipeline
     /// (negotiations, free agents, listings, scouting, recruitment
     /// meetings, board approvals, shadow reports) on `&mut Country`.
@@ -123,7 +139,8 @@ impl CountryResult {
     ) -> DeferredTransferOps {
         let country_id = country.id;
         let mut summary = TransferActivitySummary::new();
-        let window_manager = TransferWindowManager::for_country(country, current_date);
+        let window_manager =
+            TransferWindowManager::for_country(country.id, &country.code, current_date);
         let window_open = window_manager.is_window_open(country_id, current_date);
         let config = TransferConfig::default();
 
@@ -155,7 +172,7 @@ impl CountryResult {
         // players their limbo is real until the next window.
         country.transfer_market.check_transfer_window(window_open);
         if window_just_closed {
-            Self::emit_window_close_limbo(country, current_date);
+            ListingPass::emit_window_close_limbo(country, current_date);
         }
 
         Self::settle_open_business(
@@ -223,7 +240,7 @@ impl CountryResult {
         // `global_block_reasons` are aggregated into a single
         // `FreeAgentBumpBatch` and applied in ONE pass over
         // `data.free_agents` per tick via
-        // `PipelineProcessor::apply_free_agent_market_bumps_batch`,
+        // `ApproachPass::apply_free_agent_market_bumps_batch`,
         // collapsing the old O(countries × pool) double-walk.
 
         // Route clause credits owed to sellers outside the settling
@@ -261,7 +278,7 @@ impl CountryResult {
         // pool, not one per signing. Still ahead of the foreign-negotiation
         // kickoff below, so no club can open a saga for a player who was
         // signed a moment ago.
-        PipelineProcessor::cleanup_player_transfer_interest_batch(data, &placed_from_pool);
+        ApproachPass::cleanup_player_transfer_interest_batch(data, &placed_from_pool);
 
         drop(stage);
 
@@ -316,7 +333,7 @@ impl CountryResult {
         // Phase 3: Foreign negotiation initiation (domestic priority).
         if ops.window_open {
             PerformanceProfiler::stage("drain_foreign_negotiations", 3, || {
-                PipelineProcessor::initiate_foreign_negotiations(data, ops.country_id, current_date)
+                ApproachPass::initiate_foreign_negotiations(data, ops.country_id, current_date)
             });
         }
     }
@@ -402,7 +419,14 @@ impl CountryResult {
             "tm_resolve_negotiations",
             3,
             || country_name.clone(),
-            || Self::resolve_pending_negotiations(country, current_date, market_map, &mut summary),
+            || {
+                NegotiationPass::resolve_pending_negotiations(
+                    country,
+                    current_date,
+                    market_map,
+                    &mut summary,
+                )
+            },
         );
         ops.deferred_transfers = outcomes.deferred;
         ops.global_signings = outcomes.free_agent_signings;
@@ -414,7 +438,7 @@ impl CountryResult {
         // domestic player forever (selection rests near-sold assets).
         let expired = country.transfer_market.update(current_date);
         for (buying_club_id, player_id) in expired {
-            PipelineProcessor::on_negotiation_resolved(country, buying_club_id, player_id, false);
+            ApproachPass::on_negotiation_resolved(country, buying_club_id, player_id, false);
             let saga_still_live = country.transfer_market.negotiations.values().any(|n| {
                 n.player_id == player_id
                     && matches!(
@@ -453,7 +477,7 @@ impl CountryResult {
             3,
             || country_name.clone(),
             || {
-                Self::handle_free_agents(
+                FreeAgentPass::handle_free_agents(
                     country,
                     current_date,
                     &FreeAgentWorld {
@@ -526,19 +550,19 @@ impl CountryResult {
             "tm_evaluate_squads",
             3,
             || country_name.clone(),
-            || PipelineProcessor::evaluate_squads(country, current_date),
+            || SquadReviewPass::evaluate_squads(country, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_staff_recommendations",
             3,
             || country_name.clone(),
-            || PipelineProcessor::generate_staff_recommendations(country, current_date),
+            || StaffRecommendations::generate_staff_recommendations(country, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_process_staff_recs",
             3,
             || country_name.clone(),
-            || PipelineProcessor::process_staff_recommendations(country, current_date),
+            || StaffRecommendations::process_staff_recommendations(country, current_date),
         );
         // The club's standing knowledge of the market: names within reach
         // and within the brief's envelope for each shirt it means to fill.
@@ -559,44 +583,37 @@ impl CountryResult {
             "tm_refresh_watchlists",
             3,
             || country_name.clone(),
-            || PipelineProcessor::refresh_watchlists(country, world_pool, current_date),
+            || Watchlist::refresh_watchlists(country, world_pool, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_assign_scouts",
             3,
             || country_name.clone(),
-            || PipelineProcessor::assign_scouts(country, current_date),
+            || ScoutingPass::assign_scouts(country, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_assign_match_scouts",
             3,
             || country_name.clone(),
-            || PipelineProcessor::assign_scouts_to_matches(country, current_date),
+            || ScoutingPass::assign_scouts_to_matches(country, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_match_scouting",
             3,
             || country_name.clone(),
-            || PipelineProcessor::process_match_scouting(country, current_date),
+            || ScoutingPass::process_match_scouting(country, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_process_scouting",
             3,
             || country_name.clone(),
-            || {
-                PipelineProcessor::process_scouting(
-                    country,
-                    &foreign_players,
-                    current_date,
-                    market_map,
-                )
-            },
+            || ScoutingPass::process_scouting(country, &foreign_players, current_date, market_map),
         );
         PerformanceProfiler::stage_labelled(
             "tm_recruitment_meetings",
             3,
             || country_name.clone(),
-            || PipelineProcessor::run_recruitment_meetings(country, current_date),
+            || MeetingPass::run_recruitment_meetings(country, current_date),
         );
     }
 
@@ -617,7 +634,7 @@ impl CountryResult {
             "tm_list_players",
             3,
             || country_name.clone(),
-            || Self::list_players_from_pipeline(country, current_date, &mut summary),
+            || ListingPass::list_players_from_pipeline(country, current_date, &mut summary),
         );
         // Market-circulation / diagnosis: record interest in (or a
         // coherent block reason for) every available signed player,
@@ -627,25 +644,25 @@ impl CountryResult {
             "tm_circulate_available",
             3,
             || country_name.clone(),
-            || PipelineProcessor::circulate_available_players(country, current_date),
+            || MarketCirculation::circulate_available_players(country, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_build_shortlists",
             3,
             || country_name.clone(),
-            || PipelineProcessor::build_shortlists(country, current_date),
+            || ShortlistPass::build_shortlists(country, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_board_approvals",
             3,
             || country_name.clone(),
-            || PipelineProcessor::evaluate_board_approvals(country, current_date),
+            || ShortlistPass::evaluate_board_approvals(country, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_initiate_negotiations",
             3,
             || country_name.clone(),
-            || PipelineProcessor::initiate_negotiations(country, current_date),
+            || ApproachPass::initiate_negotiations(country, current_date),
         );
         // Seller-side push runs BEFORE the borrower scan: a National+ parent
         // evaluates the whole market and places each loan-listed development
@@ -658,7 +675,7 @@ impl CountryResult {
             "tm_broadcast_loans",
             3,
             || country_name.clone(),
-            || PipelineProcessor::broadcast_listed_loans(country, current_date),
+            || LoanPipeline::broadcast_listed_loans(country, current_date),
         );
         // Stale permanent listings get the same push, permanent
         // flavor: a player unsold past the grace weeks asks the club
@@ -670,20 +687,20 @@ impl CountryResult {
             "tm_broadcast_transfers",
             3,
             || country_name.clone(),
-            || PipelineProcessor::broadcast_listed_transfers(country, current_date),
+            || LoanPipeline::broadcast_listed_transfers(country, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_scan_loan_market",
             3,
             || country_name.clone(),
-            || PipelineProcessor::scan_loan_market(country, current_date),
+            || LoanPipeline::scan_loan_market(country, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_scan_foreign_loans",
             3,
             || country_name.clone(),
             || {
-                PipelineProcessor::scan_foreign_loan_market(
+                LoanPipeline::scan_foreign_loan_market(
                     country,
                     &foreign_players,
                     current_date,
@@ -711,14 +728,14 @@ impl CountryResult {
             "tm_release_unsold",
             3,
             || country_name.clone(),
-            || Self::release_unsold_listed_players(country, current_date),
+            || ListingPass::release_unsold_listed_players(country, current_date),
         );
 
         PerformanceProfiler::stage_labelled(
             "tm_shadow_reports",
             3,
             || country_name.clone(),
-            || PipelineProcessor::refresh_shadow_reports(country, current_date),
+            || ScoutingPass::refresh_shadow_reports(country, current_date),
         );
         // Year-round breakout watch: discover high-form players on plausible
         // buyers' books even with the window shut. Runs outside the window
@@ -728,13 +745,13 @@ impl CountryResult {
             "tm_breakout_form",
             3,
             || country_name.clone(),
-            || PipelineProcessor::scan_breakout_form(country, &foreign_players, current_date),
+            || FormWatch::scan_breakout_form(country, &foreign_players, current_date),
         );
         PerformanceProfiler::stage_labelled(
             "tm_sync_wanted",
             3,
             || country_name.clone(),
-            || PipelineProcessor::sync_wanted_status(country),
+            || ApproachPass::sync_wanted_status(country),
         );
     }
 }
@@ -747,7 +764,7 @@ mod side_channel_tests {
     //! in one tick (retry at a second club, offer + rejection chain).
     //! These per-country vecs are aggregated world-wide into a
     //! `FreeAgentBumpBatch` and applied in ONE pass over the pool by
-    //! `PipelineProcessor::apply_free_agent_market_bumps_batch`, which
+    //! `ApproachPass::apply_free_agent_market_bumps_batch`, which
     //! must collapse them to one market-state bump per player per tick.
 
     use super::*;
@@ -845,7 +862,7 @@ mod side_channel_tests {
             rejected_ids: vec![900, 900],
             block_reasons: Vec::new(),
         };
-        PipelineProcessor::apply_free_agent_market_bumps_batch(&mut data, &batch, date);
+        ApproachPass::apply_free_agent_market_bumps_batch(&mut data, &batch, date);
 
         let state = data.free_agents[0]
             .free_agent_state()
@@ -998,7 +1015,7 @@ mod pending_signal_delivery_tests {
             buyer_competition_path: None,
         };
 
-        CountryResult::deliver_pending_player_signals(&mut data, &[signal]);
+        TransferTick::deliver_pending_player_signals(&mut data, &[signal]);
 
         let player = data
             .country(2)

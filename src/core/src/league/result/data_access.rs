@@ -35,7 +35,8 @@ use crate::simulator::CountryInfo;
 use crate::simulator::SimulatorData;
 use crate::transfers::MarketMap;
 use crate::transfers::TransferListing;
-use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
+use crate::transfers::pipeline::PlayerSummary;
+use crate::transfers::pipeline::approach::ApproachPass;
 use crate::{Club, Country, Player, Team};
 use chrono::NaiveDateTime;
 use rustc_hash::FxHashMap;
@@ -222,7 +223,7 @@ impl LeagueProcessAccess for SimulatorData {
     }
     fn clear_player_interest_in_country(&mut self, country_id: u32, player_id: u32) {
         if let Some(country) = SimulatorData::country_mut(self, country_id) {
-            PipelineProcessor::clear_player_interest(country, player_id);
+            ApproachPass::clear_player_interest(country, player_id);
         }
     }
     fn try_defer_contract_interaction(
@@ -478,7 +479,7 @@ impl<'a> LeagueProcessAccess for CountryProcessCtx<'a> {
     }
     fn clear_player_interest_in_country(&mut self, country_id: u32, player_id: u32) {
         if country_id == self.country.id {
-            PipelineProcessor::clear_player_interest(self.country, player_id);
+            ApproachPass::clear_player_interest(self.country, player_id);
         }
     }
     fn try_defer_contract_interaction(

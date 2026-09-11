@@ -11,6 +11,7 @@ pub mod breakout;
 pub mod config;
 pub mod desk;
 pub mod exposure;
+pub mod judgement;
 pub mod recruitment;
 pub mod watch;
 pub mod watchlist;
@@ -21,6 +22,9 @@ pub use watchlist::MarketKnowledge;
 
 use crate::club::team::squad::SquadEvidenceContext;
 use crate::transfers::scouting::assignment::ClubScan;
+use crate::transfers::scouting::judgement::ScoutJudgement;
+use crate::transfers::view::club::ClubView;
+use crate::transfers::view::player::PlayerView;
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
@@ -30,16 +34,11 @@ use crate::club::player::mind::GoalKind;
 use crate::club::player::statistics::StuckCareerScan;
 use crate::simulator::PerformanceProfiler;
 use crate::transfers::ScoutingRegion;
-use crate::transfers::gate::{
-    BuyerPlausibilityContext, SquadEvidenceSource, TransferMoveStage, TransferPlausibilityBuilder,
-    TransferPlausibilityVerdict,
-};
+use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
+use crate::transfers::gate::{SquadEvidenceSource, TransferMoveStage, TransferPlausibilityVerdict};
 use crate::transfers::loan::home::HomeLoanGates;
 use crate::transfers::loan::interest::InterestDraw;
-use crate::transfers::pipeline::helpers::ClubGroupRanks;
-use crate::transfers::pipeline::processor::{
-    PipelineProcessor, PlayerSummary, SellerPlausibilityContext,
-};
+use crate::transfers::pipeline::processor::{PlayerSummary, SellerPlausibilityContext};
 use crate::transfers::pipeline::{
     ClubTransferPlan, DetailedScoutingReport, LoanDestinationPreference, PlayerObservation,
     ReportRiskFlag, ScoutMatchAssignment, ScoutingAssignment, ScoutingRecommendation,
@@ -49,6 +48,7 @@ use crate::transfers::scouting::breakout::LeaguePerformanceLookup;
 use crate::transfers::scouting::config::{RealismTarget, ScoutingConfig};
 use crate::transfers::squad::standing::CareerRecordSnapshot;
 use crate::transfers::value::PlayerValuationCalculator;
+use crate::transfers::view::player::ClubGroupRanks;
 use crate::transfers::{
     ClubMarketKnowledge, ClubMarketLedger, MarketAffinity, MarketAffinityInputs, MarketMap,
     MoveKind,
@@ -346,7 +346,7 @@ impl<'c> PoolContext<'c> {
         // of the league/club they actually played for.
         let (seller_league_rep, seller_club_rep) =
             PlayerValuationCalculator::seller_context(country, club);
-        let club_world_rep = PipelineProcessor::club_world_reputation(club);
+        let club_world_rep = ClubView::club_world_reputation(club);
         // Staged-plausibility seller context, resolved once per club so a
         // cross-country buyer can assess this player without re-walking
         // the seller's roster. `overall_score` (not market value) matches
@@ -398,7 +398,10 @@ impl<'c> PoolContext<'c> {
     }
 }
 
-impl PipelineProcessor {
+/// The scouting tick: assignments, observations, match reports and the shadow board.
+pub struct ScoutingPass;
+
+impl ScoutingPass {
     /// Contract months at or below which a player is publicly on his way
     /// out — clubs abroad watch expiring contracts regardless of which
     /// league he currently plays in.
@@ -768,7 +771,7 @@ impl PipelineProcessor {
 
                 // Get scout skills
                 let (judging_ability, judging_potential) =
-                    Self::get_scout_skills(club, match_assignment.scout_staff_id);
+                    ClubView::get_scout_skills(club, match_assignment.scout_staff_id);
 
                 // Mark attendance
                 staged.attended_updates.push((
@@ -863,7 +866,7 @@ impl PipelineProcessor {
         // Without this the match route bypasses the reputation band
         // entirely and re-surfaces the very monitoring the pool
         // gate blocks.
-        let buyer_world_rep = Self::club_world_reputation(club);
+        let buyer_world_rep = ClubView::club_world_reputation(club);
         let seller_league_rep = target_team
             .league_id
             .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
@@ -878,7 +881,7 @@ impl PipelineProcessor {
             })
             .unwrap_or((0, 0));
         let realism_target = RealismTarget {
-            club_world_reputation: Self::club_world_reputation(target_club),
+            club_world_reputation: ClubView::club_world_reputation(target_club),
             world_reputation: player.player_attributes.world_reputation,
             current_reputation: player.player_attributes.current_reputation,
             home_reputation: player.player_attributes.home_reputation,
@@ -987,7 +990,7 @@ impl PipelineProcessor {
             + IntegerUtils::random(-ability_error, ability_error))
         .clamp(1, 200) as u8;
 
-        let growth_potential = Self::estimate_growth_potential(
+        let growth_potential = ScoutJudgement::estimate_growth_potential(
             player_age,
             player.skills.mental.determination,
             player.skills.mental.work_rate,
@@ -1066,13 +1069,13 @@ impl PipelineProcessor {
                     ((days / 30).min(i16::MAX as i64) as i16, c.salary)
                 })
                 .unwrap_or((0, 0));
-            let risk_flags = Self::evaluate_risk_flags(
+            let risk_flags = ScoutJudgement::evaluate_risk_flags(
                 player.player_attributes.is_injured,
                 player.skills.mental.determination,
                 player_age,
                 contract_months,
                 player.player_attributes.world_reputation,
-                Self::club_world_reputation(club),
+                ClubView::club_world_reputation(club),
             );
             let role_fit = assignment.role_profile.fit(
                 player.skills.technical.average(),
@@ -1493,7 +1496,7 @@ impl PipelineProcessor {
             .map(|(scout_club_id, player_id)| {
                 (
                     *player_id,
-                    Self::local_interest_signal(
+                    PlayerView::local_interest_signal(
                         country_ref,
                         *scout_club_id,
                         *player_id,
@@ -1955,16 +1958,16 @@ mod scout_reach_tests {
         let total = ScoutingRegion::all().len();
 
         // A giant reaches the whole world...
-        let giant = PipelineProcessor::reputation_scout_regions(home, 1.0);
+        let giant = ScoutingPass::reputation_scout_regions(home, 1.0);
         assert_eq!(giant.len(), total);
 
         // ...a minnow only its own backyard...
-        let minnow = PipelineProcessor::reputation_scout_regions(home, 0.0);
+        let minnow = ScoutingPass::reputation_scout_regions(home, 0.0);
         assert_eq!(minnow, vec![home]);
 
         // ...and clubs in between land strictly in between, monotonically.
-        let small = PipelineProcessor::reputation_scout_regions(home, 0.3);
-        let big = PipelineProcessor::reputation_scout_regions(home, 0.7);
+        let small = ScoutingPass::reputation_scout_regions(home, 0.3);
+        let big = ScoutingPass::reputation_scout_regions(home, 0.7);
         assert!(minnow.len() < small.len());
         assert!(
             small.len() < big.len(),
@@ -1976,7 +1979,7 @@ mod scout_reach_tests {
 
         // A Continental club (a second-tier giant, ~0.65) reaches MOST of the
         // world — the reach boost lifts the upper tiers toward global.
-        let continental = PipelineProcessor::reputation_scout_regions(home, 0.65);
+        let continental = ScoutingPass::reputation_scout_regions(home, 0.65);
         assert!(
             continental.len() >= 12,
             "Continental reach {} should be near-global",
@@ -1993,8 +1996,7 @@ mod scout_reach_tests {
     /// him out — the whole point of global scouting for a giant.
     #[test]
     fn top_european_club_reaches_talent_corridors() {
-        let reach =
-            PipelineProcessor::reputation_scout_regions(ScoutingRegion::WesternEurope, 0.85);
+        let reach = ScoutingPass::reputation_scout_regions(ScoutingRegion::WesternEurope, 0.85);
         assert!(reach.contains(&ScoutingRegion::SouthAmerica));
         assert!(reach.contains(&ScoutingRegion::WestAfrica));
         assert!(reach.contains(&ScoutingRegion::NorthAfrica));

@@ -3,6 +3,7 @@
 use super::super::*;
 use crate::club::player::builder::PlayerBuilder;
 use crate::shared::fullname::FullName;
+use crate::transfers::loan::LoanPipeline;
 use crate::{
     PersonAttributes, Player, PlayerAttributes, PlayerCollection, PlayerPosition,
     PlayerPositionType, PlayerPositions, PlayerSkills, StaffCollection, TeamReputation, TeamType,
@@ -284,28 +285,28 @@ fn development_relaxation_does_not_apply_to_outfield() {
 fn reputation_drop_gate_blocks_giant_to_minnow_unless_player_is_raw() {
     // Established player (close to the parent's best): a 2000-rep
     // borrower is too far below a 9000-rep parent.
-    assert!(!PipelineProcessor::loan_reputation_drop_ok(
+    assert!(!LoanPipeline::loan_reputation_drop_ok(
         2000, 9000, 120, 130, false
     ));
     // Same borrower is fine for a genuinely raw player — any senior
     // football is the point of the loan. The floor tracks readiness
     // continuously now rather than switching on a "very raw" flag, so
     // this is the man who is years off the shirt, not merely below it.
-    assert!(PipelineProcessor::loan_reputation_drop_ok(
+    assert!(LoanPipeline::loan_reputation_drop_ok(
         2000, 9000, 80, 130, false
     ));
     // A PEER-level borrower clears the floor for the established
     // player — that is the destination doctrine leaves him.
-    assert!(PipelineProcessor::loan_reputation_drop_ok(
+    assert!(LoanPipeline::loan_reputation_drop_ok(
         7000, 9000, 120, 130, false
     ));
     // …and a mid-table one does not: a man at his club's own level
     // goes sideways or stays.
-    assert!(!PipelineProcessor::loan_reputation_drop_ok(
+    assert!(!LoanPipeline::loan_reputation_drop_ok(
         3000, 9000, 120, 130, false
     ));
     // Unknown parent reputation never blocks.
-    assert!(PipelineProcessor::loan_reputation_drop_ok(
+    assert!(LoanPipeline::loan_reputation_drop_ok(
         2000, 0, 120, 130, false
     ));
     // Readiness, not age, decides the drop. The development flag no longer
@@ -313,13 +314,13 @@ fn reputation_drop_gate_blocks_giant_to_minnow_unless_player_is_raw() {
     // choice (close to the parent's best) is held to the same peer-level
     // floor as an established player, so the giant-to-minnow drop is
     // blocked — he moves down a tier or two, not several.
-    assert!(!PipelineProcessor::loan_reputation_drop_ok(
+    assert!(!LoanPipeline::loan_reputation_drop_ok(
         2000, 9000, 120, 130, true
     ));
     // A genuinely raw development player still has the floor lifted
     // entirely — any senior football is the point, and the minutes gate is
     // the realism check instead.
-    assert!(PipelineProcessor::loan_reputation_drop_ok(
+    assert!(LoanPipeline::loan_reputation_drop_ok(
         400, 9000, 90, 130, true
     ));
 }
@@ -328,23 +329,17 @@ fn reputation_drop_gate_blocks_giant_to_minnow_unless_player_is_raw() {
 fn foreign_loan_country_rep_gate_lifts_for_development_step_down() {
     // Higher-reputation nation → lower (e.g. Russia → Belarus): an
     // established fringe player can't drop a national tier on loan.
-    assert!(!PipelineProcessor::foreign_loan_country_rep_ok(
+    assert!(!LoanPipeline::foreign_loan_country_rep_ok(
         7000, 5000, false
     ));
     // ...but a development-profile youngster going abroad for senior
     // minutes is exactly the move the gate is meant to permit. The
     // region-prestige and club-rep gates still bound how far he falls.
-    assert!(PipelineProcessor::foreign_loan_country_rep_ok(
-        7000, 5000, true
-    ));
+    assert!(LoanPipeline::foreign_loan_country_rep_ok(7000, 5000, true));
     // Equal-or-lower-reputation source never trips the gate regardless
     // of profile — there's no step-down to guard against.
-    assert!(PipelineProcessor::foreign_loan_country_rep_ok(
-        5000, 7000, false
-    ));
-    assert!(PipelineProcessor::foreign_loan_country_rep_ok(
-        5000, 5000, false
-    ));
+    assert!(LoanPipeline::foreign_loan_country_rep_ok(5000, 7000, false));
+    assert!(LoanPipeline::foreign_loan_country_rep_ok(5000, 5000, false));
 }
 
 #[test]
@@ -352,15 +347,15 @@ fn foreign_loan_region_gate_lifts_for_development_step_down() {
     // Italy (Western Europe, 1.0) → Romania/Russia (Eastern Europe, 0.50).
     // A settled player won't loan down two prestige bands for a bit-part
     // role — the 0.50 gap exceeds the 0.20 cover allowance.
-    assert!(!PipelineProcessor::foreign_loan_region_ok(1.0, 0.50, false));
+    assert!(!LoanPipeline::foreign_loan_region_ok(1.0, 0.50, false));
     // ...but a development youngster going abroad for senior minutes is
     // exactly the "go abroad to play" move the region gate used to block —
     // the wider development allowance clears the gap. The downstream
     // club-rep band still bounds how far he actually falls.
-    assert!(PipelineProcessor::foreign_loan_region_ok(1.0, 0.50, true));
+    assert!(LoanPipeline::foreign_loan_region_ok(1.0, 0.50, true));
     // The development lift stays bounded: a top-region prospect still can't
     // reach the very bottom regions (e.g. South Asia, 0.10) from 1.0.
-    assert!(!PipelineProcessor::foreign_loan_region_ok(1.0, 0.10, true));
+    assert!(!LoanPipeline::foreign_loan_region_ok(1.0, 0.10, true));
     // Moving to an equal-or-more-prestigious region is never blocked.
-    assert!(PipelineProcessor::foreign_loan_region_ok(0.50, 1.0, false));
+    assert!(LoanPipeline::foreign_loan_region_ok(0.50, 1.0, false));
 }

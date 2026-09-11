@@ -10,7 +10,7 @@ use core::club::player::calculators::WageCalculator;
 use core::club::player::transfer::ReleaseContext;
 use core::shared::{Currency, CurrencyValue};
 use core::transfers::deal::reason::TransferReason;
-use core::transfers::pipeline::PipelineProcessor;
+use core::transfers::pipeline::approach::ApproachPass;
 use core::transfers::{CompletedTransfer, TransferType};
 use core::{Person, PlayerClubContract, PlayerSquadStatus, SimulatorData};
 use serde::{Deserialize, Serialize};
@@ -270,7 +270,7 @@ pub(crate) fn execute_move_on_free(sim: &mut SimulatorData, player_id: u32) -> b
     // listings end Cancelled, team transfer lists drop their rows,
     // scouting interest is cleared, live negotiations are rejected —
     // exactly like the automatic sweep's release cleanup.
-    PipelineProcessor::cleanup_player_release_interest(sim, player_id);
+    ApproachPass::cleanup_player_release_interest(sim, player_id);
 
     sim.rebuild_indexes();
     true

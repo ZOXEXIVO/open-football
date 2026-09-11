@@ -1,5 +1,4 @@
-use crate::Country;
-use chrono::{Datelike, NaiveDate};
+use chrono::{Datelike, NaiveDate, Weekday};
 use std::collections::HashMap;
 
 /// How wide the buyer/seller "talks are allowed" window is around the
@@ -32,12 +31,17 @@ impl TransferWindowManager {
 
     /// Construct a manager pre-seeded with the right windows for the given
     /// country. Falls back to default European windows for codes the
-    /// calendar table doesn't recognise, so unknown countries behave
-    /// exactly as before. Cheap to call; no global state.
-    pub fn for_country(country: &Country, date: NaiveDate) -> Self {
+    /// calendar table does not recognise, so unknown countries behave exactly
+    /// as before. Cheap to call; no global state.
+    ///
+    /// Takes the id and the code rather than the `Country`: the calendar is a
+    /// property of the code, and this file is the market calendar MODEL — it
+    /// decides from numbers, and reading a world object is what its callers
+    /// do for it.
+    pub fn for_country(country_id: u32, code: &str, date: NaiveDate) -> Self {
         let mut mgr = Self::new();
-        let window = TransferCalendar::for_country(&country.code, date);
-        mgr.add_window(country.id, window.into_window(country.id));
+        let window = TransferCalendar::for_country(code, date);
+        mgr.add_window(country_id, window.into_window(country_id));
         mgr
     }
 
@@ -248,6 +252,7 @@ impl TransferCalendar {
 /// `TransferCalendar::for_country` — convertible to the storage shape
 /// `TransferWindow` once a `country_id` is known.
 #[derive(Debug, Clone, Copy)]
+
 pub struct CountryTransferWindow {
     pub summer_window: (NaiveDate, NaiveDate),
     pub winter_window: (NaiveDate, NaiveDate),
@@ -260,6 +265,90 @@ impl CountryTransferWindow {
             winter_window: self.winter_window,
             country_id,
         }
+    }
+}
+
+/// When a country market is live, and how often the pipeline should look at
+/// it.
+///
+/// Every predicate answers from the country CODE. The calendar is a property
+/// of the code — Europe runs a summer and a January window, MLS-style leagues
+/// run theirs in February and July, Latam spans New Year — and nothing here
+/// needs the club list hanging off a `Country`. That is what keeps the
+/// cadence in the model layer instead of in the pipeline, where a hard-coded
+/// June/January pair starved every non-European calendar for years.
+pub struct MarketCadence;
+
+impl MarketCadence {
+    /// European-calendar fallback for the mid-season window bias. Kept
+    /// only for the pure decision fns that carry no country context
+    /// (`resolve_initial_approach`); every country-holding caller uses
+    /// [`Self::is_mid_season_window_for`] instead.
+    pub(in crate::transfers) fn is_january_window(date: NaiveDate) -> bool {
+        date.month() == 1
+    }
+
+    /// The date falls inside the COUNTRY's shorter (mid-season
+    /// reinforcement) window — January in Europe, July for MLS-style
+    /// calendars, June for Latam. Drives the "prefer loans, quick
+    /// fixes" mid-season bias, which the raw month==1 check applied to
+    /// the wrong month everywhere outside Europe.
+    pub(in crate::transfers) fn is_mid_season_window_for(code: &str, date: NaiveDate) -> bool {
+        let w = TransferCalendar::for_country(code, date);
+        let (s_start, s_end) = w.summer_window;
+        let (w_start, w_end) = w.winter_window;
+        let summer_len = (s_end - s_start).num_days();
+        let winter_len = (w_end - w_start).num_days();
+        let in_summer = date >= s_start && date <= s_end;
+        let in_winter = date >= w_start && date <= w_end;
+        if summer_len >= winter_len {
+            in_winter
+        } else {
+            in_summer
+        }
+    }
+
+    /// Full plan reset at the opening of each of the COUNTRY's transfer
+    /// windows — the opening day and the day before it, mirroring the
+    /// old May 31 + June 1 double for the European calendar. The
+    /// hard-coded European triple reset Latam plans MID-window (their
+    /// Dec–Jan window spans New Year, so Jan 1 wiped requests,
+    /// shortlists, and the spent/reserved ledger halfway through their
+    /// market) and never reset MLS-style calendars at their real
+    /// openings at all.
+    pub(in crate::transfers) fn is_window_start_for(code: &str, date: NaiveDate) -> bool {
+        let tomorrow = date
+            .checked_add_signed(chrono::Duration::days(1))
+            .unwrap_or(date);
+        // Anchor the calendar on both dates: a window opening Jan 1
+        // belongs to next year's anchor when today is Dec 31.
+        let today_cal = TransferCalendar::for_country(code, date);
+        let tomorrow_cal = TransferCalendar::for_country(code, tomorrow);
+        [
+            today_cal.summer_window.0,
+            today_cal.winter_window.0,
+            tomorrow_cal.summer_window.0,
+            tomorrow_cal.winter_window.0,
+        ]
+        .into_iter()
+        .any(|start| date == start || tomorrow == start)
+    }
+
+    /// Re-evaluate during the COUNTRY's transfer windows.
+    /// Daily during the first week of each window for fast pipeline
+    /// startup, then weekly (Monday) for the rest of the window. The
+    /// old hard-coded June/January cadence starved every non-European
+    /// calendar: an MLS-style Feb–Apr window got no evaluation ticks
+    /// (and no staff recommendations) for its entire duration.
+    pub(in crate::transfers) fn should_evaluate_for(code: &str, date: NaiveDate) -> bool {
+        let w = TransferCalendar::for_country(code, date);
+        for (start, end) in [w.summer_window, w.winter_window] {
+            if date >= start && date <= end {
+                let days_in = (date - start).num_days();
+                return days_in < 7 || date.weekday() == Weekday::Mon;
+            }
+        }
+        false
     }
 }
 

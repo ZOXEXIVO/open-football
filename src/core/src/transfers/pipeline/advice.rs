@@ -1,9 +1,10 @@
+use crate::transfers::market::window::MarketCadence;
+use crate::transfers::squad::bands::TierBands;
 use chrono::NaiveDate;
 
 use crate::club::player::transfer::AvailabilityBlockReason;
 use crate::transfers::gate::EffectivePlayerReputation;
 use crate::transfers::gate::fit::SquadFitSnapshot;
-use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::scouting::breakout::BreakoutPerformanceSignal;
 use crate::transfers::scouting::exposure::{
     AvailabilityExposure, AvailabilitySignals, ExposureStage,
@@ -321,12 +322,9 @@ impl ListedTargetScreen {
         // still bound how far above his level a club can actually reach.
         const AVAILABLE_CEILING_RELAX: u8 = 20;
 
-        let baseline =
-            PipelineProcessor::tier_starter_ca_score(ctx.buyer_rep_score, target.position_group);
-        let base_ceiling = PipelineProcessor::tier_target_ceiling_score(
-            ctx.buyer_rep_score,
-            target.position_group,
-        );
+        let baseline = TierBands::tier_starter_ca_score(ctx.buyer_rep_score, target.position_group);
+        let base_ceiling =
+            TierBands::tier_target_ceiling_score(ctx.buyer_rep_score, target.position_group);
         let ceiling = if publicly_available {
             base_ceiling.saturating_add(AVAILABLE_CEILING_RELAX)
         } else {
@@ -585,7 +583,10 @@ impl ListedTargetScreen {
     }
 }
 
-impl PipelineProcessor {
+/// The head coach's own list, and what the club does with it.
+pub struct StaffRecommendations;
+
+impl StaffRecommendations {
     /// How many standing staff recommendations a club's plan holds before
     /// new ones are dropped. Smaller clubs carry more — their recruitment
     /// runs on tips, while a big club's department filters harder. One
@@ -630,7 +631,7 @@ impl PipelineProcessor {
 
     pub fn generate_staff_recommendations(country: &mut Country, date: NaiveDate) {
         // Only runs weekly (same schedule as should_evaluate)
-        if !Self::should_evaluate_for(country, date) {
+        if !MarketCadence::should_evaluate_for(&country.code, date) {
             return;
         }
         StaffAdvicePass::run(country, date);
@@ -638,7 +639,7 @@ impl PipelineProcessor {
 
     pub fn process_staff_recommendations(country: &mut Country, date: NaiveDate) {
         // Only runs weekly (same schedule as should_evaluate)
-        if !Self::should_evaluate_for(country, date) {
+        if !MarketCadence::should_evaluate_for(&country.code, date) {
             return;
         }
         RecommendationIntake::run(country, date);

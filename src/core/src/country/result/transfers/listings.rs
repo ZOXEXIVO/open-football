@@ -5,11 +5,11 @@ use crate::club::player::contract::{AffordabilityInput, ContractStalemate};
 use crate::club::player::transfer::processing::UNHAPPY_LISTING_MIN_DAYS;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::club::team::squad::{SquadAssetClass, SquadAssetProtection, SquadEvidenceContext};
-use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::TransferWindowManager;
 use crate::transfers::loan::guard::LoanAssetGuard;
-use crate::transfers::pipeline::{LoanOutReason, PipelineProcessor, TransferTrace};
+use crate::transfers::pipeline::approach::ApproachPass;
+use crate::transfers::pipeline::{LoanOutReason, TransferTrace};
 use crate::transfers::value::PlayerValuationCalculator;
 use crate::transfers::{
     NegotiationStatus, TransferListing, TransferListingOrigin, TransferListingStatus,
@@ -121,7 +121,10 @@ struct ListingReading {
     affordability: AffordabilityInput,
 }
 
-impl CountryResult {
+/// Who the club puts on the market, and the rows that says so.
+pub struct ListingPass;
+
+impl ListingPass {
     /// List players for transfer based on pipeline decisions and staff evaluations.
     pub(crate) fn list_players_from_pipeline(
         country: &mut Country,
@@ -139,7 +142,7 @@ impl CountryResult {
         // the candidate row; the live market row is this pass's to pull.
         Self::withdraw_cancelled_loan_listings(country, date);
         let price_level = country.settings.pricing.price_level;
-        let window_mgr = TransferWindowManager::for_country(country, date);
+        let window_mgr = TransferWindowManager::for_country(country.id, &country.code, date);
         let current_window = window_mgr.current_window_dates(country.id, date);
 
         for club in &country.clubs {
@@ -492,7 +495,7 @@ impl CountryResult {
             {
                 listing.status = TransferListingStatus::Cancelled;
             }
-            PipelineProcessor::clear_player_interest(country, player_id);
+            ApproachPass::clear_player_interest(country, player_id);
         }
     }
 
@@ -1263,7 +1266,7 @@ impl CountryResult {
 
         for player in &main_team.players.players {
             let presence = MarketPresence::of(&country.transfer_market, player.id);
-            match CountryResult::evaluate_player_listing(
+            match ListingPass::evaluate_player_listing(
                 player,
                 &squad_analysis,
                 club,
@@ -1273,7 +1276,7 @@ impl CountryResult {
             ) {
                 ListingDecision::Keep => {}
                 ListingDecision::UpgradeLoanToTransfer => {
-                    let asking_price = CountryResult::calculate_asking_price(
+                    let asking_price = ListingPass::calculate_asking_price(
                         player,
                         club,
                         date,
@@ -1299,7 +1302,7 @@ impl CountryResult {
                     });
                 }
                 ListingDecision::Transfer { reason } => {
-                    let asking_price = CountryResult::calculate_asking_price(
+                    let asking_price = ListingPass::calculate_asking_price(
                         player,
                         club,
                         date,
@@ -1420,7 +1423,7 @@ impl CountryResult {
                                 && (date - existing.listed_date).num_days()
                                     >= LOAN_UNSOLD_UPGRADE_DAYS
                             {
-                                let asking_price = CountryResult::calculate_asking_price(
+                                let asking_price = ListingPass::calculate_asking_price(
                                     player,
                                     club,
                                     date,
@@ -1468,7 +1471,7 @@ impl CountryResult {
                     let already_on_market = player.statuses.has(PlayerStatusType::Lst)
                         || player.statuses.has(PlayerStatusType::Frt);
                     if (requested || long_unhappy) && !already_on_market {
-                        let asking_price = CountryResult::calculate_asking_price(
+                        let asking_price = ListingPass::calculate_asking_price(
                             player,
                             club,
                             date,
@@ -1512,7 +1515,7 @@ impl CountryResult {
                 {
                     continue;
                 }
-                let asking_price = CountryResult::calculate_asking_price(
+                let asking_price = ListingPass::calculate_asking_price(
                     player,
                     club,
                     date,
@@ -1930,7 +1933,7 @@ impl CountryResult {
             });
         }
         if labelled_not_needed {
-            return Some(CountryResult::decide_listing_type(
+            return Some(ListingPass::decide_listing_type(
                 player,
                 &rep_level,
                 avg,
@@ -1973,15 +1976,15 @@ impl CountryResult {
         // level (a squad that is weak everywhere has nothing to cycle
         // him out for), once the season has produced a sample, and never
         // below the group's depth floor.
-        if let Some(level) = CountryResult::club_level(club) {
+        if let Some(level) = ListingPass::club_level(club) {
             let group = player.position().position_group();
             if !is_promising_youth
                 && level.is_below_rotation_band(ca, group)
                 && !SquadEvidenceContext::current_season_sample(date, club).is_early_season()
-                && CountryResult::group_has_starter_at_level(club, group, &level)
-                && CountryResult::position_group_has_depth(club, player, date)
+                && ListingPass::group_has_starter_at_level(club, group, &level)
+                && ListingPass::position_group_has_depth(club, player, date)
             {
-                return Some(CountryResult::decide_listing_type(
+                return Some(ListingPass::decide_listing_type(
                     player,
                     &rep_level,
                     avg,
@@ -2021,10 +2024,10 @@ impl CountryResult {
         // Well below squad average
         if analysis.quality_level > 15 && ca_i < avg - quality_gap_threshold && !is_promising_youth
         {
-            if !CountryResult::position_group_has_depth(club, player, date) {
+            if !ListingPass::position_group_has_depth(club, player, date) {
                 return Some(ListingDecision::Keep);
             }
-            return Some(CountryResult::decide_listing_type(
+            return Some(ListingPass::decide_listing_type(
                 player,
                 &rep_level,
                 avg,
@@ -2039,7 +2042,7 @@ impl CountryResult {
         for surplus_pos in &analysis.surplus_positions {
             if surplus_pos.position_group() == player_group {
                 if ca_i < avg && !is_promising_youth {
-                    return Some(CountryResult::decide_listing_type(
+                    return Some(ListingPass::decide_listing_type(
                         player,
                         &rep_level,
                         avg,
@@ -2080,7 +2083,7 @@ impl CountryResult {
         };
 
         if squad_size > max_comfortable_squad && ca_i < avg - 10 && !is_promising_youth {
-            return Some(CountryResult::decide_listing_type(
+            return Some(ListingPass::decide_listing_type(
                 player,
                 &rep_level,
                 avg,
@@ -2293,7 +2296,7 @@ mod tests {
             TransferListingType::Transfer,
         ));
 
-        CountryResult::reconcile_stale_market_statuses(&mut country);
+        ListingPass::reconcile_stale_market_statuses(&mut country);
 
         let has = |id: u32, s: PlayerStatusType| {
             country.clubs[0].teams.teams[0]
@@ -2357,7 +2360,7 @@ mod tests {
             TransferListingType::Loan,
         ));
 
-        CountryResult::reconcile_stale_market_statuses(&mut country);
+        ListingPass::reconcile_stale_market_statuses(&mut country);
 
         let has = |id: u32, s: PlayerStatusType| {
             country.clubs[0].teams.teams[0]
@@ -2398,9 +2401,9 @@ mod tests {
             TeamType::Main,
             vec![player],
         )]);
-        let analysis = CountryResult::analyze_squad_needs(&club, today);
+        let analysis = ListingPass::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision = CountryResult::evaluate_player_listing(
+        let decision = ListingPass::evaluate_player_listing(
             player_ref,
             &analysis,
             &club,
@@ -2427,9 +2430,9 @@ mod tests {
             vec![player],
         )]);
         club.transfer_plan.manager_review_until = Some(Fixture::date(2026, 7, 15));
-        let analysis = CountryResult::analyze_squad_needs(&club, today);
+        let analysis = ListingPass::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision = CountryResult::evaluate_player_listing(
+        let decision = ListingPass::evaluate_player_listing(
             player_ref,
             &analysis,
             &club,
@@ -2458,9 +2461,9 @@ mod tests {
             vec![player],
         )]);
         club.transfer_plan.manager_review_until = Some(Fixture::date(2026, 7, 15));
-        let analysis = CountryResult::analyze_squad_needs(&club, today);
+        let analysis = ListingPass::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision = CountryResult::evaluate_player_listing(
+        let decision = ListingPass::evaluate_player_listing(
             player_ref,
             &analysis,
             &club,
@@ -2498,7 +2501,7 @@ mod tests {
         )]);
         let mut country = Fixture::country(club);
         let mut summary = TransferActivitySummary::new();
-        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+        ListingPass::list_players_from_pipeline(&mut country, today, &mut summary);
         assert_eq!(
             country
                 .transfer_market
@@ -2540,7 +2543,7 @@ mod tests {
         )]);
         let mut country = Fixture::country(club);
         let mut summary = TransferActivitySummary::new();
-        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+        ListingPass::list_players_from_pipeline(&mut country, today, &mut summary);
         let p = &country.clubs[0].teams.teams[0].players.players[0];
         let told = p
             .happiness
@@ -2575,7 +2578,7 @@ mod tests {
         let mut country = Fixture::country(club);
         let mut summary = TransferActivitySummary::new();
 
-        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+        ListingPass::list_players_from_pipeline(&mut country, today, &mut summary);
 
         let listing = country
             .transfer_market
@@ -2633,7 +2636,7 @@ mod tests {
         let mut country = Fixture::country(club);
         let mut summary = TransferActivitySummary::new();
 
-        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+        ListingPass::list_players_from_pipeline(&mut country, today, &mut summary);
 
         let listing = country
             .transfer_market
@@ -2693,7 +2696,7 @@ mod tests {
         let mut country = Fixture::country(club);
         let mut summary = TransferActivitySummary::new();
 
-        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+        ListingPass::list_players_from_pipeline(&mut country, today, &mut summary);
 
         let listing = country
             .transfer_market
@@ -2755,7 +2758,7 @@ mod tests {
         ));
         let mut summary = TransferActivitySummary::new();
 
-        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+        ListingPass::list_players_from_pipeline(&mut country, today, &mut summary);
 
         let rows: Vec<&TransferListing> = country
             .transfer_market
@@ -2805,7 +2808,7 @@ mod tests {
         ));
         let mut summary = TransferActivitySummary::new();
 
-        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+        ListingPass::list_players_from_pipeline(&mut country, today, &mut summary);
 
         let rows: Vec<&TransferListing> = country
             .transfer_market
@@ -2872,7 +2875,7 @@ mod tests {
         let today = ValveFx::monday();
         // Listed 396 days ago — past the year threshold, no negotiation.
         let mut country = ValveFx::listed_country(Fixture::date(2025, 5, 1));
-        CountryResult::release_unsold_listed_players(&mut country, today);
+        ListingPass::release_unsold_listed_players(&mut country, today);
 
         let player = ValveFx::player(&country);
         assert!(player.contract.is_none(), "the deal must be torn up");
@@ -2901,7 +2904,7 @@ mod tests {
         let today = ValveFx::monday();
         // Listed ~3 months ago — a live sale, not a stalemate.
         let mut country = ValveFx::listed_country(Fixture::date(2026, 3, 1));
-        CountryResult::release_unsold_listed_players(&mut country, today);
+        ListingPass::release_unsold_listed_players(&mut country, today);
         assert!(
             ValveFx::player(&country).contract.is_some(),
             "a listing months old is still a sale in progress"
@@ -2911,7 +2914,7 @@ mod tests {
     #[test]
     fn window_close_lands_limbo_on_listed_players() {
         let mut country = ValveFx::listed_country(Fixture::date(2026, 5, 1));
-        CountryResult::emit_window_close_limbo(&mut country, ValveFx::monday());
+        ListingPass::emit_window_close_limbo(&mut country, ValveFx::monday());
         let unsold = ValveFx::player(&country)
             .happiness
             .recent_events
@@ -2928,7 +2931,7 @@ mod tests {
     fn window_close_ignores_synthetic_listings() {
         let mut country = ValveFx::listed_country(Fixture::date(2026, 5, 1));
         country.transfer_market.listings[0].origin = TransferListingOrigin::SyntheticUnsolicited;
-        CountryResult::emit_window_close_limbo(&mut country, ValveFx::monday());
+        ListingPass::emit_window_close_limbo(&mut country, ValveFx::monday());
         let unsold = ValveFx::player(&country)
             .happiness
             .recent_events
@@ -2952,7 +2955,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .expiration = Fixture::date(2026, 9, 1);
-        CountryResult::release_unsold_listed_players(&mut country, today);
+        ListingPass::release_unsold_listed_players(&mut country, today);
         assert!(
             ValveFx::player(&country).contract.is_some(),
             "final-half-year deals run out on their own — no severance needed"
@@ -2981,7 +2984,7 @@ mod tests {
         let mut country = Fixture::country(club);
         let mut summary = TransferActivitySummary::new();
 
-        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+        ListingPass::list_players_from_pipeline(&mut country, today, &mut summary);
 
         let listing = country
             .transfer_market
@@ -3015,8 +3018,8 @@ mod tests {
         let mut country = Fixture::country(club);
         let mut summary = TransferActivitySummary::new();
 
-        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
-        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+        ListingPass::list_players_from_pipeline(&mut country, today, &mut summary);
+        ListingPass::list_players_from_pipeline(&mut country, today, &mut summary);
 
         let loan_listings = country
             .transfer_market
@@ -3045,9 +3048,9 @@ mod tests {
             TeamType::Main,
             vec![player],
         )]);
-        let analysis = CountryResult::analyze_squad_needs(&club, today);
+        let analysis = ListingPass::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision = CountryResult::evaluate_player_listing(
+        let decision = ListingPass::evaluate_player_listing(
             player_ref,
             &analysis,
             &club,
@@ -3074,9 +3077,9 @@ mod tests {
             TeamType::Main,
             vec![player],
         )]);
-        let analysis = CountryResult::analyze_squad_needs(&club, today);
+        let analysis = ListingPass::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision = CountryResult::evaluate_player_listing(
+        let decision = ListingPass::evaluate_player_listing(
             player_ref,
             &analysis,
             &club,
@@ -3106,9 +3109,9 @@ mod tests {
             TeamType::Main,
             vec![player],
         )]);
-        let analysis = CountryResult::analyze_squad_needs(&club, today);
+        let analysis = ListingPass::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision = CountryResult::evaluate_player_listing(
+        let decision = ListingPass::evaluate_player_listing(
             player_ref,
             &analysis,
             &club,
@@ -3140,9 +3143,9 @@ mod tests {
             TeamType::Main,
             vec![player],
         )]);
-        let analysis = CountryResult::analyze_squad_needs(&club, today);
+        let analysis = ListingPass::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision = CountryResult::evaluate_player_listing(
+        let decision = ListingPass::evaluate_player_listing(
             player_ref,
             &analysis,
             &club,
@@ -3177,9 +3180,9 @@ mod tests {
             TeamType::Main,
             vec![player],
         )]);
-        let analysis = CountryResult::analyze_squad_needs(&club, today);
+        let analysis = ListingPass::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision = CountryResult::evaluate_player_listing(
+        let decision = ListingPass::evaluate_player_listing(
             player_ref,
             &analysis,
             &club,
@@ -3206,9 +3209,9 @@ mod tests {
             TeamType::Main,
             vec![player],
         )]);
-        let analysis = CountryResult::analyze_squad_needs(&club, today);
+        let analysis = ListingPass::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision = CountryResult::evaluate_player_listing(
+        let decision = ListingPass::evaluate_player_listing(
             player_ref,
             &analysis,
             &club,
@@ -3235,9 +3238,9 @@ mod tests {
             TeamType::Main,
             vec![player],
         )]);
-        let analysis = CountryResult::analyze_squad_needs(&club, today);
+        let analysis = ListingPass::analyze_squad_needs(&club, today);
         let player_ref = &club.teams.teams[0].players.players[0];
-        let decision = CountryResult::evaluate_player_listing(
+        let decision = ListingPass::evaluate_player_listing(
             player_ref,
             &analysis,
             &club,
@@ -3376,14 +3379,14 @@ mod tests {
             PlayerSquadStatus::MainBackupPlayer,
         ] {
             let club = TopFlightSquad::club_with_regular(status.clone(), 119);
-            let analysis = CountryResult::analyze_squad_needs(&club, today);
+            let analysis = ListingPass::analyze_squad_needs(&club, today);
             let player = club.teams.teams[0]
                 .players
                 .players
                 .iter()
                 .find(|p| p.id == 99)
                 .unwrap();
-            let decision = CountryResult::evaluate_player_listing(
+            let decision = ListingPass::evaluate_player_listing(
                 player,
                 &analysis,
                 &club,
@@ -3407,7 +3410,7 @@ mod tests {
     fn three_keepers_are_not_a_surplus_position() {
         let today = Fixture::date(2026, 8, 2);
         let club = TopFlightSquad::club_with_regular(PlayerSquadStatus::NotYetSet, 122);
-        let analysis = CountryResult::analyze_squad_needs(&club, today);
+        let analysis = ListingPass::analyze_squad_needs(&club, today);
         assert!(
             !analysis
                 .surplus_positions
@@ -3443,7 +3446,7 @@ mod tests {
         )]);
         let mut country = Fixture::country(club);
         let mut summary = TransferActivitySummary::new();
-        CountryResult::list_players_from_pipeline(&mut country, today, &mut summary);
+        ListingPass::list_players_from_pipeline(&mut country, today, &mut summary);
 
         let rows = country
             .transfer_market

@@ -11,6 +11,9 @@
 //! market visibility, scout regions, and the compatriot sweep have no domestic
 //! counterpart.
 
+use crate::transfers::loan::LoanPipeline;
+use crate::transfers::market::window::MarketCadence;
+use crate::transfers::view::club::ClubView;
 use chrono::NaiveDate;
 use log::debug;
 
@@ -18,16 +21,15 @@ use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::ScoutingRegion;
 use crate::transfers::deal::offer::{PersonalTermsOffer, TransferClause, TransferOffer};
 use crate::transfers::deal::reason::TransferReason;
+use crate::transfers::gate::TransferPlausibilityVerdict;
+use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
 use crate::transfers::gate::stance::PlayerStanceBuilder;
-use crate::transfers::gate::{
-    BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
-};
 use crate::transfers::loan::interest::{
     BorrowerTaste, GroupPressure, InterestDraw, LoanCandidateProfile,
 };
 use crate::transfers::market::{TransferListing, TransferListingOrigin, TransferListingType};
 use crate::transfers::pipeline::TransferRequestStatus;
-use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
+use crate::transfers::pipeline::processor::PlayerSummary;
 use crate::transfers::pipeline::trace::MarketSwitches;
 use crate::transfers::squad::minutes::LoanPromise;
 use crate::transfers::{MarketAffinity, MarketAffinityInputs, MarketMap, MoveKind};
@@ -125,7 +127,7 @@ impl ForeignLoanScan {
 
         let mut actions: Vec<ForeignLoanAction> = Vec::new();
         let load = MarketLoad {
-            pending_loans: PipelineProcessor::pending_incoming_loans_by_club(country),
+            pending_loans: LoanPipeline::pending_incoming_loans_by_club(country),
             active_counts: country.transfer_market.active_negotiation_counts(),
             active_pairs: country.transfer_market.active_negotiation_pairs(),
         };
@@ -172,7 +174,7 @@ impl ForeignLoanScan {
         date: NaiveDate,
         market_map: &MarketMap,
     ) -> Option<ForeignLoanBoard<'a>> {
-        let is_january = PipelineProcessor::is_mid_season_window_for(country, date);
+        let is_january = MarketCadence::is_mid_season_window_for(&country.code, date);
 
         // The scanning country's own region — used to block loans from
         // clearly more prestigious regions (Paraguay can't loan from England).
@@ -253,7 +255,7 @@ impl ForeignLoanScan {
                 // below and the club-rep reality band downstream still bound
                 // how far the move can fall.
                 if !HomeLoanGates::country_rep_ok(
-                    PipelineProcessor::foreign_loan_country_rep_ok(
+                    LoanPipeline::foreign_loan_country_rep_ok(
                         p.country_reputation,
                         country_rep,
                         ForeignUnsolicitedLoanTarget::is_development(p.age),
@@ -268,7 +270,7 @@ impl ForeignLoanScan {
                 // (an Italian U18 → Romania). See `foreign_loan_region_ok`.
                 // `p.region` is precomputed at pool-build time.
                 if !HomeLoanGates::region_ok(
-                    PipelineProcessor::foreign_loan_region_ok(
+                    LoanPipeline::foreign_loan_region_ok(
                         p.region.league_prestige(),
                         club_region_prestige,
                         ForeignUnsolicitedLoanTarget::is_development(p.age),
@@ -388,7 +390,7 @@ impl ForeignLoanScan {
             return None;
         }
         // The slice each branch actually looks at.
-        let borrower_league_rep = PipelineProcessor::club_league_reputation(country, club);
+        let borrower_league_rep = LoanPipeline::club_league_reputation(country, club);
 
         // Check concurrent negotiation limits
         let actual_active = active_counts.get(&club.id).copied().unwrap_or(0);
@@ -684,7 +686,7 @@ impl ForeignLoanScan {
                 // gate as the domestic scan, anchored on the
                 // player's own club rather than his personal
                 // reputation.
-                && PipelineProcessor::loan_level_ok(
+                && LoanPipeline::loan_level_ok(
                     team_rep,
                     p.club_world_reputation.max(0) as u16,
                     p.skill_ability,
@@ -714,7 +716,7 @@ impl ForeignLoanScan {
                 )
                 // The asset's own price on this destination —
                 // the two money terms cross a border unchanged.
-                && PipelineProcessor::foreign_loan_guard_allows(
+                && LoanPipeline::foreign_loan_guard_allows(
                     p,
                     foreign_borrower_for(p.position_group).as_ref(),
                 )
@@ -836,7 +838,7 @@ impl ForeignLoanScan {
                     // country — reachable only by a National side
                     // with an open request in his position.
                     (p.is_loan_listed || p.home_return_wanted)
-                && PipelineProcessor::home_pickup_age_ok(
+                && LoanPipeline::home_pickup_age_ok(
                     p.age,
                     p.home_return_wanted,
                     p.nationality_country_id,
@@ -878,7 +880,7 @@ impl ForeignLoanScan {
                     true,
                     p.club_best_in_group,
                 )
-                && PipelineProcessor::loan_level_ok(
+                && LoanPipeline::loan_level_ok(
                     team_rep,
                     p.club_world_reputation.max(0) as u16,
                     p.skill_ability,
@@ -903,7 +905,7 @@ impl ForeignLoanScan {
                 )
                 // The asset's own price on this destination —
                 // the two money terms cross a border unchanged.
-                && PipelineProcessor::foreign_loan_guard_allows(
+                && LoanPipeline::foreign_loan_guard_allows(
                     p,
                     foreign_borrower_for(p.position_group).as_ref(),
                 )
@@ -978,7 +980,7 @@ impl ForeignLoanScan {
             );
             country.transfer_market.add_listing(listing);
 
-            let buying_rep = PipelineProcessor::get_club_reputation(country, action.club_id);
+            let buying_rep = ClubView::get_club_reputation(country, action.club_id);
             // Use a reasonable estimate for selling club rep
             let selling_rep = (action.player.skill_ability as f32 / 200.0).clamp(0.1, 0.9);
 
@@ -999,8 +1001,7 @@ impl ForeignLoanScan {
             if coming_home && action.player.estimated_value > 0.0 {
                 clauses.push(TransferClause::LoanOptionToBuy(CurrencyValue {
                     amount: FormattingUtils::round_fee(
-                        action.player.estimated_value
-                            * PipelineProcessor::LOAN_OPTION_VALUE_FRACTION,
+                        action.player.estimated_value * LoanPipeline::LOAN_OPTION_VALUE_FRACTION,
                     ),
                     currency: Currency::Usd,
                 }));
@@ -1009,7 +1010,7 @@ impl ForeignLoanScan {
                 base_fee: asking_price,
                 clauses,
                 contract_length_years: None,
-                loan_duration_months: Some(PipelineProcessor::loan_duration_to_season_end(
+                loan_duration_months: Some(LoanPipeline::loan_duration_to_season_end(
                     country,
                     action.club_id,
                     date,

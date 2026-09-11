@@ -44,25 +44,27 @@
 //! clubs as scout monitoring instead of staying invisible behind a
 //! zero-reputation age-group league.
 //!
-//! Per project convention this is a method on [`PipelineProcessor`]; every
-//! type is reached through a `use` at the file header.
+//! Per project convention this hangs off [`ScoutingPass`] rather than a
+//! loose function; every type is reached through a `use` at the file header.
 
+use crate::transfers::pipeline::StaffRecommendations;
+use crate::transfers::scouting::ScoutingPass;
+use crate::transfers::scouting::judgement::ScoutJudgement;
+use crate::transfers::view::player::PlayerView;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
 use chrono::{Datelike, NaiveDate, Weekday};
 
 use crate::transfers::ScoutingRegion;
-use crate::transfers::gate::{
-    BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
-};
+use crate::transfers::gate::TransferPlausibilityVerdict;
+use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
 use crate::transfers::loan::interest::{ClubOpinion, InterestDraw};
 use crate::transfers::pipeline::advice::{
     ListedTargetScreen, ListedTargetVerdict, ListedTargetView,
 };
 use crate::transfers::pipeline::circulation::BuyerScan;
-use crate::transfers::pipeline::helpers::ClubGroupRanks;
-use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
+use crate::transfers::pipeline::processor::PlayerSummary;
 use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::pipeline::{
     KnownPlayerMemory, RecommendationSource, RecommendationType, StaffRecommendation,
@@ -72,6 +74,7 @@ use crate::transfers::scouting::breakout::{
 };
 use crate::transfers::scouting::recruitment::{ScoutMonitoringSource, ScoutPlayerMonitoring};
 use crate::transfers::squad::standing::{CareerRecordSnapshot, StandingInputs, StandingSignal};
+use crate::transfers::view::player::ClubGroupRanks;
 use crate::{Club, Country, Person, PlayerFieldPositionGroup, PlayerPositionType};
 
 /// One discovered player the watch may surface — his market summary, the few
@@ -172,9 +175,7 @@ impl InvestmentRelevance {
                 believed_by_group
                     .entry(p.position().position_group())
                     .or_default()
-                    .push(
-                        opinion.believed_ability(PipelineProcessor::position_evaluation_ability(p)),
-                    );
+                    .push(opinion.believed_ability(PlayerView::position_evaluation_ability(p)));
             }
         }
         for abilities in believed_by_group.values_mut() {
@@ -221,7 +222,10 @@ struct BuyerRead<'a> {
     plausibility: &'a BuyerPlausibilityContext,
 }
 
-impl PipelineProcessor {
+/// The year-round form sweep: who is playing above his level, anywhere.
+pub struct FormWatch;
+
+impl FormWatch {
     /// Per-pass cap on NEW monitors a single club opens at the FLOOR of the
     /// reputation ladder, so the watch builds a club's books gradually
     /// rather than in one flood. Scaled up with reputation by
@@ -418,7 +422,7 @@ impl PipelineProcessor {
                             parent_league_reputation,
                         )
                     };
-                    let skill_ability = PipelineProcessor::position_evaluation_ability(player);
+                    let skill_ability = PlayerView::position_evaluation_ability(player);
 
                     // Standing: what a scout in the stands takes away
                     // rather than what the scoreline says. A youth-squad
@@ -467,7 +471,7 @@ impl PipelineProcessor {
                     // pair — build the summary directly instead of
                     // re-finding the player with a country-wide scan, and
                     // hand it the group snapshot so it doesn't re-sort.
-                    let summary = PipelineProcessor::build_player_summary_ranked(
+                    let summary = PlayerView::build_player_summary_ranked(
                         country,
                         club,
                         player,
@@ -476,7 +480,7 @@ impl PipelineProcessor {
                     );
 
                     let estimated_potential = skill_ability
-                        + PipelineProcessor::estimate_growth_potential(
+                        + ScoutJudgement::estimate_growth_potential(
                             age,
                             player.skills.mental.determination,
                             player.skills.mental.work_rate,
@@ -592,7 +596,7 @@ impl PipelineProcessor {
             // most of these moves actually begin. It lowers the bar; it
             // never removes it, and only for a watcher who can genuinely
             // offer him a bigger stage.
-            let bar = PipelineProcessor::discovery_bar(
+            let bar = FormWatch::discovery_bar(
                 s.seller_ctx.big_stage_inclination,
                 s.seller_ctx.league_reputation,
                 best_league_reputation,
@@ -625,7 +629,7 @@ impl PipelineProcessor {
                 continue;
             }
             let estimated_potential = s.skill_ability
-                + PipelineProcessor::estimate_growth_potential(
+                + ScoutJudgement::estimate_growth_potential(
                     s.age,
                     s.determination,
                     s.work_rate,
@@ -677,7 +681,7 @@ impl PipelineProcessor {
                     .teams
                     .first()
                     .map(|t| {
-                        PipelineProcessor::staff_recommendation_cap_score(
+                        StaffRecommendations::staff_recommendation_cap_score(
                             t.reputation.level(),
                             t.reputation.overall_score(),
                         )
@@ -788,7 +792,7 @@ impl PipelineProcessor {
         // standout abroad and simply never have a slot to file him in.
         if !plan.initialized
             || plan.scout_monitoring.len()
-                >= PipelineProcessor::breakout_watch_monitor_cap(club_overall_score)
+                >= FormWatch::breakout_watch_monitor_cap(club_overall_score)
         {
             return;
         }
@@ -813,7 +817,7 @@ impl PipelineProcessor {
         // keeps "form travels" meaning "as far as your scouts do".
         let home_region = ScoutingRegion::from_country(country.continent_id, &country.code);
         let reach: HashSet<ScoutingRegion> =
-            PipelineProcessor::reputation_scout_regions(home_region, club_overall_score)
+            ScoutingPass::reputation_scout_regions(home_region, club_overall_score)
                 .into_iter()
                 .collect();
 
@@ -850,7 +854,7 @@ impl PipelineProcessor {
             .collect();
         let drawn = InterestDraw::pick_several(
             &slate,
-            PipelineProcessor::breakout_watch_per_pass(club_overall_score),
+            FormWatch::breakout_watch_per_pass(club_overall_score),
         );
         for (cand, _score) in drawn.into_iter().map(|i| &scored[i as usize]) {
             let s = &cand.summary;
@@ -1034,6 +1038,7 @@ mod breakout_watch_tests {
     use crate::transfers::pipeline::{
         SellerPlausibilityContext, TransferNeedReason, TransferRequestStatus,
     };
+    use crate::transfers::squad::bands::TierBands;
     use crate::transfers::squad::standing::CareerRecordSnapshot;
     use crate::{
         Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, Player,
@@ -1263,14 +1268,12 @@ mod breakout_watch_tests {
     fn foreign_breakout_star_is_discovered_without_being_listed() {
         let mut country = Fx::country(8_200);
         let rep_score = country.clubs[0].teams.teams[0].reputation.overall_score();
-        let ability = PipelineProcessor::tier_starter_ca_score(
-            rep_score,
-            PlayerFieldPositionGroup::Midfielder,
-        );
+        let ability =
+            TierBands::tier_starter_ca_score(rep_score, PlayerFieldPositionGroup::Midfielder);
         let star = Fx::massalyga(ability);
         let pool: Vec<&PlayerSummary> = vec![&star];
 
-        PipelineProcessor::scan_breakout_form(&mut country, &pool, Fx::monday());
+        FormWatch::scan_breakout_form(&mut country, &pool, Fx::monday());
 
         let plan = &country.clubs[0].transfer_plan;
         assert!(
@@ -1297,17 +1300,15 @@ mod breakout_watch_tests {
     fn the_recommendation_opens_a_marquee_request() {
         let mut country = Fx::country(8_200);
         let rep_score = country.clubs[0].teams.teams[0].reputation.overall_score();
-        let ability = PipelineProcessor::tier_starter_ca_score(
-            rep_score,
-            PlayerFieldPositionGroup::Midfielder,
-        );
+        let ability =
+            TierBands::tier_starter_ca_score(rep_score, PlayerFieldPositionGroup::Midfielder);
         let star = Fx::massalyga(ability);
         let pool: Vec<&PlayerSummary> = vec![&star];
 
-        PipelineProcessor::scan_breakout_form(&mut country, &pool, Fx::monday());
+        FormWatch::scan_breakout_form(&mut country, &pool, Fx::monday());
         assert!(country.clubs[0].transfer_plan.transfer_requests.is_empty());
 
-        PipelineProcessor::process_staff_recommendations(&mut country, Fx::monday());
+        StaffRecommendations::process_staff_recommendations(&mut country, Fx::monday());
 
         let plan = &country.clubs[0].transfer_plan;
         let request = plan
@@ -1333,14 +1334,12 @@ mod breakout_watch_tests {
     fn ordinary_foreign_output_is_not_discovered() {
         let mut country = Fx::country(8_200);
         let rep_score = country.clubs[0].teams.teams[0].reputation.overall_score();
-        let ability = PipelineProcessor::tier_starter_ca_score(
-            rep_score,
-            PlayerFieldPositionGroup::Midfielder,
-        );
+        let ability =
+            TierBands::tier_starter_ca_score(rep_score, PlayerFieldPositionGroup::Midfielder);
         let plain = Fx::ordinary_foreigner(ability);
         let pool: Vec<&PlayerSummary> = vec![&plain];
 
-        PipelineProcessor::scan_breakout_form(&mut country, &pool, Fx::monday());
+        FormWatch::scan_breakout_form(&mut country, &pool, Fx::monday());
 
         assert!(
             country.clubs[0]
@@ -1365,7 +1364,7 @@ mod breakout_watch_tests {
         };
         let pool: Vec<&PlayerSummary> = vec![&star];
 
-        PipelineProcessor::scan_breakout_form(&mut country, &pool, Fx::monday());
+        FormWatch::scan_breakout_form(&mut country, &pool, Fx::monday());
 
         assert!(
             country.clubs[0]
@@ -1388,7 +1387,7 @@ mod discovery_bar_tests {
 
     #[test]
     fn a_settled_player_faces_the_full_bar() {
-        let bar = PipelineProcessor::discovery_bar(0.0, EXPORTER_LEAGUE, BIG_STAGE);
+        let bar = FormWatch::discovery_bar(0.0, EXPORTER_LEAGUE, BIG_STAGE);
         assert_eq!(bar, BreakoutPerformanceSignal::BREAKOUT_THRESHOLD);
     }
 
@@ -1397,34 +1396,34 @@ mod discovery_bar_tests {
         // The level the shipped model calls "publicly restless" (0.40) is
         // where the old on/off bypass used to sit — and it needed a FORMAL
         // request on top, which is why it almost never fired.
-        let bar = PipelineProcessor::discovery_bar(0.40, EXPORTER_LEAGUE, BIG_STAGE);
+        let bar = FormWatch::discovery_bar(0.40, EXPORTER_LEAGUE, BIG_STAGE);
         assert!((bar - 35.0).abs() < 0.01, "bar was {bar}");
     }
 
     #[test]
     fn the_relief_bottoms_out_at_the_absolute_floor() {
-        let bar = PipelineProcessor::discovery_bar(1.0, EXPORTER_LEAGUE, BIG_STAGE);
-        assert_eq!(bar, PipelineProcessor::TOUTED_BREAKOUT_FLOOR);
+        let bar = FormWatch::discovery_bar(1.0, EXPORTER_LEAGUE, BIG_STAGE);
+        assert_eq!(bar, FormWatch::TOUTED_BREAKOUT_FLOOR);
     }
 
     #[test]
     fn a_watcher_who_is_no_bigger_a_stage_gets_no_relief() {
         // A sideways move answers nothing the player is asking for, so his
         // willingness cannot lower anybody's bar.
-        let bar = PipelineProcessor::discovery_bar(1.0, EXPORTER_LEAGUE, EXPORTER_LEAGUE + 400);
+        let bar = FormWatch::discovery_bar(1.0, EXPORTER_LEAGUE, EXPORTER_LEAGUE + 400);
         assert_eq!(bar, BreakoutPerformanceSignal::BREAKOUT_THRESHOLD);
     }
 
     #[test]
     fn throughput_widens_with_reputation_and_never_shrinks() {
-        let minnow_pass = PipelineProcessor::breakout_watch_per_pass(0.0);
-        let giant_pass = PipelineProcessor::breakout_watch_per_pass(1.0);
-        assert_eq!(minnow_pass, PipelineProcessor::BREAKOUT_WATCH_PER_PASS);
+        let minnow_pass = FormWatch::breakout_watch_per_pass(0.0);
+        let giant_pass = FormWatch::breakout_watch_per_pass(1.0);
+        assert_eq!(minnow_pass, FormWatch::BREAKOUT_WATCH_PER_PASS);
         assert!(giant_pass > minnow_pass, "{giant_pass} !> {minnow_pass}");
 
-        let minnow_cap = PipelineProcessor::breakout_watch_monitor_cap(0.0);
-        let giant_cap = PipelineProcessor::breakout_watch_monitor_cap(1.0);
-        assert_eq!(minnow_cap, PipelineProcessor::BREAKOUT_WATCH_MONITOR_CAP);
+        let minnow_cap = FormWatch::breakout_watch_monitor_cap(0.0);
+        let giant_cap = FormWatch::breakout_watch_monitor_cap(1.0);
+        assert_eq!(minnow_cap, FormWatch::BREAKOUT_WATCH_MONITOR_CAP);
         assert!(giant_cap > minnow_cap, "{giant_cap} !> {minnow_cap}");
     }
 }

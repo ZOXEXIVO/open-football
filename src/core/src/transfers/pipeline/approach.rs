@@ -1,3 +1,8 @@
+use crate::transfers::deal::reason::TransferReasonBuilder;
+use crate::transfers::market::window::MarketCadence;
+use crate::transfers::scouting::recruitment::meeting::MeetingPass;
+use crate::transfers::value::asking::AskingPrice;
+use crate::transfers::view::player::PlayerView;
 use chrono::NaiveDate;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -13,11 +18,12 @@ use crate::transfers::deal::negotiation::NegotiationStatus;
 use crate::transfers::deal::offer::{TransferClause, TransferOffer};
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::gate::appraisal::PlayerStance;
+use crate::transfers::gate::build::TransferPlausibilityBuilder;
 use crate::transfers::gate::fit::{ForeignSlotCount, SquadRegistrationLimits};
 use crate::transfers::gate::stance::{AvailabilityView, PlayerStanceBuilder, StanceInputs};
 use crate::transfers::gate::{
-    TransferMovePlausibility, TransferMoveStage, TransferPlausibilityBuilder,
-    TransferPlausibilityEvaluator, TransferPlausibilityVerdict,
+    TransferMovePlausibility, TransferMoveStage, TransferPlausibilityEvaluator,
+    TransferPlausibilityVerdict,
 };
 mod domestic;
 mod foreign;
@@ -26,7 +32,6 @@ use crate::transfers::MarketMap;
 use crate::transfers::market::{
     TransferListing, TransferListingOrigin, TransferListingStatus, TransferListingType,
 };
-use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::pipeline::{ClubTransferPlan, DetailedScoutingReport};
 use crate::transfers::pipeline::{
@@ -275,7 +280,7 @@ impl ApproachBuilder {
         )
         .with_valuation_reputation(drift.valuation_reputation);
 
-        let asking_price = PipelineProcessor::calculate_asking_price(
+        let asking_price = AskingPrice::calculate_asking_price(
             player,
             sell_country,
             selling_club,
@@ -306,7 +311,7 @@ impl ApproachBuilder {
         // sources are optional — minimal context falls back
         // to the previous behaviour.
         let dossier = if monitoring.is_some() || scouting_report.is_some() {
-            Some(PipelineProcessor::build_board_dossier(
+            Some(MeetingPass::build_board_dossier(
                 plan,
                 player_id,
                 ctx.shortlist_request_id,
@@ -326,7 +331,7 @@ impl ApproachBuilder {
             allocated_budget: allocated_for_move,
             wage_budget_headroom: None,
             buying_club_balance: club.finance.balance.balance,
-            is_january: PipelineProcessor::is_mid_season_window_for(buy_country, date),
+            is_january: MarketCadence::is_mid_season_window_for(&buy_country.code, date),
             price_level,
             shortlist_rank: drift.shortlist_rank,
             competition_count: drift.competition_count,
@@ -439,7 +444,7 @@ impl ApproachBuilder {
             let believed_level = monitoring
                 .map(|m| m.current_assessed_ability)
                 .or_else(|| scouting_report.map(|r| r.assessed_ability))
-                .unwrap_or_else(|| PipelineProcessor::position_evaluation_ability(player))
+                .unwrap_or_else(|| PlayerView::position_evaluation_ability(player))
                 as f32;
             let believed_ceiling = monitoring
                 .map(|m| m.current_assessed_potential)
@@ -543,7 +548,7 @@ impl ApproachBuilder {
         OfferClauses::attach_loan_appearance_fee(
             &mut offer,
             is_loan && drift.loan_appearance_fee,
-            PipelineProcessor::get_club_reputation_level(sell_country, selling_club_id),
+            ClubView::get_club_reputation_level(sell_country, selling_club_id),
         );
 
         // Resolve negotiator staff and build reason
@@ -554,7 +559,7 @@ impl ApproachBuilder {
             .iter()
             .find(|r| r.player_id == player_id);
 
-        let need_and_scout = PipelineProcessor::build_transfer_reason(request, scout_report);
+        let need_and_scout = TransferReasonBuilder::build_transfer_reason(request, scout_report);
         let reason = if drift.generic_reason_fallback && need_and_scout.is_empty() {
             if is_loan {
                 TransferReason::key("signing_reason_loan")
@@ -866,7 +871,10 @@ impl ForeignRegistrationGuard {
     }
 }
 
-impl PipelineProcessor {
+/// Opening the conversation: who the club approaches, at what price, and what the answer does to its plan.
+pub struct ApproachPass;
+
+impl ApproachPass {
     pub fn initiate_negotiations(country: &mut Country, date: NaiveDate) {
         DomesticApproachPass::run(country, date);
     }
@@ -909,7 +917,7 @@ impl PipelineProcessor {
         philosophy: &ClubPhilosophy,
         prospect: &ProspectSigningContext,
     ) -> TransferApproach {
-        let is_january = Self::is_january_window(date);
+        let is_january = MarketCadence::is_january_window(date);
 
         let age = player_age;
 
@@ -1200,7 +1208,8 @@ impl PipelineProcessor {
         // the loan lands. Domestic only: a foreign loanee isn't resolvable
         // from this country, and the in-flight depth cap already gates those.
         let loan_filled_group = if resolved_was_loan == Some(true) && accepted {
-            Self::find_player_in_country(country, player_id).map(|p| p.position().position_group())
+            PlayerView::find_player_in_country(country, player_id)
+                .map(|p| p.position().position_group())
         } else {
             None
         };
@@ -2074,7 +2083,7 @@ mod cleanup_tests {
         let country = make_country(1, "UR", "uruguay", vec![buyer, other]);
         let mut data = make_simulator(d(2026, 6, 5), vec![country]);
 
-        PipelineProcessor::cleanup_player_transfer_interest(&mut data, player_id);
+        ApproachPass::cleanup_player_transfer_interest(&mut data, player_id);
 
         let country = data.country(1).unwrap();
         for club in &country.clubs {
@@ -2140,7 +2149,7 @@ mod cleanup_tests {
 
         let mut data = make_simulator(d(2026, 6, 5), vec![country]);
 
-        PipelineProcessor::cleanup_player_transfer_interest(&mut data, player_id);
+        ApproachPass::cleanup_player_transfer_interest(&mut data, player_id);
 
         let country = data.country(1).unwrap();
         // All listings for the player are Completed.
@@ -2218,7 +2227,7 @@ mod cleanup_tests {
             vec![selling_country, buying_country, third_country],
         );
 
-        PipelineProcessor::cleanup_player_transfer_interest(&mut data, player_id);
+        ApproachPass::cleanup_player_transfer_interest(&mut data, player_id);
 
         // Verify each country has been swept clean.
         for cont in &data.continents {
@@ -2304,7 +2313,7 @@ mod cleanup_tests {
         let mut country = make_country(1, "EN", "england", vec![buyer]);
         put_prospect_pursuit(&mut country, 0, 7, player_id, 10);
 
-        PipelineProcessor::on_negotiation_resolved(&mut country, 1, player_id, false);
+        ApproachPass::on_negotiation_resolved(&mut country, 1, player_id, false);
 
         let plan = &country.clubs[0].transfer_plan;
         assert_eq!(
@@ -2326,7 +2335,7 @@ mod cleanup_tests {
         let mut country = make_country(1, "EN", "england", vec![buyer]);
         put_prospect_pursuit(&mut country, 0, 7, player_id, 11);
 
-        PipelineProcessor::on_negotiation_resolved(&mut country, 1, player_id, true);
+        ApproachPass::on_negotiation_resolved(&mut country, 1, player_id, true);
 
         let plan = &country.clubs[0].transfer_plan;
         assert_eq!(plan.prospect_pursuits_active, 0);
@@ -2357,7 +2366,7 @@ mod cleanup_tests {
         let country = make_country(1, "FR", "france", vec![buyer]);
         let mut data = make_simulator(d(2026, 6, 5), vec![country]);
 
-        PipelineProcessor::cleanup_player_transfer_interest(&mut data, signed_id);
+        ApproachPass::cleanup_player_transfer_interest(&mut data, signed_id);
 
         let buyer = &data.country(1).unwrap().clubs[0];
         // Signed player interest is gone.
@@ -2464,7 +2473,7 @@ mod prospect_approach_tests {
             prospect: &ProspectSigningContext,
             request: &TransferRequest,
         ) -> TransferApproach {
-            PipelineProcessor::determine_transfer_approach(
+            ApproachPass::determine_transfer_approach(
                 &rep,
                 budget,
                 fee,
@@ -2879,7 +2888,7 @@ mod dev_pathway_cleanup_tests {
 
         let mut data = OwnershipFixtures::world(vec![owner, stale]);
 
-        PipelineProcessor::cleanup_player_transfer_interest(&mut data, player_id);
+        ApproachPass::cleanup_player_transfer_interest(&mut data, player_id);
 
         let country = data.country(1).unwrap();
         let owner = country.clubs.iter().find(|c| c.id == 1).unwrap();

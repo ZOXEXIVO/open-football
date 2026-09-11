@@ -24,13 +24,15 @@
 //!   judgement; whether a move is legal is a fact. The plausibility model,
 //!   affordability and the seller's own protections are untouched.
 
+use crate::transfers::scouting::ScoutingPass;
+use crate::transfers::scouting::watch::FormWatch;
 use chrono::{Datelike, NaiveDate, Weekday};
 use rayon::prelude::*;
 
 use crate::club::player::personality::Language;
 use crate::transfers::ScoutingRegion;
 use crate::transfers::loan::interest::ClubOpinion;
-use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
+use crate::transfers::pipeline::processor::PlayerSummary;
 use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::pipeline::{
     ClubTransferPlan, KnownPlayerMemory, WatchAvailability, WatchlistEntry,
@@ -51,7 +53,10 @@ struct WatchCandidate<'a> {
     availability: WatchAvailability,
 }
 
-impl PipelineProcessor {
+/// The club's standing board of names it is carrying.
+pub struct Watchlist;
+
+impl Watchlist {
     /// Weekly, year-round refresh of every club's watchlist — the pipeline's
     /// entry point into [`MarketKnowledge`].
     ///
@@ -290,8 +295,8 @@ impl MarketKnowledge {
     /// still scales with its reputation rather than with the length of its
     /// wish list.
     fn follow(plan: &mut ClubTransferPlan, watcher_id: u32, overall_score: f32, date: NaiveDate) {
-        let monitor_cap = PipelineProcessor::breakout_watch_monitor_cap(overall_score);
-        let intake = PipelineProcessor::breakout_watch_per_pass(overall_score);
+        let monitor_cap = FormWatch::breakout_watch_monitor_cap(overall_score);
+        let intake = FormWatch::breakout_watch_per_pass(overall_score);
         let mut opened = 0usize;
 
         let mut ordered: Vec<WatchlistEntry> = plan.watchlist.clone();
@@ -399,7 +404,7 @@ impl MarketKnowledge {
         // it against a large share of the world every Monday — and a single
         // shift-and-and is an order of magnitude cheaper than a hash probe.
         let home_region = ScoutingRegion::from_country(country.continent_id, &country.code);
-        let reach = ReachMask::of(&PipelineProcessor::reputation_scout_regions(
+        let reach = ReachMask::of(&ScoutingPass::reputation_scout_regions(
             home_region,
             overall_score,
         ));

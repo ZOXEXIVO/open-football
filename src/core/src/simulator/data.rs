@@ -16,12 +16,13 @@ use crate::country::result::transfers::free::pricing::FreeAgentMarketCalculator;
 use crate::league::{LeagueTable, MatchStorage};
 use crate::shared::SimulatorDataIndexes;
 use crate::transfers::ScoutingRegion;
+use crate::transfers::pipeline::approach::ApproachPass;
 use std::sync::Arc;
 
 use crate::transfers::market::map::{
     CountryTransferProfile, MarketCountryFacts, MarketMap, RegionPrestigeTable,
 };
-use crate::transfers::pipeline::{PipelineProcessor, PlayerSummary};
+use crate::transfers::pipeline::PlayerSummary;
 use crate::transfers::scouting::desk::StaffIdSequence;
 use crate::utils::IntegerUtils;
 use crate::utils::random::engine as rng_engine;
@@ -800,7 +801,7 @@ impl SimulatorData {
             // Available country-market listing pointing at a club he no
             // longer plays for.
             let released_ids: Vec<u32> = released.iter().map(|p| p.id).collect();
-            PipelineProcessor::cleanup_player_release_interest_batch(self, &released_ids);
+            ApproachPass::cleanup_player_release_interest_batch(self, &released_ids);
             // Monthly diagnostics flow counter — every swept player is one
             // that leaked out of a roster into the pool this period.
             self.free_agent_flow.released_to_pool = self

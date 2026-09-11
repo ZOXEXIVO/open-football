@@ -6,6 +6,7 @@
 //! not fall below, and [`standing`] and [`minutes`] are how a player's
 //! place in the building is read.
 
+pub mod bands;
 pub mod ledger;
 mod loans;
 pub mod minutes;
@@ -14,6 +15,8 @@ pub mod plan;
 mod review;
 pub mod standing;
 
+use crate::transfers::market::window::MarketCadence;
+use crate::transfers::squad::bands::TierBands;
 use crate::transfers::squad::loans::LoanOutScan;
 
 use review::{SquadReview, SquadReviewOpening};
@@ -32,7 +35,7 @@ use crate::club::player::contract::{AffordabilityInput, ContractStalemate, Stale
 use crate::club::staff::perception::AbilityEstimator;
 use crate::club::team::squad::{SquadAssetClass, SquadAssetContext};
 use crate::transfers::TransferWindowManager;
-use crate::transfers::pipeline::processor::{PipelineProcessor, SquadPlayerInfo};
+use crate::transfers::pipeline::processor::SquadPlayerInfo;
 use crate::transfers::pipeline::trace::TransferTrace;
 use crate::transfers::value::PlayerValuationCalculator;
 
@@ -182,7 +185,7 @@ impl GroupNeedScan {
             // already assigned each slot the best man still available, discounted
             // by how far from his own role he is standing, so the weakest covered
             // slot is the honest answer to "where is this side short?".
-            let baseline = PipelineProcessor::tier_starter_ca_score(rep_score, group);
+            let baseline = TierBands::tier_starter_ca_score(rep_score, group);
             let upgrade_tolerance = quality_tolerance - (rep_score * 5.0).round() as i16;
             // A long-term-injured player never held a slot in the first place
             // (`position_coverage` skips him), so an ageing incumbent out for
@@ -761,7 +764,10 @@ impl ProspectPathway {
     }
 }
 
-impl PipelineProcessor {
+/// The monthly squad review: what this club has, what it needs, and who it will part with.
+pub struct SquadReviewPass;
+
+impl SquadReviewPass {
     /// Largest share of a club's available transfer budget one
     /// discretionary [`TransferNeedReason::SquadInvestment`] request may
     /// carry.
@@ -782,16 +788,16 @@ impl PipelineProcessor {
     // ============================================================
 
     pub fn evaluate_squads(country: &mut Country, date: NaiveDate) {
-        let is_window_start = Self::is_window_start_for(country, date);
+        let is_window_start = MarketCadence::is_window_start_for(&country.code, date);
         // Three cadences now reach this pass. The window ones are unchanged
         // (daily for the first week, then Mondays); the year-round planning
         // cadence is what makes a club that has no window open still write
         // down what it is trying to own — the whole point of L1. See
         // [`PlanningCadence`].
         let should_evaluate = is_window_start
-            || Self::should_evaluate_for(country, date)
+            || MarketCadence::should_evaluate_for(&country.code, date)
             || PlanningCadence::should_plan(country, date);
-        let window_mgr = TransferWindowManager::for_country(country, date);
+        let window_mgr = TransferWindowManager::for_country(country.id, &country.code, date);
         let current_window = window_mgr.current_window_dates(country.id, date);
         // The mid-season checkpoint — "he still has no minutes, do
         // something about it" — has to follow the COUNTRY's short window.
@@ -800,7 +806,7 @@ impl PipelineProcessor {
         // Asian (Jan 5-Feb 22) calendar is a date when the market is shut
         // and this sweep may not even run — so blocked prospects in those
         // countries got no review at all.
-        let mid_season_window = Self::is_mid_season_window_for(country, date);
+        let mid_season_window = MarketCadence::is_mid_season_window_for(&country.code, date);
 
         // Pass 0 (mut): harvest the searches that died since the last meeting,
         // BEFORE the read pass builds this tick's requests — that ordering is
@@ -1870,11 +1876,11 @@ mod stalled_prospect_tests {
         }
 
         fn formation() -> &'static [PlayerPositionType; 11] {
-            PipelineProcessor::get_formation_positions(MatchTacticType::T442)
+            SquadReviewPass::get_formation_positions(MatchTacticType::T442)
         }
 
         fn group_min(group: PlayerFieldPositionGroup) -> usize {
-            PipelineProcessor::group_min_needed(group, Self::formation())
+            SquadReviewPass::group_min_needed(group, Self::formation())
         }
     }
 
@@ -2041,7 +2047,7 @@ mod stalled_prospect_tests {
 
         let mut loan_outs = Vec::new();
         let mut force_list = Vec::new();
-        PipelineProcessor::identify_stalled_prospects(
+        SquadReviewPass::identify_stalled_prospects(
             &squad,
             date,
             &players,
@@ -2049,7 +2055,7 @@ mod stalled_prospect_tests {
             None,
             &mut loan_outs,
             &mut force_list,
-            PipelineProcessor::is_january_window(date),
+            MarketCadence::is_january_window(date),
         );
 
         let listed = loan_outs.iter().find(|c| c.player_id == 1);
@@ -2091,7 +2097,7 @@ mod stalled_prospect_tests {
 
         let mut loan_outs = Vec::new();
         let mut force_list = Vec::new();
-        PipelineProcessor::identify_stalled_prospects(
+        SquadReviewPass::identify_stalled_prospects(
             &squad,
             date,
             &players,
@@ -2099,7 +2105,7 @@ mod stalled_prospect_tests {
             None,
             &mut loan_outs,
             &mut force_list,
-            PipelineProcessor::is_january_window(date),
+            MarketCadence::is_january_window(date),
         );
 
         assert!(
@@ -2128,7 +2134,7 @@ mod stalled_prospect_tests {
 
         let mut loan_outs = Vec::new();
         let mut force_list = Vec::new();
-        PipelineProcessor::identify_stalled_prospects(
+        SquadReviewPass::identify_stalled_prospects(
             &squad,
             date,
             &players,
@@ -2136,7 +2142,7 @@ mod stalled_prospect_tests {
             None,
             &mut loan_outs,
             &mut force_list,
-            PipelineProcessor::is_january_window(date),
+            MarketCadence::is_january_window(date),
         );
 
         assert!(
@@ -2177,7 +2183,7 @@ mod stalled_prospect_tests {
 
         let mut loan_outs = Vec::new();
         let mut force_list = Vec::new();
-        PipelineProcessor::identify_stalled_prospects(
+        SquadReviewPass::identify_stalled_prospects(
             &squad,
             date,
             &players,
@@ -2185,7 +2191,7 @@ mod stalled_prospect_tests {
             None,
             &mut loan_outs,
             &mut force_list,
-            PipelineProcessor::is_january_window(date),
+            MarketCadence::is_january_window(date),
         );
 
         assert!(
@@ -2217,7 +2223,7 @@ mod stalled_prospect_tests {
             preferred_destination: LoanDestinationPreference::Any,
         }];
         let mut force_list = Vec::new();
-        PipelineProcessor::identify_stalled_prospects(
+        SquadReviewPass::identify_stalled_prospects(
             &squad,
             date,
             &players,
@@ -2225,7 +2231,7 @@ mod stalled_prospect_tests {
             None,
             &mut loan_outs,
             &mut force_list,
-            PipelineProcessor::is_january_window(date),
+            MarketCadence::is_january_window(date),
         );
 
         assert_eq!(
@@ -2309,9 +2315,9 @@ mod stalled_prospect_tests {
             .statistics_history
             .items
             .push(Fx::season_item(2025, true, 18)); // real minutes
-        assert_eq!(PipelineProcessor::loan_spell_count(&player), 2);
+        assert_eq!(SquadReviewPass::loan_spell_count(&player), 2);
         assert_eq!(
-            PipelineProcessor::failed_loan_count(&player),
+            SquadReviewPass::failed_loan_count(&player),
             1,
             "a loan with >= 5 official games is not a failed loan"
         );
@@ -2331,12 +2337,12 @@ mod stalled_prospect_tests {
             .items
             .push(Fx::season_item(2025, true, 4));
         assert_eq!(
-            PipelineProcessor::consecutive_zero_official_seasons(&player),
+            SquadReviewPass::consecutive_zero_official_seasons(&player),
             0,
             "parent 0 + loan 4 in one season is 4 games, not a write-off"
         );
         assert_eq!(
-            PipelineProcessor::last_completed_season_official_games(&player),
+            SquadReviewPass::last_completed_season_official_games(&player),
             4
         );
     }
@@ -2364,7 +2370,7 @@ mod stalled_prospect_tests {
 
         let mut loan_outs = Vec::new();
         let mut force_list = Vec::new();
-        PipelineProcessor::identify_stalled_prospects(
+        SquadReviewPass::identify_stalled_prospects(
             &squad,
             date,
             &players,
@@ -2372,7 +2378,7 @@ mod stalled_prospect_tests {
             None,
             &mut loan_outs,
             &mut force_list,
-            PipelineProcessor::is_january_window(date),
+            MarketCadence::is_january_window(date),
         );
 
         assert!(
@@ -2405,7 +2411,7 @@ mod stalled_prospect_tests {
         date: NaiveDate,
     ) -> Vec<LoanOutCandidate> {
         let mut loan_outs = Vec::new();
-        PipelineProcessor::identify_loan_outs(
+        SquadReviewPass::identify_loan_outs(
             &Fx::rosterless_club(),
             squad,
             &ReputationLevel::Regional,
@@ -2678,7 +2684,7 @@ mod goalkeeper_prospect_tests {
                 .add(GkFx::player(2, PlayerPositionType::Goalkeeper, 175, 37));
         }
 
-        let eval = PipelineProcessor::evaluate_single_club(
+        let eval = SquadReviewPass::evaluate_single_club(
             &club,
             GkFx::date(),
             None,
@@ -2720,7 +2726,7 @@ mod goalkeeper_prospect_tests {
                 .add(GkFx::player(2, PlayerPositionType::Goalkeeper, 180, 21));
         }
 
-        let eval = PipelineProcessor::evaluate_single_club(
+        let eval = SquadReviewPass::evaluate_single_club(
             &club,
             GkFx::date(),
             None,
@@ -2747,7 +2753,7 @@ mod goalkeeper_prospect_tests {
             ReputationLevel::Continental
         );
 
-        let eval = PipelineProcessor::evaluate_single_club(
+        let eval = SquadReviewPass::evaluate_single_club(
             &club,
             GkFx::date(),
             None,
@@ -2789,7 +2795,7 @@ mod goalkeeper_prospect_tests {
                 .add(GkFx::player(2, PlayerPositionType::Goalkeeper, 140, 19));
         }
 
-        let eval = PipelineProcessor::evaluate_single_club(
+        let eval = SquadReviewPass::evaluate_single_club(
             &club,
             GkFx::date(),
             None,

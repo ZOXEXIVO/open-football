@@ -3,6 +3,7 @@
 use super::super::*;
 use crate::club::player::builder::PlayerBuilder;
 use crate::shared::fullname::FullName;
+use crate::transfers::loan::LoanPipeline;
 use crate::{
     PersonAttributes, Player, PlayerAttributes, PlayerClubContract, PlayerPosition,
     PlayerPositionType, PlayerPositions, PlayerSkills,
@@ -312,18 +313,16 @@ fn a_posted_compatriot_is_taken_at_the_age_his_posting_used() {
     const ENGLAND: u32 = 1;
 
     // A posted 24-year-old Brazilian, seen by a Brazilian club.
-    assert!(PipelineProcessor::home_pickup_age_ok(
-        24, true, BRAZIL, BRAZIL
-    ));
+    assert!(LoanPipeline::home_pickup_age_ok(24, true, BRAZIL, BRAZIL));
     // …and 25, the oldest the posting model itself will name.
-    assert!(PipelineProcessor::home_pickup_age_ok(
+    assert!(LoanPipeline::home_pickup_age_ok(
         UnsettledAbroadScan::MAX_AGE,
         true,
         BRAZIL,
         BRAZIL
     ));
     // Past that the parent's answer is the market, not a loan.
-    assert!(!PipelineProcessor::home_pickup_age_ok(
+    assert!(!LoanPipeline::home_pickup_age_ok(
         UnsettledAbroadScan::MAX_AGE + 1,
         true,
         BRAZIL,
@@ -332,15 +331,11 @@ fn a_posted_compatriot_is_taken_at_the_age_his_posting_used() {
 
     // The same 24-year-old at an ENGLISH club's door is an ordinary
     // cold development pickup, and keeps the tighter band.
-    assert!(!PipelineProcessor::home_pickup_age_ok(
-        24, true, BRAZIL, ENGLAND
-    ));
+    assert!(!LoanPipeline::home_pickup_age_ok(24, true, BRAZIL, ENGLAND));
     // …as does a Brazilian nobody has posted.
-    assert!(!PipelineProcessor::home_pickup_age_ok(
-        24, false, BRAZIL, BRAZIL
-    ));
+    assert!(!LoanPipeline::home_pickup_age_ok(24, false, BRAZIL, BRAZIL));
     // Development-age men are reachable either way.
-    assert!(PipelineProcessor::home_pickup_age_ok(
+    assert!(LoanPipeline::home_pickup_age_ok(
         UnsettledAbroadScan::DEVELOPMENT_AGE,
         false,
         BRAZIL,

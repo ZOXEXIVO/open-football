@@ -17,7 +17,7 @@ use crate::club::player::transfer::FreeAgentBlockReason;
 /// once for every country — `O(countries × pool)`. The orchestrator now
 /// concatenates every country's bump ids into one of these and runs a
 /// SINGLE pass over the pool via
-/// [`PipelineProcessor::apply_free_agent_market_bumps_batch`](crate::transfers::pipeline::PipelineProcessor::apply_free_agent_market_bumps_batch),
+/// [`ApproachPass::apply_free_agent_market_bumps_batch`](crate::transfers::pipeline::ApproachPass::apply_free_agent_market_bumps_batch),
 /// matching the documented "one bump per player per tick" intent across the
 /// whole world (the previous per-country dedup still allowed a player
 /// pursued by two countries to be bumped twice).

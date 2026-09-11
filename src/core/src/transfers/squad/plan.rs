@@ -22,6 +22,7 @@
 //! income, and how far each slot already sits above what the objective asks
 //! for.
 
+use crate::transfers::squad::bands::TierBands;
 use std::collections::HashMap;
 
 use chrono::{Datelike, Duration, NaiveDate, Weekday};
@@ -30,7 +31,7 @@ use crate::club::board::ChairmanAmbition;
 use crate::club::player::contract::PlayerSquadStatus;
 use crate::transfers::deal::auction::DeadlineWindow;
 use crate::transfers::market::window::TransferCalendar;
-use crate::transfers::pipeline::processor::{PipelineProcessor, SquadPlayerInfo};
+use crate::transfers::pipeline::processor::SquadPlayerInfo;
 use crate::transfers::pipeline::{TransferNeedPriority, TransferNeedReason};
 use crate::transfers::squad::{GroupNeed, GroupNeedScan, NeedKind};
 use crate::transfers::value::wage::WagePower;
@@ -352,7 +353,7 @@ impl SquadPlan {
             .iter()
             .map(|pos| {
                 let group = pos.position_group();
-                let baseline = PipelineProcessor::tier_starter_ca_score(inputs.rep_score, group);
+                let baseline = TierBands::tier_starter_ca_score(inputs.rep_score, group);
                 let target = (baseline as i16 + shift).clamp(20, 200) as u8;
                 SlotLevel {
                     position: *pos,

@@ -7,6 +7,7 @@ pub mod transfers;
 
 use crate::club::board::manager_market::ManagerMarketTick;
 use crate::country::result::transfers::DeferredTransferOps;
+use crate::country::result::transfers::TransferTick;
 use crate::league::LeagueResult;
 use crate::league::result::DeferredGlobalOps;
 use crate::r#match::MatchResult;
@@ -158,7 +159,7 @@ impl CountryResult {
         // kickoff foreign negotiations.
         if let Some(ops) = self.deferred_transfer_ops {
             PerformanceProfiler::stage("drain_transfer_ops", 2, || {
-                Self::apply_deferred_transfer_ops(data, ops, current_date)
+                TransferTick::apply_deferred_transfer_ops(data, ops, current_date)
             });
         }
     }

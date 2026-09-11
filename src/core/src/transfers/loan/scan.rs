@@ -14,6 +14,10 @@
 //! player his club never loan-listed at all. The order is load-bearing: the
 //! cap and the per-group dedupe carry across all four.
 
+use crate::transfers::loan::LoanPipeline;
+use crate::transfers::market::window::MarketCadence;
+use crate::transfers::view::club::ClubView;
+use crate::transfers::view::player::PlayerView;
 use chrono::{Datelike, NaiveDate, Weekday};
 use log::debug;
 
@@ -28,7 +32,6 @@ use crate::transfers::market::{
     TransferListing, TransferListingOrigin, TransferListingStatus, TransferListingType,
 };
 use crate::transfers::pipeline::TransferRequestStatus;
-use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::trace::{MarketSwitches, TransferTrace};
 use crate::transfers::squad::minutes::LoanPromise;
 use crate::transfers::value::PlayerValuationCalculator;
@@ -142,9 +145,7 @@ impl LoanBoard {
             if !listing.is_seller_advertised() {
                 continue;
             }
-            if let Some(player) =
-                PipelineProcessor::find_player_in_country(country, listing.player_id)
-            {
+            if let Some(player) = PlayerView::find_player_in_country(country, listing.player_id) {
                 // Skip players already on loan — can't re-loan
                 if player.is_on_loan() {
                     continue;
@@ -165,7 +166,7 @@ impl LoanBoard {
                     })
                     .unwrap_or(0);
                 let guard = parent_club
-                    .and_then(|c| PipelineProcessor::loan_guard_for(country, c, player, date));
+                    .and_then(|c| LoanPipeline::loan_guard_for(country, c, player, date));
                 // Treat as a "development" move (stricter minutes gate so he
                 // actually plays, relaxed reputation/level floors so he can
                 // drop a level or two to do so) either when the loan is
@@ -176,7 +177,7 @@ impl LoanBoard {
                 // already his club's first-choice. Pure older-surplus /
                 // financial loans keep the looser cover bar.
                 let is_development =
-                    PipelineProcessor::is_development_loan(guard.as_ref(), player.age(date))
+                    LoanPipeline::is_development_loan(guard.as_ref(), player.age(date))
                         || parent_club
                             .map(|c| {
                                 c.transfer_plan.loan_out_candidates.iter().any(|cand| {
@@ -196,7 +197,7 @@ impl LoanBoard {
                     parent_best_in_group,
                     is_development,
                     parent_league_rep: parent_club
-                        .map(|c| PipelineProcessor::club_league_reputation(country, c))
+                        .map(|c| LoanPipeline::club_league_reputation(country, c))
                         .unwrap_or(0),
                     guard,
                 });
@@ -266,7 +267,7 @@ impl LoanBoard {
                                         .map(|c| c.squad_status.clone())
                                         .unwrap_or(PlayerSquadStatus::NotYetSet),
                                     asset_class.label(),
-                                    PipelineProcessor::position_group_rank(
+                                    PlayerView::position_group_rank(
                                         club,
                                         player.id,
                                         player.position().position_group(),
@@ -291,7 +292,7 @@ impl LoanBoard {
                             // approachable; the guard says whether the
                             // development allowances belong to him.
                             Some(dev) => {
-                                dev && PipelineProcessor::is_development_loan(guard.as_ref(), age)
+                                dev && LoanPipeline::is_development_loan(guard.as_ref(), age)
                             }
                             None => continue,
                         };
@@ -467,7 +468,7 @@ impl<'a> BorrowerScan<'a> {
         let borrower_world_rep = team.reputation.world;
         // Standard of football on offer here — the division gate reads
         // this against the parent's own competition.
-        let borrower_league_rep = PipelineProcessor::club_league_reputation(country, club);
+        let borrower_league_rep = LoanPipeline::club_league_reputation(country, club);
         // What this club's own year and payroll can carry — read once,
         // then folded per candidate with the group he plays in.
         let borrower_profile = LoanBorrowerProfile::of(club, date, borrower_league_rep);
@@ -670,7 +671,7 @@ impl<'a> BorrowerScan<'a> {
                 // Every destination gate's own reading, taken before any
                 // of them can short-circuit it away — the funnel is a
                 // table, not a re-derivation.
-                && PipelineProcessor::trace_loan_destination(
+                && LoanPipeline::trace_loan_destination(
                     l.player_id,
                     &club.name,
                     l.position_group,
@@ -717,7 +718,7 @@ impl<'a> BorrowerScan<'a> {
                     is_development: l.is_development,
                 }
                 .is_plausible()
-                && PipelineProcessor::loan_guard_allows(
+                && LoanPipeline::loan_guard_allows(
                     l.guard.as_ref(),
                     borrower_for(l.position_group).as_ref(),
                     l.player_id,
@@ -826,7 +827,7 @@ impl<'a> BorrowerScan<'a> {
                 // Every destination gate's own reading, taken before any
                 // of them can short-circuit it away — the funnel is a
                 // table, not a re-derivation.
-                && PipelineProcessor::trace_loan_destination(
+                && LoanPipeline::trace_loan_destination(
                     l.player_id,
                     &club.name,
                     l.position_group,
@@ -862,7 +863,7 @@ impl<'a> BorrowerScan<'a> {
                     is_development: l.is_development,
                 }
                 .is_plausible()
-                && PipelineProcessor::loan_guard_allows(
+                && LoanPipeline::loan_guard_allows(
                     l.guard.as_ref(),
                     borrower_for(l.position_group).as_ref(),
                     l.player_id,
@@ -971,7 +972,7 @@ impl<'a> BorrowerScan<'a> {
                 // Every destination gate's own reading, taken before any
                 // of them can short-circuit it away — the funnel is a
                 // table, not a re-derivation.
-                && PipelineProcessor::trace_loan_destination(
+                && LoanPipeline::trace_loan_destination(
                     l.player_id,
                     &club.name,
                     l.position_group,
@@ -1007,7 +1008,7 @@ impl<'a> BorrowerScan<'a> {
                     is_development: l.is_development,
                 }
                 .is_plausible()
-                && PipelineProcessor::loan_guard_allows(
+                && LoanPipeline::loan_guard_allows(
                     l.guard.as_ref(),
                     borrower_for(l.position_group).as_ref(),
                     l.player_id,
@@ -1123,7 +1124,7 @@ impl<'a> BorrowerScan<'a> {
                 // Every destination gate's own reading, taken before any
                 // of them can short-circuit it away — the funnel is a
                 // table, not a re-derivation.
-                && PipelineProcessor::trace_loan_destination(
+                && LoanPipeline::trace_loan_destination(
                     l.player_id,
                     &club.name,
                     l.position_group,
@@ -1168,13 +1169,13 @@ impl<'a> BorrowerScan<'a> {
                         is_development: l.is_development,
                     },
                 )
-                && PipelineProcessor::loan_guard_allows(
+                && LoanPipeline::loan_guard_allows(
                     l.guard.as_ref(),
                     borrower_for(l.position_group).as_ref(),
                     l.player_id,
                 )
                 && (!cold_peer_only
-                    || PipelineProcessor::loan_guard_reach(
+                    || LoanPipeline::loan_guard_reach(
                         l.guard.as_ref(),
                         borrower_for(l.position_group).as_ref(),
                     ) == Some(LoanReach::PeerLevel))
@@ -1267,11 +1268,10 @@ impl LoanScanCommit {
                     ));
             }
 
-            let selling_rep =
-                PipelineProcessor::get_club_reputation(country, action.selling_club_id);
-            let buying_rep = PipelineProcessor::get_club_reputation(country, action.club_id);
+            let selling_rep = ClubView::get_club_reputation(country, action.selling_club_id);
+            let buying_rep = ClubView::get_club_reputation(country, action.club_id);
             let (p_age, p_ambition) =
-                PipelineProcessor::get_player_negotiation_data(country, action.player_id, date);
+                PlayerView::get_player_negotiation_data(country, action.player_id, date);
 
             let mut clauses = Vec::new();
 
@@ -1284,7 +1284,7 @@ impl LoanScanCommit {
             // one. In real football most loans of players with a future
             // carry an option, and a good loan spell is one of the main
             // routes a squad player finds a permanent home.
-            if let Some(option_fee) = PipelineProcessor::loan_option_fee(country, &action, date) {
+            if let Some(option_fee) = LoanPipeline::loan_option_fee(country, &action, date) {
                 clauses.push(TransferClause::LoanOptionToBuy(CurrencyValue {
                     amount: option_fee,
                     currency: Currency::Usd,
@@ -1293,7 +1293,7 @@ impl LoanScanCommit {
 
             // Add appearance fee clause for high-reputation selling clubs
             let selling_rep_level =
-                PipelineProcessor::get_club_reputation_level(country, action.selling_club_id);
+                ClubView::get_club_reputation_level(country, action.selling_club_id);
             match selling_rep_level {
                 ReputationLevel::Elite => {
                     clauses.push(TransferClause::AppearanceFee(
@@ -1327,7 +1327,7 @@ impl LoanScanCommit {
                 },
                 clauses,
                 contract_length_years: None,
-                loan_duration_months: Some(PipelineProcessor::loan_duration_to_season_end(
+                loan_duration_months: Some(LoanPipeline::loan_duration_to_season_end(
                     country,
                     action.club_id,
                     date,
@@ -1354,7 +1354,7 @@ impl LoanScanCommit {
                 p_ambition,
             ) {
                 // Resolve player and club names
-                let (p_name, sc_name) = PipelineProcessor::resolve_player_and_club_name(
+                let (p_name, sc_name) = PlayerView::resolve_player_and_club_name(
                     country,
                     action.player_id,
                     action.selling_club_id,
@@ -1405,7 +1405,7 @@ impl LoanMarketScan {
     pub(in crate::transfers::loan) fn run(country: &mut Country, date: NaiveDate) {
         let tick = LoanScanTick {
             date,
-            is_january: PipelineProcessor::is_mid_season_window_for(country, date),
+            is_january: MarketCadence::is_mid_season_window_for(&country.code, date),
             scan_unsolicited: date.weekday() == Weekday::Mon,
         };
 
@@ -1423,7 +1423,7 @@ impl LoanMarketScan {
         }
 
         let mut actions: Vec<LoanScanAction> = Vec::new();
-        let pending_loans = PipelineProcessor::pending_incoming_loans_by_club(country);
+        let pending_loans = LoanPipeline::pending_incoming_loans_by_club(country);
 
         // Rotate who looks first. The per-pass dedup below is "has anybody
         // claimed him yet", so registration order was first refusal on the

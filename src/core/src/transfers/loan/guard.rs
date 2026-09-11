@@ -37,11 +37,11 @@
 //!   `capacity_penalty`, the seller's `refusal_delta` and a one-line
 //!   diagnostic for `OF_TRACE_PLAYER`.
 
+use crate::transfers::view::player::PlayerView;
 use chrono::NaiveDate;
 
 use crate::club::player::calculators::WageCalculator;
 use crate::transfers::gate::{EffectivePlayerReputation, thresholds};
-use crate::transfers::pipeline::PipelineProcessor;
 use crate::transfers::pipeline::trace::MarketSwitches;
 use crate::{
     Club, ClubLevelAnchor, Person, Player, PlayerFieldPositionGroup, PlayerStatusType,
@@ -319,8 +319,8 @@ impl LoanAssetGuard {
             age: player.age(date),
             group,
             parent_anchor: ClubLevelAnchor::for_reputation(team.reputation.overall_score()),
-            parent_rank: PipelineProcessor::position_group_rank(club, player.id, group),
-            parent_best_in_group: PipelineProcessor::best_ca_in_group(club, group),
+            parent_rank: PlayerView::position_group_rank(club, player.id, group),
+            parent_best_in_group: PlayerView::best_ca_in_group(club, group),
             parent_league_rep,
             value,
             salary: contract.salary,

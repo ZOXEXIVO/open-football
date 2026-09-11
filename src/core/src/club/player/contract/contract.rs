@@ -1,6 +1,6 @@
 use crate::PlayerFieldPositionGroup;
 use crate::TeamType;
-use crate::transfers::pipeline::PipelineProcessor;
+use crate::transfers::squad::bands::TierBands;
 use chrono::Duration;
 use chrono::NaiveDateTime;
 pub use chrono::prelude::{DateTime, Datelike, NaiveDate, Utc};
@@ -46,13 +46,13 @@ impl ClubLevelAnchor {
     pub fn for_reputation(score: f32) -> Self {
         ClubLevelAnchor {
             score: score.clamp(0.0, 1.0),
-            tolerance: PipelineProcessor::tier_quality_tolerance_score(score),
+            tolerance: TierBands::tier_quality_tolerance_score(score),
         }
     }
 
     /// Expected starter ability in this group at this club.
     pub fn starter_level(&self, group: PlayerFieldPositionGroup) -> u8 {
-        PipelineProcessor::tier_starter_ca_score(self.score, group)
+        TierBands::tier_starter_ca_score(self.score, group)
     }
 
     /// Lowest ability the club still reads as a key man in this group.

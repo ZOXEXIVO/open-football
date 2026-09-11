@@ -5,12 +5,15 @@ use crate::club::academy::ClubAcademy;
 use crate::club::player::builder::PlayerBuilder;
 use crate::competitions::global::GlobalCompetitions;
 use crate::continent::Continent;
+use crate::country::result::transfers::NegotiationPass;
+use crate::country::result::transfers::free::FreeAgentPass;
 use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
 use crate::shared::Location;
 use crate::shared::fullname::FullName;
 use crate::transfers::deal::negotiation::NegotiationRejectionReason;
 use crate::transfers::market::TransferListingStatus;
 use crate::transfers::market::map::{CorridorWeight, CountryTransferProfile, MarketCountryFacts};
+use crate::transfers::pipeline::approach::ApproachPass;
 use crate::transfers::pipeline::{ShortlistCandidateStatus, TransferNeedPriority};
 use crate::transfers::squad::needs::EmergencyContractTermsPolicy;
 use crate::utils::random::engine::RandomEngine;
@@ -226,7 +229,7 @@ impl EmergencyFillFixtures {
     ) -> (Vec<u32>, Vec<u32>) {
         let mut offered = Vec::new();
         let mut rejected = Vec::new();
-        CountryResult::handle_free_agents_emergency_pass(
+        FreeAgentPass::handle_free_agents_emergency_pass(
             country,
             candidates,
             config,
@@ -937,7 +940,7 @@ fn rejected_emergency_offer_updates_offered_and_rejected_ids() {
     let mut signings = Vec::new();
     let mut offered = Vec::new();
     let mut rejected = Vec::new();
-    CountryResult::handle_free_agents_emergency_pass(
+    FreeAgentPass::handle_free_agents_emergency_pass(
         &country,
         &candidates,
         &TransferConfig::default(),
@@ -1003,7 +1006,7 @@ fn emergency_signing_marks_matching_transfer_request_fulfilled() {
     let mut signings = Vec::new();
     let mut offered = Vec::new();
     let mut rejected = Vec::new();
-    CountryResult::handle_free_agents_emergency_pass(
+    FreeAgentPass::handle_free_agents_emergency_pass(
         &country,
         &candidates,
         &TransferConfig::default(),
@@ -1997,7 +2000,7 @@ impl DepthPipelineFixtures {
             let mut summary = TransferActivitySummary::new();
             let mut domestic = Vec::new();
             let mut blocked = Vec::new();
-            let signings = CountryResult::handle_free_agents(
+            let signings = FreeAgentPass::handle_free_agents(
                 country,
                 date,
                 &FreeAgentWorld {
@@ -2101,7 +2104,7 @@ fn depth_slot_stages_pipeline_request_instead_of_direct_signing() {
     let mut signings = Vec::new();
     let mut offered = Vec::new();
     let mut rejected = Vec::new();
-    let intents = CountryResult::handle_free_agents_emergency_pass(
+    let intents = FreeAgentPass::handle_free_agents_emergency_pass(
         &country,
         &candidates,
         &TransferConfig::default(),
@@ -2272,7 +2275,7 @@ fn depth_personal_terms_rejection_updates_request_and_shortlist() {
     // — the staged shortlist wiring must respond like any pipeline
     // pursuit: candidate marked failed, Optional request abandoned,
     // negotiation slot released.
-    PipelineProcessor::on_negotiation_resolved(&mut country, 100, 9000, false);
+    ApproachPass::on_negotiation_resolved(&mut country, 100, 9000, false);
 
     let plan = &country.clubs[0].transfer_plan;
     let request = plan
@@ -2347,7 +2350,7 @@ fn pool_depth_medical_completion_defers_global_signing_without_direct_history() 
 
         RandomEngine::set_seed(42 + attempt);
         let mut summary = TransferActivitySummary::new();
-        let outcomes = CountryResult::resolve_pending_negotiations(
+        let outcomes = NegotiationPass::resolve_pending_negotiations(
             &mut country,
             date,
             &MarketMap::default(),
@@ -2463,7 +2466,7 @@ fn unmarked_depth_cover_request_keeps_legacy_instant_signing() {
         let mut offered = Vec::new();
         let mut rejected = Vec::new();
         let mut blocked = Vec::new();
-        signings = CountryResult::handle_free_agents(
+        signings = FreeAgentPass::handle_free_agents(
             &mut country,
             date,
             &FreeAgentWorld {
@@ -2640,7 +2643,7 @@ impl MarketClearingFixtures {
         // Non-peak date (March) so the club-scaled / peak-window cap
         // adjustments stay at the base values these tests assert on.
         let date = EmergencyFillFixtures::d(2026, 3, 10);
-        CountryResult::handle_free_agents_market_clearing_pass(
+        FreeAgentPass::handle_free_agents_market_clearing_pass(
             country,
             candidates,
             config,
@@ -2742,7 +2745,7 @@ fn request_matcher_tries_fallback_candidates_past_rejecting_top_quality() {
         let mut offered = Vec::new();
         let mut rejected = Vec::new();
         let mut blocked = Vec::new();
-        let signings = CountryResult::handle_free_agents(
+        let signings = FreeAgentPass::handle_free_agents(
             &mut country,
             date,
             &FreeAgentWorld {

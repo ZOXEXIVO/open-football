@@ -1102,7 +1102,7 @@ mod trim_surplus_tests {
     use super::*;
     use crate::academy::ClubAcademy;
     use crate::club::player::core::builder::PlayerBuilder;
-    use crate::country::result::CountryResult;
+    use crate::country::result::transfers::ListingPass;
     use crate::country::result::transfers::types::TransferActivitySummary;
     use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
     use crate::shared::Location;
@@ -1434,7 +1434,7 @@ mod trim_surplus_tests {
         }
 
         let mut summary = TransferActivitySummary::new();
-        CountryResult::list_players_from_pipeline(&mut country, date, &mut summary);
+        ListingPass::list_players_from_pipeline(&mut country, date, &mut summary);
 
         let listing = country
             .transfer_market

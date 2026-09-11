@@ -6,6 +6,7 @@ use crate::context::{HomeLeagueTable, TournamentClocks};
 use crate::country::CountryResult;
 use crate::country::core::builder::CountryBuilder;
 use crate::country::national::NationalTeam;
+use crate::country::result::transfers::TransferTick;
 use crate::league::LeagueBuildOutput;
 use crate::league::LeagueCollection;
 use crate::league::LeaguePendingState;
@@ -18,7 +19,7 @@ use crate::r#match::MatchResult;
 use crate::simulator::PerformanceProfiler;
 use crate::transfers::market::TransferMarket;
 use crate::transfers::market::map::CountryTransferProfile;
-use crate::transfers::pipeline::PipelineProcessor;
+use crate::transfers::pipeline::approach::ApproachPass;
 use crate::{Club, ClubResult, Player, PlayerResult};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
@@ -823,7 +824,7 @@ impl Country {
                 self.transfer_market.add_listing(listing);
             }
             for player_id in worker_staged.interest_clears {
-                PipelineProcessor::clear_player_interest(self, player_id);
+                ApproachPass::clear_player_interest(self, player_id);
             }
             staged_contract_interactions.extend(worker_staged.contract_interactions);
         }
@@ -874,7 +875,7 @@ impl Country {
         // returned DeferredTransferOps, drained by Phase C.
         let stage = PerformanceProfiler::stage_scope("country_transfer_market", 2)
             .labelled(|| country_name.clone());
-        let transfer_ops = CountryResult::simulate_transfer_market_local(
+        let transfer_ops = TransferTick::simulate_transfer_market_local(
             self,
             current_date,
             world.world_pool,

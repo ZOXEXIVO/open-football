@@ -15,6 +15,11 @@
 //! used, because the hazard here is not a compile error, it is silently swapping
 //! one reputation score for another.
 
+use crate::transfers::market::window::MarketCadence;
+use crate::transfers::pipeline::StaffRecommendations;
+use crate::transfers::scouting::judgement::ScoutJudgement;
+use crate::transfers::squad::bands::TierBands;
+use crate::transfers::view::player::PlayerView;
 use chrono::Duration;
 use chrono::NaiveDate;
 use rayon::prelude::*;
@@ -28,13 +33,10 @@ use crate::club::player::transfer::AvailabilityBlockReason;
 use crate::club::staff::recruitment::ResolvedStaff;
 use crate::simulator::PerformanceProfiler;
 use crate::transfers::TransferWindowManager;
+use crate::transfers::gate::TransferPlausibilityVerdict;
+use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
 use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
-use crate::transfers::gate::{
-    BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
-};
 use crate::transfers::loan::interest::{ClubOpinion, InterestDraw};
-use crate::transfers::pipeline::helpers::CountryPlayerLookup;
-use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::{
     ClubTransferPlan, RecommendationSource, RecommendationType, StaffRecommendation,
     TransferRequestStatus,
@@ -46,6 +48,7 @@ use crate::transfers::scouting::exposure::{
 use crate::transfers::scouting::recruitment::ScoutMonitoringSource;
 use crate::transfers::scouting::recruitment::ScoutPlayerMonitoring;
 use crate::transfers::value::PlayerValuationCalculator;
+use crate::transfers::view::player::CountryPlayerLookup;
 use crate::utils::IntegerUtils;
 use crate::{
     Club, Country, Person, PlayerFieldPositionGroup, PlayerPositionType, PlayerStatusType,
@@ -207,11 +210,10 @@ impl SnapshotPass {
                                 })
                                 .unwrap_or(0);
 
-                            let skill_ability =
-                                PipelineProcessor::position_evaluation_ability(player);
+                            let skill_ability = PlayerView::position_evaluation_ability(player);
                             let player_age = player.age(date);
                             let estimated_potential = skill_ability
-                                + PipelineProcessor::estimate_growth_potential(
+                                + ScoutJudgement::estimate_growth_potential(
                                     player_age,
                                     player.skills.mental.determination,
                                     player.skills.mental.work_rate,
@@ -608,18 +610,16 @@ impl<'a> ClubAdviceScan<'a> {
             let candidates: Vec<&PlayerSnapshot> = all_snapshots
                 .iter()
                 .filter(|p| {
-                    let ceiling = PipelineProcessor::tier_target_ceiling_score(
-                        club_rep_score,
-                        p.position_group,
-                    );
+                    let ceiling =
+                        TierBands::tier_target_ceiling_score(club_rep_score, p.position_group);
                     p.club_id != club.id
                         && !club.is_rival(p.club_id)
                         && !p.is_transfer_protected
                         && p.ability >= avg_ability.saturating_sub(10)
                         && p.ability <= ceiling
                         && (max_recommend_value <= 0.0 || p.estimated_value <= max_recommend_value)
-                        && PipelineProcessor::rep_level_value(&p.parent_club_reputation)
-                            >= PipelineProcessor::rep_level_value(&min_source_rep)
+                        && TierBands::rep_level_value(&p.parent_club_reputation)
+                            >= TierBands::rep_level_value(&min_source_rep)
                         && !already_recommended.contains(&p.id)
                         && !actions
                             .iter()
@@ -677,8 +677,8 @@ impl<'a> ClubAdviceScan<'a> {
                 }
 
                 // Lower-rep club
-                if PipelineProcessor::rep_level_value(&cand.parent_club_reputation)
-                    < PipelineProcessor::rep_level_value(&club_rep)
+                if TierBands::rep_level_value(&cand.parent_club_reputation)
+                    < TierBands::rep_level_value(&club_rep)
                 {
                     score += 1.0;
                 }
@@ -820,7 +820,7 @@ impl<'a> ClubAdviceScan<'a> {
         // Aging starter per group: any player at-tier in this group
         // who's 30+ — succession candidate that opens up a slot.
         let buyer_has_aging_starter = |group: PlayerFieldPositionGroup| -> bool {
-            let baseline = PipelineProcessor::tier_starter_ca_score(club_rep_score, group);
+            let baseline = TierBands::tier_starter_ca_score(club_rep_score, group);
             team.players.players.iter().any(|p| {
                 p.position().position_group() == group
                     && p.age(date) >= 30
@@ -1017,8 +1017,8 @@ impl<'a> ClubAdviceScan<'a> {
                 break;
             }
 
-            let rec_type = if PipelineProcessor::rep_level_value(&target.parent_club_reputation)
-                > PipelineProcessor::rep_level_value(&club_rep)
+            let rec_type = if TierBands::rep_level_value(&target.parent_club_reputation)
+                > TierBands::rep_level_value(&club_rep)
             {
                 // Player is at a bigger club but on the market — the
                 // smaller buyer benefits from quality leftovers.
@@ -1518,8 +1518,8 @@ impl<'a> ClubAdviceScan<'a> {
                         && p.age <= 23
                         && p.estimated_potential > p.ability + 5
                         && p.ability >= avg_ability.saturating_sub(5)
-                        && PipelineProcessor::rep_level_value(&p.parent_club_reputation)
-                            > PipelineProcessor::rep_level_value(&club_rep)
+                        && TierBands::rep_level_value(&p.parent_club_reputation)
+                            > TierBands::rep_level_value(&club_rep)
                         && !p.is_loan_listed
                         && !already_recommended.contains(&p.id)
                         && !actions
@@ -1602,7 +1602,7 @@ impl AdviceCommit {
                         .map(|t| t.reputation.level())
                         .unwrap_or(ReputationLevel::Amateur);
                     let rep_score = team.map(|t| t.reputation.overall_score()).unwrap_or(0.0);
-                    let cap = PipelineProcessor::staff_recommendation_cap_score(rep, rep_score);
+                    let cap = StaffRecommendations::staff_recommendation_cap_score(rep, rep_score);
                     if club.transfer_plan.staff_recommendations.len() < cap {
                         let rec = action.recommendation;
                         let recommender_id = rec.recommender_staff_id;
@@ -1673,10 +1673,10 @@ impl StaffAdvicePass {
             CountryPlayerLookup::build(country)
         });
 
-        let window_mgr = TransferWindowManager::for_country(country, date);
+        let window_mgr = TransferWindowManager::for_country(country.id, &country.code, date);
         let tick = AdviceTick {
             date,
-            is_january: PipelineProcessor::is_mid_season_window_for(country, date),
+            is_january: MarketCadence::is_mid_season_window_for(&country.code, date),
             price_level: country.settings.pricing.price_level,
             current_window: window_mgr.current_window_dates(country.id, date),
         };

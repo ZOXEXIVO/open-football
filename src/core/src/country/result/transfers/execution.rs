@@ -13,10 +13,13 @@ use crate::transfers::TransferRoutePolicy;
 use crate::transfers::TransferWindowManager;
 use crate::transfers::deal::negotiation::NegotiationStatus;
 use crate::transfers::deal::offer::{PersonalTermsOffer, PromisedSquadStatus, TransferClause};
+use crate::transfers::loan::LoanPipeline;
 use crate::transfers::market::{ClauseTrigger, TransferMarket};
+use crate::transfers::pipeline::approach::ApproachPass;
 use crate::transfers::pipeline::{
-    LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus, PipelineProcessor,
+    LoanDestinationPreference, LoanOutCandidate, LoanOutReason, LoanOutStatus,
 };
+use crate::transfers::squad::bands::TierBands;
 use crate::transfers::view::club::ClubView;
 use crate::transfers::view::world::MarketWorld;
 use crate::{
@@ -697,7 +700,7 @@ impl TransferExecutor {
     ) -> bool {
         let (success, stage_pathway) = Self::move_player(data, transfer, date);
         if success {
-            PipelineProcessor::cleanup_player_transfer_interest(data, transfer.player_id);
+            ApproachPass::cleanup_player_transfer_interest(data, transfer.player_id);
             if stage_pathway {
                 Self::stage_development_loan(data, transfer, date);
             }
@@ -732,7 +735,7 @@ impl TransferExecutor {
                 }
             }
         }
-        PipelineProcessor::cleanup_player_transfer_interest_batch(data, &moved);
+        ApproachPass::cleanup_player_transfer_interest_batch(data, &moved);
         for index in pathways {
             Self::stage_development_loan(data, &transfers[index], date);
         }
@@ -796,7 +799,7 @@ impl TransferExecutor {
                     n.status = NegotiationStatus::Rejected;
                 }
             }
-            PipelineProcessor::on_negotiation_resolved(
+            ApproachPass::on_negotiation_resolved(
                 buying_country,
                 transfer.buying_club_id,
                 player_id,
@@ -2076,7 +2079,7 @@ impl DevelopmentLoanPathway {
             // First-team readiness: a prospect already near the buyer's
             // tier baseline stays — he can compete for minutes now.
             let rep_score = team.reputation.overall_score();
-            let baseline = PipelineProcessor::tier_starter_ca_score(rep_score, group);
+            let baseline = TierBands::tier_starter_ca_score(rep_score, group);
             if player_ca >= baseline.saturating_sub(10) {
                 return;
             }
@@ -2181,16 +2184,11 @@ impl DevelopmentLoanPathway {
         // open; `list_loan_out_candidate` dedupes, so tomorrow's
         // process_loan_out_listings pass won't double-list.
         if staged {
-            let window_open = TransferWindowManager::for_country(country, date)
+            let window_open = TransferWindowManager::for_country(country.id, &country.code, date)
                 .current_window_dates(country.id, date)
                 .is_some();
             if window_open {
-                PipelineProcessor::list_loan_out_candidate(
-                    country,
-                    buying_club_id,
-                    player_id,
-                    date,
-                );
+                LoanPipeline::list_loan_out_candidate(country, buying_club_id, player_id, date);
             } else {
                 // Deliberate deferral: registration windows are closed, so
                 // the loan listing waits for the next window's evaluation.
@@ -3151,7 +3149,7 @@ mod development_pathway_tests {
         assert!(TransferExecutor::one(&mut data, &transfer, date));
 
         let country = data.country_mut(1).unwrap();
-        PipelineProcessor::process_loan_out_listings(country, date);
+        LoanPipeline::process_loan_out_listings(country, date);
 
         let listings = country
             .transfer_market
@@ -3253,7 +3251,7 @@ mod development_pathway_tests {
             let monday = date
                 .succ_opt()
                 .expect("a Monday follows the Sunday fixture date");
-            PipelineProcessor::broadcast_listed_loans(country, monday);
+            LoanPipeline::broadcast_listed_loans(country, monday);
             let negotiation = country
                 .transfer_market
                 .negotiations

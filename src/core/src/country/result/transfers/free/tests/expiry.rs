@@ -10,6 +10,7 @@
 
 use super::super::*;
 use crate::club::player::contract::RENEWAL_REJECTED_LABEL;
+use crate::country::result::transfers::free::FreeAgentPass;
 use crate::transfers::tests::kit::{TestClub, TestCountry, TestDate, TestPlayer, TestTeam};
 use crate::{
     Club, PersonAttributes, Player, PlayerClubContract, PlayerPositionType, PlayerSquadStatus, Team,
@@ -86,7 +87,7 @@ impl ExpiryRenewalFixtures {
         let mut global_offered_ids = Vec::new();
         let mut global_rejected_ids = Vec::new();
         let mut global_blocked = Vec::new();
-        CountryResult::handle_free_agents(
+        FreeAgentPass::handle_free_agents(
             country,
             date,
             &FreeAgentWorld {

@@ -10,12 +10,15 @@
 //! already negotiating for the man, whether he is on loan or protected, and
 //! which of the buyer's own shortlists is next in line.
 
+use crate::transfers::loan::LoanPipeline;
+use crate::transfers::pipeline::approach::ApproachPass;
+use crate::transfers::view::club::ClubView;
+use crate::transfers::view::player::PlayerView;
 use chrono::NaiveDate;
 use log::debug;
 
 use crate::Country;
 use crate::transfers::pipeline::ShortlistCandidate;
-use crate::transfers::pipeline::processor::PipelineProcessor;
 
 use super::*;
 
@@ -70,7 +73,7 @@ impl DomesticApproachPass {
         let mut actions: Vec<NegotiationAction> = Vec::new();
         let mut plausibility_rejected: Vec<PlausibilityReject> = Vec::new();
         let price_level = country.settings.pricing.price_level;
-        let window_mgr = TransferWindowManager::for_country(country, date);
+        let window_mgr = TransferWindowManager::for_country(country.id, &country.code, date);
         let current_window = window_mgr.current_window_dates(country.id, date);
 
         for club in &country.clubs {
@@ -90,7 +93,7 @@ impl DomesticApproachPass {
         Self::commit(country, date, actions);
         Self::clear_rejects(country, plausibility_rejected);
 
-        PipelineProcessor::process_loan_out_listings(country, date);
+        LoanPipeline::process_loan_out_listings(country, date);
     }
 
     /// `None` when this club is not opening anything: no plan, squad full,
@@ -265,15 +268,14 @@ impl DomesticApproachPass {
 
             // Skip players on loan contracts — they belong to another club
             // Skip recently signed players — their club has a plan for them
-            let (is_on_loan, is_protected) =
-                PipelineProcessor::find_player_in_country(country, player_id)
-                    .map(|p| {
-                        (
-                            p.is_on_loan(),
-                            p.is_transfer_protected(date, current_window),
-                        )
-                    })
-                    .unwrap_or((false, false));
+            let (is_on_loan, is_protected) = PlayerView::find_player_in_country(country, player_id)
+                .map(|p| {
+                    (
+                        p.is_on_loan(),
+                        p.is_transfer_protected(date, current_window),
+                    )
+                })
+                .unwrap_or((false, false));
             if is_on_loan || is_protected {
                 continue;
             }
@@ -441,7 +443,7 @@ impl DomesticApproachPass {
             .map(|m| m.confidence)
             .or_else(|| scouting_report.map(|r| r.confidence));
 
-        let target = PipelineProcessor::find_player_in_country(country, player_id);
+        let target = PlayerView::find_player_in_country(country, player_id);
         let player_age = target.map(|p| p.age(date)).unwrap_or(25);
 
         // Stale-row guard: a candidate outside the request's age
@@ -510,7 +512,7 @@ impl DomesticApproachPass {
             expected_wage,
         };
 
-        let approach = PipelineProcessor::determine_transfer_approach(
+        let approach = ApproachPass::determine_transfer_approach(
             &rep_level,
             budget,
             candidate.estimated_fee,
@@ -530,7 +532,7 @@ impl DomesticApproachPass {
                 Some(TransferNeedReason::DevelopmentSigning)
             );
 
-        let Some(player) = PipelineProcessor::find_player_in_country(country, player_id) else {
+        let Some(player) = PlayerView::find_player_in_country(country, player_id) else {
             return TargetOutcome::Skip;
         };
         let Some(selling_club) = country.clubs.iter().find(|c| c.id == selling_club_id) else {
@@ -557,11 +559,10 @@ impl DomesticApproachPass {
     fn commit(country: &mut Country, date: NaiveDate, actions: Vec<NegotiationAction>) {
         // Pass 2: Start negotiations
         for action in actions {
-            let selling_rep =
-                PipelineProcessor::get_club_reputation(country, action.selling_club_id);
-            let buying_rep = PipelineProcessor::get_club_reputation(country, action.club_id);
+            let selling_rep = ClubView::get_club_reputation(country, action.selling_club_id);
+            let buying_rep = ClubView::get_club_reputation(country, action.club_id);
             let (p_age, p_ambition) =
-                PipelineProcessor::get_player_negotiation_data(country, action.player_id, date);
+                PlayerView::get_player_negotiation_data(country, action.player_id, date);
 
             let has_listing = country
                 .transfer_market

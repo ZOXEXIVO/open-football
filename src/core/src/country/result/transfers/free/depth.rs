@@ -15,7 +15,7 @@
 //!    [`DepthNegotiationAction`].
 //! 3. [`FreeAgentNegotiationStager`] creates the Pending negotiation
 //!    (PersonalTerms phase) and wires the buying club's plan so
-//!    `PipelineProcessor::on_negotiation_resolved` mirrors the outcome
+//!    `ApproachPass::on_negotiation_resolved` mirrors the outcome
 //!    back onto the request like any pipeline pursuit.
 //!
 //! Resolution from there is the normal lifecycle in `negotiations.rs`:
@@ -31,10 +31,10 @@ use crate::transfers::deal::offer::TransferOffer;
 use crate::transfers::deal::reason::TransferReason;
 use crate::transfers::market::{TransferListing, TransferListingType};
 use crate::transfers::pipeline::{
-    PipelineProcessor, ShortlistCandidate, ShortlistCandidateStatus, TransferNeedPriority,
-    TransferNeedReason, TransferRequest, TransferRequestSource, TransferRequestStatus,
-    TransferShortlist,
+    ShortlistCandidate, ShortlistCandidateStatus, TransferNeedPriority, TransferNeedReason,
+    TransferRequest, TransferRequestSource, TransferRequestStatus, TransferShortlist,
 };
+use crate::transfers::squad::bands::TierBands;
 use crate::transfers::squad::needs::EmergencyGroupSlot;
 use chrono::NaiveDate;
 use log::debug;
@@ -103,7 +103,7 @@ impl EmergencyDepthRequestPlanner {
         rep_score: f32,
         request_id: u32,
     ) -> TransferRequest {
-        let baseline = PipelineProcessor::tier_starter_ca_score(rep_score, group);
+        let baseline = TierBands::tier_starter_ca_score(rep_score, group);
         let mut request = TransferRequest::new(
             request_id,
             EmergencyGroupSlot::representative_position(group),
@@ -146,7 +146,7 @@ pub(super) struct DepthNegotiationAction {
 
 /// Creates the Pending negotiation for each staged depth offer and
 /// wires the buying club's plan (shortlist candidate, request status,
-/// active-negotiation count) so `PipelineProcessor::on_negotiation_resolved`
+/// active-negotiation count) so `ApproachPass::on_negotiation_resolved`
 /// can mirror the outcome back onto the request like any pipeline
 /// pursuit. The negotiation enters `PersonalTerms` directly — a free
 /// agent has no selling club to haggle a fee with — and resolves over

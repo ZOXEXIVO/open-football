@@ -11,7 +11,9 @@ use crate::club::player::core::builder::PlayerBuilder;
 use crate::league::{DayMonthPeriod, League, LeagueCollection, LeagueSettings};
 use crate::shared::Location;
 use crate::shared::fullname::FullName;
+use crate::transfers::loan::LoanPipeline;
 use crate::transfers::market::TransferListing;
+use crate::transfers::squad::bands::TierBands;
 use crate::{
     Club, ClubColors, ClubFacilities, ClubFinances, ClubStatus, PersonAttributes, PlayerAttributes,
     PlayerClubContract, PlayerCollection, PlayerPosition, PlayerPositionType, PlayerPositions,
@@ -41,7 +43,7 @@ impl Fx {
     /// tier-window gate is satisfied by construction.
     fn at_tier_ca(world: u16) -> u8 {
         let score = TeamReputation::new(world, world, world).overall_score();
-        PipelineProcessor::tier_starter_ca_score(score, PlayerFieldPositionGroup::Midfielder)
+        TierBands::tier_starter_ca_score(score, PlayerFieldPositionGroup::Midfielder)
     }
 
     fn player(id: u32, position: PlayerPositionType, ca: u8, age: u8) -> Player {
@@ -196,7 +198,7 @@ fn stale_listing_is_broadcast_and_a_buyer_responds() {
     let date = Fx::monday();
     let mut country = Fx::market(100, TransferListingOrigin::SellerListed);
 
-    PipelineProcessor::broadcast_listed_transfers(&mut country, date);
+    LoanPipeline::broadcast_listed_transfers(&mut country, date);
 
     // The push opened a normal purchase negotiation at the buyer.
     assert!(
@@ -236,7 +238,7 @@ fn broadcast_anchor_derives_from_listing_age() {
     let date = Fx::monday();
     let mut country = Fx::market(100, TransferListingOrigin::SellerListed);
 
-    PipelineProcessor::broadcast_listed_transfers(&mut country, date);
+    LoanPipeline::broadcast_listed_transfers(&mut country, date);
 
     // The cascade clock starts when the LISTING cleared its grace, not
     // when the push first visited it — a save loaded with an old unsold
@@ -264,10 +266,8 @@ fn stale_listing_reaches_lower_tier_buyer_with_relaxed_ceiling() {
     // buyer's normal target ceiling (otherwise this exercises nothing),
     // and within it once the full staleness relaxation (+35) applies.
     let buyer_score = TeamReputation::new(BUYER_WORLD, BUYER_WORLD, BUYER_WORLD).overall_score();
-    let buyer_ceiling = PipelineProcessor::tier_target_ceiling_score(
-        buyer_score,
-        PlayerFieldPositionGroup::Midfielder,
-    );
+    let buyer_ceiling =
+        TierBands::tier_target_ceiling_score(buyer_score, PlayerFieldPositionGroup::Midfielder);
     assert!(
         ca > buyer_ceiling,
         "fixture premise: at-tier CA {ca} must exceed the lower-tier ceiling {buyer_ceiling}"
@@ -319,7 +319,7 @@ fn stale_listing_reaches_lower_tier_buyer_with_relaxed_ceiling() {
     // the ceiling has barely relaxed — the lower-tier club is not yet a
     // taker for a player this good.
     let mut early = build(30);
-    PipelineProcessor::broadcast_listed_transfers(&mut early, date);
+    LoanPipeline::broadcast_listed_transfers(&mut early, date);
     assert!(
         !early.transfer_market.has_active_negotiation_for(400, 2),
         "a month-old listing must not yet reach a much lower tier"
@@ -329,7 +329,7 @@ fn stale_listing_reaches_lower_tier_buyer_with_relaxed_ceiling() {
     // (and past) the buyer's level and the staleness-relaxed ceiling
     // admits the player — the bargain-above-your-level signing.
     let mut stale = build(250);
-    PipelineProcessor::broadcast_listed_transfers(&mut stale, date);
+    LoanPipeline::broadcast_listed_transfers(&mut stale, date);
     assert!(
         stale.transfer_market.has_active_negotiation_for(400, 2),
         "a half-season-stale listing must reach the lower-tier buyer"
@@ -342,7 +342,7 @@ fn fresh_listing_is_not_broadcast() {
     // Within the grace window — the pull-side market still owns it.
     let mut country = Fx::market(14, TransferListingOrigin::SellerListed);
 
-    PipelineProcessor::broadcast_listed_transfers(&mut country, date);
+    LoanPipeline::broadcast_listed_transfers(&mut country, date);
 
     assert!(
         !country.transfer_market.has_active_negotiation_for(400, 2),
@@ -373,7 +373,7 @@ fn synthetic_listing_is_never_broadcast() {
     // pushed around the market.
     let mut country = Fx::market(100, TransferListingOrigin::SyntheticUnsolicited);
 
-    PipelineProcessor::broadcast_listed_transfers(&mut country, date);
+    LoanPipeline::broadcast_listed_transfers(&mut country, date);
 
     assert!(
         !country.transfer_market.has_active_negotiation_for(400, 2),

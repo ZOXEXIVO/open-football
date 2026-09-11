@@ -7,6 +7,7 @@
 
 use super::super::*;
 use crate::shared::{Currency, CurrencyValue};
+use crate::transfers::loan::LoanPipeline;
 use crate::transfers::market::{TransferListing, TransferListingOrigin, TransferListingType};
 use crate::transfers::tests::kit::{TestClub, TestCountry, TestPlayer, TestTeam};
 use crate::transfers::{LoanOutCandidate, LoanOutReason, LoanOutStatus};
@@ -140,7 +141,7 @@ fn regional_club_makes_unsolicited_loan_approach_for_elite_youth_keeper() {
 
     let mut country = Fx::country(vec![parent, borrower]);
 
-    PipelineProcessor::scan_loan_market(&mut country, date);
+    LoanPipeline::scan_loan_market(&mut country, date);
 
     assert!(
         country.transfer_market.has_active_negotiation_for(200, 2),
@@ -194,7 +195,7 @@ fn cash_strapped_borrower_still_approaches_on_a_free_development_loan() {
 
     let mut country = Fx::country(vec![parent, borrower]);
 
-    PipelineProcessor::scan_loan_market(&mut country, date);
+    LoanPipeline::scan_loan_market(&mut country, date);
 
     assert!(
         country.transfer_market.has_active_negotiation_for(200, 2),
@@ -261,7 +262,7 @@ fn broadcast_places_development_keeper_into_full_but_weak_line() {
     let mut country = Fx::country(vec![parent, borrower]);
     Fx::loan_list(&mut country, 200, 1, 11);
 
-    PipelineProcessor::broadcast_listed_loans(&mut country, date);
+    LoanPipeline::broadcast_listed_loans(&mut country, date);
 
     assert!(
         country.transfer_market.has_active_negotiation_for(200, 2),
@@ -315,7 +316,7 @@ fn broadcast_places_listed_youth_at_a_same_tier_taker() {
     let mut country = Fx::country(vec![parent, borrower]);
     Fx::loan_list(&mut country, 200, 1, 11);
 
-    PipelineProcessor::broadcast_listed_loans(&mut country, date);
+    LoanPipeline::broadcast_listed_loans(&mut country, date);
 
     assert!(
         country.transfer_market.has_active_negotiation_for(200, 2),
@@ -373,22 +374,22 @@ fn broadcast_cascades_non_development_loan_high_to_low() {
     Fx::loan_list(&mut country, 200, 1, 11);
 
     // Cycle 1: opens at Elite — no Elite taker exists, nobody responds.
-    PipelineProcessor::broadcast_listed_loans(&mut country, d0);
+    LoanPipeline::broadcast_listed_loans(&mut country, d0);
     assert!(
         !country.transfer_market.has_active_negotiation_for(200, 2),
         "no Elite club exists to take him on the first broadcast"
     );
 
     // Widen one tier per 14-day window: Continental, then National.
-    PipelineProcessor::broadcast_listed_loans(&mut country, d0 + Duration::days(14));
-    PipelineProcessor::broadcast_listed_loans(&mut country, d0 + Duration::days(28));
+    LoanPipeline::broadcast_listed_loans(&mut country, d0 + Duration::days(14));
+    LoanPipeline::broadcast_listed_loans(&mut country, d0 + Duration::days(28));
     assert!(
         !country.transfer_market.has_active_negotiation_for(200, 2),
         "still being offered above the Regional taker's tier"
     );
 
     // Fourth window reaches Regional — the club with a vacancy responds.
-    PipelineProcessor::broadcast_listed_loans(&mut country, d0 + Duration::days(42));
+    LoanPipeline::broadcast_listed_loans(&mut country, d0 + Duration::days(42));
     assert!(
         country.transfer_market.has_active_negotiation_for(200, 2),
         "once the net widens to Regional, the club with a vacancy responds"
@@ -441,7 +442,7 @@ fn broadcast_places_development_loanee_at_best_taker_immediately() {
     let mut country = Fx::country(vec![parent, borrower]);
     Fx::loan_list(&mut country, 200, 1, 11);
 
-    PipelineProcessor::broadcast_listed_loans(&mut country, d0);
+    LoanPipeline::broadcast_listed_loans(&mut country, d0);
     assert!(
         country.transfer_market.has_active_negotiation_for(200, 2),
         "a development loanee is placed at the best (only) taker on the first \
@@ -488,7 +489,7 @@ fn broadcast_skipped_for_a_below_national_parent() {
     let mut country = Fx::country(vec![parent, borrower]);
     Fx::loan_list(&mut country, 200, 1, 11);
 
-    PipelineProcessor::broadcast_listed_loans(&mut country, date);
+    LoanPipeline::broadcast_listed_loans(&mut country, date);
 
     assert!(
         !country.transfer_market.has_active_negotiation_for(200, 2),
@@ -554,7 +555,7 @@ fn a_home_first_hold_releases_although_the_tier_widened_on_the_same_day() {
     Fx::loan_list(&mut country, 200, 1, 11);
 
     // Day 0: posted, and held — his own league gets first refusal.
-    PipelineProcessor::broadcast_listed_loans(&mut country, d0);
+    LoanPipeline::broadcast_listed_loans(&mut country, d0);
     assert!(
         !country.transfer_market.has_active_negotiation_for(200, 2),
         "a HomeCountry candidate is not shopped domestically on the day he is posted"
@@ -562,7 +563,7 @@ fn a_home_first_hold_releases_although_the_tier_widened_on_the_same_day() {
 
     // Day 14: the tier widens on this very tick — which used to reset
     // the clock the hold reads, so it could never elapse.
-    PipelineProcessor::broadcast_listed_loans(&mut country, d0 + Duration::days(14));
+    LoanPipeline::broadcast_listed_loans(&mut country, d0 + Duration::days(14));
     assert!(
         country.transfer_market.has_active_negotiation_for(200, 2),
         "a fortnight is a head start, not a veto: the domestic push must open"

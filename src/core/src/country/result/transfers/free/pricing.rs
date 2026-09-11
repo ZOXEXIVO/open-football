@@ -11,7 +11,7 @@ use super::{EmergencySignedTerms, FreeAgentCandidate};
 use crate::PlayerFieldPositionGroup;
 use crate::club::player::calculators::WageCalculator;
 use crate::club::player::transfer::MarketStage;
-use crate::transfers::pipeline::PipelineProcessor;
+use crate::transfers::squad::bands::TierBands;
 
 /// Inferred role the buyer is signing the player for. Drives wage
 /// asks, role-fit scoring, and acceptance. The matcher rarely knows
@@ -358,8 +358,8 @@ impl FreeAgentMarketCalculator {
         group: PlayerFieldPositionGroup,
         career_pressure: f32,
     ) -> u8 {
-        let starter = PipelineProcessor::tier_starter_ca_score(club_reputation_score, group) as i16;
-        let tolerance = PipelineProcessor::tier_quality_tolerance_score(club_reputation_score);
+        let starter = TierBands::tier_starter_ca_score(club_reputation_score, group) as i16;
+        let tolerance = TierBands::tier_quality_tolerance_score(club_reputation_score);
         let slack = (4.0 + 10.0 * career_pressure.clamp(0.0, 1.0)).round() as i16;
         (starter - tolerance - slack).clamp(20, 200) as u8
     }
@@ -373,8 +373,7 @@ impl FreeAgentMarketCalculator {
         group: PlayerFieldPositionGroup,
         career_pressure: f32,
     ) -> u8 {
-        let ceiling =
-            PipelineProcessor::tier_target_ceiling_score(club_reputation_score, group) as i16;
+        let ceiling = TierBands::tier_target_ceiling_score(club_reputation_score, group) as i16;
         let overreach = (5.0 + 18.0 * career_pressure.clamp(0.0, 1.0)).round() as i16;
         (ceiling + overreach).clamp(20, 200) as u8
     }
@@ -528,9 +527,8 @@ impl FreeAgentMarketCalculator {
         club_reputation_score: f32,
         group: PlayerFieldPositionGroup,
     ) -> BuyerRoleFit {
-        let starter = PipelineProcessor::tier_starter_ca_score(club_reputation_score, group) as i16;
-        let ceiling =
-            PipelineProcessor::tier_target_ceiling_score(club_reputation_score, group) as i16;
+        let starter = TierBands::tier_starter_ca_score(club_reputation_score, group) as i16;
+        let ceiling = TierBands::tier_target_ceiling_score(club_reputation_score, group) as i16;
         let headroom = ceiling - starter;
         let high_anchor = starter + (headroom * 2 / 3);
         let ca_i = ca as i16;

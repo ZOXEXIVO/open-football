@@ -24,6 +24,10 @@
 //! softening, circulation lift) is applied where those evaluators run,
 //! driven by the state this pass maintains.
 
+use crate::transfers::market::window::MarketCadence;
+use crate::transfers::scouting::judgement::ScoutJudgement;
+use crate::transfers::squad::bands::TierBands;
+use crate::transfers::view::player::PlayerView;
 use std::collections::{HashMap, HashSet};
 
 use chrono::NaiveDate;
@@ -31,15 +35,13 @@ use log::debug;
 
 use crate::club::player::transfer::AvailabilityBlockReason;
 use crate::transfers::deal::negotiation::NegotiationStatus;
+use crate::transfers::gate::build::TransferPlausibilityBuilder;
 use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
-use crate::transfers::gate::{
-    TransferPlausibilityBuilder, TransferPlausibilityEvaluator, TransferPlausibilityVerdict,
-};
+use crate::transfers::gate::{TransferPlausibilityEvaluator, TransferPlausibilityVerdict};
 use crate::transfers::pipeline::TransferRequestStatus;
 use crate::transfers::pipeline::advice::{
     BuyerContext, ListedTargetScreen, ListedTargetVerdict, ListedTargetView,
 };
-use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::scouting::breakout::LeaguePerformanceLookup;
 use crate::transfers::scouting::exposure::MarketDiscoveryDiagnosis;
 use crate::transfers::value::PlayerValuationCalculator;
@@ -140,7 +142,7 @@ impl BuyerScan {
             PlayerFieldPositionGroup::Midfielder,
             PlayerFieldPositionGroup::Forward,
         ] {
-            let baseline = PipelineProcessor::tier_starter_ca_score(rep_score, group);
+            let baseline = TierBands::tier_starter_ca_score(rep_score, group);
             let has_aging = team.players.players.iter().any(|p| {
                 p.position().position_group() == group
                     && p.age(date) >= 30
@@ -207,12 +209,15 @@ impl BuyerScan {
     }
 }
 
-impl PipelineProcessor {
+/// The weekly circulation / diagnosis pass.
+pub struct MarketCirculation;
+
+impl MarketCirculation {
     /// Weekly market-circulation / diagnosis pass. Runs on the same
     /// cadence as the recommendation sweep and right after it, so the
     /// interest the sweep generated this tick is already visible.
     pub fn circulate_available_players(country: &mut Country, date: NaiveDate) {
-        if !Self::should_evaluate_for(country, date) {
+        if !MarketCadence::should_evaluate_for(&country.code, date) {
             return;
         }
 
@@ -373,10 +378,10 @@ impl PipelineProcessor {
     ) -> ListedTargetView {
         // Build the player view once (shared across buyers).
         let group = player.position().position_group();
-        let ability = Self::position_evaluation_ability(player);
+        let ability = PlayerView::position_evaluation_ability(player);
         let player_age = player.age(date);
         let estimated_potential = ability
-            + Self::estimate_growth_potential(
+            + ScoutJudgement::estimate_growth_potential(
                 player_age,
                 player.skills.mental.determination,
                 player.skills.mental.work_rate,

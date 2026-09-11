@@ -1,3 +1,6 @@
+use crate::transfers::scouting::judgement::ScoutJudgement;
+use crate::transfers::scouting::recruitment::meeting::MeetingPass;
+use crate::transfers::view::player::PlayerView;
 use chrono::NaiveDate;
 use log::debug;
 use rayon::prelude::*;
@@ -9,17 +12,15 @@ use crate::club::staff::StaffEventType;
 use crate::club::staff::perception::PotentialEstimator;
 use crate::transfers::ClubTransferPlan;
 use crate::transfers::ScoutMonitoringStatus;
+use crate::transfers::gate::TransferPlausibilityVerdict;
+use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
 use crate::transfers::gate::fit::{SquadFitSnapshot, SquadRegistrationLimits};
-use crate::transfers::gate::{
-    BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
-};
-use crate::transfers::pipeline::helpers::CountryPlayerLookup;
-use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::{
     DetailedScoutingReport, PlayerSummary, ReportRiskFlag, ScoutingAssignment,
     ScoutingRecommendation, ShortlistCandidate, ShortlistCandidateStatus, TransferRequest,
     TransferRequestStatus, TransferShortlist,
 };
+use crate::transfers::view::player::CountryPlayerLookup;
 use crate::{
     Club, Country, Person, PlayerFieldPositionGroup, StaffPosition, TeamType,
     TransferInterestSource, TransferInterestStage,
@@ -128,7 +129,10 @@ struct BoardClubFinances {
     league_country_id: u32,
 }
 
-impl PipelineProcessor {
+/// Turning scouting reports and market rows into a ranked list, and putting the top name to the board.
+pub struct ShortlistPass;
+
+impl ShortlistPass {
     /// Score lift a candidate the club has been carrying on its year-round
     /// watchlist gets over a cold market find. Deliberately the same modest
     /// size as the recruitment-meeting endorsement: preparation should tilt
@@ -459,7 +463,7 @@ impl PipelineProcessor {
                             // projection as the scouted path, with the
                             // ceiling read the way scouts do (observable
                             // growth estimate, never hidden PA).
-                            let growth = PipelineProcessor::estimate_growth_potential(
+                            let growth = ScoutJudgement::estimate_growth_potential(
                                 p.age,
                                 p.determination,
                                 p.work_rate,
@@ -981,7 +985,7 @@ impl PipelineProcessor {
         // shortlisting. Domestic targets only — a foreign target's beat
         // arrives with the concrete cross-border approach.
         for (buyer_club_id, player_id) in approved_targets {
-            let months_remaining = PipelineProcessor::find_player_in_country(country, player_id)
+            let months_remaining = PlayerView::find_player_in_country(country, player_id)
                 .and_then(|p| p.contract.as_ref())
                 .map(|c| ((c.expiration - date).num_days() / 30) as i32);
             let (stage, source) = match months_remaining {
@@ -994,13 +998,8 @@ impl PipelineProcessor {
                     TransferInterestSource::LocalPress,
                 ),
             };
-            let signal = PipelineProcessor::local_interest_signal(
-                country,
-                buyer_club_id,
-                player_id,
-                stage,
-                source,
-            );
+            let signal =
+                PlayerView::local_interest_signal(country, buyer_club_id, player_id, stage, source);
             if let Some(sig) = signal {
                 for club in &mut country.clubs {
                     for team in club.teams.iter_mut() {
@@ -1038,7 +1037,7 @@ impl PipelineProcessor {
         // Pull a dossier off the recruitment-meeting state if
         // any scouts have been monitoring this candidate; the
         // board uses it to relax/tighten tolerance.
-        let dossier = Self::build_board_dossier(plan, top.player_id, req.id);
+        let dossier = MeetingPass::build_board_dossier(plan, top.player_id, req.id);
         let lead_scout_id = plan
             .scout_monitoring
             .iter()
@@ -1138,7 +1137,7 @@ mod market_fallback_age_tests {
     use crate::shared::fullname::FullName;
     use crate::shared::{Currency, CurrencyValue, Location};
     use crate::transfers::market::{TransferListing, TransferListingType};
-    use crate::transfers::pipeline::processor::PipelineProcessor;
+    use crate::transfers::pipeline::shortlist::ShortlistPass;
     use crate::transfers::pipeline::{
         TransferNeedPriority, TransferNeedReason, TransferRequest, TransferRequestStatus,
     };
@@ -1382,7 +1381,7 @@ mod market_fallback_age_tests {
         let date = MarketAgeFixtures::d(2026, 7, 1);
         let mut country = MarketAgeFixtures::world(date);
 
-        PipelineProcessor::build_shortlists(&mut country, date);
+        ShortlistPass::build_shortlists(&mut country, date);
 
         let plan = &country.clubs[0].transfer_plan;
         let shortlist = plan

@@ -80,6 +80,43 @@ impl SourceScan {
         }
         out
     }
+
+    /// Whether `line` says `name` as a whole identifier.
+    ///
+    /// Substring matching is useless here: `PlayerFieldPositionGroup` is the
+    /// model's own vocabulary and contains `Player`, `TeamType` contains
+    /// `Team`, `CountryResult` contains `Country`. A name counts only when
+    /// neither neighbour is an identifier character.
+    fn says(line: &str, name: &str) -> bool {
+        let bytes = line.as_bytes();
+        let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+        line.match_indices(name).any(|(at, _)| {
+            let before = at.checked_sub(1).map(|i| bytes[i]);
+            let after = bytes.get(at + name.len()).copied();
+            !before.is_some_and(is_word) && !after.is_some_and(is_word)
+        })
+    }
+
+    /// Every non-comment line of one file that says any of `names`.
+    fn mentions(relative: &str, names: &[&str]) -> Vec<String> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("transfers")
+            .join(relative);
+        let src = fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("{relative} is on the model roster but does not exist"));
+        let mut out = Vec::new();
+        for (index, line) in src.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            if let Some(name) = names.iter().find(|n| Self::says(trimmed, n)) {
+                out.push(format!("{relative}:{}  [{name}]  {trimmed}", index + 1));
+            }
+        }
+        out
+    }
 }
 
 /// `transfers` must never import from `country::result`.
@@ -130,6 +167,67 @@ fn transfers_only_borrows_the_simulator_world_and_its_profiler() {
         offenders.is_empty(),
         "src/transfers may borrow the world (`SimulatorData`) and the profiler, \
          but not the tick driver's internals.\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// The model layer decides from numbers; it never names the world.
+///
+/// This is rule 4 of the target shape. A model file that can say `Club` will
+/// eventually say it — `gate/mod.rs` held both halves for a year, separated
+/// by nothing but a banner comment and a mid-file `use` block, and every gate
+/// in it could have reached for a club because a club was already in scope.
+/// The hydration that reads the world lives beside it — `gate/build.rs`,
+/// `gate/stance.rs`, `gate/fit.rs` — and hands the model its numbers.
+///
+/// The roster is deliberate, not "every file that happens to be clean":
+/// bringing a module over is a line added here, so undoing it is a line
+/// removed here rather than an edit nobody notices. Step 4 grows it one
+/// module at a time.
+#[test]
+fn the_model_layer_never_names_a_world_object() {
+    /// Things you can only get by reading the world. A model is handed the
+    /// numbers instead. Position groups, squad statuses and team *types* are
+    /// vocabulary, not the world, and are matched out by whole-identifier
+    /// comparison rather than by an exception list.
+    const WORLD_OBJECTS: [&str; 6] = [
+        "Club",
+        "Country",
+        "Player",
+        "PlayerSummary",
+        "SimulatorData",
+        "Team",
+    ];
+
+    const MODEL: [&str; 16] = [
+        "deal/auction.rs",
+        "deal/negotiation.rs",
+        "deal/offer.rs",
+        "deal/reason.rs",
+        "gate/appraisal.rs",
+        "gate/mod.rs",
+        "market/affinity.rs",
+        "market/map.rs",
+        "market/region.rs",
+        "market/route.rs",
+        "market/window.rs",
+        "pool/mod.rs",
+        "scouting/exposure.rs",
+        "squad/bands.rs",
+        "squad/ledger.rs",
+        "squad/minutes.rs",
+    ];
+
+    let offenders: Vec<String> = MODEL
+        .iter()
+        .flat_map(|file| SourceScan::mentions(file, &WORLD_OBJECTS))
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "the model layer decides from numbers and must not name the world. \
+         Either the code belongs in this folder's hydration file, or the \
+         value it wants should be read there and passed in.\n{}",
         offenders.join("\n")
     );
 }

@@ -10,19 +10,18 @@
 //! The scan cannot write (it walks `&country.clubs` while deciding), so it stages
 //! actions and [`IntakeCommit`] does every write.
 
+use crate::transfers::squad::SquadReviewPass;
 use chrono::Duration;
 use chrono::NaiveDate;
 
-use crate::transfers::gate::{
-    BuyerPlausibilityContext, TransferPlausibilityBuilder, TransferPlausibilityVerdict,
-};
-use crate::transfers::pipeline::helpers::CountryPlayerLookup;
-use crate::transfers::pipeline::processor::PipelineProcessor;
+use crate::transfers::gate::TransferPlausibilityVerdict;
+use crate::transfers::gate::build::{BuyerPlausibilityContext, TransferPlausibilityBuilder};
 use crate::transfers::pipeline::{
     ClubTransferPlan, KnownPlayerMemory, ShortlistCandidate, ShortlistCandidateStatus,
     StaffRecommendation, TransferNeedPriority, TransferNeedReason, TransferRequest,
     TransferRequestStatus, TransferShortlist,
 };
+use crate::transfers::view::player::CountryPlayerLookup;
 use crate::{Club, Country, PositionCoverage};
 
 use super::BuyerNeedPicture;
@@ -321,7 +320,7 @@ impl IntakeScan<'_> {
         let alloc = rec
             .estimated_fee
             .max(available_budget * 0.15)
-            .min(available_budget * PipelineProcessor::MAX_INVESTMENT_SHARE);
+            .min(available_budget * SquadReviewPass::MAX_INVESTMENT_SHARE);
 
         if alloc <= 0.0 {
             return;

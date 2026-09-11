@@ -1,8 +1,9 @@
 //! Moved verbatim out of `helpers.rs` — see that file's `mod slot_need_tests`.
 
 use crate::club::team::squad::SquadAssetClass;
-use crate::transfers::pipeline::PipelineProcessor;
 use crate::transfers::pipeline::processor::SquadPlayerInfo;
+use crate::transfers::squad::SquadReviewPass;
+use crate::transfers::squad::bands::TierBands;
 use crate::transfers::squad::{GroupNeed, GroupNeedScan, NeedKind};
 use crate::{
     MatchTacticType, PlayerFieldPositionGroup, PlayerPositionType, RoleFamiliarity,
@@ -25,11 +26,11 @@ impl SlotFx {
     }
 
     fn tolerance() -> i16 {
-        PipelineProcessor::tier_quality_tolerance_score(Self::REP_SCORE)
+        TierBands::tier_quality_tolerance_score(Self::REP_SCORE)
     }
 
     fn baseline(group: PlayerFieldPositionGroup) -> u8 {
-        PipelineProcessor::tier_starter_ca_score(Self::REP_SCORE, group)
+        TierBands::tier_starter_ca_score(Self::REP_SCORE, group)
     }
 
     fn player(id: u32, roles: &[PlayerPositionType], ca: u8) -> SquadPlayerInfo {
@@ -264,7 +265,7 @@ fn every_group_keeps_a_rotation_cushion_over_its_formation_footprint() {
                 .iter()
                 .filter(|p| p.position_group() == group)
                 .count();
-            let floor = PipelineProcessor::group_min_needed(group, formation);
+            let floor = SquadReviewPass::group_min_needed(group, formation);
             assert!(
                 floor > slots,
                 "{tactic:?}/{group:?}: floor {floor} leaves no cover for {slots} shirts"
@@ -282,7 +283,7 @@ fn every_group_keeps_a_rotation_cushion_over_its_formation_footprint() {
 fn a_lone_striker_shape_keeps_a_deputy_centre_forward() {
     let formation = SlotFx::formation(MatchTacticType::T4231);
     assert_eq!(
-        PipelineProcessor::group_min_needed(PlayerFieldPositionGroup::Forward, formation),
+        SquadReviewPass::group_min_needed(PlayerFieldPositionGroup::Forward, formation),
         2,
         "one striker on the teamsheet still means two on the roster"
     );

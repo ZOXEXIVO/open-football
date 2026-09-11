@@ -29,7 +29,6 @@ use log::debug;
 use crate::Club;
 use crate::club::staff::StaffPosition;
 use crate::transfers::pipeline::TransferNeedPriority;
-use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::pipeline::{
     ClubTransferPlan, ReportRiskFlag, ShortlistCandidate, ShortlistCandidateStatus,
     TransferRequestStatus, TransferShortlist,
@@ -139,7 +138,10 @@ struct Consensus {
     board_risk_score: f32,
 }
 
-impl PipelineProcessor {
+/// The department that meets, argues and votes.
+pub struct MeetingPass;
+
+impl MeetingPass {
     /// Public entry point. Run weekly (Monday) inside an open transfer
     /// window. Walks every initialised club, builds an agenda from the
     /// `ReportReady`/high-confidence monitoring rows + strong staff
