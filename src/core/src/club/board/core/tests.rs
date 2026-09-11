@@ -4,37 +4,24 @@
 
 use super::*;
 use crate::MatchTacticType;
+use crate::club::board::BoardFacility;
 use crate::club::board::chairman::{ChairmanAmbition, ChairmanPatience};
 use crate::club::board::context::FfpStatus;
 use crate::club::board::governance::{
-    BoardDossierSummary, BoardTransferConcern, BoardTransferDecision, BoardTransferEconomics,
-    BoardTransferProposal,
+    BoardTransferConcern, BoardTransferDecision, BoardTransferEconomics, BoardTransferProposal,
 };
-use crate::club::board::infrastructure::FacilityReview;
-use crate::club::board::pressure::SupporterEvent;
-use crate::club::board::promise::{BoardPromise, PromiseType};
-use crate::club::board::relationship::ManagerRelationship;
+use crate::club::board::ownership::{OwnershipModel, OwnershipType};
+use crate::club::board::promise::PromiseType;
 use crate::club::board::roll::DeterministicRoll;
 use crate::club::board::sale::ForcedSaleTarget;
-use crate::club::board::scoring::SeasonPhase;
-use crate::club::board::strategy::{
-    InfrastructurePriority, ManagerAutonomy, ReviewFrequency, SquadProfile,
-};
+use crate::club::board::strategy::{InfrastructurePriority, SquadProfile};
 use crate::club::board::takeover::TakeoverStatus;
 use crate::club::board::vision::{
     ClubVision, FinancialStance, LongTermGoal, VisionPlayingStyle, VisionYouthFocus,
 };
-use crate::club::board::{BoardFacility, BoardManagerMeeting, BoardMoodState};
-use crate::club::finance::{DebtStanding, SeasonTransferFees};
+use crate::club::finance::SeasonTransferFees;
 use crate::transfers::pipeline::{TransferNeedPriority, TransferNeedReason};
 use chrono::{Duration, NaiveDate};
-
-// Scenario tests for the expanded board: archetype governance,
-// season-phase sacking protection, FFP reactions, takeovers, and
-// manager-relationship renewals. These exercise the integrated
-// `evaluate_performance` / governance / takeover paths end to end.
-use crate::club::board::ownership::{OwnershipModel, OwnershipType};
-use crate::club::board::severance::Severance;
 
 /// Boardroom scenarios the tests below are built out of.
 struct Scenario;
@@ -157,8 +144,8 @@ impl Scenario {
         ctx
     }
 
-    fn season_start() -> chrono::NaiveDate {
-        chrono::NaiveDate::from_ymd_opt(2025, 7, 1).unwrap()
+    fn season_start() -> NaiveDate {
+        NaiveDate::from_ymd_opt(2025, 7, 1).unwrap()
     }
 
     /// Assert every bounded board gauge is in range. Called every simulated
@@ -673,7 +660,7 @@ fn excellent_and_injection_emit_a_single_increase() {
 
 #[test]
 fn takeover_roll_is_deterministic_and_in_range() {
-    let date = chrono::NaiveDate::from_ymd_opt(2025, 8, 1).unwrap();
+    let date = NaiveDate::from_ymd_opt(2025, 8, 1).unwrap();
     let a = DeterministicRoll::percent(42, date, 0);
     assert_eq!(
         a,
@@ -686,11 +673,7 @@ fn takeover_roll_is_deterministic_and_in_range() {
     assert!(
         DeterministicRoll::percent(43, date, 0) != a
             || DeterministicRoll::percent(42, date, 1) != a
-            || DeterministicRoll::percent(
-                42,
-                chrono::NaiveDate::from_ymd_opt(2025, 9, 1).unwrap(),
-                0
-            ) != a,
+            || DeterministicRoll::percent(42, NaiveDate::from_ymd_opt(2025, 9, 1).unwrap(), 0) != a,
         "roll should vary across club / date / status"
     );
 }
@@ -718,13 +701,13 @@ fn takeover_decision_stream_replays_identically() {
         board.season_targets = Some(Scenario::targets(8, 12));
 
         let mut labels = Vec::new();
-        let mut date = chrono::NaiveDate::from_ymd_opt(2025, 7, 1).unwrap();
+        let mut date = NaiveDate::from_ymd_opt(2025, 7, 1).unwrap();
         for _ in 0..24 {
             let mut r = BoardResult::new();
             r.club_id = club_id;
             board.tick_takeover(&ctx, date, &mut r);
             labels.extend(r.decisions.iter().map(|d| d.label()));
-            date += chrono::Duration::days(30);
+            date += Duration::days(30);
         }
         labels
     }
@@ -892,7 +875,7 @@ fn survival_promise_is_created_then_kept_and_builds_trust() {
     ctx.total_matches = 38; // RunIn
     ctx.distance_to_relegation = 6;
     let mut r = BoardResult::new();
-    board.resolve_promises(&ctx, today + chrono::Duration::days(250), &mut r);
+    board.resolve_promises(&ctx, today + Duration::days(250), &mut r);
 
     assert!(
         !board.promises.has_active(PromiseType::Survival),
@@ -911,9 +894,7 @@ fn unkept_promise_breaks_and_costs_trust_at_season_end() {
 
     let before = board.relationship.trust_communication;
     // Mirror simulate's season-start reckoning a year later.
-    let penalty = board
-        .promises
-        .break_overdue(today + chrono::Duration::days(366));
+    let penalty = board.promises.break_overdue(today + Duration::days(366));
     assert!(penalty < 0, "an unmet survival promise must break");
     board.relationship.adjust_communication(penalty);
     assert!(board.relationship.trust_communication < before);
@@ -964,7 +945,7 @@ fn deferred_capex_opens_a_facility_promise() {
     });
     board.resolve_promises(
         &Scenario::strong_ctx(8, 20),
-        today + chrono::Duration::days(370),
+        today + Duration::days(370),
         &mut r,
     );
     assert!(!board.promises.has_active(PromiseType::FacilityImprovement));
@@ -1241,9 +1222,9 @@ fn board_holds_all_invariants_over_three_sustained_poor_seasons() {
             max_active_promises = max_active_promises.max(board.promises.active_count());
 
             board.season_month_index += 1;
-            today += chrono::Duration::days(30);
+            today += Duration::days(30);
         }
-        today += chrono::Duration::days(65); // skip to next season start
+        today += Duration::days(65); // skip to next season start
     }
 
     // Never sacked in back-to-back months: after a dismissal the board
@@ -1304,7 +1285,7 @@ fn takeover_rumour_always_resolves_within_its_window() {
             }
             TakeoverStatus::None => rumoured_streak = 0,
         }
-        date += chrono::Duration::days(30);
+        date += Duration::days(30);
     }
     assert!(
         ever_resolved,

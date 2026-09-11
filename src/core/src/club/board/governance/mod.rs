@@ -474,7 +474,6 @@ impl ClubBoard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::club::board::vision::LongTermGoal;
 
     fn transfer_proposal(
         fee: f64,
@@ -497,6 +496,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn conservative_board_vetoes_excessive_transfer_overrun() {
         let mut board = ClubBoard::new();
         board.vision.financial_stance = FinancialStance::Conservative;

@@ -426,7 +426,6 @@ mod tests {
     use super::*;
     use crate::club::board::ClubBoard;
     use crate::club::board::scoring::SeasonPhase;
-    use crate::club::board::vision::FinancialStance;
 
     fn make_ctx(income: i64, outcome: i64, ffp: FfpStatus) -> BoardContext {
         let mut c = BoardContext::new();

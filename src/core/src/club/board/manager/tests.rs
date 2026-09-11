@@ -2,7 +2,6 @@ use super::*;
 use crate::academy::ClubAcademy;
 use crate::club::board::ClubBoard;
 use crate::club::mind::organs::memory::{ActorRef, EpisodeKind, FactClaim};
-use crate::club::news::ClubAffair;
 use crate::club::staff::{StaffClubContract, StaffPosition, StaffStatus};
 use crate::club::{BoardResult, Club, StaffStub, Team};
 use crate::competitions::GlobalCompetitions;

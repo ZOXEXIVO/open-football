@@ -20,13 +20,13 @@ axum = "0.8.9"
 log = "0.4.34"
 tokio = { version = "1.53.1", features = ["full"] }
 tower = "0.5.3"
-tower-http = { version = "0.7.0", features = ["fs", "catch-panic"] }
+tower-http = { version = "0.7.1", features = ["fs", "catch-panic"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-reqwest = { version = "0.13.4", default-features = false, features = ["json"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json"] }
 chrono = "0.4.45"
 itertools = "0.15.0"
-askama = "0.16.0"
+askama = "0.16.1"
 askama_web = { version = "0.16.0", features = ["axum-0.8"] }
 rust-embed = "8.12"
 mime_guess = "2.0.5"

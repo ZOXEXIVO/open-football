@@ -43,4 +43,4 @@ deunicode = "1.6"
 # SipHash is DoS-resistant but slow; the sim's hot ID lookups
 # (player/team resolution, per-player relations) don't need that and the
 # world is iteration-order-independent, so FxHash is a safe drop-in.
-rustc-hash = "2"
+rustc-hash = "2.1.3"
